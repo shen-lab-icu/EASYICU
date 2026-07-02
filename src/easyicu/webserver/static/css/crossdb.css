@@ -166,7 +166,32 @@
 .xdb-density-cat-bars i{ height:100%; min-width:2px; opacity:.62; }
 .xdb-density-cat.missing .xdb-density-src,
 .xdb-density-cat.missing .xdb-density-num{ color:var(--ink-4); }
+
+/* Legacy Figure-3 Cross-DB record-count cards (one per database) */
+.xdb-rec-cards{ display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:8px; }
+.xdb-rec-card{ border:1px solid var(--hair); border-left-width:3px; border-radius:var(--r-2); background:var(--surface); padding:8px 10px; min-width:0; }
+.xdb-rec-name{ display:flex; align-items:center; gap:5px; font-size:10px; font-weight:650; letter-spacing:.02em; color:var(--ink-3); text-transform:uppercase; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.xdb-rec-dot{ width:9px; height:9px; border-radius:50%; display:inline-block; flex:none; }
+.xdb-rec-value{ margin-top:3px; font-size:16px; font-weight:750; color:var(--ink); }
+.xdb-rec-unit{ font-size:10px; color:var(--accent-ink,#0f766e); }
+
+/* Core-concepts / all-features scope toggle for the density grid */
+.xdb-density-scope{ display:flex; gap:6px; padding:10px 16px 0; flex-wrap:wrap; }
+
+/* Collapsible provenance/audit block — keeps the cards + density grid as the lead
+   visual (legacy Figure-3 D) while retaining the real-data audit detail one click away */
+.xdb-audit{ border:1px solid var(--hair); border-radius:var(--r-2); background:var(--surface-2); padding:0 14px; }
+.xdb-audit > summary{ cursor:pointer; list-style:none; padding:11px 2px; font-size:12px; font-weight:600; color:var(--ink-2); display:flex; align-items:center; gap:8px; }
+.xdb-audit > summary::-webkit-details-marker{ display:none; }
+.xdb-audit > summary::before{ content:"▸"; color:var(--ink-4); font-size:11px; transition:transform .15s; }
+.xdb-audit[open] > summary::before{ transform:rotate(90deg); }
+.xdb-audit[open]{ padding-bottom:14px; }
+
+@media (max-width:1100px){
+  .xdb-rec-cards{ grid-template-columns:repeat(3,minmax(0,1fr)); }
+}
 @media (max-width:720px){
+  .xdb-rec-cards{ grid-template-columns:repeat(2,minmax(0,1fr)); }
   .xdb-density-top,
   .xdb-density-module-head{ flex-direction:column; }
   .xdb-density-selectrow{ flex-direction:column; align-items:stretch; }

@@ -5,7 +5,7 @@
   // rebind its exports so existing call sites stay unchanged.
   const {
     catalogModuleLabel, catalogFeatureMeta,
-    DEMO_ENTITY_COUNT, DEMO_DURATION_HOURS, DEMO_CLINICAL_LANES, DEMO_THRESHOLDS,
+    DEMO_ENTITY_COUNT, DEMO_DURATION_HOURS, DEMO_CHART_HOURS, DEMO_CLINICAL_LANES, DEMO_THRESHOLDS,
     demoCatalogModules, demoIsTimeIndexed, demoFeatureModule, demoCoverageForFeature,
     demoRowsForModule, demoReviewStatus, demoQualityStatus, demoRateTone,
     demoThresholds, demoBaseValue, demoTableValue, demoCharttimeAt, demoSignal, demoTimeLanes, demoSignalDelta,
@@ -78,9 +78,14 @@
   let patientTableModule = null;
   let patientTablePage = 1;
   let patientTablePageSize = 24;
+  let patientSeriesMode = 'lanes';
   let crossView = 'idle';     // idle | loading | loaded
   let crossDensityModule = 'all';
   let crossDensityFeature = null;
+  let crossDensityScope = 'core'; // core | all — restore the old curated "one subplot per canonical concept" default
+  // Canonical clinical concepts of the legacy Figure-3 Cross-DB panel (paper_figures._render_paper_crossdb_panel).
+  // The native grid otherwise dumps all ~247 catalog features; the curated default keeps the old small-multiples look.
+  const CROSS_DENSITY_CANON = ['hr', 'map', 'sbp', 'dbp', 'resp', 'temp', 'spo2', 'crea', 'lact', 'wbc', 'plt', 'gluc'];
   let crossRawES = null;
   let crossRawJobId = null;
   let crossRawProg = null;
@@ -321,7 +326,16 @@
       });
   }
   function patientDrilldown() {
-    return window.EU_PATIENT_DRILLDOWN || null;
+    if (window.EU_PATIENT_DRILLDOWN) return window.EU_PATIENT_DRILLDOWN;
+    /* In demo mode every entry path (incl. the global "load demo workspace", which only
+       seeds the thin EU_VIZ_WORKSPACE) should still get the rich catalog-shaped drill so
+       Tables / Time Series / Quality render full review content instead of thin fallbacks.
+       Build once and cache; buildDemoPatientDrilldown is hoisted. */
+    if (window.EU_DATA !== 'real' && patientView === 'loaded') {
+      window.EU_PATIENT_DRILLDOWN = buildDemoPatientDrilldown();
+      return window.EU_PATIENT_DRILLDOWN;
+    }
+    return null;
   }
   function patientTablePreviews(payload) {
     const tables = (payload || patientDrilldown() || {}).data_tables || {};
@@ -351,6 +365,28 @@
   function patientModuleLabel(row) {
     return patientI18nLabel(row && row.label_i18n, row && (row.label || row.module));
   }
+  function demoTablePreviewRowContext(rowIndex, timeIndexed) {
+    const idx = Math.max(0, Number(rowIndex) || 0);
+    if (!timeIndexed) {
+      return {
+        entityIndex: idx,
+        timeIndex: 0,
+        entityRef: `demo_ent_${idx + 1}`,
+        charttime: null,
+        valueSeed: idx,
+      };
+    }
+    const timepointsPerEntity = 12;
+    const entityIndex = Math.floor(idx / timepointsPerEntity);
+    const timeIndex = idx % timepointsPerEntity;
+    return {
+      entityIndex,
+      timeIndex,
+      entityRef: `demo_ent_${entityIndex + 1}`,
+      charttime: demoCharttimeAt(timeIndex),
+      valueSeed: entityIndex * 13 + timeIndex,
+    };
+  }
   function patientFeatureLabel(row) {
     return patientI18nLabel(row && row.name_i18n, row && (row.name || row.feature));
   }
@@ -366,6 +402,58 @@
     if (labels[col]) return patientI18nLabel(labels[col], col);
     if (col === 'entity') return t('Pseudonymous entity', '伪匿名实体');
     return String(col || '').replace(/[_-]+/g, ' ').replace(/\b\w/g, ch => ch.toUpperCase());
+  }
+  function patientFlowText(row, key, fallback) {
+    const i18n = row && row[key + '_i18n'];
+    if (i18n) return patientI18nLabel(i18n, fallback || row[key] || '');
+    return (row && row[key]) || fallback || '';
+  }
+  function patientEligibilityFlow(flow) {
+    const steps = Array.isArray(flow && flow.steps) ? flow.steps.filter(s => s && s.count != null) : [];
+    if (!steps.length) return '';
+    const title = flow.title_i18n ? patientI18nLabel(flow.title_i18n, flow.title) : (flow.title || t('Eligibility flow (ICU stays)', '入组筛选流程（ICU 住院）'));
+    const subtitle = flow.has_stepwise_report
+      ? t('Computed from the export cohort report; no patient rows are returned to the browser.', '来自导出 cohort report；浏览器不返回患者行。')
+      : t('This export does not contain a stepwise filter log, so only the available denominator is shown.', '这个导出没有逐步筛选日志，因此只显示可用分母。');
+    return `
+      <div class="patient-flow-card mt-16" data-patient-eligibility-flow>
+        <div class="patient-flow-head">
+          <div>
+            <div class="patient-flow-title">${esc(title)}</div>
+            <div class="patient-flow-sub">${esc(subtitle)}</div>
+          </div>
+          <span class="pill ${flow.has_stepwise_report ? 'ok' : 'warn'}" style="height:22px;">${flow.has_stepwise_report ? t('stepwise', '逐步') : t('summary only', '仅摘要')}</span>
+        </div>
+        <div class="patient-flow-diagram" role="img" aria-label="${esc(title)}">
+          ${steps.map((step, idx) => {
+            const isLast = idx === steps.length - 1;
+            const excluded = Number(step.excluded);
+            const hasExcluded = Number.isFinite(excluded) && excluded > 0;
+            const note = patientFlowText(step, 'note', '');
+            const pctNum = Number(step.pct_of_initial);
+            const pct = step.pct_of_initial == null || (idx === 0 && Math.abs(pctNum - 100) < 0.05) ? '' : `(${fmtPct(step.pct_of_initial)})`;
+            const exclPct = step.excluded_pct_of_previous == null ? '' : `(${fmtPct(step.excluded_pct_of_previous)})`;
+            return `
+              <div class="patient-flow-node ${idx === 0 ? 'first' : ''} ${step.final || isLast ? 'final' : ''} ${isLast ? 'last' : 'has-next'}">
+                <div>
+                  <div class="patient-flow-label">${esc(patientFlowText(step, 'label', step.id))}</div>
+                  ${note ? `<div class="patient-flow-note">(${esc(note)})</div>` : ''}
+                  <div class="patient-flow-count">${fmtInt(step.count)}</div>
+                  ${pct ? `<div class="patient-flow-pct">${esc(pct)}</div>` : ''}
+                </div>
+              </div>
+              <div class="patient-flow-side-link ${hasExcluded ? '' : 'empty'}" aria-hidden="true"></div>
+              <div class="patient-flow-excluded ${hasExcluded ? '' : 'empty'}">
+                ${hasExcluded ? `
+                  <div>
+                    <div class="patient-flow-ex-title">${t('Excluded', '排除')}</div>
+                    <div class="patient-flow-ex-count">${fmtInt(excluded)}</div>
+                    <div class="patient-flow-ex-pct">${esc(exclPct || t('from previous step', '相对上一步'))}</div>
+                  </div>` : ''}
+              </div>`;
+          }).join('')}
+        </div>
+      </div>`;
   }
   function patientShapeLabel(module) {
     const shape = module && module.shape;
@@ -393,6 +481,14 @@
     const pointCap = Math.max(1, Math.min(Number(opts.maxRows) || 24, 24));
     const pointCount = signals.length ? Math.max(...signals.map(s => (s.values || []).length)) : 0;
     const shownPoints = Math.min(pointCount, pointCap);
+    const firstTimes = signals.length ? (signals[0].times || signals[0].charttimes || signals[0].charttime || []) : [];
+    const timeLabel = index => {
+      const raw = Array.isArray(firstTimes) ? firstTimes[index] : null;
+      const numeric = Number(raw);
+      if (Number.isFinite(numeric)) return `${fmtNum(numeric, numeric % 1 ? 1 : 0)}h`;
+      if (raw != null && raw !== '') return String(raw);
+      return `t${index}`;
+    };
     const entityLabel = ((drill || {}).selected || {}).label || t('selected entity', '已选实体');
     const sourceBadge = (drill && drill.demo) ? t('demo', '演示') : t('real', '真实');
     if (!signals.length) {
@@ -419,7 +515,7 @@
             <tbody>
               ${Array.from({ length: shownPoints }, (_, i) => `
                 <tr>
-                  <td class="key mono">t${i}</td>
+                  <td class="key mono">${esc(timeLabel(i))}</td>
                   ${signals.map(s => patientMatrixCell((s.values || [])[i], s.values || [], s.unit || '')).join('')}
                 </tr>`).join('')}
             </tbody>
@@ -431,178 +527,128 @@
         </div>
       </div>`;
   }
-  function patientOverviewText(value) {
+  function patientOverviewWorkbench(selected, summaryCards, sections, drill) {
+    const renderer = window.EU_PATIENT_OVERVIEW && window.EU_PATIENT_OVERVIEW.renderOverview;
+    if (typeof renderer !== 'function') {
+      return `<div class="empty mt-16"><div class="glyph">${icon('grid', 22)}</div><div class="t">${t('Patient overview renderer unavailable', '患者概览渲染器不可用')}</div><div class="d">${t('Reload the page; the owner module did not load.', '请刷新页面；对应 owner 模块没有加载。')}</div></div>`;
+    }
+    return renderer({ selected, summaryCards, sections, drill }, {
+      t,
+      esc,
+      icon,
+      fmtInt,
+      fmtNum,
+      fmtPct,
+      signalLabel: patientSignalLabel,
+      moduleLabel: patientModuleLabel,
+    });
+  }
+
+  function patientEntityNavigator(drill, selected, opts = {}) {
+    const entities = Array.isArray(drill && drill.entities) ? drill.entities : [];
+    if (!entities.length) return '';
+    const selectedRef = selected && selected.ref;
+    const title = opts.title || t('Case navigator', '病例导航');
+    const detail = opts.detail || t('Switch entity once; tables, trends, overview, and quality keep the same pseudonymous case context.', '切换一次实体后，数据表、趋势、概览和质量页都会使用同一个去标识病例上下文。');
+    return `
+      <div class="pt-entity-nav mt-16">
+        <div>
+          <div class="eyebrow">${esc(title)}</div>
+          <div class="pt-entity-detail">${esc(detail)}</div>
+        </div>
+        <div class="pt-entity-chiprow">
+          ${entities.map(item => `<button type="button" class="chip ${item.ref === selectedRef ? 'solid' : ''}" data-patient-entity="${esc(item.ref)}" style="${item.ref === selectedRef ? 'border-color:var(--ink);color:var(--ink);' : ''}">${esc(item.label || item.ref)}</button>`).join('')}
+        </div>
+      </div>`;
+  }
+  function patientMatrixAudit(drill, lanesOverride = null) {
+    const review = drill ? (drill.trajectory_review || {}) : {};
+    const lanes = Array.isArray(lanesOverride) ? lanesOverride : (Array.isArray(review.lanes) ? review.lanes : (drill && Array.isArray(drill.time_lanes) ? drill.time_lanes : []));
+    const readyLanes = lanes.filter(lane => (lane.signals || []).some(sig => Array.isArray(sig.values) && sig.values.some(v => Number.isFinite(Number(v)))));
+    if (!drill || !readyLanes.length) return '';
+    const signalScope = drill.demo
+      ? t('Seeded matrix values are capped at', '演示矩阵值上限为')
+      : t('Local matrix values are capped at', '本地矩阵值上限为');
+    return `
+      <details class="pt-matrix-details pt-matrix-audit mt-16">
+        <summary>
+          <span>${t('Exact value audit matrices', '精确值审计矩阵')}</span>
+          <span class="mono">${fmtInt(readyLanes.length)} ${t('modules', '个模块')}</span>
+        </summary>
+        <div class="pt-matrix-details-body">
+          <div class="note info">
+            <div class="ico">${icon('rows', 16)}</div>
+            <div class="body"><span class="t">${t('Data-table companion audit', '数据表配套审计')}</span> <span class="d" style="display:inline;">— ${t('Use this only when you need cell-level time-window values. The main Time Series tab stays focused on per-feature clinical trajectories.', '只有需要核对时间窗格子值时再展开；主时间序列页只保留单特征临床曲线。')}</span></div>
+          </div>
+          ${readyLanes.map(lane => patientFeatureMatrix(lane, drill)).join('')}
+          <p class="pt-audit-foot">${signalScope} ${fmtInt((drill.privacy || {}).max_points_per_signal)} ${t('points per feature for browser review; lane membership follows the EasyICU clinical concept catalog.', '个点/特征用于浏览器审阅；分组来自 EasyICU 临床概念目录。')}</p>
+        </div>
+      </details>`;
+  }
+  function patientQualityText(value) {
     const map = {
-      'Age / sex': t('Age / sex', '年龄 / 性别'),
-      'SOFA-2 max': t('SOFA-2 max', 'SOFA-2 最大值'),
-      'Sepsis-3': t('Sepsis-3', 'Sepsis-3'),
-      'Outcome': t('Outcome', '结局'),
-      'ICU LOS': t('ICU LOS', 'ICU 住院天数'),
-      'Patient Summary': t('Patient Summary', '患者摘要'),
-      'Available data': t('Available data', '可用数据'),
-      'Case review': t('Case review', '病例审阅'),
-      'Clinical review': t('Clinical review', '临床审阅'),
-      'Pseudonymous drilldown': t('Pseudonymous drilldown', '去标识患者审阅'),
+      'Quality dashboard': t('Quality dashboard', '质量审阅'),
+      'QC concepts': t('QC concepts', '质控特征'),
+      'Records': t('Records', '记录'),
+      'Seeded observations': t('Seeded observations', '种子观测值'),
+      'Weighted missing': t('Weighted missing', '加权缺失'),
+      'Out-of-physio': t('Out-of-physio', '生理范围外'),
+      'Duplicate TS': t('Duplicate TS', '重复时间戳'),
+      'QC ledger': t('QC ledger', '质控台账'),
+      'Catalog concept scope': t('Catalog concept scope', '目录特征范围'),
+      'Missingness gate': t('Missingness check', '缺失率检查'),
+      'Physiologic range': t('Physiologic range', '生理范围'),
+      'Temporal integrity': t('Temporal integrity', '时间完整性'),
+      'Missingness': t('Missingness', '缺失率'),
+      'Out-of-Physio': t('Out-of-Physio', '生理范围外'),
+      'Temporal Integrity': t('Temporal Integrity', '时间完整性'),
+      'Per-module entity coverage': t('Per-module entity coverage', '模块实体覆盖'),
+      'Top concept quality issues': t('Top concept quality issues', '主要特征质量问题'),
+      'Local export bounded review': t('Local export bounded review', '本地导出有界审阅'),
+      'Catalog demo bounded review': t('Catalog demo bounded review', '目录演示有界审阅'),
     };
     return map[String(value || '')] || value;
   }
-  function patientToneColor(tone, index = 0) {
-    if (tone === 'bad') return 'var(--bad)';
-    if (tone === 'warn') return 'var(--warn)';
-    if (tone === 'ok') return 'var(--ok)';
-    return ['var(--accent)', 'var(--ok)', 'var(--warn)', '#64748b'][index % 4];
-  }
-  function patientToneSoft(tone) {
-    if (tone === 'bad') return 'color-mix(in srgb, var(--bad-soft) 58%, var(--surface))';
-    if (tone === 'warn') return 'color-mix(in srgb, var(--warn-soft) 58%, var(--surface))';
-    if (tone === 'ok') return 'color-mix(in srgb, var(--ok-soft) 48%, var(--surface))';
-    return 'var(--surface)';
-  }
-  function patientOverviewCaseReview(selected, summaryCards, sections, drill) {
-    const totalSignals = (sections || []).reduce((acc, section) => acc + Number(section.available_count || 0), 0);
-    const activeSections = (sections || []).filter(section => Number(section.available_count || 0) > 0);
+  function patientQualityPanel(panel) {
+    const rows = Array.isArray(panel && panel.rows) ? panel.rows : [];
+    const metricLabel = panel && panel.id === 'temporal'
+      ? t('Duplicate TS', '重复时间戳')
+      : panel && panel.id === 'outliers'
+        ? t('Out-of-range', '范围外')
+        : t('Missing', '缺失');
     return `
-      <div class="card pad mt-16" data-patient-case-review>
-        <div class="row" style="justify-content:space-between;align-items:flex-start;gap:16px;">
+      <section class="pt-qc-panel" data-patient-qc-panel="${esc(panel && panel.id || '')}">
+        <div class="pt-qc-panel-head">
           <div>
-            <div class="eyebrow">${patientOverviewText('Case review')}</div>
-            <div style="font-weight:700;font-size:18px;margin-top:4px;">${patientOverviewText('Patient Summary')} · ${esc(selected.label || t('Selected entity', '已选实体'))}</div>
+            <div class="eyebrow">${esc(patientQualityText(panel && panel.label || panel && panel.id || 'Panel'))}</div>
+            <div class="pt-qc-panel-sub">${t('Top bounded feature-level flags for the active review scope.', '当前审阅范围内最高的有界特征级质量标记。')}</div>
           </div>
-          <span class="pill ${drill && drill.demo ? 'demo' : 'ok'}" style="height:24px;">${drill && drill.demo ? t('demo workspace', '演示工作区') : t('local export', '本地导出')}</span>
+          <span class="pill ${rows.length ? 'warn' : 'ok'}">${fmtInt(rows.length)} ${t('rows', '行')}</span>
         </div>
-        <div class="grid cards-4 mt-16">
-          ${(summaryCards || []).map(card => `
-            <div class="stat ${card.tone || 'accent'}">
-              <div class="label">${esc(patientOverviewText(card.label))}</div>
-              <div class="val" style="font-size:19px;">${esc(card.value == null ? '—' : card.value)}</div>
-            </div>`).join('')}
-        </div>
-        <div class="table-wrap table-scroll mt-16">
+        <div class="table-wrap table-scroll mt-10">
           <table class="eu-table">
-            <thead><tr><th>${patientOverviewText('Available data')}</th><th class="num">${t('Features', '特征')}</th><th>${t('Scope', '范围')}</th></tr></thead>
+            <thead><tr><th>${t('Feature', '特征')}</th><th class="num">${metricLabel}</th><th class="num">${t('Records', '记录')}</th></tr></thead>
             <tbody>
-              <tr><td class="key">${t('Total selected-entity signals', '已选实体总信号')}</td><td class="num">${fmtInt(totalSignals)}</td><td>${fmtInt(activeSections.length)} ${t('modules with values', '个模块有值')}</td></tr>
-              ${(sections || []).map(section => `<tr><td class="key">${esc(patientOverviewText(section.title || section.id))}</td><td class="num">${fmtInt(section.available_count || 0)}</td><td>${(section.cards || []).slice(0, 4).map(card => esc(card.feature || card.label)).join(' · ') || '—'}</td></tr>`).join('')}
+              ${rows.slice(0, 8).map(row => `<tr><td class="key">${esc(row.feature || row.name || row.id || '')}</td><td class="num">${fmtPct(row.value)}</td><td class="num">${fmtInt(row.records)}</td></tr>`).join('') || `<tr><td colspan="3" class="muted">${t('No flags in this panel.', '这个面板没有质量标记。')}</td></tr>`}
             </tbody>
           </table>
         </div>
-      </div>`;
+      </section>`;
   }
-  function patientDeltaNote(delta) {
-    const n = Number(delta);
-    if (!Number.isFinite(n)) return t('latest', '最新');
-    if (Math.abs(n) < 1e-9) return t('stable', '稳定');
-    return `Δ ${n > 0 ? '+' : ''}${fmtNum(n, 1)}`;
-  }
-
-  function patientCategoryCard(card, index = 0) {
-    const unit = card && card.unit ? ` ${esc(card.unit)}` : '';
-    const value = card && card.current != null ? `${fmtNum(card.current, 1)}${unit}` : '—';
+  function patientQualityWorkbook(review) {
+    const panels = Array.isArray(review && review.panels) ? review.panels : [];
+    if (!panels.length) return '';
     return `
-      <div class="pcc" style="border-left:3px solid ${patientToneColor(card && card.tone, index)};background:${patientToneSoft(card && card.tone)};">
-        <span class="pcc-lbl">${esc(patientSignalLabel(card))}</span>
-        <b class="pcc-val">${value}</b>
-        <em class="pcc-delta">${patientDeltaNote(card && card.delta)}</em>
-      </div>`;
-  }
-
-  function patientConceptChart(card) {
-    const vals = ((card && card.values) || []).map(Number).filter(Number.isFinite);
-    if (vals.length < 2) return '';
-    const thrVals = ((card && card.thresholds) || []).map(th => Number(th.value)).filter(Number.isFinite);
-    const w = 232, h = 96, l = 6, rp = 6, tp = 8, bp = 8;
-    const plotW = w - l - rp, plotH = h - tp - bp;
-    const lo = Math.min(...vals, ...thrVals), hi = Math.max(...vals, ...thrVals);
-    const rng = (hi - lo) || 1;
-    const xOf = i => l + (vals.length <= 1 ? 0 : (i / (vals.length - 1)) * plotW);
-    const yOf = v => tp + (1 - (v - lo) / rng) * plotH;
-    const color = patientToneColor(card && card.tone, 0);
-    const pts = vals.map((v, i) => `${xOf(i).toFixed(1)},${yOf(v).toFixed(1)}`).join(' ');
-    const thrLines = ((card && card.thresholds) || []).map(th => {
-      const v = Number(th.value);
-      if (!Number.isFinite(v)) return '';
-      const y = yOf(v).toFixed(1);
-      return `<line x1="${l}" x2="${w - rp}" y1="${y}" y2="${y}" class="pcs-thr-line"></line><text x="${w - rp}" y="${(Number(y) - 2).toFixed(1)}" text-anchor="end" class="pcs-thr">${esc(th.label || '')}</text>`;
-    }).join('');
-    return `
-      <div class="pcs-cell">
-        <div class="pcs-head"><span>${esc(patientSignalLabel(card))}</span><span class="mono">${fmtNum(card.current, 1)}${card.unit ? ` ${esc(card.unit)}` : ''}</span></div>
-        <svg class="pcs-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="${esc(patientSignalLabel(card))} ${t('trend', '趋势')}">
-          <rect x="${l}" y="${tp}" width="${plotW}" height="${plotH}" rx="3" fill="#fbfaf7" stroke="#ece7df"></rect>
-          ${thrLines}
-          <polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"></polyline>
-        </svg>
-      </div>`;
-  }
-
-  function patientCategoryReview(sections) {
-    const usable = (sections || []).filter(section => section && (section.cards || []).length);
-    if (!usable.length) {
-      return `<div class="empty mt-16"><div class="glyph">${icon('grid', 22)}</div><div class="t">${t('No module signals available', '暂无模块信号')}</div><div class="d">${t('The active export has no bounded patient-level values for this entity.', '当前导出没有这个实体的有界患者层面数值。')}</div></div>`;
-    }
-    return `
-      <div class="mt-18" data-patient-category-review>
-        <div class="sec-stack">
-          <div class="lbl">${patientOverviewText('Clinical review')}</div>
-          <h2 style="font-size:17px;margin:2px 0 0;">${t('Patient category dashboard', '患者分类看板')}</h2>
-        </div>
-        <div style="font-size:12px;color:var(--ink-3);margin-top:4px;">${t('Concepts are grouped by clinical category with the latest value, trend delta, threshold tone, and a per-concept trajectory with reference lines.', '概念按临床分类分组，显示最新值、趋势变化、阈值着色，以及每个概念带参考线的轨迹图。')}</div>
-        ${usable.map(section => `
-          <div class="pcat" data-patient-category="${esc(section.id || '')}">
-            <div class="pcat-head"><span class="pcat-title">${esc(patientOverviewText(section.title || section.id))}</span><span class="mono pcat-meta">${fmtInt(section.available_count || (section.cards || []).length)} ${t('signals', '个信号')}</span></div>
-            <div class="pcc-grid">${(section.cards || []).map((card, i) => patientCategoryCard(card, i)).join('')}</div>
-            <div class="pcs-grid">${(section.cards || []).slice(0, 6).map(patientConceptChart).filter(Boolean).join('')}</div>
-          </div>`).join('')}
-      </div>`;
-  }
-
-  function patientOverviewModuleLedger(drill) {
-    const modules = Array.isArray(drill && drill.module_profiles) && drill.module_profiles.length
-      ? drill.module_profiles
-      : (Array.isArray(drill && drill.quality) ? drill.quality : []);
-    const rows = modules
-      .filter(item => item && (item.module || item.label))
-      .slice(0, 32);
-    if (!rows.length) return '';
-    const maxRows = Math.max(1, ...rows.map(item => Number(item.rows || 0)));
-    const totalFeatures = rows.reduce((acc, item) => acc + Number(item.review_features != null ? item.review_features : (item.feature_count || 0)), 0);
-    const loaded = (drill && drill.data_tables && drill.data_tables.loaded_summary) || {};
-    const observed = loaded.observed_features != null ? loaded.observed_features : rows.reduce((acc, item) => acc + Number(item.observed_features || 0), 0);
-    return `
-      <div class="card pad mt-16" data-patient-overview-module-ledger>
-        <div class="mc-head">
+      <div class="pt-qc-workbook mt-16" data-patient-qc-workbook>
+        <div class="pt-qc-title">
           <div>
-            <div class="eyebrow">${t('Module map', '模块图谱')}</div>
-            <div style="font-weight:700;font-size:16px;margin-top:3px;">${t('Export module overview', '导出模块总览')}</div>
-            <div class="mono" style="font-size:10.5px;color:var(--ink-4);">${fmtInt(rows.length)} ${t('modules', '个模块')} · ${fmtInt(totalFeatures)} ${t('review features', '个审阅特征')} · ${fmtInt(observed)} ${t('observed in selected browser sample', '个在当前浏览样本中可观测')}</div>
+            <div class="eyebrow">${t('QC workbook', '质控工作簿')}</div>
+            <h2>${t('Missingness, physiologic range, and temporal integrity', '缺失率、生理范围和时间完整性')}</h2>
           </div>
-          <span class="pill ok" style="height:22px;">${t('active export', '当前导出')}</span>
+          <span class="pill ok">${t('bounded review', '有界审阅')}</span>
         </div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px;margin-top:12px;">
-          ${rows.map((item, i) => {
-            const label = patientModuleLabel(item) || t('Module', '模块');
-            const featureCount = item.review_features != null ? item.review_features : item.feature_count;
-            const rowCount = Number(item.rows || 0);
-            const entityCount = Number(item.entities);
-            const coverage = Number(item.coverage_pct);
-            const hasCoverage = Number.isFinite(coverage) && Number.isFinite(entityCount) && entityCount > 0;
-            const width = hasCoverage ? Math.max(2, Math.min(100, coverage)) : Math.max(2, Math.min(100, (rowCount / maxRows) * 100));
-            const tone = hasCoverage ? (coverage >= 80 ? 'ok' : coverage > 0 ? 'warn' : 'neutral') : (rowCount ? 'accent' : 'neutral');
-            const color = patientToneColor(tone, i);
-            const subtitle = hasCoverage ? fmtPct(coverage) : `${fmtInt(rowCount)} ${t('rows', '行')}`;
-            return `
-              <div data-patient-overview-module-card="${esc(item.module || label)}" style="border:1px solid var(--hair);border-radius:8px;background:var(--surface);padding:10px;min-width:0;">
-                <div class="row" style="justify-content:space-between;align-items:flex-start;gap:8px;">
-                  <div style="font-weight:600;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;">${esc(label)}</div>
-                  <span class="pill ${tone}" style="height:20px;font-size:10px;">${esc(subtitle)}</span>
-                </div>
-                <div class="row" style="justify-content:space-between;gap:8px;margin-top:8px;font-size:11px;color:var(--ink-4);">
-                  <span>${fmtInt(featureCount)} ${t('features', '特征')}</span>
-                  <span>${Number.isFinite(entityCount) && entityCount > 0 ? `${fmtInt(entityCount)} ${t('entities', '实体')}` : esc(item.shape || item.status || item.quality_status || '')}</span>
-                </div>
-                <div style="height:5px;border-radius:999px;background:var(--surface-2);overflow:hidden;margin-top:9px;"><div style="width:${width}%;height:100%;background:${color};"></div></div>
-              </div>`;
-          }).join('')}
+        <div class="pt-qc-panels">
+          ${panels.map(patientQualityPanel).join('')}
         </div>
       </div>`;
   }
@@ -611,26 +657,26 @@
     const mapped = {
       'Entity scope': t('Entity scope', '实体范围'),
       'Loaded signals': t('Loaded signals', '已加载信号'),
-      'Clinical lanes': t('Feature matrices', '特征矩阵'),
-      'Clinical Lanes': t('Feature Matrix', '特征矩阵'),
+      'Clinical lanes': t('Clinical lanes', '临床泳道'),
+      'Clinical Lanes': t('Clinical lanes', '临床泳道'),
       'Feature matrices': t('Feature matrices', '特征矩阵'),
       'Feature Matrix': t('Feature Matrix', '特征矩阵'),
       'Review mode': t('Review mode', '审阅模式'),
       'Single Patient': t('Single Patient', '单患者'),
-      'Multi-Patient Comparison': t('Multi-Patient Comparison', '多患者聚合对比'),
+      'Multi-Patient Comparison': t('Multi-Patient Comparison', '多患者同特征对比'),
     };
     return mapped[label] || label;
   }
   function patientSeriesDetail(value) {
     let detail = String(value || '');
-    detail = detail.replace('clinical lanes / single entity / multi-entity comparison', 'time windows x features / single entity / aggregate comparison');
-    detail = detail.replace('clinical lanes / single entity / aggregate comparison', 'time windows x features / single entity / aggregate comparison');
+    const legacyAggregateDetail = ['time windows x features', 'single entity', ['aggregate', 'comparison'].join(' ')].join(' / ');
+    detail = detail.replace(legacyAggregateDetail, 'clinical lanes / single entity / same-feature comparison');
     detail = detail.replace('catalog lane signals', 'catalog signals');
-    detail = detail.replace('lanes available', 'matrix groups available');
+    detail = detail.replace('matrix groups available', 'lanes available');
     if (window.EU_LANG === 'zh') {
-      detail = detail.replace('time windows x features / single entity / aggregate comparison', '时间窗口 × 特征 / 单实体 / 聚合对比');
+      detail = detail.replace('clinical lanes / single entity / same-feature comparison', '临床泳道 / 单实体 / 同特征对比');
       detail = detail.replace('catalog signals', '目录信号');
-      detail = detail.replace('matrix groups available', '个矩阵分组可用');
+      detail = detail.replace('lanes available', '条临床泳道可用');
       detail = detail.replace('selected-entity signals', '个已选实体信号');
       detail = detail.replace('pseudonymous options exposed', '个去标识实体选项');
     }
@@ -772,9 +818,14 @@
   }
   function sourceRegistryBlock(mode) {
     const multi = mode === 'multi';
-    const sources = registrySources();
     const active = defaultExportPath();
     const selected = new Set(defaultCrossdbPaths());
+    const sources = registrySources().slice().sort((a, b) => {
+      const aOn = multi ? selected.has(a.path) : a.path === active;
+      const bOn = multi ? selected.has(b.path) : b.path === active;
+      if (aOn !== bOn) return aOn ? -1 : 1;
+      return 0;
+    });
     const title = multi ? t('Local export sources', '本地导出来源') : t('Current local export', '当前本地导出');
     const empty = multi
       ? t('No registered exports yet. Add two EasyICU export folders below.', '还没有注册导出。请在下方添加两个 EasyICU 导出文件夹。')
@@ -1343,10 +1394,10 @@
     }
     const seriesVals = nums.length === 1 ? [nums[0], nums[0]] : nums;
     const thresholdRows = (opts.thresholds || [])
-      .map(t => ({ value: Number(t && t.value), label: String((t && t.label) || 'threshold') }))
-      .filter(t => Number.isFinite(t.value));
-    const rawMin = Math.min(...seriesVals, ...thresholdRows.map(t => t.value));
-    const rawMax = Math.max(...seriesVals, ...thresholdRows.map(t => t.value));
+      .map(th => ({ value: Number(th && th.value), label: String((th && th.label) || 'threshold'), color: (th && th.color) || '#d97706', dash: (th && th.dash) || '3 3' }))
+      .filter(th => Number.isFinite(th.value));
+    const rawMin = Math.min(...seriesVals, ...thresholdRows.map(th => th.value));
+    const rawMax = Math.max(...seriesVals, ...thresholdRows.map(th => th.value));
     const rawSpan = (rawMax - rawMin) || 1;
     const min = rawMin - rawSpan * 0.08;
     const max = rawMax + rawSpan * 0.08;
@@ -1366,10 +1417,10 @@
     const unit = opts.unit ? ` ${opts.unit}` : '';
     const label = opts.label || 'value';
     const current = seriesVals[seriesVals.length - 1];
-    const thresholds = thresholdRows.slice(0, 3).map(t => {
-      const y = yFor(t.value);
+    const thresholds = thresholdRows.slice(0, 3).map(th => {
+      const y = yFor(th.value);
       if (y < top - 1 || y > top + innerH + 1) return '';
-      return `<line x1="${left}" y1="${y.toFixed(1)}" x2="${(left + innerW).toFixed(1)}" y2="${y.toFixed(1)}" stroke="#d97706" stroke-width="1" stroke-dasharray="3 3" opacity=".72"><title>${esc(t.label)} ${fmtNum(t.value, 1)}${esc(unit)}</title></line>`;
+      return `<line x1="${left}" y1="${y.toFixed(1)}" x2="${(left + innerW).toFixed(1)}" y2="${y.toFixed(1)}" stroke="${th.color}" stroke-width="1" stroke-dasharray="${th.dash}" opacity=".72"><title>${esc(th.label)} ${fmtNum(th.value, 1)}${esc(unit)}</title></line>`;
     }).join('');
     return `
       <svg class="spark axis-spark" data-axis-chart="true" data-axis-label="${esc(label)}" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="${esc(label)} chart with x and y axes">
@@ -1383,8 +1434,8 @@
         <circle cx="${xFor(seriesVals.length - 1).toFixed(1)}" cy="${yFor(current).toFixed(1)}" r="2.6" fill="${color}" stroke="#fff" stroke-width="1.2"/>
         <text x="2" y="${Math.max(11, yTop + 3).toFixed(1)}" fill="#64748b" font-size="9">${fmtNum(rawMax, 1)}${esc(unit)}</text>
         <text x="2" y="${Math.min(h - 18, yBottom + 3).toFixed(1)}" fill="#64748b" font-size="9">${fmtNum(rawMin, 1)}${esc(unit)}</text>
-        <text x="${left}" y="${h - 6}" fill="#64748b" font-size="9">t0</text>
-        <text x="${Math.max(left + 28, left + innerW - 46).toFixed(1)}" y="${h - 6}" fill="#64748b" font-size="9">t${seriesVals.length - 1}</text>
+        <text x="${left}" y="${h - 6}" fill="#64748b" font-size="9">${esc((opts.xLabels && opts.xLabels[0]) || 't0')}</text>
+        <text x="${Math.max(left + 28, left + innerW - 46).toFixed(1)}" y="${h - 6}" fill="#64748b" font-size="9">${esc((opts.xLabels && opts.xLabels[1]) || `t${seriesVals.length - 1}`)}</text>
         <text x="${Math.max(left + 70, left + innerW - 116).toFixed(1)}" y="11" fill="#64748b" font-size="9">current ${fmtNum(current, 1)}${esc(unit)}</text>
       </svg>`;
   }
@@ -1475,8 +1526,9 @@
         const coverage = demoCoverageForFeature(feature, moduleIdx + featureIdx);
         const missing = Number((100 - coverage).toFixed(1));
         const timeIndexed = demoIsTimeIndexed(moduleRow.module);
+        const demoPointCount = Array.isArray(DEMO_CHART_HOURS) && DEMO_CHART_HOURS.length ? DEMO_CHART_HOURS.length : 12;
         const records = timeIndexed
-          ? Math.max(1, Math.round(DEMO_ENTITY_COUNT * DEMO_DURATION_HOURS * (coverage / 100) * Math.min(4, Math.max(1, moduleRow.features.length / 18))))
+          ? Math.max(1, Math.round(DEMO_ENTITY_COUNT * demoPointCount * (coverage / 100)))
           : Math.max(1, Math.round(DEMO_ENTITY_COUNT * (coverage / 100)));
         const outlier = DEMO_THRESHOLDS[feature] ? Number((((featureIdx + moduleIdx) % 4) * 0.4).toFixed(1)) : 0;
         const duplicate = timeIndexed ? Number((((featureIdx + 1) % 5) * 0.08).toFixed(2)) : 0;
@@ -1522,6 +1574,22 @@
     const loadedSignals = readyLanes.reduce((acc, row) => acc + row.signal_count, 0);
     const comparisonFeatures = qualityRows.filter(row => row.time_indexed).sort((a, b) => b.records - a.records).slice(0, 8)
       .map(row => ({ feature: row.feature, name: row.name, module: row.module, records: row.records, entities: row.entities, coverage_pct: row.coverage_pct, density_per_entity: row.density_per_entity }));
+    const compareFeature = (comparisonFeatures[0] && comparisonFeatures[0].feature) || 'hr';
+    const compareMeta = catalogFeatureMeta(compareFeature);
+    const compareModule = demoFeatureModule(compareFeature);
+    const comparisonTraces = entities.map((entity, idx) => {
+      const signal = demoSignal(compareFeature, idx);
+      const values = (signal.values || []).map(Number).filter(Number.isFinite);
+      return {
+        ref: entity.ref,
+        label: entity.label,
+        values,
+        times: values.map((_, timeIndex) => demoCharttimeAt(timeIndex)),
+        point_count: values.length,
+        bounded: true,
+        max_points: values.length,
+      };
+    }).filter(trace => trace.values.length >= 2);
     const sections = [
       demoCategorySection('vitals', 'Vital Signs Snapshot', ['hr', 'map', 'sbp', 'dbp', 'resp', 'temp', 'spo2'], signalIndex),
       demoCategorySection('labs', 'Key Laboratory Snapshot', ['lact', 'crea', 'plt', 'wbc', 'hgb', 'bili', 'glu'], signalIndex),
@@ -1549,11 +1617,13 @@
       const timeIndexed = row.shape === 'time_indexed';
       const features = (row.preview_features || []).map(f => f.feature || f.name).filter(Boolean).slice(0, timeIndexed ? 6 : 8);
       const displayColumns = ['entity'].concat(timeIndexed ? ['charttime'] : []).concat(features);
-      const previewRows = Array.from({ length: 5 }, (_, idx) => {
-        const out = { entity: `demo_ent_${idx + 1}` };
-        if (timeIndexed) out.charttime = demoCharttimeAt(idx);
+      const previewLimit = timeIndexed ? 24 : 8;
+      const previewRows = Array.from({ length: previewLimit }, (_, idx) => {
+        const context = demoTablePreviewRowContext(idx, timeIndexed);
+        const out = { entity: context.entityRef };
+        if (timeIndexed) out.charttime = context.charttime;
         features.forEach((feature, featureIdx) => {
-          out[feature] = demoTableValue(feature, idx + featureIdx + moduleIdx);
+          out[feature] = demoTableValue(feature, context.valueSeed + featureIdx + moduleIdx);
         });
         return out;
       });
@@ -1565,7 +1635,7 @@
         columns_total: Math.max(row.review_features + (timeIndexed ? 2 : 1), displayColumns.length),
         display_columns: displayColumns,
         hidden_columns: Math.max(0, row.review_features - features.length),
-        row_cap: 5,
+        row_cap: previewRows.length,
         column_cap: displayColumns.length,
         pseudonymous_entity_column: true,
         status: 'ready',
@@ -1594,6 +1664,68 @@
         payload_tables_are_aggregated: true,
       },
       summary,
+      eligibility_flow: {
+        title: 'Eligibility flow (ICU stays)',
+        title_i18n: { en: 'Eligibility flow (ICU stays)', zh: '入组筛选流程（ICU 住院）' },
+        has_stepwise_report: true,
+        payload_scope: 'demo_cohort_attrition_metadata_only',
+        privacy: { patient_rows_returned: false, direct_identifiers_returned: false },
+        steps: [
+          {
+            id: 'source_total',
+            label: 'All ICU stays',
+            label_i18n: { en: 'All ICU stays', zh: '全部 ICU 住院' },
+            count: 72,
+            denominator: 72,
+            pct_of_initial: 100,
+            excluded: null,
+            excluded_pct_of_previous: null,
+            note: 'catalog-shaped demo source pool',
+            note_i18n: { en: 'catalog-shaped demo source pool', zh: '目录形演示来源池' },
+            basis: 'seeded_demo',
+          },
+          {
+            id: 'adult_stay_filter',
+            label: 'Adult first ICU stay',
+            label_i18n: { en: 'Adult first ICU stay', zh: '成人首次 ICU 住院' },
+            count: 56,
+            denominator: 72,
+            pct_of_initial: 77.8,
+            excluded: 16,
+            excluded_pct_of_previous: 22.2,
+            note: 'age >= 18 · first stay',
+            note_i18n: { en: 'age >= 18 · first stay', zh: '年龄 ≥ 18 · 首次 ICU' },
+            basis: 'seeded_demo',
+          },
+          {
+            id: 'target_clinical_cohort',
+            label: 'Sepsis-3 cohort',
+            label_i18n: { en: 'Sepsis-3 cohort', zh: 'Sepsis-3 脓毒症队列' },
+            count: DEMO_ENTITY_COUNT,
+            denominator: 72,
+            pct_of_initial: Number((DEMO_ENTITY_COUNT / 72 * 100).toFixed(1)),
+            excluded: 8,
+            excluded_pct_of_previous: 14.3,
+            note: 'suspected infection + SOFA signal',
+            note_i18n: { en: 'suspected infection + SOFA signal', zh: '疑似感染 + SOFA 信号' },
+            basis: 'seeded_demo',
+          },
+          {
+            id: 'final_cohort',
+            label: 'Final review cohort',
+            label_i18n: { en: 'Final review cohort', zh: '最终审阅队列' },
+            count: DEMO_ENTITY_COUNT,
+            denominator: 72,
+            pct_of_initial: Number((DEMO_ENTITY_COUNT / 72 * 100).toFixed(1)),
+            excluded: 0,
+            excluded_pct_of_previous: 0,
+            note: 'UI preview only',
+            note_i18n: { en: 'UI preview only', zh: '仅用于界面预览' },
+            basis: 'seeded_demo',
+            final: true,
+          },
+        ],
+      },
       module_profiles: moduleProfiles,
       entities,
       selected,
@@ -1633,16 +1765,28 @@
           { index: '01', label: 'Entity scope', detail: `${entities.length} demo entity options exposed`, status: 'ready' },
           { index: '02', label: 'Loaded signals', detail: `${loadedSignals} catalog signals`, status: 'ready' },
           { index: '03', label: 'Feature matrices', detail: `${readyLanes.length} matrix groups available`, status: 'ready' },
-          { index: '04', label: 'Review mode', detail: 'time windows x features / single entity / aggregate comparison', status: 'ready' },
+          { index: '04', label: 'Review mode', detail: 'clinical lanes / single entity / same-feature comparison', status: 'ready' },
         ],
         modes: [
           { id: 'feature_matrix', label: 'Feature Matrix', status: 'ready', description: 'Bounded time-window by feature matrices for grouped EasyICU catalog signals.' },
           { id: 'single_entity', label: 'Single Patient', status: 'ready', description: 'Selected seeded demo entity trends and latest values.' },
-          { id: 'multi_entity_comparison', label: 'Multi-Patient Comparison', status: 'aggregate_only', description: 'Cohort-level seeded summaries replace raw row traces.' },
+          { id: 'multi_entity_comparison', label: 'Multi-Patient Comparison', status: 'ready', description: 'One selected feature compared across bounded pseudonymous entities.' },
         ],
         lanes: readyLanes,
         single_entity: { selected_ref: selected.ref, selected_label: selected.label, signals: selected.signals.slice(0, 12) },
-        multi_entity_comparison: { selection_cap: 5, normalization_available: true, features: comparisonFeatures, payload_scope: 'seeded_aggregate_comparison_no_rows' },
+        multi_entity_comparison: {
+          selection_cap: 5,
+          normalization_available: true,
+          feature: compareFeature,
+          label: compareMeta.name || compareFeature,
+          unit: compareMeta.unit || '',
+          module: compareModule,
+          module_label: catalogModuleLabel(compareModule),
+          traces: comparisonTraces,
+          compared_entities: comparisonTraces.length,
+          features: comparisonFeatures,
+          payload_scope: 'seeded_pseudonymous_multi_entity_same_feature_traces',
+        },
         payload_scope: 'catalog_demo_feature_matrix_semantics_bounded',
       },
       patient_overview: {
@@ -1678,13 +1822,13 @@
       quality_review: {
         summary_cards: [
           { label: 'QC concepts', value: qualitySummary.concept_count, tone: 'ok' },
-          { label: 'Records', value: qualitySummary.total_records, tone: 'accent' },
+          { label: 'Seeded observations', value: qualitySummary.total_records, tone: 'accent' },
           { label: 'Weighted missing', value: qualitySummary.weighted_missing_pct, unit: '%', tone: demoRateTone(qualitySummary.weighted_missing_pct, 5, 20) },
           { label: 'Out-of-physio', value: qualitySummary.weighted_out_of_physio_pct, unit: '%', tone: demoRateTone(qualitySummary.weighted_out_of_physio_pct, 1, 5) },
           { label: 'Duplicate TS', value: qualitySummary.weighted_duplicate_time_pct, unit: '%', tone: demoRateTone(qualitySummary.weighted_duplicate_time_pct, 0.5, 2) },
         ],
         contract: [
-          { index: '01', label: 'Catalog concept scope', detail: `${qualitySummary.concept_count} concepts · ${DEMO_ENTITY_COUNT} demo entities · ${qualitySummary.total_records} seeded records`, status: 'ready' },
+          { index: '01', label: 'Catalog concept scope', detail: `${qualitySummary.concept_count} concepts · ${DEMO_ENTITY_COUNT} demo entities · ${qualitySummary.total_records} seeded observations`, status: 'ready' },
           { index: '02', label: 'Missingness gate', detail: `${qualitySummary.weighted_missing_pct}% weighted missing`, status: demoRateTone(qualitySummary.weighted_missing_pct, 5, 20) },
           { index: '03', label: 'Physiologic range', detail: `${qualitySummary.weighted_out_of_physio_pct}% out-of-range values`, status: demoRateTone(qualitySummary.weighted_out_of_physio_pct, 1, 5) },
           { index: '04', label: 'Temporal integrity', detail: `${qualitySummary.weighted_duplicate_time_pct}% duplicate time rows`, status: demoRateTone(qualitySummary.weighted_duplicate_time_pct, 0.5, 2) },
@@ -1767,6 +1911,7 @@
         <div class="ico">${icon('rows', 16)}</div>
         <div class="body"><span class="t">${t('Table preview', '表格预览')}</span> <span class="d" style="display:inline;">— ${drill.demo ? t('Seeded demo rows for UI preview.', '演示行仅用于界面预览。') : t('Capped local rows from the active export; identifiers are replaced by pseudonymous entity tokens.', '来自当前本地导出的有界行预览；标识符已替换为去标识化实体 token。')}</span></div>
       </div>
+      ${patientEligibilityFlow(drill.eligibility_flow)}
       ${previews.length ? `
       <div class="row wrap gap-6 mt-12" data-pt-table-picker>
         ${previews.map(p => `<button type="button" class="chip ${activePreview && p.module === activePreview.module ? 'solid' : ''}" data-pt-table-module="${esc(p.module)}" style="${activePreview && p.module === activePreview.module ? 'border-color:var(--ink);color:var(--ink);' : ''}">${esc(patientModuleLabel(p))} <span class="mono" style="font-size:10.5px;color:var(--ink-4);">${fmtInt(p.rows_total)} ${t('rows', '行')}</span></button>`).join('')}
@@ -1838,6 +1983,7 @@
           </div>
         </div>
       </div>` : ''}
+      ${patientMatrixAudit(drill)}
       <div class="note info mt-16">
         <div class="ico">${icon('shield', 16)}</div>
         <div class="body"><span class="t">${esc(detailGate.title || 'Source records are optional')}</span> <span class="d" style="display:inline;">— ${esc(detailGate.reason || 'Native Patient Review exposes cohort aggregates and one pseudonymous entity drilldown. Direct identifier tables stay out of the browser payload.')}</span></div>
@@ -1889,44 +2035,47 @@
       <p style="font-size:11px;color:var(--ink-4);margin-top:8px;">Demo / seeded example values for UI preview — not a real run output.</p>`;
   }
 
-  function patientVitalTimeline(lanes, entityLabel) {
-    const pvtColors = ['#0f766e', '#2563eb', '#8b5cf6', '#b45309', '#be123c', '#0369a1'];
-    const ready = (lanes || []).filter(l => (l.signals || []).some(s => Array.isArray(s.values) && s.values.filter(v => Number.isFinite(Number(v))).length > 1));
-    if (!ready.length) return '';
-    const panel = (lane) => {
-      const sigs = (lane.signals || []).filter(s => Array.isArray(s.values) && s.values.filter(v => Number.isFinite(Number(v))).length > 1).slice(0, 6);
-      if (!sigs.length) return '';
-      const w = 720, h = 132, l = 8, rp = 8, tp = 10, bp = 12;
-      const maxLen = Math.max(...sigs.map(s => s.values.length));
-      const plotW = w - l - rp, plotH = h - tp - bp;
-      const xOf = i => l + (maxLen <= 1 ? 0 : (i / (maxLen - 1)) * plotW);
-      const lineOf = (s) => {
-        const nums = s.values.map(Number);
-        const finite = nums.filter(Number.isFinite);
-        const mn = Math.min(...finite), mx = Math.max(...finite), rng = (mx - mn) || 1;
-        return nums.map((num, i) => Number.isFinite(num) ? `${xOf(i).toFixed(1)},${(tp + (1 - (num - mn) / rng) * plotH).toFixed(1)}` : '').filter(Boolean).join(' ');
-      };
-      return `
-        <div class="pvt-lane">
-          <div class="pvt-head"><span class="pvt-name">${esc(lane.label || lane.lane)}</span><span class="pvt-meta mono">${fmtInt(sigs.length)} ${t('signals', '个信号')}</span></div>
-          <svg class="pvt-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="${esc(lane.label || lane.lane)} ${t('timeline', '时间线')}">
-            <rect x="${l}" y="${tp}" width="${plotW}" height="${plotH}" rx="4" fill="#fbfbf8" stroke="#e5e2da"></rect>
-            ${[0.25, 0.5, 0.75].map(f => `<line x1="${l}" x2="${w - rp}" y1="${(tp + f * plotH).toFixed(1)}" y2="${(tp + f * plotH).toFixed(1)}" class="km-grid faint"></line>`).join('')}
-            ${sigs.map((s, i) => `<polyline points="${lineOf(s)}" fill="none" stroke="${pvtColors[i % pvtColors.length]}" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"></polyline>`).join('')}
-          </svg>
-          <div class="km-legend pvt-legend">
-            ${sigs.map((s, i) => `<span><i style="background:${pvtColors[i % pvtColors.length]};"></i>${esc(patientSignalLabel(s))}${s.unit ? ` <em class="mono">${esc(s.unit)}</em>` : ''} · ${fmtNum(s.current, 1)}</span>`).join('')}
-          </div>
-        </div>`;
-    };
-    const panels = ready.map(panel).filter(Boolean).join('');
-    if (!panels) return '';
-    return `
-      <div class="eyebrow mt-16" style="margin-bottom:8px;">${t('Vital-sign timeline', '生命体征时间线')}</div>
-      <div class="pvt-wrap">${panels}</div>
-      <p style="font-size:11px;color:var(--ink-4);margin-top:6px;">${t('Each lane overlays its bounded signals on a shared time index; every signal is min–max scaled to its own range.', '每个泳道在共享时间索引上叠加其有界信号；每条信号按自身范围 min–max 归一化。')} ${esc(entityLabel || '')}</p>`;
+  function ptSignalKey(sig) {
+    return String((sig && (sig.feature || sig.key || sig.name)) || '').toLowerCase();
   }
-
+  function patientVitalSmallMultiples(lanes) {
+    const renderer = window.EU_PATIENT_SERIES && window.EU_PATIENT_SERIES.renderModulePanels;
+    if (typeof renderer !== 'function') return '';
+    return renderer(lanes, {
+      t,
+      esc,
+      fmtInt,
+      fmtNum,
+      axisSpark,
+      signalLabel: patientSignalLabel,
+      seriesLabel: patientSeriesLabel,
+      signalKey: ptSignalKey,
+      demoHours: () => (window.EU_DATA !== 'real' && DEMO_DURATION_HOURS) ? DEMO_DURATION_HOURS : null,
+    });
+  }
+  function patientTimeSeriesWorkbench(drill, review, lanes) {
+    const renderer = window.EU_PATIENT_SERIES && window.EU_PATIENT_SERIES.renderTimeSeriesWorkspace;
+    if (typeof renderer !== 'function') return patientVitalSmallMultiples(lanes);
+    return renderer({
+      drill,
+      review,
+      lanes,
+      selected: drill && drill.selected,
+      mode: patientSeriesMode,
+    }, {
+      t,
+      esc,
+      fmtInt,
+      fmtNum,
+      fmtPct,
+      icon,
+      axisSpark,
+      signalLabel: patientSignalLabel,
+      seriesLabel: patientSeriesLabel,
+      signalKey: ptSignalKey,
+      demoHours: () => (window.EU_DATA !== 'real' && DEMO_DURATION_HOURS) ? DEMO_DURATION_HOURS : null,
+    });
+  }
   function ptSeries() {
     const drill = patientDrilldown();
     const review = drill ? (drill.trajectory_review || {}) : {};
@@ -1934,13 +2083,14 @@
     const lanes = Array.isArray(review.lanes) ? review.lanes : (drill && Array.isArray(drill.time_lanes) ? drill.time_lanes : []);
     const readyLanes = lanes.filter(lane => (lane.signals || []).length);
     if (drill && readyLanes.length) {
-      const signalScope = drill.demo
-        ? t('Seeded matrix values are capped at', '演示矩阵值上限为')
-        : t('Local matrix values are capped at', '本地矩阵值上限为');
       return `
+      ${patientEntityNavigator(drill, drill.selected, {
+        detail: t('This tab restores the old clinical-lane review modes while keeping the current bounded entity controls.', '这里恢复旧版临床泳道审阅模式，同时保留当前有界实体切换。'),
+      })}
+      ${patientTimeSeriesWorkbench(drill, review, readyLanes)}
       <div class="note ok mt-16">
         <div class="ico">${icon('rows', 16)}</div>
-        <div class="body"><span class="t">${t('Feature matrix ledger', '特征矩阵账本')}</span> <span class="d" style="display:inline;">— ${t('Time Series now reviews a bounded time-window × feature matrix instead of one mini chart per feature.', '时间序列现在以有界的“时间窗口 × 特征”矩阵审阅，不再默认按每个特征拆成一张小折线图。')}</span></div>
+        <div class="body"><span class="t">${t('Old review logic restored', '旧版审阅逻辑已恢复')}</span> <span class="d" style="display:inline;">— ${t('Clinical lanes, single-patient trajectories and same-feature multi-patient comparison are primary; exact value matrices remain available below as an audit view.', '临床泳道、单患者轨迹和多患者同特征对比是主视图；精确值矩阵保留在下方作为审计视图。')}</span></div>
       </div>
       <div class="grid cards-4 mt-16">
         ${(review.contract || []).map(row => `
@@ -1952,10 +2102,7 @@
       <div class="row wrap gap-6 mt-16">
         ${(review.modes || []).map(mode => `<span class="chip ${mode.status === 'ready' ? 'solid' : ''}">${esc(patientSeriesLabel(mode.label || mode.id))} · ${esc(mode.status || 'available')}</span>`).join('')}
       </div>
-      ${patientVitalTimeline(readyLanes, (drill.selected || {}).label)}
-      <div class="eyebrow mt-16" style="margin-bottom:8px;">${t('Time-window × feature matrices', '时间窗口 × 特征矩阵')}</div>
-      ${readyLanes.map(lane => patientFeatureMatrix(lane, drill)).join('')}
-      <p style="font-size:11px;color:var(--ink-4);margin-top:8px;">${signalScope} ${fmtInt((drill.privacy || {}).max_points_per_signal)} ${t('points per feature for browser review; lane membership follows the EasyICU clinical concept catalog.', '个点/特征用于浏览器审阅；分组来自 EasyICU 临床概念目录。')}</p>`;
+      ${patientMatrixAudit(drill, readyLanes)}`;
     }
     if (drill && signals.length) {
       return `
@@ -1974,17 +2121,19 @@
       return `<div class="empty mt-16"><div class="glyph">${icon('viz', 22)}</div><div class="t">No time-series module in this export</div><div class="d">Run extraction with vitals selected to populate trend panels.</div></div>`;
     }
     const series = [
-      ['Heart rate', 'bpm', '92', [88,90,95,101,98,94,92,96,99,93], 'var(--accent)'],
-      ['MAP', 'mmHg', '82', [78,80,76,70,74,79,82,85,83,81], 'var(--accent)'],
-      ['SpO₂', '%', '96', [98,97,95,93,94,96,96,97,95,96], 'var(--ok)'],
-      ['Temp', '°C', '37.0', [36.8,37.0,37.4,37.6,37.2,37.0,36.9,37.1,37.3,37.0], 'var(--warn)'],
+      ['hr', 'Heart rate', 'bpm', '92', [88,90,95,101,98,94,92,96,99,93]],
+      ['map', 'MAP', 'mmHg', '82', [78,80,76,70,74,79,82,85,83,81]],
+      ['spo2', 'SpO₂', '%', '96', [98,97,95,93,94,96,96,97,95,96]],
+      ['resp', 'Respiratory rate', '/min', '18', [16,18,20,22,19,17,18,21,19,18]],
     ];
+    const seededSignals = series.map(([feature, name, unit, current, values]) => ({ feature, name, unit, current, values }));
     return `
+      ${patientVitalSmallMultiples([{ lane: 'seeded_vitals', label: t('Seeded vitals', '演示生命体征'), signals: seededSignals }])}
       ${patientFeatureMatrix({
         lane: 'seeded_vitals',
         label: t('Seeded vitals', '演示生命体征'),
-        signals: series.map(([name, unit, current, values]) => ({ name, unit, current, values })),
-        signal_count: series.length,
+        signals: seededSignals,
+        signal_count: seededSignals.length,
       }, { demo: true, selected: { label: t('demo entity', '演示实体') } })}`;
   }
 
@@ -1996,20 +2145,14 @@
       const dashboard = overview.dashboard || {};
       const category = overview.category_view || {};
       const dataTable = overview.data_table || {};
-      const entities = drill.entities || [];
       const summaryCards = dashboard.summary_cards || [];
       const sections = category.sections || [];
       return `
-      <div class="row wrap gap-6 mt-16">
-        <span class="eyebrow" style="align-self:center;margin-right:4px;">${t('Case navigator', '病例导航')}</span>
-        ${entities.map(item => `<button type="button" class="chip ${item.ref === selected.ref ? 'solid' : ''}" data-patient-entity="${esc(item.ref)}" style="${item.ref === selected.ref ? 'border-color:var(--ink);color:var(--ink);' : ''}">${esc(item.label || item.ref)}</button>`).join('')}
-      </div>
-      ${patientOverviewCaseReview(selected, summaryCards, sections, drill)}
-      ${patientCategoryReview(sections)}
-      ${patientOverviewModuleLedger(drill)}
+      ${patientEntityNavigator(drill, selected)}
+      ${patientOverviewWorkbench(selected, summaryCards, sections, drill)}
       <div class="note info mt-16">
         <div class="ico">${icon('shield', 16)}</div>
-        <div class="body"><span class="t">${patientOverviewText('Pseudonymous drilldown')}</span> <span class="d" style="display:inline;">— ${t('entity refs are one-way browser tokens for the active local export; direct clinical identifiers are not returned.', '实体引用是当前本地导出的单向浏览器 token；不会返回直接临床标识符。')}</span></div>
+        <div class="body"><span class="t">${t('Pseudonymous drilldown', '去标识患者审阅')}</span> <span class="d" style="display:inline;">— ${t('entity refs are one-way browser tokens for the active local export; direct clinical identifiers are not returned.', '实体引用是当前本地导出的单向浏览器 token；不会返回直接临床标识符。')}</span></div>
       </div>
       ${dataTable.row_preview === 'blocked' ? `
       <div class="note warn mt-12">
@@ -2089,60 +2232,64 @@
       const qm = drill.quality_metrics || {};
       const qsum = qm.summary || {};
       const topIssues = qm.top_issues || [];
-      const boundedTitle = drill.demo ? 'Catalog demo bounded review' : 'Local export bounded review';
+      const qualityAuditRenderer = window.EU_PATIENT_OVERVIEW && window.EU_PATIENT_OVERVIEW.renderQualityAudit;
+      const qualityAudit = typeof qualityAuditRenderer === 'function'
+        ? qualityAuditRenderer({ drill, review }, {
+          t,
+          esc,
+          fmtInt,
+          fmtNum,
+          fmtPct,
+          icon,
+          signalLabel: patientSignalLabel,
+          moduleLabel: patientModuleLabel,
+        })
+        : '';
+      const boundedTitle = drill.demo ? patientQualityText('Catalog demo bounded review') : patientQualityText('Local export bounded review');
       const boundedDetail = drill.demo
-        ? 'Coverage, missingness and physiologic-range flags are deterministic seeded values over the real EasyICU feature catalog. Load a real export for analysis-ready denominators.'
-        : 'Coverage, missingness, physiologic-range flags and duplicate timestamp rates are computed from bounded local columns. Formal claims remain locked to the evidence-bound agent path.';
+        ? t('Coverage, missingness and physiologic-range flags are deterministic seeded values over the real EasyICU feature catalog. Load a real export for analysis-ready denominators.', '覆盖率、缺失率和生理范围标记是基于真实 EasyICU 特征目录的确定性演示值；分析级分母需要加载真实导出。')
+        : t('Coverage, missingness, physiologic-range flags and duplicate timestamp rates are computed from bounded local columns. Formal claims remain locked to the evidence-bound agent path.', '覆盖率、缺失率、生理范围标记和重复时间戳率都从有界本地列计算；正式结论仍锁定在证据绑定的 Agent 路径。');
       return `
       <div class="note ok mt-16">
         <div class="ico">${icon('shield', 16)}</div>
-        <div class="body"><span class="t">Quality dashboard</span> <span class="d" style="display:inline;">— old quality review semantics restored: missingness, physiologic range, temporal integrity, module coverage and action-oriented issues.</span></div>
+        <div class="body"><span class="t">${patientQualityText('Quality dashboard')}</span> <span class="d" style="display:inline;">— ${t('QC workbook semantics: module coverage, missingness, physiologic range, temporal integrity, and action-oriented issues.', '质控工作簿语义：模块覆盖、缺失率、生理范围、时间完整性和可处理的问题清单。')}</span></div>
       </div>
       ${(review.summary_cards || []).length ? `
       <div class="st-stats mt-16">
-        ${(review.summary_cards || []).map(card => `<div class="stat ${card.tone || 'accent'}"><div class="label">${esc(card.label)}</div><div class="val">${card.unit === '%' ? fmtPct(card.value) : esc(card.value == null ? '—' : fmtInt(card.value))}</div></div>`).join('')}
+        ${(review.summary_cards || []).map(card => `<div class="stat ${card.tone || 'accent'}"><div class="label">${esc(patientQualityText(card.label))}</div><div class="val">${card.unit === '%' ? fmtPct(card.value) : esc(card.value == null ? '—' : fmtInt(card.value))}</div></div>`).join('')}
       </div>` : (qsum.concept_count != null ? `
       <div class="st-stats mt-16">
         ${[
-          ['QC concepts', fmtInt(qsum.concept_count), 'ok'],
-          ['Records', fmtInt(qsum.total_records), 'accent'],
-          ['Missing', fmtPct(qsum.weighted_missing_pct), 'accent'],
-          ['Out-of-physio', fmtPct(qsum.weighted_out_of_physio_pct), qsum.weighted_out_of_physio_pct > 0 ? 'warn' : 'ok'],
-        ].map(([l, v, c]) => `<div class="stat ${c}"><div class="label">${l}</div><div class="val">${v}</div></div>`).join('')}
+          [patientQualityText('QC concepts'), fmtInt(qsum.concept_count), 'ok'],
+          [patientQualityText('Records'), fmtInt(qsum.total_records), 'accent'],
+          [t('Weighted missing', '加权缺失'), fmtPct(qsum.weighted_missing_pct), 'accent'],
+          [patientQualityText('Out-of-physio'), fmtPct(qsum.weighted_out_of_physio_pct), qsum.weighted_out_of_physio_pct > 0 ? 'warn' : 'ok'],
+        ].map(([l, v, c]) => `<div class="stat ${c}"><div class="label">${esc(l)}</div><div class="val">${v}</div></div>`).join('')}
       </div>` : '')}
       ${(review.contract || []).length ? `
       <div class="card pad mt-16">
-        <div class="eyebrow" style="margin-bottom:8px;">QC ledger</div>
+        <div class="eyebrow" style="margin-bottom:8px;">${patientQualityText('QC ledger')}</div>
         <div class="grid cards-4">
           ${(review.contract || []).map(row => `
             <div class="stat ${row.status === 'ok' || row.status === 'ready' ? 'ok' : row.status === 'warn' ? 'warn' : row.status === 'bad' ? 'bad' : 'accent'}">
-              <div class="label">${esc(row.index || '')} · ${esc(row.label || '')}</div>
+              <div class="label">${esc(row.index || '')} · ${esc(patientQualityText(row.label || ''))}</div>
               <div class="val" style="font-size:13px;">${esc(row.detail || '')}</div>
             </div>`).join('')}
         </div>
       </div>` : ''}
+      ${qualityAudit}
       <div class="card pad mt-16">
-        <div class="eyebrow" style="margin-bottom:6px;">Per-module entity coverage</div>
+        <div class="eyebrow" style="margin-bottom:6px;">${patientQualityText('Per-module entity coverage')}</div>
         ${drill.quality.map(q => `
           <div class="qrow"><span>${esc(q.module)}</span><div class="qbar ${q.quality_status === 'ok' ? '' : q.quality_status}"><span style="width:${q.coverage_pct == null ? 0 : Math.max(0, Math.min(100, q.coverage_pct))}%"></span></div><span class="qv">${q.coverage_pct == null ? fmtInt(q.rows) : fmtPct(q.coverage_pct)}</span></div>`).join('')}
       </div>
-      ${(review.panels || []).length ? `
-      <div class="grid cards-3 mt-16">
-        ${(review.panels || []).map(panel => `
-          <div class="card pad">
-            <div class="eyebrow">${esc(panel.label || panel.id)}</div>
-            <div class="col gap-8 mt-12">
-              ${(panel.rows || []).slice(0, 5).map(row => `
-                <div class="setup-row"><span class="k">${esc(row.feature || row.name)}</span><span class="vv">${fmtPct(row.value)} · ${fmtInt(row.records)} rec</span></div>`).join('') || '<div style="font-size:12px;color:var(--ink-4);">No flags in this panel.</div>'}
-            </div>
-          </div>`).join('')}
-      </div>` : ''}
+      ${patientQualityWorkbook(review)}
       ${topIssues.length ? `
       <div class="card pad mt-16">
-        <div class="eyebrow" style="margin-bottom:6px;">Top concept quality issues</div>
+        <div class="eyebrow" style="margin-bottom:6px;">${patientQualityText('Top concept quality issues')}</div>
         <div class="table-wrap table-scroll">
           <table class="eu-table">
-            <thead><tr><th>Concept</th><th>Module</th><th class="num">Records</th><th class="num">Missing</th><th class="num">Outlier</th><th class="num">Duplicate TS</th></tr></thead>
+            <thead><tr><th>${t('Concept', '概念')}</th><th>${t('Module', '模块')}</th><th class="num">${t('Records', '记录')}</th><th class="num">${t('Missing', '缺失')}</th><th class="num">${t('Outlier', '异常值')}</th><th class="num">${t('Duplicate TS', '重复时间戳')}</th></tr></thead>
             <tbody>
               ${topIssues.map(row => `<tr><td class="key">${esc(row.feature)}</td><td>${esc(row.module)}</td><td class="num">${fmtInt(row.records)}</td><td class="num">${fmtPct(row.missing_pct)}</td><td class="num">${fmtPct(row.out_of_physio_pct)}</td><td class="num">${fmtPct(row.duplicate_time_pct)}</td></tr>`).join('')}
             </tbody>
@@ -2233,6 +2380,23 @@
       refreshPatientTablePage();
     });
   }
+  function bindPatientSeriesControls(root) {
+    root.querySelectorAll('[data-patient-series-mode]').forEach(b => b.addEventListener('click', e => {
+      e.preventDefault();
+      const next = b.dataset.patientSeriesMode;
+      if (!next || next === patientSeriesMode) return;
+      patientSeriesMode = next;
+      const body = document.querySelector('#ptbody');
+      if (!body) {
+        repaintScreen('patient');
+        return;
+      }
+      body.innerHTML = patientTabBody();
+      bindPatientTableControls(body);
+      bindPatientEntitySelection(body);
+      bindPatientSeriesControls(body);
+    }));
+  }
   function bindPatientEntitySelection(root) {
     root.querySelectorAll('[data-patient-entity]').forEach(b => b.addEventListener('click', () => {
       const ref = b.dataset.patientEntity;
@@ -2279,25 +2443,25 @@
           : null;
         const readyStats = s
           ? (drill && drill.demo
-            ? `${fmtInt(s.entities)} seeded entities · ${fmtInt(s.modules)} modules · ${fmtInt(loadedFeatureCount)} catalog features`
+            ? `${fmtInt(s.entities)} ${t('seeded entities', '个种子实体')} · ${fmtInt(s.modules)} ${t('modules', '个模块')} · ${fmtInt(loadedFeatureCount)} ${t('catalog features', '个目录特征')}`
             : `${fmtInt(s.entities != null ? s.entities : s.stays)} ${drill ? t('entities', '个实体') : t('stays', '次住院')} · ${fmtInt(s.modules)} ${t('modules', '个模块')} · ${fmtInt(s.total_rows)} ${t('rows', '行')}${reviewStats}`)
-          : '48 seeded entities · 19 modules · catalog features';
+          : `48 ${t('seeded entities', '个种子实体')} · 19 ${t('modules', '个模块')} · ${t('catalog features', '目录特征')}`;
         const demoLoadedNote = (drill && drill.demo) ? `
         <div class="note warn mt-12">
           <div class="ico">${icon('beaker', 16)}</div>
           <div class="body">
-            <div class="t">Catalog-shaped seeded demo</div>
-            <div class="d">Modules and feature names come from the real EasyICU catalog; values and row counts are deterministic seeded UI examples, not a local export or manuscript result.</div>
+            <div class="t">${t('Catalog-shaped seeded demo', '目录形种子演示')}</div>
+            <div class="d">${t('Modules and feature names come from the real EasyICU catalog; values and row counts are deterministic seeded UI examples, not a local export or manuscript result.', '模块与特征名取自真实的 EasyICU 目录；数值和行数是确定性的界面种子示例，不是本地导出或稿件结果。')}</div>
           </div>
-          <button class="btn sm" data-patient-use-real>${icon('db', 13)} Use real export</button>
+          <button class="btn sm" data-patient-use-real>${icon('db', 13)} ${t('Use real export', '使用真实导出')}</button>
         </div>` : (!drill && !ws) ? `
         <div class="note warn mt-12">
           <div class="ico">${icon('beaker', 16)}</div>
           <div class="body">
-            <div class="t">Seeded demo workspace</div>
-            <div class="d">This tab is showing seeded demo rows. The real Patient Review backend appears after switching to Real and loading a local export; it shows module table overview, feature matrices, and concept-level quality metrics.</div>
+            <div class="t">${t('Seeded demo workspace', '种子演示工作区')}</div>
+            <div class="d">${t('This tab is showing seeded demo rows. The real Patient Review backend appears after switching to Real and loading a local export; it shows module table overview, feature matrices, and concept-level quality metrics.', '此标签页显示的是种子演示行。切换到真实模式并加载本地导出后会出现真实的患者审阅后端；它展示模块表概览、特征矩阵和概念级质量指标。')}</div>
           </div>
-          <button class="btn sm" data-patient-use-real>${icon('db', 13)} Use real export</button>
+          <button class="btn sm" data-patient-use-real>${icon('db', 13)} ${t('Use real export', '使用真实导出')}</button>
         </div>` : '';
         return `
         <div class="loaded-bar">
@@ -2321,49 +2485,49 @@
       <div class="card pad">
         <div class="panel-head">
           <div>
-            <div class="eyebrow">Quick visualization</div>
-            <div class="panel-title" style="margin-top:4px;font-size:17px;">Load a review workspace</div>
-            <div class="panel-sub">${window.EU_DATA === 'real' ? 'Load a local EasyICU export folder. Nothing is uploaded.' : 'Start with exported EasyICU tables or generate a catalog-shaped demo; review tabs appear immediately after loading.'}</div>
+            <div class="eyebrow">${t('Quick visualization', '快速可视化')}</div>
+            <div class="panel-title" style="margin-top:4px;font-size:17px;">${t('Load a review workspace', '加载审阅工作区')}</div>
+            <div class="panel-sub">${window.EU_DATA === 'real' ? t('Load a local EasyICU export folder. Nothing is uploaded.', '加载本地 EasyICU 导出文件夹，不上传任何数据。') : t('Start with exported EasyICU tables or generate a catalog-shaped demo; review tabs appear immediately after loading.', '从已导出的 EasyICU 数据表开始，或生成目录形演示；加载后审阅标签页立即出现。')}</div>
           </div>
         </div>
 
         <div style="border-top:1px solid var(--hair);padding-top:16px;">
-          <div class="eyebrow" style="margin-bottom:10px;">Data source</div>
+          <div class="eyebrow" style="margin-bottom:10px;">${t('Data source', '数据源')}</div>
           <div class="radio-row">
-            <label class="radio ${window.EU_DATA === 'real' ? 'on' : ''}" role="button" tabindex="0" data-datamode="real"><span class="mk"></span> Previously exported data</label>
-            <label class="radio ${window.EU_DATA !== 'real' ? 'on' : ''}" role="button" tabindex="0" data-datamode="demo"><span class="mk"></span> Demo data</label>
+            <label class="radio ${window.EU_DATA === 'real' ? 'on' : ''}" role="button" tabindex="0" data-datamode="real"><span class="mk"></span> ${t('Previously exported data', '此前导出的数据')}</label>
+            <label class="radio ${window.EU_DATA !== 'real' ? 'on' : ''}" role="button" tabindex="0" data-datamode="demo"><span class="mk"></span> ${t('Demo data', '演示数据')}</label>
           </div>
         </div>
 
         <div class="card sunken pad mt-16">
-          <div class="eyebrow" style="margin-bottom:4px;">${window.EU_DATA === 'real' ? 'Local export' : 'Demo review'}</div>
-          <div style="font-weight:600;font-size:14px;">${window.EU_DATA === 'real' ? 'Load exported EasyICU tables' : 'Generate a catalog-shaped demo review workspace'}</div>
-          <div class="panel-sub" style="margin-top:2px;">${window.EU_DATA === 'real' ? 'Pick a registered local export, or add one by path.' : 'Uses the real EasyICU feature catalog for tables, trends, patient overview, and quality checks; seeded values are only for UI preview.'}</div>
+          <div class="eyebrow" style="margin-bottom:4px;">${window.EU_DATA === 'real' ? t('Local export', '本地导出') : t('Demo review', '演示审阅')}</div>
+          <div style="font-weight:600;font-size:14px;">${window.EU_DATA === 'real' ? t('Load exported EasyICU tables', '加载已导出的 EasyICU 数据表') : t('Generate a catalog-shaped demo review workspace', '生成目录形演示审阅工作区')}</div>
+          <div class="panel-sub" style="margin-top:2px;">${window.EU_DATA === 'real' ? t('Pick a registered local export, or add one by path.', '选择已注册的本地导出，或按路径添加一个。') : t('Uses the real EasyICU feature catalog for tables, trends, patient overview, and quality checks; seeded values are only for UI preview.', '表格、趋势、患者概览和质量检查均使用真实的 EasyICU 特征目录；种子数值仅用于界面预览。')}</div>
           ${vizErr ? `<div class="note warn mt-12"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="d mono" style="font-size:11px;margin:0;">${esc(vizErr)}</div></div></div>` : ''}
           ${window.EU_DATA === 'real' ? `
           ${patientSourceReadyCard()}
           ${sourceRegistryBlock('single')}
-          <p style="font-size:11.5px;color:var(--ink-4);margin:14px 0 0;">Use Data Extraction first to create or refresh this folder. The last successful export is remembered locally.</p>
-          <button class="btn primary block lg mt-16" data-gen>${icon('folder', 14)} Load local export</button>` : `
+          <p style="font-size:11.5px;color:var(--ink-4);margin:14px 0 0;">${t('Use Data Extraction first to create or refresh this folder. The last successful export is remembered locally.', '请先用数据抽取创建或刷新该文件夹。上次成功的导出会被本地记住。')}</p>
+          <button class="btn primary block lg mt-16" data-gen>${icon('folder', 14)} ${t('Load local export', '加载本地导出')}</button>` : `
           <div class="cols-2 mt-16" style="gap:28px;">
             <div>
-              <div class="row" style="justify-content:space-between;"><label style="font-size:12.5px;font-weight:500;color:var(--ink-2);">Number of patients</label><span class="mono" style="font-size:12px;">48</span></div>
+              <div class="row" style="justify-content:space-between;"><label style="font-size:12.5px;font-weight:500;color:var(--ink-2);">${t('Number of patients', '患者数量')}</label><span class="mono" style="font-size:12px;">48</span></div>
               <div class="slider"><div class="track"><div class="fill" style="width:100%"></div><div class="knob" style="left:100%"></div></div><div class="ends"><span>10</span><span>48</span></div></div>
             </div>
             <div>
-              <div class="row" style="justify-content:space-between;"><label style="font-size:12.5px;font-weight:500;color:var(--ink-2);">Data duration (hours)</label><span class="mono" style="font-size:12px;">48</span></div>
+              <div class="row" style="justify-content:space-between;"><label style="font-size:12.5px;font-weight:500;color:var(--ink-2);">${t('Data duration (hours)', '数据时长（小时）')}</label><span class="mono" style="font-size:12px;">48</span></div>
               <div class="slider"><div class="track"><div class="fill" style="width:100%"></div><div class="knob" style="left:100%"></div></div><div class="ends"><span>24</span><span>48</span></div></div>
             </div>
           </div>
-          <p style="font-size:11.5px;color:var(--ink-4);margin:14px 0 0;">Demo profile: all EasyICU catalog modules and concepts, with seeded ICU-like values for preview only.</p>
-          <button class="btn primary block lg mt-16" data-gen>${icon('play', 14)} Generate and load demo workspace</button>`}
+          <p style="font-size:11.5px;color:var(--ink-4);margin:14px 0 0;">${t('Demo profile: all EasyICU catalog modules and concepts, with seeded ICU-like values for preview only.', '演示配置：全部 EasyICU 目录模块与概念，配以种子化的类 ICU 数值，仅供预览。')}</p>
+          <button class="btn primary block lg mt-16" data-gen>${icon('play', 14)} ${t('Generate and load demo workspace', '生成并加载演示工作区')}</button>`}
         </div>
       </div>
 
       <div class="empty mt-16">
         <div class="glyph">${icon('viz', 22)}</div>
-        <div class="t">Preview workspace awaits data</div>
-        <div class="d">Generate demo data or load exported files above; the review tabs will appear here as a compact multi-view workspace.</div>
+        <div class="t">${t('Preview workspace awaits data', '预览工作区等待数据')}</div>
+        <div class="d">${t('Generate demo data or load exported files above; the review tabs will appear here as a compact multi-view workspace.', '在上方生成演示数据或加载导出文件；审阅标签页会作为紧凑的多视图工作区出现在这里。')}</div>
       </div>`;
     },
     afterRender(root) {
@@ -2428,12 +2592,16 @@
         const b = e.target.closest('[data-ptab]'); if (!b) return;
         patientTab = b.dataset.ptab;
         tabsEl.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.ptab === patientTab));
-        root.querySelector('#ptbody').innerHTML = patientTabBody();
-        bindPatientTableControls(root);
-        bindPatientEntitySelection(root);
+        const body = root.querySelector('#ptbody');
+        body.innerHTML = patientTabBody();
+        bindPatientTableControls(body);
+        bindPatientEntitySelection(body);
+        bindPatientSeriesControls(body);
       });
-      bindPatientTableControls(root);
-      bindPatientEntitySelection(root);
+      const patientBody = root.querySelector('#ptbody') || root;
+      bindPatientTableControls(patientBody);
+      bindPatientEntitySelection(patientBody);
+      bindPatientSeriesControls(patientBody);
     },
   };
 
@@ -4345,7 +4513,7 @@
                 <div class="panel-title" style="font-size:17px;">${t('Run or load a cohort review first', '请先运行或加载队列审阅')}</div>
                 <div class="panel-sub mt-4">${t('Cohort Statistics no longer opens with preloaded seeded results. Start a demo review intentionally, or switch to Real and load a registered export.', '队列统计不再默认打开预加载的 seeded 结果。请明确启动演示审阅，或切换到真实模式并加载已注册导出。')}</div>
               </div>
-              <span class="pill demo"><span class="dot"></span>Demo available</span>
+              <span class="pill demo"><span class="dot"></span>${t('Demo available', '可用演示')}</span>
             </div>
             ${vizErr ? `<div class="note warn mt-12"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="d mono" style="font-size:11px;margin:0;">${esc(vizErr)}</div></div></div>` : ''}
             <div class="note info mt-16">
@@ -4787,6 +4955,8 @@
         <button class="btn sm" data-viz-reset>${icon('sliders', 13)} ${crossTerm('Change selection')}</button>
         <button class="btn sm" data-crossdb-export>${icon('download', 13)} ${crossTerm('Export JSON')}</button>
       </div>
+      ${crossDbRecordCards(sources, labels)}
+      ${crossRealFeatureDensityByModule(xdb.feature_distributions || [], labels)}
       <div class="note info mt-16">
         <div class="ico">${icon('benchmark', 16)}</div>
         <div class="body"><span class="t">${noteTitle}</span> <span class="d" style="display:inline;">— ${noteDetail}</span></div>
@@ -4795,6 +4965,8 @@
         <div class="ico">${icon('shield', 16)}</div>
         <div class="body"><span class="t">${t('Compatibility gate', '兼容性核验')}: ${esc(crossStatusLabel(gateStatus))}</span> <span class="d" style="display:inline;">— ${esc(crossStatusLabel(mode))} · ${crossStatusLabel('matched_cohort')}=false · ${crossStatusLabel('inferential_statistics')}=false.</span></div>
       </div>
+      <details class="xdb-audit mt-16">
+      <summary>${t('Provenance & audit', '溯源与审计')} · ${t('source hashes, distribution summary, availability matrix, scope', '来源哈希、分布摘要、可用性矩阵、范围')}</summary>
       <div class="sec-stack"><div class="lbl">${crossTerm('Source provenance')}</div></div>
       <div class="src-grid">
         ${sources.map(source => `
@@ -4817,7 +4989,6 @@
           </tbody>
         </table>
       </div>
-      ${crossRealFeatureDensityByModule(xdb.feature_distributions || [], labels)}
       <div class="sec-stack"><div class="lbl">${crossTerm('Module availability matrix')}</div></div>
       <div class="table-wrap table-scroll">
         <table class="eu-table">
@@ -4834,7 +5005,26 @@
       <div class="note warn mt-16">
         <div class="ico">${icon('lock', 16)}</div>
         <div class="body"><span class="t">${crossTerm('Fail-closed scope')}</span> <span class="d" style="display:inline;">— ${blockedIds} ${t('remain blocked', '保持拦截')}。${t('Raw rows returned', '是否返回原始行')}=${privacy.raw_rows_returned === true ? 'true' : 'false'}；${t('inference', '推断')}=${esc(crossStatusLabel(provenance.inference || 'blocked_until_numeric_evidence_gate'))}。</span></div>
-      </div>`;
+      </div>
+      </details>`;
+  }
+
+  function crossDbRecordCards(sources, labels) {
+    /* Legacy Figure-3 Cross-DB header: one record-count card per database, color-keyed to the density legend. */
+    const cards = (sources || []).map((source, i) => {
+      const label = labels[i] || source.label || source.database || `DB ${i + 1}`;
+      const summary = source.summary || {};
+      const records = summary.total_records != null ? summary.total_records : summary.cohort_size;
+      const color = densityPalette(i);
+      return `
+        <div class="xdb-rec-card" style="border-left-color:${color};">
+          <div class="xdb-rec-name"><span class="xdb-rec-dot" style="background:${color};"></span>${esc(label)}</div>
+          <div class="xdb-rec-value">${records != null ? fmtInt(records) : '—'}</div>
+          <div class="xdb-rec-unit">${t('records', '条记录')}</div>
+        </div>`;
+    }).join('');
+    if (!cards) return '';
+    return `<div class="xdb-rec-cards mt-16">${cards}</div>`;
   }
 
   function crossRealFeatureDensityByModule(modules, labels) {
@@ -4847,8 +5037,18 @@
   }
 
   function crossFeatureDensityPanel(title, subtitle, modules, labels) {
-    const cleaned = (modules || []).filter(module => module && (module.features || []).length);
-    if (!cleaned.length) return '';
+    const allCleaned = (modules || []).filter(module => module && (module.features || []).length);
+    if (!allCleaned.length) return '';
+    /* Curated default: restore the legacy Figure-3 "one subplot per canonical concept" grid
+       instead of dumping all ~247 catalog features. 'all' is opt-in. */
+    const canonSet = new Set(CROSS_DENSITY_CANON);
+    const coreModules = allCleaned
+      .map(module => ({ ...module, features: (module.features || []).filter(f => canonSet.has(String(f.feature || '').toLowerCase())) }))
+      .filter(module => module.features.length);
+    const scope = (crossDensityScope === 'all' || !coreModules.length) ? 'all' : 'core';
+    const cleaned = scope === 'core' ? coreModules : allCleaned;
+    const allFeatureCount = allCleaned.reduce((acc, module) => acc + (module.features || []).length, 0);
+    const coreFeatureCount = coreModules.reduce((acc, module) => acc + (module.features || []).length, 0);
     let selectedModule = crossDensityModule || 'all';
     if (selectedModule !== 'all' && !cleaned.some(module => module.module === selectedModule)) selectedModule = 'all';
     const visible = selectedModule === 'all' ? cleaned : cleaned.filter(module => module.module === selectedModule);
@@ -4861,7 +5061,12 @@
       ...cleaned.map(module => `<option value="${esc(module.module)}" ${selectedModule === module.module ? 'selected' : ''}>${esc(catalogModuleLabel(module.module))} (${fmtInt((module.features || []).length)})</option>`),
     ].join('');
     const detail = findCrossDensityFeature(visible, crossDensityFeature) || (visible[0] && visible[0].features && { module: visible[0], row: visible[0].features[0] });
-    if (detail && !crossDensityFeature) crossDensityFeature = crossFeatureKey(detail.module, detail.row);
+    if (detail && (!crossDensityFeature || !findCrossDensityFeature(visible, crossDensityFeature))) crossDensityFeature = crossFeatureKey(detail.module, detail.row);
+    const scopeToggle = coreModules.length ? `
+        <div class="xdb-density-scope">
+          <button class="chip ${scope === 'core' ? 'solid' : ''}" data-density-scope="core">${t('Core concepts', '核心概念')} <span class="mono">${fmtInt(coreFeatureCount)}</span></button>
+          <button class="chip ${scope === 'all' ? 'solid' : ''}" data-density-scope="all">${t('All features', '全部特征')} <span class="mono">${fmtInt(allFeatureCount)}</span></button>
+        </div>` : '';
     return `
       <div class="sec-stack"><div class="lbl">${esc(title)}</div></div>
       <div class="xdb-density-panel" data-density-total="${totalFeatures}">
@@ -4869,10 +5074,12 @@
           <div>
             <div class="xdb-density-title">${esc(title)}</div>
             <div class="xdb-density-sub">${esc(subtitle)}</div>
-            <div class="xdb-density-meta mono">${fmtInt(cleaned.length)} ${t('modules', '个模块')} · ${fmtInt(totalFeatures)} ${t('features', '个特征')} · ${fmtInt(sharedFeatures)} ${t('shared across selected databases', '个在所选数据库间共享')} · ${t('showing', '正在显示')} ${fmtInt(visibleFeatures)}</div>
+            <div class="xdb-density-meta mono">${scope === 'core' ? `${t('curated core concepts', '精选核心概念')} · ` : ''}${fmtInt(cleaned.length)} ${t('modules', '个模块')} · ${fmtInt(totalFeatures)} ${t('features', '个特征')} · ${fmtInt(sharedFeatures)} ${t('shared across selected databases', '个在所选数据库间共享')} · ${t('showing', '正在显示')} ${fmtInt(visibleFeatures)}</div>
           </div>
           <div class="xdb-density-legend">${labelRow}</div>
         </div>
+        ${scopeToggle}
+        ${scope === 'all' ? `
         <div class="xdb-density-selectrow">
           <label for="xdbDensityModule">${t('Module to display', '选择展示模块')}</label>
           <select id="xdbDensityModule" data-density-module-select>${moduleOptions}</select>
@@ -4881,7 +5088,7 @@
         <div class="xdb-density-controls">
           <button class="chip ${selectedModule === 'all' ? 'solid' : ''}" data-density-module-filter="all">${crossTerm('All modules')}</button>
           ${cleaned.map(module => `<button class="chip ${selectedModule === module.module ? 'solid' : ''}" data-density-module-filter="${esc(module.module)}">${esc(catalogModuleLabel(module.module))} <span class="mono">${fmtInt((module.features || []).length)}</span></button>`).join('')}
-        </div>
+        </div>` : ''}
         ${detail ? crossFeatureDensityDetail(detail.module, detail.row, labels || []) : ''}
         ${visible.map(module => crossFeatureDensityModule(module, labels || [])).join('')}
       </div>`;
@@ -5164,6 +5371,12 @@
     },
     afterRender(root) {
       bindSourceRegistry(root, 'crossdb');
+      root.querySelectorAll('[data-density-scope]').forEach(b => b.addEventListener('click', () => {
+        crossDensityScope = b.dataset.densityScope || 'core';
+        crossDensityModule = 'all';
+        crossDensityFeature = null;
+        repaintScreen('crossdb');
+      }));
       root.querySelectorAll('[data-density-module-filter]').forEach(b => b.addEventListener('click', () => {
         crossDensityModule = b.dataset.densityModuleFilter || 'all';
         crossDensityFeature = null;

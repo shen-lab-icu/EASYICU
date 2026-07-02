@@ -50,7 +50,7 @@
      terminology in the navigation. */
   const CLASSIC = [
     { id: 'extraction', label: ['Extract Data', '抽取数据'], sub: ['choose cohort + modules', '选择队列 + 模块'], ico: 'extract' },
-    { id: 'patient', label: ['Patient Drilldown', '患者明细'], sub: ['single-patient review', '单患者审阅'], ico: 'patient' },
+    { id: 'patient', label: ['Patient Drilldown', '患者明细'], sub: ['tables · trends · patients', '表格 · 趋势 · 患者'], ico: 'patient' },
     { id: 'cohort', label: ['Cohort Review', '队列审阅'], sub: ['groups + coverage', '分组 + 覆盖率'], ico: 'cohort' },
     { id: 'crossdb', label: ['Cross-DB Compare', '跨库对比'], sub: ['multi-database checks', '多数据库检查'], ico: 'benchmark' },
   ];

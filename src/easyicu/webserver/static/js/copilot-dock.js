@@ -433,9 +433,12 @@
       const r = routeOf();
       if (r === 'guided') { close(); fab.hidden = true; }
       else { if (!dock.classList.contains('open')) fab.hidden = false; }
-      if (dock.classList.contains('open') && r !== lastRoute && r !== 'guided') {
-        document.getElementById('cpCtx').textContent = contextText(r);
-        appendRouteGreeting(r);
+      if (r !== lastRoute && r !== 'guided') {
+        // Keep the context label in sync with the route even while the dock is
+        // closed — it lives in the DOM and otherwise keeps its build-time value.
+        const ctxEl = document.getElementById('cpCtx');
+        if (ctxEl) ctxEl.textContent = contextText(r);
+        if (dock.classList.contains('open')) appendRouteGreeting(r);
       }
       lastRoute = r;
     });

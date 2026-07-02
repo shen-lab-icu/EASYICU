@@ -15,14 +15,14 @@
 
   /* ============== study panel model ============== */
   const STUDY = [
-    ['question', 'Research question', 'spark'],
-    ['data', 'Data source', 'flask'],
-    ['cohort', 'Cohort', 'cohort'],
-    ['concepts', 'Feature modules', 'layers'],
-    ['extract', 'Extraction', 'extract'],
-    ['review', 'Review', 'eye'],
-    ['analysis', 'Analysis run', 'agent'],
-    ['draft', 'Manuscript draft', 'shield'],
+    ['question', 'Research question', 'spark', '研究问题'],
+    ['data', 'Data source', 'flask', '数据源'],
+    ['cohort', 'Cohort', 'cohort', '队列'],
+    ['concepts', 'Feature modules', 'layers', '特征模块'],
+    ['extract', 'Extraction', 'extract', '数据抽取'],
+    ['review', 'Review', 'eye', '审阅'],
+    ['analysis', 'Analysis run', 'agent', '分析运行'],
+    ['draft', 'Manuscript draft', 'shield', '稿件草稿'],
   ];
   const STEP_INDEX = {}; STUDY.forEach(([id], i) => STEP_INDEX[id] = i);
 
@@ -144,6 +144,7 @@
   let guidedDraftParentDir = '~/easyicu/projects';
   let guidedFolderBrowser = { open: false, loading: false, error: null, data: null, path: '' };
   let guidedKnownProjectsOpen = false;
+  let guidedPipelineOpen = false;
   let guidedSlotSaveTimer = null;
   let studyParams;   // dynamic params extracted from clarify answers + free text
 
@@ -192,6 +193,7 @@
     guidedDraftParentDir = '~/easyicu/projects';
     guidedFolderBrowser = { open: false, loading: false, error: null, data: null, path: '' };
     guidedKnownProjectsOpen = false;
+    guidedPipelineOpen = false;
     studyParams = { outcome: 'In-hospital mortality', window: 'full available window', exposure: 'lactate', scope: 'all 19 modules', caught: null };
     studyStatus = {}; studyVal = {};
     gen++;
@@ -1926,10 +1928,10 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     if (guidedIdea.handoffing) return t('Writing local handoff plan...', '正在写入本地 handoff plan...');
     if (guidedIdea.projectCreating) return t('Creating metadata-only Agent project seed...', '正在创建 metadata-only Agent project seed...');
     if (guidedIdea.error) return esc(guidedIdea.error);
-    if (guidedIdea.result && !guidedIdea.dataContextConfirmed) return t('Candidate idea found. Confirm a local export/cohort/module context before pre-experiment or Agent handoff.', '已找到候选 idea。预实验或 Agent 交接前，需要先确认本地导出、队列与模块上下文。');
+    if (guidedIdea.result && !guidedIdea.dataContextConfirmed) return t('Candidate idea found. Confirm a local export/cohort/module context before feasibility assessment or Agent handoff.', '已找到候选 idea。可行性评估或 Agent 交接前，需要先确认本地导出、队列与模块上下文。');
     if (guidedIdea.project) return t('Metadata-only Agent project seed created. It is not an analysis run or manuscript claim.', 'metadata-only Agent 项目种子已创建；这还不是分析运行，也不是稿件结论。');
     if (guidedIdea.handoff) return t('Handoff draft is frozen. Create a project seed only if you want Agent Projects to continue from this confirmed context.', '交接草稿已冻结。只有在你希望 Agent Projects 从这个已确认上下文继续时，才创建项目种子。');
-    if (guidedIdea.result && guidedIdea.dataContextConfirmed) return t('Data context confirmed. Review the pre-experiment and edit the plan before any Agent handoff.', '数据上下文已确认。请先审阅预实验并编辑计划，再做 Agent 交接。');
+    if (guidedIdea.result && guidedIdea.dataContextConfirmed) return t('Data context confirmed. Review feasibility and edit the plan before any Agent handoff.', '数据上下文已确认。请先审阅可行性评估并编辑计划，再做 Agent 交接。');
     if (guidedIdea.resolved) {
       const adapter = guidedIdea.resolved.source_adapter || {};
       const status = String(adapter.status || '');
@@ -2260,7 +2262,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
             <div class="gdi-tags">${concepts.map(row => `<code>${esc(row.concept_id || row.label)} · ${esc(row.tier || '')}</code>`).join('') || `<em>${t('No dictionary mapping yet', '暂无字典映射')}</em>`}</div>
           </div>
           <div><span>${t('Feasibility', '可行性')}</span><strong>${esc(feasibility.label || feasibility.tier || 'unknown')}</strong><small>${esc(feasibility.reason || '')}</small></div>
-          <div><span>${t('Prior art', '既有研究')}</span><strong>${esc(prior.status || 'not checked')}</strong><small>${esc(prior.reason || '')}</small></div>
+          <div><span>${t('Prior art', '既有研究')}</span><strong>${esc(prior.status || 'not checked')}</strong><small>${esc(prior.opportunity_frame || prior.reason || '')}</small></div>
           <div><span>${t('Next action', '下一步')}</span><strong>${esc(idea.next_action || idea.go_no_go_reason || 'review')}</strong></div>
         </div>
       </div>`;
@@ -2302,7 +2304,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         <div class="gdi-ledger-grid">
           <div><span>${t('Detected export', '检测到的导出')}</span><strong>${esc(ready ? guidedIdeaActiveExportText(result) : t('none confirmed', '尚未确认'))}</strong></div>
           <div><span>${t('Mapped concepts', '映射概念')}</span><strong>${fmtInt(mapped, '0')}</strong><small>${t('candidate dictionary links only', '仅候选字典映射')}</small></div>
-          <div><span>${t('Pre-experiment status', '预实验状态')}</span><strong>${esc(pre.status || 'not available')}</strong><small>${esc(pre.reason || t('aggregate-only feasibility; no patient rows shown', '仅聚合可行性；不展示患者行'))}</small></div>
+          <div><span>${t('Feasibility status', '可行性状态')}</span><strong>${esc(pre.status || 'not available')}</strong><small>${esc(pre.reason || t('aggregate-only feasibility; no patient rows shown', '仅聚合可行性；不展示患者行'))}</small></div>
           <div><span>${t('Agent handoff', 'Agent 交接')}</span><strong>${confirmed ? t('unlocked for plan review', '已解锁计划审阅') : t('locked', '已锁定')}</strong><small>${t('requires explicit data-context confirmation', '需要显式确认数据上下文')}</small></div>
         </div>
         <div class="gdx-actions">
@@ -2319,7 +2321,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     return `
       <div class="gdi-pre">
         <div class="gdi-ledger-title">
-          <div><span class="gdx-label">${t('Pre-experiment on active export', 'active export 预实验')}</span><strong>${esc(pre.status || 'blocked')}</strong></div>
+          <div><span class="gdx-label">${t('Feasibility on active export', 'active export 可行性评估')}</span><strong>${esc(pre.status || 'blocked')}</strong></div>
           <span class="pill">${esc(pre.payload_scope || 'aggregate')}</span>
         </div>
         ${pre.reason ? `<p>${esc(pre.reason)}</p>` : ''}
@@ -2366,8 +2368,8 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     return `
       <div class="gdi-prior">
         <div class="gdi-ledger-title">
-          <div><span class="gdx-label">Prior-art check</span><strong>${esc(prior.status || 'not checked')}</strong></div>
-          <button type="button" class="btn sm" data-gi-prior ${guidedIdea.priorArting ? 'disabled' : ''}>${icon('search', 12)} ${t('Check prior art', '检查既有研究')}</button>
+          <div><span class="gdx-label">${t('Literature inspiration', '已有文献与启发')}</span><strong>${esc(prior.status || 'not checked')}</strong></div>
+          <button type="button" class="btn sm" data-gi-prior ${guidedIdea.priorArting ? 'disabled' : ''}>${icon('search', 12)} ${t('Check literature', '检查已有文献')}</button>
         </div>
         <p>${esc(prior.reason || t('Optional bounded network metadata search. It does not use an LLM provider, and it stays blocked until you explicitly opt in for this source.', '可选有界网络元数据搜索。它不使用 LLM provider，且在当前来源显式 opt-in 前保持阻断。'))}</p>
         ${queries.length ? `<div class="gdi-query-list">${queries.slice(0, 4).map(q => `<code>${esc(q)}</code>`).join('')}</div>` : ''}
@@ -2681,7 +2683,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       concepts: idea && Array.isArray(idea.mapped_concepts)
         ? `${fmtInt(idea.mapped_concepts.length)} ${t('candidate mappings', '个候选映射')}`
         : t('review mapped concepts', '审阅映射概念'),
-      analysis: t('pre-experiment only', '仅预实验'),
+      analysis: t('feasibility only', '仅可行性'),
     });
     markThrough('cohort', 'active');
     renderThread();
@@ -2968,24 +2970,67 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   function renderAside() {
     const host = document.getElementById('gdAsideBody');
     if (!host) return;
+    host.innerHTML = renderStudyPipelineSummary() + renderStudyItemList() + renderOutputs(host);
+  }
+  function normalizedStudyRows() {
     const gi = goalIdx();
-    host.innerHTML = STUDY.map(([id, label, ico], idx) => {
+    return STUDY.map(([id, label, ico, labelZh], idx) => {
       let stt = studyStatus[id] || 'pending';
       // steps past the chosen finish line are optional — dim them unless already reached
       if (idx > gi && (stt === 'pending')) stt = 'beyond';
       let v = studyVal[id]; if (typeof v === 'function') v = v();
+      return { id, label, ico, labelZh, idx, stt, v };
+    });
+  }
+  function renderStudyPipelineSummary() {
+    const rows = normalizedStudyRows();
+    let activeIdx = rows.findIndex(r => r.stt === 'active');
+    if (activeIdx < 0) activeIdx = rows.findIndex(r => r.stt !== 'done' && r.stt !== 'beyond');
+    if (activeIdx < 0) activeIdx = 0;
+    const active = rows[activeIdx] || rows[0];
+    const next = rows.slice(activeIdx + 1).find(r => r.stt !== 'beyond');
+    const done = rows.filter(r => r.stt === 'done').length;
+    const total = Math.max(1, Math.min(goalIdx() + 1, STUDY.length));
+    const pct = Math.max(0, Math.min(100, Math.round(done / total * 100)));
+    const currentValue = active && active.v ? `<div class="gd-pipeline-value">${esc(active.v)}</div>` : '';
+    const nextLine = next
+      ? `<span>${t('Next', '下一步')}</span><strong>${t(next.label, next.labelZh || next.label)}</strong>`
+      : `<span>${t('Next', '下一步')}</span><strong>${t('Ready for sign-off', '等待核验')}</strong>`;
+    return `
+      <div class="gd-pipeline-summary" data-gd-pipeline-summary>
+        <div class="gd-pipeline-summary-head">
+          <div>
+            <div class="eyebrow">${t('Step overview', '步骤总览')}</div>
+            <strong>${t(active.label, active.labelZh || active.label)}</strong>
+            ${currentValue}
+          </div>
+          <button class="gd-pipeline-toggle" type="button" data-gd-pipeline-toggle aria-controls="gdPipelineList" aria-expanded="${guidedPipelineOpen ? 'true' : 'false'}">
+            ${guidedPipelineOpen ? t('Hide steps', '收起步骤') : t('Show all steps', '展开步骤')}
+          </button>
+        </div>
+        <div class="gd-pipeline-bar" aria-label="${t('Guided study progress', '研究引导进度')}"><span style="width:${pct}%;"></span></div>
+        <div class="gd-pipeline-meta">
+          <span><strong>${done}/${total}</strong> ${t('required steps done', '个必需步骤完成')}</span>
+          <span>${t('Goal', '目标')} · ${DEPTH[depth].label}</span>
+        </div>
+        <div class="gd-pipeline-next">${nextLine}</div>
+      </div>`;
+  }
+  function renderStudyItemList() {
+    const gi = goalIdx();
+    return `<div class="gd-pipeline-list ${guidedPipelineOpen ? 'open' : 'collapsed'}" id="gdPipelineList" ${guidedPipelineOpen ? '' : 'hidden'} data-gd-pipeline-list>` + normalizedStudyRows().map(({ id, label, ico, labelZh, idx, stt, v }) => {
       const dot = stt === 'done' ? icon('check', 11, 3) : stt === 'locked' ? icon('lock', 10) : icon(ico, 12);
       const badge = stt === 'active' ? '<span class="si-state"><span class="spin sm" style="width:11px;height:11px;"></span></span>'
         : stt === 'locked' ? `<span class="si-state pill warn" style="height:18px;"><span class="dot"></span></span>`
-        : stt === 'beyond' ? `<span class="si-state si-opt">optional</span>` : '';
+        : stt === 'beyond' ? `<span class="si-state si-opt">${t('optional', '可选')}</span>` : '';
       const clickable = thread.some(t => t.card && t.step === id);
-      const row = `<div class="study-item ${stt}${clickable ? ' nav' : ''}" ${clickable ? `data-study="${id}" role="button" tabindex="0"` : ''}><span class="si-dot">${dot}</span><div class="si-txt"><div class="si-t">${label}</div>${v ? `<div class="si-v">${v}</div>` : ''}</div>${badge}</div>`;
+      const row = `<div class="study-item ${stt}${clickable ? ' nav' : ''}" ${clickable ? `data-study="${id}" role="button" tabindex="0"` : ''}><span class="si-dot">${dot}</span><div class="si-txt"><div class="si-t">${t(label, labelZh || label)}</div>${v ? `<div class="si-v">${v}</div>` : ''}</div>${badge}</div>`;
       // draw the finish line right after the goal step (only when stopping short of the full study)
       const fin = (idx === gi && depth !== 'full')
-        ? `<div class="study-finishline"><span class="fl-flag">${icon('check', 10, 3)}</span><span class="fl-t">Finish line · ${DEPTH[depth].label}</span></div>`
+        ? `<div class="study-finishline"><span class="fl-flag">${icon('check', 10, 3)}</span><span class="fl-t">${t('Finish line', '终点线')} · ${DEPTH[depth].label}</span></div>`
         : '';
       return row + fin;
-    }).join('') + renderOutputs(host);
+    }).join('') + '</div>';
   }
 
   /* ============== composer intent parsing ============== */
@@ -4375,9 +4420,9 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       return `
       <div class="gd-shell">
         <div class="gd-top">
-          <button class="gd-home-link" type="button" data-open="entry" aria-label="Back to EasyICU home" title="Back to EasyICU home">
+          <button class="gd-home-link" type="button" data-open="entry" aria-label="${t('Back to EasyICU home', '返回 EasyICU 首页')}" title="${t('Back to EasyICU home', '返回 EasyICU 首页')}">
             <span class="brand-mark">${icon('spark', 16)}</span>
-            <span><span class="gd-name">Guided Copilot</span><span class="gd-mode">EasyICU · guided study</span></span>
+            <span><span class="gd-name">Guided Copilot</span><span class="gd-mode">${t('EasyICU · guided study', 'EasyICU · 研究引导')}</span></span>
           </button>
           <span class="grow"></span>
           <button class="btn sm" data-open="entry">${icon('back', 13)} ${t('Exit', '退出')}</button>
@@ -4404,16 +4449,16 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
             <div class="gd-suggest" id="gdSuggest"></div>
             <div class="gd-composer-wrap">
               <div class="gd-composer">
-                <input class="gd-input" id="gdInput" placeholder="Reply, or tap an option above to continue…" autocomplete="off" />
+                <input class="gd-input" id="gdInput" placeholder="${t('Reply, or tap an option above to continue…', '回复，或点击上方选项继续…')}" autocomplete="off" />
                 <button class="gd-send" id="gdSend">${icon('arrow', 16)}</button>
               </div>
-              <div class="gd-foot-note">Guided Copilot · local first · nothing leaves your machine</div>
+              <div class="gd-foot-note">${t('Guided Copilot · local first · nothing leaves your machine', '引导式 Copilot · 本地优先 · 数据不离开你的电脑')}</div>
             </div>
           </div>
           <aside class="gd-aside">
-            <div class="gd-aside-head"><div class="eyebrow">Building your study</div><div class="at">Study workspace</div><div class="asub">Assembles as we talk · edit any step</div></div>
+            <div class="gd-aside-head"><div class="eyebrow">${t('Building your study', '正在搭建你的研究')}</div><div class="at">${t('Study workspace', '研究工作区')}</div><div class="asub">${t('Assembles as we talk · edit any step', '随对话逐步组装 · 任意步骤可编辑')}</div></div>
             <div class="gd-aside-body" id="gdAsideBody"></div>
-            <div class="gd-aside-foot"><div class="note ok" style="padding:9px 11px;"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t" style="font-size:11.5px;">Evidence-bound</div><div class="d" style="font-size:10.5px;">Draft stays gated until checks pass.</div></div></div></div>
+            <div class="gd-aside-foot"><div class="note ok" style="padding:9px 11px;"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t" style="font-size:11.5px;">${t('Evidence-bound', '证据绑定')}</div><div class="d" style="font-size:10.5px;">${t('Draft stays gated until checks pass.', '草稿在检查通过前保持受限。')}</div></div></div></div>
           </aside>
         </div>
         <div id="gdFolderDialogHost"></div>
@@ -4804,6 +4849,12 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           }
           return;
         }
+        const pipelineToggle = e.target.closest('[data-gd-pipeline-toggle]');
+        if (pipelineToggle) {
+          guidedPipelineOpen = !guidedPipelineOpen;
+          renderAside();
+          return;
+        }
         // exit / classic
         const openEl = e.target.closest('[data-open]');
         if (openEl) { location.hash = '#' + openEl.dataset.open; return; }
@@ -4985,7 +5036,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
             guidedIdea.project = null;
           }
           if (key !== 'planEdits' && hadOutputs) {
-            // Editing the source invalidates the stale result/pre-experiment/
+            // Editing the source invalidates the stale result/feasibility/
             // handoff cards, so the thread must re-render. renderThread()
             // rebuilds the textarea/input being typed in, which drops focus
             // and caret mid-keystroke — restore both onto the same field.

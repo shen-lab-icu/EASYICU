@@ -1,6 +1,6 @@
 /* Screen: Idea Mining — first-class discovery workflow.
    Local-first Stage67: user-supplied metadata/excerpt -> idea ledger ->
-   dictionary/export feasibility -> pre-experiment -> Agent handoff plan. */
+   dictionary/export feasibility assessment -> Agent handoff plan. */
 (function () {
   const S = (window.SCREENS = window.SCREENS || {});
 
@@ -73,6 +73,91 @@
     if (activeStep === 'evidence') return t('Feasibility', '可行性');
     if (activeStep === 'handoff') return t('Plan / replan', '计划 / replan');
     return t('Source', '来源');
+  }
+  function normalizePlanStep(row, i) {
+    if (row && typeof row === 'object') {
+      return {
+        phase: row.phase || t('Step', '步骤'),
+        title: row.title || row.action || t('Plan step', '计划步骤'),
+        action: row.action || '',
+        output: row.output || '',
+        guardrail: row.guardrail || '',
+      };
+    }
+    const text = String(row || '').trim();
+    const lower = text.toLowerCase();
+    const has = (needle) => lower.includes(needle);
+    const mk = (phase, title, action, output, guardrail) => ({ phase, title, action, output, guardrail });
+    if (has('lock the clinical question')) {
+      return mk(
+        t('Question', '问题'),
+        t('Freeze the clinical question and estimand', '锁定临床问题和估计目标'),
+        t('Confirm population, exposure or index time, comparator, outcome, and analysis window before reading any effect estimate.', '先确认人群、暴露或时间零点、比较组、结局和分析窗口，再看任何效应估计。'),
+        t('One locked PICOT-style question.', '一条锁定的 PICOT 风格问题。'),
+        t('Idea Mining proposes the question; it has not finished cohort selection or analysis.', 'Idea 挖掘只提出问题，还没有完成队列筛选或分析。')
+      );
+    }
+    if (has('confirm the active easyicu export') || has('cohort denominator')) {
+      return mk(
+        t('Data context', '数据上下文'),
+        t('Confirm export, cohort, and modules', '确认导出、队列和模块'),
+        t('Select the real local export, denominator, required modules, and concept dictionary mappings with the user.', '和用户确认真实本地导出、分母、所需模块和概念映射。'),
+        t('Confirmed export/cohort/module contract for Agent Projects.', '交给研究项目的导出/队列/模块契约。'),
+        t('MOCK or demo exports are UI rehearsal only.', 'MOCK 或演示导出只能用于界面演练。')
+      );
+    }
+    if (has('outcome-blind feasibility') || has('missingness structure')) {
+      return mk(
+        t('Feasibility', '可行性'),
+        t('Run outcome-blind feasibility assessment', '运行不看结局效应的可行性评估'),
+        t('Check concept availability, joint completeness, time-index support, missingness, and event rate before modeling.', '建模前检查概念可用性、联合完整度、时间索引、缺失结构和事件率。'),
+        t('Feasibility table with denominators and blockers.', '包含分母和阻断项的可行性表。'),
+        t('Do not present feasibility as a clinical finding.', '不能把可行性检查当成临床结论。')
+      );
+    }
+    if (has('treatment-strategy comparison') || has('timing anchors')) {
+      return mk(
+        t('Design', '设计'),
+        t('Translate the article into an ICU treatment-strategy question', '把文章转译成 ICU 治疗策略问题'),
+        t('Define vasopressor/fluid timing anchors, exposure summaries, comparator groups, and eligible shock or sepsis windows.', '定义升压药/补液的时间锚点、暴露摘要、比较组，以及休克或脓毒症窗口。'),
+        t('Treatment-strategy contrast ready for descriptive review.', '可进入描述性审阅的治疗策略对照。'),
+        t('Flag confounding by indication and immortal-time risk before modeling.', '建模前标记适应症混杂和 immortal-time 风险。')
+      );
+    }
+    if (has('balance and sensitivity') || has('sensitivity checks')) {
+      return mk(
+        t('Robustness', '稳健性'),
+        t('Predefine balance and sensitivity checks', '预先定义平衡性和敏感性检查'),
+        t('Compare baseline severity, missingness, exposure timing, and alternative dose or window definitions.', '比较基线严重程度、缺失、暴露时序，以及替代剂量或窗口定义。'),
+        t('Sensitivity checklist for replan.', '用于 replan 的敏感性清单。'),
+        t('Keep claims exploratory unless assumptions are audited.', '除非假设被审计，否则结论保持探索性。')
+      );
+    }
+    if (has('prior-art') || has('literature')) {
+      return mk(
+        t('Prior art', '既有文献'),
+        t('Use existing literature as an inspiration map', '把已有文献当成启发地图'),
+        t('Check whether prior studies answered the same question or suggest better comparators, subgroups, timing, or outcomes.', '检查既有研究是否已经回答同一问题，或提示更合适的比较组、亚组、时序和结局。'),
+        t('Already answered, partially answered, or new exploratory angle.', '判定为已回答、部分回答，或新的探索角度。'),
+        t('Prior work shapes novelty; it does not automatically kill the idea.', '既有研究塑造创新点，不会自动否定 idea。')
+      );
+    }
+    if (has('agent projects') || has('handoff')) {
+      return mk(
+        t('Agent handoff', 'Agent 交接'),
+        t('Create a project seed only after confirmation', '确认后再创建研究项目种子'),
+        t('Send the locked question, feasibility table, literature interpretation, and analysis steps to Agent Projects.', '把锁定问题、可行性表、文献解释和分析步骤交给研究项目。'),
+        t('Metadata-only project seed.', '仅元数据的项目种子。'),
+        t('Manuscript claims remain blocked until evidence checks and human sign-off pass.', '证据核验和人工签署前，论文结论保持锁定。')
+      );
+    }
+    return mk(
+      t('Step', '步骤'),
+      text || `${t('Plan step', '计划步骤')} ${i + 1}`,
+      '',
+      '',
+      t('Review this legacy planning note before Agent handoff.', '交给 Agent 前需要审阅这条历史计划说明。')
+    );
   }
   function repaint() {
     if (window.__euRender) window.__euRender();
@@ -187,6 +272,44 @@
       return t('Frontier mode can prepare queries without network access. If you opt in, it searches bounded PubMed metadata/abstracts, maps candidate ideas to the EasyICU dictionary, then lets you choose one for the local ledger.', '前沿模式在未联网时只准备检索式；如果你 opt-in，会检索有界 PubMed 元数据/摘要，把候选 idea 映射到 EasyICU 字典，并让你选择其中一个生成本地台账。');
     }
     return t('Manual mode creates a local, evidence-bound idea ledger from the text you provide.', '手动模式会根据你提供的文本生成本地、证据绑定的 idea 台账。');
+  }
+  function sourceModeGuide() {
+    const rows = {
+      manual: [
+        [t('Type one clinical question or hunch', '写一句临床问题或直觉'), t('No paper is required; a rationale sentence is optional.', '不需要文章；触发理由可选。')],
+        [t('Create a local idea ledger', '生成本地 idea 台账'), t('This checks dictionary fit and active-export feasibility before any Agent run.', '先检查字典匹配和当前导出可行性，不会启动 Agent。')],
+      ],
+      url: [
+        [t('Paste the article link', '粘贴文章链接'), t('Then resolve metadata if network opt-in is allowed, or fill the title manually.', '允许网络 opt-in 时可解析元数据；也可以手动补标题。')],
+        [t('Translate the article into an ICU question', '把文章转成 ICU 问题'), t('The article is inspiration, not proof that the same analysis is already done.', '文章是启发，不等于同一分析已经完成。')],
+      ],
+      pdf: [
+        [t('Choose a local PDF', '选择本地 PDF'), t('The browser reads it locally; this screen retains bounded metadata/excerpt and SHA-256.', '浏览器本地读取；本页只保留有界元数据/摘录和 SHA-256。')],
+        [t('Add the ICU question it suggests', '补充它启发的 ICU 问题'), t('If parsing misses the key sentence, paste a short bounded excerpt.', '如果解析没抓到关键句，粘贴一小段有界摘录。')],
+      ],
+      literature_folder: [
+        [t('Point to a local paper folder', '选择本地文献文件夹'), t('Scan PDF metadata and representative snippets without storing full text.', '扫描 PDF 元数据和代表摘录，不保存全文。')],
+        [t('Define the review scope', '定义综述范围'), t('Use the folder to surface candidate ICU-database questions, then choose one.', '用这批文献提出候选 ICU 数据库问题，再选择其中一个。')],
+      ],
+      frontier: [
+        [t('Describe the frontier topic', '描述前沿主题'), t('Without opt-in, EasyICU only prepares bounded queries and a local rationale.', '未 opt-in 时只准备有界检索式和本地理由。')],
+        [t('Opt in only when ready', '需要时再 opt-in'), t('Bounded PubMed metadata search can then map candidate papers to EasyICU concepts.', '之后可用有界 PubMed 元数据检索，把候选文献映射到 EasyICU 概念。')],
+      ],
+    }[srcType] || [];
+    return `
+      <div class="ideas-source-gate ${esc(srcType)}">
+        <div class="ideas-source-gate-title">${esc(modeTitle())}</div>
+        <div class="ideas-source-gate-steps">
+          ${rows.map((row, i) => `<div><span>${String(i + 1).padStart(2, '0')}</span><b>${row[0]}</b><em>${row[1]}</em></div>`).join('')}
+        </div>
+      </div>`;
+  }
+  function optionalMetadataBlock(body, title) {
+    return `
+      <details class="ideas-secondary-fields">
+        <summary>${icon('list', 13)} ${title || t('Optional metadata', '可选元数据')} <span>${t('can fill later', '可稍后补')}</span></summary>
+        <div class="ideas-secondary-body">${body}</div>
+      </details>`;
   }
   function validatePayload(payload) {
     const hasTopic = !!payload.topic;
@@ -398,7 +521,7 @@
     const steps = [
       ['source', t('Source', '来源'), source ? esc(source.title || source.journal || 'bound') : t('waiting for input', '等待输入'), source ? 'check' : 'file'],
       ['ledger', t('Idea ledger', 'Idea 台账'), idea ? esc(idea.go_no_go || 'draft') : t('not mined', '尚未挖掘'), idea ? 'target' : 'clock'],
-      ['evidence', t('Pre-experiment', '预实验'), pre ? esc(pre.status || 'checked') : t('after mining', '挖掘后生成'), pre ? 'beaker' : 'shield'],
+      ['evidence', t('Feasibility', '可行性评估'), pre ? esc(pre.status || 'checked') : t('after mining', '挖掘后生成'), pre ? 'shield' : 'shield'],
       ['handoff', t('Plan / replan', '计划 / replan'), project ? t('project seed ready', '项目种子已生成') : handoff ? t('frozen for Agent', '已冻结给 Agent') : planDraft ? t('plan draft ready', '计划草案已生成') : t('plan required', '需要计划'), project ? 'agent' : handoff || planDraft ? 'check' : 'arrow'],
     ];
     return `<div class="ideas-summary-strip">${steps.map(row => {
@@ -488,44 +611,52 @@
   }
   function sourceSpecificForm() {
     if (srcType === 'manual') return `
-      <div class="ideas-primary-grid mt-14">
-        <label class="field ideas-field"><span>${modePrimaryLabel()}</span><textarea id="ideaTopic" rows="4" placeholder="${esc(modePlaceholder())}">${esc(fieldValue('topic'))}</textarea></label>
-        <label class="field ideas-field"><span>${modeExcerptLabel()}</span><textarea id="ideaExcerpt" rows="4" placeholder="${t('Optional: paste the sentence, clinical observation, or rationale that triggered the idea.', '可选：粘贴触发这个想法的句子、临床观察或理由。')}">${esc(fieldValue('excerpt'))}</textarea></label>
+      <div class="ideas-source-form manual mt-14">
+        ${sourceModeGuide()}
+        <label class="field ideas-field"><span>${modePrimaryLabel()}</span><textarea id="ideaTopic" rows="5" placeholder="${esc(modePlaceholder())}">${esc(fieldValue('topic'))}</textarea></label>
+        ${optionalMetadataBlock(`<label class="field ideas-field"><span>${modeExcerptLabel()}</span><textarea id="ideaExcerpt" rows="3" placeholder="${t('Optional: paste the sentence, clinical observation, or rationale that triggered the idea.', '可选：粘贴触发这个想法的句子、临床观察或理由。')}">${esc(fieldValue('excerpt'))}</textarea></label>`, t('Optional rationale', '可选触发理由'))}
       </div>`;
     if (srcType === 'url') return `
-      <div class="ideas-url-stack mt-14">
+      <div class="ideas-source-form url mt-14">
+        ${sourceModeGuide()}
         <label class="field ideas-field"><span>${t('Article URL', '文章链接')}</span><input id="ideaUrl" placeholder="https://www.nejm.org/doi/full/..." value="${esc(fieldValue('url'))}" /></label>
-        <div class="ideas-meta-grid mt-10">
+        <label class="field ideas-field"><span>${modePrimaryLabel()}</span><textarea id="ideaTopic" rows="3" placeholder="${esc(modePlaceholder())}">${esc(fieldValue('topic'))}</textarea></label>
+        <label class="field ideas-field"><span>${modeExcerptLabel()}</span><textarea id="ideaExcerpt" rows="3" placeholder="${t('Optional: paste the article sentence that should become an ICU-database question.', '可选：粘贴应转化为 ICU 数据库问题的文章句子。')}">${esc(fieldValue('excerpt'))}</textarea></label>
+        ${optionalMetadataBlock(`<div class="ideas-meta-grid">
           <label class="field ideas-field"><span>DOI / PMID</span><input id="ideaDoi" placeholder="10.xxxx or PMID" value="${esc(fieldValue('doi'))}" /></label>
           <label class="field ideas-field"><span>Title</span><input id="ideaTitle" placeholder="${t('Resolved or manually entered title', '解析或手动输入的标题')}" value="${esc(fieldValue('title'))}" /></label>
           <label class="field ideas-field"><span>Journal</span><input id="ideaJournal" placeholder="e.g. NEJM" value="${esc(fieldValue('journal'))}" /></label>
           <label class="field ideas-field ideas-year"><span>Year</span><input id="ideaYear" placeholder="2026" value="${esc(fieldValue('year'))}" /></label>
-        </div>
-        <label class="field ideas-field mt-10"><span>${modeExcerptLabel()}</span><textarea id="ideaExcerpt" rows="3" placeholder="${t('Optional: paste the article sentence that should become an ICU-database question.', '可选：粘贴应转化为 ICU 数据库问题的文章句子。')}">${esc(fieldValue('excerpt'))}</textarea></label>
+        </div>`, t('Optional article metadata', '可选文章元数据'))}
         ${optInBlock()}
       </div>`;
     if (srcType === 'pdf') return `
-      <div class="ideas-url-stack mt-14">
+      <div class="ideas-source-form pdf mt-14">
+        ${sourceModeGuide()}
         ${pdfPickerBlock()}
         <label class="field ideas-field"><span>${modePrimaryLabel()}</span><textarea id="ideaTopic" rows="3" placeholder="${esc(modePlaceholder())}">${esc(fieldValue('topic'))}</textarea></label>
         <label class="field ideas-field"><span>${modeExcerptLabel()}</span><textarea id="ideaExcerpt" rows="4" placeholder="${t('Optional: paste a bounded passage if the PDF parser did not extract the motivating sentence.', '可选：如果 PDF 解析没有抽到触发句，可以粘贴一段有界摘录。')}">${esc(fieldValue('excerpt'))}</textarea></label>
-        <div class="ideas-meta-grid mt-10">
+        ${optionalMetadataBlock(`<div class="ideas-meta-grid two">
           <label class="field ideas-field"><span>Title</span><input id="ideaTitle" placeholder="${t('Auto-filled from PDF when available', '可由 PDF 自动填充')}" value="${esc(fieldValue('title'))}" /></label>
           <label class="field ideas-field"><span>DOI / PMID</span><input id="ideaDoi" placeholder="10.xxxx or PMID" value="${esc(fieldValue('doi'))}" /></label>
-        </div>
+        </div>`, t('Optional PDF metadata', '可选 PDF 元数据'))}
       </div>`;
     if (srcType === 'literature_folder') return `
-      <div class="ideas-url-stack mt-14">
+      <div class="ideas-source-form literature_folder mt-14">
+        ${sourceModeGuide()}
         ${literatureFolderBlock()}
         <label class="field ideas-field"><span>${modePrimaryLabel()}</span><textarea id="ideaTopic" rows="3" placeholder="${esc(modePlaceholder())}">${esc(fieldValue('topic'))}</textarea></label>
+        ${optionalMetadataBlock(`<label class="field ideas-field"><span>${modeExcerptLabel()}</span><textarea id="ideaExcerpt" rows="3" placeholder="${t('Optional notes about what this literature folder should help explore.', '可选：说明这批文献主要想辅助探索什么。')}">${esc(fieldValue('excerpt'))}</textarea></label>`, t('Optional library notes', '可选文献库备注'))}
       </div>`;
     return `
-      <div class="ideas-url-stack mt-14">
+      <div class="ideas-source-form frontier mt-14">
+        ${sourceModeGuide()}
         <label class="field ideas-field"><span>${modePrimaryLabel()}</span><textarea id="ideaTopic" rows="4" placeholder="${esc(modePlaceholder())}">${esc(fieldValue('topic'))}</textarea></label>
-        <div class="ideas-meta-grid mt-10">
+        ${optionalMetadataBlock(`<div class="ideas-meta-grid two">
           <label class="field ideas-field"><span>${t('Journal scope', '期刊范围')}</span><input id="ideaJournal" placeholder="NEJM, JAMA, ICM..." value="${esc(fieldValue('journal'))}" /></label>
           <label class="field ideas-field ideas-year"><span>${t('Year window', '年份窗口')}</span><input id="ideaYear" placeholder="2024-2026" value="${esc(fieldValue('year'))}" /></label>
         </div>
+        <label class="field ideas-field mt-10"><span>${modeExcerptLabel()}</span><textarea id="ideaExcerpt" rows="3" placeholder="${t('Optional: describe why this topic matters for ICU discovery.', '可选：说明这个主题为什么适合 ICU 数据库探索。')}">${esc(fieldValue('excerpt'))}</textarea></label>`, t('Optional search scope', '可选检索范围'))}
         ${optInBlock()}
         ${discoveryPanel()}
       </div>`;
@@ -624,9 +755,9 @@
                   <p>${esc(feas.reason || t('No feasibility rationale recorded.', '尚未记录可行性理由。'))}</p>
                 </section>
                 <section>
-                  <h4>${t('Prior art', '已有研究')}</h4>
+                  <h4>${t('Literature inspiration', '已有研究与启发')}</h4>
                   <span class="pill warn">${esc(prior.status || 'not checked')}</span>
-                  <p>${esc(prior.reason || t('Prior-art search has not been run.', '尚未运行已有研究检索。'))}</p>
+                  <p>${esc(prior.opportunity_frame || prior.reason || t('Prior-art search has not been run; use the source as inspiration, not as a completed novelty claim.', '尚未运行已有研究检索；先把来源当作启发，而不是已经完成的新颖性判断。'))}</p>
                 </section>
                 <section>
                   <h4>${t('Decision', '决策')}</h4>
@@ -654,15 +785,15 @@
       <div class="card pad ideas-core-card">
         <div class="section-head">
           <span class="sec-ico">${icon('search', 14)}</span>
-          <div><h2>${t('Prior-art check', '已有研究检查')}</h2><p>${t('Optional metadata search, kept behind explicit opt-in.', '可选元数据检索，必须显式 opt-in。')}</p></div>
+          <div><h2>${t('Prior-art and inspiration map', '已有文献与启发地图')}</h2><p>${t('Check what has already been published, then use it to refine the new ICU-database question.', '先看别人怎么做过，再据此细化新的 ICU 数据库探索问题。')}</p></div>
         </div>
         <div class="ideas-prior-card mt-10">
           <div class="ideas-prior-top">
             <div>
               <span class="pill ${statusTone}">${esc(status)}</span>
-              <p>${esc((prior && prior.reason) || t('No prior-art request has been made yet.', '尚未发起已有研究检索。'))}</p>
+              <p>${esc((prior && (prior.opportunity_frame || prior.reason)) || t('No prior-art request has been made yet. The source article can still inspire a new subgroup, timing window, comparator, or outcome question.', '尚未发起已有研究检索。来源文章仍可启发新的亚组、时间窗、比较方式或结局问题。'))}</p>
             </div>
-            <button class="btn ${prior && prior.search_performed ? '' : 'primary'}" data-idea-prior-art ${priorArting ? 'aria-disabled="true"' : ''}>${priorArting ? '<span class="spin"></span>' : icon('search', 13)} ${t('Check prior art', '检查已有研究')}</button>
+            <button class="btn ${prior && prior.search_performed ? '' : 'primary'}" data-idea-prior-art ${priorArting ? 'aria-disabled="true"' : ''}>${priorArting ? '<span class="spin"></span>' : icon('search', 13)} ${t('Check literature', '检查已有文献')}</button>
           </div>
           <label class="rtodo-row ideas-network-row">
             <input type="checkbox" id="ideaNetworkOptIn" ${fieldValue('allow_network') === 'true' || fieldValue('allow_network') === true ? 'checked' : ''} />
@@ -674,6 +805,7 @@
             <div class="ideas-query-list">${queries.map(q => `<code>${esc(q)}</code>`).join('')}</div>
           </details>` : ''}
         </div>
+        ${(prior && prior.next_use) ? `<div class="ideas-interpretation mt-10"><div>${icon('spark', 13)} <span>${esc(prior.next_use)}</span></div></div>` : ''}
         ${rows.length ? `<div class="ideas-prior-results mt-12">${rows.map(r => `<article><b>${esc(r.title || '')}</b><span>${esc(r.journal || '')} · ${fmt(r.year)} · PMID ${esc(r.pmid || '')}</span></article>`).join('')}</div>` : ''}
       </div>`;
   }
@@ -714,13 +846,13 @@
     return `
       <div class="card pad ideas-core-card">
         <div class="section-head">
-          <span class="sec-ico">${icon('beaker', 14)}</span>
-          <div><h2>${t('Pre-experiment on active export', '基于当前导出的预实验')}</h2><p>${t('Quick feasibility triage from the active export.', '基于当前导出的快速可行性预审。')} ${esc(activeSourceLine())}</p></div>
+          <span class="sec-ico">${icon('shield', 14)}</span>
+          <div><h2>${t('Feasibility assessment on active export', '基于当前导出的可行性评估')}</h2><p>${t('Outcome-blind feasibility check from the active export.', '基于当前导出的 outcome-blind 可行性检查。')} ${esc(activeSourceLine())}</p></div>
         </div>
         <div class="ideas-pre-summary mt-10">
-          <div><span>Status</span><b>${esc(pre.status || '—')}</b></div>
-          <div><span>Entities</span><b>${fmt(pre.cohort && pre.cohort.entities)}</b></div>
-          <div><span>Modules</span><b>${fmt(pre.cohort && pre.cohort.modules)}</b></div>
+          <div><span>${t('Status', '状态')}</span><b>${esc(pre.status || '—')}</b></div>
+          <div><span>${t('Entities', '实体')}</span><b>${fmt(pre.cohort && pre.cohort.entities)}</b></div>
+          <div><span>${t('Modules', '模块')}</span><b>${fmt(pre.cohort && pre.cohort.modules)}</b></div>
           <div><span>${t('Low coverage', '低覆盖')}</span><b>${fmt(riskCount)}</b></div>
         </div>
         ${stats.length ? `<div class="ideas-feature-list mt-12">${visibleStats.map(featureRow).join('')}</div>
@@ -737,7 +869,7 @@
       <div class="card pad ideas-core-card">
         <div class="section-head">
           <span class="sec-ico">${icon('agent', 14)}</span>
-          <div><h2>${t('Plan / replan before Agent', 'Agent 前计划 / replan')}</h2><p>${t('Generate a study plan from the idea ledger and pre-experiment before freezing an Agent handoff.', '先根据 idea 台账和预实验生成研究计划，然后再冻结交接给 Agent。')}</p></div>
+          <div><h2>${t('Plan / replan before Agent', 'Agent 前计划 / replan')}</h2><p>${t('Generate a concrete study plan from the idea ledger, feasibility assessment, and literature-inspiration map before freezing an Agent handoff.', '先根据 idea 台账、可行性评估和已有文献启发地图生成具体研究计划，然后再冻结交接给 Agent。')}</p></div>
         </div>
         <div class="note warn mt-8"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t">${t('Plan required before handoff', '交接前需要计划')}</div><div class="d">${t('This step collects the clinical question, feasibility risks, cohort/module confirmations, analysis family, reference method motifs, and reporting boundary. It is not an Agent run.', '这一步收集临床问题、可行性风险、队列/模块确认、分析类型、参考方法套路和报告边界。它不是 Agent run。')}</div></div></div>
         <div class="row gap-8 mt-12">
@@ -753,6 +885,22 @@
       const body = typeof row === 'object' ? [row.use_for, row.guardrail].filter(Boolean).join(' · ') : '';
       return `<div class="ideas-feature-row"><div class="ideas-feature-name"><b>${esc(label)}</b>${body ? `<span class="mono">${esc(body)}</span>` : ''}</div></div>`;
     }).join('')}</div>` : '';
+    const planSteps = Array.isArray(plan.analysis_plan) ? plan.analysis_plan : [];
+    const planStep = (row, i) => {
+      const obj = normalizePlanStep(row, i);
+      return `<article class="ideas-plan-step">
+        <div class="ideas-plan-num">${String(i + 1).padStart(2, '0')}</div>
+        <div class="ideas-plan-copy">
+          <div class="ideas-plan-phase">${esc(obj.phase || t('Step', '步骤'))}</div>
+          <h3>${esc(obj.title || obj.action || t('Plan step', '计划步骤'))}</h3>
+          ${obj.action ? `<p>${esc(obj.action)}</p>` : ''}
+          <div class="ideas-plan-meta">
+            ${obj.output ? `<span><b>${t('Output', '产物')}</b>${esc(obj.output)}</span>` : ''}
+            ${obj.guardrail ? `<span><b>${t('Guardrail', '约束')}</b>${esc(obj.guardrail)}</span>` : ''}
+          </div>
+        </div>
+      </article>`;
+    };
     return `
       <div class="card pad ideas-core-card">
         <div class="section-head">
@@ -760,9 +908,7 @@
           <div><h2>${t('Plan / replan before Agent', 'Agent 前计划 / replan')}</h2><p>${t('Confirm or revise the plan before sending it to Agent Projects. This does not unlock a manuscript draft.', '交给 Agent Projects 前先确认或修订计划。这里不会解锁论文草稿。')}</p></div>
         </div>
         <div class="note ok mt-8"><div class="ico">${icon('check', 14)}</div><div class="body"><div class="t">${esc(plan.research_question || '')}</div><div class="d">${esc((plan.agent_boundary && plan.agent_boundary.reason) || t('Draft analysis plan is locked until human confirmation and evidence checks pass.', '分析计划草稿在人工确认和证据核验通过前保持锁定。'))}</div></div></div>
-        <div class="ledger compact mt-12">
-          ${(plan.analysis_plan || []).map((x, i) => `<div class="ledger-row"><span class="ledger-ico">${String(i + 1).padStart(2, '0')}</span><div>${esc(x)}</div></div>`).join('')}
-        </div>
+        <div class="ideas-plan-steps mt-12">${planSteps.map(planStep).join('')}</div>
         ${patterns.length ? `<details class="ideas-compact-details mt-10" open><summary>${icon('book', 13)} ${t('Reference method patterns', '参考方法套路')} <span>${patterns.length}</span></summary>${miniList(patterns)}</details>` : ''}
         ${constraints.length ? `<details class="ideas-compact-details mt-10"><summary>${icon('shield', 13)} ${t('ICU constraints', 'ICU 场景约束')} <span>${constraints.length}</span></summary>${miniList(constraints)}</details>` : ''}
         ${confirmations.length ? `<div class="ideas-interpretation mt-10"><div>${icon('shield', 13)} <span>${t('Still needs confirmation', '仍需确认')}: ${confirmations.map(esc).join(' · ')}</span></div></div>` : ''}
@@ -833,6 +979,14 @@
     }
     return rows;
   }
+  function ideaListContext(rows) {
+    if (!rows.length) return '';
+    return `
+      <div class="ideas-list-context" role="note">
+        <div class="ideas-list-context-k">${t('History', '历史记录')}</div>
+        <div class="ideas-list-context-d">${t('These are metadata-only idea ledgers from this machine. They are reference material, not active Agent analyses.', '这里是本机保存的仅元数据 idea 台账。它们是参考材料，不是正在运行的 Agent 分析。')}</div>
+      </div>`;
+  }
   function ideaList() {
     const rows = recordRows();
     const dotCls = { ready: 'ready', draft: 'draft', idle: 'idle' };
@@ -843,6 +997,7 @@
           <div><span class="ttl">${t('Local idea runs', '本地 idea run')} · ${rows.length}</span><div class="ag-list-cap">${t('stored on this machine · not Agent analysis runs', '保存在本机 · 不是 Agent 分析运行')}</div></div>
           <button class="ag-newbtn" data-idea-new>${icon('plus', 13)} ${t('New', '新建')}</button>
         </div>
+        ${ideaListContext(rows)}
         <div class="ag-studies">
           ${rows.length ? rows.map((r, i) => `
             <button class="studycard ${String(r.id) === String(activeId) ? 'on' : ''}" data-idea-record="${esc(r.runId || r.id)}" data-idea-record-key="${esc(r.id)}" ${loadingRun === (r.runId || r.id) ? 'aria-disabled="true"' : ''}>
@@ -1089,8 +1244,8 @@
     nav: 'ideas',
     wide: true,
     crumbs: ['Home', 'Idea Mining'],
-    status: '<span class="pill ok"><span class="dot"></span> Local-first</span>',
-    actionHtml: '<button class="btn sm" data-nav="agent">' + icon('agent', 13) + ' Research Projects</button>',
+    get status() { return `<span class="pill ok"><span class="dot"></span> ${t('Local-first', '本地优先')}</span>`; },
+    get actionHtml() { return `<button class="btn sm" data-nav="agent">${icon('agent', 13)} ${t('Research Projects', '研究项目')}</button>`; },
     rail() {
       const last = result && (result.idea_ledger || [])[0];
       return `
@@ -1117,7 +1272,7 @@
         <div class="page-head" style="margin-bottom:16px;">
           <div class="row" style="justify-content:space-between;align-items:flex-start;gap:16px;">
             <div>
-              <div class="eyebrow">DISCOVERY · IDEA MINING · PRE-EXPERIMENT</div>
+              <div class="eyebrow">${t('DISCOVERY · IDEA MINING · FEASIBILITY', '发现 · IDEA 挖掘 · 可行性')}</div>
               <h1 style="margin-top:6px;">${t('Idea Mining', 'Idea 挖掘')}</h1>
               <p class="lead">${t('A workspace for turning papers, review themes, or raw hunches into an auditable idea ledger and an Agent-ready seed.', '把文章、review 主题或研究直觉转成可审计 idea 台账和研究项目可接手的种子。')}</p>
               <div style="font-size:11.5px;color:var(--ink-4);margin-top:9px;">${t('Separated from Research Projects: mining decides what is worth running; Agent Projects runs confirmed analyses.', '已和研究项目拆分：Idea 挖掘判断什么值得做；研究项目只运行确认后的分析。')}</div>

@@ -271,6 +271,7 @@ def patient_review_drilldown(body: Dict[str, Any]) -> Dict[str, Any]:
             list((sepsis_by_entity_all or sepsis_by_entity).values())
         ),
     }
+    eligibility_flow = _eligibility_flow_payload(path, desc, summary)
     module_profiles = _module_profiles(desc, review_frames, entity_set)
     time_lanes = _time_lane_payloads(review_frames, selected_id)
     quality_metrics = _quality_metrics_payload(review_frames, entity_set)
@@ -279,7 +280,7 @@ def patient_review_drilldown(body: Dict[str, Any]) -> Dict[str, Any]:
         path, desc, module_profiles, summary, table_paging
     )
     trajectory_review = _trajectory_review_payload(
-        time_lanes, selected, entities, quality_metrics
+        time_lanes, selected, entities, quality_metrics, review_frames, path, entity_ids
     )
     patient_overview = _patient_overview_payload(
         selected, entities, time_lanes, quality_metrics
@@ -314,6 +315,7 @@ def patient_review_drilldown(body: Dict[str, Any]) -> Dict[str, Any]:
             "payload_tables_are_bounded": True,
         },
         "summary": summary,
+        "eligibility_flow": eligibility_flow,
         "module_profiles": module_profiles,
         "entities": entities,
         "selected": selected,
@@ -342,6 +344,301 @@ def patient_review_drilldown(body: Dict[str, Any]) -> Dict[str, Any]:
             },
         ],
     }
+
+
+def _eligibility_flow_payload(
+    path: Path, desc: Dict[str, Any], summary: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Return cohort attrition metadata without reading patient rows."""
+    manifest = dataio._read_export_manifest(path)
+    report = manifest.get("cohort_report") if isinstance(manifest, dict) else None
+    contract = manifest.get("cohort_contract") if isinstance(manifest, dict) else None
+    report = report if isinstance(report, dict) else {}
+    contract = contract if isinstance(contract, dict) else {}
+    final_count = _first_int(
+        report.get("selected"),
+        report.get("cohort_size"),
+        summary.get("entities"),
+        (desc.get("summary") or {}).get("stays"),
+        manifest.get("patient_count") if isinstance(manifest, dict) else None,
+    )
+    source_total = _first_int(
+        report.get("source_total"),
+        report.get("initial"),
+        manifest.get("source_total") if isinstance(manifest, dict) else None,
+    )
+    if source_total is None:
+        source_total = final_count
+
+    steps: List[Dict[str, Any]] = []
+
+    def add_step(
+        step_id: str,
+        label_en: str,
+        label_zh: str,
+        count: Any,
+        *,
+        note_en: str = "",
+        note_zh: str = "",
+        basis: str = "manifest",
+        final: bool = False,
+    ) -> None:
+        parsed = _int_or_none(count)
+        if parsed is None:
+            return
+        if steps and steps[-1].get("id") == step_id and steps[-1].get("count") == parsed:
+            return
+        previous = _int_or_none(steps[-1].get("count")) if steps else None
+        excluded = (
+            max(0, previous - parsed)
+            if previous is not None and parsed is not None
+            else None
+        )
+        denominator = _int_or_none(source_total) or parsed
+        pct = round(parsed / denominator * 100, 1) if denominator else None
+        excluded_pct = (
+            round(excluded / previous * 100, 1)
+            if excluded is not None and previous
+            else None
+        )
+        steps.append(
+            {
+                "id": step_id,
+                "label": label_en,
+                "label_i18n": {"en": label_en, "zh": label_zh},
+                "count": parsed,
+                "denominator": denominator,
+                "pct_of_initial": pct,
+                "excluded": excluded,
+                "excluded_pct_of_previous": excluded_pct,
+                "note": note_en,
+                "note_i18n": {"en": note_en, "zh": note_zh},
+                "basis": basis,
+                "final": bool(final),
+            }
+        )
+
+    has_report = bool(report)
+    add_step(
+        "source_total",
+        "All ICU stays" if has_report else "All exported ICU stays",
+        "全部 ICU 住院" if has_report else "全部已导出 ICU 住院",
+        source_total,
+        note_en=(
+            "from source cohort before EasyICU filters"
+            if has_report
+            else "no stepwise filter log in this legacy export"
+        ),
+        note_zh=(
+            "EasyICU 筛选前的来源队列"
+            if has_report
+            else "这个旧导出没有逐步筛选日志"
+        ),
+        basis="cohort_report" if has_report else "export_summary",
+    )
+
+    demo_count = _first_int(report.get("selected_before_concept_prefilter"))
+    if demo_count is not None:
+        add_step(
+            "demographic_stay_filters",
+            _demographic_flow_label(contract, "en"),
+            _demographic_flow_label(contract, "zh"),
+            demo_count,
+            note_en=_demographic_flow_note(contract, "en"),
+            note_zh=_demographic_flow_note(contract, "zh"),
+            basis="cohort_report",
+        )
+
+    concept_count = _first_int(report.get("concept_matches"))
+    if concept_count is not None:
+        add_step(
+            "concept_prefilter",
+            _target_clinical_flow_label(contract, report, "en"),
+            _target_clinical_flow_label(contract, report, "zh"),
+            concept_count,
+            note_en=_target_clinical_flow_note(contract, report, "en"),
+            note_zh=_target_clinical_flow_note(contract, report, "zh"),
+            basis="cohort_report",
+        )
+
+    icd = report.get("icd") if isinstance(report.get("icd"), dict) else {}
+    if icd.get("enabled"):
+        icd_count = _first_int(report.get("selected_before_cap"), report.get("selected"))
+        include_count = len(icd.get("include_tokens") or [])
+        exclude_count = len(icd.get("exclude_tokens") or [])
+        add_step(
+            "icd_filters",
+            "ICD include / exclude",
+            "ICD 纳入 / 排除",
+            icd_count,
+            note_en=f"{include_count} include · {exclude_count} exclude tokens",
+            note_zh=f"{include_count} 个纳入 · {exclude_count} 个排除条件",
+            basis="cohort_report",
+        )
+
+    selected_before_cap = _first_int(report.get("selected_before_cap"))
+    if (
+        selected_before_cap is not None
+        and final_count is not None
+        and selected_before_cap != final_count
+    ):
+        add_step(
+            "max_patient_cap",
+            "Runtime sample cap",
+            "运行样本上限",
+            final_count,
+            note_en="max_patients applied",
+            note_zh="已应用 max_patients 上限",
+            basis="cohort_report",
+        )
+
+    if has_report or not steps or _int_or_none(steps[-1].get("count")) != final_count:
+        add_step(
+            "final_cohort",
+            "Final cohort",
+            "最终队列",
+            final_count,
+            note_en=(
+                "analysis-ready exported denominator"
+                if has_report
+                else "current Patient Review denominator"
+            ),
+            note_zh=("可分析导出分母" if has_report else "当前患者审阅分母"),
+            basis="cohort_report" if has_report else "export_summary",
+            final=True,
+        )
+    elif steps:
+        steps[-1]["id"] = "final_cohort"
+        steps[-1]["label"] = "Final cohort"
+        steps[-1]["label_i18n"] = {"en": "Final cohort", "zh": "最终队列"}
+        steps[-1]["note"] = "current Patient Review denominator"
+        steps[-1]["note_i18n"] = {
+            "en": "current Patient Review denominator",
+            "zh": "当前患者审阅分母",
+        }
+        steps[-1]["final"] = True
+    if len(steps) == 1:
+        steps[0]["final"] = True
+
+    return {
+        "title": "Eligibility flow (ICU stays)",
+        "title_i18n": {
+            "en": "Eligibility flow (ICU stays)",
+            "zh": "入组筛选流程（ICU 住院）",
+        },
+        "steps": steps,
+        "initial_count": steps[0]["count"] if steps else None,
+        "final_count": final_count,
+        "has_stepwise_report": has_report,
+        "payload_scope": "cohort_attrition_metadata_only",
+        "privacy": {
+            "patient_rows_returned": False,
+            "direct_identifiers_returned": False,
+        },
+    }
+
+
+def _first_int(*values: Any) -> int | None:
+    for value in values:
+        parsed = _int_or_none(value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _demographic_flow_label(contract: Dict[str, Any], lang: str) -> str:
+    preset = str(contract.get("preset") or "").strip()
+    age_min = _int_or_none(contract.get("age_min"))
+    age_max = _int_or_none(contract.get("age_max"))
+    min_los = _int_or_none(contract.get("min_icu_los_hours"))
+    first_stay = bool(contract.get("exclude_readmissions"))
+    if lang == "zh":
+        if age_min is not None and age_max is not None and min_los:
+            return f"年龄 {age_min}-{age_max} 岁 + ICU ≥ {min_los} 小时"
+        if age_min is not None and age_max is not None:
+            return f"年龄 {age_min}-{age_max} 岁"
+        if min_los:
+            return f"ICU ≥ {min_los} 小时"
+        return "人口学 / 住院筛选" if first_stay or preset else "来源队列确认"
+    if age_min is not None and age_max is not None and min_los:
+        return f"Age {age_min}-{age_max} + ICU stay >= {min_los}h"
+    if age_min is not None and age_max is not None:
+        return f"Age {age_min}-{age_max} years"
+    if min_los:
+        return f"ICU stay >= {min_los}h"
+    return "Demographic / stay filters" if first_stay or preset else "Source cohort confirmed"
+
+
+def _demographic_flow_note(contract: Dict[str, Any], lang: str) -> str:
+    pieces: List[str] = []
+    if contract.get("exclude_readmissions"):
+        pieces.append("first ICU stay" if lang == "en" else "首次 ICU")
+    min_los = _int_or_none(contract.get("min_icu_los_hours"))
+    if min_los:
+        pieces.append(
+            f"LOS >= {min_los}h" if lang == "en" else f"住院时长 >= {min_los} 小时"
+        )
+    return " · ".join(pieces)
+
+
+def _target_clinical_flow_preset(
+    contract: Dict[str, Any], report: Dict[str, Any]
+) -> str:
+    return str(contract.get("preset") or report.get("mode") or "").strip().lower()
+
+
+def _target_clinical_flow_label(
+    contract: Dict[str, Any], report: Dict[str, Any], lang: str
+) -> str:
+    preset = _target_clinical_flow_preset(contract, report)
+    if lang == "zh":
+        labels = {
+            "sepsis3": "Sepsis-3 脓毒症队列",
+            "aki": "AKI 目标队列",
+            "ventilation": "机械通气目标队列",
+            "vasopressor": "血管活性药物暴露队列",
+            "respiratory": "呼吸支持目标队列",
+            "icd": "ICD 定义目标队列",
+        }
+        return labels.get(preset, "目标临床队列")
+    labels = {
+        "sepsis3": "Sepsis-3 cohort",
+        "aki": "AKI target cohort",
+        "ventilation": "Mechanical ventilation cohort",
+        "vasopressor": "Vasopressor exposure cohort",
+        "respiratory": "Respiratory support cohort",
+        "icd": "ICD-defined target cohort",
+    }
+    return labels.get(preset, "Target clinical cohort")
+
+
+def _target_clinical_flow_note(
+    contract: Dict[str, Any], report: Dict[str, Any], lang: str
+) -> str:
+    preset = _target_clinical_flow_preset(contract, report)
+    if lang == "zh":
+        notes = {
+            "sepsis3": "疑似感染 + SOFA 信号",
+            "aki": "AKI 规则阳性",
+            "ventilation": "机械通气概念阳性",
+            "vasopressor": "血管活性药物暴露阳性",
+            "respiratory": "呼吸支持或氧合异常信号",
+            "icd": "诊断编码规则",
+        }
+        note = notes.get(preset, "概念规则阳性")
+        window = _int_or_none(contract.get("observation_window_hours"))
+        return f"{note} · 前 {window} 小时窗口" if window else note
+    notes = {
+        "sepsis3": "suspected infection + SOFA signal",
+        "aki": "AKI rule-positive",
+        "ventilation": "mechanical ventilation concept-positive",
+        "vasopressor": "vasopressor exposure-positive",
+        "respiratory": "respiratory support or oxygenation signal",
+        "icd": "diagnosis-code rule",
+    }
+    note = notes.get(preset, "concept rule-positive")
+    window = _int_or_none(contract.get("observation_window_hours"))
+    return f"{note} · first {window}h window" if window else note
 
 
 def _resolve_registered_source(
@@ -735,7 +1032,19 @@ def _time_lane_payloads(
         for feature in item.get("features") or []:
             if feature not in one.columns:
                 continue
-            values = dataio._numeric_values(one[feature])
+            # Keep charttime aligned with each numeric value so the front-end
+            # can render the real ICU-admission-hour axis instead of a bare
+            # index. dataio._numeric_values drops non-numeric rows, so we pair
+            # time and value row-by-row with the same drop rule rather than
+            # zipping the raw (unfiltered) time column.
+            times: List[Any] = []
+            values: List[float] = []
+            for raw_time, raw_value in zip(one[time_col], one[feature]):
+                num = dataio._num(raw_value)
+                if num is None:
+                    continue
+                values.append(float(num))
+                times.append(_json_cell(raw_time))
             if not values:
                 continue
             by_feature.setdefault(
@@ -747,6 +1056,7 @@ def _time_lane_payloads(
                     "module": item.get("module"),
                     "time_indexed": bool(time_col),
                     "values": values[:_MAX_SIGNAL_POINTS],
+                    "times": times[:_MAX_SIGNAL_POINTS],
                     "point_count": len(values),
                     "current": values[min(len(values), _MAX_SIGNAL_POINTS) - 1],
                     "min": round(min(values), 3),
@@ -1243,6 +1553,9 @@ def _trajectory_review_payload(
     selected: Dict[str, Any],
     entities: List[Dict[str, Any]],
     quality_metrics: Dict[str, Any],
+    review_frames: List[Dict[str, Any]],
+    path: Path,
+    entity_ids: List[str],
 ) -> Dict[str, Any]:
     """Build bounded time-window feature-matrix review metadata."""
     ready_lanes = [
@@ -1254,7 +1567,11 @@ def _trajectory_review_payload(
         for signal in lane.get("signals") or []:
             selected_signals.append(signal)
     selected_signals = selected_signals[:_MAX_REVIEW_SIGNALS]
-    comparison_features = _comparison_feature_payload(quality_metrics)
+    comparison_payload = _multi_entity_comparison_payload(
+        review_frames, path, entity_ids[:_MAX_ENTITIES], selected_signals, quality_metrics
+    )
+    comparison_features = comparison_payload.get("features") or []
+    has_multi_traces = bool(comparison_payload.get("traces"))
     return {
         "contract": [
             {
@@ -1278,7 +1595,7 @@ def _trajectory_review_payload(
             {
                 "index": "04",
                 "label": "Review mode",
-                "detail": "time windows x features / single entity / aggregate comparison",
+                "detail": "clinical lanes / single entity / multi-entity same-feature traces",
                 "status": "ready",
             },
         ],
@@ -1298,8 +1615,10 @@ def _trajectory_review_payload(
             {
                 "id": "multi_entity_comparison",
                 "label": "Multi-Patient Comparison",
-                "status": "aggregate_only" if comparison_features else "unavailable",
-                "description": "Cohort-level feature summaries replace raw multi-entity traces in the native browser payload.",
+                "status": "ready"
+                if has_multi_traces
+                else ("aggregate_only" if comparison_features else "unavailable"),
+                "description": "Same feature across a bounded set of pseudonymous entities.",
             },
         ],
         "lanes": ready_lanes,
@@ -1308,14 +1627,138 @@ def _trajectory_review_payload(
             "selected_label": selected.get("label"),
             "signals": selected_signals[:12],
         },
-        "multi_entity_comparison": {
-            "selection_cap": _MAX_ENTITIES,
-            "normalization_available": True,
-            "features": comparison_features,
-            "payload_scope": "aggregate_comparison_no_multi_entity_rows",
-        },
+        "multi_entity_comparison": comparison_payload,
         "payload_scope": "feature_matrix_semantics_bounded",
     }
+
+
+def _multi_entity_comparison_payload(
+    review_frames: List[Dict[str, Any]],
+    path: Path,
+    entity_ids: List[str],
+    selected_signals: List[Dict[str, Any]],
+    quality_metrics: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Return old Patient Review-style same-feature traces across entities.
+
+    The payload remains bounded and pseudonymous: it exposes at most five entity
+    tokens and at most ``_MAX_SIGNAL_POINTS`` values per entity, never stay_id.
+    """
+    aggregate_features = _comparison_feature_payload(quality_metrics)
+    candidates = _comparison_feature_candidates(review_frames, selected_signals)
+    for feature in candidates:
+        for item in review_frames:
+            frame = item.get("frame")
+            time_col = item.get("time_col")
+            if (
+                frame is None
+                or frame.empty
+                or "stay_id" not in frame.columns
+                or not time_col
+                or time_col not in frame.columns
+                or feature not in frame.columns
+            ):
+                continue
+            traces = _feature_traces_for_entities(
+                frame, path, entity_ids, time_col, feature
+            )
+            if len(traces) >= 2:
+                return {
+                    "selection_cap": _MAX_ENTITIES,
+                    "normalization_available": True,
+                    "feature": feature,
+                    "label": _concept_name(feature),
+                    "unit": _concept_unit(feature),
+                    "module": item.get("module"),
+                    "module_label": _module_label(str(item.get("module") or "")),
+                    "traces": traces,
+                    "compared_entities": len(traces),
+                    "features": aggregate_features[:8],
+                    "payload_scope": "bounded_pseudonymous_multi_entity_same_feature_traces",
+                }
+    return {
+        "selection_cap": _MAX_ENTITIES,
+        "normalization_available": True,
+        "features": aggregate_features,
+        "traces": [],
+        "payload_scope": "aggregate_comparison_no_multi_entity_traces_available",
+    }
+
+
+def _comparison_feature_candidates(
+    review_frames: List[Dict[str, Any]], selected_signals: List[Dict[str, Any]]
+) -> List[str]:
+    preferred = [
+        "hr",
+        "map",
+        "sbp",
+        "dbp",
+        "spo2",
+        "resp",
+        "temp",
+        "lact",
+        "lac",
+        "sofa2",
+        "sofa",
+    ]
+    out: List[str] = []
+    for signal in selected_signals:
+        feature = str(signal.get("feature") or signal.get("key") or "").strip()
+        if feature and feature not in out:
+            out.append(feature)
+    for feature in preferred:
+        if feature not in out:
+            out.append(feature)
+    for item in review_frames:
+        if not item.get("time_col"):
+            continue
+        for feature in item.get("features") or []:
+            if feature and feature not in out:
+                out.append(str(feature))
+    return out
+
+
+def _feature_traces_for_entities(
+    frame: Any,
+    path: Path,
+    entity_ids: List[str],
+    time_col: str,
+    feature: str,
+) -> List[Dict[str, Any]]:
+    traces: List[Dict[str, Any]] = []
+    subset = frame[frame["stay_id"].isin(entity_ids)].copy()
+    if subset.empty:
+        return traces
+    subset = subset.dropna(subset=[feature])
+    if subset.empty:
+        return traces
+    for ordinal, entity_id in enumerate(entity_ids, start=1):
+        one = subset[subset["stay_id"] == entity_id].copy()
+        if one.empty:
+            continue
+        one = one.sort_values(time_col)
+        values = dataio._numeric_values(one[feature])
+        if len(values) < 2:
+            continue
+        bounded_values = values[:_MAX_SIGNAL_POINTS]
+        bounded_times = [
+            _json_cell(value)
+            for value in list(one[time_col])[: len(bounded_values)]
+        ]
+        traces.append(
+            {
+                "ref": _entity_ref(path, entity_id),
+                "label": f"Entity {ordinal}",
+                "values": bounded_values,
+                "times": bounded_times,
+                "point_count": len(values),
+                "bounded": True,
+                "max_points": _MAX_SIGNAL_POINTS,
+            }
+        )
+        if len(traces) >= _MAX_ENTITIES:
+            break
+    return traces
 
 
 def _patient_overview_payload(

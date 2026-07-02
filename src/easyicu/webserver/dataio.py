@@ -20,9 +20,11 @@ drives ``DataConverter.convert_all(progress_callback=...)`` directly.
 
 from __future__ import annotations
 
+import csv
+import json
+import re
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
-import re
 
 # Core metadata tables per database — a folder that holds these (as parquet or
 # csv) is recognised as that database. Mirrors check_data_status' core_tables.
@@ -487,12 +489,19 @@ def _normalize_delta_function(value: Any) -> str:
 def _normalize_sepsis_definition(value: Any) -> Dict[str, Any]:
     """Record Sepsis/SOFA detection parameters and runtime callback kwargs.
 
-    These fields mirror ``easyicu.scores.sepsis.susp_inf`` plus
-    ``sep3``/``sep3_sofa2``. Defaults remain the Sepsis-3 main profile; non-
-    default values are preserved as explicit sensitivity/strategy choices.
+    The Web extraction contract is intentionally narrower than the lower-level
+    callback signatures.  It locks the Sepsis-3 core definition to suspected
+    infection plus a >=2 SOFA increase in the standard window.  The SOFA score
+    source is owned by the selected modules (sep3_sofa2 / sep3_sofa1), not by a
+    user-facing toggle.  The suspected-infection strategy is recorded as runtime
+    metadata, but is not exposed as a review option: MIMIC-style sources have one
+    ABX+sample timing chain, and the `icd_abx` value is accepted only for
+    legacy/eICU-specific metadata.  The remaining user-facing audit choice is
+    repeated-SI event selection.
     """
     raw = value if isinstance(value, dict) else {}
     profiles = {
+        "selected_module_defaults": "module-specific SOFA source",
         "sofa2_primary": "SOFA-2",
         "sofa1_sensitivity": "SOFA-1",
         "dual_audit": "SOFA-2 + SOFA-1",
@@ -501,7 +510,7 @@ def _normalize_sepsis_definition(value: Any) -> Dict[str, Any]:
     implementation_profile = str(raw.get("implementation_profile") or "").strip()
     if implementation_profile not in profiles:
         implementation_profile = score_to_profile.get(
-            str(raw.get("score_family") or "").strip(), "sofa2_primary"
+            str(raw.get("score_family") or "").strip(), "selected_module_defaults"
         )
     score_family = profiles[implementation_profile]
 
@@ -513,30 +522,22 @@ def _normalize_sepsis_definition(value: Any) -> Dict[str, Any]:
     si_aliases = {"antibiotic_and_sample": "and", "abx_sample": "and"}
     si_mode = str(raw_si.get("mode") or "auto").strip()
     si_mode = si_aliases.get(si_mode, si_mode)
-    si_mode = _choice_str(si_mode, {"auto", "and", "icd_abx", "abx", "samp", "or"}, "auto")
-    abx_win_hours = _choice_int(
-        raw_si.get("abx_win_hours", raw_si.get("antibiotic_to_sample_hours")),
-        {12, 24, 48},
-        24,
-    )
-    samp_win_hours = _choice_int(
-        raw_si.get("samp_win_hours", raw_si.get("sample_to_antibiotic_hours")),
-        {24, 48, 72},
-        72,
-    )
-    abx_count_win_hours = _choice_int(raw_si.get("abx_count_win_hours"), {12, 24, 48}, 24)
-    abx_min_count = _choice_int(raw_si.get("abx_min_count"), {1, 2, 3}, 1)
-    positive_cultures = _bool_choice(raw_si.get("positive_cultures_required"), False)
+    si_mode = _choice_str(si_mode, {"auto", "and", "icd_abx"}, "auto")
+    abx_win_hours = 24
+    samp_win_hours = 72
+    abx_count_win_hours = 24
+    abx_min_count = 1
+    positive_cultures = False
 
     si_window_value = raw_sofa.get("si_window")
     if si_window_value is None:
         si_window_value = raw_sofa.get("si_event")
-    si_window = _choice_str(str(si_window_value or "first"), {"first", "last", "any"}, "first")
-    window_before = _choice_int(raw_sofa.get("window_before_si_hours"), {24, 48, 72}, 48)
-    window_after = _choice_int(raw_sofa.get("window_after_si_hours"), {12, 24, 48}, 24)
-    delta_function = _normalize_delta_function(raw_sofa.get("delta_function"))
-    threshold = _choice_int(raw_sofa.get("threshold"), {2, 3}, 2)
-    keep_components = _bool_choice(raw_sofa.get("keep_components"), False)
+    si_window = _choice_str(str(si_window_value or "first"), {"first", "any"}, "first")
+    window_before = 48
+    window_after = 24
+    delta_function = "delta_cummin"
+    threshold = 2
+    keep_components = False
 
     si_def = {
         "mode": si_mode,
@@ -578,24 +579,18 @@ def _normalize_sepsis_definition(value: Any) -> Dict[str, Any]:
         ],
         "implementation_profile": implementation_profile,
         "score_family": score_family,
+        "definition_locked": True,
         "suspected_infection": si_def,
         "sofa_increase": sofa_def,
         "runtime_kwargs": runtime_kwargs,
         "review_options": {
-            "implementation_profile": list(profiles.keys()),
-            "score_family": list(profiles.values()),
-            "si_mode": ["auto", "and", "icd_abx", "abx", "samp", "or"],
-            "abx_win_hours": [12, 24, 48],
-            "samp_win_hours": [24, 48, 72],
-            "abx_count_win_hours": [12, 24, 48],
-            "abx_min_count": [1, 2, 3],
-            "positive_cultures_required": [False, True],
-            "si_window": ["first", "last", "any"],
-            "window_before_si_hours": [24, 48, 72],
-            "window_after_si_hours": [12, 24, 48],
-            "delta_function": ["delta_cummin", "delta_start", "delta_min"],
-            "threshold": [2, 3],
-            "keep_components": [False, True],
+            "si_window": ["first", "any"],
+        },
+        "locked_core": {
+            "suspected_infection_windows": "ABX->sample 24h; sample->ABX 72h",
+            "sofa_window": "-48h/+24h",
+            "delta_rule": "cumulative minimum within SI window",
+            "sofa_threshold": "delta >= 2",
         },
     }
 
@@ -674,7 +669,10 @@ def _resolve_export_out_dir(
 
 
 def _render_export_readme(
-    manifest: Dict[str, Any], *, files: List[Dict[str, Any]]
+    manifest: Dict[str, Any],
+    *,
+    files: List[Dict[str, Any]],
+    definition_files: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     cohort = manifest.get("cohort_contract") or {}
     report = manifest.get("cohort_report") or {}
@@ -739,6 +737,15 @@ def _render_export_readme(
         "",
         "- `_manifest.json` contains the machine-readable extraction contract, module files, row counts, and cohort report.",
         "- Each module file contains the extracted concept table for the same resolved cohort.",
+        *(
+            [
+                "- `feature_definitions.json` and `feature_definitions.csv` contain the selected concept IDs, names, units, exported module files, and callback provenance.",
+                "- Example definition row: `concept_id=age`, `module=demographics`, `unit=years`, `export_files=demographics.parquet`, `callback_import_path=easyicu.api.load_concepts`, `callback_project_path=<local EasyICU repo>`.",
+                "- Raw table/column lineage is included only when declared by the catalog; otherwise `raw_metadata_status=not_declared_in_current_catalog` is used instead of guessing.",
+            ]
+            if definition_files
+            else []
+        ),
         "- This `README.md` is a human-readable summary of the same extraction contract.",
         "",
         "## Files",
@@ -747,6 +754,10 @@ def _render_export_readme(
     for f in files:
         lines.append(
             f"- `{f.get('file')}` — module `{f.get('module', '')}`, rows `{f.get('rows', '')}`"
+        )
+    for f in definition_files or []:
+        lines.append(
+            f"- `{f.get('file')}` — feature definition manifest, records `{f.get('records', '')}`"
         )
     lines.append("")
     return "\n".join(lines)
@@ -824,6 +835,168 @@ def _normalize_export_concepts(
             {"modules": modules},
         )
     return selected
+
+
+def _feature_definition_payload(
+    *,
+    database: str,
+    data_path: str,
+    export_path: Path,
+    concept_plan: Dict[str, List[str]],
+    files: List[Dict[str, Any]],
+    api_module: Any,
+) -> Dict[str, Any]:
+    """Build a metadata-only definition manifest for selected concepts."""
+    from easyicu.concept.catalog import (
+        COMPOSITE_CONCEPT_OUTPUT_SOURCES,
+        CONCEPT_DESCRIPTIONS,
+        CONCEPT_DICTIONARY,
+        CONCEPT_GROUP_NAMES,
+    )
+
+    project_path = Path(__file__).resolve().parents[3]
+    callback_source = Path(getattr(api_module, "__file__", "")).resolve()
+    file_by_module: Dict[str, List[str]] = {}
+    for item in files:
+        module = str(item.get("module") or "")
+        file_name = str(item.get("file") or "")
+        if module and file_name:
+            file_by_module.setdefault(module, []).append(file_name)
+
+    records: List[Dict[str, Any]] = []
+    for module, concept_ids in concept_plan.items():
+        group_en, group_zh = CONCEPT_GROUP_NAMES.get(module, (module, module))
+        for concept_id in concept_ids:
+            name_en, name_zh, unit = CONCEPT_DICTIONARY.get(
+                concept_id, (concept_id, concept_id, "")
+            )
+            desc_en, desc_zh = CONCEPT_DESCRIPTIONS.get(concept_id, ("", ""))
+            derived_output_source = COMPOSITE_CONCEPT_OUTPUT_SOURCES.get(concept_id)
+            records.append(
+                {
+                    "database": database,
+                    "concept_id": concept_id,
+                    "name_en": name_en,
+                    "name_zh": name_zh,
+                    "unit": unit,
+                    "module": module,
+                    "module_name_en": group_en,
+                    "module_name_zh": group_zh,
+                    "description_en": desc_en,
+                    "description_zh": desc_zh,
+                    "source": {
+                        "data_path": str(data_path),
+                        "export_path": str(export_path),
+                        "export_files": file_by_module.get(module, []),
+                        "raw_tables": [],
+                        "raw_columns": [],
+                        "raw_metadata_status": "not_declared_in_current_catalog",
+                        "note": (
+                            "EasyICU resolves raw database tables inside concept "
+                            "callbacks. This manifest records the selected concept "
+                            "metadata, exported module files, and callback "
+                            "provenance; raw table/column lineage is only populated "
+                            "when declared by the catalog."
+                        ),
+                    },
+                    "callback": {
+                        "import_path": "easyicu.api.load_concepts",
+                        "function": "load_concepts",
+                        "source_file": str(callback_source),
+                        "project_path": str(project_path),
+                        "module_callback": derived_output_source,
+                        "call_signature": (
+                            "load_concepts(concept_ids, patient_ids=resolved_cohort, "
+                            "database=database, data_path=data_path, use_sofa2=..., "
+                            "merge=True, **cohort_runtime_kwargs)"
+                        ),
+                    },
+                }
+            )
+
+    return {
+        "schema_version": "easyicu_feature_definitions_v1",
+        "database": database,
+        "data_path": str(data_path),
+        "export_path": str(export_path),
+        "record_count": len(records),
+        "raw_lineage_scope": "catalog_metadata_plus_callback_provenance",
+        "records": records,
+    }
+
+
+def _write_feature_definition_files(
+    out: Path, payload: Dict[str, Any]
+) -> List[Dict[str, Any]]:
+    json_name = "feature_definitions.json"
+    csv_name = "feature_definitions.csv"
+    (out / json_name).write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+
+    fieldnames = [
+        "database",
+        "module",
+        "module_name_en",
+        "module_name_zh",
+        "concept_id",
+        "name_en",
+        "name_zh",
+        "unit",
+        "export_files",
+        "raw_tables",
+        "raw_columns",
+        "raw_metadata_status",
+        "callback_import_path",
+        "callback_function",
+        "callback_source_file",
+        "callback_project_path",
+        "module_callback",
+        "description_en",
+        "description_zh",
+    ]
+    with (out / csv_name).open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for record in payload.get("records", []):
+            source = record.get("source") or {}
+            callback = record.get("callback") or {}
+            writer.writerow(
+                {
+                    "database": record.get("database", ""),
+                    "module": record.get("module", ""),
+                    "module_name_en": record.get("module_name_en", ""),
+                    "module_name_zh": record.get("module_name_zh", ""),
+                    "concept_id": record.get("concept_id", ""),
+                    "name_en": record.get("name_en", ""),
+                    "name_zh": record.get("name_zh", ""),
+                    "unit": record.get("unit", ""),
+                    "export_files": ";".join(source.get("export_files") or []),
+                    "raw_tables": ";".join(source.get("raw_tables") or []),
+                    "raw_columns": ";".join(source.get("raw_columns") or []),
+                    "raw_metadata_status": source.get("raw_metadata_status", ""),
+                    "callback_import_path": callback.get("import_path", ""),
+                    "callback_function": callback.get("function", ""),
+                    "callback_source_file": callback.get("source_file", ""),
+                    "callback_project_path": callback.get("project_path", ""),
+                    "module_callback": callback.get("module_callback") or "",
+                    "description_en": record.get("description_en", ""),
+                    "description_zh": record.get("description_zh", ""),
+                }
+            )
+
+    return [
+        {
+            "file": json_name,
+            "kind": "feature_definitions",
+            "records": payload.get("record_count", 0),
+        },
+        {
+            "file": csv_name,
+            "kind": "feature_definitions_csv",
+            "records": payload.get("record_count", 0),
+        },
+    ]
 
 
 def _coerce_int(
@@ -1271,6 +1444,7 @@ def _resolve_export_cohort(
         has_sepsis=None,
         return_dataframe=True,
     )
+    source_total = _positive_int(getattr(pf, "_last_original_count", None))
     if "patient_id" not in filtered.columns:
         raise ExportCohortError(
             "cohort_filter_missing_patient_id", {"database": database}
@@ -1355,6 +1529,7 @@ def _resolve_export_cohort(
         "cohort_contract": normalized,
         "cohort_report": {
             "mode": normalized["preset"],
+            "source_total": source_total,
             "selected": len(ids),
             "selected_before_cap": uncapped,
             "selected_before_concept_prefilter": before_concept,
@@ -1391,6 +1566,7 @@ def make_export_runner(
     create_run_subdir: bool = False,
     max_patients: Optional[int] = None,
     cohort: Optional[Dict[str, Any]] = None,
+    include_feature_definitions: bool = True,
 ) -> Any:
     """Build a job runner that extracts the selected feature modules to disk.
 
@@ -1502,6 +1678,8 @@ def make_export_runner(
         )
 
         files: List[Dict[str, Any]] = []
+        definition_files: List[Dict[str, Any]] = []
+        definition_payload: Optional[Dict[str, Any]] = None
         total = len(sel)
         with api.keep_cache(database=database, data_path=str(data_path)):
             for i, mod in enumerate(sel, start=1):
@@ -1572,6 +1750,17 @@ def make_export_runner(
                 "cancelled_at": "modules",
             }
 
+        if include_feature_definitions:
+            definition_payload = _feature_definition_payload(
+                database=database,
+                data_path=str(data_path),
+                export_path=out,
+                concept_plan={module: concept_plan[module] for module in sel},
+                files=files,
+                api_module=api,
+            )
+            definition_files = _write_feature_definition_files(out, definition_payload)
+
         manifest = {
             "database": database,
             "data_path": str(data_path),
@@ -1592,20 +1781,41 @@ def make_export_runner(
             },
             "generated": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "files": files,
+            "feature_definitions": (
+                {
+                    "included": True,
+                    "schema_version": definition_payload.get("schema_version"),
+                    "record_count": definition_payload.get("record_count"),
+                    "raw_lineage_scope": definition_payload.get("raw_lineage_scope"),
+                    "files": definition_files,
+                }
+                if definition_payload
+                else {"included": False}
+            ),
         }
         (out / "_manifest.json").write_text(
             json.dumps(manifest, indent=2, ensure_ascii=False)
         )
         (out / "README.md").write_text(
-            _render_export_readme(manifest, files=files), encoding="utf-8"
+            _render_export_readme(
+                manifest, files=files, definition_files=definition_files
+            ),
+            encoding="utf-8",
         )
         return {
             "out_dir": str(out),
             "files": files,
+            "definition_files": definition_files,
             "file_count": len(files),
             "total_rows": sum(f["rows"] for f in files),
             "manifest": "_manifest.json",
             "readme": "README.md",
+            "feature_definitions": "feature_definitions.json"
+            if definition_files
+            else None,
+            "feature_definitions_csv": "feature_definitions.csv"
+            if definition_files
+            else None,
         }
 
     return runner

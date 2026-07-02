@@ -5,7 +5,7 @@ FastAPI UI.  Live literature search remains explicit network opt-in.  Local PDF
 and literature-folder ingestion are allowed, but only bounded excerpts, file
 metadata, and hashes are returned; full text is not persisted.  The web contract
 produces source evidence, idea ledger rows, data-dictionary feasibility,
-active-export pre-experiment summaries, and a frozen plan handoff draft.
+active-export feasibility summaries, and a frozen plan handoff draft.
 """
 
 from __future__ import annotations
@@ -570,7 +570,7 @@ def check_prior_art(body: Dict[str, Any]) -> Dict[str, Any]:
             "queries_to_run": queries,
             "results": [],
             "public_database_used_by_prior_work": "unknown_until_search",
-            "reason": "Prior-art checking needs explicit network opt-in. No request was made.",
+            "reason": "Prior-art interpretation needs explicit network opt-in. No request was made.",
         }
         network_calls = 0
     else:
@@ -1082,12 +1082,17 @@ def _idea_from_source(
         concepts = _dedupe_concepts(hits[:3])
     title = _idea_title(source, predictor, outcome, concepts)
     concept_rows = [_concept_feasibility(row, export_index) for row in concepts]
-    overall = _overall_feasibility(concept_rows)
+    overall = _overall_feasibility(concept_rows, export_index)
     novelty = _prior_art(source, title)
     go_no_go = (
         "recommend"
         if overall["tier"] == "executable"
-        else ("hold" if overall["tier"].startswith("T1") else "db-cannot-do")
+        else (
+            "hold"
+            if overall["tier"].startswith("T1")
+            or overall["tier"] == "demo_only"
+            else "db-cannot-do"
+        )
     )
     idea_payload = {
         "idea_id": "idea_"
@@ -1128,8 +1133,10 @@ def _pre_experiment(
             "reason": "No active registered export is selected. Extract data or register an EasyICU export first.",
             "payload_scope": "no_patient_rows",
             "feature_statistics": [],
+            "reportable": False,
         }
     source, desc = export
+    demo_like = bool(export_index.get("demo_like"))
     entity_ids = export_index.get("entity_ids") or set()
     concepts = [
         row.get("concept_id")
@@ -1156,15 +1163,24 @@ def _pre_experiment(
         if stats and not missing_required
         else ("partial" if stats else "blocked")
     )
+    if demo_like and status in {"ready", "partial"}:
+        status = "demo_only"
     return {
         "status": status,
         "payload_scope": "aggregate_pre_experiment_no_row_payload",
+        "reportable": False,
+        "reason": (
+            "Current active export is a MOCK/demo source. Use this only for UI rehearsal; switch to a real EasyICU export before reporting feasibility."
+            if demo_like
+            else None
+        ),
         "source": {
             "label": source.get("label") or desc.get("label") or "Local export",
             "path_hash": _sha256(str(source.get("path") or desc.get("path") or ""))[
                 :16
             ],
             "database": desc.get("database"),
+            "demo_like": demo_like,
         },
         "cohort": {
             "entities": (
@@ -1177,7 +1193,7 @@ def _pre_experiment(
         },
         "feature_statistics": stats,
         "missing_required_concepts": missing_required,
-        "interpretation": _pre_experiment_interpretation(stats),
+        "interpretation": _pre_experiment_interpretation(stats, demo_like=demo_like),
     }
 
 
@@ -1226,12 +1242,9 @@ def _handoff_plan(
             "entities": (pre_experiment.get("cohort") or {}).get("entities"),
             "feature_count": len(pre_experiment.get("feature_statistics") or []),
         },
-        "analysis_plan": [
-            "Confirm cohort denominator and inclusion/exclusion criteria.",
-            "Run feature availability and missingness audit before modeling.",
-            "Estimate descriptive association only after evidence gate passes.",
-            "Block manuscript claims unless every numeric sentence binds to evidence.",
-        ],
+        "analysis_plan": _agent_style_steps(
+            str(idea.get("analysis_family") or "association"), mapped
+        )[:4],
         "blocked_until": [
             "human confirms the idea and plan",
             "active export contains required features or re-extraction is complete",
@@ -1300,7 +1313,7 @@ def _analysis_plan_draft(
 
 def _agent_style_steps(
     family: str, concepts: List[Dict[str, Any]]
-) -> List[str]:
+) -> List[Dict[str, str]]:
     concept_ids = {str(row.get("concept_id") or "") for row in concepts}
     treatment_strategy = bool(
         concept_ids & {"vaso_ind", "norepi_equiv", "norepi_rate", "norepi_dur"}
@@ -1308,43 +1321,121 @@ def _agent_style_steps(
         concept_ids
         & {"total_input_ml", "fluid_balance", "fluid_balance_cumulative"}
     )
-    steps = [
-        "Lock the clinical question, denominator, exposure/index time, outcome, and analysis window before reading any effect estimate.",
-        "Confirm the active EasyICU export, cohort denominator, selected modules, and concept dictionary mappings with the user.",
-        "Run an outcome-blind feasibility review: concept availability, joint completeness, time-index availability, and missingness structure.",
+    steps: List[Dict[str, str]] = [
+        {
+            "phase": "Question",
+            "title": "Freeze the clinical question and estimand",
+            "action": "Confirm population, exposure/index time, comparator, outcome, and follow-up window before looking at any effect estimate.",
+            "output": "One locked PICOT-style question plus a non-reportable planning note.",
+            "guardrail": "Idea Mining proposes the question only; it has not completed cohort selection or analysis.",
+        },
+        {
+            "phase": "Data context",
+            "title": "Confirm the real EasyICU export and modules",
+            "action": "Select the real local export, cohort denominator, required modules, and concept dictionary mappings with the user.",
+            "output": "Confirmed export/cohort/module contract for Agent Projects.",
+            "guardrail": "MOCK/demo exports are UI rehearsal only and cannot support reportable feasibility.",
+        },
+        {
+            "phase": "Feasibility",
+            "title": "Run an outcome-blind feasibility assessment",
+            "action": "Check concept availability, joint completeness, time-index support, missingness structure, and event rate before modeling.",
+            "output": "Feasibility table with required concepts, denominators, and blockers.",
+            "guardrail": "Do not interpret feasibility checks as clinical findings.",
+        },
     ]
     if treatment_strategy:
         steps.extend(
             [
-                "Translate the source into an ICU treatment-strategy comparison with explicit timing anchors; flag indication bias and immortal-time risk before modeling.",
-                "Plan descriptive balance and sensitivity checks before any adjusted association model.",
+                {
+                    "phase": "Design",
+                    "title": "Translate the article into an ICU treatment-strategy question",
+                    "action": "Define vasopressor/fluid timing anchors, dose or exposure summaries, comparator groups, and eligible shock/sepsis windows.",
+                    "output": "Treatment-strategy contrast ready for descriptive review.",
+                    "guardrail": "Flag confounding by indication and immortal-time risk before any adjusted model.",
+                },
+                {
+                    "phase": "Robustness",
+                    "title": "Predefine balance and sensitivity checks",
+                    "action": "Compare baseline severity, missingness, exposure timing, and alternative dose/window definitions before final modeling.",
+                    "output": "Sensitivity checklist for Agent replanning.",
+                    "guardrail": "Keep claims exploratory unless causal assumptions are explicitly audited.",
+                },
             ]
         )
     elif family == "prediction":
         steps.extend(
             [
-                "Define predictor window, target outcome window, train/validation split, calibration, and minimum display set before fitting a model.",
-                "Audit leakage, class balance, missingness handling, and transportability across ICU sources when available.",
+                {
+                    "phase": "Model design",
+                    "title": "Define prediction windows and validation",
+                    "action": "Set predictor window, target outcome horizon, split strategy, calibration display, and minimum reporting set.",
+                    "output": "Prediction model protocol draft.",
+                    "guardrail": "Audit leakage and class balance before fitting.",
+                },
+                {
+                    "phase": "Generalization",
+                    "title": "Audit missingness and transportability",
+                    "action": "Review missingness handling and cross-source transportability when multiple ICU databases are available.",
+                    "output": "Validation and missingness plan.",
+                    "guardrail": "Do not use post-outcome measurements as predictors.",
+                },
             ]
         )
     elif family == "trajectory":
         steps.extend(
             [
-                "Define repeated-measure anchors, aggregation rules, and trajectory summaries before comparing groups.",
-                "Separate measurement frequency effects from clinical change using coverage and sensitivity checks.",
+                {
+                    "phase": "Trajectory design",
+                    "title": "Define repeated-measure anchors and summaries",
+                    "action": "Choose time zero, aggregation rules, trajectory summaries, and group comparison windows.",
+                    "output": "Longitudinal feature construction plan.",
+                    "guardrail": "Separate measurement frequency from physiologic change.",
+                },
+                {
+                    "phase": "Sensitivity",
+                    "title": "Check observation density and missingness",
+                    "action": "Run coverage and sensitivity checks for irregular ICU measurements before comparing trajectories.",
+                    "output": "Trajectory feasibility and sensitivity table.",
+                    "guardrail": "Sparse monitoring can create apparent trajectories.",
+                },
             ]
         )
     else:
         steps.extend(
             [
-                "Use a descriptive association workflow first; add adjusted or time-to-event models only after assumptions and covariates are confirmed.",
-                "Predefine subgroup, sensitivity, and missingness checks instead of adding them after seeing results.",
+                {
+                    "phase": "Analysis",
+                    "title": "Start with descriptive association",
+                    "action": "Summarize denominators, exposure/outcome distributions, crude contrasts, and missingness before adjusted models.",
+                    "output": "Descriptive cohort comparison package.",
+                    "guardrail": "Add adjusted or time-to-event models only after covariates and assumptions are confirmed.",
+                },
+                {
+                    "phase": "Robustness",
+                    "title": "Predefine subgroup and sensitivity checks",
+                    "action": "Choose subgroup, missingness, and alternative-definition checks before viewing final results.",
+                    "output": "Sensitivity plan for Agent execution.",
+                    "guardrail": "Do not add checks post hoc to rescue a result.",
+                },
             ]
         )
     steps.extend(
         [
-            "Run prior-art review only after explicit network/provider opt-in, then update the plan if the literature shows the question is already answered or the comparator is wrong.",
-            "Create an Agent Projects seed only after the user confirms the plan; keep manuscript claims blocked until evidence IDs and human sign-off pass.",
+            {
+                "phase": "Prior art",
+                "title": "Use existing literature as an inspiration map",
+                "action": "After explicit opt-in, inspect whether prior studies answer the same question, use public ICU databases, or suggest better comparators/subgroups.",
+                "output": "Prior-art interpretation: already answered, partially answered, or new exploratory angle.",
+                "guardrail": "Prior work does not automatically block the idea; it shapes the new question and novelty claim.",
+            },
+            {
+                "phase": "Agent handoff",
+                "title": "Create an Agent Projects seed only after confirmation",
+                "action": "Send the locked question, feasibility table, prior-art interpretation, and analysis steps to Agent Projects.",
+                "output": "Metadata-only project seed for planner/replanner/coder/analyzer/writer.",
+                "guardrail": "Manuscript claims remain blocked until evidence IDs and human sign-off pass.",
+            },
         ]
     )
     return steps
@@ -1432,7 +1523,7 @@ def _required_plan_confirmations(
         "analysis family and reporting boundary",
     ]
     status = str(pre_experiment.get("status") or "").lower()
-    if not status or "blocked" in status:
+    if not status or "blocked" in status or "demo" in status:
         confirmations.insert(0, "prepare or register a usable EasyICU export")
     prior = (prior_art or {}).get("prior_art") or {}
     if not prior.get("search_performed"):
@@ -1467,8 +1558,8 @@ def _export_index(
     export: Optional[Tuple[Dict[str, Any], Dict[str, Any]]],
 ) -> Dict[str, Any]:
     if not export:
-        return {"concept_to_file": {}, "entity_ids": set()}
-    _source, desc = export
+        return {"concept_to_file": {}, "entity_ids": set(), "demo_like": False}
+    source, desc = export
     concept_to_file: Dict[str, Dict[str, Any]] = {}
     concepts = set(concept_catalog.CONCEPT_DICTIONARY)
     for item in desc.get("files") or []:
@@ -1483,7 +1574,27 @@ def _export_index(
         entity_ids = set(stay_ids or [])
     except Exception:
         entity_ids = set()
-    return {"concept_to_file": concept_to_file, "entity_ids": entity_ids}
+    return {
+        "concept_to_file": concept_to_file,
+        "entity_ids": entity_ids,
+        "demo_like": _export_is_demo_like(source, desc),
+    }
+
+
+def _export_is_demo_like(source: Dict[str, Any], desc: Dict[str, Any]) -> bool:
+    text = " ".join(
+        str(v or "")
+        for v in [
+            source.get("label"),
+            source.get("database"),
+            source.get("path"),
+            desc.get("label"),
+            desc.get("database"),
+            desc.get("path"),
+            (desc.get("summary") or {}).get("database"),
+        ]
+    ).lower()
+    return any(marker in text for marker in ("mock", "demo", "seeded"))
 
 
 def _feature_stats(
@@ -1617,7 +1728,11 @@ def _concept_feasibility(
 ) -> Dict[str, Any]:
     concept_id = row.get("concept_id")
     in_export = concept_id in (export_index.get("concept_to_file") or {})
-    if in_export:
+    demo_like = bool(export_index.get("demo_like"))
+    if in_export and demo_like:
+        tier = "demo_only"
+        note = "Concept is present only in the active MOCK/demo export; switch to a real EasyICU export before treating it as feasible."
+    elif in_export:
         tier = "executable"
         note = "Concept is in the EasyICU dictionary and present in the active export."
     else:
@@ -1638,12 +1753,20 @@ def _concept_feasibility(
     }
 
 
-def _overall_feasibility(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _overall_feasibility(
+    rows: List[Dict[str, Any]], export_index: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     if not rows:
         return {
             "tier": "T3_not_in_db",
             "label": "No mapped EasyICU concept",
             "reason": "No source phrase mapped to the current EasyICU dictionary.",
+        }
+    if (export_index or {}).get("demo_like"):
+        return {
+            "tier": "demo_only",
+            "label": "Demo export only",
+            "reason": "The mapped concepts are available only on the active MOCK/demo export. Select a real local EasyICU export before presenting feasibility.",
         }
     if all(row.get("tier") == "executable" for row in rows):
         return {
@@ -1670,7 +1793,9 @@ def _prior_art(source: Dict[str, Any], title: str) -> Dict[str, Any]:
         "novelty_label": "unknown_until_search",
         "direct_same_topic_hits": [],
         "public_database_used_by_prior_work": "unknown_until_search",
-        "reason": "This local run did not call PubMed, journal sites, or an external LLM. Run the opt-in literature search stage before claiming novelty.",
+        "reason": "Prior-art interpretation has not been run. Use the source article as inspiration, then run opt-in metadata search before claiming novelty.",
+        "opportunity_frame": "Existing trials, reviews, or editorials should shape the ICU-database question: comparator, subgroup, timing window, outcome horizon, and whether the new angle is exploratory rather than already answered.",
+        "next_use": "After opt-in, classify the literature as already answered, partially answered, or inspiration for a new ICU exploratory analysis.",
         "queries_to_run": _prior_art_queries(source, title),
     }
 
@@ -1910,12 +2035,18 @@ def _agent_project_seed(handoff: Dict[str, Any]) -> Dict[str, Any]:
 def _prior_art_queries(source: Dict[str, Any], title: str) -> List[str]:
     title = _clean(title or source.get("title") or "ICU idea", 180)
     source_title = _clean(source.get("title") or "", 180)
+    source_quote = _clean(source.get("evidence_quote") or "", 220)
+    exploratory_terms = _clean(" ".join(re.findall(r"[A-Za-z][A-Za-z0-9\-]{3,}", source_quote))[:160], 180)
     queries = [
         f'("{title}") AND (ICU OR critical care)',
         f'("{title}") AND (MIMIC OR eICU OR "public database")',
     ]
     if source_title and source_title != title:
         queries.append(f'("{source_title}") AND (MIMIC OR eICU OR ICU)')
+    if exploratory_terms:
+        queries.append(
+            f'({exploratory_terms}) AND (subgroup OR timing OR trajectory OR "public database" OR MIMIC OR eICU)'
+        )
     doi = _clean(source.get("doi") or "", 120)
     if doi:
         queries.append(f'"{doi}"')
@@ -2256,12 +2387,26 @@ def _pubmed_prior_art(queries: List[str]) -> Dict[str, Any]:
             re.I,
         )
     ]
+    status = (
+        "searched"
+        if deduped
+        else ("search_failed" if errors else "searched_no_hits")
+    )
+    if deduped:
+        interpretation = (
+            f"Found {len(deduped)} metadata hit(s). Treat them as a map of what has been tried: "
+            "which comparator, cohort, database, endpoint, and time window they used. This does not automatically kill the idea; it tells the planner how to refine the new ICU exploration."
+        )
+    elif errors:
+        interpretation = (
+            "The metadata search failed or was incomplete. Do not claim novelty; keep the idea as a planning draft until prior art can be reviewed."
+        )
+    else:
+        interpretation = (
+            "No metadata hit was found with the bounded queries. This is only weak evidence of novelty; broaden queries or review manually before presenting the idea."
+        )
     return {
-        "status": (
-            "searched"
-            if deduped
-            else ("search_failed" if errors else "searched_no_hits")
-        ),
+        "status": status,
         "search_performed": True,
         "network_calls": calls,
         "queries_to_run": queries,
@@ -2273,6 +2418,8 @@ def _pubmed_prior_art(queries: List[str]) -> Dict[str, Any]:
         "direct_same_topic_hits": deduped[:5],
         "errors": errors,
         "reason": "PubMed metadata search only; full text and external LLM review were not used.",
+        "opportunity_frame": interpretation,
+        "next_use": "Use these hits to decide whether the source article suggests a new subgroup, timing window, exposure definition, or outcome that EasyICU can assess.",
     }
 
 
@@ -2370,7 +2517,7 @@ def _select_idea_concepts(
     Literature-derived ICU ideas often describe a strategy (for example,
     vasopressor-first plus fluid-sparing) rather than a single laboratory
     predictor.  The web adapter is still local/deterministic, but it should
-    preserve that concept set so the pre-experiment can honestly say which
+    preserve that concept set so the feasibility assessment can honestly say which
     required modules are missing from the active export.
     """
     by_id = {str(row.get("concept_id")): row for row in hits}
@@ -2537,7 +2684,7 @@ def _rationale(
         )
     if outcome:
         parts.append(f"Outcome can be represented by `{outcome['concept_id']}`.")
-    parts.append("This is a pre-experiment triage result, not a manuscript finding.")
+    parts.append("This is a feasibility triage result, not a manuscript finding.")
     return " ".join(parts)
 
 
@@ -2554,6 +2701,11 @@ def _go_reason(go: str, feasibility: Dict[str, Any], prior_art: Dict[str, Any]) 
     if go == "recommend":
         return "Mapped concepts are present in the active export; prior-art search still needs explicit review before reporting novelty."
     if go == "hold":
+        if feasibility.get("tier") == "demo_only":
+            return (
+                feasibility.get("reason")
+                or "The current active export is demo-only and cannot support reportable feasibility."
+            )
         return (
             feasibility.get("reason")
             or "Some concepts need re-extraction before analysis."
@@ -2566,13 +2718,22 @@ def _go_reason(go: str, feasibility: Dict[str, Any], prior_art: Dict[str, Any]) 
 
 def _next_action(go: str, feasibility: Dict[str, Any]) -> str:
     if go == "recommend":
-        return "Review pre-experiment statistics, edit the plan, then hand off to Agent Projects."
+        return "Review feasibility statistics, interpret prior art, edit the plan, then hand off to Agent Projects."
     if go == "hold":
-        return "Re-run extraction with missing modules/features, then repeat the pre-experiment check."
+        if feasibility.get("tier") == "demo_only":
+            return "Select a real EasyICU export, rerun feasibility assessment, then generate the plan."
+    return "Re-run extraction with missing modules/features, then repeat the feasibility assessment."
     return "Choose another database or revise the idea."
 
 
-def _pre_experiment_interpretation(stats: List[Dict[str, Any]]) -> List[str]:
+def _pre_experiment_interpretation(
+    stats: List[Dict[str, Any]], *, demo_like: bool = False
+) -> List[str]:
+    if demo_like:
+        return [
+            "The active export is MOCK/demo. These checks are useful for UI rehearsal only and must not be used as reportable feasibility evidence.",
+            "Select or register a real EasyICU export before creating an Agent project for this idea.",
+        ]
     if not stats:
         return [
             "No mapped feature is present in the active export; run extraction with the needed modules first."
@@ -2595,7 +2756,7 @@ def _pre_experiment_interpretation(stats: List[Dict[str, Any]]) -> List[str]:
         )
     elif not event_rows:
         notes.append(
-            "Mapped features have at least 50% entity coverage in this pre-experiment summary."
+            "Mapped features have at least 50% entity coverage in this feasibility summary."
         )
     return notes
 

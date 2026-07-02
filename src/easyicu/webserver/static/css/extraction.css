@@ -159,6 +159,79 @@
 .ex-export-browse,
 .ex-export-create{ flex:none; height:34px; }
 
+.ex-definition-option{
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-start;
+  gap:14px;
+  margin-top:12px;
+  padding:11px 12px;
+  border:1px solid var(--accent-border);
+  border-radius:var(--r-2);
+  background:color-mix(in srgb, var(--accent-soft) 62%, var(--surface));
+}
+
+.ex-definition-option .def-title{
+  font-size:12.5px;
+  font-weight:650;
+  color:var(--ink);
+}
+
+.ex-definition-option .def-copy{
+  margin-top:3px;
+  font-size:11px;
+  line-height:1.45;
+  color:var(--ink-4);
+}
+
+.def-example{
+  margin-top:8px;
+}
+
+.def-example summary{
+  width:max-content;
+  max-width:100%;
+  color:var(--accent-ink);
+  font-size:11px;
+  font-weight:600;
+  cursor:pointer;
+}
+
+.def-example-grid{
+  display:grid;
+  grid-template-columns:auto minmax(0,1fr);
+  gap:5px 10px;
+  margin-top:8px;
+  max-width:520px;
+  padding:9px 10px;
+  border:1px solid var(--hair-2);
+  border-radius:var(--r-2);
+  background:var(--surface);
+}
+
+.def-example-grid span{
+  color:var(--ink-4);
+  font-size:10.5px;
+  white-space:nowrap;
+}
+
+.def-example-grid b{
+  min-width:0;
+  color:var(--ink);
+  font-family:var(--mono);
+  font-size:10.75px;
+  font-weight:600;
+  overflow-wrap:anywhere;
+}
+
+.def-example-note{
+  max-width:62ch;
+  margin-top:6px;
+  font-size:10.75px;
+  line-height:1.45;
+  color:var(--ink-4);
+}
+
 /* Extraction folder picker destination creation */
 .eu-pick-create{
   display:grid;
@@ -281,11 +354,11 @@
 
 /* Sepsis/SOFA definition checkpoint */
 .sepsis-def-panel{
-  margin-top:12px;
-  padding:13px;
-  border:1px solid color-mix(in srgb,var(--warn,#b45309) 24%,var(--hair));
+  margin-top:10px;
+  padding:12px;
+  border:1px solid var(--hair);
   border-radius:var(--r-2);
-  background:linear-gradient(180deg,color-mix(in srgb,var(--warn,#b45309) 7%,var(--surface)) 0%,var(--surface) 100%);
+  background:var(--surface);
 }
 .sepsis-def-head{
   display:flex;
@@ -299,16 +372,16 @@
   display:grid;
   place-items:center;
   border-radius:7px;
-  color:var(--warn,#9a5a00);
-  background:color-mix(in srgb,var(--warn,#b45309) 11%,var(--surface));
-  border:1px solid color-mix(in srgb,var(--warn,#b45309) 22%,transparent);
+  color:var(--accent-ink);
+  background:color-mix(in srgb,var(--accent-soft) 62%,var(--surface));
+  border:1px solid var(--accent-border);
 }
 .sepsis-def-kicker{
   font-size:9.5px;
   font-weight:650;
   text-transform:uppercase;
   letter-spacing:.06em;
-  color:var(--warn,#9a5a00);
+  color:var(--ink-4);
 }
 .sepsis-def-title{
   margin-top:2px;
@@ -323,11 +396,103 @@
   line-height:1.45;
   color:var(--ink-3);
 }
+.sepsis-def-audit-strip{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  gap:12px;
+  align-items:center;
+  margin-top:10px;
+  padding:10px;
+  border:1px solid var(--accent-border);
+  border-radius:8px;
+  background:color-mix(in srgb,var(--accent-soft) 26%,var(--surface));
+}
+.sepsis-def-audit-label{
+  font-size:9.5px;
+  font-weight:650;
+  letter-spacing:.06em;
+  text-transform:uppercase;
+  color:var(--ink-4);
+}
+.sepsis-def-audit-rule{
+  margin-top:2px;
+  font-size:12.5px;
+  font-weight:650;
+  color:var(--ink);
+}
+.sepsis-def-audit-meta{
+  min-width:0;
+  display:flex;
+  flex-wrap:wrap;
+  justify-content:flex-end;
+  gap:5px;
+}
+.sepsis-def-details{
+  min-width:0;
+  margin-top:8px;
+  border:1px solid var(--hair);
+  border-radius:8px;
+  background:var(--surface);
+  overflow:hidden;
+}
+.sepsis-def-details-lite{
+  border-style:dashed;
+  background:color-mix(in srgb,var(--surface) 92%,var(--surface-2));
+}
+.sepsis-def-details summary{
+  min-height:34px;
+  display:flex;
+  align-items:center;
+  gap:7px;
+  padding:8px 10px;
+  color:var(--ink-2);
+  font-size:11.5px;
+  font-weight:650;
+  cursor:pointer;
+  user-select:none;
+}
+.sepsis-def-details summary::-webkit-details-marker{ display:none; }
+.sepsis-def-details summary::after{
+  content:"";
+  width:7px;
+  height:7px;
+  margin-left:auto;
+  border-right:1.5px solid var(--ink-4);
+  border-bottom:1.5px solid var(--ink-4);
+  transform:rotate(45deg) translateY(-2px);
+  transition:transform .14s ease;
+}
+.sepsis-def-details[open] summary::after{
+  transform:rotate(-135deg) translateY(-1px);
+}
+.sepsis-def-detail-body{
+  padding:10px;
+  border-top:1px solid var(--hair);
+}
+.sepsis-def-detail-title{
+  margin:2px 0 7px;
+  font-size:10px;
+  font-weight:700;
+  letter-spacing:.05em;
+  text-transform:uppercase;
+  color:var(--ink-4);
+}
+.sepsis-def-detail-title + .sepsis-def-grid,
+.sepsis-def-chips + .sepsis-def-detail-title{
+  margin-top:12px;
+}
 .sepsis-def-grid{
   display:grid;
   grid-template-columns:repeat(2,minmax(0,1fr));
   gap:10px;
   margin-top:12px;
+}
+.sepsis-def-grid.compact{
+  grid-template-columns:1fr;
+  gap:8px;
+  margin-top:0;
+  padding:0;
+  border-top:0;
 }
 .sepsis-def-summary{
   display:flex;
@@ -381,6 +546,19 @@
   background:color-mix(in srgb,var(--accent-soft) 44%,var(--surface));
   color:var(--accent-ink);
   font-weight:650;
+}
+.sepsis-def-static{
+  min-height:28px;
+  display:inline-flex;
+  align-items:center;
+  padding:5px 9px;
+  border:1px solid color-mix(in srgb,var(--accent-border) 60%,var(--hair));
+  border-radius:999px;
+  background:color-mix(in srgb,var(--accent-soft) 36%,var(--surface));
+  color:var(--accent-ink);
+  font-size:11px;
+  font-weight:650;
+  line-height:1.2;
 }
 .sepsis-def-help{
   margin-top:6px;
@@ -442,6 +620,8 @@
   .cohort-preset-grid{ grid-template-columns:1fr; }
   .range-pair{ grid-template-columns:1fr; }
   .sepsis-def-grid{ grid-template-columns:1fr; }
+  .sepsis-def-audit-strip{ grid-template-columns:1fr; }
+  .sepsis-def-audit-meta{ justify-content:flex-start; }
 }
 
 @media (max-width:560px){

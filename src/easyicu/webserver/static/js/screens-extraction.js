@@ -193,8 +193,8 @@
   let exportCancelRequested = false;
   let exportRunMode = 'custom';  // custom | recommended
   let exportRunModules = null;   // module keys used by the current/last run
-  let exCustomOpen = true;
-  let exAdvCohort = false, exAdvExport = false, exShowAllMods = true;
+  let exCustomOpen = false;
+  let exAdvCohort = false, exAdvExport = false, exShowAllMods = true, exIncludeDefinitions = true;
   let exFormat = 'parquet';     // parquet | csv | excel
   let exMerge = 'separate';
   let exExportDir = null;
@@ -365,13 +365,27 @@
     return String(v == null ? '' : v).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
   }
   function rememberExportPath(path, opts) {
-    if (!path) return;
+    if (!path) return Promise.resolve(null);
     try { localStorage.setItem('easyicu_last_export_dir', path); } catch (e) {}
+    window.EU_LAST_EXPORT = Object.assign({}, window.EU_LAST_EXPORT || {}, { out_dir: path });
     if (window.EU_API && window.EU_API.registerWorkspaceSource) {
-      window.EU_API.registerWorkspaceSource(path, opts || { active: true, crossdb: true })
-        .then(() => { if (window.__euRender) window.__euRender(); })
-        .catch(err => { console.warn('[EasyICU] source registry update failed:', err); });
+      return window.EU_API.registerWorkspaceSource(path, opts || { active: true, crossdb: true })
+        .then(registry => {
+          window.EU_WORKSPACE_REGISTRY = registry;
+          window.EU_VIZ_WORKSPACE = null;
+          window.EU_CROSSDB_WORKSPACE = null;
+          window.EU_PATIENT_DRILLDOWN = null;
+          window.EU_PATIENT_SOURCES = null;
+          window.EU_COHORT_REVIEW = null;
+          if (window.__euRender) window.__euRender();
+          return registry;
+        })
+        .catch(err => {
+          console.warn('[EasyICU] source registry update failed:', err);
+          throw err;
+        });
     }
+    return Promise.resolve(null);
   }
   function exportDestinationLabel() {
     return currentExportDir() || t('No export destination selected', '尚未选择导出目录');
@@ -468,6 +482,7 @@
       const payload = {
         path: exPath, database: database, modules: modules,
         format: exFormat, merge: exMerge === 'merged', max_patients: exMaxPatients,
+        include_feature_definitions: exIncludeDefinitions,
         cohort: runMode === 'recommended' ? recommendedCohortContract() : cohortContract(),
       };
       payload.out_dir = outDir;
@@ -487,7 +502,14 @@
               exportResult = m.result || {};
               window.EU_LAST_EXPORT = exportResult;
               if (exportResult.out_dir) {
-                rememberExportPath(exportResult.out_dir);
+                rememberExportPath(exportResult.out_dir)
+                  .catch(() => null)
+                  .finally(() => {
+                    exView = 'done'; window.EU_STALE = false; window.EU_HASWORK = true;
+                    repaint();
+                  });
+                teardownExportES();
+                return;
               }
               exView = 'done'; window.EU_STALE = false; window.EU_HASWORK = true;
             }
@@ -1324,7 +1346,13 @@
   function sepsisDefinitionPanel() {
     const sepsis = window.EUExtractionSepsis;
     return sepsis && sepsis.panel
-      ? sepsis.panel({ moduleKeys: modKeys(), t, icon, escHtml })
+      ? sepsis.panel({
+        moduleKeys: modKeys(),
+        database: (exScanResult && exScanResult.db_key) || 'miiv',
+        t,
+        icon,
+        escHtml,
+      })
       : '';
   }
   function conceptRows(m) {
@@ -1419,6 +1447,24 @@
           <button class="btn sm ghost ex-export-create" data-ex-export-create>${icon('plus', 13)} ${t('New folder', '新建目录')}</button>
         </div>
         <div class="note-line mt-8" style="font-size:11px;color:${hintTone};">${icon(destination ? 'shield' : 'alert', 11)} ${exportDestinationHint()}</div>
+        <div class="ex-definition-option">
+          <div>
+            <div class="def-title">${t('Feature definition manifest', '特征定义清单')}</div>
+            <div class="def-copy">${t('Write feature_definitions.json/csv with selected IDs, units, exported files, callback provenance, and project path.', '写入 feature_definitions.json/csv：包含已选特征 ID、单位、导出文件、callback 来源和项目路径。')}</div>
+            <details class="def-example">
+              <summary>${t('What will be written?', '会导出什么?')}</summary>
+              <div class="def-example-grid">
+                <span>${t('concept_id', '特征 ID')}</span><b>age</b>
+                <span>${t('module file', '模块文件')}</span><b>demographics.parquet</b>
+                <span>${t('unit', '单位')}</span><b>years</b>
+                <span>${t('callback', '回调')}</span><b>easyicu.api.load_concepts</b>
+                <span>${t('project path', '项目路径')}</span><b>${t('your local EasyICU repo path', '本机 EasyICU 项目路径')}</b>
+              </div>
+              <div class="def-example-note">${t('Raw table/column lineage is included only when the catalog declares it; otherwise the manifest says not_declared_in_current_catalog instead of guessing.', '只有 catalog 明确声明原始表/列来源时才写入 raw table/column；否则清单会写 not_declared_in_current_catalog，不会猜。')}</div>
+            </details>
+          </div>
+          ${switchEl(exIncludeDefinitions, 'definitions')}
+        </div>
         <button class="adv-toggle ${exAdvExport ? 'open' : ''}" data-ex-adve>${t('Advanced export options', '高级导出选项')} <span class="chev">${icon('chevdown', 13)}</span></button>
         <div class="adv-body" ${exAdvExport ? '' : 'hidden'}>
           <div class="col gap-12">
@@ -1447,6 +1493,7 @@
         <div class="sum-row"><span class="k">${t('Modules', '模块')}</span><span class="v" id="exSumMods">${selMods().length}</span></div>
         <div class="sum-row"><span class="k">${t('Concepts', '概念')}</span><span class="v" id="exSumConc">${conceptN()}</span></div>
         <div class="sum-row"><span class="k">${t('Format', '格式')}</span><span class="v">${exFormat.toUpperCase()}</span></div>
+        <div class="sum-row"><span class="k">${t('Definitions', '定义清单')}</span><span class="v">${exIncludeDefinitions ? t('JSON + CSV', 'JSON + CSV') : t('Off', '关闭')}</span></div>
         <button class="btn primary block mt-16" data-ex-run="custom" ${extractDisabled ? 'disabled' : ''}>${icon('download', 14)} ${t('Extract', '开始抽取')}</button>
         <div class="note-line mt-8" style="font-size:11px;color:${support.ok && exportReady ? 'var(--ink-4)' : 'var(--warn,#a66a00)'};text-align:center;">${icon(support.ok && exportReady ? 'shield' : 'alert', 11)} ${summaryMessage}</div>
       </div>
@@ -1486,6 +1533,7 @@
     const totalRows = r ? r.total_rows : null;
     const fileList = files
       .concat([{ file: '_manifest.json', manifest: true }])
+      .concat((r && r.definition_files) ? r.definition_files : [])
       .concat((r && r.readme) ? [{ file: r.readme, readme: true }] : []);
     return `
       <div class="state-hero success solid" style="max-width:720px;margin:0 auto;">
@@ -1500,7 +1548,7 @@
       </div>
       <div class="cols-2 mt-20" style="max-width:720px;margin-left:auto;margin-right:auto;">
         ${fileList.map(f => `
-          <div class="ledger-row"><span class="ledger-ico">${icon(f.manifest ? 'shield' : 'file', 14)}</span><div><div class="mono" style="font-weight:600;font-size:12px;">${f.file}</div><div style="font-size:11px;color:var(--ink-4);">${f.manifest ? t('reproducibility manifest', '可复现清单') : (f.readme ? t('human-readable extraction README', '可读抽取说明') : (f.rows != null ? Number(f.rows).toLocaleString() + ' ' + t('rows', '行') : (f.module || '')))}</div></div></div>`).join('')}
+          <div class="ledger-row"><span class="ledger-ico">${icon(f.manifest ? 'shield' : (String(f.kind || '').startsWith('feature_definitions') ? 'file' : 'file'), 14)}</span><div><div class="mono" style="font-weight:600;font-size:12px;">${f.file}</div><div style="font-size:11px;color:var(--ink-4);">${f.manifest ? t('reproducibility manifest', '可复现清单') : (String(f.kind || '').startsWith('feature_definitions') ? `${t('selected feature definitions', '已选特征定义')} · ${Number(f.records || 0).toLocaleString()} ${t('records', '条')}` : (f.readme ? t('human-readable extraction README', '可读抽取说明') : (f.rows != null ? Number(f.rows).toLocaleString() + ' ' + t('rows', '行') : (f.module || ''))))}</div></div></div>`).join('')}
       </div>`;
   }
 
@@ -1660,6 +1708,10 @@
         window.EU_STALE = true;
         repaint();
       }));
+      root.querySelectorAll('[data-ex-switch="definitions"]').forEach(s => s.addEventListener('click', () => {
+        exIncludeDefinitions = !exIncludeDefinitions;
+        repaint();
+      }));
       root.querySelectorAll('[data-ex-filter-load]').forEach(b => b.addEventListener('click', loadExtractionFilters));
       const coverage = root.querySelector('[data-ex-filter-coverage]'); if (coverage) coverage.addEventListener('click', e => {
         const b = e.target.closest('button'); if (!b) return;
@@ -1678,6 +1730,7 @@
       }
       if (window.EUExtractionSepsis && window.EUExtractionSepsis.bind) {
         window.EUExtractionSepsis.bind(root, {
+          database: (exScanResult && exScanResult.db_key) || 'miiv',
           markStale: () => { window.EU_STALE = true; },
           repaint,
         });

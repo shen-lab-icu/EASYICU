@@ -321,8 +321,8 @@
           `Fig 2 问题 · ${pre.status || '已导入'} · ${pre.feature_count || 0} 条证据`,
         ]
         : [
-          `research idea · ${pre.status || 'pre-experiment'} · ${pre.feature_count || 0} features`,
-          `研究想法 · ${pre.status || '预实验'} · ${pre.feature_count || 0} 特征`,
+          `research idea · ${pre.status || 'feasibility'} · ${pre.feature_count || 0} features`,
+          `研究想法 · ${pre.status || '可行性'} · ${pre.feature_count || 0} 特征`,
         ],
       question: [q, q],
       runs: seedRuns.map((r, i) => [
@@ -384,6 +384,33 @@
     if (s && s.projectKind === 'canonical9') return t('Completed analysis', '已完成分析');
     if (s && s.ideaSeed) return t('Research idea', '研究想法');
     return t('Analysis', '分析');
+  }
+  function studyListContext(studies) {
+    const count = Array.isArray(studies) ? studies.length : 0;
+    if (agIdeaProjects.loading || !count) return '';
+    const localCount = studies.filter(s => s && s.ideaSeed).length;
+    const demoCount = studies.filter(s => s && !s.ideaSeed).length;
+    const line = realMode()
+      ? t('This list only shows local Agent projects and completed runs written on this machine.', '这里仅显示本机写入的 Agent 项目和已完成运行。')
+      : t('Demo mode includes example projects for exploration. Your own projects appear here after Idea Mining or an Agent run creates a local folder.', '演示模式会放入可探索的示例项目。你自己的项目会在 Idea Mining 或 Agent run 创建本地文件夹后出现在这里。');
+    return `
+      <div class="ag-list-context" role="note">
+        <div class="ag-list-context-k">${realMode() ? t('Local projects', '本地项目') : t('Example projects', '示例项目')}</div>
+        <div class="ag-list-context-d">${line}</div>
+        <div class="ag-list-context-m">
+          <span>${t('local', '本地')} ${localCount}</span>
+          ${demoCount ? `<span>${t('examples', '示例')} ${demoCount}</span>` : ''}
+        </div>
+      </div>`;
+  }
+  function agentTermStrip(s) {
+    if (!s || s.empty) return '';
+    return `
+      <div class="ag-term-strip" role="note">
+        <span class="ag-term"><b>${t('Read-only review', '只读审阅')}</b><em>${t('review an imported/demo package; it does not create or unlock a manuscript draft', '审阅导入或演示包；不会创建或解锁论文草稿')}</em></span>
+        <span class="ag-term"><b>${t('Evidence items', '证据项')}</b><em>${t('traceable local artifacts used to support visible claims', '用于支撑可见论断的可追溯本地产物')}</em></span>
+        <span class="ag-term"><b>${t('Verification passed', '核验通过')}</b><em>${t('automated checks passed; human review is still required before claims move forward', '自动检查通过；论断推进前仍需要人工审阅')}</em></span>
+      </div>`;
   }
   function requestIdeaAgentProjects(force) {
     if (!window.EU_API || !window.EU_API.loadIdeaAgentProjects) return;
@@ -534,12 +561,32 @@
     const fallback = !parts.lead && !parts.context.length && !parts.requirements.length
       ? `<div class="ag-q-lead">${esc(raw)}</div>`
       : '';
+    // The data context + numbered tasks are the raw run brief (often verbose,
+    // English benchmark prose). Keep the human-readable core question visible
+    // and fold the technical brief so the overview does not open as a wall of
+    // text. No-lead parses keep the fallback inline so nothing is hidden.
+    const contextSection = paragraphs
+      ? `<section class="ag-q-section"><div class="ag-q-kicker">${t('Data context', '数据上下文')}</div><div class="ag-q-copy">${paragraphs}</div></section>`
+      : '';
+    const reqsSection = reqs
+      ? `<section class="ag-q-section"><div class="ag-q-kicker">${t('Analysis requirements', '任务要求')}</div><ol class="ag-req-list">${reqs}</ol></section>`
+      : '';
+    const taskCount = parts.requirements.length;
+    const brief = (parts.lead && (contextSection || reqsSection))
+      ? `<details class="ag-q-more">
+          <summary class="ag-q-more-sum">
+            <span class="ag-q-more-ico">${icon('chevron', 12)}</span>
+            <span class="ag-q-more-lab">${t('Data context & analysis tasks', '数据上下文与分析任务')}${taskCount ? ` · ${taskCount} ${t('tasks', '项任务')}` : ''}</span>
+            <span class="ag-q-more-hint">${t('technical brief', '技术细节')}</span>
+          </summary>
+          <div class="ag-q-more-body">${contextSection}${reqsSection}</div>
+        </details>`
+      : `${contextSection}${reqsSection}`;
     return `
       <div class="card pad ag-question-brief">
         <div class="eyebrow">${t('Research question', '研究问题')}</div>
         ${parts.lead ? `<section class="ag-q-section"><div class="ag-q-kicker">${t('Core question', '核心问题')}</div><div class="ag-q-lead">${esc(parts.lead)}</div></section>` : fallback}
-        ${paragraphs ? `<section class="ag-q-section"><div class="ag-q-kicker">${t('Data context', '数据上下文')}</div><div class="ag-q-copy">${paragraphs}</div></section>` : ''}
-        ${reqs ? `<section class="ag-q-section"><div class="ag-q-kicker">${t('Analysis requirements', '任务要求')}</div><ol class="ag-req-list">${reqs}</ol></section>` : ''}
+        ${brief}
         <div class="row wrap gap-6 mt-12">
           ${questionTags(s, raw).map(tag => `<span class="chip">@${esc(tag)}</span>`).join('')}
         </div>
@@ -1010,6 +1057,7 @@
         <div><span class="ttl">${t('Studies', '研究项目')} · ${studies.length}</span><div class="ag-list-cap">${t('each study = a local project folder', '每个研究 = 一个本地项目文件夹')}</div></div>
         <button class="ag-newbtn" data-ag-new>${icon('plus', 13)} ${t('New', '新建')}</button>
       </div>
+      ${studyListContext(studies)}
       <div class="ag-studies">
         ${agIdeaProjects.loading ? `<div class="empty-mini" style="margin:10px;min-height:80px;">${t('Loading local research projects…', '正在加载本地研究项目…')}</div>` : ''}
         ${agIdeaProjects.error ? `<div class="note warn" style="margin:10px;"><div class="ico">${icon('alert', 13)}</div><div class="body"><div class="t">${t('Local research projects unavailable', '本地研究项目不可用')}</div><div class="d">${esc(agIdeaProjects.error)}</div></div></div>` : ''}
@@ -1077,6 +1125,7 @@
         </div>
       </div>
       ${pipeline()}
+      ${agentTermStrip(s)}
     </div>`;
   }
 
@@ -1110,11 +1159,28 @@
   }
 
   /* ---------------- tab bodies ---------------- */
+  function seedPlanStepDisplay(row) {
+    if (row && typeof row === 'object') {
+      const title = row.title || row.action || row.phase || t('Plan step', '计划步骤');
+      const detail = [
+        row.phase,
+        row.output || row.guardrail || t('from Idea Mining handoff', '来自 Idea Mining 交接'),
+      ].filter(Boolean).join(' · ');
+      return { title, detail };
+    }
+    return {
+      title: String(row || t('Plan step', '计划步骤')),
+      detail: t('from Idea Mining handoff', '来自 Idea Mining 交接'),
+    };
+  }
   function planList() {
     const s = study();
     const seedPlan = s.ideaSeed && Array.isArray(s.ideaSeed.analysis_plan) ? s.ideaSeed.analysis_plan : null;
     const plan = seedPlan
-      ? seedPlan.map(x => [x, t('from Idea Mining handoff', '来自 Idea Mining 交接'), 'ready'])
+      ? seedPlan.map(x => {
+        const step = seedPlanStepDisplay(x);
+        return [step.title, step.detail, 'ready'];
+      })
       : s.mode === 'idea'
       ? [
         [t('Frame the idea', '框定想法'), t('exposure / outcome / source', '暴露 / 结局 / 来源'), 'ready'],
@@ -1141,7 +1207,7 @@
             <div class="plan-item ${st}">
               <div class="pi-n mono">${String(i + 1).padStart(2, '0')}</div>
               <div class="pi-node">${st === 'gated' ? icon('lock', 11, 2) : icon('check', 12, 2.6)}</div>
-              <div class="pi-body"><div class="pi-t">${ti}</div><div class="pi-d">${d}</div></div>
+              <div class="pi-body"><div class="pi-t">${esc(ti)}</div><div class="pi-d">${esc(d)}</div></div>
               <div class="pi-tag">${st === 'gated' ? `<span class="pill dashed">${t('requires review', '需审阅')}</span>` : `<span class="pill ok" style="height:20px;"><span class="dot"></span>${t('planned', '已计划')}</span>`}</div>
             </div>`).join('')}
         </div>
@@ -1442,34 +1508,51 @@
     return `
       <div class="ag-block-contract">
         <div>
-          <div class="ag-block-k">${t('Inputs', '输入')}</div>
+          <div class="ag-block-k">${t('What the user confirms', '用户确认')}</div>
           <div class="ag-block-tags">${blockListItems(block.inputs)}</div>
         </div>
         <div>
-          <div class="ag-block-k">${t('Outputs', '产物')}</div>
+          <div class="ag-block-k">${t('Agent produces', 'Agent 产出')}</div>
           <div class="ag-block-tags">${blockListItems(block.outputs)}</div>
         </div>
         <div>
-          <div class="ag-block-k">${t('Evidence', '证据')}</div>
+          <div class="ag-block-k">${t('Evidence check', '证据检查')}</div>
           <div class="ag-block-tags evidence">${blockListItems(block.evidence)}</div>
         </div>
+      </div>`;
+  }
+  function compactBlockList(items, limit) {
+    const rows = Array.isArray(items) ? items.filter(Boolean) : [];
+    const kept = rows.slice(0, limit || 3).map(x => `<span>${esc(x)}</span>`);
+    if (rows.length > kept.length) kept.push(`<span>${t('+' + (rows.length - kept.length) + ' more', '另 ' + (rows.length - kept.length) + ' 项')}</span>`);
+    return kept.join('');
+  }
+  function workflowCell(label, items) {
+    return `
+      <div class="ag-wf-cell">
+        <div class="ag-wf-label">${label}</div>
+        <div class="ag-wf-listline">${compactBlockList(items, 3)}</div>
       </div>`;
   }
 
   function workflowRow(block, index, total) {
     return `
       <div class="ag-wf-row ${agBlockSelected === block.id ? 'selected' : ''}" data-ag-block-select="${block.id}">
-        <div class="ag-wf-n mono">${String(index + 1).padStart(2, '0')}</div>
-        <div class="ag-wf-ico">${icon(block.icon || 'layers', 14)}</div>
+        <div class="ag-wf-step">
+          <div class="ag-wf-n mono">${String(index + 1).padStart(2, '0')}</div>
+          <div class="ag-wf-ico">${icon(block.icon || 'layers', 14)}</div>
+        </div>
         <div class="ag-wf-main">
           <div class="ag-wf-title">${bi(block.title)}</div>
           <div class="ag-wf-desc">${bi(block.stage)} · ${bi(block.desc)}</div>
-          <div class="ag-block-mini">${block.outputs.slice(0, 3).map(x => `<span>${esc(x)}</span>`).join('')}</div>
         </div>
+        ${workflowCell(t('What you confirm', '你确认什么'), block.inputs)}
+        ${workflowCell(t('Agent produces', 'Agent 产出'), block.outputs)}
+        ${workflowCell(t('Evidence check', '证据检查'), block.evidence)}
         <div class="ag-wf-actions">
           <button class="icobtn xs" data-ag-block-up="${index}" title="${t('Move up', '上移')}" ${index === 0 ? 'aria-disabled="true"' : ''}>${icon('chevdown', 12)}</button>
           <button class="icobtn xs" data-ag-block-down="${index}" title="${t('Move down', '下移')}" ${index >= total - 1 ? 'aria-disabled="true"' : ''}>${icon('chevdown', 12)}</button>
-          <button class="icobtn xs danger" data-ag-block-remove="${index}" title="${t('Remove block', '移除块')}">${icon('stop', 12)}</button>
+          <button class="icobtn xs danger" data-ag-block-remove="${index}" title="${t('Remove workflow step', '移除步骤')}">${icon('stop', 12)}</button>
         </div>
       </div>`;
   }
@@ -1493,9 +1576,9 @@
     return `
       <div class="ag-block-hero">
         <div>
-          <div class="eyebrow">${t('Research Blocks', '研究块')}</div>
-          <div class="ag-block-title">${t('Assemble this project as auditable workflow blocks', '把这个项目组装成可审计的工作流块')}</div>
-          <div class="ag-block-sub">${t('Blocks define required inputs, generated artifacts, and evidence contracts. They do not change global prompts or run anything until you explicitly start an Agent run.', 'Blocks 定义必需输入、生成产物和证据契约；不会改全局 prompt，也不会在你显式启动 Agent run 前执行。')}</div>
+          <div class="eyebrow">${t('Research Blocks', '研究工作流')}</div>
+          <div class="ag-block-title">${t('Turn the project into reviewable research steps', '把项目拆成可审阅的研究步骤')}</div>
+          <div class="ag-block-sub">${t('The workflow step table shows what the researcher must confirm, what the Agent will produce, and which evidence must exist before claims can move forward. Local configuration only; no Agent run starts until you explicitly run it.', '工作流步骤表会说明研究者要确认什么、Agent 会产出什么、哪些证据必须存在后才能推进论断。这里只保存本地配置；你显式启动前不会运行 Agent。')}</div>
         </div>
         <div class="row wrap gap-8">
           <button class="btn sm" data-ag-block-pack="nature">${icon('plus', 12)} ${t('Add Nature pack', '加入 Nature 套件')}</button>
@@ -1505,15 +1588,23 @@
       <div class="ag-block-grid">
         <section class="ag-block-panel">
           <div class="ag-block-panel-head">
-            <div><div class="ag-block-panel-title">${t('Current workflow', '当前工作流')}</div><div class="ag-block-panel-sub">${rows.length} ${t('blocks queued for this project', '个块已加入此项目')}</div></div>
+            <div><div class="ag-block-panel-title">${t('Workflow step table', '工作流步骤表')}</div><div class="ag-block-panel-sub">${rows.length} ${t('steps queued for this project', '个步骤已加入此项目')}</div></div>
             <span class="pill ok"><span class="dot"></span>${t('local config', '本地配置')}</span>
+          </div>
+          <div class="ag-wf-guide">
+            <span>${t('Step', '步骤')}</span>
+            <span>${t('Research step', '研究步骤')}</span>
+            <span>${t('What you confirm', '你确认什么')}</span>
+            <span>${t('Agent produces', 'Agent 产出')}</span>
+            <span>${t('Evidence check', '证据检查')}</span>
+            <span>${t('Edit', '编辑')}</span>
           </div>
           <div class="ag-wf-list">
             ${rows.length ? rows.map((block, i) => workflowRow(block, i, rows.length)).join('') : `
               <div class="empty-mini" style="min-height:160px;">
                 <div>${icon('layers', 22)}</div>
-                <h3>${t('No blocks selected', '尚未选择块')}</h3>
-                <p>${t('Add blocks from the library to make the workflow explicit.', '从右侧库中加入块，让工作流变得明确。')}</p>
+                <h3>${t('No workflow steps selected', '尚未选择工作流步骤')}</h3>
+                <p>${t('Add steps from the library to make the research path explicit.', '从右侧库中加入步骤，让研究路径变得明确。')}</p>
               </div>`}
           </div>
           ${selected ? `
@@ -1524,7 +1615,7 @@
             ${blockContract(selected)}
             <div class="row wrap gap-8 mt-12">
               <button class="btn sm" data-nav="${selected.route || 'agent'}">${icon('arrow', 12)} ${selected.route === 'ideas' ? t('Open Idea Mining', '打开 Idea Mining') : t('Open Agent Projects', '打开研究项目')}</button>
-              <span class="ag-block-note">${t('Execution remains gated by active export, provider consent, and evidence review.', '执行仍由 active export、provider 授权和证据审阅约束。')}</span>
+              <span class="ag-block-note">${t('Selected step details. Execution remains gated by active export, provider consent, and evidence review.', '当前选中步骤详情。执行仍由 active export、provider 授权和证据审阅约束。')}</span>
             </div>
           </div>` : ''}
         </section>
@@ -1648,6 +1739,195 @@
           </figure>`).join('')}
       </div>`;
   }
+  function artifactScalar(value) {
+    if (value === null || value === undefined || value === '') return '—';
+    if (typeof value === 'boolean') return value ? t('yes', '是') : t('no', '否');
+    if (typeof value === 'number') return Number.isFinite(value) ? value.toLocaleString() : '—';
+    if (Array.isArray(value)) return `${value.length.toLocaleString()} ${t('items', '项')}`;
+    if (typeof value === 'object') return `${Object.keys(value).length.toLocaleString()} ${t('fields', '字段')}`;
+    return readableArtifactText(String(value));
+  }
+  function artifactKeyLabel(key) {
+    const labels = {
+      run_id: t('Run ID', '运行 ID'),
+      run_type: t('Run type', '运行类型'),
+      study_id: t('Study ID', '研究 ID'),
+      status: t('Status', '状态'),
+      mode: t('Mode', '模式'),
+      question: t('Question', '问题'),
+      local_first: t('Local-first', '本地优先'),
+      cohort_size: t('Cohort size', '队列规模'),
+      evidence_count: t('Evidence items', '证据项'),
+      missing_evidence: t('Missing evidence', '缺失证据'),
+      signed: t('Signed', '已签署'),
+      provider: t('Provider', 'Provider'),
+      database_scope: t('Database scope', '数据库范围'),
+    };
+    return labels[key] || String(key || '').replace(/_/g, ' ');
+  }
+  function artifactSummaryRows(payload, preferred) {
+    const source = payload && typeof payload === 'object' ? payload : {};
+    const keys = (preferred || []).concat(Object.keys(source)).filter((key, idx, arr) => arr.indexOf(key) === idx);
+    return keys
+      .filter(key => Object.prototype.hasOwnProperty.call(source, key))
+      .filter(key => !/data_url|image_data_url/i.test(key))
+      .map(key => [artifactKeyLabel(key), artifactScalar(source[key])])
+      .filter(row => row[1] !== '—')
+      .slice(0, 10);
+  }
+  function artifactTable(title, headers, rows, emptyText) {
+    const safeRows = Array.isArray(rows) ? rows.filter(Boolean) : [];
+    if (!safeRows.length) {
+      return `<div class="ag-artifact-section"><div class="ag-artifact-section-title">${title}</div><div class="ag-artifact-empty">${emptyText || t('No table rows in this artifact.', '这个产物没有可展示的表格行。')}</div></div>`;
+    }
+    return `
+      <div class="ag-artifact-section">
+        <div class="ag-artifact-section-title">${title}</div>
+        <div class="ag-artifact-table-wrap">
+          <table class="ag-artifact-table">
+            <thead><tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr></thead>
+            <tbody>
+              ${safeRows.map(row => `<tr>${row.map(cell => `<td>${esc(artifactScalar(cell))}</td>`).join('')}</tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+  }
+  function objectArrayRows(rows, headers) {
+    const arr = Array.isArray(rows) ? rows : [];
+    return arr.slice(0, 12).map(row => headers.map(key => {
+      if (!row || typeof row !== 'object') return row;
+      return row[key];
+    }));
+  }
+  function firstObjectArray(payload) {
+    if (!payload || typeof payload !== 'object') return null;
+    const found = Object.entries(payload).find(([, value]) => Array.isArray(value) && value.some(row => row && typeof row === 'object'));
+    if (!found) return null;
+    const keys = [];
+    found[1].forEach(row => {
+      if (!row || typeof row !== 'object') return;
+      Object.keys(row).forEach(key => {
+        if (keys.length < 5 && !keys.includes(key) && !/data_url|image_data_url/i.test(key)) keys.push(key);
+      });
+    });
+    return keys.length ? { name: found[0], rows: found[1], keys } : null;
+  }
+  function stepRowsFrom(payload) {
+    const rows =
+      (payload && Array.isArray(payload.steps) && payload.steps)
+      || (payload && Array.isArray(payload.nodes) && payload.nodes)
+      || (payload && payload.workflow && Array.isArray(payload.workflow.steps) && payload.workflow.steps)
+      || (payload && payload.agent_plan && Array.isArray(payload.agent_plan.steps) && payload.agent_plan.steps)
+      || [];
+    return rows.slice(0, 12).map((row, i) => [
+      row.id || row.step || String(i + 1),
+      row.title || row.name || row.label || row.stage || 'step',
+      row.status || row.state || row.kind || 'planned',
+      Array.isArray(row.evidence_ids) ? row.evidence_ids.join(', ') : (row.evidence || row.output || row.outputs || ''),
+    ]);
+  }
+  function artifactStructuredView(name, payload) {
+    const n = String(name || '').toLowerCase();
+    const p = payload && typeof payload === 'object' ? payload : {};
+    const gate = p.gate && typeof p.gate === 'object' ? p.gate : p;
+    const sections = [];
+    const summary = artifactSummaryRows(
+      p,
+      ['run_id', 'study_id', 'run_type', 'status', 'mode', 'database_scope', 'cohort_size', 'evidence_count', 'missing_evidence', 'local_first']
+    );
+    if (summary.length) {
+      sections.push(artifactTable(t('Readable artifact summary', '可读产物摘要'), [t('Field', '字段'), t('Value', '值')], summary));
+    }
+    if (n.includes('figure_gallery')) {
+      const figs = Array.isArray(p.figures) ? p.figures : [];
+      sections.push(artifactTable(
+        t('Figure table', '图件表'),
+        [t('Label', '标签'), t('File', '文件'), t('Status', '状态')],
+        figs.map(row => [row.label || row.name || 'figure', row.relative_path || row.path || row.name || '', row.status || t('available', '可用')]),
+        t('No figures were embedded in this artifact.', '这个产物没有嵌入图件。')
+      ));
+    }
+    if (n.includes('scorecard')) {
+      const dims =
+        (Array.isArray(p.dimensions) && p.dimensions)
+        || (p.scorecard && Array.isArray(p.scorecard.dimensions) && p.scorecard.dimensions)
+        || (Array.isArray(p.scores) && p.scores)
+        || [];
+      sections.push(artifactTable(
+        t('Scorecard dimensions', '记分卡维度'),
+        [t('Dimension', '维度'), t('Score', '评分'), t('Status', '状态'), t('Evidence', '证据')],
+        dims.map(row => [
+          row.dimension || row.name || row.id || row.metric || '',
+          firstValue(row.score, row.value, row.points, row.grade),
+          row.status || row.level || row.rating || '',
+          row.evidence || row.note || row.reason || row.summary || '',
+        ]),
+        t('No per-dimension scores are present.', '没有逐维度评分。')
+      ));
+    }
+    if (n.includes('workflow') || n.includes('plan')) {
+      sections.push(artifactTable(
+        t('Workflow steps', '工作流步骤'),
+        [t('ID', 'ID'), t('Step', '步骤'), t('Status', '状态'), t('Evidence / output', '证据 / 产物')],
+        stepRowsFrom(p),
+        t('No workflow steps are present.', '没有工作流步骤。')
+      ));
+    }
+    if (n.includes('gate')) {
+      const checks = Array.isArray(gate.checks) ? gate.checks : (Array.isArray(p.checks) ? p.checks : []);
+      sections.push(artifactTable(
+        t('Quality gate checks', '质量核验项'),
+        [t('Check', '检查项'), t('Status', '状态'), t('Evidence', '证据'), t('Reason', '原因')],
+        checks.map(row => [row.id || row.name || row.check || '', row.status || row.result || '', firstValue(row.evidence_count, row.evidence, row.evidence_id), row.reason || row.message || row.note || '']),
+        t('No quality checks are present.', '没有质量核验项。')
+      ));
+    }
+    if (n.includes('ledger')) {
+      const artifacts = Array.isArray(p.artifacts) ? p.artifacts : [];
+      sections.push(artifactTable(
+        t('Evidence artifact registry', '证据产物登记表'),
+        [t('Artifact', '产物'), t('Category', '类别'), t('SHA-256', 'SHA-256'), t('Size', '大小')],
+        artifacts.map(row => [row.name || row.relative_path || '', artifactCategory(row.name || row.relative_path || ''), row.sha256 || '', row.bytes == null ? '' : `${Number(row.bytes || 0).toLocaleString()} B`]),
+        t('No artifact registry is present.', '没有产物登记表。')
+      ));
+    }
+    if (n.includes('draft')) {
+      const claims = Array.isArray(p.claims) ? p.claims : (Array.isArray(p.sentences) ? p.sentences : []);
+      sections.push(artifactTable(
+        t('Locked claims', '锁定论断'),
+        [t('Claim', '论断'), t('Evidence IDs', '证据 ID'), t('Status', '状态')],
+        claims.map(row => [row.text || row.claim || row.sentence || '', Array.isArray(row.evidence_ids) ? row.evidence_ids.join(', ') : '', row.status || p.status || 'locked']),
+        t('No claims are present.', '没有论断。')
+      ));
+    }
+    if (sections.length <= (summary.length ? 1 : 0)) {
+      const firstTable = firstObjectArray(p);
+      if (firstTable) {
+        sections.push(artifactTable(
+          t('Structured rows', '结构化行'),
+          firstTable.keys.map(artifactKeyLabel),
+          objectArrayRows(firstTable.rows, firstTable.keys),
+          t('No structured rows are present.', '没有结构化行。')
+        ));
+      }
+    }
+    if (!sections.length) {
+      sections.push(artifactTable(t('Readable artifact summary', '可读产物摘要'), [t('Field', '字段'), t('Value', '值')], [[t('Artifact', '产物'), name || 'artifact'], [t('Payload', '内容'), artifactScalar(p)]]));
+    }
+    return `
+      <div class="ag-artifact-readable">
+        <div class="ag-artifact-readable-head">
+          <div>
+            <div class="eyebrow">${t('Table view', '表格视图')}</div>
+            <div class="ag-artifact-readable-title">${t('Raw JSON is kept for audit, but the default view is table-based.', '原始 JSON 保留用于审计；默认展示为表格。')}</div>
+          </div>
+          <span class="pill ok" style="height:22px;"><span class="dot"></span>${t('readable', '可读')}</span>
+        </div>
+        ${figureGallery(p)}
+        ${sections.join('')}
+      </div>`;
+  }
   function artifactViewer(live) {
     if (!live || agArtifact.projectDir !== live.project_dir) return '';
     if (agArtifact.loading) {
@@ -1673,8 +1953,11 @@
         <span class="pill" style="height:22px;"><span class="dot"></span>${esc((artifact.sha256 || '').slice(0, 12))}</span>
         <span class="pill" style="height:22px;"><span class="dot"></span>${Number(artifact.bytes || 0).toLocaleString()} B</span>
       </div>
-      ${figureGallery(data.payload || {})}
-      <pre class="mono" style="margin-top:12px;max-height:360px;overflow:auto;background:var(--surface-2);border:1px solid var(--hair);border-radius:8px;padding:12px;font-size:11px;line-height:1.5;white-space:pre-wrap;">${esc(payload.slice(0, 12000))}${payload.length > 12000 ? '\n...' : ''}</pre>
+      ${artifactStructuredView(artifact.name || agArtifact.name || '', data.payload || {})}
+      <details class="ag-raw-json">
+        <summary>${t('View raw JSON', '查看原始 JSON')}</summary>
+        <pre class="mono">${esc(payload.slice(0, 12000))}${payload.length > 12000 ? '\n...' : ''}</pre>
+      </details>
     </div>`;
   }
   function outputBrief(artifacts) {

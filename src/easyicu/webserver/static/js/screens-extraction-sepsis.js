@@ -1,27 +1,26 @@
-/* Extraction Sepsis-3 parameter panel.
-   Owner: Data Extraction route. Keeps the code-aligned Sepsis controls out of
-   the main extraction screen IIFE. */
+/* Extraction Sepsis-3 definition panel.
+   Owner: Data Extraction route. The Web UI exposes only definition-safe
+   choices; lower-level callback kwargs remain an implementation detail. */
 (function () {
-  const RUNTIME_PROFILE = 'easyicu_ricu_default_v1';
-  const PROFILES = [
-    ['sofa2_primary', 'SOFA-2 primary', 'SOFA-2 主口径', 'SOFA-2'],
-    ['sofa1_sensitivity', 'SOFA-1 sensitivity', 'SOFA-1 敏感性', 'SOFA-1'],
-    ['dual_audit', 'SOFA-2 + SOFA-1 audit', 'SOFA-2 + SOFA-1 审计', 'SOFA-2 + SOFA-1'],
-  ];
-  const state = {
-    profile: 'sofa2_primary',
-    siMode: 'auto',
+  const RUNTIME_PROFILE = 'easyicu_sepsis3_locked_v1';
+  const IMPLEMENTATION_PROFILE = 'selected_module_defaults';
+  const SCORE_FAMILY = 'module-specific SOFA source';
+  const LOCKED = {
     abxWinHours: 24,
     sampWinHours: 72,
     abxCountWinHours: 24,
     abxMinCount: 1,
     positiveCultures: false,
-    siWindow: 'first',
     windowBeforeHours: 48,
     windowAfterHours: 24,
     deltaFunction: 'delta_cummin',
     threshold: 2,
     keepComponents: false,
+  };
+  const state = {
+    siMode: 'auto',
+    siWindow: 'first',
+    detailsOpen: false,
   };
 
   function bi(t, en, zh) {
@@ -38,65 +37,43 @@
     return typeof icon === 'function' ? icon(name, size) : '';
   }
 
-  function activeProfile() {
-    return PROFILES.find(p => p[0] === state.profile) || PROFILES[0];
-  }
-
   function relevant(moduleKeys) {
     return (moduleKeys || []).some(k => k.startsWith('sepsis3_') || k.startsWith('sofa') || k === 'sepsis_shared');
   }
 
   function contract() {
-    const profile = activeProfile();
     return {
       record_scope: 'metadata_current_runtime_defaults',
       runtime_profile: RUNTIME_PROFILE,
-      implementation_profile: profile[0],
-      score_family: profile[3],
+      implementation_profile: IMPLEMENTATION_PROFILE,
+      score_family: SCORE_FAMILY,
+      definition_locked: true,
       suspected_infection: {
         mode: state.siMode,
-        abx_win_hours: state.abxWinHours,
-        samp_win_hours: state.sampWinHours,
-        abx_count_win_hours: state.abxCountWinHours,
-        abx_min_count: state.abxMinCount,
-        positive_cultures_required: state.positiveCultures,
+        abx_win_hours: LOCKED.abxWinHours,
+        samp_win_hours: LOCKED.sampWinHours,
+        abx_count_win_hours: LOCKED.abxCountWinHours,
+        abx_min_count: LOCKED.abxMinCount,
+        positive_cultures_required: LOCKED.positiveCultures,
       },
       sofa_increase: {
         si_window: state.siWindow,
-        window_before_si_hours: state.windowBeforeHours,
-        window_after_si_hours: state.windowAfterHours,
-        delta_function: state.deltaFunction,
-        threshold: state.threshold,
-        keep_components: state.keepComponents,
+        window_before_si_hours: LOCKED.windowBeforeHours,
+        window_after_si_hours: LOCKED.windowAfterHours,
+        delta_function: LOCKED.deltaFunction,
+        threshold: LOCKED.threshold,
+        keep_components: LOCKED.keepComponents,
       },
       review_options: {
-        implementation_profile: PROFILES.map(p => p[0]),
-        score_family: PROFILES.map(p => p[3]),
-        si_mode: ['auto', 'and', 'icd_abx', 'abx', 'samp', 'or'],
-        abx_win_hours: [12, 24, 48],
-        samp_win_hours: [24, 48, 72],
-        abx_count_win_hours: [12, 24, 48],
-        abx_min_count: [1, 2, 3],
-        positive_cultures_required: [false, true],
-        si_window: ['first', 'last', 'any'],
-        window_before_si_hours: [24, 48, 72],
-        window_after_si_hours: [12, 24, 48],
-        delta_function: ['delta_cummin', 'delta_start', 'delta_min'],
-        threshold: [2, 3],
+        si_window: ['first', 'any'],
+      },
+      locked_core: {
+        suspected_infection_windows: 'ABX->sample 24h; sample->ABX 72h',
+        sofa_window: '-48h/+24h',
+        delta_rule: 'cumulative minimum within SI window',
+        sofa_threshold: 'delta >= 2',
       },
     };
-  }
-
-  function profileLabel(t, profile) {
-    const p = profile || activeProfile();
-    return bi(t, p[1], p[2]);
-  }
-
-  function profileSeg(ctx) {
-    return `
-      <div class="sepsis-def-seg" data-ex-sepsis-profile>
-        ${PROFILES.map(p => `<button class="${p[0] === state.profile ? 'active' : ''}" data-val="${esc(ctx.escHtml, p[0])}">${esc(ctx.escHtml, bi(ctx.t, p[1], p[2]))}</button>`).join('')}
-      </div>`;
   }
 
   function optionSeg(ctx, key, options, value) {
@@ -115,14 +92,39 @@
 
   function siModeLabel(t, value) {
     const map = {
-      auto: bi(t, 'auto by database', '按数据库自动'),
+      auto: bi(t, 'database implementation', '当前数据库口径'),
       and: bi(t, 'ABX + sample', '抗菌药 + 采样'),
       icd_abx: bi(t, 'infection ICD + ABX', '感染 ICD + 抗菌药'),
-      abx: bi(t, 'ABX only', '仅抗菌药'),
-      samp: bi(t, 'sample only', '仅采样'),
-      or: bi(t, 'ABX or sample', '抗菌药或采样'),
     };
     return map[value] || value;
+  }
+
+  function databaseKey(ctx) {
+    return String((ctx && ctx.database) || '').trim().toLowerCase();
+  }
+
+  function isEicu(ctx) {
+    return databaseKey(ctx).includes('eicu');
+  }
+
+  function effectiveSiLabel(t, ctx) {
+    return isEicu(ctx)
+      ? bi(t, 'eICU fallback: infection ICD + ABX', 'eICU 兜底：感染 ICD + 抗菌药')
+      : bi(t, 'ABX + sample', '抗菌药 + 采样');
+  }
+
+  function effectiveSiHelp(t, ctx) {
+    return isEicu(ctx)
+      ? bi(
+        t,
+        'eICU lacks a harmonized culture/sample timing chain, so EasyICU uses the documented infection-ICD plus antimicrobial fallback for eICU only.',
+        'eICU 无法统一到同一套培养/采样时间链，因此 EasyICU 仅在 eICU 使用“感染 ICD + 抗菌药”兜底。'
+      )
+      : bi(
+        t,
+        'For MIMIC-style sources this is fixed to antimicrobial plus sample timing; there is no separate "auto" choice for users to tune.',
+        '对 MIMIC 这类数据源，疑似感染锚点固定为“抗菌药 + 采样”；这里不再提供额外的“自动”选择。'
+      );
   }
 
   function siWindowLabel(t, value) {
@@ -130,15 +132,6 @@
       first: bi(t, 'first SI event', '首个 SI 事件'),
       last: bi(t, 'last SI event', '末次 SI 事件'),
       any: bi(t, 'any SI event', '任一 SI 事件'),
-    };
-    return map[value] || value;
-  }
-
-  function deltaLabel(t, value) {
-    const map = {
-      delta_cummin: bi(t, 'cumulative minimum', '累积最小值'),
-      delta_start: bi(t, 'first observed', '首个观测值'),
-      delta_min: bi(t, 'sliding minimum', '滑动最小值'),
     };
     return map[value] || value;
   }
@@ -156,133 +149,108 @@
       </div>`;
   }
 
+  function refreshPanel(root, ctx) {
+    root.querySelectorAll('[data-ex-sepsis]').forEach(seg => {
+      const key = seg.dataset.exSepsis || '';
+      const value = key === 'si_mode' ? state.siMode : state.siWindow;
+      seg.querySelectorAll('button[data-val]').forEach(button => {
+        button.classList.toggle('active', String(button.dataset.val || '') === String(value));
+      });
+    });
+    const meta = root.querySelector('.sepsis-def-audit-meta');
+    if (meta) {
+      meta.innerHTML = [
+        effectiveSiLabel(ctx && ctx.t, ctx),
+        siWindowLabel(ctx && ctx.t, state.siWindow),
+      ].map(x => chip(ctx || {}, x, 'current')).join('');
+    }
+  }
+
   function panel(ctx) {
     if (!relevant(ctx.moduleKeys || [])) return '';
-    const profile = activeProfile();
-    const current = [
-      profileLabel(ctx.t, profile),
-      siModeLabel(ctx.t, state.siMode),
-      bi(ctx.t, 'sample→ABX ', '采样→抗菌药 ') + state.sampWinHours + 'h / ' + bi(ctx.t, 'ABX→sample ', '抗菌药→采样 ') + state.abxWinHours + 'h',
-      bi(ctx.t, 'ABX count ', '抗菌药计数 ') + state.abxMinCount + bi(ctx.t, ' in ', ' 次 / ') + state.abxCountWinHours + 'h',
-      state.positiveCultures ? bi(ctx.t, 'positive cultures required', '要求阳性培养') : bi(ctx.t, 'any sample accepted', '采样即可'),
-      siWindowLabel(ctx.t, state.siWindow),
-      bi(ctx.t, 'SOFA window ', 'SOFA 窗口 ') + '−' + state.windowBeforeHours + 'h/+' + state.windowAfterHours + 'h',
-      deltaLabel(ctx.t, state.deltaFunction),
-      'ΔSOFA ≥ ' + state.threshold,
+    const lockedSummary = [
+      bi(ctx.t, 'suspected infection', '疑似感染'),
+      'ΔSOFA ≥ 2',
+      bi(ctx.t, 'standard SI window', '标准 SI 窗口'),
     ];
+    const current = [
+      effectiveSiLabel(ctx.t, ctx),
+      siWindowLabel(ctx.t, state.siWindow),
+    ];
+    const lockedCore = [
+      bi(ctx.t, 'ABX then sample: 24h', '抗菌药后采样：24 小时'),
+      bi(ctx.t, 'Sample then ABX: 72h', '采样后抗菌药：72 小时'),
+      bi(ctx.t, 'ABX count: ≥1 in 24h', '抗菌药计数：24 小时内 ≥1 次'),
+      bi(ctx.t, 'No positive-culture override', '不开放阳性培养覆盖'),
+      bi(ctx.t, 'SOFA delta: cumulative minimum', 'SOFA 增量：窗口内累积最小值'),
+      bi(ctx.t, 'Threshold fixed: ΔSOFA ≥ 2', '阈值固定：ΔSOFA ≥ 2'),
+    ];
+    if (isEicu(ctx)) {
+      lockedCore.splice(3, 0, bi(ctx.t, 'eICU-only fallback: infection ICD + ABX', '仅 eICU 兜底：感染 ICD + 抗菌药'));
+    }
     return `
       <div class="sepsis-def-panel">
         <div class="sepsis-def-head">
           <span class="sepsis-def-ico">${ic(ctx.icon, 'shield', 15)}</span>
           <div class="grow">
             <div class="sepsis-def-kicker">${bi(ctx.t, 'Definition checkpoint', '定义检查点')}</div>
-            <div class="sepsis-def-title">${bi(ctx.t, 'Sepsis-3 implementation profile', 'Sepsis-3 实现口径')}</div>
+            <div class="sepsis-def-title">${bi(ctx.t, 'Sepsis-3 definition locked', 'Sepsis-3 口径已锁定')}</div>
             <div class="sepsis-def-copy">${bi(
               ctx.t,
-              'These controls mirror easyicu.scores.sepsis.susp_inf() and sep3()/sep3_sofa2(). The default is the Sepsis-3 profile; non-default thresholds or modes are written as sensitivity/strategy choices and passed into the extraction callbacks.',
-              '这里的控件对应 easyicu.scores.sepsis.susp_inf() 与 sep3()/sep3_sofa2() 的真实参数。默认是 Sepsis-3 主口径；非默认阈值或模式会作为敏感性/策略选择写入 manifest，并传入抽取 callback。'
+              'Used only to document the fixed implementation used for extraction; this is not part of the normal setup flow.',
+              '这里只记录抽取时使用的固定实现口径；普通配置流程不需要展开。'
             )}</div>
           </div>
-          <span class="pill mono">${esc(ctx.escHtml, profile[3])}</span>
+          <span class="pill mono">${bi(ctx.t, 'locked', '已锁定')}</span>
         </div>
-        <div class="sepsis-def-summary">
-          ${current.map(x => chip(ctx, x, 'current')).join('')}
+        <div class="sepsis-def-audit-strip">
+          <div>
+            <div class="sepsis-def-audit-label">${bi(ctx.t, 'Core rule', '核心规则')}</div>
+            <div class="sepsis-def-audit-rule">${lockedSummary.map(x => esc(ctx.escHtml, x)).join(' + ')}</div>
+          </div>
+          <div class="sepsis-def-audit-meta">
+            ${current.map(x => chip(ctx, x, 'current')).join('')}
+          </div>
         </div>
-        <div class="sepsis-def-grid">
-          ${control(ctx, bi(ctx.t, 'Implementation profile', '实现口径'), profileSeg(ctx), bi(ctx.t, 'Switches the SOFA score source used by sep3 or sep3_sofa2.', '切换 sep3 或 sep3_sofa2 使用的 SOFA 评分来源。'))}
-          ${control(ctx, bi(ctx.t, 'Suspected infection mode', '疑似感染模式'), optionSeg(ctx, 'si_mode', [
-            ['auto', 'Auto', '自动'],
-            ['and', 'ABX + sample', '抗菌药 + 采样'],
-            ['icd_abx', 'ICD + ABX', 'ICD + 抗菌药'],
-            ['abx', 'ABX only', '仅抗菌药'],
-            ['samp', 'Sample only', '仅采样'],
-            ['or', 'ABX or sample', '抗菌药或采样'],
-          ], state.siMode), bi(ctx.t, 'Matches susp_inf(si_mode=...). Auto uses database-specific defaults.', '对应 susp_inf(si_mode=...)；自动模式使用数据库特异默认值。'))}
-          ${control(ctx, bi(ctx.t, 'ABX then sample window', '抗菌药后采样窗口'), optionSeg(ctx, 'abx_win_hours', [
-            ['12', '12 h', '12 小时'],
-            ['24', '24 h', '24 小时'],
-            ['48', '48 h', '48 小时'],
-          ], state.abxWinHours))}
-          ${control(ctx, bi(ctx.t, 'Sample then ABX window', '采样后抗菌药窗口'), optionSeg(ctx, 'samp_win_hours', [
-            ['24', '24 h', '24 小时'],
-            ['48', '48 h', '48 小时'],
-            ['72', '72 h', '72 小时'],
-          ], state.sampWinHours))}
-          ${control(ctx, bi(ctx.t, 'ABX counting rule', '抗菌药计数规则'), optionSeg(ctx, 'abx_min_count', [
-            ['1', '≥1 dose', '≥1 次'],
-            ['2', '≥2 doses', '≥2 次'],
-            ['3', '≥3 doses', '≥3 次'],
-          ], state.abxMinCount) + optionSeg(ctx, 'abx_count_win_hours', [
-            ['12', '12 h window', '12 小时窗口'],
-            ['24', '24 h window', '24 小时窗口'],
-            ['48', '48 h window', '48 小时窗口'],
-          ], state.abxCountWinHours), bi(ctx.t, 'Matches abx_min_count and abx_count_win in susp_inf().', '对应 susp_inf() 的 abx_min_count 与 abx_count_win。'))}
-          ${control(ctx, bi(ctx.t, 'Culture requirement', '培养要求'), boolSeg(ctx, 'positive_cultures', state.positiveCultures), bi(ctx.t, 'Matches positive_cultures in susp_inf().', '对应 susp_inf() 的 positive_cultures。'))}
-          ${control(ctx, bi(ctx.t, 'SI event for SOFA window', 'SOFA 窗口使用的 SI 事件'), optionSeg(ctx, 'si_window', [
-            ['first', 'First', '首个'],
-            ['last', 'Last', '末次'],
-            ['any', 'Any', '任一'],
-          ], state.siWindow), bi(ctx.t, 'Matches si_window in sep3()/sep3_sofa2().', '对应 sep3()/sep3_sofa2() 的 si_window。'))}
-          ${control(ctx, bi(ctx.t, 'SOFA lookback', 'SOFA 回看窗口'), optionSeg(ctx, 'window_before_hours', [
-            ['24', '−24 h', '−24 小时'],
-            ['48', '−48 h', '−48 小时'],
-            ['72', '−72 h', '−72 小时'],
-          ], state.windowBeforeHours))}
-          ${control(ctx, bi(ctx.t, 'SOFA follow-up', 'SOFA 后续窗口'), optionSeg(ctx, 'window_after_hours', [
-            ['12', '+12 h', '+12 小时'],
-            ['24', '+24 h', '+24 小时'],
-            ['48', '+48 h', '+48 小时'],
-          ], state.windowAfterHours))}
-          ${control(ctx, bi(ctx.t, 'SOFA delta function', 'SOFA 增量函数'), optionSeg(ctx, 'delta_function', [
-            ['delta_cummin', 'Cumulative min', '累积最小值'],
-            ['delta_start', 'Start value', '起始值'],
-            ['delta_min', 'Sliding min', '滑动最小值'],
-          ], state.deltaFunction))}
-          ${control(ctx, bi(ctx.t, 'SOFA threshold', 'SOFA 阈值'), optionSeg(ctx, 'threshold', [
-            ['2', 'Δ ≥ 2', 'Δ ≥ 2'],
-            ['3', 'Δ ≥ 3', 'Δ ≥ 3'],
-          ], state.threshold), bi(ctx.t, 'Δ ≥ 2 is the default Sepsis-3 criterion; Δ ≥ 3 is a sensitivity setting supported by the code.', 'Δ ≥ 2 是默认 Sepsis-3 标准；Δ ≥ 3 是代码支持的敏感性设置。'))}
-          ${control(ctx, bi(ctx.t, 'Keep diagnostic components', '保留诊断组件'), boolSeg(ctx, 'keep_components', state.keepComponents), bi(ctx.t, 'Keeps delta_sofa and component times when the callback emits them.', 'callback 输出时保留 delta_sofa 与组件时间。'))}
-        </div>
-        <div class="sepsis-def-foot">${ic(ctx.icon, 'file', 12)} ${bi(ctx.t, 'Recorded as cohort.sepsis_definition and passed as kwargs to sepsis callbacks during extraction.', '记录到 cohort.sepsis_definition，并在抽取时作为 kwargs 传给 Sepsis callback。')}</div>
+        <details class="sepsis-def-details sepsis-def-details-lite" ${state.detailsOpen ? 'open' : ''}>
+            <summary>${ic(ctx.icon, 'sliders', 13)} ${bi(ctx.t, 'Advanced audit details', '高级审计细节')}</summary>
+            <div class="sepsis-def-detail-body">
+              <div class="sepsis-def-detail-title">${bi(ctx.t, 'Locked implementation constants', '锁定实现常量')}</div>
+              <div class="sepsis-def-chips">${lockedCore.map(x => chip(ctx, x, 'review')).join('')}</div>
+              <div class="sepsis-def-detail-title">${bi(ctx.t, 'Audit anchors', '审计锚点')}</div>
+              <div class="sepsis-def-grid compact">
+              ${control(ctx, bi(ctx.t, 'Suspected infection anchor', '疑似感染锚点'), `<div class="sepsis-def-static">${esc(ctx.escHtml, effectiveSiLabel(ctx.t, ctx))}</div>`, effectiveSiHelp(ctx.t, ctx))}
+              ${control(ctx, bi(ctx.t, 'SI event', 'SI 事件'), optionSeg(ctx, 'si_window', [
+                ['first', 'First', '首个'],
+                ['any', 'Any', '任一'],
+              ], state.siWindow), bi(ctx.t, 'The SOFA window and threshold stay fixed; this only chooses how repeated SI events are anchored.', 'SOFA 窗口和阈值保持固定；这里只选择多次 SI 事件时如何锚定。'))}
+              </div>
+              <div class="sepsis-def-help">${bi(ctx.t, 'Advanced callback kwargs are intentionally not exposed here because they would create non-standard sensitivity definitions.', '高级 callback 参数不在这里暴露，避免误生成非标准敏感性定义。')}</div>
+            </div>
+        </details>
+        <div class="sepsis-def-foot">${ic(ctx.icon, 'file', 12)} ${bi(ctx.t, 'Recorded as cohort.sepsis_definition with locked core defaults and the small set of allowed implementation choices.', '记录到 cohort.sepsis_definition；核心定义固定，只保存少数允许的实现口径选择。')}</div>
       </div>`;
   }
 
   function bind(root, ctx) {
-    root.querySelectorAll('[data-ex-sepsis-profile]').forEach(seg => seg.addEventListener('click', e => {
-      const button = e.target.closest('button');
-      if (!button) return;
-      const val = button.dataset.val || '';
-      if (!PROFILES.some(p => p[0] === val)) return;
-      state.profile = val;
-      if (ctx && typeof ctx.markStale === 'function') ctx.markStale();
-      if (ctx && typeof ctx.repaint === 'function') ctx.repaint();
+    root.querySelectorAll('.sepsis-def-details').forEach(details => details.addEventListener('toggle', () => {
+      state.detailsOpen = !!details.open;
     }));
     root.querySelectorAll('[data-ex-sepsis]').forEach(seg => seg.addEventListener('click', e => {
       const button = e.target.closest('button');
       if (!button) return;
+      const details = button.closest('.sepsis-def-details');
+      if (details) state.detailsOpen = !!details.open;
       const key = seg.dataset.exSepsis || '';
       const val = button.dataset.val || '';
-      if (key === 'si_mode') state.siMode = val || 'auto';
-      else if (key === 'abx_win_hours') state.abxWinHours = Number(val || 24);
-      else if (key === 'samp_win_hours') state.sampWinHours = Number(val || 72);
-      else if (key === 'abx_count_win_hours') state.abxCountWinHours = Number(val || 24);
-      else if (key === 'abx_min_count') state.abxMinCount = Number(val || 1);
-      else if (key === 'positive_cultures') state.positiveCultures = val === 'true';
-      else if (key === 'si_window') state.siWindow = val || 'first';
-      else if (key === 'window_before_hours') state.windowBeforeHours = Number(val || 48);
-      else if (key === 'window_after_hours') state.windowAfterHours = Number(val || 24);
-      else if (key === 'delta_function') state.deltaFunction = val || 'delta_cummin';
-      else if (key === 'threshold') state.threshold = Number(val || 2);
-      else if (key === 'keep_components') state.keepComponents = val === 'true';
+      if (key === 'si_window' && ['first', 'any'].includes(val)) state.siWindow = val || 'first';
       if (ctx && typeof ctx.markStale === 'function') ctx.markStale();
-      if (ctx && typeof ctx.repaint === 'function') ctx.repaint();
+      refreshPanel(root, ctx);
     }));
   }
 
   window.EUExtractionSepsis = {
     state,
-    profiles: PROFILES,
     relevant,
     contract,
     panel,

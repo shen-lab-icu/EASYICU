@@ -1,0 +1,205 @@
+.pt-series-workbench{
+  border:1px solid var(--hair);
+  border-radius:var(--r-2);
+  background:var(--surface);
+  padding:14px;
+  box-shadow:var(--sh-1);
+  margin-top:16px;
+}
+.pt-series-workbench-head,
+.pt-series-panel-head{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:14px;
+}
+.pt-series-workbench-head h2,
+.pt-series-panel-head h2{
+  margin:2px 0 4px;
+  font-size:18px;
+  line-height:1.25;
+}
+.pt-series-workbench-head p,
+.pt-series-panel-head p{
+  margin:0;
+  max-width:720px;
+  color:var(--ink-4);
+  font-size:12.5px;
+  line-height:1.45;
+}
+.pt-series-modebar{
+  display:grid;
+  grid-template-columns:repeat(3, minmax(0,1fr));
+  gap:8px;
+  margin-top:14px;
+  padding:6px;
+  border:1px solid var(--hair);
+  border-radius:var(--r-2);
+  background:var(--surface-2);
+}
+.pt-series-mode{
+  border:1px solid transparent;
+  border-radius:var(--r-1);
+  background:transparent;
+  color:var(--ink-3);
+  padding:10px 12px;
+  text-align:left;
+  cursor:pointer;
+  min-height:64px;
+}
+.pt-series-mode:hover{
+  border-color:var(--hair-strong);
+  background:var(--surface);
+}
+.pt-series-mode.active{
+  border-color:var(--accent);
+  color:var(--ink);
+  background:color-mix(in srgb, var(--accent) 9%, var(--surface));
+  box-shadow:inset 3px 0 0 var(--accent);
+}
+.pt-series-mode span{
+  display:block;
+  font-size:11.5px;
+  line-height:1.35;
+}
+.pt-series-mode-title{
+  font-weight:700;
+  font-size:13px !important;
+  margin-bottom:3px;
+}
+.pt-series-panel{
+  margin-top:14px;
+}
+.pt-single-grid{
+  display:grid;
+  grid-template-columns:repeat(2, minmax(0,1fr));
+  gap:12px;
+  margin-top:12px;
+}
+.pt-single-card{
+  border:1px solid var(--hair);
+  border-radius:var(--r-2);
+  background:color-mix(in srgb, var(--surface) 96%, var(--surface-2));
+  padding:10px;
+  min-width:0;
+}
+.pt-single-meta{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  color:var(--ink-4);
+  font-size:11px;
+  margin-bottom:8px;
+}
+.pt-single-meta span{
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.pt-compare-table{
+  margin-top:12px;
+}
+.pt-compare-feature{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  border:1px solid var(--hair);
+  border-radius:var(--r-2);
+  background:var(--surface-2);
+  padding:10px 12px;
+  margin-top:12px;
+}
+.pt-compare-feature strong{
+  display:inline-block;
+  margin-right:8px;
+  font-size:15px;
+}
+.pt-multi-chart{
+  border:1px solid var(--hair);
+  border-radius:var(--r-2);
+  background:linear-gradient(180deg, var(--surface), var(--surface-2));
+  margin-top:12px;
+  padding:10px;
+  overflow:hidden;
+}
+.pt-multi-chart svg{
+  display:block;
+  width:100%;
+  height:260px;
+}
+.pt-multi-chart .grid{
+  stroke:var(--hair);
+  stroke-width:1;
+}
+.pt-multi-chart .axis-line{
+  stroke:var(--hair-strong);
+  stroke-width:1;
+}
+.pt-multi-chart .axis{
+  fill:var(--ink-4);
+  font-size:11px;
+}
+.pt-trace-legend{
+  display:grid;
+  grid-template-columns:repeat(2, minmax(0, 1fr));
+  gap:8px;
+  margin-top:10px;
+}
+.pt-trace-key{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  border:1px solid var(--hair);
+  border-radius:var(--r-1);
+  background:var(--surface);
+  padding:8px 10px;
+  min-width:0;
+  font-size:12px;
+}
+.pt-trace-key i{
+  width:18px;
+  height:4px;
+  border-radius:999px;
+  flex:0 0 auto;
+}
+.pt-trace-key span{
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  color:var(--ink-3);
+}
+.pt-trace-key b{
+  margin-left:auto;
+  font-family:var(--mono);
+  font-weight:700;
+}
+.pt-trace-key em{
+  color:var(--ink-4);
+  font-style:normal;
+  font-family:var(--mono);
+}
+.pt-compare-bar{
+  height:8px;
+  min-width:110px;
+  border-radius:999px;
+  background:var(--surface-3);
+  overflow:hidden;
+}
+.pt-compare-bar i{
+  display:block;
+  height:100%;
+  border-radius:inherit;
+  background:var(--accent);
+}
+@media (max-width: 980px){
+  .pt-series-modebar,
+  .pt-single-grid,
+  .pt-trace-legend{ grid-template-columns:1fr; }
+  .pt-series-workbench-head,
+  .pt-series-panel-head{ flex-direction:column; }
+  .pt-compare-feature{ flex-direction:column; align-items:flex-start; }
+}
