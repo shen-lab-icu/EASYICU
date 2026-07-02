@@ -152,9 +152,53 @@ def test_supervised_without_split_warns(ra):
         y = df["death"]
         LogisticRegression(random_state=0).fit(X, y)
     """)
-    findings = auditor.audit(context=_ctx(ra), script_text=code)
+    ctx = _ctx(ra).model_copy(
+        update={
+            "research_question": "Build a mortality prediction model.",
+            "user_preferences": ra.schema.UserPreferences(
+                inferred_analysis_family="prediction_model"
+            ),
+        }
+    )
+    step = ra.schema.AnalysisStep(
+        step_id="01_prediction",
+        intent="Fit a mortality prediction model and report AUROC.",
+        expected_outputs=["statistic:auroc"],
+    )
+    findings = auditor.audit(context=ctx, script_text=code, step=step)
     warnings = [f for f in findings if f.severity == "warning"]
     assert any("split" in f.message.lower() or "in-sample" in f.message.lower() for f in warnings)
+
+
+def test_association_logistic_without_split_is_not_prediction_warning(ra):
+    auditor = ra.AnalysisPatternAuditor()
+    code = textwrap.dedent("""\
+        from sklearn.linear_model import LogisticRegression
+        import pandas as pd
+        df = pd.read_parquet("cohort.parquet")
+        X = df[["sepsis3", "age"]]
+        y = df["death"]
+        LogisticRegression().fit(X, y)
+    """)
+    ctx = _ctx(ra, roles={"sepsis3": ra.schema.VariableRole.OTHER}).model_copy(
+        update={
+            "research_question": "Is Sepsis-3 status associated with ICU mortality?",
+            "user_preferences": ra.schema.UserPreferences(
+                inferred_analysis_family="association"
+            ),
+        }
+    )
+    step = ra.schema.AnalysisStep(
+        step_id="04_primary_adjusted_association_model",
+        intent="Estimate an adjusted odds ratio for sepsis3 and mortality.",
+        expected_outputs=["statistic:primary_or", "table:adjusted_association"],
+        method="logistic_regression_association",
+    )
+
+    findings = auditor.audit(context=ctx, script_text=code, step=step)
+
+    assert not any("in-sample" in f.message.lower() for f in findings), findings
+    assert not any("random_state" in f.message for f in findings), findings
 
 
 # ---------------------------------------------------------------------------

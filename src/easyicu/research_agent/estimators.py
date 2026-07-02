@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
 
 from .cohort_schema import CohortDefinition, build_cohort
 from .missing import apply_missing_strategy
+from .pipeline_primary_effect import _extract_primary_effect_payload_from_records
 from .robustness_panel import PRIMARY_SPEC_ID, RobustnessPanelRow, RobustnessSpec
 
 
@@ -240,15 +241,27 @@ def fit_robustness_rows_from_records(
     context: Any = None,
     exposure: Optional[str] = None,
     outcome: Optional[str] = None,
+    run_dir: Optional[Path] = None,
 ) -> Tuple[List[RobustnessPanelRow], List[str]]:
-    """Auto-fit robustness rows from a coder-emitted estimator payload.
+    """Auto-fit the robustness-panel rows for a run.
 
-    The payload is intentionally explicit and local to ``step_summary``:
+    Row sourcing, in priority order:
 
-    ``{"estimator_adapter": {"data": [...], "exposure": "x", "outcome": "y"}}``
+    1. **Primary row** — the step's *validated* primary estimate
+       (``step_summary.primary_or`` / CI / n), never a re-fit, so the panel
+       headline matches the manuscript-facing primary effect. Falls back to a
+       primary re-fit only when no step reports a primary.
+    2. **Variant rows** — re-fit per spec, adjusted for the primary model's
+       recovered covariate set (``run_dir``) so each variant reports the
+       exposure's effect on the same footing as the primary rather than as a
+       bare unadjusted single-predictor fit.
 
-    Coder-emitted ``robustness_rows`` remain accepted as a fallback, but adapter
-    rows win for duplicate ``spec_id`` values and a warning is returned.
+    Data source for the re-fits: an explicit ``step_summary.estimator_adapter``
+    payload (``{"data": [...], "exposure": "x", "outcome": "y"}``) *if a coder
+    emits one* — no current prompt does, so in practice the operative path
+    infers the exposure/outcome and loads the cohort parquet. Coder-emitted
+    ``robustness_rows`` remain accepted; adapter/step rows win for duplicate
+    ``spec_id`` values and a warning is returned.
     """
 
     warnings: List[str] = []
@@ -304,10 +317,39 @@ def fit_robustness_rows_from_records(
         ]
 
     rows: List[RobustnessPanelRow] = []
-    row_specs: List[Tuple[str, str, Optional[RobustnessSpec]]] = [
-        (PRIMARY_SPEC_ID, "primary", None),
-        *[(spec.spec_id, spec.axis, spec) for spec in specs],
-    ]
+    # Recover the primary model's adjustment set so robustness *variants* are fit
+    # on the same footing as the (now step-sourced, adjusted) primary effect
+    # rather than as bare unadjusted single-predictor re-fits. Empty when the
+    # covariate set cannot be recovered (e.g. no run_dir) — variants then stay
+    # unadjusted, i.e. the previous behaviour.
+    covariates = _recover_primary_covariates(
+        run_dir,
+        per_step_records=per_step_records,
+        exposure=exposure,
+        outcome=outcome,
+        available_columns=getattr(data, "columns", ()),
+    )
+    if covariates:
+        warnings.append(
+            "robustness variants adjusted for the primary model covariates: "
+            + ", ".join(covariates)
+        )
+    primary_row = _primary_row_from_step_records(per_step_records)
+    if primary_row is not None:
+        rows.append(primary_row)
+        if PRIMARY_SPEC_ID in declared_ids:
+            warnings.append(
+                "step primary estimate overrides coder-emitted robustness_rows "
+                "with spec_id 'primary'"
+            )
+        row_specs: List[Tuple[str, str, Optional[RobustnessSpec]]] = [
+            (spec.spec_id, spec.axis, spec) for spec in specs
+        ]
+    else:
+        row_specs = [
+            (PRIMARY_SPEC_ID, "primary", None),
+            *[(spec.spec_id, spec.axis, spec) for spec in specs],
+        ]
     for spec_id, axis, spec in row_specs:
         row = _fit_one_row(
             spec_id=spec_id,
@@ -322,6 +364,7 @@ def fit_robustness_rows_from_records(
             default_missing=default_missing,
             context=context,
             evidence_id=evidence_id,
+            covariates=covariates,
         )
         rows.append(row)
         if spec_id in declared_ids:
@@ -330,6 +373,130 @@ def fit_robustness_rows_from_records(
                 "robustness_rows with the same spec_id"
             )
     return rows, warnings
+
+
+def _primary_row_from_step_records(
+    per_step_records: Sequence[Dict[str, Any]]
+) -> Optional[RobustnessPanelRow]:
+    payload = _extract_primary_effect_payload_from_records(per_step_records)
+    if not payload or payload.get("primary_or") is None:
+        return None
+    sample_size = payload.get("sample_size")
+    n = int(sample_size) if isinstance(sample_size, int) else 0
+    return RobustnessPanelRow(
+        spec_id=PRIMARY_SPEC_ID,
+        axis="primary",
+        n=n,
+        point_estimate=_float_or_none(payload.get("primary_or")),
+        ci_low=_float_or_none(payload.get("primary_ci_low")),
+        ci_high=_float_or_none(payload.get("primary_ci_high")),
+        se=None,
+        evidence_id=str(payload.get("evidence_id") or ""),
+        converged=True,
+        notes="Primary analysis estimate from step_summary.",
+    )
+
+
+def _recover_primary_covariates(
+    run_dir: Optional[Path],
+    *,
+    per_step_records: Sequence[Dict[str, Any]],
+    exposure: Optional[str],
+    outcome: Optional[str],
+    available_columns: Any,
+) -> List[str]:
+    """The primary model's adjustment-set column names, or ``[]``.
+
+    Prefers an explicit covariate declaration in the selected primary step's
+    summary, then falls back to the conservative code parser used by the
+    overadjustment check. It intentionally does not treat generic effect-summary
+    CSV ``term`` columns as covariates: those rows can list sensitivity model
+    focal terms rather than the primary adjustment set.
+    """
+    if run_dir is None:
+        return []
+    from .plan_utils import _covariate_names_from_code
+
+    base = Path(run_dir)
+    payload = _extract_primary_effect_payload_from_records(per_step_records)
+    step_id = str((payload or {}).get("step_id") or "").strip()
+    names = _explicit_primary_covariates_from_records(
+        per_step_records,
+        step_id=step_id,
+    )
+    search_dirs: List[Path] = []
+    if step_id:
+        for candidate in (base / "steps" / step_id / "outputs", base / "steps" / step_id):
+            if candidate.exists():
+                search_dirs.append(candidate)
+    if not search_dirs and base.exists():
+        search_dirs.append(base)
+
+    if not names:
+        for directory in search_dirs:
+            names = _covariate_names_from_code(directory)
+            if names:
+                break
+    try:
+        available = {str(column) for column in list(available_columns)}
+    except TypeError:
+        available = set()
+    excluded = {str(exposure or ""), str(outcome or "")}
+    return [name for name in names if name in available and name not in excluded]
+
+
+def _explicit_primary_covariates_from_records(
+    per_step_records: Sequence[Dict[str, Any]],
+    *,
+    step_id: str,
+) -> List[str]:
+    if not step_id:
+        return []
+    for record in per_step_records or []:
+        if str(record.get("step_id") or "") != step_id:
+            continue
+        summary = record.get("step_summary")
+        if not isinstance(summary, dict):
+            return []
+        return _explicit_covariate_names(summary)
+    return []
+
+
+def _explicit_covariate_names(payload: Dict[str, Any]) -> List[str]:
+    candidates: List[Any] = [
+        payload.get("model_covariates"),
+        payload.get("covariates"),
+        payload.get("adjustment_covariates"),
+        payload.get("adjustment_cols"),
+        payload.get("confounders"),
+    ]
+    model_metadata = payload.get("model_metadata")
+    if isinstance(model_metadata, dict):
+        candidates.extend(
+            [
+                model_metadata.get("model_covariates"),
+                model_metadata.get("covariates"),
+                model_metadata.get("adjustment_covariates"),
+                model_metadata.get("adjustment_cols"),
+                model_metadata.get("confounders"),
+            ]
+        )
+    for value in candidates:
+        names = _string_sequence(value)
+        if names:
+            return names
+    return []
+
+
+def _string_sequence(value: Any) -> List[str]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    names: List[str] = []
+    for item in value:
+        text = str(item or "").strip()
+        if text and text not in names:
+            names.append(text)
+    return names
 
 
 def _fit_one_row(
@@ -346,6 +513,7 @@ def _fit_one_row(
     default_missing: str,
     context: Any,
     evidence_id: str,
+    covariates: Sequence[str] = (),
 ) -> RobustnessPanelRow:
     cohort_definition = (
         spec.cohort_override
@@ -373,7 +541,17 @@ def _fit_one_row(
             or outcome_column
         )
         missing_strategy = _missing_strategy_for(spec, default_missing)
-        needed = [exposure, outcome_column]
+        # Adjust for the primary model's covariates (when supplied and present)
+        # so the variant reports the exposure's *adjusted* effect on the same
+        # footing as the primary — fit_estimator reports the first non-const
+        # column, so the exposure must lead the design matrix.
+        present_covariates = [
+            column
+            for column in covariates
+            if column in cohort_df.columns
+            and column not in (exposure, outcome_column)
+        ]
+        needed = [exposure, outcome_column, *present_covariates]
         missing_columns = [
             column for column in needed if column not in cohort_df.columns
         ]
@@ -382,10 +560,15 @@ def _fit_one_row(
         model_df = apply_missing_strategy(cohort_df[needed], missing_strategy)
         result = fit_estimator(
             cohort=cohort_definition,
-            X=model_df[[exposure]],
+            X=model_df[[exposure, *present_covariates]],
             y=model_df[outcome_column],
             kind=kind,
         )
+        notes = result.notes
+        if present_covariates:
+            notes = _join_notes(
+                "adjusted for " + ", ".join(present_covariates), result.notes
+            )
         return RobustnessPanelRow(
             spec_id=spec_id,
             axis=axis,
@@ -396,7 +579,7 @@ def _fit_one_row(
             se=result.se,
             evidence_id=evidence_id,
             converged=result.converged,
-            notes=result.notes,
+            notes=notes,
         )
     except Exception as exc:
         return RobustnessPanelRow(

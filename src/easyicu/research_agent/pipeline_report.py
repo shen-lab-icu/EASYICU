@@ -276,6 +276,245 @@ def _publication_figure_bundle_ready(
     }
 
 
+_TABLE_ONE_DIRECT_TERMS = (
+    "table_one",
+    "table one",
+    "table 1",
+    "baseline characteristic",
+)
+_TABLE_ONE_SUBJECT_TERMS = (
+    "cohort",
+    "covariate",
+    "patient",
+    "baseline",
+    "demographic",
+)
+_TABLE_ONE_DESCRIPTOR_TERMS = ("summary", "characteristic", "overview")
+_AUDIT_DISPLAY_CATEGORIES = {
+    "audit",
+    "data_quality",
+    "missingness",
+    "provenance",
+    "sensitivity",
+    "robustness",
+}
+
+
+def _display_table_key(relative_path: str) -> str:
+    return Path(str(relative_path or "")).name.split("__", 1)[-1]
+
+
+def _declares_table_one_text(text: str) -> bool:
+    lowered = str(text or "").lower()
+    if any(term in lowered for term in _TABLE_ONE_DIRECT_TERMS):
+        return True
+    return any(term in lowered for term in _TABLE_ONE_SUBJECT_TERMS) and any(
+        term in lowered for term in _TABLE_ONE_DESCRIPTOR_TERMS
+    )
+
+
+def _plan_expects_table_one(plan: Optional[AnalysisPlan]) -> bool:
+    if plan is None:
+        return False
+    for step in plan.steps:
+        items = [step.intent, step.method, *(step.expected_outputs or [])]
+        for item in items:
+            text = str(item or "")
+            if "table" in text.lower() and _declares_table_one_text(text):
+                return True
+    return False
+
+
+def _display_categories_for_text(text: str) -> set[str]:
+    lowered = str(text or "").lower()
+    categories: set[str] = set()
+    if _declares_table_one_text(lowered):
+        categories.add("table_one")
+    if any(term in lowered for term in ("attrition", "denominator", "flow")):
+        categories.add("cohort_flow")
+    if any(
+        term in lowered
+        for term in (
+            "association",
+            "effect",
+            "odds ratio",
+            "risk ratio",
+            "risk difference",
+            "primary",
+            "regression",
+            "estimate",
+        )
+    ):
+        categories.add("primary_effect")
+    if any(term in lowered for term in ("sensitivity", "robustness", "variant")):
+        categories.add("sensitivity")
+    if any(
+        term in lowered
+        for term in (
+            "audit",
+            "quality",
+            "missingness",
+            "measurement",
+            "provenance",
+            "source definition",
+            "zero fill",
+            "complete case",
+            "coercion",
+            "convergence",
+        )
+    ):
+        categories.add("data_quality")
+    if any(
+        term in lowered
+        for term in ("auroc", "calibration", "discrimination", "prediction")
+    ):
+        categories.add("prediction")
+    return categories
+
+
+def _contract_text_for_display(raw: Dict[str, Any]) -> str:
+    parts: List[str] = [
+        str(raw.get("figure_id") or ""),
+        str(raw.get("title") or ""),
+        str(raw.get("core_claim") or ""),
+        str(raw.get("statistics_note") or ""),
+    ]
+    panels = raw.get("panels")
+    if isinstance(panels, list):
+        for panel in panels:
+            if not isinstance(panel, dict):
+                continue
+            parts.extend(
+                [
+                    str(panel.get("title") or ""),
+                    str(panel.get("role") or ""),
+                    str(panel.get("claim") or ""),
+                    str(panel.get("review_risk") or ""),
+                ]
+            )
+    return "\n".join(part for part in parts if part)
+
+
+def _figure_contract_paths(run_dir: Path) -> List[Path]:
+    paths = [
+        *run_dir.glob("publication_figures/*.figure_contract.json"),
+        *run_dir.glob("steps/*/outputs/*.figure_contract.json"),
+    ]
+    seen: set[str] = set()
+    unique: List[Path] = []
+    for path in sorted(paths):
+        key = str(path.resolve())
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(path)
+    return unique
+
+
+def _display_suite_status(
+    *,
+    plan: Optional[AnalysisPlan],
+    evidence: EvidenceStore,
+    run_dir: Path,
+    publication: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Summarise article-level display coverage.
+
+    This gate is intentionally above individual figure validation. A result
+    figure can be technically valid while the manuscript package is still too
+    thin or repetitive for article use.
+    """
+    table_keys: set[str] = set()
+    categories: set[str] = set()
+    for record in evidence.records():
+        text = " ".join(
+            [
+                record.evidence_id,
+                record.kind,
+                record.description,
+                _display_table_key(record.relative_path),
+                json.dumps(record.metadata or {}, ensure_ascii=False, default=str),
+            ]
+        )
+        categories.update(_display_categories_for_text(text))
+        if record.kind == "table":
+            table_keys.add(_display_table_key(record.relative_path))
+
+    contract_paths = _figure_contract_paths(run_dir)
+    panel_count = 0
+    role_names: set[str] = set()
+    result_like_contracts = 0
+    for contract_path in contract_paths:
+        try:
+            raw = json.loads(contract_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(raw, dict):
+            continue
+        text = _contract_text_for_display(raw)
+        categories.update(_display_categories_for_text(text))
+        panels = raw.get("panels")
+        if not isinstance(panels, list):
+            continue
+        panel_count += len(panels)
+        contract_roles: set[str] = set()
+        for panel in panels:
+            if not isinstance(panel, dict):
+                continue
+            role = str(panel.get("role") or "").strip().lower()
+            if role:
+                role_names.add(role)
+                contract_roles.add(role)
+        if any(
+            token in text.lower()
+            for token in (
+                "association",
+                "effect",
+                "risk ratio",
+                "risk difference",
+                "odds ratio",
+                "sensitivity",
+                "robustness",
+                "prediction",
+            )
+        ):
+            result_like_contracts += 1
+
+    table_one_expected = _plan_expects_table_one(plan)
+    has_table_one = "table_one" in categories
+    has_audit_context = bool(categories & _AUDIT_DISPLAY_CATEGORIES)
+    figure_contract_count = len(contract_paths)
+    errors: List[str] = []
+    if table_one_expected and not has_table_one:
+        errors.append("Table 1/baseline cohort display was declared but not registered.")
+    if not publication.get("publication_figure_bundle_ready"):
+        errors.append("No complete publication figure bundle is registered.")
+    if result_like_contracts == 0:
+        errors.append("No result-bearing figure contract is registered.")
+    if panel_count < 2:
+        errors.append("Manuscript-facing result figures expose fewer than two panels.")
+    if len(role_names) < 2:
+        errors.append("Figure contracts lack panel-role diversity.")
+    if not has_audit_context:
+        errors.append("No audit, sensitivity, robustness, missingness, or provenance display is registered.")
+    if len(categories) < 3:
+        errors.append("Display suite covers fewer than three article content categories.")
+
+    return {
+        "display_suite_complete": not errors,
+        "display_table_count": len(table_keys),
+        "display_figure_contract_count": figure_contract_count,
+        "display_result_figure_contract_count": result_like_contracts,
+        "display_contract_panel_count": panel_count,
+        "display_contract_role_count": len(role_names),
+        "display_categories": sorted(categories),
+        "display_table_one_expected": table_one_expected,
+        "display_table_one_present": has_table_one,
+        "display_audit_context_present": has_audit_context,
+        "display_suite_errors": errors,
+    }
+
+
 _STEP_ID_IN_MESSAGE_PATTERNS = (
     # Matches the in-message tokens written by every pipeline_execute
     # ValidationFinding site that references a specific step. See
@@ -366,6 +605,21 @@ _GATE_STATE_SUPERSESSION_PATTERNS = (
         "manuscript generation skipped",
         "execution_complete",
     ),
+    (
+        "evidence_bound_writer",
+        "strict evidence enforcement blocked manuscript generation",
+        "manuscript_bound_clean",
+    ),
+    (
+        "manuscript_numeric_auditor",
+        "strict evidence enforcement blocked manuscript generation",
+        "manuscript_numeric_bound_clean",
+    ),
+    (
+        "critic_agent",
+        "criticagent marked manuscript",
+        "manuscript_critique_passed",
+    ),
 )
 
 
@@ -393,12 +647,105 @@ def _is_gate_state_superseded(
     return False
 
 
+def _manuscript_numeric_bound_clean(manuscript_text: str) -> bool:
+    """Return true when the latest bound manuscript has no numeric gap markers."""
+    if not manuscript_text:
+        return False
+    if "Manuscript scaffold not generated" in manuscript_text[:300]:
+        return False
+    return "<!-- UNTRACED:" not in manuscript_text and "<!-- AMBIGUOUS:" not in manuscript_text
+
+
+_PUBLICATION_FIGURE_SUMMARY_RE = re.compile(
+    r"^publication_figure_skill_summary(?:_v(?P<version>\d+))?"
+    r"__publication_figure_skill_summary\.json$"
+)
+
+
+def _publication_figure_summary_sort_key(path: Path) -> tuple[int, str]:
+    match = _PUBLICATION_FIGURE_SUMMARY_RE.match(path.name)
+    if not match:
+        return (0, path.name)
+    version = int(match.group("version") or "1")
+    return (version, path.name)
+
+
+def _latest_publication_figure_audit_status(run_dir: Path) -> Optional[Dict[str, Any]]:
+    """Return the latest versioned publication-figure audit summary, if any."""
+    candidates = sorted(
+        (run_dir / "evidence").glob(
+            "publication_figure_skill_summary*__publication_figure_skill_summary.json"
+        ),
+        key=_publication_figure_summary_sort_key,
+    )
+    for path in reversed(candidates):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        findings = payload.get("audit_findings")
+        if not isinstance(findings, list):
+            continue
+        errors = [
+            item
+            for item in findings
+            if isinstance(item, dict) and item.get("severity") == "error"
+        ]
+        return {
+            "path": str(path),
+            "error_count": len(errors),
+            "errors": errors,
+        }
+    return None
+
+
+def _finding_references_publication_figure(finding: ValidationFinding) -> bool:
+    detail_text = ""
+    if finding.detail:
+        try:
+            detail_text = json.dumps(finding.detail, ensure_ascii=False, default=str)
+        except Exception:
+            detail_text = str(finding.detail)
+    haystack = " ".join(
+        [
+            finding.validator or "",
+            finding.message or "",
+            " ".join(finding.evidence_ids or []),
+            detail_text,
+        ]
+    ).lower()
+    return "publication_figure" in haystack or "easyicu_publication_figure" in haystack
+
+
+def _is_publication_figure_audit_superseded(
+    finding: ValidationFinding,
+    *,
+    latest_publication_audit: Optional[Dict[str, Any]],
+) -> bool:
+    """True when a newer publication-figure audit has resolved an older error."""
+    if not latest_publication_audit:
+        return False
+    if latest_publication_audit.get("error_count") != 0:
+        return False
+    if finding.severity != "error":
+        return False
+    if finding.validator not in {
+        "publication_figure_export",
+        "figure_contract_quality",
+        "visual_qa",
+        "vlm_visual_qa",
+    }:
+        return False
+    return _finding_references_publication_figure(finding)
+
+
 def _partition_findings_by_supersession(
     findings: Sequence[ValidationFinding],
     *,
     success_step_ids: set,
     known_step_ids: Optional[set] = None,
     gate_state: Optional[Dict[str, bool]] = None,
+    latest_publication_audit: Optional[Dict[str, Any]] = None,
 ) -> tuple[List[ValidationFinding], List[ValidationFinding]]:
     """Split findings into (active, superseded).
 
@@ -420,6 +767,11 @@ def _partition_findings_by_supersession(
        ``manuscript_gate`` complaining the execution gate had not
        passed) and the corresponding gate is now True in
        ``gate_state``.
+    4. It is an older publication-figure audit error and the latest
+       versioned publication-figure skill summary has no current
+       errors. This keeps repaired figure exports from being blocked
+       by stale resume-era QA findings while preserving the historical
+       finding in the audit trail.
 
     The classification is purely deterministic — same inputs always
     yield the same partition. The superseded set is returned
@@ -441,6 +793,12 @@ def _partition_findings_by_supersession(
                 superseded.append(f)
                 continue
         if _is_gate_state_superseded(f, gate_state=gate_state):
+            superseded.append(f)
+            continue
+        if _is_publication_figure_audit_superseded(
+            f,
+            latest_publication_audit=latest_publication_audit,
+        ):
             superseded.append(f)
             continue
         active.append(f)
@@ -481,12 +839,37 @@ def _compute_readiness_gates(
     # the finding was emitted under.
     current_gate_state: Dict[str, bool] = {
         "execution_complete": bool(execution.get("execution_complete")),
+        "manuscript_bound_clean": bool(
+            manuscript_text
+            and "Manuscript scaffold not generated" not in manuscript_text[:300]
+            and missing_evidence_count == 0
+            and not stop_after_analysis
+            and not writer_probe_mode
+        ),
+        "manuscript_numeric_bound_clean": bool(
+            manuscript_text
+            and _manuscript_numeric_bound_clean(manuscript_text)
+            and not stop_after_analysis
+            and not writer_probe_mode
+        ),
+        "manuscript_critique_passed": False,
     }
+    critique_path = run_dir / "manuscript_critique.json"
+    if critique_path.exists():
+        try:
+            critique_payload = json.loads(critique_path.read_text(encoding="utf-8"))
+        except Exception:
+            critique_payload = {}
+        current_gate_state["manuscript_critique_passed"] = (
+            isinstance(critique_payload, dict) and critique_payload.get("status") == "pass"
+        )
+    latest_publication_audit = _latest_publication_figure_audit_status(run_dir)
     active_findings, superseded_findings = _partition_findings_by_supersession(
         findings,
         success_step_ids=success_step_ids,
         known_step_ids=known_step_ids,
         gate_state=current_gate_state,
+        latest_publication_audit=latest_publication_audit,
     )
     numeric_errors = [
         f.message
@@ -540,6 +923,12 @@ def _compute_readiness_gates(
         run_dir=run_dir,
         findings=active_findings,
     )
+    display_suite = _display_suite_status(
+        plan=plan,
+        evidence=evidence,
+        run_dir=run_dir,
+        publication=publication,
+    )
     return {
         **execution,
         "evidence_complete": evidence_complete,
@@ -547,7 +936,8 @@ def _compute_readiness_gates(
         "analysis_validated": analysis_validated,
         "manuscript_ready": manuscript_ready,
         "publication_ready": manuscript_ready
-        and publication["publication_figure_bundle_ready"],
+        and publication["publication_figure_bundle_ready"]
+        and display_suite["display_suite_complete"],
         "manuscript_generated": manuscript_generated,
         "writer_probe_mode": bool(writer_probe_mode),
         "writer_probe_failed_steps": list(writer_probe_failed_steps or []),
@@ -573,6 +963,7 @@ def _compute_readiness_gates(
             if f.severity == "error"
         ],
         **publication,
+        **display_suite,
     }
 
 
@@ -663,6 +1054,29 @@ def write_readiness_artifacts(
     )
     artifact_paths["numeric_audit"] = str(numeric_audit_path.relative_to(run_dir))
 
+    display_suite_path = run_dir / "display_suite_audit.json"
+    display_suite_payload = {
+        "schema_version": "easyicu.display_suite_audit/1",
+        "display_suite_complete": gates["display_suite_complete"],
+        "table_count": gates["display_table_count"],
+        "figure_contract_count": gates["display_figure_contract_count"],
+        "result_figure_contract_count": gates["display_result_figure_contract_count"],
+        "contract_panel_count": gates["display_contract_panel_count"],
+        "contract_role_count": gates["display_contract_role_count"],
+        "categories": gates["display_categories"],
+        "table_one_expected": gates["display_table_one_expected"],
+        "table_one_present": gates["display_table_one_present"],
+        "audit_context_present": gates["display_audit_context_present"],
+        "errors": gates["display_suite_errors"],
+    }
+    display_suite_path.write_text(
+        json.dumps(display_suite_payload, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
+    artifact_paths["display_suite_audit"] = str(
+        display_suite_path.relative_to(run_dir)
+    )
+
     claim_ledger_path = run_dir / "claim_ledger.csv"
     claim_rows = _extract_claim_ledger_rows(manuscript_path=manuscript_path, gates=gates)
     with claim_ledger_path.open("w", newline="", encoding="utf-8") as fh:
@@ -728,6 +1142,12 @@ def write_readiness_artifacts(
             "statistic",
             "Numeric-claim audit for manuscript gating.",
             numeric_audit_path,
+        ),
+        (
+            "display_suite_audit",
+            "statistic",
+            "Article display-suite coverage audit for publication gating.",
+            display_suite_path,
         ),
         (
             "claim_ledger",
@@ -850,6 +1270,7 @@ def _render_author_review_note(
         f"- numeric_verified: `{gates['numeric_verified']}`",
         f"- analysis_validated: `{gates['analysis_validated']}`",
         f"- manuscript_ready: `{gates['manuscript_ready']}`",
+        f"- display_suite_complete: `{gates.get('display_suite_complete')}`",
         f"- publication_ready: `{gates['publication_ready']}`",
         "",
     ]
@@ -867,6 +1288,11 @@ def _render_author_review_note(
             lines.append(f"- `{step_id}` blocked outcome linkage or tabulation.")
         for leak in gates.get("blocked_outcome_leaks") or []:
             lines.append(f"- Manuscript leak: {str(leak)[:240]}")
+        lines.append("")
+    if gates.get("display_suite_errors"):
+        lines.extend(["", "## Display suite gate", ""])
+        for error in gates.get("display_suite_errors") or []:
+            lines.append(f"- {error}")
         lines.append("")
     error_findings = [f for f in findings if f.severity == "error"]
     if error_findings:
@@ -955,6 +1381,7 @@ def render_report(
             "numeric_verified={numeric_verified}, "
             "analysis_validated={analysis_validated}, "
             "manuscript_ready={manuscript_ready}, "
+            "display_suite_complete={display_suite_complete}, "
             "publication_ready={publication_ready}".format(**readiness)
         )
         parts.append("")

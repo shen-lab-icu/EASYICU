@@ -111,6 +111,57 @@ def test_prior_successful_primary_effect_satisfies_later_primary_requirement(ra)
     )
 
 
+def test_missing_exposure_or_outcome_count_is_not_primary_or(ra):
+    from easyicu.research_agent.pipeline import _step_contract_findings
+
+    findings = _step_contract_findings(
+        step=_association_step(ra),
+        step_summary={
+            "cohort_definition": {
+                "excluded_missing_exposure_or_outcome_n": 0,
+            },
+            "primary_or": None,
+        },
+    )
+
+    errors = _errors(findings)
+    assert errors
+    assert "primary association estimate" in errors[0].message
+
+
+def test_table_prevalence_step_does_not_satisfy_later_primary_model(ra):
+    from easyicu.research_agent.pipeline import _step_contract_findings
+
+    findings = _step_contract_findings(
+        step=_association_step(ra, step_id="04_primary_adjusted_association_model"),
+        step_summary={
+            "primary_or": None,
+            "skipped": [{"reason": "validated_modeling_cohort_not_found"}],
+        },
+        completed_step_records=[
+            {
+                "step_id": "02_table_one_and_prevalence",
+                "status": "ok",
+                "step_summary": {
+                    "cohort_definition": {
+                        "excluded_missing_exposure_or_outcome_n": 0,
+                    },
+                    "prevalence": {
+                        "death_by_exposure": {
+                            "exposed": {"prevalence": 0.12},
+                            "unexposed": {"prevalence": 0.08},
+                        }
+                    },
+                },
+            }
+        ],
+    )
+
+    errors = _errors(findings)
+    assert errors
+    assert "primary association estimate" in errors[0].message
+
+
 def _prediction_figure_step(ra, step_id: str = "01_model_training_figure"):
     return ra.AnalysisStep(
         step_id=step_id,
@@ -211,4 +262,3 @@ def test_rejects_nonfinite_primary_effect_values(ra):
         )
 
         assert _errors(findings)
-

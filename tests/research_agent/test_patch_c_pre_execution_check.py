@@ -191,6 +191,20 @@ def test_coderagent_run_triggers_repair_on_violation_then_returns_clean_code():
     assert agent.last_compatibility_violations == []
 
 
+def test_coderagent_repair_rejects_non_script_output():
+    llm = _ScriptedLLM(["{}"])
+    agent = CoderAgent(llm)
+
+    with pytest.raises(ValueError, match="non-script output"):
+        agent.repair(
+            context=_ordinal_context(),
+            step=_step(),
+            code=_BAD_SCRIPT,
+            run_log="contract failed",
+            attempt=1,
+        )
+
+
 def test_coderagent_run_no_repair_when_first_attempt_is_clean():
     llm = _ScriptedLLM([_CLEAN_SCRIPT])
     agent = CoderAgent(llm)

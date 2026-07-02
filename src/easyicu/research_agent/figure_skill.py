@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 import pandas as pd
 
+from .audits.validators import FigureContractQualityValidator
 from .evidence import EvidenceStore
 from .publication_figures import (
     add_panel_label,
@@ -73,7 +74,7 @@ class PublicationFigureSkill:
         run_dir: Path,
         prompt_pack_version: Optional[str] = None,
     ) -> PublicationFigureSkillResult:
-        if _has_curated_publication_figure_bundle(evidence):
+        if _has_curated_publication_figure_bundle(evidence, run_dir=run_dir):
             return PublicationFigureSkillResult(
                 generated=False,
                 skipped_reason="existing_curated_publication_figure_bundle",
@@ -279,7 +280,9 @@ class PublicationFigureSkill:
                 side_axes.append(("missingness", fig.add_subplot(grid[1, 1])))
         else:
             height = max(2.3, 0.42 * len(plot_df) + 1.05)
-            fig, ax = plt.subplots(figsize=(126 / 25.4, height), constrained_layout=False)
+            fig, ax = plt.subplots(
+                figsize=(126 / 25.4, height), constrained_layout=False
+            )
             fig.subplots_adjust(left=0.2, right=0.96, top=0.93, bottom=0.18)
             side_axes = []
         y = np.arange(len(plot_df))
@@ -324,8 +327,7 @@ class PublicationFigureSkill:
         ax.set_ylabel("")
         use_log_scale = (
             bool(axis_meta.get("ratio_scale"))
-            and
-            float(lower.min()) > 0
+            and float(lower.min()) > 0
             and float(upper.max()) / max(float(lower.min()), 1e-9) > 1.8
         )
         if use_log_scale:
@@ -451,6 +453,12 @@ class PublicationFigureSkill:
         plt.close(fig)
 
         audit_findings = list(audit_publication_exports(paths))
+        audit_findings.extend(
+            FigureContractQualityValidator().audit_contract_file(
+                paths["contract"],
+                manuscript_facing=True,
+            )
+        )
         figure_ids: List[str] = []
         contract_evidence_id: Optional[str] = None
         for key, path in paths.items():
@@ -466,6 +474,7 @@ class PublicationFigureSkill:
                     generation_mode="deterministic_figure_skill",
                     prompt_pack_version=prompt_pack_version,
                     metadata={"source_evidence_id": source_record.evidence_id},
+                    on_sha_change="new_id",
                 )
                 contract_evidence_id = record.evidence_id
                 continue
@@ -474,7 +483,10 @@ class PublicationFigureSkill:
                 description=f"Publication figure export ({suffix.lstrip('.')}) generated from analysis evidence.",
                 source_path=path,
                 evidence_id=f"publication_figure_{suffix.lstrip('.')}",
-                aliases=["publication_figure", f"publication_figure_{suffix.lstrip('.')}"],
+                aliases=[
+                    "publication_figure",
+                    f"publication_figure_{suffix.lstrip('.')}",
+                ],
                 producer=self.name,
                 generation_mode="deterministic_figure_skill",
                 prompt_pack_version=prompt_pack_version,
@@ -483,6 +495,7 @@ class PublicationFigureSkill:
                     "figure_contract": "publication_figure_contract",
                     "figure_role": "publication_figure",
                 },
+                on_sha_change="new_id",
             )
             figure_ids.append(record.evidence_id)
 
@@ -496,6 +509,7 @@ class PublicationFigureSkill:
             generation_mode="deterministic_figure_skill",
             prompt_pack_version=prompt_pack_version,
             metadata={"source_evidence_id": source_record.evidence_id},
+            on_sha_change="new_id",
         )
 
         summary = {
@@ -519,6 +533,7 @@ class PublicationFigureSkill:
             producer=self.name,
             generation_mode="deterministic_figure_skill",
             prompt_pack_version=prompt_pack_version,
+            on_sha_change="new_id",
         )
         return PublicationFigureSkillResult(
             generated=True,
@@ -555,12 +570,19 @@ class PublicationFigureSkill:
         if not rows:
             raise ValueError("robustness panel has no converged rows to plot")
         primary_rows = [row for row in rows if row.spec_id == panel.primary_spec_id]
-        other_rows = [row for row in rows if row.spec_id != panel.primary_spec_id]
+        primary = primary_rows[0] if primary_rows else None
+        other_rows = [
+            row
+            for row in rows
+            if row.spec_id != panel.primary_spec_id
+            and not _duplicates_primary_row(row, primary)
+        ]
         plot_rows = (primary_rows + other_rows)[:10]
         source_df = pd.DataFrame(
             [
                 {
                     "spec_id": row.spec_id,
+                    "display_label": _robustness_spec_label(row.spec_id),
                     "axis": row.axis,
                     "n": row.n,
                     "point_estimate": row.point_estimate,
@@ -572,22 +594,91 @@ class PublicationFigureSkill:
                 for row in plot_rows
             ]
         )
+        all_rows_df = pd.DataFrame(
+            [
+                {
+                    "spec_id": row.spec_id,
+                    "axis": row.axis or "unspecified",
+                    "n": row.n,
+                    "converged": bool(row.converged),
+                    "point_estimate": row.point_estimate,
+                    "ci_low": row.ci_low,
+                    "ci_high": row.ci_high,
+                    "notes": row.notes,
+                }
+                for row in panel.rows
+            ]
+        )
+        if all_rows_df.empty:
+            all_rows_df = source_df[["spec_id", "axis", "n", "converged"]].copy()
+        all_rows_df["axis"] = all_rows_df["axis"].fillna("unspecified").astype(str)
+        all_rows_df["n"] = pd.to_numeric(all_rows_df["n"], errors="coerce")
+        all_rows_df.loc[all_rows_df["n"] <= 0, "n"] = pd.NA
+        all_rows_df["converged"] = all_rows_df["converged"].astype(bool)
+        axis_summary = (
+            all_rows_df.groupby("axis", dropna=False)
+            .agg(
+                total_specs=("spec_id", "count"),
+                converged_specs=("converged", "sum"),
+                median_n=("n", "median"),
+                min_n=("n", "min"),
+                max_n=("n", "max"),
+            )
+            .reset_index()
+        )
+        axis_summary["not_converged_specs"] = (
+            axis_summary["total_specs"] - axis_summary["converged_specs"]
+        )
+        axis_order = {"primary": 0, "cohort": 1, "missing": 2, "outcome": 3}
+        axis_summary["axis_order"] = axis_summary["axis"].map(
+            lambda value: axis_order.get(str(value).lower(), 99)
+        )
+        axis_summary = axis_summary.sort_values(
+            ["axis_order", "axis"],
+            kind="stable",
+        ).reset_index(drop=True)
+        axis_summary["axis_label"] = axis_summary["axis"].map(_robustness_axis_label)
 
         palette = apply_publication_style()
         out_dir = run_dir / "publication_figures"
         out_dir.mkdir(parents=True, exist_ok=True)
         source_copy = out_dir / "publication_figure_source_robustness_panel.csv"
         source_df.to_csv(source_copy, index=False)
+        axis_summary_copy = (
+            out_dir / "publication_figure_source_robustness_axis_summary.csv"
+        )
+        axis_summary.drop(columns=["axis_order"]).to_csv(
+            axis_summary_copy,
+            index=False,
+        )
 
-        height = max(2.5, 0.42 * len(plot_rows) + 1.15)
-        fig, ax = plt.subplots(figsize=(142 / 25.4, height), constrained_layout=False)
-        fig.subplots_adjust(left=0.34, right=0.95, top=0.90, bottom=0.18)
+        height = max(4.35, 0.38 * len(plot_rows) + 1.85)
+        fig = plt.figure(figsize=(183 / 25.4, height), constrained_layout=False)
+        grid = fig.add_gridspec(
+            2,
+            2,
+            width_ratios=[1.55, 0.95],
+            height_ratios=[1.0, 1.0],
+            left=0.27,
+            right=0.98,
+            top=0.93,
+            bottom=0.14,
+            wspace=0.42,
+            hspace=0.55,
+        )
+        ax = fig.add_subplot(grid[:, 0])
+        ax_counts = fig.add_subplot(grid[0, 1])
+        ax_n = fig.add_subplot(grid[1, 1])
         y = np.arange(len(source_df))
         estimate = source_df["point_estimate"].astype(float).to_numpy()
         lower = source_df["ci_low"].astype(float).to_numpy()
         upper = source_df["ci_high"].astype(float).to_numpy()
         labels = [
-            "Primary" if str(row["spec_id"]) == panel.primary_spec_id else str(row["spec_id"]).replace("_", " ")
+            (
+                "Primary"
+                if str(row["spec_id"]) == panel.primary_spec_id
+                else str(row["display_label"])
+            )
             for _, row in source_df.iterrows()
         ]
         for idx, row in source_df.iterrows():
@@ -656,7 +747,107 @@ class PublicationFigureSkill:
                 va="center",
                 fontsize=6.5,
             )
-        add_panel_label(ax, "A", x=-0.32)
+        add_panel_label(ax, "A", x=-0.36)
+
+        axis_y = np.arange(len(axis_summary))
+        axis_labels = axis_summary["axis_label"].astype(str).tolist()
+        converged = axis_summary["converged_specs"].astype(float).to_numpy()
+        not_converged = axis_summary["not_converged_specs"].astype(float).to_numpy()
+        ax_counts.barh(
+            axis_y,
+            converged,
+            color=palette.get("green", "#008B5E"),
+            height=0.58,
+            label="Converged",
+        )
+        if float(not_converged.max()) > 0:
+            ax_counts.barh(
+                axis_y,
+                not_converged,
+                left=converged,
+                color=palette.get("neutral_light", "#D8D8D8"),
+                height=0.58,
+                label="Not converged",
+            )
+        for idx, row in axis_summary.iterrows():
+            total = int(row["total_specs"])
+            conv = int(row["converged_specs"])
+            ax_counts.text(
+                float(total) + 0.08,
+                idx,
+                f"{conv}/{total}",
+                va="center",
+                ha="left",
+                fontsize=6.5,
+                color=palette.get("baseline", "#272727"),
+            )
+        ax_counts.set_yticks(axis_y, axis_labels)
+        ax_counts.invert_yaxis()
+        ax_counts.set_xlabel("Specifications, n")
+        ax_counts.set_title("Convergence", loc="left", pad=7)
+        ax_counts.set_xlim(0, max(1.0, float(axis_summary["total_specs"].max()) + 1.0))
+        ax_counts.grid(
+            axis="x",
+            color=palette.get("neutral_light", "#D8D8D8"),
+            linewidth=0.5,
+            alpha=0.75,
+        )
+        if float(not_converged.max()) > 0:
+            ax_counts.legend(
+                frameon=False,
+                fontsize=5.6,
+                loc="upper right",
+                bbox_to_anchor=(1.0, 1.02),
+                ncol=1,
+                handlelength=1.2,
+                borderaxespad=0.0,
+            )
+        add_panel_label(ax_counts, "B", x=-0.18, y=1.06, fontsize=10.0)
+
+        n_summary = axis_summary.dropna(subset=["median_n", "min_n", "max_n"]).copy()
+        if n_summary.empty:
+            ax_n.text(
+                0.5,
+                0.5,
+                "Analytic n not reported",
+                ha="center",
+                va="center",
+                fontsize=7.0,
+                transform=ax_n.transAxes,
+            )
+            ax_n.set_axis_off()
+        else:
+            n_y = np.arange(len(n_summary))
+            median_n = n_summary["median_n"].astype(float).to_numpy()
+            min_n = n_summary["min_n"].astype(float).to_numpy()
+            max_n = n_summary["max_n"].astype(float).to_numpy()
+            ax_n.errorbar(
+                median_n,
+                n_y,
+                xerr=np.vstack([
+                    np.maximum(0.0, median_n - min_n),
+                    np.maximum(0.0, max_n - median_n),
+                ]),
+                fmt="o",
+                color=palette.get("blue", "#0F4D92"),
+                ecolor=palette.get("blue", "#0F4D92"),
+                elinewidth=1.0,
+                capsize=2.0,
+                markersize=3.8,
+            )
+            ax_n.set_yticks(n_y, n_summary["axis_label"].astype(str).tolist())
+            ax_n.invert_yaxis()
+            ax_n.set_xlabel("Analytic sample size (n)")
+            ax_n.set_title("Sample-size range", loc="left", pad=4)
+            ax_n.grid(
+                axis="x",
+                color=palette.get("neutral_light", "#D8D8D8"),
+                linewidth=0.5,
+                alpha=0.75,
+            )
+            if float(max_n.max()) > 0:
+                ax_n.set_xlim(0, float(max_n.max()) * 1.12)
+        add_panel_label(ax_n, "C", x=-0.18, y=1.06, fontsize=10.0)
 
         contract = make_figure_contract(
             figure_id="easyicu_publication_figure",
@@ -671,12 +862,41 @@ class PublicationFigureSkill:
                     "role": "robustness",
                     "claim": (
                         "The primary row and converged variants are drawn from "
-                        "robustness_panel.json rather than generated figure-step files."
+                        "registered robustness evidence rather than generated "
+                        "figure-step files."
                     ),
                     "evidence_ids": [source_record.evidence_id],
                     "review_risk": (
-                        "Non-converged variants remain visible in robustness_panel.json "
-                        "and are not silently plotted."
+                        "Non-converged variants remain recorded in the registered "
+                        "robustness evidence and are not silently plotted."
+                    ),
+                },
+                {
+                    "panel_id": "B",
+                    "title": "Variant convergence by axis",
+                    "role": "validation",
+                    "claim": (
+                        "The number of converged and non-converged robustness "
+                        "specifications is summarised by pre-specified analysis axis."
+                    ),
+                    "evidence_ids": [source_record.evidence_id],
+                    "review_risk": (
+                        "A small number of variants limits how strongly the "
+                        "robustness range can be interpreted."
+                    ),
+                },
+                {
+                    "panel_id": "C",
+                    "title": "Analytic sample-size range",
+                    "role": "audit",
+                    "claim": (
+                        "Sample-size ranges are shown by robustness axis so "
+                        "estimate shifts can be read with denominator context."
+                    ),
+                    "evidence_ids": [source_record.evidence_id],
+                    "review_risk": (
+                        "Large denominator changes can indicate that a robustness "
+                        "variant is testing both definition and selection effects."
                     ),
                 }
             ],
@@ -695,6 +915,12 @@ class PublicationFigureSkill:
         plt.close(fig)
 
         audit_findings = list(audit_publication_exports(paths))
+        audit_findings.extend(
+            FigureContractQualityValidator().audit_contract_file(
+                paths["contract"],
+                manuscript_facing=True,
+            )
+        )
         contract_evidence_id: Optional[str] = None
         figure_ids: List[str] = []
         for key, path in paths.items():
@@ -713,6 +939,7 @@ class PublicationFigureSkill:
                     generation_mode="deterministic_figure_skill",
                     prompt_pack_version=prompt_pack_version,
                     metadata={"source_evidence_id": source_record.evidence_id},
+                    on_sha_change="new_id",
                 )
                 contract_evidence_id = record.evidence_id
                 continue
@@ -724,7 +951,10 @@ class PublicationFigureSkill:
                 ),
                 source_path=path,
                 evidence_id=f"publication_figure_{suffix.lstrip('.')}",
-                aliases=["publication_figure", f"publication_figure_{suffix.lstrip('.')}"],
+                aliases=[
+                    "publication_figure",
+                    f"publication_figure_{suffix.lstrip('.')}",
+                ],
                 producer=self.name,
                 generation_mode="deterministic_figure_skill",
                 prompt_pack_version=prompt_pack_version,
@@ -733,6 +963,7 @@ class PublicationFigureSkill:
                     "figure_contract": "publication_figure_contract",
                     "figure_role": "publication_figure",
                 },
+                on_sha_change="new_id",
             )
             figure_ids.append(record.evidence_id)
 
@@ -746,6 +977,22 @@ class PublicationFigureSkill:
             generation_mode="deterministic_figure_skill",
             prompt_pack_version=prompt_pack_version,
             metadata={"source_evidence_id": source_record.evidence_id},
+            on_sha_change="new_id",
+        )
+        axis_summary_record = evidence.register_file(
+            kind="table",
+            description=(
+                "Axis-level source data copied for the robustness-panel "
+                "publication figure."
+            ),
+            source_path=axis_summary_copy,
+            evidence_id="publication_figure_source_robustness_axis_summary",
+            aliases=["publication_figure_axis_summary_source_data"],
+            producer=self.name,
+            generation_mode="deterministic_figure_skill",
+            prompt_pack_version=prompt_pack_version,
+            metadata={"source_evidence_id": source_record.evidence_id},
+            on_sha_change="new_id",
         )
         summary = {
             "stage": self.name,
@@ -755,6 +1002,7 @@ class PublicationFigureSkill:
             "core_claim": contract.core_claim,
             "source_evidence_ids": [source_record.evidence_id],
             "source_copy_evidence_id": source_copy_record.evidence_id,
+            "axis_summary_source_evidence_id": axis_summary_record.evidence_id,
             "figure_evidence_ids": figure_ids,
             "contract_evidence_id": contract_evidence_id,
             "audit_findings": [f.model_dump(mode="json") for f in audit_findings],
@@ -769,6 +1017,7 @@ class PublicationFigureSkill:
             producer=self.name,
             generation_mode="deterministic_figure_skill",
             prompt_pack_version=prompt_pack_version,
+            on_sha_change="new_id",
         )
         return PublicationFigureSkillResult(
             generated=True,
@@ -796,7 +1045,9 @@ class PublicationFigureSkill:
             return self._write_skip_summary(
                 reason="prediction_figure_bundle_missing_svg_or_png",
                 context=context,
-                plan=AnalysisPlan(research_question=context.research_question, steps=[]),
+                plan=AnalysisPlan(
+                    research_question=context.research_question, steps=[]
+                ),
                 evidence=evidence,
                 run_dir=run_dir,
                 prompt_pack_version=prompt_pack_version,
@@ -859,6 +1110,12 @@ class PublicationFigureSkill:
             "contract": contract_path,
         }
         audit_findings = list(audit_publication_exports(paths.values()))
+        audit_findings.extend(
+            FigureContractQualityValidator().audit_contract_file(
+                contract_path,
+                manuscript_facing=True,
+            )
+        )
 
         contract_record = evidence.register_file(
             kind="log",
@@ -873,6 +1130,7 @@ class PublicationFigureSkill:
                 "source_evidence_ids": source_ids,
                 "figure_role": "publication_figure",
             },
+            on_sha_change="new_id",
         )
 
         figure_ids: List[str] = []
@@ -899,6 +1157,7 @@ class PublicationFigureSkill:
                     "figure_contract": contract_record.evidence_id,
                     "figure_role": "publication_figure",
                 },
+                on_sha_change="new_id",
             )
             figure_ids.append(record.evidence_id)
 
@@ -923,6 +1182,7 @@ class PublicationFigureSkill:
             producer=self.name,
             generation_mode="deterministic_figure_skill",
             prompt_pack_version=prompt_pack_version,
+            on_sha_change="new_id",
         )
         return PublicationFigureSkillResult(
             generated=True,
@@ -964,6 +1224,7 @@ class PublicationFigureSkill:
             producer=self.name,
             generation_mode="deterministic_figure_skill",
             prompt_pack_version=prompt_pack_version,
+            on_sha_change="new_id",
         )
         return PublicationFigureSkillResult(
             generated=False,
@@ -1041,7 +1302,12 @@ def _select_existing_prediction_figure_bundle(
     return None
 
 
-def _has_curated_publication_figure_bundle(evidence: EvidenceStore) -> bool:
+def _has_curated_publication_figure_bundle(
+    evidence: EvidenceStore,
+    *,
+    run_dir: Path,
+) -> bool:
+    found_bundle = False
     for record in evidence.records():
         haystack = f"{record.evidence_id} {record.relative_path}".lower()
         if (
@@ -1052,7 +1318,28 @@ def _has_curated_publication_figure_bundle(evidence: EvidenceStore) -> bool:
                 or record.generation_mode == "deterministic_figure_skill"
             )
         ):
-            return True
+            found_bundle = True
+            break
+    if not found_bundle:
+        return False
+
+    contract_candidates: List[Path] = []
+    contract_record = evidence.get("publication_figure_contract")
+    if contract_record is not None:
+        contract_candidates.append(run_dir / contract_record.relative_path)
+    contract_candidates.append(
+        run_dir
+        / "publication_figures"
+        / "easyicu_publication_figure.figure_contract.json"
+    )
+    for contract_path in contract_candidates:
+        if not contract_path.exists():
+            continue
+        findings = FigureContractQualityValidator().audit_contract_file(
+            contract_path,
+            manuscript_facing=True,
+        )
+        return not any(finding.severity == "error" for finding in findings)
     return False
 
 
@@ -1171,10 +1458,12 @@ def _normalise_association_frame(frame: pd.DataFrame) -> pd.DataFrame:
     if estimate_col is None or label_col is None:
         return pd.DataFrame(columns=["label", "estimate", "lower", "upper"])
 
-    out = pd.DataFrame({
-        "label": frame[label_col].astype(str).map(_prettify_label),
-        "estimate": pd.to_numeric(frame[estimate_col], errors="coerce"),
-    })
+    out = pd.DataFrame(
+        {
+            "label": frame[label_col].astype(str).map(_prettify_label),
+            "estimate": pd.to_numeric(frame[estimate_col], errors="coerce"),
+        }
+    )
     if lower_col is not None:
         out["lower"] = pd.to_numeric(frame[lower_col], errors="coerce")
     else:
@@ -1185,13 +1474,13 @@ def _normalise_association_frame(frame: pd.DataFrame) -> pd.DataFrame:
         out["upper"] = out["estimate"]
     raw_label = frame[label_col].astype(str).str.strip().str.lower()
     out = out.loc[raw_label.ne("intercept")].copy()
-    out = out.replace([float("inf"), float("-inf")], pd.NA).dropna(
-        subset=["estimate"]
-    )
+    out = out.replace([float("inf"), float("-inf")], pd.NA).dropna(subset=["estimate"])
     out["lower"] = out["lower"].fillna(out["estimate"])
     out["upper"] = out["upper"].fillna(out["estimate"])
     result = out[["label", "estimate", "lower", "upper"]]
-    result.attrs.update(_association_axis_from_token(_effect_measure_token(frame, cols, estimate_col)))
+    result.attrs.update(
+        _association_axis_from_token(_effect_measure_token(frame, cols, estimate_col))
+    )
     return result
 
 
@@ -1231,14 +1520,20 @@ def _association_axis_from_token(token: str) -> Dict[str, Any]:
             "null_value": 1.0,
             "ratio_scale": True,
         }
-    if normalized in {"rr", "risk_ratio", "relative_risk"} or "risk_ratio" in normalized:
+    if (
+        normalized in {"rr", "risk_ratio", "relative_risk"}
+        or "risk_ratio" in normalized
+    ):
         return {
             "xlabel": "Risk ratio",
             "header": "RR (95% CI)",
             "null_value": 1.0,
             "ratio_scale": True,
         }
-    if normalized in {"ate", "average_treatment_effect"} or "treatment_effect" in normalized:
+    if (
+        normalized in {"ate", "average_treatment_effect"}
+        or "treatment_effect" in normalized
+    ):
         return {
             "xlabel": "Average treatment effect",
             "header": "ATE (95% CI)",
@@ -1304,7 +1599,9 @@ def _normalise_strata_frame(frame: pd.DataFrame) -> pd.DataFrame:
             "kdigo_stage",
         ],
     )
-    rate_col = _first_col(cols, ["death_rate", "mortality_rate", "outcome_rate", "rate"])
+    rate_col = _first_col(
+        cols, ["death_rate", "mortality_rate", "outcome_rate", "rate"]
+    )
     n_col = _first_col(cols, ["n", "count", "n_total"])
     if score_col is None or rate_col is None:
         return pd.DataFrame(columns=["score", "rate"])
@@ -1334,7 +1631,9 @@ def _normalise_missingness_frame(frame: pd.DataFrame) -> pd.DataFrame:
     n_col = _first_col(cols, ["n", "n_total", "total"])
     if variable_col is None:
         return pd.DataFrame(columns=["variable", "missing_fraction"])
-    out = pd.DataFrame({"variable": frame[variable_col].astype(str).map(_prettify_label)})
+    out = pd.DataFrame(
+        {"variable": frame[variable_col].astype(str).map(_prettify_label)}
+    )
     if frac_col is not None:
         out["missing_fraction"] = pd.to_numeric(frame[frac_col], errors="coerce")
     elif pct_col is not None:
@@ -1348,10 +1647,16 @@ def _normalise_missingness_frame(frame: pd.DataFrame) -> pd.DataFrame:
     out = out.replace([float("inf"), float("-inf")], pd.NA).dropna(
         subset=["missing_fraction"]
     )
-    return out.sort_values("missing_fraction", ascending=False).head(8).reset_index(drop=True)
+    return (
+        out.sort_values("missing_fraction", ascending=False)
+        .head(8)
+        .reset_index(drop=True)
+    )
 
 
-def _draw_strata_panel(ax: Any, frame: pd.DataFrame, *, palette: Dict[str, str], outcome: str) -> None:
+def _draw_strata_panel(
+    ax: Any, frame: pd.DataFrame, *, palette: Dict[str, str], outcome: str
+) -> None:
     import matplotlib.ticker as mticker
 
     x = frame["score"].astype(float)
@@ -1371,7 +1676,12 @@ def _draw_strata_panel(ax: Any, frame: pd.DataFrame, *, palette: Dict[str, str],
     ymax = max(0.05, min(1.0, float(y.max()) * 1.25 if len(y) else 0.05))
     ax.set_ylim(0, ymax)
     ax.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=1.0, decimals=0))
-    ax.grid(axis="y", color=palette.get("neutral_light", "#D8D8D8"), linewidth=0.5, alpha=0.7)
+    ax.grid(
+        axis="y",
+        color=palette.get("neutral_light", "#D8D8D8"),
+        linewidth=0.5,
+        alpha=0.7,
+    )
 
 
 def _strata_score_label(frame: pd.DataFrame) -> str:
@@ -1404,7 +1714,9 @@ def _score_axis_label(column: Any) -> str:
     return f"{pretty} score"
 
 
-def _draw_missingness_panel(ax: Any, frame: pd.DataFrame, *, palette: Dict[str, str]) -> None:
+def _draw_missingness_panel(
+    ax: Any, frame: pd.DataFrame, *, palette: Dict[str, str]
+) -> None:
     import matplotlib.ticker as mticker
     import numpy as np
 
@@ -1434,7 +1746,100 @@ def _draw_missingness_panel(ax: Any, frame: pd.DataFrame, *, palette: Dict[str, 
             color=palette.get("neutral", "#8F8F8F"),
             fontsize=7.0,
         )
-    ax.grid(axis="x", color=palette.get("neutral_light", "#D8D8D8"), linewidth=0.5, alpha=0.7)
+    ax.grid(
+        axis="x",
+        color=palette.get("neutral_light", "#D8D8D8"),
+        linewidth=0.5,
+        alpha=0.7,
+    )
+
+
+def _duplicates_primary_row(row: Any, primary: Any) -> bool:
+    if primary is None:
+        return False
+    spec_id = str(getattr(row, "spec_id", "") or "").lower()
+    if "primary" not in spec_id:
+        return False
+    return (
+        _same_float(
+            getattr(row, "point_estimate", None),
+            getattr(primary, "point_estimate", None),
+        )
+        and _same_float(getattr(row, "ci_low", None), getattr(primary, "ci_low", None))
+        and _same_float(
+            getattr(row, "ci_high", None), getattr(primary, "ci_high", None)
+        )
+    )
+
+
+def _same_float(left: Any, right: Any, *, tolerance: float = 1e-9) -> bool:
+    try:
+        return abs(float(left) - float(right)) <= tolerance
+    except (TypeError, ValueError):
+        return False
+
+
+def _robustness_spec_label(spec_id: Any) -> str:
+    raw = str(spec_id or "").strip()
+    if not raw:
+        return "Variant"
+    lowered = raw.lower()
+    explicit = {
+        "primary": "Primary",
+        "alt_cohort_no_los_restriction": "No ICU LOS restriction",
+        "cohort_no_los_restriction": "No ICU LOS restriction",
+        "alt_cohort_stricter_los_2d": "ICU LOS >=2 d",
+        "cohort_los_ge_2d": "ICU LOS >=2 d",
+        "alt_cohort_core_physiology_present": "Core physiology present",
+        "cohort_core_physiology_present": "Core physiology present",
+        "alt_missing_complete_case": "Complete-case",
+        "missing_raw_complete_case": "Complete-case",
+        "missing_drop_lactate": "Drop lactate",
+        "alt_outcome_rr_scale": "Risk-ratio scale",
+        "effect_robust_poisson_rr": "Risk-ratio scale",
+        "alt_outcome_rd_scale": "Risk-difference scale",
+        "effect_marginal_standardized_rd": "Risk-difference scale",
+        "primary_los_ge_1d": "Primary ICU LOS >=1 d",
+    }
+    if lowered in explicit:
+        return explicit[lowered]
+    replacements = {
+        "adult": "Adult",
+        "any": "any",
+        "los": "ICU LOS",
+        "ge": ">=",
+        "1d": "1 day",
+        "2": "2",
+        "cc": "complete case",
+        "frozen": "locked",
+        "lact": "lactate",
+        "lactate": "lactate",
+        "measured": "measured",
+        "missing": "missing",
+        "indicator": "indicator",
+        "offprotocol": "off-protocol",
+        "primary": "primary",
+        "cohort": "cohort",
+    }
+    tokens = [token for token in lowered.replace("-", "_").split("_") if token]
+    if not tokens:
+        return _prettify_label(raw)
+    words = [replacements.get(token, token) for token in tokens]
+    label = " ".join(words)
+    label = label.replace("ICU LOS >= 1 day", "ICU LOS >=1 d")
+    label = label.replace("ICU LOS >= 2", "ICU LOS >=2 d")
+    return label[0].upper() + label[1:] if label else _prettify_label(raw)
+
+
+def _robustness_axis_label(axis: Any) -> str:
+    mapping = {
+        "primary": "Primary",
+        "cohort": "Cohort",
+        "missing": "Missing data",
+        "outcome": "Outcome",
+        "unspecified": "Unspecified",
+    }
+    return mapping.get(str(axis or "").strip().lower(), _prettify_label(axis))
 
 
 def _prettify_label(value: Any) -> str:

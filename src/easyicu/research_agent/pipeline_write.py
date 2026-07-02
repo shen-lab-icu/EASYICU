@@ -37,6 +37,7 @@ from .manuscript_post import (
     enforce_writer_claim_language,
     _demote_unresolved_evidence_placeholders,
     _remove_tbd_sentences,
+    _repair_common_writer_citation_omissions,
     _repair_common_writer_placeholders,
 )
 from .pipeline_report import execution_gate_status
@@ -143,6 +144,36 @@ def run_write_phase(
                     },
                 )
             )
+        elif stop_after_analysis:
+            findings.append(
+                ValidationFinding(
+                    validator="manuscript_gate",
+                    severity="info",
+                    message=(
+                        "Manuscript generation skipped after a planned analysis "
+                        "pause before the execution gate completed."
+                    ),
+                    detail={
+                        **execution_gate,
+                        "planned_pause": True,
+                    },
+                )
+            )
+            emit_progress(
+                "pause",
+                "Analysis paused before all planned steps completed; manuscript generation skipped.",
+                status="paused",
+                run_id=run_id,
+            )
+            bound_path = run_dir / "manuscript_scaffold_bound.md"
+            bound_path.write_text(
+                "# Manuscript scaffold not generated\n\n"
+                "This run stopped after a requested analysis checkpoint before "
+                "all planned analysis steps completed. Review the completed "
+                "step outputs and resume from the next step when ready.\n",
+                encoding="utf-8",
+            )
+            return _WritePhaseResult(literature=None, bound_path=bound_path)
         else:
             findings.append(
                 ValidationFinding(
@@ -454,6 +485,22 @@ def run_write_phase(
                         {"from": old, "to": new} for old, new in placeholder_repairs
                     ]
                 },
+            )
+        )
+    scaffold, citation_repairs = _repair_common_writer_citation_omissions(
+        scaffold,
+        evidence=evidence,
+    )
+    if citation_repairs:
+        findings.append(
+            ValidationFinding(
+                validator="evidence_bound_writer",
+                severity="warning",
+                message=(
+                    "Repaired common uncited manuscript methods sentence(s): "
+                    f"{len(citation_repairs)} citation(s) appended."
+                ),
+                detail={"citation_repairs": citation_repairs},
             )
         )
     scaffold_path = run_dir / "manuscript_scaffold.md"

@@ -377,6 +377,40 @@ class ConceptUsageAuditor:
                     detail={"column": col, "function": fn},
                 ))
 
+        def _call_receiver_key(node: ast.Call) -> Optional[str]:
+            func = node.func
+            if not isinstance(func, ast.Attribute):
+                return None
+            try:
+                return ast.unparse(func.value)
+            except Exception:
+                if isinstance(func.value, ast.Name):
+                    return func.value.id
+                return None
+
+        def _mean_call_is_indicator_fraction(node: ast.Call) -> bool:
+            """True for ``.isna().mean()``-style prevalence calculations."""
+            func = node.func
+            if not isinstance(func, ast.Attribute) or func.attr != "mean":
+                return False
+            receiver = func.value
+            if isinstance(receiver, ast.Compare):
+                return True
+            try:
+                receiver_text = ast.unparse(receiver).lower()
+            except Exception:
+                receiver_text = ""
+            indicator_tokens = (
+                ".isna(",
+                ".isnull(",
+                ".notna(",
+                ".notnull(",
+            )
+            return any(token in receiver_text for token in indicator_tokens)
+
+        mean_receivers: Set[str] = set()
+        median_receivers: Set[str] = set()
+
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
@@ -386,11 +420,19 @@ class ConceptUsageAuditor:
 
             referenced_cols = _extract_column_names(node, alias_map)
             if func_name in {"mean", "std"}:
+                if func_name == "mean" and _mean_call_is_indicator_fraction(node):
+                    continue
+                receiver_key = _call_receiver_key(node)
+                if func_name == "mean" and receiver_key:
+                    mean_receivers.add(receiver_key)
                 for col in referenced_cols:
                     _check(col, func_name)
                     if func_name == "mean":
                         mean_columns.add(col)
             elif func_name == "median":
+                receiver_key = _call_receiver_key(node)
+                if receiver_key:
+                    median_receivers.add(receiver_key)
                 median_columns.update(referenced_cols)
             elif func_name in {"agg", "aggregate"}:
                 agg_names = _aggregation_names_from_call(node)
@@ -424,7 +466,11 @@ class ConceptUsageAuditor:
             v = var_by_name.get(col)
             if v is None:
                 continue
-            if v.role == VariableRole.LAB and col not in median_columns:
+            if (
+                v.role == VariableRole.LAB
+                and col not in median_columns
+                and not (mean_receivers & median_receivers)
+            ):
                 findings.append(ValidationFinding(
                     validator=self.name, severity="warning",
                     message=(
@@ -592,7 +638,12 @@ def _strings_from_node(node: ast.AST) -> Set[str]:
 def _call_has_zero(node: ast.Call) -> bool:
     args = list(node.args) + [kw.value for kw in node.keywords]
     for arg in args:
-        if isinstance(arg, ast.Constant) and arg.value in {0, 0.0}:
+        if (
+            isinstance(arg, ast.Constant)
+            and isinstance(arg.value, (int, float))
+            and not isinstance(arg.value, bool)
+            and arg.value == 0
+        ):
             return True
     return False
 
@@ -1126,6 +1177,612 @@ class StatisticalValidator:
         return None
 
 
+class FigureSourceDataValidator:
+    """Verify figure source-data tables are traceable to upstream step tables."""
+
+    name = "figure_source_data"
+    _SOURCE_DATA_GLOB = "*source_data*.csv"
+    _KEY_COLUMNS = (
+        "spec_id",
+        "row_id",
+        "label",
+        "variable",
+        "term",
+        "contrast",
+    )
+    _NUMERIC_COLUMNS = (
+        "point_estimate",
+        "estimate",
+        "ci_low",
+        "ci_high",
+        "se",
+        "odds_ratio",
+        "risk_ratio",
+        "risk_difference",
+        "p_value",
+    )
+    _TEXT_COLUMNS = ("effect_scale",)
+
+    def audit(
+        self,
+        *,
+        step: AnalysisStep,
+        out_dir: Path,
+        run_dir: Path,
+        step_summary: Dict[str, Any],
+    ) -> List[ValidationFinding]:
+        if not self._is_rendering_step(step=step, step_summary=step_summary):
+            return []
+        source_tables = sorted(out_dir.glob(self._SOURCE_DATA_GLOB))
+        if not source_tables:
+            return []
+
+        upstream_step_ids = self._upstream_step_ids(step=step, step_summary=step_summary)
+        if not upstream_step_ids:
+            return []
+        upstream_tables = self._upstream_tables(
+            run_dir=run_dir,
+            current_out_dir=out_dir,
+            upstream_step_ids=upstream_step_ids,
+        )
+        if not upstream_tables:
+            return [
+                ValidationFinding(
+                    validator=self.name,
+                    severity="warning",
+                    message=(
+                        f"Figure step '{step.step_id}' wrote source data, but no "
+                        "candidate upstream source table was found for "
+                        f"{sorted(upstream_step_ids)}."
+                    ),
+                    detail={
+                        "step_id": step.step_id,
+                        "upstream_step_ids": sorted(upstream_step_ids),
+                        "source_tables": [p.name for p in source_tables],
+                    },
+                )
+            ]
+
+        findings: List[ValidationFinding] = []
+        for source_path in source_tables:
+            try:
+                source_df = pd.read_csv(source_path)
+            except Exception as exc:
+                findings.append(
+                    ValidationFinding(
+                        validator=self.name,
+                        severity="warning",
+                        message=f"Could not read figure source-data table {source_path.name}: {exc}",
+                        detail={"source_table": source_path.name},
+                    )
+                )
+                continue
+            if source_df.empty:
+                continue
+            comparisons = [
+                self._compare_source_to_upstream(
+                    source_df=source_df,
+                    source_path=source_path,
+                    upstream_path=upstream_path,
+                )
+                for upstream_path in upstream_tables
+            ]
+            if any(item.get("ok") for item in comparisons):
+                continue
+            actionable = [
+                item for item in comparisons if item.get("reason") != "no_shared_key"
+            ]
+            best = actionable[0] if actionable else comparisons[0]
+            findings.append(
+                ValidationFinding(
+                    validator=self.name,
+                    severity="error",
+                    message=(
+                        f"Figure source-data table '{source_path.name}' is not a "
+                        "traceable subset of the declared upstream table(s); "
+                        f"{best.get('message', 'no matching upstream rows found')}."
+                    ),
+                    detail={
+                        "step_id": step.step_id,
+                        "source_table": source_path.name,
+                        "upstream_step_ids": sorted(upstream_step_ids),
+                        "candidate_upstream_tables": [
+                            str(p.relative_to(run_dir)) if p.is_relative_to(run_dir) else str(p)
+                            for p in upstream_tables
+                        ],
+                        "best_mismatch": best,
+                    },
+                )
+            )
+        return findings
+
+    @classmethod
+    def _is_rendering_step(
+        cls, *, step: AnalysisStep, step_summary: Dict[str, Any]
+    ) -> bool:
+        if bool((step_summary or {}).get("rendering_only")):
+            return True
+        haystack = f"{step.step_id} {step.method} {step.intent}".lower()
+        return "figure" in haystack or "render" in haystack
+
+    @classmethod
+    def _upstream_step_ids(
+        cls, *, step: AnalysisStep, step_summary: Dict[str, Any]
+    ) -> Set[str]:
+        found: Set[str] = set()
+        for key in (
+            "upstream_step_id",
+            "source_step_id",
+            "producer_step_id",
+        ):
+            value = (step_summary or {}).get(key)
+            if isinstance(value, str) and value.strip():
+                found.add(value.strip())
+        for key in (
+            "upstream_step_ids",
+            "source_step_ids",
+            "producer_step_ids",
+        ):
+            value = (step_summary or {}).get(key)
+            if isinstance(value, (list, tuple, set)):
+                found.update(str(item).strip() for item in value if str(item).strip())
+
+        text = f"{step.intent}\n{step.method}\n{json.dumps(step_summary or {}, default=str)}"
+        for match in re.finditer(r"\bstep\s*['\"]([A-Za-z0-9_.:-]+)['\"]", text):
+            candidate = match.group(1).strip()
+            if candidate and candidate != step.step_id:
+                found.add(candidate)
+
+        step_id = str(step.step_id)
+        for suffix in (
+            "_figure",
+            "_publication_figure",
+            "_figure_generation",
+            "_render_figure",
+        ):
+            if step_id.endswith(suffix) and len(step_id) > len(suffix):
+                found.add(step_id[: -len(suffix)])
+        return found
+
+    @classmethod
+    def _upstream_tables(
+        cls,
+        *,
+        run_dir: Path,
+        current_out_dir: Path,
+        upstream_step_ids: Set[str],
+    ) -> List[Path]:
+        tables: List[Path] = []
+        for step_id in sorted(upstream_step_ids):
+            outputs = run_dir / "steps" / step_id / "outputs"
+            if not outputs.exists():
+                continue
+            for path in sorted(outputs.iterdir()):
+                if not path.is_file():
+                    continue
+                if path.parent.resolve() == current_out_dir.resolve():
+                    continue
+                if path.suffix.lower() == ".csv":
+                    tables.append(path)
+        return tables
+
+    @classmethod
+    def _compare_source_to_upstream(
+        cls,
+        *,
+        source_df: pd.DataFrame,
+        source_path: Path,
+        upstream_path: Path,
+    ) -> Dict[str, Any]:
+        try:
+            upstream_df = pd.read_csv(upstream_path)
+        except Exception as exc:
+            return {
+                "ok": False,
+                "reason": "upstream_read_failed",
+                "upstream_table": upstream_path.name,
+                "message": f"could not read upstream table {upstream_path.name}: {exc}",
+            }
+        if upstream_df.empty:
+            return {
+                "ok": False,
+                "reason": "upstream_empty",
+                "upstream_table": upstream_path.name,
+                "message": f"upstream table {upstream_path.name} is empty",
+            }
+
+        key = next(
+            (
+                col
+                for col in cls._KEY_COLUMNS
+                if col in source_df.columns and col in upstream_df.columns
+            ),
+            None,
+        )
+        if key is None:
+            return {
+                "ok": False,
+                "reason": "no_shared_key",
+                "upstream_table": upstream_path.name,
+                "message": f"no shared key column with {upstream_path.name}",
+            }
+
+        source = source_df.copy()
+        upstream = upstream_df.copy()
+        source[key] = source[key].astype(str)
+        upstream[key] = upstream[key].astype(str)
+        upstream_keys = set(upstream[key].dropna())
+        missing_keys = sorted(set(source[key].dropna()) - upstream_keys)
+        if missing_keys:
+            return {
+                "ok": False,
+                "reason": "source_rows_not_in_upstream",
+                "key_column": key,
+                "upstream_table": upstream_path.name,
+                "missing_keys": missing_keys[:20],
+                "n_missing_keys": len(missing_keys),
+                "message": (
+                    f"{len(missing_keys)} {key} value(s) are absent from "
+                    f"{upstream_path.name}"
+                ),
+            }
+
+        merged = source.merge(
+            upstream,
+            on=key,
+            how="left",
+            suffixes=("_source", "_upstream"),
+        )
+        mismatches: List[Dict[str, Any]] = []
+        for col in cls._NUMERIC_COLUMNS:
+            source_col = f"{col}_source"
+            upstream_col = f"{col}_upstream"
+            if source_col not in merged.columns or upstream_col not in merged.columns:
+                continue
+            left = pd.to_numeric(merged[source_col], errors="coerce")
+            right = pd.to_numeric(merged[upstream_col], errors="coerce")
+            diff = (left - right).abs()
+            bad = diff[(diff > 1e-9) & ~(left.isna() & right.isna())]
+            if not bad.empty:
+                idx = int(bad.index[0])
+                mismatches.append(
+                    {
+                        "column": col,
+                        "key": merged.loc[idx, key],
+                        "source": None if pd.isna(left.loc[idx]) else float(left.loc[idx]),
+                        "upstream": None if pd.isna(right.loc[idx]) else float(right.loc[idx]),
+                        "abs_diff": float(bad.iloc[0]),
+                    }
+                )
+        for col in cls._TEXT_COLUMNS:
+            source_col = f"{col}_source"
+            upstream_col = f"{col}_upstream"
+            if source_col not in merged.columns or upstream_col not in merged.columns:
+                continue
+            left = merged[source_col].fillna("").astype(str).str.strip().str.lower()
+            right = merged[upstream_col].fillna("").astype(str).str.strip().str.lower()
+            bad = left != right
+            if bad.any():
+                idx = int(bad[bad].index[0])
+                mismatches.append(
+                    {
+                        "column": col,
+                        "key": merged.loc[idx, key],
+                        "source": merged.loc[idx, source_col],
+                        "upstream": merged.loc[idx, upstream_col],
+                    }
+                )
+        if mismatches:
+            return {
+                "ok": False,
+                "reason": "source_values_disagree",
+                "key_column": key,
+                "upstream_table": upstream_path.name,
+                "mismatches": mismatches[:20],
+                "n_mismatches": len(mismatches),
+                "message": f"source-data values disagree with {upstream_path.name}",
+            }
+        return {
+            "ok": True,
+            "reason": "source_subset_matches",
+            "source_table": source_path.name,
+            "upstream_table": upstream_path.name,
+            "key_column": key,
+            "n_source_rows": int(len(source_df)),
+        }
+
+
+class FigureContractQualityValidator:
+    """Audit manuscript-facing figure contracts beyond file/source existence."""
+
+    name = "figure_contract_quality"
+    _CONTRACT_GLOB = "*.figure_contract.json"
+    _FALLBACK_TERMS = (
+        "rescue",
+        "fallback",
+        "placeholder",
+        "did not emit exports",
+        "no generated figure",
+    )
+    _RESULT_ROLES = {
+        "relationship",
+        "robustness",
+        "forest_odds_ratio",
+        "forest_risk_difference",
+        "forest_risk_ratio",
+        "association",
+        "effect",
+    }
+    _RAW_IDENTIFIER_RE = re.compile(r"\b[a-z][a-z0-9]+(?:_[a-z0-9]+){1,}\b")
+
+    def audit(
+        self,
+        *,
+        step: AnalysisStep,
+        out_dir: Path,
+        run_dir: Path,
+        step_summary: Dict[str, Any],
+    ) -> List[ValidationFinding]:
+        if not FigureSourceDataValidator._is_rendering_step(
+            step=step,
+            step_summary=step_summary,
+        ):
+            return []
+        findings: List[ValidationFinding] = []
+        contract_paths = sorted(out_dir.glob(self._CONTRACT_GLOB))
+        if not contract_paths and self._has_figure_exports(out_dir):
+            findings.append(
+                ValidationFinding(
+                    validator=self.name,
+                    severity="error",
+                    message=(
+                        f"Figure step '{step.step_id}' wrote figure exports "
+                        "without a .figure_contract.json file; manuscript-facing "
+                        "figures must declare panel claims and source evidence."
+                    ),
+                    detail={
+                        "step_id": step.step_id,
+                        "out_dir": str(out_dir),
+                    },
+                )
+            )
+            return findings
+        for contract_path in contract_paths:
+            findings.extend(
+                self.audit_contract_file(
+                    contract_path,
+                    step=step,
+                    step_summary=step_summary,
+                    manuscript_facing=True,
+                )
+        )
+        return findings
+
+    @staticmethod
+    def _has_figure_exports(out_dir: Path) -> bool:
+        figure_suffixes = {".svg", ".pdf", ".png", ".tiff", ".tif", ".pptx"}
+        return any(
+            path.is_file() and path.suffix.lower() in figure_suffixes
+            for path in out_dir.iterdir()
+        )
+
+    def audit_contract_file(
+        self,
+        contract_path: Path,
+        *,
+        step: Optional[AnalysisStep] = None,
+        step_summary: Optional[Dict[str, Any]] = None,
+        manuscript_facing: Optional[bool] = None,
+    ) -> List[ValidationFinding]:
+        try:
+            raw = json.loads(contract_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            return [
+                ValidationFinding(
+                    validator=self.name,
+                    severity="warning",
+                    message=f"Could not read figure contract {contract_path.name}: {exc}",
+                    detail={"path": str(contract_path)},
+                )
+            ]
+        if not isinstance(raw, dict):
+            return []
+
+        is_manuscript = (
+            bool(manuscript_facing)
+            if manuscript_facing is not None
+            else self._looks_manuscript_facing(raw, contract_path, step, step_summary)
+        )
+        if not is_manuscript:
+            return []
+
+        figure_id = str(raw.get("figure_id") or contract_path.stem)
+        panels = raw.get("panels")
+        panels_list = panels if isinstance(panels, list) else []
+        text_blob = self._contract_text(raw)
+        findings: List[ValidationFinding] = []
+
+        fallback_terms = [
+            term for term in self._FALLBACK_TERMS if term in text_blob.lower()
+        ]
+        if fallback_terms:
+            findings.append(
+                ValidationFinding(
+                    validator=self.name,
+                    severity="error",
+                    message=(
+                        f"{figure_id} is marked as a fallback/rescue figure; "
+                        "manuscript-facing figures must be regenerated from "
+                        "registered source data instead of accepted as rescue output."
+                    ),
+                    detail={
+                        "path": str(contract_path),
+                        "terms": sorted(set(fallback_terms)),
+                        "step_id": getattr(step, "step_id", None),
+                    },
+                )
+            )
+
+        result_like = self._is_result_like_contract(raw, panels_list)
+        if result_like and len(panels_list) < 2:
+            findings.append(
+                ValidationFinding(
+                    validator=self.name,
+                    severity="error",
+                    message=(
+                        f"{figure_id} has only {len(panels_list)} panel(s); "
+                        "manuscript-facing result figures need at least two "
+                        "data-backed panels so the primary estimate, robustness, "
+                        "and audit context are not collapsed into one forest plot."
+                    ),
+                    detail={
+                        "path": str(contract_path),
+                        "panel_count": len(panels_list),
+                        "step_id": getattr(step, "step_id", None),
+                    },
+                )
+            )
+
+        blank_titles = [
+            str(panel.get("panel_id") or idx + 1)
+            for idx, panel in enumerate(panels_list)
+            if isinstance(panel, dict) and not str(panel.get("title") or "").strip()
+        ]
+        if blank_titles:
+            findings.append(
+                ValidationFinding(
+                    validator=self.name,
+                    severity="error",
+                    message=(
+                        f"{figure_id} has panel(s) without titles: "
+                        + ", ".join(blank_titles)
+                    ),
+                    detail={"path": str(contract_path), "panel_ids": blank_titles},
+                )
+            )
+
+        weak_claims = [
+            str(panel.get("panel_id") or idx + 1)
+            for idx, panel in enumerate(panels_list)
+            if isinstance(panel, dict)
+            and len(str(panel.get("claim") or "").strip()) < 24
+        ]
+        if weak_claims:
+            findings.append(
+                ValidationFinding(
+                    validator=self.name,
+                    severity="warning",
+                    message=(
+                        f"{figure_id} has panel(s) with weak or missing claims: "
+                        + ", ".join(weak_claims)
+                    ),
+                    detail={"path": str(contract_path), "panel_ids": weak_claims},
+                )
+            )
+
+        machine_labels = sorted(
+            {
+                token
+                for token in self._RAW_IDENTIFIER_RE.findall(
+                    self._reader_facing_text(raw)
+                )
+                if token not in {"figure_id", "source_data", "evidence_ids"}
+            }
+        )
+        if machine_labels:
+            findings.append(
+                ValidationFinding(
+                    validator=self.name,
+                    severity="warning",
+                    message=(
+                        f"{figure_id} includes machine-style labels in the "
+                        "figure contract; manuscript figures should expose "
+                        "reader-facing labels."
+                    ),
+                    detail={
+                        "path": str(contract_path),
+                        "examples": machine_labels[:10],
+                    },
+                )
+            )
+        return findings
+
+    @classmethod
+    def _looks_manuscript_facing(
+        cls,
+        raw: Dict[str, Any],
+        contract_path: Path,
+        step: Optional[AnalysisStep],
+        step_summary: Optional[Dict[str, Any]],
+    ) -> bool:
+        haystack = cls._contract_text(raw) + f"\n{contract_path.name}"
+        if step is not None:
+            haystack += f"\n{step.step_id}\n{step.intent}\n{step.method}"
+            haystack += "\n" + json.dumps(
+                getattr(step, "expected_outputs", []) or [],
+                default=str,
+            )
+        if step_summary:
+            haystack += "\n" + json.dumps(step_summary, default=str)
+        lowered = haystack.lower()
+        if any(token in lowered for token in ("exploratory", "diagnostic", "qa only")):
+            return False
+        return any(
+            token in lowered
+            for token in ("figure", "publication", "manuscript", "render")
+        )
+
+    @classmethod
+    def _is_result_like_contract(
+        cls,
+        raw: Dict[str, Any],
+        panels: Sequence[Any],
+    ) -> bool:
+        role_text = " ".join(
+            str(panel.get("role") or "")
+            for panel in panels
+            if isinstance(panel, dict)
+        ).lower()
+        text_blob = cls._contract_text(raw).lower()
+        return any(role in role_text or role in text_blob for role in cls._RESULT_ROLES)
+
+    @staticmethod
+    def _contract_text(raw: Dict[str, Any]) -> str:
+        parts: List[str] = []
+
+        def collect(value: Any) -> None:
+            if isinstance(value, str):
+                parts.append(value)
+            elif isinstance(value, dict):
+                for item in value.values():
+                    collect(item)
+            elif isinstance(value, list):
+                for item in value:
+                    collect(item)
+
+        collect(raw)
+        return "\n".join(parts)
+
+    @staticmethod
+    def _reader_facing_text(raw: Dict[str, Any]) -> str:
+        parts = [
+            str(raw.get("title") or ""),
+            str(raw.get("core_claim") or ""),
+            str(raw.get("statistics_note") or ""),
+        ]
+        panels = raw.get("panels")
+        if isinstance(panels, list):
+            for panel in panels:
+                if not isinstance(panel, dict):
+                    continue
+                parts.extend([
+                    str(panel.get("title") or ""),
+                    str(panel.get("claim") or ""),
+                    str(panel.get("review_risk") or ""),
+                ])
+        return "\n".join(part for part in parts if part)
+
+
 class ClinicalConstraintValidator:
     """ICU-specific semantic warnings over planned and executed analyses."""
 
@@ -1167,15 +1824,39 @@ class ClinicalConstraintValidator:
                 "calibration",
             )
         )
+        treatment_like = any(
+            term in combined
+            for term in (
+                "target trial",
+                "treatment",
+                "treated",
+                "untreated",
+                "intervention",
+                "therapy",
+                "drug",
+                "dose",
+                "assignment",
+                "vasopressor",
+                "ventilation",
+            )
+        )
+        causal_exposure_language = "exposure" in combined and any(
+            term in combined
+            for term in (
+                "causal",
+                "effect of",
+                "treatment effect",
+                "intervention effect",
+                "target trial",
+            )
+        )
 
         if (
             not prediction_like
             and (
                 family in {"causal_inference", "treatment_response", "reinforcement_learning"}
-                or any(
-                    term in combined
-                    for term in ("target trial", "treatment", "intervention", "exposure")
-                )
+                or treatment_like
+                or causal_exposure_language
             )
         ):
             if not any(term in combined for term in ("time zero", "time-zero", "eligibility", "anchor", "alignment")):
@@ -1559,6 +2240,7 @@ class PublicationClaimAuditor:
 __all__ = [
     "CohortAuditor",
     "ConceptUsageAuditor",
+    "FigureContractQualityValidator",
     "LLMConceptAuditor",
     "parse_llm_concept_audit_response",
     "StatisticalValidator",

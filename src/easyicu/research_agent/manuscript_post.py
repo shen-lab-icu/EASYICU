@@ -59,6 +59,14 @@ _FORBIDDEN_INTERPRETIVE_RE = re.compile(
     r"\b(" + "|".join(re.escape(t) for t in _FORBIDDEN_INTERPRETIVE_TERMS) + r")\b",
     re.IGNORECASE,
 )
+_MANUSCRIPT_METADATA_LINE_RE = re.compile(
+    r"^\s*(?:#{1,6}\s*)?(?:\*\*)?"
+    r"(?:keywords?|key words|data\s+(?:and\s+code\s+)?availability|"
+    r"code\s+availability|funding|conflicts?\s+of\s+interest|"
+    r"acknowledg(?:e)?ments?|ethics\s+approval)"
+    r"\s*(?:\*\*)?\s*[:：]?",
+    re.I,
+)
 
 
 def _first_resolvable_name(
@@ -173,6 +181,145 @@ def _repair_common_writer_placeholders(
     return text, repairs
 
 
+_METHOD_CITATION_REPAIR_RULES: tuple[tuple[re.Pattern[str], tuple[str, ...]], ...] = (
+    (
+        re.compile(
+            r"\b(primary\s+(?:predictor|exposure)|exposure|predictor|"
+            r"derived\s+from|variable[s]?)\b",
+            re.I,
+        ),
+        (
+            "01_define_cohort_and_derive",
+            "define_cohort",
+            "derive",
+            "exposure",
+            "clinical_semantics_resolution",
+            "research_context",
+            "00_probe",
+        ),
+    ),
+    (
+        re.compile(
+            r"\b(primary\s+association|adjusted\s+association|"
+            r"association\b.{0,100}\badjust(?:ment|ed)?\b|"
+            r"logistic\s+regression|cox\s+regression|multivariable|"
+            r"model\s+family|model(?:ed|ling|ing)?\b|regression)\b",
+            re.I,
+        ),
+        (
+            "04_primary_adjusted_association_model",
+            "primary_association",
+            "adjusted_association",
+            "model",
+            "00_probe",
+        ),
+    ),
+    (
+        re.compile(r"\b(sensitivity|robust(?:ness)?|alternative specification)\b", re.I),
+        (
+            "05_sensitivity_comparison",
+            "robustness_panel",
+            "sensitivity",
+        ),
+    ),
+    (
+        re.compile(r"\b(missingness|data quality|imput(?:e|ation)|measurement)\b", re.I),
+        (
+            "03_missingness_and_data_quality_audit",
+            "missingness",
+            "data_quality",
+        ),
+    ),
+    (
+        re.compile(r"\b(cohort|inclusion|exclusion|adult|stay-level|source table)\b", re.I),
+        (
+            "01_define_cohort_and_derive",
+            "table_one",
+            "cohort",
+            "00_probe",
+            "research_context",
+        ),
+    ),
+)
+
+
+def _sentence_has_evidence_placeholder(sentence: str) -> bool:
+    return "{evidence:" in sentence or "{{evidence:" in sentence
+
+
+def _append_evidence_citation(sentence: str, evidence_id: str) -> str:
+    citation = f" {{evidence:{evidence_id}}}"
+    match = re.search(r"([.!?。！？])(\s*)$", sentence)
+    if match:
+        return sentence[: match.start(1)].rstrip() + citation + match.group(1) + match.group(2)
+    return sentence.rstrip() + citation
+
+
+def _best_methods_citation(sentence: str, resolvable: set[str]) -> Optional[str]:
+    for pattern, candidates in _METHOD_CITATION_REPAIR_RULES:
+        if not pattern.search(sentence):
+            continue
+        resolved = _first_resolvable_name(resolvable, candidates)
+        if resolved:
+            return resolved
+    return None
+
+
+def _repair_common_writer_citation_omissions(
+    scaffold: str,
+    *,
+    evidence: EvidenceStore,
+) -> tuple[str, List[Dict[str, str]]]:
+    """Append evidence citations to common uncited Methods-style sentences.
+
+    This is intentionally narrow. It repairs sentences that describe already
+    registered analysis infrastructure — cohort/exposure derivation, model
+    family, missingness/data-quality handling, or sensitivity design. It does
+    not invent citations for free-form conclusions; if no matching registered
+    evidence id is available, the strict evidence gate still blocks the draft.
+    """
+    resolvable = set(evidence.resolvable_names())
+    repairs: List[Dict[str, str]] = []
+    out_lines: List[str] = []
+    in_metadata_section = False
+    for raw_line in scaffold.splitlines():
+        stripped = raw_line.strip()
+        if re.match(r"^#{1,6}\s+", stripped):
+            in_metadata_section = bool(_MANUSCRIPT_METADATA_LINE_RE.match(stripped))
+            out_lines.append(raw_line)
+            continue
+        if (
+            not stripped
+            or stripped.startswith("```")
+            or _MANUSCRIPT_METADATA_LINE_RE.match(stripped)
+            or in_metadata_section
+        ):
+            out_lines.append(raw_line)
+            continue
+        sentences = re.split(r"(?<=[.!?。！？])\s+", raw_line)
+        changed = False
+        fixed: List[str] = []
+        for sentence in sentences:
+            if not sentence.strip() or _sentence_has_evidence_placeholder(sentence):
+                fixed.append(sentence)
+                continue
+            evidence_id = _best_methods_citation(sentence, resolvable)
+            if not evidence_id:
+                fixed.append(sentence)
+                continue
+            repaired = _append_evidence_citation(sentence, evidence_id)
+            repairs.append(
+                {
+                    "evidence_id": evidence_id,
+                    "sentence": sentence.strip()[:500],
+                }
+            )
+            fixed.append(repaired)
+            changed = True
+        out_lines.append(" ".join(part.strip() for part in fixed if part.strip()) if changed else raw_line)
+    return "\n".join(out_lines), repairs
+
+
 def _demote_unresolved_evidence_placeholders(
     bound_manuscript: str,
 ) -> tuple[str, List[str]]:
@@ -283,12 +430,14 @@ _SEMANTIC_HINTS = (
             re.compile(r"\baverage\s+treatment\s+effect\b", re.IGNORECASE),
             re.compile(r"\bATE\b"),
             re.compile(r"\brisk\s+difference\b", re.IGNORECASE),
+            re.compile(r"\brisk\s+ratio\b", re.IGNORECASE),
             re.compile(r"\btreatment\s+effect\b", re.IGNORECASE),
         ),
         (
             re.compile(r"average[_:. -]*treatment[_:. -]*effect", re.IGNORECASE),
             re.compile(r"(^|[_:. -])ate($|[_:. -])", re.IGNORECASE),
             re.compile(r"risk[_:. -]*difference", re.IGNORECASE),
+            re.compile(r"risk[_:. -]*ratio", re.IGNORECASE),
             re.compile(r"treatment[_:. -]*effect", re.IGNORECASE),
         ),
     ),
@@ -439,12 +588,14 @@ def _claim_numeric_distance(
     display_abs_tol = 0.0
     if display_places > 0:
         display_abs_tol = 0.5 * (10 ** (-display_places))
+    elif has_percent:
+        display_abs_tol = 0.5
     window = tolerance if tolerance is not None else claim.tolerance
     if abs(candidate) > 1e-9:
         rel = abs(candidate - canonical) / abs(candidate)
     else:
-        rel = abs(candidate - canonical)
-    abs_window = max(display_abs_tol, window * max(abs(candidate), abs(canonical), 1.0))
+        rel = 0.0 if abs(canonical) <= 1e-12 else float("inf")
+    abs_window = max(display_abs_tol, window * max(abs(candidate), abs(canonical)))
     if rel <= window or abs(candidate - canonical) <= abs_window:
         return abs(candidate - canonical) / max(abs(candidate), 1e-9)
     return None
@@ -509,6 +660,184 @@ def _semantic_hint_score(context: str, claim: NumericClaim) -> int:
             continue
         if any(pattern.search(source) for pattern in source_patterns):
             score += 1
+    score += _contextual_source_score(context, claim)
+    return score
+
+
+def _contextual_source_score(context: str, claim: NumericClaim) -> int:
+    text = (context or "").lower()
+    source = (claim.source_field or "").lower()
+    step = (claim.step_id or "").lower()
+    evidence_id = (claim.evidence_id or "").lower()
+    score = 0
+
+    if step and step in text:
+        score += 20
+    if evidence_id and evidence_id in text:
+        score += 15
+
+    if re.search(r"\bcomplete[-\s]?cases?\b", text):
+        if "complete_case_flow.n_complete_case" in source:
+            score += 8
+        elif "n_final_model" in source:
+            score += 5
+        elif re.search(r"(?:primary_result\.n|modeled_n|primary_n)$", source):
+            score += 3
+
+    if "primary adjusted" in text or "primary specification" in text:
+        if step.startswith("04_primary_adjusted"):
+            score += 4
+        if source.startswith("primary_or"):
+            score += 3
+        if "primary_result" in source:
+            score += 1
+
+    if "analysis cohort" in text or "analytic cohort" in text:
+        if any(
+            token in source
+            for token in (
+                "n_analysis_cohort",
+                "analysis_cohort_n",
+                "included_n",
+                "n_final_model",
+            )
+        ):
+            score += 5
+
+    if re.search(r"\bsepsis[-\s]?3\b", text):
+        if any(token in source for token in ("n_sepsis3", "sepsis3_positive", "sepsis3.events")):
+            score += 5
+        if "sepsis3_prevalence" in source or "prevalence.sepsis3" in source:
+            score += 4
+
+    if re.search(r"\b(?:death|mortality)\b", text):
+        if any(token in source for token in ("n_deaths", "death_positive", "death_n", "events")):
+            score += 5
+        if "death_rate" in source or "death_prevalence" in source:
+            score += 4
+
+    if "risk ratio" in text:
+        if "risk_ratio" in source:
+            score += 6
+    if "risk difference" in text:
+        if "risk_difference" in source:
+            score += 6
+
+    if re.search(r"\b(?:confidence\s+interval|ci)\b", text):
+        if re.search(r"primary_or_ci_(?:low|lower|high|upper)$", source):
+            score += 6
+        elif re.search(r"primary_ci_(?:low|lower|high|upper)$", source):
+            score += 4
+        elif re.search(r"ci_(?:low|lower|high|upper)$", source):
+            score += 2
+        if source.endswith("_from_summary"):
+            score -= 1
+
+    if re.search(r"\b(?:range|ranged|lower end|upper end|from)\b", text):
+        if re.search(r"(?:^|[._-])range_(?:low|lower|high|upper)$", source):
+            score += 7
+
+    if re.search(r"\b(?:cohort[-\s]?restriction|los|length\s+of\s+stay)\b", text):
+        if "worst_cohort_point_estimate" in source:
+            score += 6
+        elif "point_estimate" in source and "cohort" in step:
+            score += 2
+
+    context_source_pairs = (
+        (r"\b(?:source\s+export|per-stay\s+export|source\s+cohort|source\s+population)\b", "cohort.n_stays"),
+        (r"\b(?:stays|icu\s+stays|stay-level)\b", "cohort.n_stays"),
+        (r"\bpatients\b", "cohort.n_patients"),
+        (r"\blactate\b", "variable_groups.lact."),
+        (r"\b(?:temperature|temp)\b", "variable_groups.temp."),
+        (r"\b(?:heart[-\s]?rate|hr)\b", "variable_groups.hr."),
+        (r"\b(?:mean\s+arterial\s+pressure|map)\b", "variable_groups.map."),
+    )
+    for context_pattern, source_prefix in context_source_pairs:
+        if not re.search(context_pattern, text):
+            continue
+        if source.startswith(source_prefix):
+            score += 5
+        elif (
+            source_prefix in {"cohort.n_stays", "cohort.n_patients"}
+            and source == "cohort.n_stays_and_patients"
+        ):
+            score += 5
+
+    if "missingness" in text and ".missingness." in source:
+        score += 3
+    return score
+
+
+def _same_numeric_fact(candidates: Sequence[tuple[NumericClaim, float]]) -> bool:
+    if not candidates:
+        return False
+    first = candidates[0][0]
+    for claim, _ in candidates[1:]:
+        if claim.step_id != first.step_id:
+            return False
+        if abs(claim.canonical - first.canonical) > max(claim.tolerance, first.tolerance):
+            return False
+    return True
+
+
+def _source_field_tiebreak_score(context: str, claim: NumericClaim) -> int:
+    text = (context or "").lower()
+    source = (claim.source_field or "").lower()
+    score = 0
+    universe_context = bool(
+        re.search(
+            r"\b(?:universe|source\s+(?:export|population)|before\s+analysis)\b",
+            text,
+        )
+    )
+    analysis_count_context = bool(
+        re.search(
+            r"\b(?:analysis|analy[sz]ed|analytic|modeled|modelled|validated|"
+            r"final|primary|included|retained|eligible)\b",
+            text,
+        )
+    )
+    if analysis_count_context:
+        for token in (
+            "n_final_model",
+            "modeled_n",
+            "primary_result.n",
+            "primary_n",
+            "n_complete_case",
+            "n_analysis_cohort",
+            "analysis_cohort_n",
+            "cohort_definition.analysis_cohort_n",
+            "attrition.n_analysis_cohort",
+        ):
+            if token in source:
+                score += 6
+                break
+        if re.search(r"(?:^|[._-])n_universe$", source) and not universe_context:
+            score -= 6
+        if any(token in source for token in ("raw", "candidate", "source_population")):
+            score -= 2
+    if universe_context and re.search(r"(?:^|[._-])n_universe$", source):
+        score += 4
+    if "analysis cohort" in text or "analytic cohort" in text:
+        for token in ("n_analysis_cohort", "analysis_cohort_n", "included_n", "n_final_model"):
+            if token in source:
+                score += 5
+                break
+    if re.search(r"\b(?:stays|patients|cohort|denominator)\b", text):
+        if re.search(r"(?:^|[._-])(?:n|count|included_n|n_total|n_universe)$", source):
+            score += 2
+    if re.search(r"\bsepsis[-\s]?3\b", text):
+        if any(token in source for token in ("n_sepsis3", "sepsis3_positive", "sepsis3.events")):
+            score += 5
+    if re.search(r"\b(?:death|mortality)\b", text):
+        if any(token in source for token in ("n_deaths", "death_positive", "death_n", "events")):
+            score += 5
+    if "prevalence" in text and "prevalence" in source:
+        score += 3
+    if "missingness" in source or "coercion" in source or "overlap" in source:
+        score -= 3
+    if "[" in source:
+        score -= 2
     return score
 
 
@@ -578,6 +907,17 @@ def _select_numeric_claim(
     ]
     if len(remaining) == 1:
         return remaining[0][0], False
+
+    if _same_numeric_fact(remaining):
+        ranked = sorted(
+            remaining,
+            key=lambda item: (
+                -_source_field_tiebreak_score(context, item[0]),
+                len(item[0].source_field or ""),
+                item[0].source_field or "",
+            ),
+        )
+        return ranked[0][0], False
 
     return None, True
 

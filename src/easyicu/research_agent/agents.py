@@ -1447,7 +1447,13 @@ class CoderAgent:
         raw = self.llm.complete(
             messages, max_tokens=_CODER_MAX_TOKENS, temperature=0.05
         )
-        return _strip_code_fence(raw.strip())
+        repaired = _strip_code_fence(raw.strip())
+        if not _looks_like_python_script(repaired):
+            raise ValueError(
+                "Coder repair returned non-script output; refusing to replace "
+                "the previous analysis script."
+            )
+        return repaired
 
 
 # ---------------------------------------------------------------------------
@@ -1539,9 +1545,18 @@ class WriterAgent:
                     f"{instruction}\n\n"
                     f"{lang_inst}\n\n"
                     "CITATION RULE:\n"
-                    "- `{{evidence:<id>}}` is an inline citation (like a footnote number).\n"
+                    "- `{evidence:<id>}` is an inline citation (like a footnote number).\n"
                     "- Write the actual number in prose, then cite: "
-                    "`mortality was 12% {{evidence:outcome_rate}}`.\n"
+                    "`mortality was 12% {evidence:outcome_rate}`.\n"
+                    "- Use exactly single braces: `{evidence:<id>}`, not "
+                    "`{{evidence:<id>}}`.\n"
+                    "- Every body-text sentence that reports, interprets, compares, "
+                    "or explains cohort composition, exposure prevalence, outcome "
+                    "frequency, model estimates, sensitivity/robustness, missingness, "
+                    "data quality, mechanisms, strengths, or limitations must include "
+                    "at least one evidence citation.\n"
+                    "- Keywords, Data/code availability, Funding, and Conflicts of "
+                    "interest are manuscript metadata and do not need evidence citations.\n"
                     "- NEVER use a placeholder as a noun. If a number is unavailable, omit the sentence.\n"
                     f"- Only use ids from this list: {evidence_list}\n\n"
                     "OUTPUT DISCIPLINE:\n"
@@ -1713,14 +1728,17 @@ class WriterAgent:
             instruction=(
                 "Write these sections exactly:\n"
                 "## Conclusion\n"
-                "1-2 sentences. Associational phrasing. End with a call for prospective / "
-                "external validation.\n\n"
+                "1-2 sentences. Associational phrasing. Each conclusion sentence must cite "
+                "at least one registered evidence id. End with a call for prospective / "
+                "external validation only if it can be tied to sensitivity, limitation, "
+                "or validation evidence.\n\n"
                 "## Data and code availability\n"
                 "'The cohort, generated scripts, SHA-256 evidence store, reproducibility "
                 "envelope, STROBE checklist, and supplementary tables are released alongside "
                 "this manuscript.'\n\n"
                 "## Funding\n"
-                "'TBD by author.'\n\n"
+                "'Funding information was not available to the analysis agent and "
+                "should be completed by the authors before journal submission.'\n\n"
                 "## Conflicts of interest\n"
                 "'The authors declare no conflicts of interest.'"
             ),
@@ -1798,6 +1816,28 @@ def _strip_code_fence(text: str) -> str:
             rest = rest[:end]
         return rest.strip() + "\n"
     return m.group(1).strip() + "\n"
+
+
+def _looks_like_python_script(text: str) -> bool:
+    stripped = (text or "").strip()
+    if not stripped or stripped in {"{}", "[]", "null", "None"}:
+        return False
+    script_markers = (
+        "\nimport ",
+        "import ",
+        "\nfrom ",
+        "from ",
+        "\ndef ",
+        "def ",
+        "os.environ",
+        "pd.",
+        "json.",
+        ".to_csv",
+        "write_text",
+        "STEP_OUT_DIR",
+        "COHORT_PARQUET",
+    )
+    return any(marker in stripped for marker in script_markers)
 
 
 def _first_json_block(text: str) -> Optional[str]:
@@ -1990,12 +2030,24 @@ def _sentences_missing_evidence_tokens(scaffold: str) -> List[str]:
         r"^\*\*(?:background|methods?|results?|conclusions?|discussion|limitations?)\s*:\*\*\s*",
         flags=re.I,
     )
+    metadata_line_re = re.compile(
+        r"^\s*(?:#{1,6}\s*)?(?:\*\*)?"
+        r"(?:keywords?|key words|data\s+(?:and\s+code\s+)?availability|"
+        r"code\s+availability|funding|conflicts?\s+of\s+interest|"
+        r"acknowledg(?:e)?ments?|ethics\s+approval)"
+        r"\s*(?:\*\*)?\s*[:：]?",
+        flags=re.I,
+    )
+    in_metadata_section = False
     for raw_line in text.splitlines():
         stripped = raw_line.strip()
         if not stripped:
             cleaned_lines.append(" ")
             continue
         if re.match(r"^#{1,6}\s+", stripped):
+            in_metadata_section = bool(metadata_line_re.match(stripped))
+            continue
+        if in_metadata_section or metadata_line_re.match(stripped):
             continue
         # Skip footnote/provenance DEFINITION lines (``[^claim_1]: value=...;
         # step=...; evidence=<name>``). These are auto-appended by the numeric

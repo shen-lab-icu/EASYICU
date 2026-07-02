@@ -4,11 +4,13 @@ exposure, so the in-run repair loop re-fits it (no full pipeline restart).
 Regression for E1 20260611: the agent misread sep3_sofa2's NA (= not septic)
 as 66% missingness, dropped Sepsis-3, and modelled SOFA instead.
 """
+
 from types import SimpleNamespace
 
 from easyicu.research_agent.plan_utils import (
     _exposure_names_match,
     _primary_exposure_contract_findings,
+    _primary_exposure_measurement_filter_findings,
 )
 
 
@@ -82,3 +84,37 @@ def test_exposure_names_match_table():
     assert _exposure_names_match("sepsis3", "sepsis3") is True
     assert _exposure_names_match("sepsis3", "sepsis3_binary") is True
     assert _exposure_names_match("vasopressor", "norepinephrine") is False
+
+
+def test_flags_primary_exposure_collapsed_by_measurement_filter():
+    summary = {
+        "cohort_definition": {
+            "unmeasured_no_positive_evidence_n": 46600,
+            "analytic_cohort_n": 28229,
+        },
+        "primary_adjusted_association": {
+            "named_predictor": "sepsis3",
+            "odds_ratio": None,
+            "notes": "Exposure has no variation in complete-case cohort.",
+        },
+        "robustness_rows": [
+            {
+                "spec_id": "primary",
+                "exposed_n": 26764,
+                "unexposed_n": 0,
+                "notes": "Exposure has no variation in complete-case cohort.",
+            }
+        ],
+    }
+
+    findings = _primary_exposure_measurement_filter_findings(
+        step=_step("01_primary_cohort_and_exposure"),
+        step_summary=summary,
+        context=_ctx("sepsis3"),
+    )
+
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.severity == "error"
+    assert f.detail["kind"] == "exposure_measurement_filter"
+    assert "single level" in f.message

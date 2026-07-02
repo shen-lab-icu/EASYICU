@@ -43,6 +43,7 @@ from easyicu.research_agent.code_repair import (
     _extract_missing_index_columns,
     _patch_json_dump_numpy_key_sanitizer,
     _strip_columns_from_list_literals,
+    deterministic_contract_repair,
     deterministic_concept_audit_repair,
 )
 
@@ -119,6 +120,102 @@ def test_prediction_split_repair_requires_explicit_outcome_col():
     assert 'os.environ.get("OUTCOME_COL")' in patched
     assert "df.columns[-1]" not in patched
     assert '"death" if "death" in df.columns' not in patched
+
+
+def test_summary_repair_handles_age_without_measured_indicator():
+    code = """
+source_vars_for_table = ["sepsis3", "death", "age", "sex", "hr_first"]
+for var in source_vars_for_table:
+        if var in ["sepsis3", "death"]:
+            pass
+        elif var == "sex":
+            coding_rows.append({"variable": var})
+        else:
+            meas_var = measured_vars[var]
+            coding_rows.append({"variable": meas_var})
+"""
+
+    repaired = _deterministic_summary_repair(
+        code=code,
+        step_summary={"primary_or": None, "error": "'age'"},
+    )
+
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "age_covariate_no_measured_indicator_v1"
+    assert 'elif var == "age":' in patched
+    assert "Demographic baseline covariate" in patched
+    assert (
+        _deterministic_summary_repair(
+            code=patched,
+            step_summary={"primary_or": None, "error": "'age'"},
+            previous_repair=name,
+        )
+        is None
+    )
+
+
+def test_contract_repair_drops_overadjustment_covariates():
+    code = (
+        'continuous_covariates = ["age", "map_first", "lact_first"]\n'
+        'source_vars_for_table = ["sepsis3", "death", "age", "map_first"]\n'
+    )
+
+    repaired = deterministic_contract_repair(
+        code=code,
+        findings=[
+            {
+                "validator": "overadjustment_auditor",
+                "severity": "error",
+                "detail": {
+                    "kind": "overadjustment",
+                    "offending_covariates": ["map_first_filled"],
+                },
+            }
+        ],
+    )
+
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "drop_overadjustment_covariates_v1"
+    assert '"map_first"' not in patched
+    assert '"lact_first"' in patched
+
+
+def test_contract_repair_filters_generated_overadjustment_covariates_at_runtime():
+    code = """
+x_cols = ["sepsis3"]
+raw = "map_min"
+model_name = "map_min_per_10mmhg"
+miss_name = f"{raw}_missing_indicator"
+x_cols.extend([model_name, miss_name, "age_per_10y"])
+x_cols = list(dict.fromkeys(x_cols))
+"""
+
+    repaired = deterministic_contract_repair(
+        code=code,
+        findings=[
+            {
+                "validator": "overadjustment_auditor",
+                "severity": "error",
+                "detail": {
+                    "kind": "overadjustment",
+                    "offending_covariates": [
+                        "map_min_per_10mmhg",
+                        "map_min_missing_indicator",
+                    ],
+                },
+            }
+        ],
+    )
+
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "drop_overadjustment_covariates_v1"
+    assert "_easyicu_overadjustment_drop_v1" in patched
+    namespace = {}
+    exec(patched, namespace)
+    assert namespace["x_cols"] == ["sepsis3", "age_per_10y"]
 
 
 def test_prediction_split_repair_uses_outcome_col_at_runtime(

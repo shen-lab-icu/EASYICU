@@ -80,6 +80,36 @@ def test_first_write_wins_on_alias_collision(ra, tmp_path: Path):
     assert store.get(second.evidence_id) is not None
 
 
+def test_register_file_new_id_preserves_existing_blob(ra, tmp_path: Path):
+    first_src = tmp_path / "figure.png"
+    first_src.write_text("old", encoding="utf-8")
+    store = ra.EvidenceStore(root=tmp_path)
+    first = store.register_file(
+        kind="figure",
+        description="first",
+        source_path=first_src,
+        evidence_id="publication_figure_png",
+    )
+    first_blob = tmp_path / first.relative_path
+    first_sha = first.sha256
+
+    second_src = tmp_path / "rerun" / "figure.png"
+    second_src.parent.mkdir()
+    second_src.write_text("new", encoding="utf-8")
+    second = store.register_file(
+        kind="figure",
+        description="second",
+        source_path=second_src,
+        evidence_id="publication_figure_png",
+        on_sha_change="new_id",
+    )
+
+    assert second.evidence_id == "publication_figure_png_v2"
+    assert first_blob.read_text(encoding="utf-8") == "old"
+    assert store.get(first.evidence_id).sha256 == first_sha
+    assert (tmp_path / second.relative_path).read_text(encoding="utf-8") == "new"
+
+
 def test_bind_manuscript_replaces_known_placeholders(ra, tmp_path: Path):
     src = tmp_path / "table_one.csv"
     src.write_text("a,b\n1,2\n", encoding="utf-8")
@@ -92,6 +122,23 @@ def test_bind_manuscript_replaces_known_placeholders(ra, tmp_path: Path):
     assert "[evidence missing: does_not_exist]" in bound
     # Ensure the resolved placeholder embeds the relative path + sha
     assert "sha256=" in bound
+
+
+def test_bind_manuscript_accepts_double_brace_writer_placeholders(ra, tmp_path: Path):
+    src = tmp_path / "table_one.csv"
+    src.write_text("a,b\n1,2\n", encoding="utf-8")
+    store = ra.EvidenceStore(root=tmp_path)
+    store.register_file(kind="table", description="t1", source_path=src)
+
+    bound = store.bind_manuscript(
+        "Cohort: {{evidence:table_one}}. Single: {evidence:table_one}."
+    )
+
+    assert bound.count("[table_one]") == 2
+    assert "{[" not in bound
+    assert "]}" not in bound
+    assert "{{evidence:" not in bound
+    assert "{evidence:" not in bound
 
 
 def test_bind_manuscript_supports_comma_separated_placeholders(ra, tmp_path: Path):

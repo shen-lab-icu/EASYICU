@@ -159,7 +159,9 @@ def test_plan_payload_normalizer_drops_extra_robustness_spec_keys(ra) -> None:
 
     assert all("missing_handling" not in spec for spec in data["robustness_specs"])
     assert len(dropped["robustness_specs"]) == len(specs)
-    assert all(item.endswith(":missing_handling") for item in dropped["robustness_specs"])
+    assert all(
+        item.endswith(":missing_handling") for item in dropped["robustness_specs"]
+    )
     plan = AnalysisPlan(
         research_question=data["research_question"],
         steps=[AnalysisStep(**data["steps"][0])],
@@ -213,6 +215,319 @@ def test_each_spec_produces_panel_row() -> None:
     assert panel.rows[0].spec_id == "primary"
 
 
+def test_panel_primary_row_comes_from_step_validated_primary_not_refit() -> None:
+    """Regression lock for the primary-effect headline bug.
+
+    The manuscript-facing PRIMARY panel row must be sourced from the step's
+    validated primary estimate (``step_summary.primary_or`` / ``n``), NOT the
+    crude ``[exposure]``-only re-fit that ``_fit_one_row`` performs for variant
+    axes. In the incident, a step that reported a validated adjusted OR of 1.346
+    on n=50,640 had its panel primary silently replaced by an unadjusted re-fit
+    on the raw cohort (OR≈1.006, n=27,277), which the writer then headlined as
+    the canonical primary effect. Variant rows must still come from the re-fit.
+    """
+    import numpy as np
+    import pandas as pd
+
+    from easyicu.research_agent.estimators import fit_robustness_rows_from_records
+    from easyicu.research_agent.robustness_panel import (
+        PRIMARY_SPEC_ID,
+        default_robustness_specs,
+    )
+
+    # A small cohort: any re-fit on this can only ever report n≈200, never the
+    # summary's n=50640, so n=50640 on the primary row proves it came from the
+    # validated step summary rather than a re-fit of this frame.
+    rng = np.random.default_rng(0)
+    n_rows = 200
+    lactate = rng.normal(3.0, 1.0, n_rows)
+    death = (rng.random(n_rows) < 0.3).astype(int)
+    data = pd.DataFrame({"lactate": lactate, "death": death})
+
+    specs = default_robustness_specs()
+    records = [
+        {
+            "step_id": "01_primary_model",
+            "step_summary_evidence_id": "stat_primary_model",
+            "step_summary": {
+                "primary_predictor": "lactate",
+                "primary_or": 1.346,
+                "primary_ci_low": 1.21,
+                "primary_ci_high": 1.50,
+                "n_total": 50640,
+                # The coder also emits a 'primary' robustness row; the validated
+                # step estimate must override it (and warn), not the reverse.
+                "robustness_rows": [
+                    {
+                        "spec_id": PRIMARY_SPEC_ID,
+                        "axis": "primary",
+                        "n": 27277,
+                        "point_estimate": 1.006,
+                        "ci_low": 0.94,
+                        "ci_high": 1.08,
+                        "se": 0.03,
+                        "converged": True,
+                        "notes": "unadjusted re-fit",
+                    }
+                ],
+            },
+        }
+    ]
+
+    rows, warnings = fit_robustness_rows_from_records(
+        specs=specs,
+        per_step_records=records,
+        data=data,
+        exposure="lactate",
+        outcome="death",
+    )
+
+    primary = next(r for r in rows if r.spec_id == PRIMARY_SPEC_ID)
+    assert primary.point_estimate == 1.346  # validated step OR, not 1.006 re-fit
+    assert primary.n == 50640  # validated step n, not 27277 / the 200-row re-fit
+    assert "step_summary" in (primary.notes or "")
+    assert any("overrides" in w and "primary" in w for w in warnings)
+
+    # Variant rows are still produced by the re-fit on the supplied frame, so
+    # they cannot inherit the summary's n — the fix does not disturb variants.
+    variant_ns = {r.n for r in rows if r.spec_id != PRIMARY_SPEC_ID}
+    assert 50640 not in variant_ns
+
+
+def test_primary_row_prefers_final_repaired_effect_over_synthesis_collision() -> None:
+    """The primary row must not mix a synthesis step's broad n/CI with the final
+    repaired primary association contract.
+
+    Mirrors the 2026-07-01 E2 run shape: a synthesis step carried a top-level
+    primary OR but nested tables also contained a full-cohort n and categorical
+    CI. The final contract-repair step carried the intended paired OR/CI/n.
+    """
+    import numpy as np
+    import pandas as pd
+
+    from easyicu.research_agent.estimators import fit_robustness_rows_from_records
+    from easyicu.research_agent.robustness_panel import (
+        PRIMARY_SPEC_ID,
+        default_robustness_specs,
+    )
+
+    rng = np.random.default_rng(2)
+    n_rows = 220
+    data = pd.DataFrame(
+        {
+            "lact_max": rng.normal(3.0, 1.0, n_rows),
+            "death": (rng.random(n_rows) < 0.3).astype(int),
+        }
+    )
+    records = [
+        {
+            "step_id": "04_final_evidence_synthesis",
+            "step_summary_evidence_id": "stat_synthesis",
+            "step_summary": {
+                "primary_or": 1.3460230881055546,
+                "primary_or_se": 0.004837765021605868,
+                "outputs": {
+                    "summary:cohort_attrition": {"n_total": 94458},
+                    "summary:categorical_lactate_model": {
+                        "ci": [1.2302420713511062, 1.4023751359118677],
+                    },
+                },
+            },
+        },
+        {
+            "step_id": "05_contract_repair_and_association_addendum",
+            "step_summary_evidence_id": "stat_repaired_primary",
+            "step_summary": {
+                "primary_or": 1.3460230881055546,
+                "primary_or_ci_low": 1.3333206221140712,
+                "primary_or_ci_high": 1.3588465697324286,
+                "n_total": 50640,
+            },
+        },
+    ]
+
+    rows, _warnings = fit_robustness_rows_from_records(
+        specs=default_robustness_specs(),
+        per_step_records=records,
+        data=data,
+        exposure="lact_max",
+        outcome="death",
+    )
+
+    primary = next(row for row in rows if row.spec_id == PRIMARY_SPEC_ID)
+    assert primary.evidence_id == "stat_repaired_primary"
+    assert primary.n == 50640
+    assert primary.ci_low == 1.3333206221140712
+    assert primary.ci_high == 1.3588465697324286
+
+
+def test_primary_row_prefers_nested_frozen_primary_reconciliation() -> None:
+    """E1 regression: a later reconciliation step can repair an earlier
+    off-protocol primary model.
+
+    The canonical primary row must prefer ``step_summary.primary_result`` when
+    it explicitly names the locked/frozen primary specification, while retaining
+    the off-protocol estimate as a disclosed variant.
+    """
+    from easyicu.research_agent.robustness_panel import (
+        PRIMARY_SPEC_ID,
+        build_robustness_panel_from_records,
+    )
+
+    records = [
+        {
+            "step_id": "04_primary_adjusted_association_model",
+            "step_summary_evidence_id": "stat_offprotocol_primary",
+            "step_summary": {
+                "primary_predictor": "sepsis3",
+                "primary_or": 1.3582181885372382,
+                "primary_ci_low": 1.2939996351138754,
+                "primary_ci_high": 1.4256237773289848,
+                "n_total": 88061,
+            },
+        },
+        {
+            "step_id": "05_cohort_definition_sensitivity_comparison",
+            "step_summary_evidence_id": "stat_reconciled_primary",
+            "step_summary": {
+                "primary_predictor": "sepsis3",
+                "primary_result": {
+                    "spec_id": "frozen_primary_cc",
+                    "n_modeled": 71249,
+                    "adjusted_or": 1.2927410203895164,
+                    "ci_low": 1.2272324290331191,
+                    "ci_high": 1.3617464029323074,
+                },
+                "offprotocol_reestimated_result": {
+                    "spec_id": "adult_any_los_offprotocol_cc",
+                    "n_modeled": 88061,
+                    "adjusted_or": 1.3582181885372382,
+                    "ci_low": 1.2939996351138754,
+                    "ci_high": 1.4256237773289848,
+                },
+            },
+        },
+    ]
+
+    panel = build_robustness_panel_from_records(specs=[], per_step_records=records)
+
+    primary = next(row for row in panel.rows if row.spec_id == PRIMARY_SPEC_ID)
+    assert primary.evidence_id == "stat_reconciled_primary"
+    assert primary.n == 71249
+    assert primary.point_estimate == 1.2927410203895164
+    assert primary.ci_low == 1.2272324290331191
+    assert primary.ci_high == 1.3617464029323074
+
+
+def test_robustness_variants_adjust_for_primary_covariates(tmp_path: Path) -> None:
+    """Regression lock: robustness variants must be fit on the same footing as
+    the primary effect (adjusted for the primary model's covariate set), not as
+    bare unadjusted single-predictor re-fits.
+
+    The primary model's adjustment set is recovered from the run directory using
+    the same covariate-recovery path the overadjustment check trusts; here it is
+    declared in a step ``analysis.py`` (``covariates = ['age']``). The variant
+    re-fit must then include ``age`` in the design and say so in its notes.
+    """
+    import numpy as np
+    import pandas as pd
+
+    from easyicu.research_agent.estimators import fit_robustness_rows_from_records
+    from easyicu.research_agent.robustness_panel import (
+        PRIMARY_SPEC_ID,
+        default_robustness_specs,
+    )
+
+    # A run layout the covariate recoverer understands: steps/<id>/analysis.py
+    # declaring the adjustment set, and outputs/ beside it.
+    step_dir = tmp_path / "steps" / "03_primary_model"
+    (step_dir / "outputs").mkdir(parents=True)
+    (step_dir / "analysis.py").write_text(
+        "covariates = ['age']\n" "# formula = 'death ~ lactate + age'\n",
+        encoding="utf-8",
+    )
+
+    rng = np.random.default_rng(1)
+    n_rows = 300
+    age = rng.normal(65, 12, n_rows)
+    lactate = rng.normal(3.0, 1.0, n_rows)
+    death = (rng.random(n_rows) < 0.3).astype(int)
+    data = pd.DataFrame({"lactate": lactate, "age": age, "death": death})
+
+    records = [
+        {
+            "step_id": "03_primary_model",
+            "step_summary_evidence_id": "stat_primary_model",
+            "step_summary": {
+                "primary_predictor": "lactate",
+                "primary_or": 1.42,
+                "primary_ci_low": 1.10,
+                "primary_ci_high": 1.83,
+                "n_total": 300,
+            },
+        }
+    ]
+
+    rows, warnings = fit_robustness_rows_from_records(
+        specs=default_robustness_specs(),
+        per_step_records=records,
+        data=data,
+        exposure="lactate",
+        outcome="death",
+        run_dir=tmp_path,
+    )
+
+    assert any("adjusted for" in w and "age" in w for w in warnings)
+    variant_notes = [
+        r.notes or "" for r in rows if r.spec_id != PRIMARY_SPEC_ID and r.converged
+    ]
+    assert variant_notes, "expected at least one converged variant row"
+    assert any("adjusted for age" in note for note in variant_notes)
+
+
+def test_effect_summary_terms_are_not_recovered_as_primary_covariates(
+    tmp_path: Path,
+) -> None:
+    """A per-effect summary table is not a primary adjustment-set declaration.
+
+    The E2 synthesis table listed focal terms from multiple sensitivity models
+    (``lact_max``, ``lact_measured``). Treating those terms as covariates made
+    robustness variants condition on measurement status rather than the primary
+    model's adjustment set.
+    """
+    from easyicu.research_agent.estimators import _recover_primary_covariates
+
+    outputs = tmp_path / "steps" / "05_contract_repair" / "outputs"
+    outputs.mkdir(parents=True)
+    (outputs / "effect_estimates.csv").write_text(
+        "model_id,term,n_complete_case,or,ci_low,ci_high\n"
+        "primary_measured_only,lact_max,50640,1.34,1.33,1.36\n"
+        "measurement_status,lact_measured,94458,2.72,2.59,2.86\n",
+        encoding="utf-8",
+    )
+    records = [
+        {
+            "step_id": "05_contract_repair",
+            "step_summary": {
+                "primary_or": 1.346,
+                "primary_or_ci_low": 1.33,
+                "primary_or_ci_high": 1.36,
+                "n_total": 50640,
+            },
+        }
+    ]
+
+    covariates = _recover_primary_covariates(
+        tmp_path,
+        per_step_records=records,
+        exposure="lact_max",
+        outcome="death",
+        available_columns=["lact_max", "lact_measured", "death"],
+    )
+
+    assert covariates == []
+
+
 def test_non_convergence_does_not_abort() -> None:
     from easyicu.research_agent.robustness_panel import (
         build_robustness_panel_from_records,
@@ -260,7 +575,9 @@ def test_panel_range_correctness() -> None:
 
     panel = RobustnessPanel.from_rows(
         [
-            RobustnessPanelRow("primary", "primary", 100, 1.2, 1.0, 1.4, 0.1, "e1", True),
+            RobustnessPanelRow(
+                "primary", "primary", 100, 1.2, 1.0, 1.4, 0.1, "e1", True
+            ),
             RobustnessPanelRow("a", "cohort", 90, 1.5, 0.8, 2.0, 0.2, "e2", True),
             RobustnessPanelRow("b", "missing", 0, None, None, None, None, "e3", False),
         ],
@@ -280,9 +597,15 @@ def test_panel_numeric_digest_deduplicates_repeated_panel_values() -> None:
 
     panel = RobustnessPanel.from_rows(
         [
-            RobustnessPanelRow("primary", "primary", 500, 1.33, 1.2, 1.47, 0.1, "e1", True),
-            RobustnessPanelRow("alt_same", "cohort", 500, 1.33, 1.2, 1.47, 0.1, "e2", True),
-            RobustnessPanelRow("alt_diff", "missing", 400, 0.84, 0.7, 1.1, 0.2, "e3", True),
+            RobustnessPanelRow(
+                "primary", "primary", 500, 1.33, 1.2, 1.47, 0.1, "e1", True
+            ),
+            RobustnessPanelRow(
+                "alt_same", "cohort", 500, 1.33, 1.2, 1.47, 0.1, "e2", True
+            ),
+            RobustnessPanelRow(
+                "alt_diff", "missing", 400, 0.84, 0.7, 1.1, 0.2, "e3", True
+            ),
         ],
         locked_at="2026-05-27T00:00:00Z",
     )
@@ -308,9 +631,15 @@ def test_writer_digest_contains_panel_block(ra, tmp_path: Path) -> None:
 
     panel = RobustnessPanel.from_rows(
         [
-            RobustnessPanelRow("primary", "primary", 100, 1.2, 1.0, 1.4, 0.1, "e1", True),
-            RobustnessPanelRow("cohort_worst", "cohort", 90, 1.1, 0.7, 1.8, 0.2, "e2", True),
-            RobustnessPanelRow("cohort_hidden", "cohort", 90, 1.9, 1.5, 2.3, 0.2, "e3", True),
+            RobustnessPanelRow(
+                "primary", "primary", 100, 1.2, 1.0, 1.4, 0.1, "e1", True
+            ),
+            RobustnessPanelRow(
+                "cohort_worst", "cohort", 90, 1.1, 0.7, 1.8, 0.2, "e2", True
+            ),
+            RobustnessPanelRow(
+                "cohort_hidden", "cohort", 90, 1.9, 1.5, 2.3, 0.2, "e3", True
+            ),
         ],
         locked_at="2026-05-27T00:00:00Z",
     )
@@ -385,7 +714,9 @@ def test_panel_numerics_registered_in_evidence_store(ra, tmp_path: Path) -> None
 
     panel = RobustnessPanel.from_rows(
         [
-            RobustnessPanelRow("primary", "primary", 100, 1.2, 1.0, 1.4, 0.1, "e1", True),
+            RobustnessPanelRow(
+                "primary", "primary", 100, 1.2, 1.0, 1.4, 0.1, "e1", True
+            ),
             RobustnessPanelRow("a", "cohort", 90, 1.5, 0.8, 2.0, 0.2, "e2", True),
         ]
     )
@@ -411,7 +742,9 @@ def test_panel_json_exposes_row_count_and_primary_point_estimate() -> None:
 
     panel = RobustnessPanel.from_rows(
         [
-            RobustnessPanelRow("primary", "primary", 100, 1.2, 1.0, 1.4, 0.1, "e1", True),
+            RobustnessPanelRow(
+                "primary", "primary", 100, 1.2, 1.0, 1.4, 0.1, "e1", True
+            ),
             RobustnessPanelRow("a", "cohort", 90, 1.5, 0.8, 2.0, 0.2, "e2", True),
         ]
     )
@@ -434,7 +767,9 @@ def test_primary_only_panel_does_not_register_duplicate_range_claims(
 
     panel = RobustnessPanel.from_rows(
         [
-            RobustnessPanelRow("primary", "primary", 100, 1.2, 1.0, 1.4, 0.1, "e1", True),
+            RobustnessPanelRow(
+                "primary", "primary", 100, 1.2, 1.0, 1.4, 0.1, "e1", True
+            ),
         ]
     )
     evidence = ra.EvidenceStore(tmp_path)

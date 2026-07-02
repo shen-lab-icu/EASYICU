@@ -249,3 +249,45 @@ def test_five_dim_scorecard_never_raises_on_empty_run(tmp_path):
     )
     # empty run dir -> diagnostic_only, but never an exception
     assert card.get("tristate") == "diagnostic_only" or "error" in card
+
+
+def test_score_arm_reports_active_errors_separately_from_historical_errors(tmp_path):
+    from types import SimpleNamespace
+
+    from tools.run_research_agent_bench import _score_arm
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run_demo",
+                "findings": [
+                    {
+                        "validator": "old_gate",
+                        "severity": "error",
+                        "message": "superseded error",
+                    }
+                ],
+                "evidence": [],
+                "readiness": {
+                    "numeric_error_count": 0,
+                    "evidence_error_count": 0,
+                    "analysis_error_count": 0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    item = SimpleNamespace(
+        key="demo",
+        research_question="demo",
+        primary_predictor="",
+        expected_or_direction=0,
+        expected_finding_substrings=[],
+    )
+
+    score = _score_arm(run_dir=run_dir, item=item, label="aware")
+
+    assert score["n_errors"] == 0
+    assert score["n_historical_errors"] == 1
