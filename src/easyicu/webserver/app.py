@@ -41,6 +41,13 @@ STATIC_DIR = Path(__file__).with_name("static")
 app = FastAPI(title="EasyICU", version="0.1.0")
 
 
+def _body_bool(body: Dict[str, Any], key: str, default: bool = False) -> bool:
+    value = body.get(key, default)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
 @app.middleware("http")
 async def no_store_native_ui_assets(request: Request, call_next):
     response = await call_next(request)
@@ -299,8 +306,8 @@ def jobs_extract(body: Dict[str, Any]) -> dict:
         create_run_subdir=True,
         max_patients=body.get("max_patients"),
         cohort=body.get("cohort"),
-        include_feature_definitions=bool(
-            body.get("include_feature_definitions", True)
+        include_feature_definitions=_body_bool(
+            body, "include_feature_definitions", True
         ),
     )
 

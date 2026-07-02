@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from easyicu import concept_catalog as cc
 from easyicu.webserver import dataio
-from easyicu.webserver.app import app
+from easyicu.webserver.app import app, _body_bool
 
 STATIC_DIR = (
     Path(__file__).resolve().parents[1] / "src" / "easyicu" / "webserver" / "static"
@@ -1421,21 +1421,54 @@ def test_native_extraction_feature_definition_manifest_records_callback_provenan
     )
     assert exported["schema_version"] == "easyicu_feature_definitions_v1"
     assert exported["record_count"] == 2
+    assert exported["local_path_policy"] == (
+        "absolute_paths_omitted_from_shareable_feature_definitions"
+    )
+    serialized = json.dumps(exported)
+    assert "/Volumes/example/miiv" not in serialized
+    assert str(tmp_path) not in serialized
 
     age = next(row for row in exported["records"] if row["concept_id"] == "age")
     assert age["unit"] == "years"
     assert age["source"]["export_files"] == ["demographics.parquet"]
     assert age["source"]["raw_metadata_status"] == "not_declared_in_current_catalog"
+    assert age["source"]["data_source_ref"]["hint"] == "miiv"
+    assert age["source"]["data_source_ref"]["absolute_path_omitted"] is True
+    assert age["source"]["export_ref"]["absolute_path_omitted"] is True
     assert age["callback"]["import_path"] == "easyicu.api.load_concepts"
-    assert age["callback"]["source_file"].endswith("/src/easyicu/api.py")
-    assert age["callback"]["project_path"].endswith("/EASYICU")
+    assert age["callback"]["source_module_file"] == "src/easyicu/api.py"
+    assert age["callback"]["source_file_ref"]["absolute_path_omitted"] is True
+    assert age["callback"]["project_ref"]["hint"] == "EASYICU"
 
     sep3 = next(row for row in exported["records"] if row["concept_id"] == "sep3_sofa2")
     assert sep3["module"] == "sepsis3_sofa2"
     assert sep3["source"]["export_files"] == ["sepsis3_sofa2.parquet"]
     csv_text = (tmp_path / "feature_definitions.csv").read_text(encoding="utf-8")
-    assert "callback_project_path" in csv_text
+    assert "callback_project_ref" in csv_text
+    assert "callback_project_path" not in csv_text
+    assert "/Volumes/example/miiv" not in csv_text
+    assert str(tmp_path) not in csv_text
     assert "not_declared_in_current_catalog" in csv_text
+
+
+def test_native_extraction_include_feature_definitions_bool_parsing() -> None:
+    assert (
+        _body_bool(
+            {"include_feature_definitions": "false"},
+            "include_feature_definitions",
+            True,
+        )
+        is False
+    )
+    assert (
+        _body_bool(
+            {"include_feature_definitions": "true"},
+            "include_feature_definitions",
+            False,
+        )
+        is True
+    )
+    assert _body_bool({}, "include_feature_definitions", True) is True
 
 
 def test_native_crossdb_restores_distribution_visuals() -> None:
