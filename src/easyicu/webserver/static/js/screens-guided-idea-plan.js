@@ -14,6 +14,71 @@
     }).join('')}</div>`;
   }
 
+  function normalizePlanStep(row, i, t) {
+    if (row && typeof row === 'object') return row;
+    const text = String(row || '').trim();
+    const lower = text.toLowerCase();
+    const has = (needle) => lower.includes(needle);
+    const mk = (title, action, output, guardrail) => ({ title, action, output, guardrail });
+    if (has('lock the clinical question')) {
+      return mk(
+        t('Freeze the clinical question and estimand', '锁定临床问题和估计目标'),
+        t('Confirm population, exposure or index time, comparator, outcome, and analysis window before reading effect estimates.', '先确认人群、暴露或时间零点、比较组、结局和分析窗口，再看效应估计。'),
+        t('One locked PICOT-style question.', '一条锁定的 PICOT 风格问题。'),
+        t('Idea Mining proposes the question; it has not completed cohort selection or analysis.', 'Idea 挖掘只提出问题，还没有完成队列筛选或分析。')
+      );
+    }
+    if (has('confirm the active easyicu export') || has('cohort denominator')) {
+      return mk(
+        t('Confirm export, cohort, and modules', '确认导出、队列和模块'),
+        t('Confirm the real local export, denominator, required modules, and concept mappings with the user.', '和用户确认真实本地导出、分母、所需模块和概念映射。'),
+        t('Export/cohort/module contract for Agent Projects.', '交给研究项目的导出/队列/模块契约。'),
+        t('MOCK or demo exports are UI rehearsal only.', 'MOCK 或演示导出只能用于界面演练。')
+      );
+    }
+    if (has('outcome-blind feasibility') || has('missingness structure')) {
+      return mk(
+        t('Run outcome-blind feasibility assessment', '运行不看结局效应的可行性评估'),
+        t('Check availability, joint completeness, time-index support, missingness, and event rate before modeling.', '建模前检查可用性、联合完整度、时间索引、缺失结构和事件率。'),
+        t('Feasibility table with denominators and blockers.', '包含分母和阻断项的可行性表。'),
+        t('Do not present feasibility as a clinical finding.', '不能把可行性检查当成临床结论。')
+      );
+    }
+    if (has('treatment-strategy comparison') || has('timing anchors')) {
+      return mk(
+        t('Translate the article into an ICU treatment-strategy question', '把文章转译成 ICU 治疗策略问题'),
+        t('Define vasopressor/fluid timing anchors, exposure summaries, comparator groups, and eligible windows.', '定义升压药/补液的时间锚点、暴露摘要、比较组和入组窗口。'),
+        t('Treatment-strategy contrast ready for review.', '可审阅的治疗策略对照。'),
+        t('Flag confounding by indication and immortal-time risk before modeling.', '建模前标记适应症混杂和 immortal-time 风险。')
+      );
+    }
+    if (has('balance and sensitivity') || has('sensitivity checks')) {
+      return mk(
+        t('Predefine balance and sensitivity checks', '预先定义平衡性和敏感性检查'),
+        t('Compare severity, missingness, exposure timing, and alternative dose/window definitions.', '比较严重程度、缺失、暴露时序，以及替代剂量/窗口定义。'),
+        t('Sensitivity checklist for replan.', '用于 replan 的敏感性清单。'),
+        t('Keep claims exploratory unless assumptions are audited.', '除非假设被审计，否则结论保持探索性。')
+      );
+    }
+    if (has('prior-art') || has('literature')) {
+      return mk(
+        t('Use existing literature as an inspiration map', '把已有文献当成启发地图'),
+        t('Check whether prior studies answer the same question or suggest better comparators, subgroups, timing, or outcomes.', '检查既有研究是否回答同一问题，或提示更好的比较组、亚组、时序和结局。'),
+        t('Already answered, partially answered, or new exploratory angle.', '已回答、部分回答，或新的探索角度。'),
+        t('Prior work shapes novelty; it does not automatically kill the idea.', '既有研究塑造创新点，不会自动否定 idea。')
+      );
+    }
+    if (has('agent projects') || has('handoff')) {
+      return mk(
+        t('Create a project seed only after confirmation', '确认后再创建研究项目种子'),
+        t('Send the locked question, feasibility table, literature interpretation, and analysis steps to Agent Projects.', '把锁定问题、可行性表、文献解释和分析步骤交给研究项目。'),
+        t('Metadata-only project seed.', '仅元数据的项目种子。'),
+        t('Evidence checks and human sign-off remain required.', '仍然需要证据核验和人工签署。')
+      );
+    }
+    return mk(text || `${t('Plan step', '计划步骤')} ${i + 1}`, '', '', t('Review this legacy planning note before Agent handoff.', '交给 Agent 前需要审阅这条历史计划说明。'));
+  }
+
   function render(ctx) {
     const t = ctx.t;
     const esc = ctx.esc;
@@ -61,7 +126,12 @@
           <span>${icon('check', 12)}</span>
           <div><strong>${esc(plan.plan_status || t('draft plan requires review', '计划草案需要审阅'))}</strong><small>${esc((plan.agent_boundary && plan.agent_boundary.reason) || t('Planning is not an Agent execution and does not unlock manuscript claims.', '计划不是 Agent 执行，也不会解锁稿件结论。'))}</small></div>
         </div>
-        ${steps.length ? `<ol>${steps.map(row => `<li>${esc(row)}</li>`).join('')}</ol>` : ''}
+        ${steps.length ? `<ol>${steps.map((row, i) => {
+          const obj = normalizePlanStep(row, i, t);
+          const title = obj.title || obj.action || t('Plan step', '计划步骤');
+          const detail = [obj.action, obj.output ? `${t('Output', '产物')}: ${obj.output}` : '', obj.guardrail ? `${t('Guardrail', '约束')}: ${obj.guardrail}` : ''].filter(Boolean).join(' · ');
+          return `<li><strong>${esc(title)}</strong>${detail ? `<br><small>${esc(detail)}</small>` : ''}</li>`;
+        }).join('')}</ol>` : ''}
         ${patterns.length ? `<details class="gdi-plan-details" open><summary>${icon('book', 13)} ${t('Reference method patterns', '参考方法套路')}</summary>${list(patterns, '', 'gdi-feature-list', esc)}</details>` : ''}
         ${constraints.length ? `<details class="gdi-plan-details"><summary>${icon('shield', 13)} ${t('ICU constraints', 'ICU 场景约束')}</summary>${list(constraints, '', 'gdi-feature-list', esc)}</details>` : ''}
         ${confirmations.length ? `<div class="gdr-note"><strong>${t('Still needs user confirmation', '仍需用户确认')}</strong><br>${confirmations.map(esc).join(' · ')}</div>` : ''}

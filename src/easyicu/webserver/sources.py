@@ -52,6 +52,65 @@ def _source_id(path: str) -> str:
     return "src_" + hashlib.sha1(path.encode("utf-8")).hexdigest()[:12]
 
 
+def _source_timestamp(source: Dict[str, Any]) -> float:
+    generated = str(source.get("generated") or source.get("registered_at") or "")
+    if generated:
+        try:
+            return datetime.fromisoformat(generated.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            pass
+    try:
+        return Path(str(source.get("path") or "")).stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _path_is_within(path: str, base: Path) -> bool:
+    try:
+        p = Path(path).expanduser().resolve()
+        b = base.expanduser().resolve()
+    except OSError:
+        return False
+    return p == b or b in p.parents
+
+
+def _configured_export_base() -> Path | None:
+    raw = settings_store.load_settings().get("export_dir")
+    if not raw:
+        return None
+    return Path(str(raw)).expanduser()
+
+
+def _preferred_configured_export(
+    sources: Iterable[Dict[str, Any]],
+    *,
+    active_path: str | None,
+    active_source: str | None,
+) -> str | None:
+    """Migrate old auto-active defaults to the newest configured export.
+
+    New registries persist ``active_source`` for explicit user choices and
+    completed extraction jobs. Older registries did not, so if their active
+    path sits inside the current default export directory, prefer the newest
+    valid export there instead of keeping a stale auto-discovered child.
+    """
+    if active_source:
+        return None
+    base = _configured_export_base()
+    if base is None:
+        return None
+    if active_path and not _path_is_within(active_path, base):
+        return None
+    candidates = [
+        source
+        for source in sources
+        if source.get("ok") and _path_is_within(str(source.get("path") or ""), base)
+    ]
+    if not candidates:
+        return None
+    return str(max(candidates, key=_source_timestamp).get("path") or "") or None
+
+
 def _source_from_path(
     path: str, label: str | None = None, registered_at: str | None = None
 ) -> Dict[str, Any]:
@@ -97,22 +156,44 @@ def _raw_removed_paths(raw: Dict[str, Any]) -> List[str]:
     return _dedup_paths(raw.get("removed_paths") or [])
 
 
-def _autodiscovered_paths() -> List[str]:
+def _autodiscovery_bases() -> List[Path]:
     settings = settings_store.load_settings()
-    bases = [
-        Path(
-            str(settings.get("export_dir") or settings_store.DEFAULTS["export_dir"])
-        ).expanduser(),
+    raw_bases = [
+        settings.get("export_dir"),
+        Path.home() / "easyicu_export",
         Path.home() / "easyicu" / "exports",
+        Path.home() / ".easyicu" / "exports",
     ]
-    paths: List[str] = []
-    for base in bases:
+    bases: List[Path] = []
+    seen = set()
+    for raw in raw_bases:
+        if not raw:
+            continue
+        base = Path(str(raw)).expanduser()
         try:
             base = base.resolve()
         except OSError:
             pass
+        key = str(base)
+        if key in seen:
+            continue
+        seen.add(key)
+        bases.append(base)
+    return bases
+
+
+def _autodiscovered_paths() -> List[str]:
+    paths: List[str] = []
+    for base in _autodiscovery_bases():
         if not base.is_dir():
             continue
+        try:
+            if dataio.describe_export_source(str(base)).get("ok"):
+                paths.append(str(base))
+        except (
+            Exception
+        ):  # noqa: BLE001 - arbitrary local folders must not break registry boot.
+            pass
         try:
             children = sorted(base.iterdir(), key=lambda p: p.name.lower())
         except OSError:
@@ -159,6 +240,13 @@ def load_registry() -> Dict[str, Any]:
     active_path = (
         _norm_path(raw.get("active_path") or "") if raw.get("active_path") else None
     )
+    preferred_active_path = _preferred_configured_export(
+        sources,
+        active_path=active_path,
+        active_source=raw.get("active_source"),
+    )
+    if preferred_active_path in valid_paths:
+        active_path = preferred_active_path
     if active_path not in valid_paths:
         active_path = valid_paths[0] if valid_paths else None
 
@@ -174,6 +262,7 @@ def load_registry() -> Dict[str, Any]:
         "ok": True,
         "sources": sources,
         "active_path": active_path,
+        "active_source": raw.get("active_source") or "auto_discovered",
         "crossdb_paths": crossdb_paths,
         "config_path": str(_CONFIG_PATH),
     }
@@ -198,6 +287,12 @@ def save_registry(patch: Dict[str, Any]) -> Dict[str, Any]:
 
     active_path = patch.get("active_path", current.get("active_path"))
     active_path = _norm_path(active_path) if active_path else None
+    if patch.get("active_source"):
+        active_source = str(patch.get("active_source"))
+    elif "active_path" in patch and active_path:
+        active_source = "manual"
+    else:
+        active_source = raw.get("active_source")
     crossdb_paths = patch.get("crossdb_paths", current.get("crossdb_paths") or [])
     crossdb_paths = _dedup_paths(crossdb_paths)
 
@@ -213,6 +308,7 @@ def save_registry(patch: Dict[str, Any]) -> Dict[str, Any]:
         {
             "sources": persist_sources,
             "active_path": active_path,
+            "active_source": active_source,
             "crossdb_paths": crossdb_paths,
             "removed_paths": sorted(removed_paths),
             "updated_at": _now(),
@@ -235,6 +331,7 @@ def register_source(
         {
             "sources": [source],
             "active_path": source["path"] if active else registry.get("active_path"),
+            "active_source": "registered_source" if active else registry.get("active_source"),
             "crossdb_paths": next_paths,
         }
     )
@@ -293,6 +390,7 @@ def rename_source(path: str, label: str) -> Dict[str, Any]:
         {
             "sources": persist_sources,
             "active_path": raw.get("active_path") or registry.get("active_path"),
+            "active_source": raw.get("active_source") or registry.get("active_source"),
             "crossdb_paths": raw.get("crossdb_paths")
             or registry.get("crossdb_paths")
             or [],
@@ -344,6 +442,9 @@ def remove_source(path: str) -> Dict[str, Any]:
     active_path = _norm_path(active_path) if active_path else None
     if active_path == norm or active_path not in remaining_valid:
         active_path = remaining_valid[0] if remaining_valid else None
+        active_source = "fallback" if active_path else None
+    else:
+        active_source = raw.get("active_source") or registry.get("active_source")
 
     raw_crossdb = raw.get("crossdb_paths") or registry.get("crossdb_paths") or []
     crossdb_paths = [
@@ -355,6 +456,7 @@ def remove_source(path: str) -> Dict[str, Any]:
         {
             "sources": persist_sources,
             "active_path": active_path,
+            "active_source": active_source,
             "crossdb_paths": crossdb_paths,
             "removed_paths": sorted(removed_paths),
             "updated_at": _now(),

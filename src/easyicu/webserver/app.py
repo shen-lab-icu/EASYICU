@@ -288,7 +288,7 @@ def jobs_extract(body: Dict[str, Any]) -> dict:
         raise HTTPException(status_code=400, detail="path and database are required")
     settings = settings_store.load_settings()
     out_dir = body.get("out_dir") or settings.get("export_dir")
-    runner = dataio.make_export_runner(
+    export_runner = dataio.make_export_runner(
         data_path=path,
         database=database,
         modules=body.get("modules"),
@@ -299,7 +299,28 @@ def jobs_extract(body: Dict[str, Any]) -> dict:
         create_run_subdir=True,
         max_patients=body.get("max_patients"),
         cohort=body.get("cohort"),
+        include_feature_definitions=bool(
+            body.get("include_feature_definitions", True)
+        ),
     )
+
+    def runner(job: Any) -> dict:
+        result = export_runner(job)
+        out_path = str((result or {}).get("out_dir") or "")
+        if out_path and result.get("manifest") and not result.get("cancelled_at"):
+            registry = source_store.register_source(
+                out_path,
+                label=body.get("label"),
+                active=True,
+                crossdb=True,
+            )
+            result["registered_source"] = {
+                "ok": bool(registry.get("ok")),
+                "active_path": registry.get("active_path"),
+                "source_count": len(registry.get("sources") or []),
+            }
+        return result
+
     job = MANAGER.submit("extract", runner)
     return {"job_id": job.id, "kind": job.kind, "status": job.status}
 

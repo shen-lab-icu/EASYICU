@@ -66,10 +66,7 @@ def run_browser(base_url: str, run_dir: Path, screenshots: bool) -> dict[str, An
             "against fluid-forward resuscitation, with lactate, blood pressure, SOFA-2 severity, "
             "and mortality outcomes.",
         )
-        page.locator("details.ideas-advanced summary").first.click()
-        page.fill("#ideaTitle", "Vasopressors or Fluids in Early Septic Shock")
-        page.fill("#ideaJournal", "New England Journal of Medicine")
-        page.fill("#ideaYear", "2026")
+        page.locator("details.ideas-secondary-fields summary").first.click()
         page.fill(
             "#ideaExcerpt",
             "Adult septic shock patients were assigned to restricted intravenous fluid and earlier "
@@ -79,16 +76,17 @@ def run_browser(base_url: str, run_dir: Path, screenshots: bool) -> dict[str, An
         with page.expect_response(lambda res: "/api/ideas/resolve-source" in res.url, timeout=10000) as resolve_info:
             page.locator("[data-idea-resolve]").click()
         resolve_response = resolve_info.value
-        page.wait_for_function(
-            "() => document.body.innerText.includes('metadata_ready') || document.body.innerText.includes('source resolved')",
-            timeout=8000,
-        )
+        try:
+            resolve_payload = resolve_response.json()
+        except Exception:
+            resolve_payload = {}
+        page.wait_for_timeout(300)
 
         with page.expect_response(lambda res: "/api/ideas/mine" in res.url, timeout=10000) as mine_info:
             page.locator("[data-idea-mine]").click()
         mine_response = mine_info.value
         page.wait_for_function(
-            "() => document.body.innerText.includes('Idea ledger') && document.body.innerText.includes('Pre-experiment')",
+            "() => document.body.innerText.includes('Idea ledger') && (document.body.innerText.includes('Feasibility') || document.body.innerText.includes('Pre-experiment'))",
             timeout=10000,
         )
         mined = page.evaluate(
@@ -103,7 +101,7 @@ def run_browser(base_url: str, run_dir: Path, screenshots: bool) -> dict[str, An
                 conceptIds: concepts,
                 ledgerRows: document.querySelectorAll('table tbody tr').length,
                 sourceEvidenceVisible: document.body.innerText.includes('SOURCE EVIDENCE'),
-                preExperimentVisible: document.body.innerText.includes('Pre-experiment'),
+                preExperimentVisible: document.body.innerText.includes('Feasibility') || document.body.innerText.includes('Pre-experiment'),
                 feasibilityText: document.body.innerText,
                 goNoGo: idea.go_no_go || null,
                 preStatus: run.pre_experiment && run.pre_experiment.status,
@@ -115,10 +113,11 @@ def run_browser(base_url: str, run_dir: Path, screenshots: bool) -> dict[str, An
         )
 
         page.locator("[data-idea-step='handoff']").first.click()
-        page.wait_for_function(
-            "() => document.body.innerText.includes('Plan handoff') && !!document.querySelector('#ideaPlanEdits')",
-            timeout=8000,
-        )
+        page.wait_for_selector("[data-idea-plan]", timeout=8000)
+        with page.expect_response(lambda res: "/api/ideas/plan" in res.url, timeout=10000) as plan_info:
+            page.locator("[data-idea-plan]").click()
+        plan_response = plan_info.value
+        page.wait_for_selector("#ideaPlanEdits", timeout=8000)
         page.fill("#ideaPlanEdits", "Use adult first ICU stay and add a missingness sensitivity check.")
         with page.expect_response(lambda res: "/api/ideas/handoff" in res.url, timeout=10000) as handoff_info:
             page.locator("[data-idea-handoff]").click()
@@ -163,14 +162,14 @@ def run_browser(base_url: str, run_dir: Path, screenshots: bool) -> dict[str, An
             page.locator("[data-idea-record]").first.click()
         run_response = run_info.value
         page.wait_for_function(
-            "() => document.body.innerText.includes('Idea ledger') && document.body.innerText.includes('Plan handoff')",
+            "() => document.body.innerText.includes('Idea ledger') && (document.body.innerText.includes('Plan / replan') || document.body.innerText.includes('Plan handoff') || document.body.innerText.includes('Handoff written'))",
             timeout=10000,
         )
         history_load = page.evaluate(
             """() => ({
               ledgerVisible: document.body.innerText.includes('Idea ledger'),
-              preExperimentVisible: document.body.innerText.includes('Pre-experiment'),
-              handoffVisible: document.body.innerText.includes('Handoff written') || document.body.innerText.includes('Plan handoff'),
+              preExperimentVisible: document.body.innerText.includes('Feasibility') || document.body.innerText.includes('Pre-experiment'),
+              handoffVisible: document.body.innerText.includes('Handoff written') || document.body.innerText.includes('Plan / replan') || document.body.innerText.includes('Plan handoff'),
               projectVisible: document.body.innerText.includes('Agent project seed created') || document.body.innerText.includes('Create Agent project'),
             })"""
         )
@@ -208,7 +207,25 @@ def run_browser(base_url: str, run_dir: Path, screenshots: bool) -> dict[str, An
         browser.close()
         return {
             "resolveResponseStatus": resolve_response.status,
+            "resolvePayload": {
+                "sourceAdapterStatus": (
+                    (resolve_payload.get("source_adapter") or {}).get("status")
+                    if isinstance(resolve_payload, dict)
+                    else None
+                ),
+                "metadataSource": (
+                    (resolve_payload.get("source_adapter") or {}).get("metadata_source")
+                    if isinstance(resolve_payload, dict)
+                    else None
+                ),
+                "networkCalls": (
+                    (resolve_payload.get("source_adapter") or {}).get("network_calls")
+                    if isinstance(resolve_payload, dict)
+                    else None
+                ),
+            },
             "mineResponseStatus": mine_response.status,
+            "planResponseStatus": plan_response.status,
             "handoffResponseStatus": handoff_response.status,
             "projectResponseStatus": project_response.status,
             "historyRunResponseStatus": run_response.status,
@@ -265,6 +282,8 @@ def main() -> int:
             failures.append(f"resolve response {browser.get('resolveResponseStatus')}")
         if browser.get("mineResponseStatus") != 200:
             failures.append(f"mine response {browser.get('mineResponseStatus')}")
+        if browser.get("planResponseStatus") != 200:
+            failures.append(f"plan response {browser.get('planResponseStatus')}")
         if browser.get("handoffResponseStatus") != 200:
             failures.append(f"handoff response {browser.get('handoffResponseStatus')}")
         if browser.get("projectResponseStatus") != 200:

@@ -231,6 +231,10 @@ def test_idea_plan_stage_precedes_agent_handoff_and_stays_metadata_only(
     assert plan["clinical_icu_constraints"]
     assert plan["required_user_confirmations"]
     assert "prepare or register a usable EasyICU export" in plan["required_user_confirmations"]
+    assert isinstance(plan["analysis_plan"][0], dict)
+    assert plan["analysis_plan"][0]["phase"] == "Question"
+    assert "Freeze the clinical question" in plan["analysis_plan"][0]["title"]
+    assert "Prior work does not automatically block the idea" in str(plan["analysis_plan"])
     assert plan["agent_boundary"]["agent_run_created"] is False
     assert plan["agent_boundary"]["draft_unlocked"] is False
     assert "target-trial-style translation" in str(plan["reference_analysis_patterns"])
@@ -260,6 +264,57 @@ def test_idea_plan_stage_precedes_agent_handoff_and_stays_metadata_only(
     assert frozen["agent_seed"]["requires_human_confirmation"] is True
     assert frozen["agent_seed"]["reportable"] is False
     assert frozen["agent_seed"]["draft_unlocked"] is False
+
+
+def test_idea_mining_does_not_recommend_mock_export_as_real_feasibility(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(idea_mining, "_RUN_ROOT", tmp_path / "idea_runs")
+    monkeypatch.setattr(idea_mining, "_HISTORY_PATH", tmp_path / "idea_history.json")
+    monkeypatch.setattr(
+        idea_mining,
+        "_active_export",
+        lambda: (
+            {"label": "MOCK", "path": str(tmp_path / "mock_export")},
+            {
+                "ok": True,
+                "label": "MOCK",
+                "database": "MOCK",
+                "path": str(tmp_path / "mock_export"),
+                "summary": {"stays": 10, "modules": 20, "total_rows": 1000},
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        idea_mining,
+        "_export_index",
+        lambda export: {
+            "concept_to_file": {
+                "vaso_ind": {"module": "vasopressors"},
+                "total_input_ml": {"module": "vitals"},
+                "death": {"module": "outcome"},
+            },
+            "entity_ids": {"1", "2"},
+            "demo_like": True,
+        },
+    )
+
+    response = TestClient(app).post(
+        "/api/ideas/mine",
+        json={
+            "source_type": "url",
+            "title": "Vasopressors or Fluids in Early Septic Shock",
+            "excerpt": "Vasopressor and fluid strategy may affect mortality in septic shock.",
+        },
+    )
+
+    assert response.status_code == 200
+    idea = response.json()["idea_ledger"][0]
+    assert idea["feasibility"]["tier"] == "demo_only"
+    assert idea["go_no_go"] == "hold"
+    assert "MOCK/demo" in idea["feasibility"]["reason"]
+    assert "real EasyICU export" in idea["next_action"]
 
 
 def test_idea_literature_discovery_blocks_without_network_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -245,7 +245,7 @@
         </div>` : ''}
       <div class="gdi-feature-list">
         <div class="gdi-feature-row">
-          <div><strong>${translate(ctx, 'Local deterministic mining', '本地确定性挖掘')}</strong><small>${translate(ctx, 'PDF/folder bounded excerpt, dictionary feasibility, pre-experiment, Agent handoff seed', 'PDF/文件夹有界摘录、字典可行性、预实验、Agent 交接种子')}</small></div>
+          <div><strong>${translate(ctx, 'Local deterministic mining', '本地确定性挖掘')}</strong><small>${translate(ctx, 'PDF/folder bounded excerpt, dictionary feasibility assessment, Agent handoff seed', 'PDF/文件夹有界摘录、字典可行性评估、Agent 交接种子')}</small></div>
           <span class="pill ok">${translate(ctx, 'available now', '当前可用')}</span>
         </div>
         <div class="gdi-feature-row">

@@ -484,6 +484,7 @@ class PatientFilter:
         # 加载数据
         df = self._load_demographics()
         original_count = len(df)
+        self._last_original_count = original_count
         
         if self.verbose:
             logger.info(f"开始筛选: 原始患者数 {original_count}")

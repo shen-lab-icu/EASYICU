@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from easyicu import concept_catalog
 from easyicu.webserver.app import app
+import easyicu.webserver.app as app_module
 from easyicu.webserver import agent_runs
 from easyicu.webserver import cohort_review
 from easyicu.webserver import copilot_sessions
@@ -1730,6 +1731,14 @@ def test_patient_review_drilldown_uses_active_source_with_bounded_table_previews
     assert payload["summary"]["modules"] == 5
     assert payload["summary"]["mortality"] == 33.3
     assert payload["summary"]["median_sofa2"] == 6.5
+    assert payload["eligibility_flow"]["payload_scope"] == "cohort_attrition_metadata_only"
+    assert payload["eligibility_flow"]["has_stepwise_report"] is False
+    assert [row["id"] for row in payload["eligibility_flow"]["steps"]] == [
+        "final_cohort",
+    ]
+    assert payload["eligibility_flow"]["steps"][0]["count"] == 3
+    assert payload["eligibility_flow"]["steps"][0]["label"] == "Final cohort"
+    assert payload["eligibility_flow"]["steps"][-1]["final"] is True
     assert len(payload["entities"]) == 3
     assert payload["entities"][0]["ref"].startswith("ent_")
     assert payload["selected"]["label"] == "Entity 1"
@@ -1756,6 +1765,14 @@ def test_patient_review_drilldown_uses_active_source_with_bounded_table_previews
         "spo2",
         "temp",
     }
+    # Each lane signal must carry charttime aligned with its values so the
+    # front-end renders the real ICU-admission-hour axis (not a 0..N index).
+    vitals_hr = next(
+        row for row in lanes["vitals"]["signals"] if row["feature"] == "hr"
+    )
+    assert vitals_hr["values"] == [90.0, 95.0]
+    assert vitals_hr["times"] == ["2026-01-01 00:00", "2026-01-01 01:00"]
+    assert len(vitals_hr["times"]) == len(vitals_hr["values"])
     assert lanes["scores"]["signals"][0]["feature"] == "sofa2"
     assert not any(
         row["feature"] == "age" for row in lanes.get("other", {}).get("signals", [])
@@ -1877,6 +1894,83 @@ def test_patient_review_drilldown_uses_active_source_with_bounded_table_previews
     serialized = json.dumps(payload)
     for marker in ["subject_id", "hadm_id", "tableRows", "stay_id", '"series"']:
         assert marker not in serialized
+
+
+def test_patient_review_drilldown_renders_manifest_eligibility_flow(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    export_dir = _write_csv_export(tmp_path / "miiv", database="miiv")
+    manifest_path = export_dir / "_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["cohort_contract"] = {
+        "preset": "sepsis3",
+        "age_min": 18,
+        "age_max": 90,
+        "min_icu_los_hours": 24,
+        "observation_window_hours": 72,
+        "exclude_readmissions": True,
+        "icd_enabled": True,
+        "icd_include": ["N17"],
+        "icd_exclude": ["C34"],
+    }
+    manifest["cohort_report"] = {
+        "mode": "sepsis3",
+        "source_total": 5,
+        "selected_before_concept_prefilter": 4,
+        "concept_matches": 4,
+        "selected_before_icd": 4,
+        "selected_before_cap": 3,
+        "selected": 3,
+        "max_patients_applied": False,
+        "applied_filters": ["demographics", "concept_prefilter", "icd"],
+        "icd": {
+            "enabled": True,
+            "include_tokens": ["N17"],
+            "exclude_tokens": ["C34"],
+            "include_matches": 3,
+            "exclude_matches": 1,
+        },
+    }
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    source_store.register_source(
+        str(export_dir), label="Review fixture", active=True, crossdb=True
+    )
+    client = TestClient(app)
+
+    response = client.post("/api/patient-review/drilldown", json={})
+
+    assert response.status_code == 200
+    flow = response.json()["eligibility_flow"]
+    assert flow["has_stepwise_report"] is True
+    assert flow["privacy"] == {
+        "patient_rows_returned": False,
+        "direct_identifiers_returned": False,
+    }
+    steps = flow["steps"]
+    assert [row["id"] for row in steps] == [
+        "source_total",
+        "demographic_stay_filters",
+        "concept_prefilter",
+        "icd_filters",
+        "final_cohort",
+    ]
+    assert [row["count"] for row in steps] == [5, 4, 4, 3, 3]
+    assert steps[1]["excluded"] == 1
+    assert steps[2]["label_i18n"] == {
+        "en": "Sepsis-3 cohort",
+        "zh": "Sepsis-3 脓毒症队列",
+    }
+    assert steps[2]["note_i18n"] == {
+        "en": "suspected infection + SOFA signal · first 72h window",
+        "zh": "疑似感染 + SOFA 信号 · 前 72 小时窗口",
+    }
+    assert steps[3]["excluded"] == 1
+    assert steps[4]["final"] is True
+    assert steps[1]["label_i18n"]["zh"] == "年龄 18-90 岁 + ICU ≥ 24 小时"
 
 
 def test_patient_review_drilldown_paginates_module_table_previews(
@@ -4145,6 +4239,145 @@ def test_export_source_registry_autodiscovery_skips_unreadable_children(
     assert result["ok"] is True
     assert result["sources"] == []
     assert result["active_path"] is None
+
+
+def test_export_source_registry_autodiscovery_includes_export_root_and_children(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    export_root = _write_csv_export(tmp_path / "easyicu_export", database="mock")
+    child_export = _write_csv_export(
+        export_root / "easyicu_export_20260627_miiv_parquet", database="miiv"
+    )
+    monkeypatch.setattr(
+        source_store.settings_store,
+        "load_settings",
+        lambda: {"export_dir": str(export_root)},
+    )
+
+    result = source_store.load_registry()
+    paths = {source["path"] for source in result["sources"]}
+
+    assert str(export_root) in paths
+    assert str(child_export) in paths
+    assert result["active_path"] in paths
+
+
+def test_export_source_registry_promotes_latest_configured_export_for_old_auto_active(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    export_root = _write_csv_export(tmp_path / "easyicu_export", database="mock")
+    old_child = _write_csv_export(export_root / "mock_20260424", database="mock")
+    manifest = json.loads((export_root / "_manifest.json").read_text())
+    manifest["generated"] = "2026-06-27T08:00:00"
+    (export_root / "_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    old_manifest = json.loads((old_child / "_manifest.json").read_text())
+    old_manifest["generated"] = "2026-04-24T19:16:51"
+    (old_child / "_manifest.json").write_text(
+        json.dumps(old_manifest), encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        source_store.settings_store,
+        "load_settings",
+        lambda: {"export_dir": str(export_root)},
+    )
+    source_store._write_raw(
+        {
+            "sources": [{"path": str(old_child), "label": "MOCK"}],
+            "active_path": str(old_child),
+            "crossdb_paths": [],
+            "removed_paths": [],
+        }
+    )
+
+    result = source_store.load_registry()
+
+    assert result["active_path"] == str(export_root)
+    assert result["active_source"] == "auto_discovered"
+
+
+def test_export_source_registry_respects_manual_active_inside_configured_export(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    export_root = _write_csv_export(tmp_path / "easyicu_export", database="mock")
+    child = _write_csv_export(export_root / "manual_child", database="mock")
+    monkeypatch.setattr(
+        source_store.settings_store,
+        "load_settings",
+        lambda: {"export_dir": str(export_root)},
+    )
+    saved = source_store.save_registry(
+        {"sources": [str(export_root), str(child)], "active_path": str(child)}
+    )
+
+    result = source_store.load_registry()
+
+    assert saved["active_source"] == "manual"
+    assert result["active_path"] == str(child)
+    assert result["active_source"] == "manual"
+
+
+def test_extraction_job_registers_finished_export_as_active(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    export_dir = _write_csv_export(tmp_path / "finished_export", database="miiv")
+    calls: list[dict[str, object]] = []
+
+    def fake_make_export_runner(**_kwargs):
+        def runner(_job):
+            return {
+                "out_dir": str(export_dir),
+                "manifest": "_manifest.json",
+                "files": [],
+                "file_count": 0,
+                "total_rows": 0,
+            }
+
+        return runner
+
+    def fake_register_source(path, label=None, active=True, crossdb=True):
+        calls.append(
+            {"path": path, "label": label, "active": active, "crossdb": crossdb}
+        )
+        return {"ok": True, "active_path": path, "sources": [{"path": path}]}
+
+    monkeypatch.setattr(app_module.dataio, "make_export_runner", fake_make_export_runner)
+    monkeypatch.setattr(app_module.source_store, "register_source", fake_register_source)
+    client = TestClient(app)
+
+    submitted = client.post(
+        "/api/jobs/extract",
+        json={"path": str(tmp_path), "database": "miiv", "label": "Latest export"},
+    )
+    assert submitted.status_code == 200
+    job_id = submitted.json()["job_id"]
+    snapshot = None
+    for _ in range(50):
+        snapshot = client.get(f"/api/jobs/{job_id}").json()
+        if snapshot["status"] != "running":
+            break
+        time.sleep(0.01)
+
+    assert snapshot is not None
+    assert snapshot["status"] == "done"
+    assert calls == [
+        {
+            "path": str(export_dir),
+            "label": "Latest export",
+            "active": True,
+            "crossdb": True,
+        }
+    ]
+    assert snapshot["result"]["registered_source"]["active_path"] == str(export_dir)
 
 
 def test_export_source_registry_rename_and_remove_are_metadata_only(

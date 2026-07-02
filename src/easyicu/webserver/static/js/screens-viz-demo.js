@@ -28,6 +28,7 @@
 
   const DEMO_ENTITY_COUNT = 48;
   const DEMO_DURATION_HOURS = 48;
+  const DEMO_CHART_HOURS = [0.2, 1, 2, 3.4, 6, 8, 12, 18, 24, 30, 36, 48];
   const DEMO_CLINICAL_LANES = {
     vitals: ['hr', 'map', 'sbp', 'dbp', 'temp', 'spo2', 'resp'],
     labs: ['lact', 'crea', 'bili', 'plt', 'hgb', 'wbc', 'inr_pt', 'glu', 'k', 'na', 'alb', 'crp', 'tnt', 'ph', 'po2', 'pco2'],
@@ -85,8 +86,8 @@
   function demoRowsForModule(module, featureCount, coverage) {
     const entityRows = Math.max(1, Math.round(DEMO_ENTITY_COUNT * (coverage || 90) / 100));
     if (!demoIsTimeIndexed(module)) return entityRows;
-    const density = Math.max(1, Math.min(6, Math.ceil(featureCount / 8)));
-    return entityRows * DEMO_DURATION_HOURS * density;
+    const density = Math.max(1, Math.min(3, Math.ceil(featureCount / 12)));
+    return entityRows * DEMO_CHART_HOURS.length * density;
   }
   function demoReviewStatus(coverage, featureCount) {
     if (!featureCount) return 'empty';
@@ -119,8 +120,6 @@
     'sofa_resp', 'sofa_coag', 'sofa_liver', 'sofa_cardio', 'sofa_cns', 'sofa_renal',
     'sofa2_resp', 'sofa2_coag', 'sofa2_liver', 'sofa2_cardio', 'sofa2_cns', 'sofa2_renal',
   ]);
-  const DEMO_CHART_HOURS = [0, 1, 2, 3, 4, 6, 8, 12, 18, 24, 36, 48];
-
   function demoIsBooleanFeature(feature, unit) {
     const key = String(feature || '').toLowerCase();
     return String(unit || '').toLowerCase() === 'boolean'
@@ -146,8 +145,19 @@
     if (key === 'sofa' || key === 'sofa2') return demoClamp(Math.round(raw), 0, 24);
     if (key === 'mews' || key === 'news') return demoClamp(Math.round(raw), 0, 20);
     if (demoIsIntegerFeature(key)) return Math.round(raw);
-    if (key === 'ph' || Math.abs(raw) < 1) return Number(raw.toFixed(2));
-    return Number(raw.toFixed(1));
+    if (key === 'ph') return Number(demoClamp(raw, 6.8, 7.8).toFixed(2));
+    if (key === 'spo2') return Number(demoClamp(raw, 70, 100).toFixed(1));
+    if (key === 'fio2') return Number(demoClamp(raw, 21, 100).toFixed(1));
+    if (key === 'pafi' || key === 'safi') return Number(demoClamp(raw, 40, 600).toFixed(1));
+    if (key.includes('rate') || key.includes('dur') || key === 'peep' || key === 'ins') {
+      return Number(Math.max(0, raw).toFixed(Math.abs(raw) < 1 ? 2 : 1));
+    }
+    const nonNegativeUnits = ['mg/dl', 'mmol/l', 'x10', 'mcg/kg/min', 'hours', 'ratio', 'bpm', 'mmhg', '%', 'breaths/min'];
+    const unitKey = String(unit || '').toLowerCase();
+    const bounded = nonNegativeUnits.some(part => unitKey.includes(part)) || Math.abs(raw) < 1;
+    const value = bounded ? Math.max(0, raw) : raw;
+    if (Math.abs(value) < 1) return Number(value.toFixed(2));
+    return Number(value.toFixed(1));
   }
   function demoCharttimeAt(rowIndex) {
     const idx = Math.max(0, Number(rowIndex) || 0);
@@ -198,8 +208,9 @@
       const base = demoBaseValue(feature, entityIndex);
       if (demoIsBooleanFeature(key, meta.unit)) return (i + (entityIndex || 0)) % 5 === 0 ? 0 : 1;
       const wave = Math.sin((i + 1 + (entityIndex || 0)) / 2.1);
-      const drift = (i - 5) * 0.06;
-      const scale = Math.max(0.08, Math.abs(base) * 0.045);
+      const smallDose = Math.abs(base) < 1;
+      const drift = (i - 5) * (smallDose ? 0.006 : 0.06);
+      const scale = Math.max(smallDose ? 0.008 : 0.08, Math.abs(base) * 0.045);
       return demoNormalizeValue(key, base + wave * scale + drift, meta.unit);
     });
     return {
@@ -208,6 +219,7 @@
       name: meta.name || feature,
       unit: meta.unit || '',
       values,
+      times: DEMO_CHART_HOURS.slice(0, values.length),
       point_count: values.length,
       current: values[values.length - 1],
       min: Math.min(...values),
@@ -273,7 +285,7 @@
 
   window.VIZ_DEMO = {
     catalogModuleLabel, catalogFeatureMeta,
-    DEMO_ENTITY_COUNT, DEMO_DURATION_HOURS, DEMO_CLINICAL_LANES, DEMO_THRESHOLDS,
+    DEMO_ENTITY_COUNT, DEMO_DURATION_HOURS, DEMO_CHART_HOURS, DEMO_CLINICAL_LANES, DEMO_THRESHOLDS,
     demoCatalogModules, demoIsTimeIndexed, demoFeatureModule, demoCoverageForFeature,
     demoRowsForModule, demoReviewStatus, demoQualityStatus, demoRateTone,
     demoThresholds, demoBaseValue, demoTableValue, demoCharttimeAt, demoSignal, demoTimeLanes, demoSignalDelta,

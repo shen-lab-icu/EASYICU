@@ -88,3 +88,57 @@
   line-height:1.5;
   color:var(--ink-2);
 }
+
+/* Foldable technical brief (data context + numbered tasks) so the overview
+   does not open as a wall of raw run prose. Owner: screens-agent.js. */
+.ag-wrap .ag-q-more{
+  margin-top:12px;
+  padding-top:12px;
+  border-top:1px solid var(--hair);
+}
+
+.ag-wrap .ag-q-more-sum{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  cursor:pointer;
+  list-style:none;
+  user-select:none;
+  padding:2px 0;
+  color:var(--ink-2);
+}
+
+.ag-wrap .ag-q-more-sum::-webkit-details-marker{ display:none; }
+
+.ag-wrap .ag-q-more-ico{
+  display:inline-grid;
+  place-items:center;
+  color:var(--ink-4);
+  transition:transform .15s ease;
+}
+
+.ag-wrap .ag-q-more[open] .ag-q-more-ico{ transform:rotate(90deg); }
+
+.ag-wrap .ag-q-more-lab{
+  font-size:12px;
+  font-weight:650;
+}
+
+.ag-wrap .ag-q-more-hint{
+  margin-left:auto;
+  font-size:10px;
+  font-weight:700;
+  text-transform:uppercase;
+  letter-spacing:.03em;
+  color:var(--ink-4);
+}
+
+.ag-wrap .ag-q-more-body{
+  margin-top:12px;
+}
+
+.ag-wrap .ag-q-more-body .ag-q-section:first-child{
+  margin-top:0;
+  padding-top:0;
+  border-top:none;
+}
