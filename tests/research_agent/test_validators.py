@@ -88,6 +88,32 @@ def test_concept_usage_silences_lab_mean_when_median_present(ra):
     assert all("lact" not in f.message.lower() for f in findings)
 
 
+def test_concept_usage_ignores_lab_missingness_fraction_mean(ra):
+    ctx = _ctx_with_sofa(ra)
+    findings = ra.ConceptUsageAuditor().audit(
+        context=ctx,
+        script_text='missing_pct = df["lact"].isna().mean() * 100',
+    )
+    assert all("lact" not in f.message.lower() for f in findings)
+
+
+def test_concept_usage_silences_generic_helper_with_median_and_mean(ra):
+    ctx = _ctx_with_sofa(ra)
+    code = """
+def add_continuous(series):
+    vals = series.dropna().astype(float)
+    return {
+        "median": vals.median(),
+        "q25": vals.quantile(0.25),
+        "q75": vals.quantile(0.75),
+        "mean": vals.mean(),
+    }
+summary = add_continuous(df["lact"])
+"""
+    findings = ra.ConceptUsageAuditor().audit(context=ctx, script_text=code)
+    assert all("lact" not in f.message.lower() for f in findings)
+
+
 def test_concept_usage_flags_fillna_zero(ra):
     ctx = _ctx_with_sofa(ra)
     auditor = ra.ConceptUsageAuditor()
@@ -95,6 +121,19 @@ def test_concept_usage_flags_fillna_zero(ra):
     findings = auditor.audit(context=ctx, script_text=code)
     assert any("fillna" in f.message.lower() or "imputation" in f.message.lower()
                for f in findings)
+
+
+def test_concept_usage_allows_boolean_mask_fillna_false(ra):
+    ctx = _ctx_with_sofa(ra)
+    code = """
+mask = pd.to_numeric(df["age"], errors="coerce") >= 18
+adult = df.loc[mask.fillna(False)].copy()
+"""
+    findings = ra.ConceptUsageAuditor().audit(context=ctx, script_text=code)
+    assert not any(
+        "fillna" in f.message.lower() or "imputation" in f.message.lower()
+        for f in findings
+    )
 
 
 def test_concept_usage_fillna_zero_ignores_env_string_subscripts(ra):
@@ -258,6 +297,293 @@ def test_statistical_validator_flags_primary_or_mismatch(ra, tmp_path: Path):
     )
     assert any(f.severity == "error" and "primary or" in f.message.lower()
                for f in findings), findings
+
+
+def _figure_source_fixture(tmp_path: Path) -> tuple[Path, Path]:
+    run_dir = tmp_path / "run"
+    upstream = run_dir / "steps" / "05_sensitivity_comparison" / "outputs"
+    figure = run_dir / "steps" / "05_sensitivity_comparison_figure" / "outputs"
+    upstream.mkdir(parents=True)
+    figure.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {
+                "spec_id": "primary_modeled_or",
+                "effect_scale": "odds_ratio",
+                "point_estimate": 1.07,
+                "ci_low": 1.01,
+                "ci_high": 1.13,
+            },
+            {
+                "spec_id": "drop_lactate_modeled_or",
+                "effect_scale": "odds_ratio",
+                "point_estimate": 1.24,
+                "ci_low": 1.18,
+                "ci_high": 1.30,
+            },
+            {
+                "spec_id": "primary_modeled_rd",
+                "effect_scale": "risk_difference",
+                "point_estimate": 0.005,
+                "ci_low": 0.001,
+                "ci_high": 0.009,
+            },
+        ]
+    ).to_csv(upstream / "sensitivity_comparison.csv", index=False)
+    return run_dir, figure
+
+
+def test_figure_source_data_validator_accepts_upstream_subset(ra, tmp_path: Path):
+    run_dir, figure_out = _figure_source_fixture(tmp_path)
+    pd.DataFrame(
+        [
+            {
+                "spec_id": "primary_modeled_or",
+                "effect_scale": "odds_ratio",
+                "point_estimate": 1.07,
+                "ci_low": 1.01,
+                "ci_high": 1.13,
+            },
+            {
+                "spec_id": "primary_modeled_rd",
+                "effect_scale": "risk_difference",
+                "point_estimate": 0.005,
+                "ci_low": 0.001,
+                "ci_high": 0.009,
+            },
+        ]
+    ).to_csv(figure_out / "sensitivity_forest_source_data.csv", index=False)
+
+    step = ra.schema.AnalysisStep(
+        step_id="05_sensitivity_comparison_figure",
+        intent="Render the publication figure declared by step '05_sensitivity_comparison'.",
+    )
+    findings = ra.FigureSourceDataValidator().audit(
+        step=step,
+        out_dir=figure_out,
+        run_dir=run_dir,
+        step_summary={"rendering_only": True},
+    )
+    assert findings == []
+
+
+def test_figure_source_data_validator_blocks_resume_evidence_pollution(
+    ra,
+    tmp_path: Path,
+):
+    run_dir, figure_out = _figure_source_fixture(tmp_path)
+    pd.DataFrame(
+        [
+            {
+                "spec_id": "primary_modeled_or",
+                "effect_scale": "odds_ratio",
+                "point_estimate": 1.07,
+                "ci_low": 1.01,
+                "ci_high": 1.13,
+            },
+            {
+                "spec_id": "alt_cohort_from_old_robustness_panel",
+                "effect_scale": "odds_ratio",
+                "point_estimate": 1.03,
+                "ci_low": 0.95,
+                "ci_high": 1.11,
+            },
+        ]
+    ).to_csv(figure_out / "sensitivity_forest_source_data.csv", index=False)
+
+    step = ra.schema.AnalysisStep(
+        step_id="05_sensitivity_comparison_figure",
+        intent="Render the publication figure declared by step '05_sensitivity_comparison'.",
+    )
+    findings = ra.FigureSourceDataValidator().audit(
+        step=step,
+        out_dir=figure_out,
+        run_dir=run_dir,
+        step_summary={"rendering_only": True},
+    )
+    assert any(f.severity == "error" for f in findings), findings
+    assert "absent" in findings[0].message.lower() or (
+        findings[0].detail
+        and findings[0].detail["best_mismatch"]["reason"]
+        == "source_rows_not_in_upstream"
+    )
+
+
+def test_figure_source_data_validator_blocks_numeric_drift(ra, tmp_path: Path):
+    run_dir, figure_out = _figure_source_fixture(tmp_path)
+    pd.DataFrame(
+        [
+            {
+                "spec_id": "primary_modeled_or",
+                "effect_scale": "odds_ratio",
+                "point_estimate": 9.99,
+                "ci_low": 1.01,
+                "ci_high": 1.13,
+            }
+        ]
+    ).to_csv(figure_out / "sensitivity_forest_source_data.csv", index=False)
+
+    step = ra.schema.AnalysisStep(
+        step_id="05_sensitivity_comparison_figure",
+        intent="Render the publication figure declared by step '05_sensitivity_comparison'.",
+    )
+    findings = ra.FigureSourceDataValidator().audit(
+        step=step,
+        out_dir=figure_out,
+        run_dir=run_dir,
+        step_summary={"rendering_only": True},
+    )
+    assert any(
+        f.severity == "error"
+        and f.detail
+        and f.detail["best_mismatch"]["reason"] == "source_values_disagree"
+        for f in findings
+    ), findings
+
+
+def test_figure_contract_quality_blocks_rescue_publication_contract(ra, tmp_path: Path):
+    run_dir = tmp_path / "run"
+    out_dir = run_dir / "steps" / "04_primary_association_figure" / "outputs"
+    out_dir.mkdir(parents=True)
+    contract_path = out_dir / "publication_figure.figure_contract.json"
+    contract_path.write_text(
+        json.dumps(
+            {
+                "figure_id": "publication_figure",
+                "core_claim": "Adjusted odds ratios are summarised from source data.",
+                "statistics_note": (
+                    "Deterministic rescue figure generated when the figure-only "
+                    "child step did not emit exports."
+                ),
+                "panels": [
+                    {
+                        "panel_id": "A",
+                        "title": "Odds-ratio forest plot",
+                        "role": "relationship",
+                        "claim": "Adjusted odds ratios and 95% intervals are plotted.",
+                        "evidence_ids": ["table_association_results"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    step = ra.schema.AnalysisStep(
+        step_id="04_primary_association_figure",
+        intent="Render the manuscript publication figure.",
+        method="figure rendering",
+    )
+
+    findings = ra.FigureContractQualityValidator().audit(
+        step=step,
+        out_dir=out_dir,
+        run_dir=run_dir,
+        step_summary={"rendering_only": True},
+    )
+
+    assert any(
+        f.severity == "error" and "fallback/rescue" in f.message.lower()
+        for f in findings
+    ), findings
+
+
+def test_figure_contract_quality_requires_contract_for_figure_exports(ra, tmp_path: Path):
+    run_dir = tmp_path / "run"
+    out_dir = run_dir / "steps" / "04_primary_association_figure" / "outputs"
+    out_dir.mkdir(parents=True)
+    (out_dir / "effect_estimate_forest.png").write_bytes(b"fake-png")
+    step = ra.schema.AnalysisStep(
+        step_id="04_primary_association_figure",
+        intent="Render the manuscript publication figure.",
+        method="figure rendering",
+    )
+
+    findings = ra.FigureContractQualityValidator().audit(
+        step=step,
+        out_dir=out_dir,
+        run_dir=run_dir,
+        step_summary={"rendering_only": True},
+    )
+
+    assert any(
+        f.severity == "error" and "without a .figure_contract.json" in f.message
+        for f in findings
+    ), findings
+
+
+def test_figure_contract_quality_blocks_single_panel_result_contract(ra, tmp_path: Path):
+    contract_path = tmp_path / "easyicu_publication_figure.figure_contract.json"
+    contract_path.write_text(
+        json.dumps(
+            {
+                "figure_id": "easyicu_publication_figure",
+                "core_claim": "Primary effect and robustness range are shown.",
+                "panels": [
+                    {
+                        "panel_id": "A",
+                        "title": "Primary effect and robustness variants",
+                        "role": "robustness",
+                        "claim": "Primary and robustness estimates are plotted.",
+                        "evidence_ids": ["robustness_panel"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    findings = ra.FigureContractQualityValidator().audit_contract_file(
+        contract_path,
+        manuscript_facing=True,
+    )
+
+    assert any(
+        f.severity == "error" and "only 1 panel" in f.message
+        for f in findings
+    ), findings
+
+
+def test_figure_contract_quality_accepts_multipanel_result_contract(ra, tmp_path: Path):
+    contract_path = tmp_path / "easyicu_publication_figure.figure_contract.json"
+    contract_path.write_text(
+        json.dumps(
+            {
+                "figure_id": "easyicu_publication_figure",
+                "core_claim": "Primary effect, robustness, and denominator context are shown.",
+                "panels": [
+                    {
+                        "panel_id": "A",
+                        "title": "Primary effect and robustness variants",
+                        "role": "robustness",
+                        "claim": "Primary and variant estimates are shown with intervals.",
+                        "evidence_ids": ["robustness_panel"],
+                    },
+                    {
+                        "panel_id": "B",
+                        "title": "Variant convergence by axis",
+                        "role": "validation",
+                        "claim": "Converged and non-converged variants are counted.",
+                        "evidence_ids": ["robustness_panel"],
+                    },
+                    {
+                        "panel_id": "C",
+                        "title": "Analytic sample-size range",
+                        "role": "audit",
+                        "claim": "Sample-size ranges are shown for denominator context.",
+                        "evidence_ids": ["robustness_panel"],
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    findings = ra.FigureContractQualityValidator().audit_contract_file(
+        contract_path,
+        manuscript_facing=True,
+    )
+
+    assert not any(f.severity == "error" for f in findings), findings
 
 
 def test_cohort_auditor_row_count_mismatch(ra, tmp_path: Path):
@@ -579,6 +905,35 @@ def test_clinical_constraint_validator_does_not_flag_prediction_feature_list_as_
         step=step,
         out_dir=out_dir,
         step_summary={"statistic:auroc": 0.8, "statistic:brier_score": 0.18},
+    )
+    assert not any("immortal time bias" in f.message.lower() for f in findings), findings
+
+
+def test_clinical_constraint_validator_does_not_flag_association_named_exposure(
+    ra, tmp_path: Path
+):
+    ctx = _ctx_with_sofa(ra).model_copy(
+        update={
+            "research_question": "Is Sepsis-3 status associated with ICU mortality?",
+            "user_preferences": ra.schema.UserPreferences(
+                inferred_analysis_family="association"
+            ),
+        }
+    )
+    step = ra.schema.AnalysisStep(
+        step_id="03b_dataset_validation",
+        intent="Validate the modeling dataset and named exposure before regression.",
+    )
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    findings = ra.ClinicalConstraintValidator().audit(
+        context=ctx,
+        step=step,
+        out_dir=out_dir,
+        step_summary={
+            "named_exposure": "sepsis3",
+            "method": "post_audit_modeling_dataset_validation_and_repair",
+        },
     )
     assert not any("immortal time bias" in f.message.lower() for f in findings), findings
 

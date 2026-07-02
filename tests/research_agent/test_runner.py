@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -30,6 +31,37 @@ def test_runner_records_real_duration(ra, tmp_path: Path):
     assert 0 <= result.duration_seconds < 10
     log_text = (result.cwd / "run.log").read_text(encoding="utf-8")
     assert "duration_seconds:" in log_text
+
+
+def test_code_runner_exposes_run_level_artifact_env(ra, tmp_path: Path):
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)
+    run_dir = tmp_path / "run"
+
+    runner = ra.CodeRunner(
+        workdir=run_dir,
+        cohort_parquet=cohort_path,
+        timeout_seconds=10,
+    )
+    result = runner.run(
+        step_id="env_probe",
+        code=(
+            "import json, os\n"
+            "from pathlib import Path\n"
+            "payload = {k: os.environ.get(k) for k in [\n"
+            "  'EASYICU_RUN_DIR', 'EASYICU_EVIDENCE_DIR', 'EASYICU_MANIFEST_PARTIAL'\n"
+            "]}\n"
+            "Path(os.environ['STEP_OUT_DIR'], 'env.json').write_text(json.dumps(payload))\n"
+        ),
+    )
+
+    assert result.succeeded
+    payload = json.loads((result.out_dir / "env.json").read_text(encoding="utf-8"))
+    assert payload["EASYICU_RUN_DIR"] == str(run_dir.resolve())
+    assert payload["EASYICU_EVIDENCE_DIR"] == str((run_dir / "evidence").resolve())
+    assert payload["EASYICU_MANIFEST_PARTIAL"] == str(
+        (run_dir / "manifest_partial.json").resolve()
+    )
 
 
 def test_runner_build_command_defaults_to_network_isolation(ra, tmp_path: Path):
@@ -299,6 +331,65 @@ def test_runner_retries_without_macos_sandbox_when_openmp_shm_is_blocked(
     assert result.isolation_degraded is True
     assert result.effective_isolation == "host_subprocess"
     assert "shared memory" in (result.isolation_degradation_reason or "")
+
+
+def test_runner_retries_without_macos_sandbox_when_profile_apply_is_denied(
+    ra,
+    tmp_path: Path,
+    monkeypatch,
+):
+    import easyicu.research_agent.runner as runner_mod
+
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)
+
+    runner = ra.CodeRunner(
+        workdir=tmp_path / "run",
+        cohort_parquet=cohort_path,
+        timeout_seconds=10,
+    )
+
+    calls: list[list[str]] = []
+    captured_env = {}
+
+    def _fake_run(cmd, *, cwd, env, capture_output, text, timeout, encoding, errors):
+        calls.append(list(cmd))
+        captured_env.update(env)
+        if cmd[0] == "sandbox-exec":
+            return SimpleNamespace(
+                stdout="",
+                stderr="sandbox-exec: sandbox_apply: Operation not permitted",
+                returncode=71,
+            )
+        Path(env["STEP_OUT_DIR"], "ok.txt").write_text("ok", encoding="utf-8")
+        return SimpleNamespace(stdout="ok\n", stderr="", returncode=0)
+
+    monkeypatch.setattr(
+        runner,
+        "build_command",
+        lambda *, script_path: [
+            "sandbox-exec",
+            "-p",
+            "(deny network*)",
+            "python",
+            str(script_path),
+        ],
+    )
+    monkeypatch.setattr(runner_mod.sys, "platform", "darwin")
+    monkeypatch.setattr(runner_mod.subprocess, "run", _fake_run)
+
+    result = runner.run(step_id="macos_sandbox_apply_fallback", code="print('ok')\n")
+
+    assert result.succeeded
+    assert len(calls) == 2
+    assert calls[0][0] == "sandbox-exec"
+    assert _is_python_executable(calls[1][0])
+    assert captured_env["MPLCONFIGDIR"].endswith(".matplotlib")
+    assert any(p.name == "ok.txt" for p in result.artefacts)
+    assert "could not apply its profile" in result.stderr
+    assert result.isolation_degraded is True
+    assert result.effective_isolation == "host_subprocess"
+    assert "profile application" in (result.isolation_degradation_reason or "")
 
 
 def test_runner_retries_without_macos_sandbox_when_stdio_is_blocked(

@@ -121,6 +121,8 @@ _SPLITTERS = (
     "StratifiedShuffleSplit",
 )
 
+_ASSOCIATION_ESTIMATORS = {"Logit", "OLS", "GLM", "LogisticRegression", "LinearRegression"}
+
 _SURVIVAL_FAMILIES = (
     "CoxPHFitter",
     "WeibullAFTFitter",
@@ -318,6 +320,48 @@ def _id_or_time_columns_in(
     return out
 
 
+def _prediction_or_performance_context(
+    *,
+    context: ResearchContext,
+    step: Optional[AnalysisStep],
+) -> bool:
+    family = (
+        (context.user_preferences.inferred_analysis_family or "").lower()
+        if context.user_preferences
+        else ""
+    )
+    combined = " ".join(
+        part
+        for part in (
+            context.research_question or "",
+            step.step_id if step is not None else "",
+            step.intent if step is not None else "",
+            " ".join(step.expected_outputs or []) if step is not None else "",
+            step.method or "" if step is not None else "",
+        )
+        if part
+    ).lower()
+    return family == "prediction_model" or any(
+        term in combined
+        for term in (
+            "prediction",
+            "predictive",
+            "classifier",
+            "classification",
+            "held-out",
+            "train/test",
+            "cross-validation",
+            "cross validation",
+            "generalisation",
+            "generalization",
+            "performance",
+            "auroc",
+            "brier",
+            "calibration",
+        )
+    )
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -480,8 +524,17 @@ class AnalysisPatternAuditor:
         # ------------------------------------------------------------
         # 5) Supervised estimator without train/test split
         # ------------------------------------------------------------
-        if inspection.supervised_estimators and not inspection.splitters:
-            ests = sorted({n for n, _ in inspection.supervised_estimators})
+        supervised_estimator_names = sorted({n for n, _ in inspection.supervised_estimators})
+        non_association_estimators = [
+            name for name in supervised_estimator_names if name not in _ASSOCIATION_ESTIMATORS
+        ]
+        prediction_like = _prediction_or_performance_context(context=context, step=step)
+        if (
+            inspection.supervised_estimators
+            and not inspection.splitters
+            and (prediction_like or non_association_estimators)
+        ):
+            ests = supervised_estimator_names
             findings.append(
                 ValidationFinding(
                     validator=self.name,
@@ -561,6 +614,8 @@ class AnalysisPatternAuditor:
         # ------------------------------------------------------------
         for est_name, call in inspection.distance_estimators + inspection.supervised_estimators:
             if est_name in {"OLS", "GLM", "Logit"}:  # statsmodels: deterministic
+                continue
+            if not prediction_like and est_name in _ASSOCIATION_ESTIMATORS:
                 continue
             has_random_state = any(
                 kw.arg == "random_state" for kw in call.keywords

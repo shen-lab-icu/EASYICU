@@ -508,41 +508,24 @@ def worst_rows_by_axis(panel: RobustnessPanel) -> Dict[str, RobustnessPanelRow]:
 def _primary_row_from_records(
     per_step_records: Sequence[Dict[str, Any]]
 ) -> Optional[RobustnessPanelRow]:
-    for record in per_step_records:
-        summary = record.get("step_summary")
-        if not isinstance(summary, dict):
-            continue
-        estimate = _first_float(
-            summary,
-            ("primary_or", "adjusted_or", "odds_ratio", "estimate", "auroc"),
-        )
-        if estimate is None:
-            continue
-        ci_low = _first_float(
-            summary,
-            ("primary_ci_low", "ci_lower", "overall_ci_low"),
-        )
-        ci_high = _first_float(
-            summary,
-            ("primary_ci_high", "ci_upper", "overall_ci_high"),
-        )
-        ci_pair = summary.get("primary_or_ci")
-        if isinstance(ci_pair, (list, tuple)) and len(ci_pair) >= 2:
-            ci_low = _optional_float(ci_pair[0])
-            ci_high = _optional_float(ci_pair[1])
-        return RobustnessPanelRow(
-            spec_id=PRIMARY_SPEC_ID,
-            axis="primary",
-            n=int(_first_float(summary, ("n", "n_total", "sample_size")) or 0),
-            point_estimate=estimate,
-            ci_low=ci_low,
-            ci_high=ci_high,
-            se=_first_float(summary, ("se", "primary_or_se")),
-            evidence_id=str(record.get("step_summary_evidence_id") or ""),
-            converged=True,
-            notes="Primary analysis estimate.",
-        )
-    return None
+    from .pipeline_primary_effect import _extract_primary_effect_payload_from_records
+
+    payload = _extract_primary_effect_payload_from_records(per_step_records)
+    if not payload or payload.get("primary_or") is None:
+        return None
+    sample_size = payload.get("sample_size")
+    return RobustnessPanelRow(
+        spec_id=PRIMARY_SPEC_ID,
+        axis="primary",
+        n=int(sample_size) if isinstance(sample_size, int) else 0,
+        point_estimate=_optional_float(payload.get("primary_or")),
+        ci_low=_optional_float(payload.get("primary_ci_low")),
+        ci_high=_optional_float(payload.get("primary_ci_high")),
+        se=None,
+        evidence_id=str(payload.get("evidence_id") or ""),
+        converged=True,
+        notes="Primary analysis estimate from step_summary.",
+    )
 
 
 def _declared_rows_from_records(

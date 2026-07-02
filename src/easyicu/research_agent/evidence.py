@@ -707,6 +707,12 @@ class EvidenceStore:
     def _make_id(self, prefix: str, digest: str) -> str:
         return f"{prefix}_{digest[:8]}"
 
+    def _next_versioned_id(self, evidence_id: str) -> str:
+        suffix_n = 2
+        while self._record_by_id(f"{evidence_id}_v{suffix_n}") is not None:
+            suffix_n += 1
+        return f"{evidence_id}_v{suffix_n}"
+
     def _register_target(
         self,
         *,
@@ -854,12 +860,24 @@ class EvidenceStore:
             eid = evidence_id or self._make_id(
                 _id_prefix(kind, source_path.stem), source_digest
             )
-            target = self.dir / f"{eid}__{source_path.name}"
+            target_eid = eid
+            target_metadata = dict(metadata or {})
+            target_on_sha_change = on_sha_change
+            existing = self._record_by_id(eid)
+            if (
+                existing is not None
+                and existing.sha256 != source_digest
+                and on_sha_change == "new_id"
+            ):
+                target_eid = self._next_versioned_id(eid)
+                target_metadata.setdefault("resume_supersedes", eid)
+                target_on_sha_change = "raise"
+            target = self.dir / f"{target_eid}__{source_path.name}"
             if target.resolve() != source_path.resolve():
                 shutil.copy2(source_path, target)
             digest = sha256_of_file(target)
             return self._register_target(
-                evidence_id=eid,
+                evidence_id=target_eid,
                 kind=kind,
                 description=description,
                 target=target,
@@ -871,8 +889,8 @@ class EvidenceStore:
                 producer=producer,
                 generation_mode=generation_mode,
                 prompt_pack_version=prompt_pack_version,
-                metadata=metadata,
-                on_sha_change=on_sha_change,
+                metadata=target_metadata,
+                on_sha_change=target_on_sha_change,
             )
 
     def register_text(
@@ -891,17 +909,30 @@ class EvidenceStore:
         generation_mode: Optional[str] = None,
         prompt_pack_version: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        on_sha_change: str = "raise",
     ) -> EvidenceRecord:
         payload = text.encode("utf-8")
         digest = sha256_of_bytes(payload)
         eid = evidence_id or self._make_id(
             _id_prefix(kind, Path(filename).stem), digest
         )
-        target = self.dir / f"{eid}__{filename}"
-        _atomic_write_bytes(target, payload)
         with self._lock:
+            target_eid = eid
+            target_metadata = dict(metadata or {})
+            target_on_sha_change = on_sha_change
+            existing = self._record_by_id(eid)
+            if (
+                existing is not None
+                and existing.sha256 != digest
+                and on_sha_change == "new_id"
+            ):
+                target_eid = self._next_versioned_id(eid)
+                target_metadata.setdefault("resume_supersedes", eid)
+                target_on_sha_change = "raise"
+            target = self.dir / f"{target_eid}__{filename}"
+            _atomic_write_bytes(target, payload)
             return self._register_target(
-                evidence_id=eid,
+                evidence_id=target_eid,
                 kind=kind,
                 description=description,
                 target=target,
@@ -913,7 +944,8 @@ class EvidenceStore:
                 producer=producer,
                 generation_mode=generation_mode,
                 prompt_pack_version=prompt_pack_version,
-                metadata=metadata,
+                metadata=target_metadata,
+                on_sha_change=target_on_sha_change,
             )
 
     def register_json(
@@ -931,6 +963,7 @@ class EvidenceStore:
         generation_mode: Optional[str] = None,
         prompt_pack_version: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        on_sha_change: str = "raise",
     ) -> EvidenceRecord:
         text = json.dumps(payload, indent=2, ensure_ascii=False, default=str)
         return self.register_text(
@@ -946,6 +979,7 @@ class EvidenceStore:
             generation_mode=generation_mode,
             prompt_pack_version=prompt_pack_version,
             metadata=metadata,
+            on_sha_change=on_sha_change,
         )
 
     def update_record(
@@ -1359,8 +1393,8 @@ class EvidenceStore:
                 if abs(candidate) > 1e-9:
                     rel = abs(candidate - canonical) / abs(candidate)
                 else:
-                    rel = abs(candidate - canonical)
-                abs_window = max(display_abs_tol, window * max(abs(candidate), abs(canonical), 1.0))
+                    rel = 0.0 if abs(canonical) <= 1e-12 else float("inf")
+                abs_window = max(display_abs_tol, window * max(abs(candidate), abs(canonical)))
                 if rel <= window or abs(candidate - canonical) <= abs_window:
                     return claim
         return None
@@ -1498,11 +1532,17 @@ class EvidenceStore:
             if j < 0:
                 out.append(scaffold[i:])
                 break
-            out.append(scaffold[i:j])
             k = scaffold.find("}", j)
             if k < 0:
                 out.append(scaffold[j:])
                 break
+            double_wrapped = (
+                j > i
+                and scaffold[j - 1] == "{"
+                and k + 1 < n
+                and scaffold[k + 1] == "}"
+            )
+            out.append(scaffold[i : j - 1 if double_wrapped else j])
             eid = scaffold[j + len("{evidence:") : k]
             requested_ids = [
                 _normalize_requested_evidence_id(item)
@@ -1536,7 +1576,7 @@ class EvidenceStore:
             elif verbose:
                 out.append(f"[evidence missing: {eid}]")
                 all_missing.append(eid)
-            i = k + 1
+            i = k + 2 if double_wrapped else k + 1
         if all_missing and self.enforcement_mode is EvidenceEnforcementMode.STRICT:
             unique_missing = sorted(set(all_missing))
             raise EvidenceEnforcementError(
@@ -1601,6 +1641,36 @@ _RESULT_TOKEN_RE = re.compile(
     r"\bconfidence interval\b|\bCI\b|\bp\s*[<=>]|%|\d)",
     re.I,
 )
+_MANUSCRIPT_METADATA_PREFIX_RE = re.compile(
+    r"^\s*(?:\*\*)?"
+    r"(?:keywords?|key words|funding|conflicts?\s+of\s+interest|"
+    r"data\s+(?:and\s+code\s+)?availability|code\s+availability|"
+    r"ethics\s+approval|acknowledg(?:e)?ments?)"
+    r"\s*(?:\*\*)?\s*[:：]",
+    re.I,
+)
+_AVAILABILITY_BOILERPLATE_RE = re.compile(
+    r"\b(?:generated scripts?|sha-?256|evidence store|reproducibility envelope|"
+    r"strobe checklist|supplementary tables?|released alongside|available from|"
+    r"data availability|code availability)\b",
+    re.I,
+)
+_AVAILABILITY_ACTION_RE = re.compile(
+    r"\b(?:released|available|deposited|archived|provided|shared|included)\b",
+    re.I,
+)
+
+
+def _looks_manuscript_metadata_sentence(sentence: str) -> bool:
+    """Return True for non-analytic manuscript front/back matter."""
+    stripped = sentence.strip()
+    if _MANUSCRIPT_METADATA_PREFIX_RE.search(stripped):
+        return True
+    if _AVAILABILITY_BOILERPLATE_RE.search(stripped) and _AVAILABILITY_ACTION_RE.search(
+        stripped
+    ):
+        return True
+    return False
 
 
 def _split_sentences(text: str) -> List[str]:
@@ -1614,6 +1684,8 @@ def _split_sentences(text: str) -> List[str]:
 
 def _looks_result_like_sentence(sentence: str) -> bool:
     if "{evidence:" in sentence:
+        return False
+    if _looks_manuscript_metadata_sentence(sentence):
         return False
     return bool(_RESULT_TOKEN_RE.search(sentence))
 

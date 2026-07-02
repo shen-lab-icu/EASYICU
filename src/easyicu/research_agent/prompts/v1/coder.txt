@@ -1,6 +1,20 @@
 Code contract:
 - Read the cohort from os.environ["COHORT_PARQUET"].
 - Write any artefact (CSV, PNG, SVG, JSON) to os.environ["STEP_OUT_DIR"].
+- If a step depends on an artefact produced by a previous step, first look for
+  these runtime paths when available: `EASYICU_RUN_DIR`,
+  `EASYICU_EVIDENCE_DIR`, and `EASYICU_MANIFEST_PARTIAL`. Read
+  `manifest_partial.json` or search the evidence directory for the registered
+  artefact name/alias before guessing a relative `steps/.../outputs` path.
+  Evidence records store `relative_path` values relative to `EASYICU_RUN_DIR`.
+- For rendering-only figure steps, prefer the explicitly named upstream
+  analysis step outputs over broad evidence-directory search. Do not use
+  existing figure files, previous figure source-data CSVs, robustness panels,
+  numeric audits, critique reports, or earlier outputs from the same
+  rendering step as the primary data source unless the step explicitly asks
+  for that file. If one canonical upstream table is present, render from
+  that table alone and use audit/provenance tables only for short notes or
+  metadata.
 - OPTIONAL trajectory: if os.environ.get("TRAJECTORY_PARQUET") is set, it
   is a LONG per-timepoint table with columns
   (stay_id, charttime, concept, value_num, value_str) — charttime is
@@ -86,6 +100,35 @@ Code contract:
   move numeric summaries into an aligned in-panel text column, or
   drop secondary annotations. Never place odds-ratio text beyond the
   axis limit or outside the saved canvas.
+- Never mix incompatible effect scales on a single forest-plot axis.
+  Odds ratios and risk ratios may share a ratio/log axis only if the
+  labels clearly distinguish the scale; risk differences, absolute
+  differences, percentages, counts, and standardized effects require
+  their own linear axis, a separate panel, or a table-only summary.
+  If a sensitivity table contains mixed `effect_scale` values, split
+  the plot by `effect_scale` or plot only the comparable primary scale
+  and list the other scales in source data / step_summary.
+- Use reader-facing labels in figures. Avoid raw column names,
+  filenames, or machine ids such as `spec_id` values as tick labels
+  unless they are the only unambiguous study labels; prefer compact
+  labels derived from cohort definition, missing-data strategy, model
+  family, or a documented display-label mapping, and keep raw ids in
+  source data / step_summary. Before plotting labels derived from ids,
+  remove suffixes like `_modeled_or`, `_modeled_rr`, `_modeled_rd`,
+  replace underscores with spaces, and add the scale in a separate
+  column or axis title rather than in every tick label.
+- Do not place long audit/provenance/reporting notes or free-text
+  recommendations inside result plots. Keep the plot focused on
+  source-backed statistics; put full audit notes in CSVs,
+  step_summary, FigureContract source data, caption metadata, or a
+  separate notes table. If a visual cue is needed, summarize long
+  provenance notes as a compact count or flag inside the panel and
+  write the full notes as a separate table.
+- Do not draw figure captions, long footnotes, provenance sentences,
+  or "this step did not..." process notes as free text inside the
+  saved plotting canvas. Put that text in FigureContract metadata,
+  step_summary, or source-data notes so it cannot be clipped by
+  `tight_layout`, `bbox_inches`, or journal cropping.
 - Save a machine-readable summary to step_summary.json containing
   every numeric statistic that downstream agents may quote.
 - DERIVED NUMBERS (optional): if you computed a derived value (a CI
@@ -239,6 +282,29 @@ CLINICAL SCORE AND MISSINGNESS SEMANTICS:
 - Never treat a numeric score value of 0 as equivalent to "not measured".
   When measurement presence matters, explicitly separate measured
   normal/low values from unmeasured or missing values.
+- Never derive a binary exposure, outcome, event flag, or eligibility flag
+  with `.fillna(0)` or by otherwise recoding missing source values to the
+  negative class. Use an explicit rule that preserves missingness first, e.g.
+  `np.where(source.isna(), np.nan, (source >= threshold).astype(int))`, then
+  report the source missing count and decide whether modelling should drop,
+  block, or use a prespecified missingness strategy. A missing source value
+  is not evidence of event absence unless the concept metadata explicitly
+  defines unrecorded as negative.
+- When validating a supplied derived column against a rebuilt locked
+  definition, treat a missing supplied column as `not_applicable` /
+  `unavailable_for_comparison`, not as a failed derivation or mismatch.
+  Only report a derivation failure when both the supplied column and the
+  source column are present and comparable rows actually disagree, or when
+  the source column needed for the locked definition is absent.
+- Do not define the analytic cohort for a binary event/exposure by keeping
+  only rows where `<concept>_measured == 1` or `<concept>_n > 0`. For sparse
+  event indicators, treatment/onset flags, and derived 0/1 clinical states,
+  absence of an event/trigger is usually the negative class (0/False) unless
+  the concept metadata explicitly says the patient was screened/assessed and
+  an unassessed state is not interpretable. If filtering on measurement turns
+  the primary exposure into all 1s or all 0s, treat that as a design error:
+  rebuild the exposure denominator to retain event-negative/untriggered
+  records, or write an infeasibility summary with source-data evidence.
 - Whenever you coerce descriptive or modelling variables to numeric,
   preserve an audit table or step_summary block with original
   missingness, post-coercion missingness, and newly invalid/coerced

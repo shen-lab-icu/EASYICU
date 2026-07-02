@@ -121,6 +121,155 @@ def test_same_step_preference(ra, tmp_path: Path) -> None:
     assert binding_map["claim_2"].step_id == "02_model"
 
 
+def test_cited_step_breaks_repeated_count_tie(ra, tmp_path: Path) -> None:
+    from easyicu.research_agent.manuscript_post import bind_numeric_values
+
+    store = ra.EvidenceStore(tmp_path)
+    store.register_numeric_claim(
+        value="74829",
+        canonical=74829.0,
+        evidence_id="e_cohort",
+        step_id="01_define_cohort",
+        source_field="n_analysis_cohort",
+    )
+    store.register_numeric_claim(
+        value="74829",
+        canonical=74829.0,
+        evidence_id="e_model",
+        step_id="04_model",
+        source_field="n_final_model",
+    )
+
+    _, binding_map, untraced = bind_numeric_values(
+        "The analysis cohort included 74,829 ICU stays "
+        "[01_define_cohort](evidence/cohort.json).",
+        evidence=store,
+    )
+
+    assert untraced == []
+    assert binding_map["claim_1"].step_id == "01_define_cohort"
+
+
+def test_same_evidence_duplicate_count_uses_stable_field_tiebreak(
+    ra,
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.manuscript_post import bind_numeric_values
+
+    store = ra.EvidenceStore(tmp_path)
+    store.register_numeric_claim(
+        value="74829",
+        canonical=74829.0,
+        evidence_id="e_cohort",
+        step_id="01_define_cohort",
+        source_field="missingness_audit.numeric_coercion_rows[0].n_total",
+    )
+    store.register_numeric_claim(
+        value="74829",
+        canonical=74829.0,
+        evidence_id="e_cohort",
+        step_id="01_define_cohort",
+        source_field="attrition.n_analysis_cohort",
+    )
+
+    _, binding_map, untraced = bind_numeric_values(
+        "The analysis cohort included 74,829 ICU stays "
+        "[01_define_cohort](evidence/cohort.json).",
+        evidence=store,
+    )
+
+    assert untraced == []
+    assert binding_map["claim_1"].source_field == "attrition.n_analysis_cohort"
+
+
+def test_same_step_duplicate_count_across_versions_uses_stable_tiebreak(
+    ra,
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.manuscript_post import bind_numeric_values
+
+    store = ra.EvidenceStore(tmp_path)
+    store.register_numeric_claim(
+        value="74829",
+        canonical=74829.0,
+        evidence_id="e_model_old",
+        step_id="04_model",
+        source_field="n_universe",
+    )
+    store.register_numeric_claim(
+        value="74829",
+        canonical=74829.0,
+        evidence_id="e_model_new",
+        step_id="04_model",
+        source_field="n_final_model",
+    )
+
+    _, binding_map, untraced = bind_numeric_values(
+        "The validated primary model included 74,829 stays "
+        "[04_model](evidence/model.json).",
+        evidence=store,
+    )
+
+    assert untraced == []
+    assert binding_map["claim_1"].source_field == "n_final_model"
+
+
+def test_analyzed_stays_context_prefers_final_model_over_universe(
+    ra,
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.manuscript_post import bind_numeric_values
+
+    store = ra.EvidenceStore(tmp_path)
+    store.register_numeric_claim(
+        value="74829",
+        canonical=74829.0,
+        evidence_id="e_model_old",
+        step_id="04_model",
+        source_field="n_universe",
+    )
+    store.register_numeric_claim(
+        value="74829",
+        canonical=74829.0,
+        evidence_id="e_model_new",
+        step_id="04_model",
+        source_field="n_final_model",
+    )
+
+    _, binding_map, untraced = bind_numeric_values(
+        "The final model retained 74,829 analyzed stays "
+        "[04_model](evidence/model.json).",
+        evidence=store,
+    )
+
+    assert untraced == []
+    assert binding_map["claim_1"].source_field == "n_final_model"
+
+
+def test_integer_percent_display_binds_to_rounded_percent_claim(
+    ra,
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.manuscript_post import bind_numeric_values
+
+    store = ra.EvidenceStore(tmp_path)
+    store.register_numeric_claim(
+        value="0.098852",
+        canonical=0.098852,
+        evidence_id="e_model",
+        step_id="04_model",
+        source_field="death_rate_final_model",
+    )
+
+    _, binding_map, untraced = bind_numeric_values(
+        "The event rate was below 10% [04_model](evidence/model.json).",
+        evidence=store,
+    )
+
+    assert untraced == []
+    assert binding_map["claim_1"].source_field == "death_rate_final_model"
+
+
 def test_precision_distance_breaks_remaining_tie(ra, tmp_path: Path) -> None:
     from easyicu.research_agent.manuscript_post import bind_numeric_values
 
@@ -256,3 +405,107 @@ def test_length_of_stay_prose_picks_los_candidate(ra, tmp_path: Path) -> None:
 
     assert untraced == []
     assert binding_map["claim_1"].source_field == "median_los_icu"
+
+
+def test_complete_case_context_prefers_complete_case_count(
+    ra,
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.manuscript_post import bind_numeric_values
+
+    store = ra.EvidenceStore(tmp_path)
+    store.register_numeric_claim(
+        value="74829",
+        canonical=74829.0,
+        evidence_id="e_context",
+        step_id="01_define_cohort",
+        source_field="n_universe",
+    )
+    store.register_numeric_claim(
+        value="74829",
+        canonical=74829.0,
+        evidence_id="e_model",
+        step_id="04_primary_adjusted_association_model",
+        source_field="complete_case_flow.n_complete_case",
+    )
+    store.register_numeric_claim(
+        value="74829",
+        canonical=74829.0,
+        evidence_id="e_model",
+        step_id="04_primary_adjusted_association_model",
+        source_field="n_final_model",
+    )
+
+    _, binding_map, untraced = bind_numeric_values(
+        "The primary adjusted model was fitted on 74,829 complete cases.",
+        evidence=store,
+    )
+
+    assert untraced == []
+    assert binding_map["claim_1"].source_field == "complete_case_flow.n_complete_case"
+
+
+def test_primary_or_ci_context_prefers_primary_or_ci_not_summary_alias(
+    ra,
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.manuscript_post import bind_numeric_values
+
+    store = ra.EvidenceStore(tmp_path)
+    store.register_numeric_claim(
+        value="1.02037",
+        canonical=1.0203660748446095,
+        evidence_id="e_model",
+        step_id="04_primary_adjusted_association_model",
+        source_field="primary_or_ci_low",
+    )
+    store.register_numeric_claim(
+        value="1.02037",
+        canonical=1.0203660748446093,
+        evidence_id="e_model",
+        step_id="04_primary_adjusted_association_model",
+        source_field="primary_or_ci_low_from_summary",
+    )
+    store.register_numeric_claim(
+        value="1.01995",
+        canonical=1.0199471110955838,
+        evidence_id="e_sensitivity",
+        step_id="05_sensitivity_comparison",
+        source_field="alternative_effect_scales.risk_ratio.ci_low",
+    )
+
+    _, binding_map, untraced = bind_numeric_values(
+        "The adjusted odds ratio had a 95% confidence interval from 1.020.",
+        evidence=store,
+    )
+
+    assert untraced == []
+    assert binding_map["claim_1"].source_field == "primary_or_ci_low"
+
+
+def test_range_context_prefers_robustness_range_claim(ra, tmp_path: Path) -> None:
+    from easyicu.research_agent.manuscript_post import bind_numeric_values
+
+    store = ra.EvidenceStore(tmp_path)
+    store.register_numeric_claim(
+        value="0.00108315",
+        canonical=0.001083146182081867,
+        evidence_id="e_sensitivity",
+        step_id="05_sensitivity_comparison",
+        source_field="alternative_effect_scales.risk_difference.ci_low",
+    )
+    store.register_numeric_claim(
+        value="0.00108315",
+        canonical=0.001083146182081867,
+        evidence_id="e_panel",
+        step_id="robustness_panel",
+        source_field="range_low",
+    )
+
+    _, binding_map, untraced = bind_numeric_values(
+        "Across robustness analyses, the point estimate ranged from 0.001.",
+        evidence=store,
+    )
+
+    assert untraced == []
+    assert binding_map["claim_1"].source_field == "range_low"

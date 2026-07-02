@@ -285,6 +285,11 @@ def test_writer_prompt_discourages_tbd_and_manifest_narration(ra):
     # baseline source for prediction tasks. Exact wording has shifted; we
     # assert on the alias token rather than a specific sentence.
     assert "`model_performance`" in captured["system"]
+    assert "Use exactly single braces" in captured["user"]
+    assert "mechanisms, strengths, or limitations" in captured["user"]
+    assert "Each conclusion sentence must cite" in captured["user"]
+    assert "TBD by author" not in captured["user"]
+    assert "Funding information was not available" in captured["user"]
     # The dummy LLM's stock response should land in the bound output.
     assert "{evidence:table_one}" in out
 

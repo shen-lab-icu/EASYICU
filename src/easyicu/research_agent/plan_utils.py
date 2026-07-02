@@ -268,6 +268,82 @@ def _normalise_contract_family(raw: Optional[str]) -> str:
     return _ANALYSIS_TYPE_TO_CONTRACT_FAMILY.get(value, "")
 
 
+def _article_display_roles(steps: Sequence[AnalysisStep]) -> set[str]:
+    """Infer article-display roles represented by a plan's step text.
+
+    This is intentionally coarse. Its job is to detect when the planner has
+    already produced a multi-part article structure so the advanced contract
+    enforcer does not collapse it into one executable mega-step.
+    """
+
+    roles: set[str] = set()
+    for step in steps or []:
+        blob = " ".join(
+            [
+                step.step_id or "",
+                step.intent or "",
+                step.method or "",
+                " ".join(step.expected_outputs or []),
+            ]
+        ).lower()
+        if any(token in blob for token in ("cohort", "attrition", "eligibility", "denominator")):
+            roles.add("cohort_accounting")
+        if any(token in blob for token in ("table one", "table_one", "baseline", "characteristic")):
+            roles.add("baseline_context")
+        if any(token in blob for token in ("missing", "measurement", "availability", "data quality")):
+            roles.add("data_quality")
+        if any(
+            token in blob
+            for token in (
+                "primary",
+                "association",
+                "adjusted",
+                "odds ratio",
+                "effect estimate",
+                "primary_or",
+            )
+        ):
+            roles.add("primary_estimand")
+        if any(
+            token in blob
+            for token in (
+                "robust",
+                "sensitivity",
+                "complete-case",
+                "complete case",
+                "alternative",
+                "definition",
+            )
+        ):
+            roles.add("robustness")
+    return roles
+
+
+def _best_contract_step_for_outputs(steps: Sequence[AnalysisStep]) -> AnalysisStep:
+    """Choose the existing step that should receive mandatory contract outputs."""
+
+    preferred = (
+        "robust",
+        "sensitivity",
+        "complete-case",
+        "complete case",
+        "association",
+        "model",
+    )
+    for step in reversed(list(steps or [])):
+        blob = " ".join(
+            [
+                step.step_id or "",
+                step.intent or "",
+                step.method or "",
+                " ".join(step.expected_outputs or []),
+            ]
+        ).lower()
+        if any(token in blob for token in preferred):
+            return step
+    return list(steps)[-1]
+
+
 def _enforce_advanced_plan_contract(
     *,
     plan: AnalysisPlan,
@@ -677,6 +753,52 @@ def _enforce_advanced_plan_contract(
             if item not in combined_outputs:
                 combined_outputs.append(item)
 
+    article_roles = _article_display_roles(plan.steps)
+    if family == "robustness" and len(plan.steps or []) > 2 and len(article_roles) >= 4:
+        contract_step = _best_contract_step_for_outputs(relevant_steps)
+        missing_outputs = [
+            item
+            for item in required_outputs
+            if item not in (contract_step.expected_outputs or [])
+        ]
+        if not missing_outputs:
+            return plan, []
+        new_steps: List[AnalysisStep] = []
+        for step in plan.steps:
+            if step.step_id == contract_step.step_id:
+                new_steps.append(
+                    step.model_copy(
+                        update={
+                            "expected_outputs": [
+                                *(step.expected_outputs or []),
+                                *missing_outputs,
+                            ],
+                        }
+                    )
+                )
+            else:
+                new_steps.append(step)
+        revised = plan.model_copy(
+            update={"steps": new_steps, "revision": max(1, plan.revision) + 1}
+        )
+        finding = ValidationFinding(
+            validator="plan_contract",
+            severity="info",
+            message=(
+                "Planner output already contains an article-level display suite; "
+                "preserved step structure and augmented the robustness contract "
+                "instead of collapsing steps."
+            ),
+            detail={
+                "family": family,
+                "preserved_step_ids": [step.step_id for step in plan.steps],
+                "contract_step_id": contract_step.step_id,
+                "article_display_roles": sorted(article_roles),
+                "added_outputs": missing_outputs,
+            },
+        )
+        return revised, [finding]
+
     current = relevant_steps[0]
     missing_outputs = [
         item for item in required_outputs if item not in current.expected_outputs
@@ -905,16 +1027,20 @@ def _split_table_and_figure_outputs_in_plan(
         figure_step_id = f"{step.step_id}_figure"
         figure_intent = (
             f"Render the publication figure(s) declared by step "
-            f"'{step.step_id}' ({', '.join(figure_outputs)}). Load the "
-            "cohort from ``os.environ['COHORT_PARQUET']`` (full path is "
-            "provided by the runner) and, if needed, read tables produced "
-            f"by '{step.step_id}' from any of the registered evidence "
-            "files. Save PNG and SVG copies of every figure with matching "
-            "stems into ``os.environ['STEP_OUT_DIR']``. Always write a "
-            "valid step_summary.json into ``STEP_OUT_DIR`` listing each "
-            "produced file under ``figure_files`` even if rendering fails — "
-            "use a try/except so the step never aborts before writing the "
-            "summary."
+            f"'{step.step_id}' ({', '.join(figure_outputs)}). Treat this as "
+            "a rendering-only step: first read the table/statistic outputs "
+            f"produced by '{step.step_id}' from the registered evidence files "
+            "or from that step's outputs directory. Do not redefine the "
+            "cohort, exposure, outcome, missing-data policy, or model inside "
+            "this figure step; if the upstream table cannot support the "
+            "requested figure, write a step_summary.json explaining the "
+            "missing source-data contract instead of re-analysing "
+            "``os.environ['COHORT_PARQUET']``. Save PNG and SVG copies of "
+            "every figure with matching stems into "
+            "``os.environ['STEP_OUT_DIR']``. Always write a valid "
+            "step_summary.json into ``STEP_OUT_DIR`` listing each produced "
+            "file under ``figure_files`` even if rendering fails — use a "
+            "try/except so the step never aborts before writing the summary."
         )
         figure_step = AnalysisStep(
             step_id=figure_step_id,
@@ -1151,34 +1277,92 @@ def _cap_plan_preserving_figure_steps(
     *,
     plan: AnalysisPlan,
     cap: int,
+    protected_step_ids: Optional[Sequence[str]] = None,
 ) -> Tuple[AnalysisPlan, List[ValidationFinding]]:
-    """Truncate an initial plan without dropping required figure steps."""
+    """Truncate a plan without orphaning required figure steps.
+
+    Figure-only child steps produced by the splitter are load-bearing only when
+    their upstream source step remains in the plan. Treat the parent and child
+    as a small dependency unit: a cap may displace another non-figure step to
+    keep both, but it must not preserve a figure child by replacing its parent.
+    """
 
     steps = list(plan.steps or [])
     if cap <= 0 or len(steps) <= cap:
         return plan, []
 
-    kept = list(steps[:cap])
-    dropped = list(steps[cap:])
+    step_by_id = {step.step_id: step for step in steps}
+    original_index = {step.step_id: idx for idx, step in enumerate(steps)}
+    kept_ids = {step.step_id for step in steps[:cap]}
+    protected_ids = {
+        str(step_id)
+        for step_id in (protected_step_ids or [])
+        if step_id in step_by_id
+    }
+    kept_ids.update(protected_ids)
+    original_kept_ids = set(kept_ids)
     preserved_step_ids: List[str] = []
     displaced_step_ids: List[str] = []
 
-    for step in dropped:
+    def _protected_parent_ids(ids: set[str]) -> set[str]:
+        protected: set[str] = set()
+        for step_id in ids:
+            step = step_by_id.get(step_id)
+            if step is None or not _step_produces_figure(step):
+                continue
+            parent_id = _parent_step_id_for_figure_step(step)
+            if parent_id in ids:
+                protected.add(parent_id)
+        return protected
+
+    def _remove_displaceable(required_ids: set[str]) -> bool:
+        protected = set(required_ids) | protected_ids | _protected_parent_ids(kept_ids)
+        candidates = [
+            step_id
+            for step_id in kept_ids
+            if step_id not in protected
+            and not _step_produces_figure(step_by_id[step_id])
+        ]
+        if not candidates:
+            candidates = [
+                step_id
+                for step_id in kept_ids
+                if step_id not in protected
+            ]
+        if not candidates:
+            return False
+        displaced_id = max(candidates, key=lambda sid: original_index.get(sid, -1))
+        kept_ids.remove(displaced_id)
+        displaced_step_ids.append(displaced_id)
+        return True
+
+    for step in steps[cap:]:
         if not _step_produces_figure(step):
             continue
-        replace_idx: Optional[int] = None
-        for idx in range(len(kept) - 1, -1, -1):
-            if not _step_produces_figure(kept[idx]):
-                replace_idx = idx
-                break
-        if replace_idx is None:
+        parent_id = _parent_step_id_for_figure_step(step)
+        required_ids = {step.step_id}
+        if parent_id in step_by_id:
+            required_ids.add(parent_id)
+        if required_ids <= kept_ids:
             continue
-        displaced = kept[replace_idx]
-        kept[replace_idx] = step
-        preserved_step_ids.append(step.step_id)
-        displaced_step_ids.append(displaced.step_id)
+        added_ids: List[str] = []
+        removed_before = list(displaced_step_ids)
+        for required_id in sorted(
+            required_ids - kept_ids,
+            key=lambda sid: original_index.get(sid, len(steps)),
+        ):
+            kept_ids.add(required_id)
+            added_ids.append(required_id)
+        while len(kept_ids) > cap:
+            if not _remove_displaceable(required_ids):
+                for added_id in added_ids:
+                    kept_ids.discard(added_id)
+                displaced_step_ids = removed_before
+                break
+        if step.step_id in kept_ids and step.step_id not in original_kept_ids:
+            preserved_step_ids.append(step.step_id)
 
-    kept_ids = {step.step_id for step in kept}
+    kept = [step for step in steps if step.step_id in kept_ids]
     dropped_ids = [step.step_id for step in steps if step.step_id not in kept_ids]
     capped = plan.model_copy(update={"steps": kept})
     findings = [
@@ -1194,6 +1378,7 @@ def _cap_plan_preserving_figure_steps(
             detail={
                 "dropped_step_ids": dropped_ids,
                 "cap": cap,
+                "protected_step_ids": sorted(protected_ids),
                 "preserved_figure_step_ids": preserved_step_ids,
                 "displaced_step_ids": displaced_step_ids,
             },
@@ -1285,7 +1470,7 @@ def _primary_effect_name_matches(source_path: str) -> bool:
     return bool(
         "primary" in lowered
         or "odds_ratio" in lowered
-        or re.search(r"(?:^|[._:\-])or(?:$|[._:\-])", lowered)
+        or re.search(r"(?:^|[.:\-\[\]])or(?:$|[.:\-\[\]])", lowered)
     )
 
 
@@ -1322,7 +1507,7 @@ def _flattened_primary_effect_key_matches(source_path: str) -> bool:
         "odds_ratio" in lowered
         or "primary_or" in lowered
         or "adjusted_or" in lowered
-        or re.search(r"(?:^|[._:\-])or(?:$|[._:\-])", lowered)
+        or re.search(r"(?:^|[.:\-\[\]])or(?:$|[.:\-\[\]])", lowered)
         or lowered.endswith("_estimate")
         or lowered.endswith(".estimate")
     )
@@ -1642,6 +1827,186 @@ def _primary_exposure_contract_findings(
                 "step_id": step.step_id,
                 "required_exposure": required,
                 "actual_predictor": actual,
+            },
+        )
+    ]
+
+
+def _iter_nested_mappings(payload: Any) -> List[Mapping[str, Any]]:
+    mappings: List[Mapping[str, Any]] = []
+    if isinstance(payload, Mapping):
+        mappings.append(payload)
+        for value in payload.values():
+            mappings.extend(_iter_nested_mappings(value))
+    elif isinstance(payload, list):
+        for value in payload:
+            mappings.extend(_iter_nested_mappings(value))
+    return mappings
+
+
+def _numeric_value(value: Any) -> Optional[float]:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        number = float(value)
+        return number if math.isfinite(number) else None
+    if isinstance(value, str):
+        try:
+            number = float(value.strip())
+        except ValueError:
+            return None
+        return number if math.isfinite(number) else None
+    return None
+
+
+def _mapping_number_for_any_key(
+    mapping: Mapping[str, Any],
+    keys: Sequence[str],
+) -> Optional[float]:
+    lowered_keys = {key.lower() for key in keys}
+    for key, value in mapping.items():
+        if str(key).lower() not in lowered_keys:
+            continue
+        number = _numeric_value(value)
+        if number is not None:
+            return number
+    return None
+
+
+def _summary_has_single_level_exposure(step_summary: Mapping[str, Any]) -> bool:
+    text = json.dumps(step_summary, ensure_ascii=False, default=str).lower()
+    if any(
+        marker in text
+        for marker in (
+            "no variation",
+            "zero variance",
+            "single level",
+            "single-level",
+            "constant exposure",
+            "exposure has no variation",
+            "singular design",
+        )
+    ):
+        return True
+    for mapping in _iter_nested_mappings(step_summary):
+        exposed = _mapping_number_for_any_key(
+            mapping,
+            (
+                "exposed_n",
+                "exposure_positive_n",
+                "positive_n",
+                "event_positive_n",
+            ),
+        )
+        unexposed = _mapping_number_for_any_key(
+            mapping,
+            (
+                "unexposed_n",
+                "exposure_negative_n",
+                "negative_n",
+                "event_negative_n",
+            ),
+        )
+        if exposed is None or unexposed is None:
+            continue
+        total = exposed + unexposed
+        if total >= 10 and (
+            (exposed == 0 and unexposed > 0) or (unexposed == 0 and exposed > 0)
+        ):
+            return True
+    return False
+
+
+def _summary_has_measurement_filter_signal(step_summary: Mapping[str, Any]) -> bool:
+    for mapping in _iter_nested_mappings(step_summary):
+        for key, value in mapping.items():
+            lowered = str(key).lower()
+            if not any(
+                marker in lowered
+                for marker in (
+                    "unmeasured",
+                    "unascertain",
+                    "no_source",
+                    "no-source",
+                    "no_positive_evidence",
+                )
+            ):
+                continue
+            number = _numeric_value(value)
+            if number is not None and number > 0:
+                return True
+    return False
+
+
+def _payload_mentions_required_exposure(
+    *,
+    step: AnalysisStep,
+    step_summary: Mapping[str, Any],
+    required: str,
+) -> bool:
+    actual = _summary_primary_predictor(step_summary)
+    if actual and _exposure_names_match(required, actual):
+        return True
+    blob = " ".join(
+        [
+            getattr(step, "step_id", None) or "",
+            getattr(step, "intent", None) or "",
+            json.dumps(step_summary, ensure_ascii=False, default=str),
+        ]
+    ).lower()
+    required_norm = re.sub(r"[^a-z0-9]", "", required.lower())
+    blob_norm = re.sub(r"[^a-z0-9]", "", blob)
+    return bool(required_norm and required_norm in blob_norm)
+
+
+def _primary_exposure_measurement_filter_findings(
+    *,
+    step: AnalysisStep,
+    step_summary: Mapping[str, Any],
+    context: ResearchContext,
+) -> List[ValidationFinding]:
+    """Catch sparse-event exposures collapsed by filtering on measurement flags.
+
+    Some generated scripts treat ``<concept>_measured == 0`` or ``<concept>_n == 0``
+    as exposure-missing and remove those stays before modelling. For sparse binary
+    event indicators, that often drops event-negative/untriggered patients and
+    turns the primary exposure into a constant. This is an objective contract
+    failure only when the summary both (1) refers to the question's primary
+    exposure and (2) shows a single-level exposure plus a positive unmeasured /
+    unascertainable exclusion signal.
+    """
+    if not isinstance(step_summary, Mapping):
+        return []
+    required = (getattr(context, "primary_exposure", None) or "").strip()
+    if not required:
+        return []
+    if not _payload_mentions_required_exposure(
+        step=step, step_summary=step_summary, required=required
+    ):
+        return []
+    if not _summary_has_single_level_exposure(step_summary):
+        return []
+    if not _summary_has_measurement_filter_signal(step_summary):
+        return []
+    return [
+        ValidationFinding(
+            validator="exposure_contract_auditor",
+            severity="error",
+            message=(
+                f"The primary exposure `{required}` collapsed to a single level "
+                "after the step filtered records as unmeasured/unascertainable. "
+                "Do not exclude event-negative or untriggered rows solely because "
+                "`<concept>_measured == 0` or `<concept>_n == 0`. Rebuild the "
+                "binary exposure denominator from the source value columns so "
+                "event-absent records remain 0/False unless concept metadata "
+                "explicitly says the state is unassessed and uninterpretable. "
+                "If the exposure is truly single-level after that audit, report "
+                "the model as infeasible with source-data evidence."
+            ),
+            detail={
+                "kind": "exposure_measurement_filter",
+                "step_id": step.step_id,
+                "required_exposure": required,
             },
         )
     ]

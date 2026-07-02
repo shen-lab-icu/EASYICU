@@ -93,6 +93,32 @@ _NULL_PRIMARY_EFFECT_MARKERS = (
 )
 
 
+def _patch_age_covariate_coding_without_indicator(code: str) -> Optional[str]:
+    marker = '        elif var == "sex":\n'
+    if marker not in code or "meas_var = measured_vars[var]" not in code:
+        return None
+    age_branch = '''        elif var == "age":
+            coding_rows.append({
+                "variable": var,
+                "role": "adjustor",
+                "coding": "continuous; modeled as numeric covariate via age_filled",
+                "original_missing_n": int(eligible_df[var].isna().sum()),
+                "original_missing_pct": float(100.0 * eligible_df[var].isna().mean()),
+                "post_plausibility_missing_n": int(work_df[var].isna().sum()),
+                "post_plausibility_missing_pct": float(100.0 * work_df[var].isna().mean()),
+                "newly_invalid_n": int(newly_invalid_map.get(var, 0)),
+                "measured_indicator_available": False,
+                "measured_indicator_used": False,
+                "fill_strategy": "median_for_fit",
+                "fill_value": fill_values.get(var),
+                "included_in_model": True,
+                "notes": "Demographic baseline covariate; no measured indicator is defined or used.",
+            })
+'''
+    repaired = code.replace(marker, age_branch + marker, 1)
+    return repaired if repaired != code else None
+
+
 # ---------------------------------------------------------------------------
 # Tier-A deterministic concept-audit repair.
 #
@@ -187,6 +213,67 @@ def deterministic_concept_audit_repair(
     return repaired, applied
 
 
+def _overadjustment_strip_names(offenders: Sequence[str]) -> List[str]:
+    strip_names: List[str] = []
+    for raw_name in offenders:
+        name = str(raw_name).strip()
+        if not name:
+            continue
+        strip_names.append(name)
+        for suffix in ("_filled", "_missing_indicator", "_missing"):
+            if name.endswith(suffix):
+                strip_names.append(name[: -len(suffix)])
+        if "_per_" in name:
+            strip_names.append(name.split("_per_", 1)[0])
+    return list(dict.fromkeys(value for value in strip_names if value))
+
+
+def _patch_overadjustment_covariate_filter(
+    code: str,
+    strip_names: Sequence[str],
+) -> str:
+    if "_easyicu_overadjustment_drop_v1" in code or not strip_names:
+        return code
+    exact = list(dict.fromkeys(str(name) for name in strip_names if str(name)))
+    roots = [
+        name
+        for name in exact
+        if not name.endswith(("_indicator", "_measured", "_flag"))
+        and len(name.split("_")) >= 2
+    ]
+    exact_literal = json.dumps(exact)
+    roots_literal = json.dumps(roots)
+
+    dedupe_re = re.compile(
+        r"(?m)^(?P<indent>[ \t]*)(?P<var>x_cols|covariates|model_cols|predictor_cols)"
+        r"\s*=\s*list\(dict\.fromkeys\((?P=var)\)\)\s*$"
+    )
+
+    def _rewrite(match: "re.Match[str]") -> str:
+        indent = match.group("indent")
+        var = match.group("var")
+        return (
+            match.group(0)
+            + "\n"
+            + f"{indent}_easyicu_overadjustment_drop_v1 = set({exact_literal})\n"
+            + f"{indent}_easyicu_overadjustment_roots_v1 = tuple({roots_literal})\n"
+            + f"{indent}def _easyicu_overadjustment_keep_v1(col):\n"
+            + f"{indent}    col = str(col)\n"
+            + f"{indent}    if col in _easyicu_overadjustment_drop_v1:\n"
+            + f"{indent}        return False\n"
+            + f"{indent}    return not any(\n"
+            + f"{indent}        col == root or col.startswith(root + '_')\n"
+            + f"{indent}        for root in _easyicu_overadjustment_roots_v1\n"
+            + f"{indent}    )\n"
+            + f"{indent}{var} = [\n"
+            + f"{indent}    col for col in {var}\n"
+            + f"{indent}    if _easyicu_overadjustment_keep_v1(col)\n"
+            + f"{indent}]\n"
+        )
+
+    return dedupe_re.sub(_rewrite, code, count=1)
+
+
 def _deterministic_summary_repair(
     *,
     code: str,
@@ -243,6 +330,18 @@ def _deterministic_summary_repair(
         or step_summary.get("note")
         or ""
     )
+    age_indicator_keyerror = (
+        error_text.strip().strip("'\"") == "age"
+        and "source_vars_for_table" in code
+        and "measured_vars" in code
+        and "meas_var = measured_vars[var]" in code
+    )
+    if age_indicator_keyerror:
+        repair_name = "age_covariate_no_measured_indicator_v1"
+        if previous_repair != repair_name:
+            repaired = _patch_age_covariate_coding_without_indicator(code)
+            if repaired is not None:
+                return repair_name, repaired
     generic_soft_failure = "unknown error" in error_text.lower()
     dtype_soft_failure = (
         "pandas data cast to numpy dtype of object" in error_text.lower()
@@ -639,6 +738,42 @@ def _deterministic_summary_repair(
                     return repair_name, repaired
         return None
 
+    return None
+
+
+def deterministic_contract_repair(
+    *,
+    code: str,
+    findings: Sequence[Any],
+    previous_repair: Optional[str] = None,
+) -> Optional[tuple[str, str]]:
+    """Patch objective contract/audit failures before asking the LLM to repair."""
+
+    for finding in findings:
+        validator = getattr(finding, "validator", None)
+        detail = getattr(finding, "detail", None)
+        if isinstance(finding, dict):
+            validator = finding.get("validator")
+            detail = finding.get("detail")
+        if validator != "overadjustment_auditor" or not isinstance(detail, dict):
+            continue
+        if detail.get("kind") != "overadjustment":
+            continue
+        offenders = [
+            str(value)
+            for value in (detail.get("offending_covariates") or [])
+            if str(value).strip()
+        ]
+        if not offenders:
+            continue
+        strip_names = _overadjustment_strip_names(offenders)
+        repair_name = "drop_overadjustment_covariates_v1"
+        if previous_repair == repair_name:
+            return None
+        repaired = _strip_columns_from_list_literals(code, strip_names)
+        repaired = _patch_overadjustment_covariate_filter(repaired, strip_names)
+        if repaired != code:
+            return repair_name, repaired
     return None
 
 

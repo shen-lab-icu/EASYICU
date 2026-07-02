@@ -55,6 +55,8 @@ from .agents import (
 from .audits.validators import (
     ClinicalConstraintValidator,
     ConceptUsageAuditor,
+    FigureContractQualityValidator,
+    FigureSourceDataValidator,
     LLMConceptAuditor,
     StatisticalGuard,
     StatisticalValidator,
@@ -62,6 +64,7 @@ from .audits.validators import (
 from .code_repair import (
     _deterministic_runner_repair,
     _deterministic_summary_repair,
+    deterministic_contract_repair,
     deterministic_concept_audit_repair,
 )
 from .cohort_repair import extract_cohort_definition_from_prose
@@ -81,9 +84,12 @@ from .pipeline import (
     _promote_sibling_figure_exports,
     _render_association_publication_bundle_from_prior_outputs,
     _render_prediction_publication_bundle_from_prior_outputs,
+    _render_sensitivity_publication_bundle_from_prior_outputs,
     _semantic_aliases_for,
 )
+from .publication_figures import make_figure_contract
 from .plan_utils import (
+    _cap_plan_preserving_figure_steps,
     _cohort_definition_contract_findings,
     _cohort_definition_is_empty,
     _cohort_definition_prose,
@@ -91,12 +97,14 @@ from .plan_utils import (
     _plan_expects_analysis_cohort,
     _preserve_figure_steps_after_replan,
     _primary_exposure_contract_findings,
+    _primary_exposure_measurement_filter_findings,
     _primary_exposure_overadjustment_findings,
     _primary_model_leakage_findings,
     _step_contract_findings,
     _step_contract_repair_guidance,
     _step_expects_figure,
 )
+from .pipeline_resume import ResumeController, upsert_step_record
 from .schema import AnalysisPlan, AnalysisStep, EvidenceRef
 from .robustness_panel import (
     assert_robustness_specs_locked,
@@ -151,6 +159,156 @@ def _demote_cosmetic_visual_findings(
             demoted.append(finding)
     blocking_errors = [f for f in demoted if f.severity == "error"]
     return demoted, blocking_errors
+
+
+def _reader_label_from_stem(stem: str) -> str:
+    words = [
+        token
+        for token in stem.replace("-", "_").replace(".", "_").split("_")
+        if token
+    ]
+    if not words:
+        return "Manuscript figure"
+    return " ".join(word.capitalize() if len(word) > 3 else word.upper() for word in words)
+
+
+def _infer_step_figure_panel_role(step: AnalysisStep, stem: str) -> str:
+    text = " ".join(
+        [
+            step.step_id,
+            step.intent or "",
+            step.method or "",
+            stem,
+            " ".join(step.expected_outputs or []),
+        ]
+    ).lower()
+    if any(token in text for token in ("robustness", "sensitivity", "specification")):
+        return "robustness"
+    if any(
+        token in text
+        for token in (
+            "missingness",
+            "measurement",
+            "quality",
+            "baseline",
+            "table one",
+            "attrition",
+            "cohort",
+            "audit",
+        )
+    ):
+        return "audit"
+    if any(
+        token in text
+        for token in ("association", "effect", "forest", "estimate", "outcome")
+    ):
+        return "relationship"
+    return "overview"
+
+
+def _step_summary_paths(
+    value: Any,
+    *,
+    out_dir: Path,
+    allowed_suffixes: Optional[set[str]] = None,
+) -> List[Path]:
+    raw_values: List[Any] = []
+    if isinstance(value, (str, Path)):
+        raw_values = [value]
+    elif isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+        raw_values = list(value)
+    paths: List[Path] = []
+    for raw in raw_values:
+        path = Path(str(raw))
+        if not path.is_absolute():
+            path = out_dir / path
+        if not path.exists() or not path.is_file():
+            continue
+        if allowed_suffixes is not None and path.suffix.lower() not in allowed_suffixes:
+            continue
+        paths.append(path)
+    return sorted(dict.fromkeys(paths))
+
+
+def _ensure_step_figure_contract(
+    *,
+    step: AnalysisStep,
+    out_dir: Path,
+    step_summary: Mapping[str, Any],
+    evidence_ids: Sequence[str],
+) -> Optional[Path]:
+    """Create a minimal manuscript-facing contract for valid figure exports.
+
+    Coder prompts already ask for ``*.figure_contract.json``. This runner-level
+    fallback covers the common successful-plot / missing-boilerplate case without
+    weakening result-bearing figure gates: association and robustness figures
+    still keep their result-like roles, so the contract validator can require
+    multi-panel evidence when appropriate.
+    """
+
+    if sorted(out_dir.glob("*.figure_contract.json")):
+        return None
+    figure_suffixes = {".svg", ".pdf", ".png", ".tiff", ".tif", ".pptx"}
+    figure_paths = _step_summary_paths(
+        step_summary.get("figure_files") or step_summary.get("figure_path"),
+        out_dir=out_dir,
+        allowed_suffixes=figure_suffixes,
+    )
+    if not figure_paths:
+        figure_paths = sorted(
+            path
+            for path in out_dir.iterdir()
+            if path.is_file() and path.suffix.lower() in figure_suffixes
+        )
+    if not figure_paths:
+        return None
+    source_paths = _step_summary_paths(
+        step_summary.get("source_data_files")
+        or step_summary.get("source_data")
+        or step_summary.get("source_table"),
+        out_dir=out_dir,
+    )
+    primary_stem = figure_paths[0].stem
+    label = _reader_label_from_stem(primary_stem)
+    role = _infer_step_figure_panel_role(step, primary_stem)
+    contract = make_figure_contract(
+        figure_id=primary_stem,
+        core_claim=(
+            f"{label} summarizes the planned manuscript figure from registered "
+            "source data."
+        ),
+        panels=[
+            {
+                "panel_id": "A",
+                "title": label,
+                "role": role,
+                "claim": (
+                    "This panel displays the step result using registered "
+                    "source data and preserved code provenance."
+                ),
+                "evidence_ids": list(evidence_ids),
+                "review_risk": (
+                    "Review the source data and upstream step contract before "
+                    "using the panel in manuscript text."
+                ),
+            }
+        ],
+        export_formats=[
+            suffix.lstrip(".")
+            for suffix in (".svg", ".pdf", ".png", ".tiff")
+            if any(path.suffix.lower() == suffix for path in figure_paths)
+        ]
+        or ["svg", "png"],
+        source_data=[path.name for path in source_paths],
+        statistics_note="Auto-generated by the runner from step summary metadata.",
+        image_integrity_note="No values were invented or visually altered by this contract synthesis.",
+    )
+    contract_path = out_dir / f"{primary_stem}.figure_contract.json"
+    contract_path.write_text(
+        json.dumps(contract.model_dump(mode="json"), indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return contract_path
 
 
 def _plan_signature(
@@ -233,6 +391,8 @@ def run_execute_phase(
     skill_obj: Optional[ClinicalSkill],
     notes: Optional[str],
     emit_progress: Callable[..., None],
+    resume_from_step_id: Optional[str] = None,
+    stop_after_step_id: Optional[str] = None,
 ) -> _ExecutePhaseResult:
     """Execute probe + per-step analysis loop, with optional replanning."""
     context = plan_result.context
@@ -241,6 +401,15 @@ def run_execute_phase(
     findings = plan_result.findings
     plan = plan_result.plan
     plan_path = plan_result.plan_path
+    resume_controller = ResumeController(
+        plan=plan,
+        run_dir=run_dir,
+        resume_state=plan_result.resume_state,
+        resume_from_step_id=resume_from_step_id,
+        stop_after_step_id=stop_after_step_id,
+    )
+    requested_resume_from_step_id = resume_controller.resume_from_step_id
+    requested_stop_after_step_id = resume_controller.stop_after_step_id
     # Replan convergence bookkeeping (see _maybe_replan). ``noop_streak``
     # counts consecutive substantively-identical revisions; ``total`` counts
     # substantive revisions; ``disabled`` latches once a guard trips.
@@ -302,6 +471,8 @@ def run_execute_phase(
 
     pattern_auditor = AnalysisPatternAuditor()
     stat_validator = StatisticalValidator()
+    figure_contract_validator = FigureContractQualityValidator()
+    figure_source_validator = FigureSourceDataValidator()
     clinical_validator = ClinicalConstraintValidator()
     statistical_guard = StatisticalGuard()
     runtime_state = supervisor.bootstrap_state(run_id=run_id, context=context)
@@ -312,47 +483,16 @@ def run_execute_phase(
     probe_summary: Dict[str, Any] = {}
     resumed_step_ids: set = set()
     if plan_result.resume_state is not None:
-        try:
-            prior_records = [
-                rec
-                for rec in (plan_result.resume_state.get("per_step_records", []) or [])
-                if isinstance(rec, dict) and rec.get("step_id")
-            ]
-            prior_ok_step_ids = {
-                rec["step_id"] for rec in prior_records if rec.get("status") == "ok"
-            }
-            for rec in plan_result.resume_state.get("per_step_records", []) or []:
-                if (
-                    isinstance(rec, dict)
-                    and rec.get("status") == "ok"
-                    and rec.get("step_id")
-                ):
-                    per_step_records.append(rec)
-                    resumed_step_ids.add(rec["step_id"])
-            for f in plan_result.resume_state.get("findings", []) or []:
-                try:
-                    finding = ValidationFinding.model_validate(f)
-                except Exception:
-                    continue
-                if finding.validator == "cohort_auditor":
-                    continue
-                if finding.validator == "runner":
-                    msg = finding.message or ""
-                    if any(step_id in msg for step_id in prior_ok_step_ids):
-                        continue
-                findings.append(finding)
-            if resumed_step_ids:
-                print(
-                    f"[research_agent] resume: skipping {len(resumed_step_ids)} "
-                    f"already-completed step(s) — {sorted(resumed_step_ids)}"
-                )
-            for rec in per_step_records:
-                if rec.get("step_id") == "00_probe" and isinstance(
-                    rec.get("step_summary"), dict
-                ):
-                    probe_summary = rec["step_summary"]
-        except Exception:
-            resumed_step_ids = set()
+        resume_application = resume_controller.apply()
+        per_step_records.extend(resume_application.per_step_records)
+        resumed_step_ids = set(resume_application.resumed_step_ids)
+        findings.extend(resume_application.findings)
+        probe_summary = resume_application.probe_summary
+        if resumed_step_ids:
+            print(
+                f"[research_agent] resume: skipping {len(resumed_step_ids)} "
+                f"already-completed step(s) — {sorted(resumed_step_ids)}"
+            )
 
     def _flush_partial_manifest(extra: Optional[Dict[str, Any]] = None) -> None:
         payload: Dict[str, Any] = {
@@ -704,21 +844,45 @@ def run_execute_phase(
         # disables the guard for backward compatibility.
         cap = pipeline._max_total_steps
         if cap > 0 and len(revised.steps) > cap:
-            dropped = [s.step_id for s in revised.steps[cap:]]
-            revised = revised.model_copy(update={"steps": list(revised.steps[:cap])})
-            findings.append(
-                ValidationFinding(
-                    validator="replanner",
-                    severity="warning",
-                    message=(
-                        f"Replanner produced {len(dropped) + cap} steps; "
-                        f"truncated to max_total_steps={cap}. Dropped: "
-                        f"{', '.join(dropped[:6])}"
-                        + (" ..." if len(dropped) > 6 else "")
-                    ),
-                    detail={"dropped_step_ids": dropped, "cap": cap},
-                )
+            protected_step_ids = [
+                str(record.get("step_id"))
+                for record in (completed_records or [])
+                if record.get("step_id") and record.get("status") == "ok"
+            ]
+            capped_revised, cap_findings = _cap_plan_preserving_figure_steps(
+                plan=revised,
+                cap=cap,
+                protected_step_ids=protected_step_ids,
             )
+            revised = capped_revised
+            findings.extend(
+                finding.model_copy(
+                    update={
+                        "validator": "replanner",
+                        "message": (finding.message or "").replace(
+                            "Initial plan had",
+                            "Replanner produced",
+                        ),
+                    }
+                )
+                for finding in cap_findings
+            )
+            if not cap_findings:
+                dropped = [s.step_id for s in revised.steps[cap:]]
+                revised = revised.model_copy(update={"steps": list(revised.steps[:cap])})
+                findings.append(
+                    ValidationFinding(
+                        validator="replanner",
+                        severity="warning",
+                        message=(
+                            f"Replanner produced {len(dropped) + cap} steps; "
+                            f"truncated to max_total_steps={cap}. Dropped: "
+                            f"{', '.join(dropped[:6])}"
+                            + (" ..." if len(dropped) > 6 else "")
+                        ),
+                        detail={"dropped_step_ids": dropped, "cap": cap},
+                    )
+                )
 
         # No-op detection on the *substantive* step DAG, not the full
         # model_dump. A verbose replanner can rewrite each step's ``intent``
@@ -889,7 +1053,10 @@ def run_execute_phase(
         repair_attempts: int,
         fallback_used: bool,
         runner_repair_name: Optional[str] = None,
+        resumed_code_reuse: bool = False,
     ) -> str:
+        if resumed_code_reuse:
+            return "resumed_code_reuse"
         if fallback_used:
             return "fallback"
         if repair_attempts > 0:
@@ -975,6 +1142,7 @@ def run_execute_phase(
             "step_id": step.step_id,
             "intent": step.intent,
         }
+        resumed_code_reuse_used = False
         step_current = step_order.get(step.step_id, 0) + 1
         dependency_record = _failed_dependency_record(step)
         if dependency_record is not None:
@@ -1043,38 +1211,98 @@ def run_execute_phase(
         )
         step_record["semantics_family"] = local_runtime_state.analysis_family
 
-        try:
-            emit_progress(
-                "coder",
-                f"Generating analysis script for {step.step_id}.",
-                run_id=run_id,
-                step_id=step.step_id,
-                current_step=step_current,
-                total_steps=total_steps,
+        def _use_resumed_code(
+            resumed_code: Tuple[str, Dict[str, Any]],
+            *,
+            error: Optional[BaseException] = None,
+        ) -> str:
+            nonlocal resumed_code_reuse_used
+            resumed_code_reuse_used = True
+            prior_code, resumed_record = resumed_code
+            step_record["generation_mode"] = "resumed_code_reuse"
+            step_record["resumed_code_evidence_id"] = resumed_record.get(
+                "evidence_id"
             )
-            code = coder.run(context=agent_context, step=step)
-        except Exception as exc:
+            step_record["resumed_code_relative_path"] = resumed_record.get(
+                "relative_path"
+            )
+            detail = {
+                "step_id": step.step_id,
+                "resume_from_step_id": requested_resume_from_step_id,
+                "evidence_id": resumed_record.get("evidence_id"),
+                "relative_path": resumed_record.get("relative_path"),
+            }
+            if error is None:
+                message = (
+                    f"Explicit resume reused prior agent-generated code for step "
+                    f"{step.step_id} before requesting a new coder script."
+                )
+            else:
+                detail["error"] = str(error)
+                message = (
+                    f"Coder agent failed for step {step.step_id}; reused prior "
+                    "agent-generated code from resume evidence."
+                )
             with shared_lock:
                 findings.append(
                     ValidationFinding(
                         validator="coder",
-                        severity="error",
-                        message=f"Coder agent failed for step {step.step_id}: {exc}",
+                        severity="warning",
+                        message=message,
+                        detail=detail,
                     )
                 )
-                step_record["status"] = "coder_failed"
-                per_step_records.append(step_record)
-                _flush_partial_manifest()
             emit_progress(
                 "coder",
-                f"Coder failed for {step.step_id}.",
-                status="error",
+                f"Reused prior generated analysis script for {step.step_id}.",
+                status="warning",
                 run_id=run_id,
                 step_id=step.step_id,
                 current_step=step_current,
                 total_steps=total_steps,
             )
-            return step_record
+            return prior_code
+
+        preflight_resumed_code = resume_controller.prior_code_for_step(step.step_id)
+        if preflight_resumed_code is not None:
+            code = _use_resumed_code(preflight_resumed_code)
+        else:
+            try:
+                emit_progress(
+                    "coder",
+                    f"Generating analysis script for {step.step_id}.",
+                    run_id=run_id,
+                    step_id=step.step_id,
+                    current_step=step_current,
+                    total_steps=total_steps,
+                )
+                code = coder.run(context=agent_context, step=step)
+            except Exception as exc:
+                resumed_code = resume_controller.prior_code_for_step(step.step_id)
+                if resumed_code is not None:
+                    code = _use_resumed_code(resumed_code, error=exc)
+                else:
+                    with shared_lock:
+                        findings.append(
+                            ValidationFinding(
+                                validator="coder",
+                                severity="error",
+                                message=f"Coder agent failed for step {step.step_id}: {exc}",
+                            )
+                        )
+                        step_record["status"] = "coder_failed"
+                        per_step_records.append(step_record)
+                        _flush_partial_manifest()
+                    emit_progress(
+                        "coder",
+                        f"Coder failed for {step.step_id}.",
+                        status="error",
+                        run_id=run_id,
+                        step_id=step.step_id,
+                        current_step=step_current,
+                        total_steps=total_steps,
+                    )
+                    return step_record
         deterministic_fallback_used = False
 
         def _deterministic_fallback_code(reason: str) -> Optional[str]:
@@ -1121,7 +1349,22 @@ def run_execute_phase(
                     step=step,
                 )
             )
-            if pipeline._enable_llm_concept_audit:
+            if pipeline._enable_llm_concept_audit and resumed_code_reuse_used:
+                usage_findings.append(
+                    ValidationFinding(
+                        validator="llm_concept_auditor",
+                        severity="warning",
+                        message=(
+                            f"Skipped optional LLM concept audit for resumed code "
+                            f"in step {step.step_id}; deterministic audits still ran."
+                        ),
+                        detail={
+                            "step_id": step.step_id,
+                            "generation_mode": "resumed_code_reuse",
+                        },
+                    )
+                )
+            elif pipeline._enable_llm_concept_audit:
                 llm_audit_client = (
                     pipeline._llm_concept_auditor_client or role_resolver("analyzer")
                 )
@@ -1396,6 +1639,7 @@ def run_execute_phase(
                 total_steps=total_steps,
                 repair_attempts=repair_attempts,
             )
+            _clear_output_dir(run_dir / "steps" / step.step_id / "outputs")
             run_result = runner.run(step_id=step.step_id, code=code)
             step_record["returncode"] = run_result.returncode
             step_record["timed_out"] = run_result.timed_out
@@ -1425,12 +1669,19 @@ def run_execute_phase(
                     repair_attempts=repair_attempts,
                     fallback_used=deterministic_fallback_used,
                     runner_repair_name=runner_repair_name,
+                    resumed_code_reuse=resumed_code_reuse_used,
                 ),
                 prompt_pack_version=prompt_version,
                 metadata={
                     "repair_attempts": repair_attempts,
                     "fallback_reason": step_record.get("deterministic_code_fallback"),
                     "runner_repair": runner_repair_name,
+                    "resumed_code_evidence_id": step_record.get(
+                        "resumed_code_evidence_id"
+                    ),
+                    "resumed_code_relative_path": step_record.get(
+                        "resumed_code_relative_path"
+                    ),
                     "llm_signature": llm_signature,
                 },
             )
@@ -1447,6 +1698,7 @@ def run_execute_phase(
                         repair_attempts=repair_attempts,
                         fallback_used=deterministic_fallback_used,
                         runner_repair_name=runner_repair_name,
+                        resumed_code_reuse=resumed_code_reuse_used,
                     ),
                     metadata={
                         "repair_attempts": repair_attempts,
@@ -1662,6 +1914,13 @@ def run_execute_phase(
                     step_summary=visual_step_summary,
                     context=context,
                 )
+                early_contract_findings += (
+                    _primary_exposure_measurement_filter_findings(
+                        step=step,
+                        step_summary=visual_step_summary,
+                        context=context,
+                    )
+                )
                 # Overadjustment hard-block: if the primary exposure is a
                 # composite/derived score and this model conditioned on one of
                 # its constituents, route an error through the same repair loop
@@ -1684,10 +1943,120 @@ def run_execute_phase(
                 early_contract_errors = [
                     f for f in early_contract_findings if f.severity == "error"
                 ]
-                if (
-                    early_contract_errors
-                    and repair_attempts < pipeline._max_code_repair_attempts
-                ):
+                if early_contract_errors:
+                    if pipeline._enable_deterministic_runner_repair:
+                        before_repair_code = code
+                        summary_repair = _deterministic_summary_repair(
+                            code=code,
+                            step_summary=visual_step_summary,
+                            previous_repair=runner_repair_name,
+                            analysis_family=local_runtime_state.analysis_family,
+                        )
+                    else:
+                        summary_repair = None
+                    if summary_repair is not None:
+                        repair_attempts += 1
+                        runner_repair_name, code = summary_repair
+                        step_record["runner_repair"] = runner_repair_name
+                        step_record["code_repair_attempts"] = repair_attempts
+                        _record_repair(
+                            repair_id=runner_repair_name,
+                            step_id=step.step_id,
+                            trigger={
+                                "source": "deterministic_summary_repair",
+                                "step_summary_keys": sorted(
+                                    str(key) for key in visual_step_summary.keys()
+                                ),
+                                "contract_findings": [
+                                    f.message for f in early_contract_errors
+                                ],
+                            },
+                            transformation=(
+                                "Deterministic repair before LLM contract repair."
+                            ),
+                            before_code=before_repair_code,
+                            after_code=code,
+                        )
+                        emit_progress(
+                            "runner_repair",
+                            (
+                                f"Applied deterministic summary repair for "
+                                f"{step.step_id}: {runner_repair_name}."
+                            ),
+                            run_id=run_id,
+                            step_id=step.step_id,
+                            current_step=step_current,
+                            total_steps=total_steps,
+                        )
+                        _clear_output_dir(run_result.out_dir)
+                        continue
+                    if pipeline._enable_deterministic_runner_repair:
+                        before_repair_code = code
+                        contract_repair = deterministic_contract_repair(
+                            code=code,
+                            findings=early_contract_errors,
+                            previous_repair=runner_repair_name,
+                        )
+                    else:
+                        contract_repair = None
+                    if contract_repair is not None:
+                        repair_attempts += 1
+                        runner_repair_name, code = contract_repair
+                        step_record["runner_repair"] = runner_repair_name
+                        step_record["code_repair_attempts"] = repair_attempts
+                        _record_repair(
+                            repair_id=runner_repair_name,
+                            step_id=step.step_id,
+                            trigger={
+                                "source": "deterministic_contract_repair",
+                                "contract_findings": [
+                                    f.message for f in early_contract_errors
+                                ],
+                            },
+                            transformation=(
+                                "Deterministically removed covariates named by "
+                                "objective contract/audit findings."
+                            ),
+                            before_code=before_repair_code,
+                            after_code=code,
+                        )
+                        emit_progress(
+                            "runner_repair",
+                            (
+                                f"Applied deterministic contract repair for "
+                                f"{step.step_id}: {runner_repair_name}."
+                            ),
+                            run_id=run_id,
+                            step_id=step.step_id,
+                            current_step=step_current,
+                            total_steps=total_steps,
+                        )
+                        _clear_output_dir(run_result.out_dir)
+                        continue
+                    if repair_attempts >= pipeline._max_code_repair_attempts:
+                        with shared_lock:
+                            findings.extend(early_contract_findings)
+                            step_record["status"] = "contract_failed"
+                            step_record["contract_findings"] = [
+                                f.model_dump() for f in early_contract_findings
+                            ]
+                            step_record["step_summary"] = visual_step_summary
+                            per_step_records.append(step_record)
+                            _flush_partial_manifest()
+                        emit_progress(
+                            "contract",
+                            (
+                                f"Contract violation could not be repaired for "
+                                f"{step.step_id}; no LLM repair budget remains."
+                            ),
+                            status="error",
+                            run_id=run_id,
+                            step_id=step.step_id,
+                            current_step=step_current,
+                            total_steps=total_steps,
+                        )
+                        return step_record
+
                     repair_attempts += 1
                     step_record["code_repair_attempts"] = repair_attempts
                     emit_progress(
@@ -2090,6 +2459,7 @@ def run_execute_phase(
                 repair_attempts=repair_attempts,
                 fallback_used=deterministic_fallback_used,
                 runner_repair_name=runner_repair_name,
+                resumed_code_reuse=resumed_code_reuse_used,
             )
             if art.name == "step_summary.json":
                 rec = evidence.register_file(
@@ -2227,6 +2597,40 @@ def run_execute_phase(
                     step.step_id,
                     exc,
                 )
+        auto_contract_path = _ensure_step_figure_contract(
+            step=step,
+            out_dir=run_result.out_dir,
+            step_summary=step_summary,
+            evidence_ids=evidence_ids_for_step,
+        )
+        if auto_contract_path is not None:
+            generation_mode = _script_generation_mode(
+                repair_attempts=repair_attempts,
+                fallback_used=deterministic_fallback_used,
+                runner_repair_name=runner_repair_name,
+                resumed_code_reuse=resumed_code_reuse_used,
+            )
+            rec = evidence.register_file(
+                kind="log",
+                description=(
+                    f"Auto-generated figure contract for step {step.step_id}."
+                ),
+                source_path=auto_contract_path,
+                produced_by_step=step.step_id,
+                script_evidence_id=script_record.evidence_id,
+                aliases=_semantic_aliases_for(step, auto_contract_path),
+                producer="runner",
+                generation_mode=generation_mode,
+                metadata={
+                    "script_evidence_id": script_record.evidence_id,
+                    "figure_role": figure_role or "analysis_figure",
+                    "synthesis": "step_summary_figure_contract_v1",
+                },
+            )
+            evidence_ids_for_step.append(rec.evidence_id)
+            run_result.artefacts = sorted(
+                set([*run_result.artefacts, auto_contract_path])
+            )
         stat_findings = stat_validator.audit(
             context=context,
             cohort_path=cohort_path,
@@ -2254,19 +2658,179 @@ def run_execute_phase(
             step_summary=step_summary,
             completed_step_records=completed_records_snapshot,
         )
+        contract_findings.extend(
+            _primary_exposure_contract_findings(
+                step=step,
+                step_summary=step_summary,
+                context=context,
+            )
+        )
+        contract_findings.extend(
+            _primary_exposure_measurement_filter_findings(
+                step=step,
+                step_summary=step_summary,
+                context=context,
+            )
+        )
+        contract_findings.extend(
+            _primary_exposure_overadjustment_findings(
+                step=step,
+                context=context,
+                out_dir=run_result.out_dir,
+            )
+        )
+        contract_findings.extend(
+            _primary_model_leakage_findings(
+                step=step,
+                context=context,
+                out_dir=run_result.out_dir,
+            )
+        )
+        contract_findings.extend(
+            figure_contract_validator.audit(
+                step=step,
+                out_dir=run_result.out_dir,
+                run_dir=run_dir,
+                step_summary=step_summary,
+            )
+        )
+        figure_source_findings = figure_source_validator.audit(
+            step=step,
+            out_dir=run_result.out_dir,
+            run_dir=run_dir,
+            step_summary=step_summary,
+        )
+        figure_gate_errors = [
+            finding
+            for finding in contract_findings + figure_source_findings
+            if finding.severity == "error"
+            and finding.validator in {"figure_contract_quality", "figure_source_data"}
+        ]
+        association_publication_step = (
+            publication_step
+            and "association" in f"{step.step_id} {step.intent} {step.method}".lower()
+        )
+        sensitivity_publication_step = publication_step and any(
+            token in f"{step.step_id} {step.intent} {step.method}".lower()
+            for token in ("sensitivity", "robustness")
+        )
+        if (
+            (association_publication_step or sensitivity_publication_step)
+            and figure_gate_errors
+        ):
+            _clear_output_dir(run_result.out_dir)
+            if association_publication_step:
+                repaired = _render_association_publication_bundle_from_prior_outputs(
+                    run_dir=run_dir,
+                    current_step_id=step.step_id,
+                    out_dir=run_result.out_dir,
+                )
+                transformation = (
+                    "Replaced invalid figure-step exports with a deterministic "
+                    "multi-panel association figure from the registered parent table."
+                )
+            else:
+                repaired = _render_sensitivity_publication_bundle_from_prior_outputs(
+                    run_dir=run_dir,
+                    current_step_id=step.step_id,
+                    out_dir=run_result.out_dir,
+                )
+                transformation = (
+                    "Replaced invalid figure-step exports with a deterministic "
+                    "multi-panel sensitivity figure from the registered parent table."
+                )
+            if repaired is not None:
+                runner_repair_name = repaired
+                step_record["runner_repair"] = repaired
+                _record_repair(
+                    repair_id=repaired,
+                    step_id=step.step_id,
+                    trigger={
+                        "source": "publication_figure_quality_repair",
+                        "blocked_by": [
+                            finding.message for finding in figure_gate_errors[:5]
+                        ],
+                    },
+                    transformation=transformation,
+                )
+                run_result.artefacts = sorted(
+                    p for p in run_result.out_dir.iterdir() if p.is_file()
+                )
+                repaired_summary = run_result.out_dir / "step_summary.json"
+                if repaired_summary.exists():
+                    try:
+                        loaded_summary = json.loads(
+                            repaired_summary.read_text(encoding="utf-8")
+                        )
+                        if isinstance(loaded_summary, dict):
+                            step_summary = loaded_summary
+                    except Exception:
+                        pass
+                contract_findings = _step_contract_findings(
+                    step=step,
+                    step_summary=step_summary,
+                    completed_step_records=completed_records_snapshot,
+                )
+                contract_findings.extend(
+                    _primary_exposure_contract_findings(
+                        step=step,
+                        step_summary=step_summary,
+                        context=context,
+                    )
+                )
+                contract_findings.extend(
+                    _primary_exposure_measurement_filter_findings(
+                        step=step,
+                        step_summary=step_summary,
+                        context=context,
+                    )
+                )
+                contract_findings.extend(
+                    _primary_exposure_overadjustment_findings(
+                        step=step,
+                        context=context,
+                        out_dir=run_result.out_dir,
+                    )
+                )
+                contract_findings.extend(
+                    _primary_model_leakage_findings(
+                        step=step,
+                        context=context,
+                        out_dir=run_result.out_dir,
+                    )
+                )
+                contract_findings.extend(
+                    figure_contract_validator.audit(
+                        step=step,
+                        out_dir=run_result.out_dir,
+                        run_dir=run_dir,
+                        step_summary=step_summary,
+                    )
+                )
+                figure_source_findings = figure_source_validator.audit(
+                    step=step,
+                    out_dir=run_result.out_dir,
+                    run_dir=run_dir,
+                    step_summary=step_summary,
+                )
         with shared_lock:
             findings.extend(stat_findings)
             findings.extend(clinical_findings)
             findings.extend(guard_findings)
             findings.extend(contract_findings)
+            findings.extend(figure_source_findings)
         step_record["stat_findings"] = [f.model_dump() for f in stat_findings]
         step_record["clinical_findings"] = [f.model_dump() for f in clinical_findings]
         step_record["guard_findings"] = [f.model_dump() for f in guard_findings]
         step_record["contract_findings"] = [f.model_dump() for f in contract_findings]
+        step_record["figure_source_findings"] = [
+            f.model_dump() for f in figure_source_findings
+        ]
         step_record["generation_mode"] = _script_generation_mode(
             repair_attempts=repair_attempts,
             fallback_used=deterministic_fallback_used,
             runner_repair_name=runner_repair_name,
+            resumed_code_reuse=resumed_code_reuse_used,
         )
         raw_side_findings = step_summary.get("side_findings")
         if isinstance(raw_side_findings, list):
@@ -2288,6 +2852,7 @@ def run_execute_phase(
             clinical_findings,
             guard_findings,
             contract_findings,
+            figure_source_findings,
         )
         local_runtime_state = supervisor.critique_step(
             state=local_runtime_state,
@@ -2337,15 +2902,38 @@ def run_execute_phase(
                         )
                     )
 
-        try:
-            interpretation = analyzer.run(
-                context=agent_context,
-                step=step,
-                step_summary=step_summary,
-                evidence_ids=evidence_ids_for_step,
+        step_record["evidence_ids"] = list(dict.fromkeys(evidence_ids_for_step))
+        checkpoint_record = dict(step_record)
+        checkpoint_record["status"] = "executed_pending_review"
+        checkpoint_record["review_pending"] = True
+        with shared_lock:
+            upsert_step_record(
+                per_step_records,
+                checkpoint_record,
+                replace_statuses={"executed_pending_review"},
             )
-        except Exception as exc:
-            interpretation = f"(analyzer failed: {exc})"
+            _flush_partial_manifest()
+
+        interp_generation_mode = "llm"
+        if resumed_code_reuse_used:
+            interpretation = (
+                f"Step `{step.step_id}` was re-executed from resumed "
+                "agent-generated code. Review the registered step summary and "
+                "artefacts for numeric interpretation; no new LLM interpretation "
+                "was requested during resume."
+            )
+            interp_generation_mode = "resumed_code_reuse"
+        else:
+            try:
+                interpretation = analyzer.run(
+                    context=agent_context,
+                    step=step,
+                    step_summary=step_summary,
+                    evidence_ids=evidence_ids_for_step,
+                )
+            except Exception as exc:
+                interpretation = f"(analyzer failed: {exc})"
+                interp_generation_mode = "system"
         interp_record = evidence.register_text(
             kind="log",
             description=f"Analyzer interpretation for step {step.step_id}.",
@@ -2354,19 +2942,21 @@ def run_execute_phase(
             produced_by_step=step.step_id,
             script_evidence_id=script_record.evidence_id,
             producer="analyzer",
-            generation_mode="llm",
+            generation_mode=interp_generation_mode,
             prompt_pack_version=prompt_version,
         )
         step_record["interpretation_evidence_id"] = interp_record.evidence_id
         evidence_ids_for_step.append(interp_record.evidence_id)
         step_record["evidence_ids"] = list(dict.fromkeys(evidence_ids_for_step))
+        step_record.pop("review_pending", None)
         _propagate_findings_to_evidence(
             evidence_ids_for_step,
             usage_findings
             + stat_findings
             + clinical_findings
             + guard_findings
-            + contract_findings,
+            + contract_findings
+            + figure_source_findings,
             metadata={
                 "step_id": step.step_id,
                 "generation_mode": step_record["generation_mode"],
@@ -2375,11 +2965,16 @@ def run_execute_phase(
         with shared_lock:
             runtime_state = local_runtime_state
         has_contract_error = any(
-            finding.severity == "error" for finding in contract_findings
+            finding.severity == "error"
+            for finding in contract_findings + figure_source_findings
         )
         step_record["status"] = "contract_failed" if has_contract_error else "ok"
         with shared_lock:
-            per_step_records.append(step_record)
+            upsert_step_record(
+                per_step_records,
+                step_record,
+                replace_statuses={"executed_pending_review"},
+            )
             _flush_partial_manifest()
         emit_progress(
             "step",
@@ -2397,7 +2992,10 @@ def run_execute_phase(
         )
         return step_record
 
-    steps_to_run = [s for s in plan.steps if s.step_id not in resumed_step_ids]
+    steps_to_run = resume_controller.remaining_steps(
+        plan=plan,
+        executed_step_ids=set(resumed_step_ids),
+    )
     for skipped_step_id in sorted(resumed_step_ids):
         emit_progress(
             "resume",
@@ -2422,6 +3020,7 @@ def run_execute_phase(
         pipeline._max_concurrent_steps <= 1
         or len(steps_to_run) <= 1
         or pipeline._enable_replanning
+        or requested_stop_after_step_id is not None
     ):
 
         def _maybe_directed_model_replan(
@@ -2492,11 +3091,23 @@ def run_execute_phase(
             )
 
         executed_step_ids = set(resumed_step_ids)
-        remaining_steps = [s for s in plan.steps if s.step_id not in executed_step_ids]
+        remaining_steps = resume_controller.remaining_steps(
+            plan=plan,
+            executed_step_ids=executed_step_ids,
+        )
         while remaining_steps:
             step = remaining_steps.pop(0)
             record = _execute_one_step(step)
             executed_step_ids.add(step.step_id)
+            if step.step_id == requested_stop_after_step_id:
+                emit_progress(
+                    "pause",
+                    f"Stopped after requested step: {step.step_id}.",
+                    status="paused",
+                    run_id=run_id,
+                    step_id=step.step_id,
+                )
+                break
             directed_plan = _maybe_directed_model_replan(
                 failed_step=step, failed_record=record
             )
@@ -2506,9 +3117,10 @@ def run_execute_phase(
                 executed_step_ids.discard(step.step_id)
                 step_order.clear()
                 step_order.update({s.step_id: i for i, s in enumerate(plan.steps)})
-                remaining_steps = [
-                    s for s in plan.steps if s.step_id not in executed_step_ids
-                ]
+                remaining_steps = resume_controller.remaining_steps(
+                    plan=plan,
+                    executed_step_ids=executed_step_ids,
+                )
                 total_steps = len(plan.steps)
                 continue
             if (
@@ -2524,9 +3136,10 @@ def run_execute_phase(
                 )
                 step_order.clear()
                 step_order.update({s.step_id: i for i, s in enumerate(plan.steps)})
-                remaining_steps = [
-                    s for s in plan.steps if s.step_id not in executed_step_ids
-                ]
+                remaining_steps = resume_controller.remaining_steps(
+                    plan=plan,
+                    executed_step_ids=executed_step_ids,
+                )
                 total_steps = len(plan.steps)
     else:
         workers = min(pipeline._max_concurrent_steps, len(steps_to_run))
@@ -2565,6 +3178,7 @@ def run_execute_phase(
             primary_cohort=getattr(plan, "cohort", None),
             cohort_path=cohort_path,
             context=context,
+            run_dir=run_dir,
         )
         for warning in adapter_warnings:
             findings.append(

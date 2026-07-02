@@ -96,6 +96,117 @@ def test_find_claim_for_value_supports_percent_and_rounding(ra, tmp_path: Path):
     assert rounded_hit is not None and rounded_hit.source_field == "primary_or"
 
 
+def test_near_zero_literal_does_not_match_zero_claim(ra, tmp_path: Path):
+    from easyicu.research_agent.manuscript_post import bind_numeric_values
+
+    store = _store(ra, tmp_path)
+    store.register_numeric_claim(
+        value="0",
+        canonical=0.0,
+        evidence_id="e_zero",
+        step_id="s1",
+        source_field="zero_count",
+    )
+    store.register_numeric_claim(
+        value="0.00108315",
+        canonical=0.001083146182081867,
+        evidence_id="e_rd",
+        step_id="s2",
+        source_field="risk_difference.ci_low",
+    )
+
+    assert store.find_claim_for_value("0.001").source_field == "risk_difference.ci_low"
+    bound, binding_map, untraced = bind_numeric_values(
+        "The lower risk-difference bound was 0.001.",
+        evidence=store,
+    )
+
+    assert untraced == []
+    assert "<!-- AMBIGUOUS:" not in bound
+    assert binding_map["claim_1"].source_field == "risk_difference.ci_low"
+
+
+def test_context_numeric_claims_cover_source_counts_and_missingness(ra, tmp_path: Path):
+    from easyicu.research_agent.context_numeric import register_context_numeric_claims
+    from easyicu.research_agent.manuscript_post import bind_numeric_values
+
+    schema = ra.schema
+    context = schema.ResearchContext(
+        research_question="x",
+        cohort=schema.CohortDescriptor(
+            cohort_name="c",
+            database="synthetic",
+            n_patients=94458,
+            n_stays=94458,
+        ),
+        variables=[
+            schema.ConceptDescriptor(
+                name="lact_first",
+                role="lab",
+                dtype="float64",
+                missingness=schema.MissingnessProfile(
+                    fraction_missing=0.46388871244362573,
+                    n_missing=43818,
+                    n_total=94458,
+                ),
+            ),
+            schema.ConceptDescriptor(
+                name="lact_measured",
+                role="lab",
+                dtype="float64",
+                missingness=schema.MissingnessProfile(
+                    fraction_missing=0.0,
+                    n_missing=0,
+                    n_total=94458,
+                ),
+            ),
+            schema.ConceptDescriptor(
+                name="temp_first",
+                role="vital",
+                dtype="float64",
+                missingness=schema.MissingnessProfile(
+                    fraction_missing=0.0293781363145525,
+                    n_missing=2775,
+                    n_total=94458,
+                ),
+            ),
+            schema.ConceptDescriptor(
+                name="temp_measured",
+                role="vital",
+                dtype="float64",
+                missingness=schema.MissingnessProfile(
+                    fraction_missing=0.0,
+                    n_missing=0,
+                    n_total=94458,
+                ),
+            ),
+        ],
+    )
+    store = _store(ra, tmp_path)
+    claims = register_context_numeric_claims(store, context=context)
+
+    fields = {claim.source_field for claim in claims}
+    assert "cohort.n_stays_and_patients" in fields
+    assert "variable_groups.lact.missingness.max_fraction_missing" in fields
+    assert "variable_groups.temp.missingness.max_fraction_missing" in fields
+    assert not any(field.endswith(".n_total") for field in fields)
+    assert not any("fraction_missing[" in field for field in fields)
+
+    manuscript = (
+        "The source export contained 94,458 ICU stays. "
+        "Lactate missingness was 46.4%, while temperature missingness was 2.9%."
+    )
+    bound, binding_map, untraced = bind_numeric_values(manuscript, evidence=store)
+
+    assert untraced == []
+    assert "<!-- AMBIGUOUS:" not in bound
+    assert {claim.source_field for claim in binding_map.values()} == {
+        "cohort.n_stays_and_patients",
+        "variable_groups.lact.missingness.max_fraction_missing",
+        "variable_groups.temp.missingness.max_fraction_missing",
+    }
+
+
 def test_bind_numeric_values_attaches_footnotes(ra, tmp_path: Path):
     from easyicu.research_agent.manuscript_post import bind_numeric_values
 

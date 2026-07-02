@@ -92,6 +92,142 @@ def test_robustness_panel_publication_figure_has_no_header_title_overlap(
         finding.severity == "error" and "overlapping text" in finding.message
         for finding in result.findings
     )
+    assert not any(
+        finding.severity == "error"
+        and finding.validator == "figure_contract_quality"
+        for finding in result.findings
+    )
+    contract_path = (
+        tmp_path
+        / "publication_figures"
+        / "easyicu_publication_figure.figure_contract.json"
+    )
+    contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    assert [panel["panel_id"] for panel in contract["panels"]] == ["A", "B", "C"]
+    assert (
+        tmp_path
+        / "publication_figures"
+        / "publication_figure_source_robustness_axis_summary.csv"
+    ).exists()
+
+
+def test_publication_figure_skill_rebuilds_stale_single_panel_bundle(
+    ra,
+    tmp_path: Path,
+):
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.figure_skill import PublicationFigureSkill
+    from easyicu.research_agent.robustness_panel import (
+        RobustnessPanel,
+        RobustnessPanelRow,
+    )
+
+    out = tmp_path / "publication_figures"
+    out.mkdir(parents=True, exist_ok=True)
+    stale_png = out / "easyicu_publication_figure.png"
+    stale_png.write_text("old figure", encoding="utf-8")
+    (out / "easyicu_publication_figure.figure_contract.json").write_text(
+        json.dumps(
+            {
+                "figure_id": "easyicu_publication_figure",
+                "core_claim": "Old robustness result.",
+                "panels": [
+                    {
+                        "panel_id": "A",
+                        "title": "Primary effect and robustness variants",
+                        "role": "robustness",
+                        "claim": "Old single-panel result.",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    panel = RobustnessPanel.from_rows(
+        [
+            RobustnessPanelRow(
+                spec_id="primary",
+                axis="primary",
+                n=100,
+                point_estimate=1.14,
+                ci_low=1.08,
+                ci_high=1.21,
+                se=0.03,
+                evidence_id="primary_row",
+                converged=True,
+            ),
+            RobustnessPanelRow(
+                spec_id="alt_cohort",
+                axis="cohort",
+                n=92,
+                point_estimate=1.08,
+                ci_low=1.01,
+                ci_high=1.18,
+                se=0.04,
+                evidence_id="alt_row",
+                converged=True,
+            ),
+        ]
+    )
+    (tmp_path / "robustness_panel.json").write_text(
+        json.dumps(panel.to_dict()),
+        encoding="utf-8",
+    )
+    evidence = EvidenceStore(tmp_path)
+    evidence.register_file(
+        kind="figure",
+        description="Old publication figure.",
+        source_path=stale_png,
+        evidence_id="publication_figure_png",
+        aliases=["publication_figure"],
+        producer=PublicationFigureSkill.name,
+        generation_mode="deterministic_figure_skill",
+    )
+    evidence.register_json(
+        kind="statistic",
+        description="Robustness panel.",
+        payload=panel.to_dict(),
+        filename="robustness_panel.json",
+        evidence_id="robustness_panel",
+    )
+    context = ra.ResearchContext(
+        research_question="Does early severity predict mortality?",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_patients=100,
+            n_stays=100,
+        ),
+        variables=[],
+        target_outcome="death",
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            ra.AnalysisStep(
+                step_id="05_sensitivity_comparison_figure",
+                intent="Render a manuscript-facing sensitivity figure.",
+                expected_outputs=["figure:publication"],
+            )
+        ],
+    )
+
+    result = PublicationFigureSkill().run(
+        context=context,
+        plan=plan,
+        evidence=evidence,
+        run_dir=tmp_path,
+        prompt_pack_version="test",
+    )
+
+    assert result.generated is True
+    contract = json.loads(
+        (out / "easyicu_publication_figure.figure_contract.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert [panel["panel_id"] for panel in contract["panels"]] == ["A", "B", "C"]
+    assert any(eid.endswith("_v2") for eid in result.figure_evidence_ids)
 
 
 def test_figure_contract_enforces_unique_panel_ids():
@@ -484,6 +620,47 @@ def test_save_publication_figure_accepts_contract_only_output_dir_call(tmp_path:
 
     assert "contract" in paths
     assert paths["contract"].exists()
+
+
+def test_runner_synthesizes_contract_for_step_figure_exports(tmp_path: Path):
+    from easyicu.research_agent.audits.validators import FigureContractQualityValidator
+    from easyicu.research_agent.pipeline_execute import _ensure_step_figure_contract
+    from easyicu.research_agent.schema import AnalysisStep
+
+    out_dir = tmp_path / "outputs"
+    out_dir.mkdir()
+    png = out_dir / "missingness_measurement_panel.png"
+    svg = out_dir / "missingness_measurement_panel.svg"
+    source = out_dir / "missingness_measurement_panel_source_data.csv"
+    png.write_bytes(b"not-a-real-png-but-present")
+    svg.write_text("<svg><text>ok</text></svg>", encoding="utf-8")
+    source.write_text("variable,missing_pct\nlactate,40.7\n", encoding="utf-8")
+    step = AnalysisStep(
+        step_id="02_baseline_characteristics_and_data_quality_figure",
+        intent="Render missingness and measurement quality for manuscript review.",
+        expected_outputs=["figure:missingness_measurement_panel"],
+        method="matplotlib",
+    )
+    summary = {
+        "figure_files": [str(png), str(svg)],
+        "source_data_files": [str(source)],
+    }
+
+    contract_path = _ensure_step_figure_contract(
+        step=step,
+        out_dir=out_dir,
+        step_summary=summary,
+        evidence_ids=["table_missingness_source"],
+    )
+
+    assert contract_path == out_dir / "missingness_measurement_panel.figure_contract.json"
+    findings = FigureContractQualityValidator().audit(
+        step=step,
+        out_dir=out_dir,
+        run_dir=tmp_path,
+        step_summary=summary,
+    )
+    assert [finding for finding in findings if finding.severity == "error"] == []
 
 
 def test_audit_publication_exports_tolerates_metadata_assignment(tmp_path: Path):

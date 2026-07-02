@@ -44,7 +44,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 import pandas as pd
 
@@ -78,7 +78,12 @@ from .reporting_checklist import (
     choose_checklist,
 )
 from .reviewer import run_reviewer_round
-from .provenance import ProvenanceBundle, SourceFileRecord, build_provenance_bundle, hash_sources
+from .provenance import (
+    ProvenanceBundle,
+    SourceFileRecord,
+    build_provenance_bundle,
+    hash_sources,
+)
 from .sensitivity import (
     EValueResult,
     NegativeControlResult,
@@ -112,6 +117,7 @@ from .context import (
     build_research_context,
     build_retrieved_research_context,
 )
+from .context_numeric import register_context_numeric_claims
 from . import pipeline_cache as _pipeline_cache
 from .pipeline_config import PipelineConfig
 from .contracts import _ExecutePhaseResult, _PlanPhaseResult, _WritePhaseResult
@@ -130,6 +136,7 @@ from .pipeline_report import (
     render_report,
     write_readiness_artifacts,
 )
+
 # Back-compat aliases. Tests (and any downstream code) that imported the
 # leading-underscore names from this module before the readiness/report
 # helpers were moved to ``pipeline_report`` keep working unchanged.
@@ -140,6 +147,7 @@ from .pipeline_report import (
     _extract_claim_ledger_rows,  # noqa: F401
     _render_author_review_note,  # noqa: F401
 )
+
 _execution_gate_status = execution_gate_status  # noqa: F841 (legacy alias)
 _write_readiness_artifacts = write_readiness_artifacts  # noqa: F841 (legacy alias)
 _render_report = render_report  # noqa: F841 (legacy alias)
@@ -149,7 +157,10 @@ from .audits.manuscript_claims import (  # noqa: E402,F401
     _extract_metric_claims,
     _extract_percent_claims_near,
 )
-_audit_manuscript_numeric_claims = audit_manuscript_numeric_claims  # noqa: F841 (legacy alias)
+
+_audit_manuscript_numeric_claims = (
+    audit_manuscript_numeric_claims  # noqa: F841 (legacy alias)
+)
 
 from .evidence import (
     EvidenceEnforcementError,
@@ -167,6 +178,7 @@ from .manuscript_post import (
     _demote_unresolved_evidence_placeholders,
     _first_resolvable_name,
     _remove_tbd_sentences,
+    _repair_common_writer_citation_omissions,
     _repair_common_writer_placeholders,
 )
 from .summary_repair import (
@@ -274,6 +286,11 @@ from .schema import (
     ValidationFinding,
     VariableRole,
 )
+from .study_design import (
+    build_study_design_brief,
+    render_study_design_brief_for_prompt,
+    validate_plan_against_study_design_brief,
+)
 from .skills import ClinicalSkill, get_skill, list_skills
 from .runtime_artifacts import (
     AuditLogger,
@@ -301,6 +318,91 @@ from .pipeline_package import (
     _concept_dictionary_manifest_fields,  # noqa: F401
     _render_cost_summary,  # noqa: F401
 )
+
+
+def _resume_plan_candidate_paths(
+    *,
+    run_dir: Path,
+    resume_state: Optional[Dict[str, Any]],
+) -> List[Path]:
+    """Return saved resume plan candidates from most to least current."""
+    candidates: List[Path] = []
+    def _revision_key(path: Path) -> tuple[int, str]:
+        match = re.search(r"analysis_plan_revision_(\d+)\.json$", path.name)
+        revision = int(match.group(1)) if match else -1
+        return revision, path.name
+
+    candidates.extend(
+        sorted(
+            run_dir.glob("analysis_plan_revision_*.json"),
+            key=_revision_key,
+            reverse=True,
+        )
+    )
+    plan_path_value = (resume_state or {}).get("plan_path")
+    if plan_path_value:
+        manifest_path = Path(str(plan_path_value))
+        if not manifest_path.is_absolute():
+            manifest_path = run_dir / manifest_path
+        if manifest_path.exists():
+            candidates.append(manifest_path)
+    analysis_plan_path = run_dir / "analysis_plan.json"
+    if analysis_plan_path.exists():
+        candidates.append(analysis_plan_path)
+
+    unique: List[Path] = []
+    seen: set[Path] = set()
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        unique.append(candidate)
+    return unique
+
+
+def _load_compatible_resume_plan(
+    *,
+    run_dir: Path,
+    resume_state: Optional[Dict[str, Any]],
+) -> tuple[Optional[AnalysisPlan], Optional[Path]]:
+    """Load the newest saved plan compatible with completed resume steps."""
+    completed_step_ids = {
+        str(record.get("step_id"))
+        for record in ((resume_state or {}).get("per_step_records") or [])
+        if record.get("step_id")
+        and record.get("status") == "ok"
+        and record.get("step_id") != "00_probe"
+    }
+    for candidate in _resume_plan_candidate_paths(
+        run_dir=run_dir,
+        resume_state=resume_state,
+    ):
+        try:
+            plan = AnalysisPlan.model_validate(
+                json.loads(candidate.read_text(encoding="utf-8"))
+            )
+        except Exception:
+            continue
+        step_ids = {step.step_id for step in plan.steps}
+        if plan.steps and completed_step_ids <= step_ids:
+            return plan, candidate
+    return None, None
+
+
+def _load_resume_state(run_dir: Path) -> Optional[Dict[str, Any]]:
+    partial = run_dir / "manifest_partial.json"
+    if not partial.exists():
+        return None
+    try:
+        loaded = json.loads(partial.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise ValueError(
+            f"Cannot resume from corrupt checkpoint: {partial}"
+        ) from exc
+    if not isinstance(loaded, dict):
+        raise ValueError(f"Cannot resume from non-object checkpoint: {partial}")
+    return loaded
 
 
 class ResearchAgentPipeline:
@@ -577,9 +679,7 @@ class ResearchAgentPipeline:
             if max_consecutive_noop_replans and max_consecutive_noop_replans > 0
             else 0
         )
-        self._max_replans = (
-            int(max_replans) if max_replans and max_replans > 0 else 0
-        )
+        self._max_replans = int(max_replans) if max_replans and max_replans > 0 else 0
         self._max_numeric_claims_per_step = (
             int(max_numeric_claims_per_step)
             if max_numeric_claims_per_step and max_numeric_claims_per_step > 0
@@ -779,9 +879,11 @@ class ResearchAgentPipeline:
                 description="ResearchContext (frozen at run time).",
                 source_path=context_path,
                 evidence_id="research_context",
+                aliases=["RUN_CONTEXT", "run_context"],
                 producer="pipeline",
                 generation_mode="system",
             )
+        register_context_numeric_claims(evidence, context=context)
         concept_fingerprint_path = run_dir / "concept_dict_fingerprint.json"
         concept_fingerprint = write_concept_dict_fingerprint(concept_fingerprint_path)
         assert_concept_dict_matches(
@@ -924,7 +1026,9 @@ class ResearchAgentPipeline:
         )
         if experience_hits:
             bank = self._experience_bank()
-            bank_record_count = len(bank.records()) if bank is not None else len(experience_hits)
+            bank_record_count = (
+                len(bank.records()) if bank is not None else len(experience_hits)
+            )
             retired_count = max(0, bank_record_count - len(experience_hits))
             lines = [
                 "# Experience Hints",
@@ -1162,9 +1266,7 @@ class ResearchAgentPipeline:
                     )
                 note = render_hypothesis_blueprint_for_prompt(blueprint)
                 agent_notes = (
-                    f"{agent_context.notes}\n\n{note}"
-                    if agent_context.notes
-                    else note
+                    f"{agent_context.notes}\n\n{note}" if agent_context.notes else note
                 )
                 agent_context = agent_context.model_copy(update={"notes": agent_notes})
             except Exception as exc:
@@ -1178,6 +1280,46 @@ class ResearchAgentPipeline:
                         ),
                     )
                 )
+
+        study_design_brief = None
+        try:
+            study_design_brief = build_study_design_brief(agent_context)
+            study_design_path = run_dir / "study_design_brief.json"
+            study_design_path.write_text(
+                study_design_brief.model_dump_json(indent=2),
+                encoding="utf-8",
+            )
+            if evidence.get("study_design_brief") is None:
+                evidence.register_file(
+                    kind="log",
+                    description=(
+                        "Pre-plan study-design brief: analysis family, expected "
+                        "methods, main-text displays, supplementary displays, "
+                        "sensitivity requirements, and covariate strategy."
+                    ),
+                    source_path=study_design_path,
+                    evidence_id="study_design_brief",
+                    producer="study_design_scout",
+                    generation_mode="deterministic_skill",
+                )
+            design_note = render_study_design_brief_for_prompt(study_design_brief)
+            agent_notes = (
+                f"{agent_context.notes}\n\n{design_note}"
+                if agent_context.notes
+                else design_note
+            )
+            agent_context = agent_context.model_copy(update={"notes": agent_notes})
+        except Exception as exc:
+            findings.append(
+                ValidationFinding(
+                    validator="study_design_brief",
+                    severity="warning",
+                    message=(
+                        "Study-design brief failed; planner will use context only: "
+                        f"{type(exc).__name__}: {exc}"
+                    ),
+                )
+            )
 
         for client in self._iter_mock_clients(llm):
             client.context = agent_context
@@ -1210,7 +1352,9 @@ class ResearchAgentPipeline:
             # ``last_usage`` the envelope passes through.
             if repro_envelope is not None:
                 env_resolver = envelope_role_resolver(
-                    llm, repro_envelope, seed=self._llm_seed,
+                    llm,
+                    repro_envelope,
+                    seed=self._llm_seed,
                 )
 
                 class _EnvelopeShim:
@@ -1238,13 +1382,16 @@ class ResearchAgentPipeline:
                         )
 
                 role_resolver = metered_role_resolver(
-                    _EnvelopeShim(env_resolver), cost_meter,
+                    _EnvelopeShim(env_resolver),
+                    cost_meter,
                 )
             else:
                 role_resolver = metered_role_resolver(llm, cost_meter)
         elif repro_envelope is not None:
             role_resolver = envelope_role_resolver(
-                llm, repro_envelope, seed=self._llm_seed,
+                llm,
+                repro_envelope,
+                seed=self._llm_seed,
             )
         else:
 
@@ -1259,33 +1406,35 @@ class ResearchAgentPipeline:
         # already-completed step_ids aligned and continues from the failed step.
         reused_prior_plan = False
         if resume_state is not None:
-            _prior_plan_path = run_dir / "analysis_plan.json"
-            if _prior_plan_path.exists():
-                try:
-                    plan = AnalysisPlan.model_validate(
-                        json.loads(_prior_plan_path.read_text(encoding="utf-8"))
-                    )
-                except Exception:
-                    plan = None
-                if plan is not None and plan.steps:
-                    reused_prior_plan = True
-                    plan_generation_mode = "resumed"
-                    findings.append(
-                        ValidationFinding(
-                            validator="planner",
-                            severity="warning",
-                            message=(
-                                "Resuming prior run: reused the locked analysis "
-                                "plan (skipped re-planning) so completed step_ids "
-                                "stay aligned and execution continues from the "
-                                "failed step."
+            plan, _prior_plan_path = _load_compatible_resume_plan(
+                run_dir=run_dir,
+                resume_state=resume_state,
+            )
+            if plan is not None and plan.steps:
+                reused_prior_plan = True
+                plan_generation_mode = "resumed"
+                findings.append(
+                    ValidationFinding(
+                        validator="planner",
+                        severity="warning",
+                        message=(
+                            "Resuming prior run: reused the latest compatible "
+                            "saved analysis plan (skipped re-planning) so "
+                            "completed step_ids stay aligned and execution "
+                            "continues from the failed step."
+                        ),
+                        detail={
+                            "generation_mode": "resumed",
+                            "n_steps": len(plan.steps),
+                            "plan_path": (
+                                str(_prior_plan_path.relative_to(run_dir))
+                                if _prior_plan_path is not None
+                                and _prior_plan_path.is_relative_to(run_dir)
+                                else str(_prior_plan_path)
                             ),
-                            detail={
-                                "generation_mode": "resumed",
-                                "n_steps": len(plan.steps),
-                            },
-                        )
+                        },
                     )
+                )
 
         if reused_prior_plan:
             pass
@@ -1453,6 +1602,13 @@ class ResearchAgentPipeline:
             # it), record a loud, auditable contract error instead of silently
             # running the analysis on the full universe.
             findings.extend(_cohort_definition_contract_findings(plan))
+        if study_design_brief is not None:
+            findings.extend(
+                validate_plan_against_study_design_brief(
+                    plan=plan,
+                    brief=study_design_brief,
+                )
+            )
         plan_path = run_dir / "analysis_plan.json"
         plan_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
         if evidence.get("analysis_plan") is None:
@@ -1495,7 +1651,9 @@ class ResearchAgentPipeline:
         # stays reachable via EASYICU_UNIVERSE_PARQUET for robustness steps.
         if not reused_prior_plan:
             analysis_cohort = materialize_locked_analysis_cohort(
-                run_dir=run_dir, plan=plan, universe_path=cohort_path,
+                run_dir=run_dir,
+                plan=plan,
+                universe_path=cohort_path,
             )
             if analysis_cohort["status"] == "applied":
                 findings.append(
@@ -1571,6 +1729,8 @@ class ResearchAgentPipeline:
         skill_obj: Optional[ClinicalSkill],
         notes: Optional[str],
         emit_progress: Callable[..., None],
+        resume_from_step_id: Optional[str] = None,
+        stop_after_step_id: Optional[str] = None,
     ) -> "_ExecutePhaseResult":
         """Delegate to :mod:`pipeline_execute`.
 
@@ -1580,6 +1740,7 @@ class ResearchAgentPipeline:
         free of a cycle.
         """
         from .pipeline_execute import run_execute_phase
+
         return run_execute_phase(
             self,
             plan_result=plan_result,
@@ -1589,8 +1750,9 @@ class ResearchAgentPipeline:
             skill_obj=skill_obj,
             notes=notes,
             emit_progress=emit_progress,
+            resume_from_step_id=resume_from_step_id,
+            stop_after_step_id=stop_after_step_id,
         )
-
 
     def _run_write_phase(
         self,
@@ -1733,15 +1895,14 @@ class ResearchAgentPipeline:
         except (OSError, json.JSONDecodeError) as exc:
             logger.warning(
                 "experience-bank: run_status.json at %s could not be read: %s",
-                run_status_path, exc,
+                run_status_path,
+                exc,
             )
             return []
         gates = run_status.get("gates") or run_status.get("readiness_gates") or {}
         findings = run_status.get("findings") or []
         superseded_errors = (
-            gates.get("superseded_errors")
-            or run_status.get("superseded_errors")
-            or []
+            gates.get("superseded_errors") or run_status.get("superseded_errors") or []
         )
         plan_step_ids = []
         for step in run_status.get("plan_steps") or []:
@@ -1795,6 +1956,8 @@ class ResearchAgentPipeline:
         manuscript_authors: Optional[Sequence[str]] = None,
         manuscript_language: Optional[str] = None,
         resume_run_id: Optional[str] = None,
+        resume_from_step_id: Optional[str] = None,
+        stop_after_step_id: Optional[str] = None,
         stop_after_analysis: bool = False,
         experiment_spec: Optional[Union[ExperimentSpec, Dict[str, Any]]] = None,
         source_files: Optional[Sequence[Any]] = None,
@@ -1872,12 +2035,7 @@ class ResearchAgentPipeline:
         if resume_run_id:
             run_id = resume_run_id
             run_dir = self.workdir / run_id
-            partial = run_dir / "manifest_partial.json"
-            if partial.exists():
-                try:
-                    resume_state = json.loads(partial.read_text(encoding="utf-8"))
-                except Exception:
-                    resume_state = None
+            resume_state = _load_resume_state(run_dir)
             run_dir.mkdir(parents=True, exist_ok=True)
         else:
             run_id = (
@@ -2013,6 +2171,8 @@ class ResearchAgentPipeline:
                 skill_obj=skill_obj,
                 notes=notes,
                 emit_progress=_emit_progress,
+                resume_from_step_id=resume_from_step_id,
+                stop_after_step_id=stop_after_step_id,
             )
 
         def _write_invoker(plan_result, execute_result):
@@ -2358,8 +2518,12 @@ class ResearchAgentPipeline:
         if result is None and run_dir is None:
             raise ValueError("Provide either `result` or `run_dir`.")
         paper_profile = parse_paper_profile(paper)
-        actual_run_dir = Path(result.workdir if result is not None else run_dir).resolve()
-        manifest = json.loads((actual_run_dir / "manifest.json").read_text(encoding="utf-8"))
+        actual_run_dir = Path(
+            result.workdir if result is not None else run_dir
+        ).resolve()
+        manifest = json.loads(
+            (actual_run_dir / "manifest.json").read_text(encoding="utf-8")
+        )
         context_payload: Optional[Dict[str, Any]] = None
         context_rel = manifest.get("context_path")
         if context_rel:
@@ -2813,7 +2977,9 @@ def _render_prediction_publication_bundle_from_prior_outputs(
         return None
     metric_cols = [col for col in ("auroc", "brier_score") if col in frame.columns]
     calib_cols = [
-        col for col in ("calibration_slope", "calibration_intercept") if col in frame.columns
+        col
+        for col in ("calibration_slope", "calibration_intercept")
+        if col in frame.columns
     ]
     if not metric_cols and not calib_cols:
         return None
@@ -2831,7 +2997,9 @@ def _render_prediction_publication_bundle_from_prior_outputs(
     )
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    fig, axes = plt.subplots(1, 2, figsize=(183 / 25.4, 82 / 25.4), constrained_layout=True)
+    fig, axes = plt.subplots(
+        1, 2, figsize=(183 / 25.4, 82 / 25.4), constrained_layout=True
+    )
     apply_publication_style(fig)
     if not isinstance(axes, (list, tuple)):
         axes = axes.ravel()
@@ -2842,7 +3010,13 @@ def _render_prediction_publication_bundle_from_prior_outputs(
 
     ax1, ax2 = axes[0], axes[1]
     if "auroc" in frame.columns:
-        ax1.plot(folds, frame["auroc"].astype(float), marker="o", linewidth=1.4, label="AUROC")
+        ax1.plot(
+            folds,
+            frame["auroc"].astype(float),
+            marker="o",
+            linewidth=1.4,
+            label="AUROC",
+        )
     if "brier_score" in frame.columns:
         ax1.plot(
             folds,
@@ -2937,9 +3111,7 @@ def _render_prediction_publication_bundle_from_prior_outputs(
             "source_step_summary": str(summary_path),
         }
     )
-    figure_files = [
-        path.name for key, path in outputs.items() if key != "contract"
-    ]
+    figure_files = [path.name for key, path in outputs.items() if key != "contract"]
     existing_summary["figure_files"] = figure_files
     if figure_files:
         existing_summary["figure_path"] = figure_files[0]
@@ -2964,14 +3136,14 @@ def _render_association_publication_bundle_from_prior_outputs(
     current_step_id: str,
     out_dir: Path,
 ) -> Optional[str]:
-    """Deterministically build a forest-plot figure from a prior association step.
+    """Deterministically build a multi-panel figure from a prior association step.
 
-    Mirror of the prediction rescue for adjusted-association analyses. Small
+    Mirror of the prediction repair for adjusted-association analyses. Small
     models sometimes write a coefficient table (``odds_ratio`` + ``or_ci_low`` /
     ``or_ci_high`` columns) in the regression step but fail the follow-up
     figure-only step (e.g. hard-coding a wrong results filename). Rather than
-    failing the whole run, render an odds-ratio forest plot from the registered
-    parent table.
+    accepting a one-panel placeholder, render a source-data-backed association
+    figure with uncertainty context from the registered parent table.
     """
     steps_dir = run_dir / "steps"
     if not steps_dir.exists():
@@ -2984,19 +3156,37 @@ def _render_association_publication_bundle_from_prior_outputs(
     # and the figure-only step fails the whole run.
     _OR_ALIASES = ("odds_ratio", "oddsratio", "adjusted_or", "aor", "or")
     _CI_LOW_ALIASES = (
-        "or_ci_low", "or_ci_lower", "ci_lower", "ci_low", "or_lower",
-        "conf_low", "ci95_low", "ci_low_95", "lower",
+        "or_ci_low",
+        "or_ci_lower",
+        "ci_lower",
+        "ci_low",
+        "or_lower",
+        "conf_low",
+        "ci95_low",
+        "ci_low_95",
+        "lower",
     )
     _CI_HIGH_ALIASES = (
-        "or_ci_high", "or_ci_upper", "ci_upper", "ci_high", "or_upper",
-        "conf_high", "ci95_high", "ci_high_95", "upper",
+        "or_ci_high",
+        "or_ci_upper",
+        "ci_upper",
+        "ci_high",
+        "or_upper",
+        "conf_high",
+        "ci95_high",
+        "ci_high_95",
+        "upper",
     )
 
     def _resolve_or_ci_columns(frame: pd.DataFrame):
         lower_to_orig = {str(c).lower(): c for c in frame.columns}
         or_c = next((lower_to_orig[a] for a in _OR_ALIASES if a in lower_to_orig), None)
-        lo_c = next((lower_to_orig[a] for a in _CI_LOW_ALIASES if a in lower_to_orig), None)
-        hi_c = next((lower_to_orig[a] for a in _CI_HIGH_ALIASES if a in lower_to_orig), None)
+        lo_c = next(
+            (lower_to_orig[a] for a in _CI_LOW_ALIASES if a in lower_to_orig), None
+        )
+        hi_c = next(
+            (lower_to_orig[a] for a in _CI_HIGH_ALIASES if a in lower_to_orig), None
+        )
         if or_c and lo_c and hi_c:
             return or_c, lo_c, hi_c
         return None
@@ -3025,7 +3215,9 @@ def _render_association_publication_bundle_from_prior_outputs(
     table_path, frame, (or_col, lo_col, hi_col) = parent
     var_col = "variable" if "variable" in frame.columns else frame.columns[0]
     # Drop the intercept term; it is not an interpretable effect estimate.
-    plot_df = frame[~frame[var_col].astype(str).str.lower().isin({"const", "intercept"})]
+    plot_df = frame[
+        ~frame[var_col].astype(str).str.lower().isin({"const", "intercept"})
+    ]
     for _c in (or_col, lo_col, hi_col):
         plot_df = plot_df.assign(**{_c: pd.to_numeric(plot_df[_c], errors="coerce")})
     plot_df = plot_df.dropna(subset=[or_col, lo_col, hi_col])
@@ -3046,47 +3238,124 @@ def _render_association_publication_bundle_from_prior_outputs(
 
     out_dir.mkdir(parents=True, exist_ok=True)
     labels = plot_df[var_col].astype(str).tolist()
+    display_labels = [_publication_label(label) for label in labels]
     or_vals = plot_df[or_col].astype(float).to_numpy()
     lo = plot_df[lo_col].astype(float).to_numpy()
     hi = plot_df[hi_col].astype(float).to_numpy()
+    ci_width = hi - lo
     y = list(range(len(labels)))
-
-    fig, ax = plt.subplots(figsize=(120 / 25.4, max(60, 18 * len(labels)) / 25.4),
-                           constrained_layout=True)
-    apply_publication_style(fig)
-    ax.errorbar(
-        or_vals, y,
-        xerr=[or_vals - lo, hi - or_vals],
-        fmt="o", color="#1b4965", ecolor="#5fa8d3",
-        elinewidth=1.4, capsize=3, markersize=4,
+    source_data = pd.DataFrame(
+        {
+            str(var_col): labels,
+            "display_label": display_labels,
+            "odds_ratio": or_vals,
+            "ci_low": lo,
+            "ci_high": hi,
+            "ci_width": ci_width,
+            "source_table": table_path.name,
+        }
     )
-    ax.axvline(1.0, color="#999999", linewidth=1.0, linestyle="--")
+    source_data.to_csv(out_dir / "publication_figure_source_data.csv", index=False)
+
+    palette = apply_publication_style()
+    fig = plt.figure(
+        figsize=(183 / 25.4, max(72, 18 * len(labels) + 18) / 25.4),
+        constrained_layout=False,
+    )
+    grid = fig.add_gridspec(
+        1,
+        2,
+        width_ratios=[1.45, 0.85],
+        left=0.22,
+        right=0.98,
+        top=0.90,
+        bottom=0.18,
+        wspace=0.42,
+    )
+    ax = fig.add_subplot(grid[0, 0])
+    ax_width = fig.add_subplot(grid[0, 1], sharey=ax)
+    ax.errorbar(
+        or_vals,
+        y,
+        xerr=[
+            [max(0.0, center - lower) for center, lower in zip(or_vals, lo)],
+            [max(0.0, upper - center) for center, upper in zip(or_vals, hi)],
+        ],
+        fmt="o",
+        color=palette.get("blue", "#0F4D92"),
+        ecolor=palette.get("blue", "#0F4D92"),
+        elinewidth=1.0,
+        capsize=2.3,
+        markersize=4.0,
+    )
+    ax.axvline(
+        1.0,
+        color=palette.get("neutral", "#8F8F8F"),
+        linewidth=0.9,
+        linestyle="--",
+    )
     ax.set_yticks(y)
-    ax.set_yticklabels(labels)
+    ax.set_yticklabels(display_labels)
     ax.set_xlabel("Adjusted odds ratio (95% CI)")
     ax.set_title("Adjusted association with the outcome", loc="left", pad=4)
     ax.invert_yaxis()
-    add_panel_label(ax, "A", x=-0.1)
+    ax.grid(
+        axis="x",
+        color=palette.get("neutral_light", "#D8D8D8"),
+        linewidth=0.55,
+        alpha=0.8,
+    )
+    add_panel_label(ax, "A", x=-0.18)
+
+    ax_width.barh(
+        y,
+        ci_width,
+        color=palette.get("orange", "#E69F00"),
+        height=0.5,
+    )
+    ax_width.set_xlabel("95% CI width")
+    ax_width.set_title("Estimate precision", loc="left", pad=4)
+    ax_width.tick_params(axis="y", labelleft=False)
+    ax_width.grid(
+        axis="x",
+        color=palette.get("neutral_light", "#D8D8D8"),
+        linewidth=0.55,
+        alpha=0.8,
+    )
+    add_panel_label(ax_width, "B", x=-0.16)
 
     contract = make_figure_contract(
         figure_id="publication_figure",
         core_claim=(
-            "Adjusted odds ratios are summarised from the registered association "
-            "coefficient table."
+            "Adjusted associations and their uncertainty are summarised from "
+            "the registered association coefficient table."
         ),
         panels=[
             {
                 "panel_id": "A",
-                "title": "Odds-ratio forest plot",
+                "title": "Adjusted odds-ratio forest plot",
                 "role": "association",
-                "claim": "Per-covariate adjusted odds ratios and 95% CIs are read from the parent association table.",
+                "claim": (
+                    "Per-covariate adjusted odds ratios and 95% CIs are read "
+                    "from the parent association table."
+                ),
+                "evidence_ids": ["table_association_results"],
+            },
+            {
+                "panel_id": "B",
+                "title": "Interval-width audit",
+                "role": "validation",
+                "claim": (
+                    "The width of each 95% CI is shown to expose estimate "
+                    "precision rather than hiding uncertainty in the forest plot."
+                ),
                 "evidence_ids": ["table_association_results"],
             },
         ],
         source_data=["table_association_results"],
         statistics_note=(
-            "Deterministic rescue figure generated from parent-step association "
-            "outputs when the figure-only child step did not emit exports."
+            "Generated deterministically from the registered parent-step "
+            "association table after the figure-only step lacked canonical exports."
         ),
     )
     outputs = save_publication_figure(
@@ -3103,11 +3372,12 @@ def _render_association_publication_bundle_from_prior_outputs(
                 existing_summary = loaded
         except Exception:
             existing_summary = {}
-    existing_summary.setdefault("publication_figure_rescue", {})
-    existing_summary["publication_figure_rescue"].update(
+    existing_summary.setdefault("publication_figure_repair", {})
+    existing_summary["publication_figure_repair"].update(
         {
             "mode": "association_forest_from_parent_outputs",
             "source_association_table": str(table_path),
+            "source_data": "publication_figure_source_data.csv",
         }
     )
     figure_files = [path.name for key, path in outputs.items() if key != "contract"]
@@ -3118,8 +3388,388 @@ def _render_association_publication_bundle_from_prior_outputs(
         json.dumps(existing_summary, indent=2, ensure_ascii=False, default=str),
         encoding="utf-8",
     )
-    return "association_publication_bundle_from_parent_outputs_v1"
+    return "association_publication_bundle_from_parent_outputs_v2"
 
+
+def _render_sensitivity_publication_bundle_from_prior_outputs(
+    *,
+    run_dir: Path,
+    current_step_id: str,
+    out_dir: Path,
+) -> Optional[str]:
+    """Deterministically rebuild a sensitivity figure from parent outputs."""
+
+    steps_dir = run_dir / "steps"
+    if not steps_dir.exists():
+        return None
+
+    parent_step_id = current_step_id.removesuffix("_figure")
+    candidate_paths: List[Path] = []
+    if parent_step_id and parent_step_id != current_step_id:
+        candidate_paths.extend(
+            sorted((steps_dir / parent_step_id / "outputs").glob("*.csv"))
+            if (steps_dir / parent_step_id / "outputs").exists()
+            else []
+        )
+    for step_dir in sorted(steps_dir.iterdir()):
+        if not step_dir.is_dir() or step_dir.name == current_step_id:
+            continue
+        if "sensitivity" not in step_dir.name.lower():
+            continue
+        outputs_dir = step_dir / "outputs"
+        if outputs_dir.exists():
+            candidate_paths.extend(sorted(outputs_dir.glob("*.csv")))
+
+    parent: Optional[tuple[Path, pd.DataFrame]] = None
+    for csv_path in candidate_paths:
+        try:
+            frame = pd.read_csv(csv_path)
+        except Exception:
+            continue
+        required = {"spec_id", "effect_scale", "point_estimate", "ci_low", "ci_high"}
+        if required <= set(frame.columns):
+            parent = (csv_path, frame)
+            break
+    if parent is None:
+        return None
+
+    table_path, frame = parent
+    source_data = frame.copy()
+    for col in ("point_estimate", "ci_low", "ci_high", "modeled_analytic_n"):
+        if col in source_data.columns:
+            source_data[col] = pd.to_numeric(source_data[col], errors="coerce")
+    if "display_label" not in source_data.columns:
+        source_data["display_label"] = source_data["spec_id"].map(_publication_label)
+    if "axis" not in source_data.columns:
+        source_data["axis"] = "sensitivity"
+    if "converged" not in source_data.columns:
+        source_data["converged"] = source_data["point_estimate"].notna()
+    source_data["axis_label"] = source_data["axis"].map(_publication_label)
+    source_data["plot_label"] = [
+        _sensitivity_plot_label(row)
+        for row in source_data.to_dict(orient="records")
+    ]
+    out_dir.mkdir(parents=True, exist_ok=True)
+    source_data.to_csv(out_dir / "sensitivity_forest_source_data.csv", index=False)
+
+    plot_df = source_data.dropna(subset=["point_estimate", "ci_low", "ci_high"]).copy()
+    if plot_df.empty:
+        return None
+    ratio_df = plot_df[
+        plot_df["effect_scale"].astype(str).str.upper().isin({"OR", "RR", "HR"})
+    ].copy()
+    rd_df = plot_df[
+        plot_df["effect_scale"].astype(str).str.upper().isin({"RD", "RISK_DIFFERENCE"})
+    ].copy()
+    if not rd_df.empty:
+        rd_df["plot_label"] = "Risk difference"
+    n_df = source_data.copy()
+    if "modeled_analytic_n" in n_df.columns:
+        n_df["modeled_analytic_n"] = pd.to_numeric(
+            n_df["modeled_analytic_n"],
+            errors="coerce",
+        )
+    else:
+        n_df["modeled_analytic_n"] = pd.NA
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from easyicu.research_agent.publication_figures import (
+        add_panel_label,
+        apply_publication_style,
+        make_figure_contract,
+        save_publication_figure,
+    )
+
+    palette = apply_publication_style()
+    fig = plt.figure(figsize=(183 / 25.4, 128 / 25.4), constrained_layout=False)
+    grid = fig.add_gridspec(
+        2,
+        2,
+        width_ratios=[1.35, 0.95],
+        height_ratios=[1.0, 0.82],
+        left=0.24,
+        right=0.98,
+        top=0.92,
+        bottom=0.13,
+        wspace=0.43,
+        hspace=0.58,
+    )
+    ax_ratio = fig.add_subplot(grid[:, 0])
+    ax_rd = fig.add_subplot(grid[0, 1])
+    ax_n = fig.add_subplot(grid[1, 1])
+
+    def _plot_interval_panel(
+        ax,
+        data: pd.DataFrame,
+        *,
+        title: str,
+        xlabel: str,
+        null_value: float,
+        color: str,
+    ) -> None:
+        if data.empty:
+            ax.text(
+                0.5,
+                0.5,
+                "No converged estimates",
+                ha="center",
+                va="center",
+                fontsize=7.0,
+                transform=ax.transAxes,
+            )
+            ax.set_axis_off()
+            return
+        data = data.reset_index(drop=True)
+        y = list(range(len(data)))
+        center = data["point_estimate"].astype(float).to_numpy()
+        lo = data["ci_low"].astype(float).to_numpy()
+        hi = data["ci_high"].astype(float).to_numpy()
+        labels = [
+            _short_figure_label(label)
+            for label in data["plot_label"].fillna(data["display_label"]).astype(str)
+        ]
+        ax.errorbar(
+            center,
+            y,
+            xerr=[
+                [max(0.0, c - lower) for c, lower in zip(center, lo)],
+                [max(0.0, h - c) for c, h in zip(center, hi)],
+            ],
+            fmt="o",
+            color=color,
+            ecolor=color,
+            elinewidth=1.0,
+            capsize=2.2,
+            markersize=3.9,
+        )
+        ax.axvline(
+            null_value,
+            color=palette.get("neutral", "#8F8F8F"),
+            linestyle="--",
+            linewidth=0.8,
+        )
+        ax.set_yticks(y)
+        ax.set_yticklabels(labels)
+        ax.invert_yaxis()
+        ax.set_xlabel(xlabel)
+        ax.set_title(title, loc="left", pad=4)
+        ax.grid(
+            axis="x",
+            color=palette.get("neutral_light", "#D8D8D8"),
+            linewidth=0.55,
+            alpha=0.8,
+        )
+
+    _plot_interval_panel(
+        ax_ratio,
+        ratio_df,
+        title="Ratio-scale sensitivity estimates",
+        xlabel="Adjusted ratio estimate (95% CI)",
+        null_value=1.0,
+        color=palette.get("blue", "#0F4D92"),
+    )
+    add_panel_label(ax_ratio, "A", x=-0.28)
+
+    _plot_interval_panel(
+        ax_rd,
+        rd_df,
+        title="Risk-difference sensitivity",
+        xlabel="Adjusted risk difference (95% CI)",
+        null_value=0.0,
+        color=palette.get("green", "#008B5E"),
+    )
+    add_panel_label(ax_rd, "B", x=-0.18, y=1.06, fontsize=10.0)
+
+    n_plot = n_df.dropna(subset=["modeled_analytic_n"]).copy()
+    if n_plot.empty:
+        ax_n.text(
+            0.5,
+            0.5,
+            "Analytic n not reported",
+            ha="center",
+            va="center",
+            fontsize=7.0,
+            transform=ax_n.transAxes,
+        )
+        ax_n.set_axis_off()
+    else:
+        n_plot = n_plot.reset_index(drop=True)
+        y_n = list(range(len(n_plot)))
+        colors = [
+            palette.get("blue", "#0F4D92")
+            if bool(value)
+            else palette.get("neutral_light", "#D8D8D8")
+            for value in n_plot["converged"].fillna(False)
+        ]
+        ax_n.barh(
+            y_n,
+            n_plot["modeled_analytic_n"].astype(float),
+            color=colors,
+            height=0.56,
+        )
+        ax_n.set_yticks(y_n)
+        ax_n.set_yticklabels(
+            [
+                _short_figure_label(label, limit=22)
+                for label in n_plot["plot_label"].fillna(n_plot["display_label"]).astype(str)
+            ]
+        )
+        ax_n.invert_yaxis()
+        ax_n.set_xlabel("Analytic sample size")
+        ax_n.set_title("Denominator audit", loc="left", pad=4)
+        ax_n.grid(
+            axis="x",
+            color=palette.get("neutral_light", "#D8D8D8"),
+            linewidth=0.55,
+            alpha=0.8,
+        )
+    add_panel_label(ax_n, "C", x=-0.18, y=1.06, fontsize=10.0)
+
+    contract = make_figure_contract(
+        figure_id="sensitivity_forest",
+        core_claim=(
+            "Pre-specified sensitivity estimates are rendered from the "
+            "registered sensitivity-comparison table with effect-scale and "
+            "denominator context."
+        ),
+        panels=[
+            {
+                "panel_id": "A",
+                "title": "Ratio-scale sensitivity estimates",
+                "role": "robustness",
+                "claim": (
+                    "Adjusted odds-ratio and risk-ratio sensitivity estimates "
+                    "are read from the parent sensitivity-comparison table."
+                ),
+                "evidence_ids": ["sensitivity_comparison"],
+            },
+            {
+                "panel_id": "B",
+                "title": "Risk-difference sensitivity",
+                "role": "effect",
+                "claim": (
+                    "The marginal-standardized risk difference is shown on its "
+                    "own scale rather than mixed with ratio estimates."
+                ),
+                "evidence_ids": ["sensitivity_comparison"],
+            },
+            {
+                "panel_id": "C",
+                "title": "Denominator audit",
+                "role": "audit",
+                "claim": (
+                    "Analytic sample sizes and non-converged variants are "
+                    "visible so robustness shifts are interpreted with data "
+                    "availability context."
+                ),
+                "evidence_ids": ["sensitivity_comparison"],
+            },
+        ],
+        source_data=["sensitivity_comparison"],
+        statistics_note=(
+            "Generated deterministically from the registered parent-step "
+            "sensitivity-comparison table after the rendering step lacked a "
+            "canonical figure contract."
+        ),
+    )
+    outputs = save_publication_figure(
+        fig,
+        out_dir / "sensitivity_forest",
+        contract=contract,
+        dpi=300,
+    )
+    plt.close(fig)
+
+    step_summary_path = out_dir / "step_summary.json"
+    existing_summary: Dict[str, Any] = {}
+    if step_summary_path.exists():
+        try:
+            loaded = json.loads(step_summary_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                existing_summary = loaded
+        except Exception:
+            existing_summary = {}
+    existing_summary.update(
+        {
+            "step_id": current_step_id,
+            "method": "deterministic_sensitivity_publication_figure_repair",
+            "rendering_only": True,
+            "source_step_id": parent_step_id,
+            "source_sensitivity_table": str(table_path),
+            "source_data_csv": str(out_dir / "sensitivity_forest_source_data.csv"),
+            "n_rows_plotted": int(len(plot_df)),
+            "effect_scales_plotted": sorted(
+                set(plot_df["effect_scale"].dropna().astype(str))
+            ),
+            "figure_files": [
+                path.name for key, path in outputs.items() if key != "contract"
+            ],
+            "figure_path": "sensitivity_forest.png",
+        }
+    )
+    step_summary_path.write_text(
+        json.dumps(existing_summary, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
+    return "sensitivity_publication_bundle_from_parent_outputs_v1"
+
+
+def _publication_label(value: Any) -> str:
+    token = str(value or "").strip()
+    mapping = {
+        "sepsis3": "Sepsis-3",
+        "sep3_sofa2_max": "Sepsis-3",
+        "age": "Age",
+        "age_filled": "Age",
+        "sex_m": "Male sex",
+        "male": "Male sex",
+        "hr_first": "Heart rate",
+        "hr_first_filled": "Heart rate",
+        "map_first": "Mean arterial pressure",
+        "map_first_filled": "Mean arterial pressure",
+        "lactate": "Lactate",
+        "lact": "Lactate",
+        "lact_measured": "Lactate measured",
+        "sofa2": "SOFA-2",
+        "death": "In-hospital mortality",
+    }
+    lower = token.lower()
+    if lower in mapping:
+        return mapping[lower]
+    cleaned = lower
+    for suffix in ("_filled", "_first", "_measured"):
+        cleaned = cleaned.removesuffix(suffix)
+    return cleaned.replace("_", " ").strip().title() or token
+
+
+def _short_figure_label(value: Any, *, limit: int = 38) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[: max(1, limit - 1)].rstrip() + "..."
+
+
+def _sensitivity_plot_label(row: Mapping[str, Any]) -> str:
+    spec_id = str(row.get("spec_id") or "").strip().lower()
+    mapping = {
+        "primary_los_ge_1d": "Primary cohort",
+        "primary": "Primary cohort",
+        "cohort_no_los_restriction": "No ICU LOS restriction",
+        "cohort_los_ge_2d": "ICU LOS >=2 d",
+        "cohort_core_physiology_present": "Core physiology present",
+        "missing_raw_complete_case": "Complete-case",
+        "missing_drop_lactate": "Drop lactate",
+        "effect_robust_poisson_rr": "Risk ratio",
+        "effect_marginal_standardized_rd": "Risk difference",
+    }
+    if spec_id in mapping:
+        return mapping[spec_id]
+    label = str(row.get("display_label") or row.get("label") or spec_id).strip()
+    return _short_figure_label(label.replace("LOS ≥", "LOS >="), limit=30)
 
 
 # ---------------------------------------------------------------------------
@@ -3136,7 +3786,7 @@ def _render_association_publication_bundle_from_prior_outputs(
 # A mapping of (step_id_substring, artefact_basename) -> tuple of aliases.
 # step_id_substring is matched as ``in step.step_id`` so that step ids
 # the planner generates with arbitrary ordering ("01_table_one",
-    # "02_outcome_incidence", "04_primary_association")
+# "02_outcome_incidence", "04_primary_association")
 # all resolve correctly.
 _SEMANTIC_ALIAS_MAP: Dict[tuple, tuple] = {
     # Cohort/table-one summaries often carry the same mortality
@@ -3233,9 +3883,7 @@ _SEMANTIC_ALIAS_MAP: Dict[tuple, tuple] = {
     # Generic table outputs from any step.
     ("", "table_one.csv"): ("table_one",),
     ("", "missingness.csv"): ("missingness",),
-    ("", "sofa2_stratum_balance.csv"): (
-        "primary_association_table",
-    ),
+    ("", "sofa2_stratum_balance.csv"): ("primary_association_table",),
     ("", "stratified_mortality_incidence.csv"): (
         "stratified_mortality_incidence",
         "stratified_mortality",
@@ -3327,9 +3975,11 @@ def _semantic_aliases_for(step: AnalysisStep, artefact: Path) -> List[str]:
         expected = " ".join(str(item).lower() for item in (step.expected_outputs or []))
         intent = (step.intent or "").lower()
         prediction_step = "prediction" in intent or "model_training" in step_id.lower()
-        if any(token in expected for token in ("auroc", "brier")) or (
-            "calibration" in expected and prediction_step
-        ) or prediction_step:
+        if (
+            any(token in expected for token in ("auroc", "brier"))
+            or ("calibration" in expected and prediction_step)
+            or prediction_step
+        ):
             out.extend(
                 [
                     "model_performance",
@@ -3360,10 +4010,9 @@ def _semantic_aliases_for(step: AnalysisStep, artefact: Path) -> List[str]:
             out.extend(["outcome_rate", "mortality_rate", "robustness_summary"])
             if _step_summary_has_primary_effect(artefact):
                 out.append("primary_association")
-        if (
-            ("table_one" in step_id.lower() or "table:table_one" in expected)
-            and not (artefact.parent / "table_one.csv").exists()
-        ):
+        if ("table_one" in step_id.lower() or "table:table_one" in expected) and not (
+            artefact.parent / "table_one.csv"
+        ).exists():
             out.append("table_one")
         if "report" in step_id.lower() and _step_summary_has_any_key(
             artefact,

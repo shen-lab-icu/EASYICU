@@ -160,6 +160,11 @@ class CodeRunner:
         env = os.environ.copy()
         env["COHORT_PARQUET"] = str(self.cohort_parquet)
         env["STEP_OUT_DIR"] = str(out_dir)
+        env["EASYICU_RUN_DIR"] = str(self.workdir.resolve())
+        env["EASYICU_EVIDENCE_DIR"] = str((self.workdir / "evidence").resolve())
+        env["EASYICU_MANIFEST_PARTIAL"] = str(
+            (self.workdir / "manifest_partial.json").resolve()
+        )
         # Defensive aliases: agent-emitted scripts frequently invent
         # alternative env-var names for the canonical inputs (e.g.
         # ``STEP_OUTPUT_DIR``, ``EASYICU_OUTPUT_DIR``, ``OUT_DIR``,
@@ -184,6 +189,9 @@ class CodeRunner:
         ):
             env[out_alias] = str(out_dir)
         env["MPLBACKEND"] = "Agg"
+        mpl_config_dir = step_dir / ".matplotlib"
+        mpl_config_dir.mkdir(parents=True, exist_ok=True)
+        env["MPLCONFIGDIR"] = str(mpl_config_dir)
         env["PYTHONIOENCODING"] = "utf-8"
         # macOS sandbox-exec can block shared-memory paths used by threaded
         # BLAS/OpenMP runtimes. Single-thread defaults keep generated ICU
@@ -263,6 +271,43 @@ class CodeRunner:
                 cmd = retry_cmd
                 isolation_degraded = True
                 isolation_degradation_reason = "unshare network namespace isolation failed; retried as a host subprocess."
+            if (
+                returncode != 0
+                and original_cmd
+                and Path(original_cmd[0]).name == "sandbox-exec"
+                and sys.platform == "darwin"
+                and "sandbox_apply" in stderr.lower()
+                and "operation not permitted" in stderr.lower()
+            ):
+                retry_cmd = [self.python_executable, str(script_path)]
+                retry_timeout = max(
+                    self.timeout_seconds - (time.monotonic() - started), 1.0
+                )
+                retry_proc = subprocess.run(  # noqa: S603 - argv list, no shell
+                    retry_cmd,
+                    cwd=str(step_dir),
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=retry_timeout,
+                    encoding="utf-8",
+                    errors="replace",
+                )
+                stdout = retry_proc.stdout
+                stderr = (
+                    "[CodeRunner] macOS sandbox-exec could not apply its profile "
+                    "inside the current outer sandbox; retrying without sandbox-exec "
+                    "while keeping generated code under captured provenance.\n"
+                    f"[CodeRunner] original stderr:\n{stderr}\n"
+                    f"[CodeRunner] fallback stderr:\n{retry_proc.stderr}"
+                )
+                returncode = retry_proc.returncode
+                cmd = retry_cmd
+                isolation_degraded = True
+                isolation_degradation_reason = (
+                    "macOS sandbox-exec profile application was denied by the "
+                    "outer sandbox; retried as a host subprocess."
+                )
             if (
                 returncode != 0
                 and original_cmd

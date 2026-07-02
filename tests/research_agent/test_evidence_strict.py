@@ -58,6 +58,30 @@ def test_strict_mode_accepts_evidence_bound_scaffold(ra, tmp_path: Path):
     assert "{evidence:table_one}" in filtered
 
 
+def test_strict_mode_allows_nonanalytic_keywords_metadata(ra, tmp_path: Path):
+    store = ra.EvidenceStore(root=tmp_path, enforcement_mode="strict")
+    scaffold = (
+        "# Title\n"
+        "**Keywords:** Sepsis-3, in-hospital mortality, ICU, MIMIC-IV, "
+        "retrospective cohort, illness severity adjustment\n"
+    )
+    filtered, removed = store.enforce_evidence_bound_scaffold(scaffold)
+    assert removed == []
+    assert "**Keywords:** Sepsis-3" in filtered
+
+
+def test_strict_mode_allows_data_availability_boilerplate(ra, tmp_path: Path):
+    store = ra.EvidenceStore(root=tmp_path, enforcement_mode="strict")
+    scaffold = (
+        "The cohort, generated scripts, SHA-256 evidence store, reproducibility "
+        "envelope, STROBE checklist, and supplementary tables are released "
+        "alongside this manuscript.\n"
+    )
+    filtered, removed = store.enforce_evidence_bound_scaffold(scaffold)
+    assert removed == []
+    assert "SHA-256 evidence store" in filtered
+
+
 def test_strict_mode_raises_on_bold_section_result_sentence(ra, tmp_path: Path):
     store = ra.EvidenceStore(root=tmp_path, enforcement_mode="strict")
     scaffold = (

@@ -250,6 +250,8 @@ __all__ = [
     "RunResult",
     "CohortAuditor",
     "StatisticalValidator",
+    "FigureContractQualityValidator",
+    "FigureSourceDataValidator",
     "ClinicalConstraintValidator",
     "StatisticalGuard",
     "ConceptUsageAuditor",
@@ -723,6 +725,8 @@ def __getattr__(name: str):
     if name in {
         "CohortAuditor",
         "StatisticalValidator",
+        "FigureContractQualityValidator",
+        "FigureSourceDataValidator",
         "ClinicalConstraintValidator",
         "StatisticalGuard",
         "ConceptUsageAuditor",

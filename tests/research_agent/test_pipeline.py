@@ -535,6 +535,127 @@ def test_runtime_crash_after_contract_repair_gets_its_own_repair_budget(
     assert record.get("runtime_repair_attempts") == 1
 
 
+def test_deterministic_contract_repair_runs_when_llm_repair_budget_is_zero(
+    ra,
+    tmp_path: Path,
+):
+    class OveradjustedLLM:
+        name = "overadjusted-llm"
+
+        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
+            user = next(
+                (m.content for m in reversed(messages) if m.role == "user"), ""
+            )
+            upper = user.upper()
+            if "ICU-AWARE RESEARCH PLAN" in upper:
+                return json.dumps({
+                    "research_question": (
+                        "Estimate the adjusted association between Sepsis-3 "
+                        "and mortality."
+                    ),
+                    "steps": [{
+                        "step_id": "05_primary_association",
+                        "intent": (
+                            "Estimate the adjusted odds ratio for Sepsis-3 and "
+                            "mortality."
+                        ),
+                        "inputs": ["sepsis3", "death", "age", "map_min"],
+                        "expected_outputs": ["statistic:primary_association"],
+                        "method": "logistic",
+                        "icu_rule_refs": [
+                            "no_overadjustment_for_exposure_constituents"
+                        ],
+                    }],
+                    "rationale": "minimal deterministic overadjustment repair test",
+                })
+            if "REPAIR THE PYTHON CODE" in upper:
+                raise AssertionError("LLM repair should not be called")
+            if "WRITE THE PYTHON CODE" in upper:
+                return """
+import json
+import os
+import pandas as pd
+
+out = os.environ["STEP_OUT_DIR"]
+x_cols = [
+    "sepsis3",
+    "age_per_10y",
+    "map_min_per_10mmhg",
+    "map_min_missing_indicator",
+]
+x_cols = list(dict.fromkeys(x_cols))
+
+pd.DataFrame({
+    "term": x_cols,
+    "estimate": [1.0] * len(x_cols),
+    "odds_ratio": [1.0] * len(x_cols),
+}).to_csv(os.path.join(out, "adjusted_association_death.csv"), index=False)
+
+summary = {
+    "primary_predictor": "sepsis3",
+    "primary_or": 1.0,
+    "odds_ratio": 1.0,
+    "primary_adjusted_association": {
+        "term": "sepsis3",
+        "estimate": 1.0,
+        "effect_scale": "adjusted odds ratio",
+        "covariates": x_cols,
+    },
+}
+with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
+    json.dump(summary, f)
+print(json.dumps(summary))
+"""
+            if "INTERPRET THE RESULTS" in upper:
+                return (
+                    "The adjusted odds ratio was estimated "
+                    "{evidence:adjusted_association_death}."
+                )
+            if "MANUSCRIPT SCAFFOLD" in upper:
+                return "# Title\n\n## Results\n\nAnalysis stopped after execution."
+            return "{}"
+
+    cohort = pd.DataFrame({
+        "sepsis3": [0, 1, 0, 1],
+        "death": [0, 1, 0, 1],
+        "age": [50, 60, 70, 80],
+        "map_min": [72, 61, 80, 58],
+    })
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=OveradjustedLLM(),
+        enable_literature=False,
+        max_code_repair_attempts=0,
+    )
+
+    result = pipeline.run(
+        question="Is Sepsis-3 associated with mortality?",
+        cohort=cohort,
+        cohort_name="overadjustment_budget_zero_test",
+        database="synthetic",
+        target_outcome="death",
+        primary_exposure="sepsis3",
+        stop_after_analysis=True,
+    )
+
+    run_dir = Path(result.workdir)
+    partial = json.loads((run_dir / "manifest_partial.json").read_text("utf-8"))
+    record = _step_record_by_id(partial["per_step_records"], "05_primary_association")
+    covariates = record["step_summary"]["primary_adjusted_association"][
+        "covariates"
+    ]
+    assert record["status"] == "ok"
+    assert record["runner_repair"] == "drop_overadjustment_covariates_v1"
+    assert record["code_repair_attempts"] == 1
+    assert "map_min_per_10mmhg" not in covariates
+    assert "map_min_missing_indicator" not in covariates
+    assert not [
+        f
+        for f in record.get("contract_findings", [])
+        if f["severity"] == "error"
+    ]
+
+
 def test_promote_prior_publication_bundle_copies_real_figure_exports(tmp_path: Path):
     from easyicu.research_agent.pipeline import _promote_prior_publication_bundle
 
@@ -3406,6 +3527,145 @@ def test_plan_cap_preserves_appended_publication_figure_step(ra):
     assert findings[0].detail["preserved_figure_step_ids"]
 
 
+def test_plan_cap_preserves_figure_source_parent_pair(ra):
+    """Preserving a split figure step must not displace its source step.
+
+    Regression from E1: max_total_steps=6 kept
+    ``05_sensitivity_comparison_figure`` by replacing
+    ``05_sensitivity_comparison``, leaving a rendering-only step with no
+    upstream source table.
+    """
+    from easyicu.research_agent.pipeline import _cap_plan_preserving_figure_steps
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    plan = AnalysisPlan(
+        research_question="E1 Sepsis-3 benchmark.",
+        steps=[
+            AnalysisStep(
+                step_id="01_cohort",
+                intent="Define the cohort.",
+                expected_outputs=["table:cohort"],
+            ),
+            AnalysisStep(
+                step_id="02_table_one",
+                intent="Build Table 1.",
+                expected_outputs=["table:table_one"],
+            ),
+            AnalysisStep(
+                step_id="03_missingness",
+                intent="Audit missingness.",
+                expected_outputs=["table:missing"],
+            ),
+            AnalysisStep(
+                step_id="04_primary_model",
+                intent="Fit the primary model.",
+                expected_outputs=["table:primary", "statistic:primary_or"],
+            ),
+            AnalysisStep(
+                step_id="04_primary_model_figure",
+                intent="Render the publication figure(s) declared by step '04_primary_model'.",
+                expected_outputs=["figure:effect_estimate_forest"],
+            ),
+            AnalysisStep(
+                step_id="05_sensitivity_comparison",
+                intent="Run sensitivity analyses.",
+                expected_outputs=["table:sensitivity", "statistic:robustness_or"],
+            ),
+            AnalysisStep(
+                step_id="05_sensitivity_comparison_figure",
+                intent=(
+                    "Render the publication figure(s) declared by step "
+                    "'05_sensitivity_comparison'."
+                ),
+                expected_outputs=["figure:sensitivity_forest"],
+            ),
+        ],
+    )
+
+    capped, findings = _cap_plan_preserving_figure_steps(plan=plan, cap=6)
+    step_ids = [step.step_id for step in capped.steps]
+
+    assert len(step_ids) == 6
+    assert "05_sensitivity_comparison" in step_ids
+    assert "05_sensitivity_comparison_figure" in step_ids
+    assert step_ids.index("05_sensitivity_comparison") < step_ids.index(
+        "05_sensitivity_comparison_figure"
+    )
+    assert "03_missingness" not in step_ids
+    assert findings
+    assert findings[0].detail["preserved_figure_step_ids"] == [
+        "05_sensitivity_comparison_figure"
+    ]
+
+
+def test_plan_cap_does_not_displace_protected_completed_steps(ra):
+    from easyicu.research_agent.pipeline import _cap_plan_preserving_figure_steps
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    plan = AnalysisPlan(
+        research_question="Replan with completed upstream steps.",
+        steps=[
+            AnalysisStep(
+                step_id="00_probe",
+                intent="Probe.",
+                expected_outputs=["table:probe"],
+            ),
+            AnalysisStep(
+                step_id="01_cohort",
+                intent="Define cohort.",
+                expected_outputs=["table:cohort"],
+            ),
+            AnalysisStep(
+                step_id="02_table_one",
+                intent="Completed table one.",
+                expected_outputs=["table:table_one"],
+            ),
+            AnalysisStep(
+                step_id="03_missingness",
+                intent="Audit missingness.",
+                expected_outputs=["table:missingness"],
+            ),
+            AnalysisStep(
+                step_id="04_primary_model",
+                intent="Fit primary model.",
+                expected_outputs=["table:primary"],
+            ),
+            AnalysisStep(
+                step_id="04_primary_model_figure",
+                intent="Render the publication figure(s) declared by step '04_primary_model'.",
+                expected_outputs=["figure:primary"],
+            ),
+            AnalysisStep(
+                step_id="05_sensitivity",
+                intent="Run sensitivity.",
+                expected_outputs=["table:sensitivity"],
+            ),
+            AnalysisStep(
+                step_id="05_sensitivity_figure",
+                intent="Render the publication figure(s) declared by step '05_sensitivity'.",
+                expected_outputs=["figure:sensitivity"],
+            ),
+        ],
+    )
+
+    capped, findings = _cap_plan_preserving_figure_steps(
+        plan=plan,
+        cap=6,
+        protected_step_ids=["00_probe", "01_cohort", "02_table_one"],
+    )
+    step_ids = [step.step_id for step in capped.steps]
+
+    assert {"00_probe", "01_cohort", "02_table_one"} <= set(step_ids)
+    assert "05_sensitivity" in step_ids
+    assert "05_sensitivity_figure" in step_ids
+    assert "04_primary_model_figure" not in step_ids
+    assert findings[0].detail["protected_step_ids"] == [
+        "00_probe",
+        "01_cohort",
+        "02_table_one",
+    ]
+
+
 def test_deterministic_runner_repair_injects_undefined_helper_stub(ra):
     """Regression: NameError for an undefined helper triggers stub injection."""
     from easyicu.research_agent.pipeline import _deterministic_runner_repair
@@ -3869,6 +4129,147 @@ def test_prediction_placeholder_repair_does_not_create_outcome_rate_for_continuo
     assert ("outcome_rate", "01_model_training") not in repairs
 
 
+def test_repair_common_writer_citation_omissions_for_methods_sentences(
+    ra,
+    tmp_path: Path,
+):
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.pipeline import _repair_common_writer_citation_omissions
+
+    store = EvidenceStore(tmp_path)
+    for evidence_id in (
+        "01_define_cohort_and_derive_sepsis3",
+        "04_primary_adjusted_association_model",
+    ):
+        path = tmp_path / f"{evidence_id}.json"
+        path.write_text("{}", encoding="utf-8")
+        store.register_file(
+            kind="statistic",
+            description=evidence_id,
+            source_path=path,
+            evidence_id=evidence_id,
+            producer="test",
+        )
+
+    scaffold = (
+        "The primary predictor was binary Sepsis-3 status, derived from the "
+        "available source columns.\n"
+        "The primary association was estimated with logistic regression because "
+        "the outcome was binary.\n"
+    )
+
+    repaired, repairs = _repair_common_writer_citation_omissions(
+        scaffold,
+        evidence=store,
+    )
+
+    assert "{evidence:01_define_cohort_and_derive_sepsis3}" in repaired
+    assert "{evidence:04_primary_adjusted_association_model}" in repaired
+    assert [item["evidence_id"] for item in repairs] == [
+        "01_define_cohort_and_derive_sepsis3",
+        "04_primary_adjusted_association_model",
+    ]
+
+
+def test_repair_common_writer_citation_omissions_handles_mixed_cited_paragraph(
+    ra,
+    tmp_path: Path,
+):
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.pipeline import _repair_common_writer_citation_omissions
+
+    store = EvidenceStore(tmp_path)
+    for evidence_id in (
+        "01_define_cohort_and_derive_sepsis3",
+        "04_primary_adjusted_association_model",
+    ):
+        path = tmp_path / f"{evidence_id}.json"
+        path.write_text("{}", encoding="utf-8")
+        store.register_file(
+            kind="statistic",
+            description=evidence_id,
+            source_path=path,
+            evidence_id=evidence_id,
+            producer="test",
+        )
+
+    scaffold = (
+        "The prior sentence is already cited {evidence:04_primary_adjusted_association_model}. "
+        "The objective was to estimate Sepsis-3 prevalence and evaluate the "
+        "association with in-hospital death after adjustment. "
+        "The key exposure was derived from sep3_sofa2 fields.\n"
+    )
+
+    repaired, repairs = _repair_common_writer_citation_omissions(
+        scaffold,
+        evidence=store,
+    )
+
+    assert repaired.count("{evidence:04_primary_adjusted_association_model}") == 2
+    assert "{evidence:01_define_cohort_and_derive_sepsis3}" in repaired
+    assert [item["evidence_id"] for item in repairs] == [
+        "04_primary_adjusted_association_model",
+        "01_define_cohort_and_derive_sepsis3",
+    ]
+
+
+def test_repair_common_writer_citation_omissions_fails_closed_without_evidence(
+    ra,
+    tmp_path: Path,
+):
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.pipeline import _repair_common_writer_citation_omissions
+
+    store = EvidenceStore(tmp_path)
+    scaffold = (
+        "The primary association was estimated with logistic regression because "
+        "the outcome was binary.\n"
+    )
+
+    repaired, repairs = _repair_common_writer_citation_omissions(
+        scaffold,
+        evidence=store,
+    )
+
+    assert repaired == scaffold.rstrip()
+    assert repairs == []
+
+
+def test_repair_common_writer_citation_omissions_skips_manuscript_metadata(
+    ra,
+    tmp_path: Path,
+):
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.pipeline import _repair_common_writer_citation_omissions
+
+    store = EvidenceStore(tmp_path)
+    table_path = tmp_path / "table_one.csv"
+    table_path.write_text("variable,value\nage,64\n", encoding="utf-8")
+    store.register_file(
+        kind="table",
+        description="Table 1",
+        source_path=table_path,
+        evidence_id="table_one",
+        producer="test",
+    )
+    scaffold = (
+        "**Keywords:** Sepsis-3, intensive care unit, in-hospital mortality.\n"
+        "## Data and code availability\n"
+        "The cohort, generated scripts, SHA-256 evidence store, reproducibility "
+        "envelope, STROBE checklist, and supplementary tables are released "
+        "alongside this manuscript.\n"
+    )
+
+    repaired, repairs = _repair_common_writer_citation_omissions(
+        scaffold,
+        evidence=store,
+    )
+
+    assert repaired == scaffold.rstrip()
+    assert repairs == []
+    assert "{evidence:" not in repaired
+
+
 def test_execution_gate_and_parent_figure_dependency_helpers(ra):
     from easyicu.research_agent.pipeline import (
         _execution_gate_status,
@@ -4032,6 +4433,665 @@ def test_readiness_artifacts_emit_manuscript_ready_only_after_gates_pass(ra, tmp
     assert (tmp_path / "manuscript_ready.md").read_text(
         encoding="utf-8"
     ) == bound_path.read_text(encoding="utf-8")
+
+
+def _register_publication_bundle_for_readiness(
+    evidence,
+    tmp_path: Path,
+    *,
+    contract: dict,
+) -> None:
+    out = tmp_path / "publication_figures"
+    out.mkdir(parents=True, exist_ok=True)
+    contract_path = out / "easyicu_publication_figure.figure_contract.json"
+    contract_path.write_text(json.dumps(contract), encoding="utf-8")
+    source_path = out / "publication_figure_source_data.csv"
+    source_path.write_text("term,estimate\nsepsis3,1.14\n", encoding="utf-8")
+    evidence.register_file(
+        kind="log",
+        description="Publication figure contract.",
+        source_path=contract_path,
+        evidence_id="publication_figure_contract",
+        producer="publication_figure_skill",
+        generation_mode="deterministic_figure_skill",
+        metadata={"source_evidence_id": "publication_figure_source_data"},
+    )
+    evidence.register_file(
+        kind="table",
+        description="Publication figure source data.",
+        source_path=source_path,
+        evidence_id="publication_figure_source_data",
+        producer="publication_figure_skill",
+        generation_mode="deterministic_figure_skill",
+    )
+    for suffix in ("svg", "png"):
+        path = out / f"easyicu_publication_figure.{suffix}"
+        path.write_text("figure", encoding="utf-8")
+        evidence.register_file(
+            kind="figure",
+            description=f"Publication figure export ({suffix}).",
+            source_path=path,
+            evidence_id=f"publication_figure_{suffix}",
+            producer="publication_figure_skill",
+            generation_mode="deterministic_figure_skill",
+            metadata={
+                "figure_role": "publication_figure",
+                "figure_contract": "publication_figure_contract",
+                "source_evidence_id": "publication_figure_source_data",
+            },
+        )
+
+
+def _write_publication_skill_summary(
+    tmp_path: Path,
+    *,
+    version: int,
+    audit_findings: list[dict],
+) -> Path:
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    suffix = "" if version == 1 else f"_v{version}"
+    path = (
+        evidence_dir
+        / f"publication_figure_skill_summary{suffix}__publication_figure_skill_summary.json"
+    )
+    path.write_text(
+        json.dumps({"audit_findings": audit_findings}),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _register_complete_display_suite_for_readiness(
+    evidence,
+    tmp_path: Path,
+) -> None:
+    table_one_path = tmp_path / "table_one.csv"
+    table_one_path.write_text("variable,value\nage,64\n", encoding="utf-8")
+    evidence.register_file(
+        kind="table",
+        description="Table 1 baseline cohort characteristics.",
+        source_path=table_one_path,
+        evidence_id="table_table_one",
+        producer="coder",
+        generation_mode="llm_code",
+    )
+    _register_publication_bundle_for_readiness(
+        evidence,
+        tmp_path,
+        contract={
+            "figure_id": "easyicu_publication_figure",
+            "core_claim": "Primary effect and sensitivity audit are shown.",
+            "panels": [
+                {
+                    "panel_id": "A",
+                    "title": "Adjusted odds-ratio estimate",
+                    "role": "relationship",
+                    "claim": "The primary effect estimate is drawn from source data.",
+                },
+                {
+                    "panel_id": "B",
+                    "title": "Sensitivity and denominator audit",
+                    "role": "audit",
+                    "claim": "Robustness and denominator context are shown together.",
+                },
+            ],
+        },
+    )
+
+
+def test_readiness_publication_ready_requires_article_display_suite(
+    ra,
+    tmp_path: Path,
+):
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.pipeline import _write_readiness_artifacts
+
+    context = ra.ResearchContext(
+        research_question="Estimate whether Sepsis-3 is associated with mortality.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_stays=10,
+            n_patients=10,
+        ),
+        variables=[],
+        target_outcome="death",
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            ra.AnalysisStep(
+                step_id="01_table_one",
+                intent="Summarise baseline characteristics.",
+                expected_outputs=["table:table_one"],
+            ),
+            ra.AnalysisStep(
+                step_id="02_model",
+                intent="Fit adjusted association model.",
+                expected_outputs=["table:adjusted_association"],
+            ),
+        ],
+    )
+    evidence = EvidenceStore(tmp_path)
+    _register_publication_bundle_for_readiness(
+        evidence,
+        tmp_path,
+        contract={
+            "figure_id": "easyicu_publication_figure",
+            "core_claim": "Adjusted association estimate.",
+            "panels": [
+                {
+                    "panel_id": "A",
+                    "title": "Adjusted association",
+                    "role": "relationship",
+                    "claim": "The adjusted odds ratio is shown.",
+                }
+            ],
+        },
+    )
+    bound_path = tmp_path / "manuscript_scaffold_bound.md"
+    bound_path.write_text(
+        "The adjusted association is described in the manuscript.\n",
+        encoding="utf-8",
+    )
+
+    gates, artifact_paths = _write_readiness_artifacts(
+        context=context,
+        plan=plan,
+        findings=[],
+        per_step_records=[
+            {"step_id": "01_table_one", "status": "ok"},
+            {"step_id": "02_model", "status": "ok"},
+        ],
+        evidence=evidence,
+        run_dir=tmp_path,
+        manuscript_path=bound_path,
+        stop_after_analysis=False,
+    )
+
+    assert gates["publication_figure_bundle_ready"] is True
+    assert gates["manuscript_ready"] is True
+    assert gates["display_suite_complete"] is False
+    assert gates["publication_ready"] is False
+    assert "display_suite_audit" in artifact_paths
+    assert any("Table 1" in err for err in gates["display_suite_errors"])
+    assert any("fewer than two panels" in err for err in gates["display_suite_errors"])
+
+
+def test_readiness_publication_ready_accepts_complete_display_suite(
+    ra,
+    tmp_path: Path,
+):
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.pipeline import _write_readiness_artifacts
+
+    context = ra.ResearchContext(
+        research_question="Estimate whether Sepsis-3 is associated with mortality.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_stays=10,
+            n_patients=10,
+        ),
+        variables=[],
+        target_outcome="death",
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            ra.AnalysisStep(
+                step_id="01_table_one",
+                intent="Summarise baseline characteristics.",
+                expected_outputs=["table:table_one"],
+            ),
+            ra.AnalysisStep(
+                step_id="02_model",
+                intent="Fit adjusted association model.",
+                expected_outputs=["table:adjusted_association"],
+            ),
+            ra.AnalysisStep(
+                step_id="03_sensitivity",
+                intent="Audit sensitivity and denominator robustness.",
+                expected_outputs=["figure:sensitivity_audit"],
+            ),
+        ],
+    )
+    evidence = EvidenceStore(tmp_path)
+    _register_complete_display_suite_for_readiness(evidence, tmp_path)
+    bound_path = tmp_path / "manuscript_scaffold_bound.md"
+    bound_path.write_text(
+        "The adjusted association is described in the manuscript.\n",
+        encoding="utf-8",
+    )
+
+    gates, artifact_paths = _write_readiness_artifacts(
+        context=context,
+        plan=plan,
+        findings=[],
+        per_step_records=[
+            {"step_id": "01_table_one", "status": "ok"},
+            {"step_id": "02_model", "status": "ok"},
+            {"step_id": "03_sensitivity", "status": "ok"},
+        ],
+        evidence=evidence,
+        run_dir=tmp_path,
+        manuscript_path=bound_path,
+        stop_after_analysis=False,
+    )
+
+    assert gates["display_suite_complete"] is True
+    assert gates["display_table_one_present"] is True
+    assert gates["display_contract_panel_count"] == 2
+    assert gates["publication_ready"] is True
+    assert (tmp_path / artifact_paths["display_suite_audit"]).exists()
+
+
+def test_readiness_supersedes_stale_publication_figure_audit_error(
+    ra,
+    tmp_path: Path,
+):
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.pipeline import _write_readiness_artifacts
+    from easyicu.research_agent.schema import ValidationFinding
+
+    context = ra.ResearchContext(
+        research_question="Estimate whether Sepsis-3 is associated with mortality.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_stays=10,
+            n_patients=10,
+        ),
+        variables=[],
+        target_outcome="death",
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            ra.AnalysisStep(
+                step_id="01_table_one",
+                intent="Summarise baseline characteristics.",
+                expected_outputs=["table:table_one"],
+            ),
+            ra.AnalysisStep(
+                step_id="02_model",
+                intent="Fit adjusted association model.",
+                expected_outputs=["table:adjusted_association"],
+            ),
+            ra.AnalysisStep(
+                step_id="03_sensitivity",
+                intent="Audit sensitivity and denominator robustness.",
+                expected_outputs=["figure:sensitivity_audit"],
+            ),
+        ],
+    )
+    evidence = EvidenceStore(tmp_path)
+    _register_complete_display_suite_for_readiness(evidence, tmp_path)
+    _write_publication_skill_summary(
+        tmp_path,
+        version=2,
+        audit_findings=[
+            {
+                "validator": "publication_figure_export",
+                "severity": "warning",
+                "message": "SVG figure 'easyicu_publication_figure.svg' has text outside the canvas.",
+            }
+        ],
+    )
+    bound_path = tmp_path / "manuscript_scaffold_bound.md"
+    bound_path.write_text(
+        "The adjusted association is described in the manuscript.\n",
+        encoding="utf-8",
+    )
+
+    gates, _ = _write_readiness_artifacts(
+        context=context,
+        plan=plan,
+        findings=[
+            ValidationFinding(
+                validator="publication_figure_export",
+                severity="error",
+                message=(
+                    "SVG figure 'easyicu_publication_figure.svg' has overlapping text "
+                    "elements; multi-panel labels need more spacing."
+                ),
+            )
+        ],
+        per_step_records=[
+            {"step_id": "01_table_one", "status": "ok"},
+            {"step_id": "02_model", "status": "ok"},
+            {"step_id": "03_sensitivity", "status": "ok"},
+        ],
+        evidence=evidence,
+        run_dir=tmp_path,
+        manuscript_path=bound_path,
+        stop_after_analysis=False,
+    )
+
+    assert gates["analysis_validated"] is True
+    assert gates["analysis_error_count"] == 0
+    assert gates["superseded_error_count"] == 1
+    assert gates["publication_ready"] is True
+
+
+def test_readiness_keeps_current_publication_figure_audit_error_active(
+    ra,
+    tmp_path: Path,
+):
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.pipeline import _write_readiness_artifacts
+    from easyicu.research_agent.schema import ValidationFinding
+
+    context = ra.ResearchContext(
+        research_question="Estimate whether Sepsis-3 is associated with mortality.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_stays=10,
+            n_patients=10,
+        ),
+        variables=[],
+        target_outcome="death",
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            ra.AnalysisStep(
+                step_id="01_table_one",
+                intent="Summarise baseline characteristics.",
+                expected_outputs=["table:table_one"],
+            ),
+            ra.AnalysisStep(
+                step_id="02_model",
+                intent="Fit adjusted association model.",
+                expected_outputs=["table:adjusted_association"],
+            ),
+            ra.AnalysisStep(
+                step_id="03_sensitivity",
+                intent="Audit sensitivity and denominator robustness.",
+                expected_outputs=["figure:sensitivity_audit"],
+            ),
+        ],
+    )
+    evidence = EvidenceStore(tmp_path)
+    _register_complete_display_suite_for_readiness(evidence, tmp_path)
+    current_error = {
+        "validator": "publication_figure_export",
+        "severity": "error",
+        "message": (
+            "SVG figure 'easyicu_publication_figure.svg' has overlapping text "
+            "elements; multi-panel labels need more spacing."
+        ),
+    }
+    _write_publication_skill_summary(
+        tmp_path,
+        version=2,
+        audit_findings=[current_error],
+    )
+    bound_path = tmp_path / "manuscript_scaffold_bound.md"
+    bound_path.write_text(
+        "The adjusted association is described in the manuscript.\n",
+        encoding="utf-8",
+    )
+
+    gates, _ = _write_readiness_artifacts(
+        context=context,
+        plan=plan,
+        findings=[ValidationFinding(**current_error)],
+        per_step_records=[
+            {"step_id": "01_table_one", "status": "ok"},
+            {"step_id": "02_model", "status": "ok"},
+            {"step_id": "03_sensitivity", "status": "ok"},
+        ],
+        evidence=evidence,
+        run_dir=tmp_path,
+        manuscript_path=bound_path,
+        stop_after_analysis=False,
+    )
+
+    assert gates["analysis_validated"] is False
+    assert gates["analysis_error_count"] == 1
+    assert gates["superseded_error_count"] == 0
+    assert gates["publication_ready"] is False
+
+
+def test_readiness_supersedes_stale_strict_writer_error_after_clean_bound_manuscript(
+    ra,
+    tmp_path: Path,
+):
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.pipeline import _write_readiness_artifacts
+    from easyicu.research_agent.schema import ValidationFinding
+
+    context = ra.ResearchContext(
+        research_question="Estimate whether Sepsis-3 is associated with mortality.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_stays=10,
+            n_patients=10,
+        ),
+        variables=[],
+        target_outcome="death",
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            ra.AnalysisStep(
+                step_id="01_table_one",
+                intent="Summarise baseline characteristics.",
+                expected_outputs=["table:table_one"],
+            ),
+            ra.AnalysisStep(
+                step_id="02_model",
+                intent="Fit adjusted association model.",
+                expected_outputs=["table:adjusted_association"],
+            ),
+            ra.AnalysisStep(
+                step_id="03_sensitivity",
+                intent="Audit sensitivity and denominator robustness.",
+                expected_outputs=["figure:sensitivity_audit"],
+            ),
+        ],
+    )
+    evidence = EvidenceStore(tmp_path)
+    _register_complete_display_suite_for_readiness(evidence, tmp_path)
+    bound_path = tmp_path / "manuscript_scaffold_bound.md"
+    bound_path.write_text(
+        "The adjusted association is described in the manuscript.\n",
+        encoding="utf-8",
+    )
+
+    gates, _ = _write_readiness_artifacts(
+        context=context,
+        plan=plan,
+        findings=[
+            ValidationFinding(
+                validator="evidence_bound_writer",
+                severity="error",
+                message=(
+                    "STRICT evidence enforcement blocked manuscript generation: "
+                    "STRICT evidence mode: 2 result-like sentence(s) without "
+                    "{evidence:<id>} placeholders."
+                ),
+            )
+        ],
+        per_step_records=[
+            {"step_id": "01_table_one", "status": "ok"},
+            {"step_id": "02_model", "status": "ok"},
+            {"step_id": "03_sensitivity", "status": "ok"},
+        ],
+        evidence=evidence,
+        run_dir=tmp_path,
+        manuscript_path=bound_path,
+        stop_after_analysis=False,
+    )
+
+    assert gates["evidence_complete"] is True
+    assert gates["superseded_error_count"] == 1
+    assert gates["evidence_error_count"] == 0
+    assert gates["publication_ready"] is True
+
+
+def test_readiness_supersedes_stale_numeric_error_after_clean_bound_manuscript(
+    ra,
+    tmp_path: Path,
+):
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.pipeline import _write_readiness_artifacts
+    from easyicu.research_agent.schema import ValidationFinding
+
+    context = ra.ResearchContext(
+        research_question="Estimate whether Sepsis-3 is associated with mortality.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_stays=10,
+            n_patients=10,
+        ),
+        variables=[],
+        target_outcome="death",
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            ra.AnalysisStep(
+                step_id="01_table_one",
+                intent="Summarise baseline characteristics.",
+                expected_outputs=["table:table_one"],
+            ),
+            ra.AnalysisStep(
+                step_id="02_model",
+                intent="Fit adjusted association model.",
+                expected_outputs=["table:adjusted_association"],
+            ),
+            ra.AnalysisStep(
+                step_id="03_sensitivity",
+                intent="Audit sensitivity and denominator robustness.",
+                expected_outputs=["figure:sensitivity_audit"],
+            ),
+        ],
+    )
+    evidence = EvidenceStore(tmp_path)
+    _register_complete_display_suite_for_readiness(evidence, tmp_path)
+    bound_path = tmp_path / "manuscript_scaffold_bound.md"
+    bound_path.write_text(
+        "The adjusted association used 10 stays[^claim_1].\n\n"
+        "[^claim_1]: value=10; step=02_model; field=n_final_model; evidence=e_model\n",
+        encoding="utf-8",
+    )
+
+    gates, _ = _write_readiness_artifacts(
+        context=context,
+        plan=plan,
+        findings=[
+            ValidationFinding(
+                validator="manuscript_numeric_auditor",
+                severity="error",
+                message=(
+                    "STRICT evidence enforcement blocked manuscript generation: "
+                    "Manuscript contains 1 numeric value(s) not traceable to any "
+                    "registered claim (STRICT mode)."
+                ),
+            )
+        ],
+        per_step_records=[
+            {"step_id": "01_table_one", "status": "ok"},
+            {"step_id": "02_model", "status": "ok"},
+            {"step_id": "03_sensitivity", "status": "ok"},
+        ],
+        evidence=evidence,
+        run_dir=tmp_path,
+        manuscript_path=bound_path,
+        stop_after_analysis=False,
+    )
+
+    assert gates["numeric_verified"] is True
+    assert gates["superseded_error_count"] == 1
+    assert gates["numeric_error_count"] == 0
+    assert gates["publication_ready"] is True
+
+
+def test_readiness_supersedes_stale_critic_error_after_passed_current_critique(
+    ra,
+    tmp_path: Path,
+):
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.pipeline import _write_readiness_artifacts
+    from easyicu.research_agent.schema import ValidationFinding
+
+    context = ra.ResearchContext(
+        research_question="Estimate whether Sepsis-3 is associated with mortality.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_stays=10,
+            n_patients=10,
+        ),
+        variables=[],
+        target_outcome="death",
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            ra.AnalysisStep(
+                step_id="01_table_one",
+                intent="Summarise baseline characteristics.",
+                expected_outputs=["table:table_one"],
+            ),
+            ra.AnalysisStep(
+                step_id="02_model",
+                intent="Fit adjusted association model.",
+                expected_outputs=["table:adjusted_association"],
+            ),
+            ra.AnalysisStep(
+                step_id="03_sensitivity",
+                intent="Audit sensitivity and denominator robustness.",
+                expected_outputs=["figure:sensitivity_audit"],
+            ),
+        ],
+    )
+    evidence = EvidenceStore(tmp_path)
+    _register_complete_display_suite_for_readiness(evidence, tmp_path)
+    bound_path = tmp_path / "manuscript_scaffold_bound.md"
+    bound_path.write_text(
+        "The adjusted association is described in the manuscript.\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "manuscript_critique.json").write_text(
+        '{"status":"pass","concerns":[],"unsupported_claims":[]}',
+        encoding="utf-8",
+    )
+
+    gates, _ = _write_readiness_artifacts(
+        context=context,
+        plan=plan,
+        findings=[
+            ValidationFinding(
+                validator="critic_agent",
+                severity="error",
+                message=(
+                    "CriticAgent marked manuscript as needs_revision: "
+                    "Some result-like sentences were filtered or remain unsupported."
+                ),
+            )
+        ],
+        per_step_records=[
+            {"step_id": "01_table_one", "status": "ok"},
+            {"step_id": "02_model", "status": "ok"},
+            {"step_id": "03_sensitivity", "status": "ok"},
+        ],
+        evidence=evidence,
+        run_dir=tmp_path,
+        manuscript_path=bound_path,
+        stop_after_analysis=False,
+    )
+
+    assert gates["evidence_complete"] is True
+    assert gates["evidence_error_count"] == 0
+    assert gates["superseded_error_count"] == 1
+    assert gates["publication_ready"] is True
 
 
 def test_readiness_artifacts_block_outcome_leak_after_blocked_gate(
@@ -4358,6 +5418,28 @@ def test_critic_does_not_flag_footnote_provenance_block(ra):
     flagged = critic.review_manuscript(scaffold=bad, available_evidence_ids=[])
     assert flagged.status == "needs_revision"
     assert flagged.unsupported_claims
+
+
+def test_critic_ignores_manuscript_metadata_sections(ra):
+    critic = ra.CriticAgent()
+    scaffold = (
+        "## Results\n"
+        "The cohort comprised 500 stays [cohort](evidence/cohort.json).\n\n"
+        "## Data and code availability\n"
+        "The cohort, generated scripts, SHA-256 evidence store, STROBE checklist, "
+        "and supplementary tables are released alongside this manuscript.\n\n"
+        "## Funding\n"
+        "Funding information was not available to the analysis agent and should "
+        "be completed by the authors before journal submission.\n"
+    )
+
+    critique = critic.review_manuscript(
+        scaffold=scaffold,
+        available_evidence_ids=["cohort"],
+    )
+
+    assert critique.status == "pass"
+    assert critique.unsupported_claims == []
 
 
 def test_pipeline_removed_unsupported_sentences_do_not_block_final_manuscript(
@@ -5819,6 +6901,74 @@ def test_advanced_plan_contract_normalizes_robustness_steps(ra):
     assert step_ids == ["01_missingness", "03_complete_case_robustness"]
     assert any("statistic:primary_or" in step.expected_outputs for step in revised.steps)
     assert findings and findings[0].validator == "plan_contract"
+
+
+def test_advanced_plan_contract_preserves_article_level_robustness_suite(ra):
+    from easyicu.research_agent.pipeline import _enforce_advanced_plan_contract
+    from easyicu.research_agent.schema import (
+        AnalysisPlan,
+        AnalysisStep,
+        CohortDescriptor,
+        ResearchContext,
+        UserPreferences,
+    )
+
+    plan = AnalysisPlan(
+        research_question=(
+            "Estimate Sepsis-3 prevalence and adjusted mortality association "
+            "with visible attrition, missingness, and robustness."
+        ),
+        steps=[
+            AnalysisStep(
+                step_id="01_primary_cohort_and_exposure_definition",
+                intent="Define cohort eligibility, attrition, and Sepsis-3 exposure.",
+                expected_outputs=["table:cohort_attrition", "derived_variable:sepsis3"],
+            ),
+            AnalysisStep(
+                step_id="02_table_one_and_missingness",
+                intent="Render Table 1 baseline characteristics and missingness audit.",
+                expected_outputs=["table:table_one", "table:missingness_measurement_audit"],
+            ),
+            AnalysisStep(
+                step_id="03_primary_adjusted_association",
+                intent="Fit adjusted association model and report odds ratio.",
+                expected_outputs=["table:adjusted_association_primary"],
+            ),
+            AnalysisStep(
+                step_id="04_robustness_grid",
+                intent="Run complete-case and alternative-definition sensitivity analyses.",
+                expected_outputs=["figure:robustness_grid"],
+            ),
+        ],
+    )
+    context = ResearchContext(
+        research_question=plan.research_question,
+        cohort=CohortDescriptor(
+            cohort_name="cohort",
+            database="synthetic",
+            n_patients=10,
+            n_stays=10,
+        ),
+        variables=[],
+        target_outcome="death",
+        primary_exposure="sepsis3",
+        user_preferences=UserPreferences(inferred_analysis_family="robustness"),
+    )
+
+    revised, findings = _enforce_advanced_plan_contract(plan=plan, context=context)
+
+    assert [step.step_id for step in revised.steps] == [
+        "01_primary_cohort_and_exposure_definition",
+        "02_table_one_and_missingness",
+        "03_primary_adjusted_association",
+        "04_robustness_grid",
+    ]
+    robustness_step = revised.steps[-1]
+    assert "statistic:primary_or" in robustness_step.expected_outputs
+    assert "figure:robustness_plot" in robustness_step.expected_outputs
+    assert findings and findings[0].validator == "plan_contract"
+    assert findings[0].severity == "info"
+    assert findings[0].detail["article_display_roles"]
 
 
 def test_advanced_plan_contract_normalizes_bias_audit_steps(ra):
