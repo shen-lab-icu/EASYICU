@@ -366,11 +366,19 @@ def mimic_age(data: pd.DataFrame, val_col: str = 'age', **kwargs) -> pd.DataFram
     return data
 
 def percent_as_numeric(x: Union[str, pd.Series]) -> Union[float, pd.Series]:
-    """Convert percent strings to numeric (e.g., '50%' -> 50)."""
+    """Convert percent strings/fractions to numeric percent values.
+
+    Examples: ``"50%" -> 50``, ``"50" -> 50``, ``0.5 -> 50``.
+    """
     if isinstance(x, pd.Series):
-        return x.str.replace('%', '').astype(float)
-    else:
-        return float(str(x).replace('%', ''))
+        result = pd.to_numeric(x.astype(str).str.replace('%', '', regex=False), errors='coerce')
+        fraction_mask = result.gt(0) & result.le(1)
+        if fraction_mask.any():
+            result = result.copy()
+            result.loc[fraction_mask] = result.loc[fraction_mask] * 100.0
+        return result
+    result = float(str(x).replace('%', ''))
+    return result * 100.0 if 0 < result <= 1 else result
 
 def distribute_amount(
     data: pd.DataFrame,
@@ -1253,9 +1261,6 @@ def calc_dur(
     # Remove any duplicates while preserving order
     group_cols = list(dict.fromkeys(group_cols))
     
-    # Collect all time columns to preserve them
-    time_cols_to_keep = [col for col in data.columns if 'time' in col.lower()]
-    
     # Group and aggregate
     # 🔧 FIX: R ricu calc_dur creates two separate columns:
     #   - index_var = min(min_var)
@@ -1604,12 +1609,10 @@ def create_intervals(
         if is_minute_based:
             # Convert to minutes
             overhang_val = overhang.total_seconds() / 60.0
-            max_len_val = max_len.total_seconds() / 60.0
             interval_val = interval.total_seconds() / 60.0
         else:
             # Assume hours (for MIIV and others)
             overhang_val = overhang.total_seconds() / 3600.0
-            max_len_val = max_len.total_seconds() / 3600.0
             interval_val = interval.total_seconds() / 3600.0
         
         # R ricu logic (matching ricu 0.6.3 behavior):
@@ -1845,7 +1848,6 @@ def expand_intervals(
         return data
     
     is_datetime = pd.api.types.is_datetime64_any_dtype(data[index_var])
-    is_numeric = pd.api.types.is_numeric_dtype(data[index_var])
     
     # Convert datetime to relative-hour-boundary datetimes using admission_times
     # (matching R ricu's load_difftime which floors relative time before callbacks).

@@ -812,6 +812,27 @@ class DataConverter:
         except ValueError:
             rel_parent = Path()
         return self.data_path / rel_parent / f"{name}.parquet"
+
+    def _get_legacy_csv_name_parquet_paths(self, csv_path: Path) -> List[Path]:
+        """Return legacy flat parquet paths that keep the CSV table name.
+
+        HiRID conversion historically accepted both ricu-style names
+        (``general.parquet``) and source-style names
+        (``general_table.parquet``). Readiness checks should recognize the
+        latter so already-prepared local datasets do not emit false warnings.
+        """
+        csv_name = self._get_table_name_from_path(csv_path)
+        mapped_name = self._get_table_name(csv_path)
+        if csv_name == mapped_name:
+            return []
+        try:
+            rel_parent = csv_path.parent.relative_to(self.data_path)
+        except ValueError:
+            rel_parent = Path()
+        return [
+            self.data_path / f"{csv_name}.parquet",
+            self.data_path / rel_parent / f"{csv_name}.parquet",
+        ]
     
     def _get_shard_dir(self, csv_path: Path) -> Path:
         """Get the shard directory path for a large CSV file.
@@ -907,15 +928,11 @@ class DataConverter:
             
             return False, f"sharded ({shard_count} files)"
         
-        # Check if single parquet file exists (check both locations)
-        parquet_path = self._get_parquet_path(csv_path)
-        parquet_path_subdir = self._get_parquet_path_with_subdir(csv_path)
-        
         existing_parquet = None
-        if parquet_path.exists():
-            existing_parquet = parquet_path
-        elif parquet_path_subdir.exists():
-            existing_parquet = parquet_path_subdir
+        for candidate in self._single_parquet_candidates(csv_path):
+            if candidate.exists():
+                existing_parquet = candidate
+                break
         
         if existing_parquet is None:
             return True, "parquet file does not exist"
@@ -940,7 +957,7 @@ class DataConverter:
                 try:
                     import pyarrow.parquet as pq_reader
                     # Only read metadata, not actual data
-                    parquet_file = pq_reader.ParquetFile(parquet_path)
+                    parquet_file = pq_reader.ParquetFile(existing_parquet)
                     actual_rows = parquet_file.metadata.num_rows
                     if actual_rows == stored_rows:
                         return False, "already converted and verified"
@@ -1589,7 +1606,6 @@ class DataConverter:
         without accumulating data in memory.
         """
         import gc
-        import bisect
         import pyarrow as pa
         import pyarrow.parquet as pq
         
@@ -2721,11 +2737,15 @@ class DataConverter:
                 return sorted(path.glob("*.parquet"))
         if csv_path is None:
             return []
-        candidates = [
+        return [path for path in self._single_parquet_candidates(csv_path) if path.exists()]
+
+    def _single_parquet_candidates(self, csv_path: Path) -> List[Path]:
+        """Single-file parquet outputs accepted for a CSV input."""
+        return [
             self._get_parquet_path(csv_path),
             self._get_parquet_path_with_subdir(csv_path),
+            *self._get_legacy_csv_name_parquet_paths(csv_path),
         ]
-        return [path for path in candidates if path.exists()]
 
     def _file_manifest_record(
         self, path: Optional[Path], *, hash_files: bool = True

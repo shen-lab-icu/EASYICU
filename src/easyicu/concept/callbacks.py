@@ -29,7 +29,6 @@ from ..callbacks import (
     sofa_coag,
     sofa_liver,
     sofa_renal,
-    sofa_resp,
 )
 # SOFA-2 components: import the canonical, footnote-correct implementations from
 # sofa2.py (rewritten in 82fea9e to score ECMO and accept ecmo/ecmo_indication).
@@ -52,7 +51,7 @@ from ..scores.sepsis import (
 )
 from ..scores.sepsis_sofa2 import sep3_sofa2 as sep3_sofa2_detector
 from ..table import ICUTable, WinTbl
-from ..utils import coalesce, compute_patient_ids_hash as _compute_patient_ids_hash  # 🔧 统一的 patient_ids hash 函数
+from ..utils import coalesce  # 🔧 统一的 patient_ids hash 函数
 
 logger = logging.getLogger(__name__)
 _SUSP_INF_UNSUPPORTED_WARNED: set[str] = set()
@@ -2020,7 +2019,7 @@ def _callback_mimic_age(
             if stay_id_col in data.columns:
                 id_columns = [stay_id_col]
             
-        except Exception as e:
+        except Exception:
             # If loading icustays fails, try with admittime if available
             if 'admittime' in data.columns:
                 dob = pd.to_datetime(data['dob'], errors='coerce')
@@ -2764,7 +2763,6 @@ def _callback_sofa_resp(
         id_columns = [c for c in pafi_df.columns if c in ['stay_id', 'patientunitstayid', 'admissionid', 'patientid', 'icustay_id', 'CaseID']]
     
     # Find pafi value column
-    pafi_col = 'pafi'
     if 'pafi' not in pafi_df.columns:
         for col in pafi_df.columns:
             if col not in id_columns and col != pafi_index and 'pafi' in col.lower():
@@ -3708,7 +3706,6 @@ def _match_fio2(
         # R ricu: merge(o2, fio2, roll = match_win) = single backward rolling join.
         # Per-patient offset avoids 'by' parameter (which fails on dtype mismatches)
         # and cross-patient isolation is guaranteed by offset >> tolerance.
-        merge_cols = id_columns + [unified_time_col, o2_col, fio2_col]
         id_col_name = id_columns[0] if id_columns else None
 
         if id_col_name is not None:
@@ -4017,20 +4014,16 @@ def _callback_supp_o2(
         if vent_index != fio2_index and vent_index in vent_df.columns:
             vent_df = vent_df.rename(columns={vent_index: fio2_index})
         # Find vent_ind column
-        vent_col = 'vent_ind'
         if 'vent_ind' not in vent_df.columns:
             for col in vent_df.columns:
                 if col not in id_columns and col != fio2_index:
-                    vent_col = col
                     vent_df = vent_df.rename(columns={col: 'vent_ind'})
                     break
     
     # Prepare fio2 - find value column
-    fio2_col = 'fio2'
     if 'fio2' not in fio2_df.columns:
         for col in fio2_df.columns:
             if col not in id_columns and col != fio2_index:
-                fio2_col = col
                 fio2_df = fio2_df.rename(columns={col: 'fio2'})
                 break
     
@@ -5016,10 +5009,6 @@ def _callback_vaso_ind(
     
     # 🔧 FIX 2025-01: Database-specific time units for vaso_ind
     # After _align_time_to_admission, all databases use hours for relative time
-    ds_name = ''
-    if ctx is not None:
-        ds_cfg = getattr(getattr(ctx, 'data_source', None), 'config', None)
-        ds_name = getattr(ds_cfg, 'name', '') if ds_cfg is not None else ''
     numeric_unit = 'h'  # All databases use hours after _align_time_to_admission
     
     if time_is_numeric:
@@ -6396,7 +6385,7 @@ def _callback_gcs(
     
     return _as_icutbl(frame.reset_index(drop=True), id_columns=id_columns, index_column=index_column, value_column=output_col)
 
-from ..callbacks import uo_6h as calc_uo_6h, uo_12h as calc_uo_12h, uo_24h as calc_uo_24h, uo_all_windows
+from ..callbacks import uo_all_windows
 
 def _callback_rrt_criteria(
     tables: Dict[str, ICUTable],
@@ -7178,7 +7167,6 @@ def _callback_fluid_balance_admitted(
 
     # Load total input (mL-valued rows) directly from data source
     data_source = ctx.data_source
-    patient_ids = ctx.patient_ids
 
     try:
         # Determine database type

@@ -316,7 +316,8 @@ def get_config(name: str, cfg_dirs: Optional[List[str]] = None,
         cfg_dirs = config_paths()
     
     if combine_fun is None:
-        combine_fun = lambda x, y: {**x, **y} if isinstance(x, dict) and isinstance(y, dict) else y
+        def combine_fun(x, y):
+            return {**x, **y} if isinstance(x, dict) and isinstance(y, dict) else y
     
     results = []
     

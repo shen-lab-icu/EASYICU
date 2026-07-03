@@ -1556,7 +1556,6 @@ def _infer_numeric_time_unit(values: pd.Series, index_col: str | None = None) ->
     # 导致按 hour_like 解释会溢出 pd.Timedelta（>106751 days = ~292 years）。
     # 当 max(|values|) 远超合理小时范围（>10 万 = 11 年）时，回退到分钟解释。
     # 这处理了所有 AUMC sofa2 链路上的时间单位 bug。
-    PD_TIMEDELTA_MAX_HOURS = 2_500_000  # pd.Timedelta.max ≈ 2.56e6 hours
     REASONABLE_HOURS_THRESHOLD = 100_000  # >11 years in hours is implausible for ICU
 
     if name in hour_like:
@@ -1672,7 +1671,6 @@ def _slide_vectorized(
             pass  # Fall through to per-group loop
     
     # === PER-GROUP LOOP (fallback for small groups or custom agg functions) ===
-    agg_cols = list(agg_map.keys())
     results = []
     
     for id_vals, group in data.groupby(id_cols, sort=False):

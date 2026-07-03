@@ -297,7 +297,6 @@ def get_runtime_load_strategy(
     num_concepts = max(1, len(normalized))
     heavy_request = any(name in _HEAVY_CONCEPTS for name in normalized)
     very_large_request = num_patients is not None and num_patients >= 5000
-    medium_large_request = num_patients is not None and num_patients >= 2000
     available_mem = config.available_memory_gb
     cpu_count = max(1, config.cpu_count)
 
