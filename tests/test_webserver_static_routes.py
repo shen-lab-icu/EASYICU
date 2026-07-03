@@ -168,7 +168,7 @@ def test_native_assistant_labels_disambiguate_page_guide_guided_copilot_and_agen
     assert "js/app.js?v=20260629-ux-readability" in index_html
     assert "js/copilot-dock.js?v=20260702-agent-fab-clear" in index_html
     assert "js/screens-extraction.js?v=20260630-gate-first-ia" in index_html
-    assert "js/screens-agent.js?v=20260702-agent-tab-scroll" in index_html
+    assert "js/screens-agent.js?v=20260703-agent-render-split" in index_html
     assert "js/screens-help.js?v=20260626-tutorial-i18n" in index_html
 
 
@@ -570,6 +570,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
 
 def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     agent_js = _static_js("screens-agent.js")
+    render_js = _static_js("screens-agent-render.js")
     agent_css = _static_css("agent.css")
     agent_layout_css = _static_css("agent-layout.css")
     agent_header_css = _static_css("agent-header.css")
@@ -579,7 +580,7 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     redesign_css = _static_css("redesign.css")
     index_html = _static_html("index.html")
 
-    assert "js/screens-agent.js?v=20260702-agent-tab-scroll" in index_html
+    assert "js/screens-agent.js?v=20260703-agent-render-split" in index_html
     assert "css/agent.css?v=20260702-agent-compact-header" in index_html
     assert "css/agent-layout.css?v=20260702-agent-focus-layout" in index_html
     assert "css/agent-header.css?v=20260702-agent-compact-header" in index_html
@@ -615,10 +616,12 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     assert "artifactSummary(name)" in agent_js
     assert "artifactCategory(name)" in agent_js
     assert "Primary review outputs" in agent_js
-    assert "function artifactStructuredView(name, payload)" in agent_js
-    assert "Readable artifact summary" in agent_js
-    assert "可读产物摘要" in agent_js
-    assert "Raw JSON is kept for audit, but the default view is table-based." in agent_js
+    # Artifact renderers live in the screens-agent-render.js owner file.
+    assert "function artifactStructuredView(name, payload)" in render_js
+    assert "Readable artifact summary" in render_js
+    assert "可读产物摘要" in render_js
+    assert "Raw JSON is kept for audit, but the default view is table-based." in render_js
+    # The raw-JSON <details> lives in artifactViewer, which stays in main.
     assert "View raw JSON" in agent_js
     assert "查看原始 JSON" in agent_js
     assert "function featuredFigurePreview(live)" in agent_js
@@ -675,22 +678,26 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
 
 def test_native_agent_research_blocks_are_project_owned() -> None:
     agent_js = _static_js("screens-agent.js")
+    render_js = _static_js("screens-agent-render.js")
     agent_css = _static_css("agent.css")
     app_js = _static_js("app.js")
     screens_css = _static_css("screens.css")
     redesign_css = _static_css("redesign.css")
     index_html = _static_html("index.html")
 
-    assert "const BLOCK_LIBRARY = [" in agent_js
-    assert "const BLOCK_FAMILIES = [" in agent_js
+    # The block catalog data lives in the screens-agent-render.js owner file;
+    # the workflow-block UI + state stays in screens-agent.js.
+    assert "const BLOCK_LIBRARY = [" in render_js
+    assert "const BLOCK_FAMILIES = [" in render_js
+    assert "Nature writing block" in render_js
+    assert "Nature figure block" in render_js
+    assert "Outcome-blind feasibility" in render_js
+    assert "Evidence-bound analysis run" in render_js
+    assert "Data availability block" in render_js
+    assert "const BLOCK_LIBRARY = [" not in agent_js
     assert "AG_BLOCKS_VERSION" in agent_js
     assert "Workflow Blocks" in agent_js
     assert "Research Blocks" in agent_js
-    assert "Nature writing block" in agent_js
-    assert "Nature figure block" in agent_js
-    assert "Outcome-blind feasibility" in agent_js
-    assert "Evidence-bound analysis run" in agent_js
-    assert "Data availability block" in agent_js
     assert "data-ag-block-add" in agent_js
     assert "data-ag-block-pack" in agent_js
     assert "workflowBlocks(s).length" in agent_js
@@ -712,7 +719,7 @@ def test_native_agent_research_blocks_are_project_owned() -> None:
     assert ".ag-lib-card" in agent_css
     assert ".ag-block-contract" in agent_css
     assert "css/agent.css?v=20260702-agent-compact-header" in index_html
-    assert "js/screens-agent.js?v=20260702-agent-tab-scroll" in index_html
+    assert "js/screens-agent.js?v=20260703-agent-render-split" in index_html
 
     assert "ag-block-grid" not in app_js
     assert "Research Blocks" not in app_js
@@ -722,6 +729,42 @@ def test_native_agent_research_blocks_are_project_owned() -> None:
     assert ".ag-block-grid" not in redesign_css
     assert ".ag-wf-row" not in redesign_css
     assert ".ag-lib-card" not in redesign_css
+
+
+def test_native_agent_render_layer_is_split_into_owner_file() -> None:
+    """The fixture data (demo studies, block catalog) + pure artifact
+    renderers are owned by screens-agent-render.js, not inlined in the
+    screens-agent.js monolith (owner-file carve-out, 2026-07-03). The main
+    file rebinds them from window.AGENT_RENDER so call sites stay unchanged."""
+    agent_js = _static_js("screens-agent.js")
+    render_js = _static_js("screens-agent-render.js")
+    index_html = _static_html("index.html")
+
+    # fixture data + pure renderers are DEFINED in the render file
+    assert "const DEMO_STUDIES = [" in render_js
+    assert "const BLOCK_LIBRARY = [" in render_js
+    assert "function artifactStructuredView(name, payload)" in render_js
+    assert "function runStatusLabel(status)" in render_js
+    assert "function thumb(kind)" in render_js
+    assert "window.AGENT_RENDER = {" in render_js
+
+    # they are NOT re-defined in the main file (no duplicate definitions)
+    assert "const DEMO_STUDIES = [" not in agent_js
+    assert "const BLOCK_LIBRARY = [" not in agent_js
+    assert "function artifactStructuredView(name, payload)" not in agent_js
+    assert "function runStatusLabel(status)" not in agent_js
+
+    # main file rebinds the exports so call sites stay unchanged
+    assert "} = R;" in agent_js
+    assert "window.AGENT_RENDER" in agent_js
+    assert "artifactStructuredView" in agent_js  # still called
+
+    # render file loads BEFORE the main file in index.html
+    render_pos = index_html.find("screens-agent-render.js")
+    main_pos = index_html.find("screens-agent.js?")
+    assert render_pos != -1 and main_pos != -1
+    assert render_pos < main_pos, "screens-agent-render.js must load before screens-agent.js"
+    assert "js/screens-agent-render.js?v=20260703-agent-render-split" in index_html
 
 
 def test_native_agent_overview_renders_object_idea_plan_steps() -> None:
@@ -760,8 +803,9 @@ def test_native_agent_canonical9_import_is_project_owned() -> None:
     assert "canonical9_import" in agent_js
     assert "function importedRunForStudy(s)" in agent_js
     assert "function reviewableRunForStudy()" in agent_js
-    assert "function runStatusLabel(status)" in agent_js
-    assert "function readableArtifactText(value)" in agent_js
+    # runStatusLabel / readableArtifactText moved to the render owner file.
+    assert "function runStatusLabel(status)" in _static_js("screens-agent-render.js")
+    assert "function readableArtifactText(value)" in _static_js("screens-agent-render.js")
     assert "function evidenceLinkPanel(live, s)" in agent_js
     assert "function crossDataPanel(live, s)" in agent_js
     assert "function capabilityHighlights(live, s)" in agent_js
@@ -775,7 +819,8 @@ def test_native_agent_canonical9_import_is_project_owned() -> None:
     assert "data-ag-open-seed-run" in agent_js
     assert "artifactStructuredView(artifact.name || agArtifact.name || '', data.payload || {})" in agent_js
     assert "benchmark_scorecard.json" in agent_js
-    assert "workflow_graph.json" in agent_js
+    # workflow_graph.json only appears in the moved artifact label maps.
+    assert "workflow_graph.json" in _static_js("screens-agent-render.js")
     assert "figure_gallery.json" in agent_js
     assert "source_run_manifest.json" in agent_js
     assert "Completed analysis" in agent_js
@@ -783,7 +828,8 @@ def test_native_agent_canonical9_import_is_project_owned() -> None:
     assert "Read-only review · manuscript not unlocked" in agent_js
     assert "Study brief" in agent_js
     assert "汇报摘要" in agent_js
-    assert "verification passed" in agent_js
+    # "verification passed" is a runStatusLabel string, now in the render file.
+    assert "verification passed" in _static_js("screens-agent-render.js")
     assert "readableArtifactText(row.text || '')" in agent_js
     assert "Claim-to-artifact trace is explicit" in agent_js
     assert "Open Cross-DB workspace" in agent_js
@@ -1464,7 +1510,8 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     assert ".ideas-zotero-paste" not in redesign_css
     assert "loadIdeaAgentProjects" in agent_js
     assert "seedStudy(row)" in agent_js
-    assert "const DEMO_STUDIES" in agent_js
+    # DEMO_STUDIES data moved to screens-agent-render.js; the consumer stays.
+    assert "const DEMO_STUDIES" in _static_js("screens-agent-render.js")
     assert "const base = realMode() ? [] : DEMO_STUDIES" in agent_js
     assert "No local projects yet" in agent_js
     assert "Agent Projects no longer shows fabricated studies in Real mode" in agent_js
