@@ -42,7 +42,10 @@ import textwrap
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
-from .article_contract import summarize_article_contract_coverage
+from .article_contract import (
+    article_contract_audit_payload,
+    summarize_article_contract_coverage,
+)
 from .display_suite import summarize_display_suite_status
 from .evidence import EvidenceStore
 from .figure_strategy import summarize_article_figure_strategy_coverage
@@ -1024,19 +1027,7 @@ def write_readiness_artifacts(
     )
 
     article_contract_path = run_dir / "article_contract_audit.json"
-    article_contract_payload = {
-        "schema_version": gates["article_contract_audit_schema_version"],
-        "article_contract_complete": gates["article_contract_complete"],
-        "analysis_family": gates["article_contract_family"],
-        "required_roles": gates["article_required_roles"],
-        "plan_roles": gates["article_plan_roles"],
-        "artifact_roles": gates["article_artifact_roles"],
-        "missing_plan_roles": gates["article_missing_plan_roles"],
-        "missing_artifact_roles": gates["article_missing_artifact_roles"],
-        "missing_artifact_modules": gates["article_missing_artifact_modules"],
-        "errors": gates["article_contract_errors"],
-        "contract": gates["article_contract"],
-    }
+    article_contract_payload = article_contract_audit_payload(gates)
     article_contract_path.write_text(
         json.dumps(
             article_contract_payload,

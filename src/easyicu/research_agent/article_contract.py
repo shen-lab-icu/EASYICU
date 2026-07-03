@@ -22,6 +22,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .figure_contracts import figure_contract_paths
 from .schema import AnalysisPlan, AnalysisStep, ResearchContext, ValidationFinding
 from .study_design import StudyDesignBrief, build_study_design_brief
 from .study_design_playbook import (
@@ -302,20 +303,9 @@ def _step_summary_text(record: Mapping[str, Any]) -> str:
     return _normalise_space(json.dumps(summary, ensure_ascii=False, default=str))
 
 
-def _figure_contract_paths(run_dir: Path) -> List[Path]:
-    candidates = [
-        *run_dir.glob("publication_figures/*.figure_contract.json"),
-        *run_dir.glob("steps/*/outputs/*.figure_contract.json"),
-    ]
-    seen: Set[str] = set()
-    unique: List[Path] = []
-    for path in sorted(candidates):
-        key = str(path.resolve())
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(path)
-    return unique
+# Shared with figure_strategy / display_suite via figure_contracts so all
+# article-level audits see the identical contract list.
+_figure_contract_paths = figure_contract_paths
 
 
 def _figure_contract_text(path: Path) -> str:
@@ -436,6 +426,29 @@ def summarize_article_contract_coverage(
         "article_missing_artifact_modules": missing_artifact_modules,
         "article_contract_errors": errors,
         "article_contract": contract.model_dump(mode="json"),
+    }
+
+
+def article_contract_audit_payload(status: Mapping[str, Any]) -> Dict[str, Any]:
+    """Canonical on-disk shape of ``article_contract_audit.json``.
+
+    Both writers (the execute-phase crash-resilience snapshot and the final
+    report-phase write) must produce this shape, otherwise the registered
+    evidence copy and the run-dir file diverge structurally under the same
+    schema id.
+    """
+    return {
+        "schema_version": status["article_contract_audit_schema_version"],
+        "article_contract_complete": status["article_contract_complete"],
+        "analysis_family": status["article_contract_family"],
+        "required_roles": status["article_required_roles"],
+        "plan_roles": status["article_plan_roles"],
+        "artifact_roles": status["article_artifact_roles"],
+        "missing_plan_roles": status["article_missing_plan_roles"],
+        "missing_artifact_roles": status["article_missing_artifact_roles"],
+        "missing_artifact_modules": status["article_missing_artifact_modules"],
+        "errors": status["article_contract_errors"],
+        "contract": status["article_contract"],
     }
 
 

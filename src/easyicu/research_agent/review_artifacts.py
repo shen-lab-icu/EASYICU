@@ -39,10 +39,19 @@ _PRIMARY_LIKE_ROLES = {
 }
 
 
+# Inline previews are duplicated across review_artifacts.json,
+# figure_gallery.json and their evidence copies; cap the embedded PNG so one
+# high-dpi export cannot balloon every artifact. Larger figures fall back to
+# the relative_path/exports references already present on the row.
+_MAX_INLINE_PNG_BYTES = 1_500_000
+
+
 def _png_data_url(path: Path) -> Optional[str]:
     if not path.exists() or path.suffix.lower() != ".png":
         return None
     try:
+        if path.stat().st_size > _MAX_INLINE_PNG_BYTES:
+            return None
         payload = base64.b64encode(path.read_bytes()).decode("ascii")
     except OSError:
         return None
