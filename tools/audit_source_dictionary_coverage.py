@@ -29,7 +29,7 @@ import pandas as pd
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = REPO_ROOT / "src" / "easyicu" / "data"
 DEFAULT_DB_ROOT = Path(os.environ.get("EASYICU_DB_ROOT", "/Volumes/外置硬盘/databases"))
-DEFAULT_OUT = REPO_ROOT / "src" / "data_processing" / "source_dictionary_coverage_audit"
+DEFAULT_OUT = REPO_ROOT / "output" / "data_processing" / "source_dictionary_coverage_audit"
 
 DICTIONARY_FILES = ("concept-dict.json", "sofa2-dict.json")
 
@@ -523,6 +523,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--concepts", nargs="*", default=DEFAULT_CONCEPTS)
     parser.add_argument("--dbs", nargs="*", default=["aumc", "mimic", "miiv", "hirid", "eicu"])
+    parser.add_argument(
+        "--allow-empty",
+        action="store_true",
+        help="Write empty outputs even when no source catalog items are available.",
+    )
     return parser.parse_args()
 
 
@@ -532,6 +537,11 @@ def main() -> None:
     dbs = list(args.dbs)
     mappings = load_mappings()
     catalog = build_catalog(args.db_root, dbs)
+    if not catalog and not args.allow_empty:
+        raise SystemExit(
+            f"No source catalog items found under {args.db_root}. "
+            "Mount the source databases or pass --allow-empty explicitly."
+        )
     rows = audit(catalog, concepts, mappings)
     write_outputs(rows, args.out_dir, concepts, dbs)
     n_unmapped = sum(1 for row in rows if row["status"] == "unmapped_candidate")

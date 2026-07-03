@@ -61,16 +61,17 @@ from .expr_parser import (
     _parse_binary_op,
     _parse_literal,
     _parse_mapping,
-    _parse_r_arguments,
     _parse_r_value,
     _split_arguments,
     _strip_quotes,
 )
-from ..table import ICUTable
+from ..datasource import _duckdb_path, _enumerate_bucket_parquet_files
 
 if TYPE_CHECKING:
     from ..datasource import ICUDataSource
     from . import ConceptResolver
+
+DEBUG_MODE = False
 
 
 def _apply_callback(
@@ -354,6 +355,14 @@ def _apply_callback(
     if re.fullmatch(r"transform_fun\(percent_as_numeric\)", expr):
         series = frame[concept_name]
 
+        def _scale_fractional_percent(values: pd.Series) -> pd.Series:
+            numeric = pd.to_numeric(values, errors='coerce')
+            fraction_mask = numeric.gt(0) & numeric.le(1)
+            if fraction_mask.any():
+                numeric = numeric.copy()
+                numeric.loc[fraction_mask] = numeric.loc[fraction_mask] * 100.0
+            return numeric
+
         # 🚀 Fast path: if already numeric (DuckDB pre-processed), skip all string ops
         if pd.api.types.is_numeric_dtype(series):
             na_mask = series.isna()
@@ -365,7 +374,7 @@ def _apply_callback(
                         na_mask = series.isna()
                         if not na_mask.any():
                             break
-                frame.loc[:, concept_name] = series
+            frame.loc[:, concept_name] = _scale_fractional_percent(series)
             return frame
 
         # 🚀 Optimized slow path: try to_numeric first, only strip '%' on failures
@@ -389,6 +398,7 @@ def _apply_callback(
             )
             result = result.copy()
             result.loc[failed_mask] = fixed
+        result = _scale_fractional_percent(result)
         # Cast to object first so pandas 2.x string-backed columns accept float values.
         if hasattr(frame[concept_name], 'dtype') and str(frame[concept_name].dtype) in ('string', 'str'):
             frame = frame.copy()
@@ -2582,4 +2592,3 @@ def _apply_callback(
     )
 
 __all__ = ["_apply_callback"]
-

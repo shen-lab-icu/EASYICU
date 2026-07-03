@@ -109,24 +109,20 @@ select = ["E4", "E7", "E9", "F"]
 "src/easyicu/research_agent/pipeline.py" = ["E402", "F401", "F541"]
 # Legacy compact callback/specification files are tracked as lint debt rather
 # than reformatted in this behaviour-preserving research-agent cleanup pass.
+# 2026-07-03: paths re-mapped after the flat modules moved into subpackages
+# (concept/, scores/, io/, utils/, runtime/); entries whose debt was actually
+# fixed in that pass (F841 dead assignments, E731, F821) were dropped instead
+# of re-ignored.
 "src/easyicu/api.py" = ["E401", "E402", "E701", "F401", "F811", "F841"]
-"src/easyicu/callback_utils.py" = ["F841"]
 "src/easyicu/cohort_visualization.py" = ["F401"]
-"src/easyicu/concept.py" = ["E402", "E701", "F401", "F841"]
-"src/easyicu/concept_callback_apply.py" = ["E701", "E722", "F401", "F821", "F841"]
-"src/easyicu/concept_callbacks.py" = ["E402", "E701", "F401", "F841"]
+"src/easyicu/concept/__init__.py" = ["E402", "E701", "F401"]
+"src/easyicu/concept/callbacks.py" = ["E402"]
 "src/easyicu/config.py" = ["E402"]
-"src/easyicu/data_converter.py" = ["F401"]
 "src/easyicu/datasource.py" = ["E402", "E701", "F401", "F841"]
 "src/easyicu/easy.py" = ["E402"]
-"src/easyicu/export.py" = ["F401"]
-"src/easyicu/file_utils.py" = ["E731"]
-"src/easyicu/kdigo_aki.py" = ["F841"]
-"src/easyicu/parallel_config.py" = ["F841"]
-"src/easyicu/scores.py" = ["E701", "F401", "F841"]
-"src/easyicu/sepsis_sofa2.py" = ["F822"]
+"src/easyicu/io/export.py" = ["F401"]
+"src/easyicu/scores/__init__.py" = ["E701"]
 "src/easyicu/scripts/extract_features.py" = ["E701", "F401", "F841"]
-"src/easyicu/ts_utils.py" = ["F841"]
 "src/easyicu/visualization/*.py" = ["E741", "F401"]
 "tests/**/*.py" = ["E402", "E702", "E741", "F401", "F841"]
 "tests/research_agent/test_cost.py" = ["F811"]

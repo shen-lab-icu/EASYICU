@@ -2931,7 +2931,6 @@ def _sofa_transition_matrix(pairs: List[Tuple[float, float]]) -> List[Dict[str, 
 
 
 def _sofa_exact_transition_matrix(pairs: List[Tuple[float, float]]) -> List[Dict[str, Any]]:
-    labels = [str(value) for value in range(25)]
     total = len(pairs)
     counts: Counter[Tuple[int, int]] = Counter()
     row_totals: Counter[int] = Counter()
