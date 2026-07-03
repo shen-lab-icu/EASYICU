@@ -757,7 +757,7 @@
     if (!sourceResolved) return '';
     const adapter = sourceResolved.source_adapter || {};
     const rawStatus = String(adapter.status || '');
-    const blocked = rawStatus.includes('blocked');
+    const blocked = sourceResolved.blocked === true || rawStatus.includes('blocked');
     const title = adapter.display_status || adapter.label || (!rawStatus.includes('_') && rawStatus ? rawStatus : t('Source ready', '来源已就绪'));
     const body = adapter.display_reason || adapter.reason || t('Bounded source metadata is ready for the idea ledger.', '有界来源元数据已就绪，可进入 idea 台账。');
     return `<div class="note ${blocked ? 'warn' : 'ok'} mt-12"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t">${esc(title)}</div><div class="d">${esc(body)}</div></div></div>`;

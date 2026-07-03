@@ -611,9 +611,22 @@ def check_prior_art(body: Dict[str, Any]) -> Dict[str, Any]:
     if run_id:
         run_dir = _run_dir(run_id)
         run_dir.mkdir(parents=True, exist_ok=True)
-        (run_dir / "prior_art_check.json").write_text(
-            json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8"
+        # Never clobber a successful persisted review with a blocked
+        # placeholder: the opt-in checkbox resets between visits, so a casual
+        # re-check without network opt-in would otherwise re-block a seed
+        # whose prior-art review already completed.
+        existing_prior = (_load_prior_art(run_id) or {}).get("prior_art") or {}
+        existing_reviewed = bool(existing_prior.get("search_performed")) and (
+            str(existing_prior.get("status") or "") != "search_failed"
         )
+        new_blocked = not bool(prior.get("search_performed"))
+        if new_blocked and existing_reviewed:
+            out["persisted"] = False
+            out["retained_prior_art_status"] = str(existing_prior.get("status") or "")
+        else:
+            (run_dir / "prior_art_check.json").write_text(
+                json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
     return out
 
 
@@ -2556,7 +2569,7 @@ def _prior_art_review(prior_art_check: Optional[Dict[str, Any]]) -> Dict[str, An
         "opportunity_frame": prior.get("opportunity_frame"),
         "next_use": prior.get("next_use"),
         "reason": prior.get("reason")
-        or "Prior-art review has not been run or explicitly skipped.",
+        or "Prior-art review has not been run.",
     }
 
 
@@ -2577,8 +2590,15 @@ def _execution_gate(
         blockers.append("prepare or select a real EasyICU export")
     elif export_status == "partial" or missing:
         blockers.append("re-extract or confirm missing required concepts")
-    if not bool(prior.get("search_performed")):
-        blockers.append("run prior-art review or document an explicit skip")
+    # A prior-art review only satisfies the gate when a search actually
+    # completed: a blocked opt-in placeholder has search_performed=False, and
+    # an attempted-but-failed search (status "search_failed") returned no
+    # reviewable metadata, so neither counts as reviewed.
+    prior_reviewed = bool(prior.get("search_performed")) and (
+        str(prior.get("status") or "") != "search_failed"
+    )
+    if not prior_reviewed:
+        blockers.append("run prior-art review before Agent execution")
     if idea.get("go_no_go") != "recommend":
         blockers.append("resolve idea feasibility before Agent execution")
     return {

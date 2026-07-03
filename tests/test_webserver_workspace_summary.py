@@ -1265,7 +1265,7 @@ def test_idea_mining_web_run_creates_ledger_preexperiment_and_handoff(
     assert seed["execution_gate"]["project_seed_allowed"] is True
     assert seed["execution_gate"]["agent_run_ready_after_human_confirmation"] is False
     assert "re-extract or confirm missing required concepts" in seed["execution_gate"]["blockers"]
-    assert "run prior-art review or document an explicit skip" in seed["execution_gate"]["blockers"]
+    assert "run prior-art review before Agent execution" in seed["execution_gate"]["blockers"]
     seed_dump = json.dumps(seed, ensure_ascii=False)
     assert str(export_dir) not in seed_dump
     assert "stay_id" not in seed_dump
@@ -1281,7 +1281,7 @@ def test_idea_mining_web_run_creates_ledger_preexperiment_and_handoff(
     )
     assert blocked_start.status_code == 400
     assert blocked_start.json()["detail"]["error"] == "agent_project_execution_gate_blocked"
-    assert "run prior-art review or document an explicit skip" in blocked_start.json()["detail"]["blockers"]
+    assert "run prior-art review before Agent execution" in blocked_start.json()["detail"]["blockers"]
     assert (
         tmp_path
         / "idea_cfg"

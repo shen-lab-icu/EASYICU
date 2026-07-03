@@ -443,11 +443,16 @@ def _run_summary(
     hashed_count = int(artifact_history.get("hashed_count") or 0)
     review_passed = int(reviewer_gate.get("passed_count") or 0)
     review_total = int(reviewer_gate.get("total_count") or 0)
-    title = _short_text(
-        run_context.get("question")
-        if isinstance(run_context, dict)
-        else None
-    ) or "No active local Agent run"
+    run_ctx = run_context if isinstance(run_context, dict) else {}
+    # question is optional on /api/jobs/agent-run (preflight runs usually
+    # have none) — fall back to the study/run identity so a loaded review
+    # never renders the "No active local Agent run" empty-state header.
+    title = (
+        _short_text(run_ctx.get("question"))
+        or _short_text(run_ctx.get("study_id"))
+        or (f"Run {run_ctx.get('run_id')}" if run_ctx.get("run_id") else "")
+        or "No active local Agent run"
+    )
     source_label = _short_text(
         source.get("label")
         or source.get("database")
@@ -798,11 +803,16 @@ def _discovery_pipeline() -> Dict[str, Any]:
         _pipeline_stage(
             "prior_art",
             "Prior-art review / 既有研究审阅",
-            "passed" if prior_art.get("search_performed") else "needs_review",
+            (
+                "passed"
+                if prior_art.get("search_performed")
+                and str(prior_art.get("status") or "") != "search_failed"
+                else "needs_review"
+            ),
             str(prior_art.get("status") or "not_checked"),
             str(
                 prior_art.get("reason")
-                or "Run or explicitly skip bounded prior-art review before novelty claims. / 在新颖性表述前运行或明确跳过有界 prior-art 审阅。"
+                or "Run bounded prior-art review before novelty claims. / 在新颖性表述前完成有界 prior-art 审阅。"
             ),
         ),
         _pipeline_stage(
@@ -1154,7 +1164,10 @@ def _renderer_preview(
 ) -> Dict[str, Any]:
     if renderer_id == "concept_coverage_matrix":
         quality = payloads.get("quality_gate.json", {}).get("quality") or []
-        missing = payloads.get("missingness_audit.json", {}).get("features") or []
+        # Both missingness payload builders emit the feature list under
+        # "rows" (agent_outputs metadata + full paths); there is no
+        # "features" key, so that lookup left this fallback permanently dead.
+        missing = payloads.get("missingness_audit.json", {}).get("rows") or []
         return {
             "rows": [
                 {
@@ -1259,11 +1272,21 @@ def _figure_consistent(
 ) -> bool:
     if not figure:
         return True
-    return bool(
-        payloads.get("source_run_manifest.json")
-        or payloads.get("evidence_ledger.json")
-        or figure.get("figures")
-        or figure.get("panels")
+    rows = figure.get("figures") if isinstance(figure.get("figures"), list) else []
+    if not rows:
+        # A gallery payload with no figure entries has nothing to check.
+        return True
+    # evidence_ledger.json must NOT satisfy this check: read_run_review
+    # refuses run dirs without it, so using it as a fallback made the check
+    # unconditionally pass. Figures count as source-consistent only when the
+    # run manifest is present and every gallery entry points back to its
+    # figure contract.
+    if not payloads.get("source_run_manifest.json"):
+        return False
+    return all(
+        str(row.get("contract_path") or "").strip()
+        for row in rows
+        if isinstance(row, dict)
     )
 
 

@@ -2317,7 +2317,7 @@ def test_native_agent_run_controls_are_reconnectable_and_cancelable() -> None:
     assert "seedGateBlocksRun" in agent_js
     assert "project_seed_dir" in agent_js
     assert "Agent preflight checks are not ready" in agent_js
-    assert "Run prior-art review or document a skip" in agent_js
+    assert "Run prior-art review before Agent execution" in agent_js
     assert "Refresh this project from Idea Mining" in agent_js
 
 
