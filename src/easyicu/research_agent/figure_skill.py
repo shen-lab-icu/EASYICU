@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -32,6 +33,21 @@ from .publication_figures import (
 from .robustness_panel import RobustnessPanel, load_robustness_panel
 from .schema import AnalysisPlan, EvidenceRecord, ResearchContext, ValidationFinding
 from .study_design import infer_study_design_family
+
+
+def _close_leaked_figures() -> None:
+    """Close matplotlib figures left open by a render that raised mid-way.
+
+    pyplot is imported lazily inside the render methods, so only close when
+    it is actually loaded — importing it here would break the skip path on
+    installs without matplotlib.
+    """
+    plt = sys.modules.get("matplotlib.pyplot")
+    if plt is not None:
+        try:
+            plt.close("all")
+        except Exception:
+            pass
 
 
 @dataclass
@@ -141,6 +157,7 @@ class PublicationFigureSkill:
                         prompt_pack_version=prompt_pack_version,
                     )
                 except Exception as exc:
+                    _close_leaked_figures()
                     return self._write_skip_summary(
                         reason="robustness_panel_render_failed",
                         context=context,
@@ -219,6 +236,7 @@ class PublicationFigureSkill:
                     prompt_pack_version=prompt_pack_version,
                 )
             except Exception as exc:
+                _close_leaked_figures()
                 finding = ValidationFinding(
                     validator=self.name,
                     severity="warning",
@@ -252,6 +270,7 @@ class PublicationFigureSkill:
                     prompt_pack_version=prompt_pack_version,
                 )
             except Exception as exc:
+                _close_leaked_figures()
                 return self._write_skip_summary(
                     reason="robustness_panel_render_failed",
                     context=context,
@@ -1593,7 +1612,13 @@ def _select_existing_step_publication_figure_bundle(
     records = evidence.records()
     for order, record in enumerate(records):
         metadata = record.metadata or {}
-        step_id = str(metadata.get("step_id") or "")
+        # Step association lives on the record itself (produced_by_step);
+        # metadata["step_id"] is never populated by the runner registration
+        # path, and keying on it alone collapsed every step's bundle into the
+        # ("", stem) group so contracts could attach to another step's figure.
+        step_id = str(
+            metadata.get("step_id") or getattr(record, "produced_by_step", "") or ""
+        )
         if record.kind == "figure":
             if _is_run_level_publication_figure(record):
                 continue

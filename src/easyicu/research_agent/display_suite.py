@@ -24,6 +24,36 @@ from .schema import AnalysisPlan, ResearchContext
 from .study_design import infer_study_design_family
 
 
+# A "result-bearing" figure contract is one whose text carries the study's
+# actual findings (as opposed to audit/provenance displays). The base tokens
+# cover effect-style analyses; each study-design family adds its own result
+# vocabulary so descriptive/phenotyping/time-to-event runs are not fail-closed
+# by association/prediction-only wording (their playbooks explicitly forbid
+# forcing effect language into the figures).
+_RESULT_LIKE_BASE_TOKENS = (
+    "association",
+    "effect",
+    "risk ratio",
+    "risk difference",
+    "odds ratio",
+    "sensitivity",
+    "robustness",
+    "prediction",
+)
+_RESULT_LIKE_FAMILY_TOKENS: Dict[str, tuple] = {
+    "descriptive": ("prevalence", "incidence", "distribution", "event rate", "median"),
+    "phenotyping": ("phenotype", "cluster", "embedding", "stability", "consensus"),
+    "time_to_event": ("hazard", "survival", "cumulative incidence", "kaplan"),
+    "prediction": ("calibration", "discrimination", "auroc", "roc"),
+    "causal_emulation": (
+        "causal contrast",
+        "target trial",
+        "iptw",
+        "g-computation",
+        "average treatment effect",
+    ),
+}
+
 _TABLE_ONE_DIRECT_TERMS = (
     "table_one",
     "table one",
@@ -168,6 +198,10 @@ def summarize_display_suite_status(
         if record.kind == "table":
             table_keys.add(_display_table_key(record.relative_path))
 
+    family = infer_study_design_family(context)
+    result_like_tokens = _RESULT_LIKE_BASE_TOKENS + _RESULT_LIKE_FAMILY_TOKENS.get(
+        family, ()
+    )
     contract_paths = figure_contract_paths(run_dir)
     primary_contract_paths = [
         path
@@ -240,19 +274,7 @@ def summarize_display_suite_status(
                     primary_has_absolute_risk_visual = True
                 elif tier == "supporting_step":
                     supporting_has_absolute_risk_visual = True
-        if any(
-            token in text.lower()
-            for token in (
-                "association",
-                "effect",
-                "risk ratio",
-                "risk difference",
-                "odds ratio",
-                "sensitivity",
-                "robustness",
-                "prediction",
-            )
-        ):
+        if any(token in text.lower() for token in result_like_tokens):
             result_like_contracts += 1
             if tier == "primary_publication":
                 primary_result_like_contracts += 1
@@ -280,7 +302,6 @@ def summarize_display_suite_status(
         )
     if len(categories) < 3:
         errors.append("Display suite covers fewer than three article content categories.")
-    family = infer_study_design_family(context)
     if (
         family == "association"
         and primary_result_like_contracts > 0

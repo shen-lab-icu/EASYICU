@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence
 
@@ -109,19 +110,24 @@ def figure_contract_text(raw: Mapping[str, Any]) -> str:
 
 
 def panel_text(panel: Mapping[str, Any]) -> str:
-    return " ".join(
-        [
-            str(panel.get("panel_id") or ""),
-            str(panel.get("title") or ""),
-            str(panel.get("role") or ""),
-            str(panel.get("claim") or ""),
-            str(panel.get("review_risk") or ""),
-            json.dumps(panel.get("metadata") or {}, ensure_ascii=False, default=str),
-        ]
-    ).lower()
+    # Newline-joined so multiword tokens cannot accidentally span two fields;
+    # per-field whitespace is collapsed so double spaces cannot break them.
+    parts = [
+        str(panel.get("panel_id") or ""),
+        str(panel.get("title") or ""),
+        str(panel.get("role") or ""),
+        str(panel.get("claim") or ""),
+        str(panel.get("review_risk") or ""),
+        json.dumps(panel.get("metadata") or {}, ensure_ascii=False, default=str),
+    ]
+    return "\n".join(re.sub(r"\s+", " ", part.strip().lower()) for part in parts)
 
 
 def panel_chart_type(panel: Mapping[str, Any]) -> str:
+    # Single source of truth for panel chart-family classification. Both the
+    # display-suite gate and the article figure-strategy audit call this;
+    # keeping one classifier prevents the same panel being reported with two
+    # different chart types in sibling audit artifacts.
     metadata = panel.get("metadata") if isinstance(panel.get("metadata"), Mapping) else {}
     explicit = str(
         panel.get("chart_type")
@@ -131,8 +137,13 @@ def panel_chart_type(panel: Mapping[str, Any]) -> str:
         or ""
     ).strip().lower()
     if explicit:
-        return explicit.replace(" ", "_")
+        return "_".join(explicit.split())
     text = panel_text(panel)
+    if any(
+        token in text
+        for token in ("calibration", "roc", "curve", "kaplan", "cumulative incidence")
+    ):
+        return "curve"
     if any(token in text for token in ("heatmap", "matrix", "jaccard", "overlap")):
         return "heatmap"
     if any(
@@ -156,18 +167,19 @@ def panel_chart_type(panel: Mapping[str, Any]) -> str:
         return "dot_interval"
     if any(
         token in text
-        for token in ("missingness", "availability", "denominator", "included", "count")
-    ):
-        return "bar"
-    if any(token in text for token in ("flow", "attrition", "eligibility")):
-        return "flow"
-    if any(
-        token in text
         for token in ("distribution", "density", "histogram", "violin", "ridge")
     ):
         return "distribution"
-    if any(token in text for token in ("calibration", "roc", "curve")):
-        return "curve"
+    if any(
+        token in text
+        for token in ("flow", "attrition", "eligibility", "protocol", "schematic")
+    ):
+        return "flow"
+    if any(
+        token in text
+        for token in ("missingness", "availability", "denominator", "included", "count")
+    ):
+        return "bar"
     return "unspecified"
 
 

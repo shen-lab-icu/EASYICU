@@ -466,14 +466,19 @@ def cohort_definition_sensitivity_comparison_code() -> str:
         los_col = _first_existing(["los_icu", "icu_los_days", "los_days"])
         stay_col = _first_existing(["stay_id", "icustay_id", "icu_stay_id"])
         outcome_col = _first_existing(["death", "hospital_mortality", "mortality"])
-        sofa_col = _first_existing(["sep3_sofa2_max", "sepsis3", "sofa2"])
+        # Only true Sepsis-3 flags are accepted as the exposure. A raw SOFA-2
+        # score column is deliberately NOT a fallback: sofa2>=1 is "any organ
+        # dysfunction", not Sepsis-3, and silently relabelling it would put a
+        # wrong exposure definition into the sensitivity evidence.
+        sofa_col = _first_existing(["sep3_sofa2_max", "sepsis3"])
         if outcome_col is None or sofa_col is None:
             summary = {
                 "step_id": current_step_id,
                 "analysis_family": "cohort_definition_sensitivity",
                 "status": "blocked",
                 "blocking_reason": (
-                    "Required outcome or Sepsis-3/SOFA exposure column was absent."
+                    "Required outcome or Sepsis-3 exposure flag column was absent "
+                    "(a raw SOFA-2 score is not accepted as a Sepsis-3 proxy)."
                 ),
                 "cohort_path": str(cohort_path),
             }

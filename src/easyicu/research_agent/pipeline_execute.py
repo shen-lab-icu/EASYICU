@@ -53,6 +53,7 @@ from .agents import (
     VisualizationAgent,
 )
 from .article_contract import (
+    article_contract_audit_payload,
     summarize_article_contract_coverage,
     validate_run_against_article_contract,
 )
@@ -3791,7 +3792,7 @@ else:
         article_contract_path = run_dir / "article_contract_audit.json"
         article_contract_path.write_text(
             json.dumps(
-                article_contract_status,
+                article_contract_audit_payload(article_contract_status),
                 indent=2,
                 ensure_ascii=False,
                 default=str,

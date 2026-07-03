@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Set
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .figure_contracts import figure_contract_paths, panel_chart_type, panel_text
 from .schema import ResearchContext, ValidationFinding
 from .study_design import infer_study_design_family
 from .study_design_playbook import StudyDesignFamily
@@ -371,20 +372,9 @@ def _normalise(text: Any) -> str:
     return re.sub(r"\s+", " ", str(text or "").strip().lower())
 
 
-def _contract_paths(run_dir: Path) -> List[Path]:
-    paths = [
-        *run_dir.glob("publication_figures/*.figure_contract.json"),
-        *run_dir.glob("steps/*/outputs/*.figure_contract.json"),
-    ]
-    seen: Set[str] = set()
-    unique: List[Path] = []
-    for path in sorted(paths):
-        key = str(path.resolve())
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(path)
-    return unique
+# Shared with display_suite / review_artifacts via figure_contracts so the
+# audits cannot disagree about which contracts exist.
+_contract_paths = figure_contract_paths
 
 
 def _is_primary_publication_contract(path: Path, run_dir: Path) -> bool:
@@ -395,19 +385,7 @@ def _is_primary_publication_contract(path: Path, run_dir: Path) -> bool:
     return path.name.endswith(".figure_contract.json")
 
 
-def _panel_text(panel: Mapping[str, Any]) -> str:
-    return _normalise(
-        "\n".join(
-            [
-                str(panel.get("panel_id") or ""),
-                str(panel.get("title") or ""),
-                str(panel.get("role") or ""),
-                str(panel.get("claim") or ""),
-                str(panel.get("review_risk") or ""),
-                json.dumps(panel.get("metadata") or {}, ensure_ascii=False, default=str),
-            ]
-        )
-    )
+_panel_text = panel_text
 
 
 def _panel_role(panel: Mapping[str, Any]) -> str:
@@ -421,45 +399,7 @@ def _panel_role(panel: Mapping[str, Any]) -> str:
     )
 
 
-def _panel_chart_type(panel: Mapping[str, Any]) -> str:
-    metadata = panel.get("metadata") if isinstance(panel.get("metadata"), Mapping) else {}
-    explicit = _normalise(
-        panel.get("chart_type")
-        or panel.get("visual_form")
-        or metadata.get("chart_type")
-        or metadata.get("visual_form")
-        or ""
-    )
-    if explicit:
-        return explicit.replace(" ", "_")
-    text = _panel_text(panel)
-    if any(token in text for token in ("calibration", "roc", "curve", "kaplan", "cumulative incidence")):
-        return "curve"
-    if any(token in text for token in ("heatmap", "matrix", "jaccard", "overlap")):
-        return "heatmap"
-    if any(
-        token in text
-        for token in (
-            "forest",
-            "odds ratio",
-            "odds-ratio",
-            "risk ratio",
-            "risk-ratio",
-            "hazard ratio",
-            "hazard-ratio",
-            "ratio-scale",
-        )
-    ):
-        return "forest"
-    if any(token in text for token in ("risk difference", "prevalence", "event rate", "absolute risk")):
-        return "dot_interval"
-    if any(token in text for token in ("distribution", "density", "histogram", "violin", "ridge")):
-        return "distribution"
-    if any(token in text for token in ("flow", "attrition", "eligibility", "protocol", "schematic")):
-        return "flow"
-    if any(token in text for token in ("missingness", "availability", "denominator", "included", "count")):
-        return "bar"
-    return "unspecified"
+_panel_chart_type = panel_chart_type
 
 
 def _role_matches_panel(role: FigureRoleStrategy, panel: Mapping[str, Any]) -> bool:
@@ -484,16 +424,59 @@ def _role_has_required_text(role: FigureRoleStrategy, panels: Sequence[Mapping[s
 def _acceptable_chart_match(role: FigureRoleStrategy, chart_type: str) -> bool:
     if not role.acceptable_chart_types:
         return True
+    if chart_type == "unspecified":
+        # The panel already matched this role by name/required text but its
+        # chart family could not even be inferred. Do not hard-fail the whole
+        # publication gate on a formatting guess: chartless suites are still
+        # caught by the distinct-chart-family minimum below.
+        return True
     accepted = {item.replace(" ", "_") for item in role.acceptable_chart_types}
     if chart_type in accepted:
         return True
+    # Inferred chart types are coarse families; map each family onto every
+    # concrete chart type the role strategies declare, otherwise a correctly
+    # roled panel without explicit chart_type metadata fails closed (e.g. a
+    # calibration panel infers "curve" and was rejected against
+    # "calibration_curve").
     family_aliases = {
-        "dot_interval": {"dot_interval_absolute_risk", "event_rate_panel", "prevalence_panel"},
-        "curve": {"absolute_risk_curve", "marginal_probability_plot", "kaplan_meier_curve", "cumulative_incidence_curve"},
+        "dot_interval": {
+            "dot_interval_absolute_risk",
+            "event_rate_panel",
+            "prevalence_panel",
+            "metric_dot_interval",
+            "risk_difference_panel",
+        },
+        "curve": {
+            "absolute_risk_curve",
+            "marginal_probability_plot",
+            "kaplan_meier_curve",
+            "cumulative_incidence_curve",
+            "calibration_curve",
+            "calibration_belt",
+            "roc_curve",
+            "precision_recall_curve",
+            "effect_curve",
+        },
         "bar": {"availability_panel", "feature_availability_panel", "denominator_panel", "prevalence_panel"},
-        "heatmap": {"coverage_heatmap", "missingness_matrix", "cluster_heatmap", "profile_heatmap"},
+        "heatmap": {
+            "coverage_heatmap",
+            "missingness_matrix",
+            "cluster_heatmap",
+            "profile_heatmap",
+            "feature_missingness_matrix",
+            "consensus_matrix",
+        },
         "forest": {"sensitivity_forest", "hazard_ratio_forest", "coefficient_plot"},
         "flow": {"cohort_flow", "target_trial_schematic", "protocol_table", "timeline_diagram"},
+        "distribution": {
+            "distribution_plot",
+            "density",
+            "histogram",
+            "ridge",
+            "prevalence_panel",
+            "followup_distribution",
+            "weight_distribution",
+        },
     }
     return bool(family_aliases.get(chart_type, set()) & accepted)
 
