@@ -977,6 +977,48 @@ def _load_cohort_hygiene_cautions(run_dir: Path) -> List[str]:
     return cautions
 
 
+def _current_primary_model_output_dirs(run_dir: Path) -> List[Path]:
+    manifest_path = Path(run_dir) / "manifest_partial.json"
+    if not manifest_path.exists():
+        return []
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return []
+    records = manifest.get("per_step_records") if isinstance(manifest, dict) else []
+    if not isinstance(records, list):
+        return []
+    dirs: List[Path] = []
+    for record in records:
+        if not isinstance(record, dict) or record.get("status") != "ok":
+            continue
+        step_id = str(record.get("step_id") or "").strip()
+        if not step_id:
+            continue
+        lowered = step_id.lower()
+        if any(token in lowered for token in ("figure", "repair", "audit")):
+            continue
+        summary = record.get("step_summary")
+        summary = summary if isinstance(summary, dict) else {}
+        has_primary_model = any(
+            summary.get(key)
+            for key in (
+                "primary_model",
+                "primary_adjusted_association",
+                "primary_association",
+            )
+        )
+        textual_primary_model = "primary" in lowered and any(
+            token in lowered for token in ("association", "model", "effect")
+        )
+        if not (has_primary_model or textual_primary_model):
+            continue
+        outputs = Path(run_dir) / "steps" / step_id / "outputs"
+        if outputs.exists():
+            dirs.append(outputs)
+    return dirs
+
+
 def _load_regression_covariates(run_dir: Path) -> List[str]:
     """Best-effort: the model's adjustment set (used for the gold-free
     overadjustment / leakage checks).
@@ -989,6 +1031,10 @@ def _load_regression_covariates(run_dir: Path) -> List[str]:
     model-level OR summary is not invisible to the check. Missing/malformed
     sources degrade to an empty list.
     """
+    for outputs_dir in _current_primary_model_output_dirs(run_dir):
+        covariates = read_adjustment_covariates(outputs_dir)
+        if covariates:
+            return covariates
     return read_adjustment_covariates(run_dir)
 
 

@@ -10,12 +10,17 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from easyicu.research_agent.audits.validators import (
     FigureContractQualityValidator,
     FigureSourceDataValidator,
 )
 from easyicu.research_agent.pipeline import (
+    _context_axis_label,
+    _render_cohort_overlap_publication_bundle_from_prior_outputs as cohort_overlap_rescue,
+    _render_missingness_publication_bundle_from_prior_outputs as missingness_rescue,
+    _render_publication_bundle_from_prior_outputs_for_step as routed_rescue,
     _render_association_publication_bundle_from_prior_outputs as rescue,
     _render_sensitivity_publication_bundle_from_prior_outputs as sensitivity_rescue,
 )
@@ -26,6 +31,63 @@ def _make_parent_step(run_dir: Path, csv_name: str, columns: dict) -> None:
     out = run_dir / "steps" / "03_association_model" / "outputs"
     out.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(columns).to_csv(out / csv_name, index=False)
+
+
+def test_context_axis_label_wraps_metric_group_pairs():
+    assert _context_axis_label("Death Risk", "Sepsis-3 Negative") == (
+        "Sepsis-3 Negative\nDeath Risk"
+    )
+    assert _context_axis_label("Exposure prevalence", "Sepsis-3 prevalence") == (
+        "Sepsis-3\nprevalence"
+    )
+
+
+def test_missingness_rescue_recomputes_percentages_from_counts(tmp_path: Path):
+    parent = (
+        tmp_path
+        / "steps"
+        / "02_baseline_characteristics_and_data_quality"
+        / "outputs"
+    )
+    parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "concept": ["resp", "lact", "sep3_sofa2"],
+            "label": ["Respiratory rate", "Lactate", "Sepsis-3 source flag"],
+            "n_total": [74829, 74829, 74829],
+            "value_missing_n": [188, 30490, 0],
+            "value_missing_pct": [0.2512394927, 40.7462347486, 0.0],
+            "measured_one_n": [74641, 44339, 28229],
+            "measured_one_pct": [99.7487605073, 59.2537652514, 37.7246789346],
+            "value_present_but_measured_zero_n": [0, 0, 46600],
+        }
+    ).to_csv(parent / "missingness_measurement_audit.csv", index=False)
+    out = (
+        tmp_path
+        / "steps"
+        / "02_baseline_characteristics_and_data_quality_figure"
+        / "outputs"
+    )
+
+    rid = missingness_rescue(
+        run_dir=tmp_path,
+        current_step_id="02_baseline_characteristics_and_data_quality_figure",
+        out_dir=out,
+    )
+
+    assert rid == "missingness_publication_bundle_from_parent_outputs_v1"
+    source = pd.read_csv(out / "missingness_measurement_panel_source_data.csv")
+    resp = source[source["variable"] == "resp"].iloc[0]
+    source_flag = source[source["variable"] == "sep3_sofa2"].iloc[0]
+    assert resp["missing_pct"] == pytest.approx(0.2512394927)
+    assert resp["measured_pct"] == pytest.approx(99.7487605073)
+    assert source_flag["measured_pct"] == pytest.approx(100.0)
+    contract = json.loads(
+        (out / "missingness_measurement_panel.figure_contract.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert len(contract["panels"]) == 2
 
 
 def test_rescue_handles_ci_lower_upper_variant(tmp_path: Path):
@@ -68,7 +130,6 @@ def test_rescue_handles_ci_lower_upper_variant(tmp_path: Path):
     )
     assert source_findings == []
 
-
 def test_rescue_handles_canonical_or_ci_columns(tmp_path: Path):
     # our deterministic fallback style: or_ci_low/or_ci_high
     _make_parent_step(
@@ -87,6 +148,232 @@ def test_rescue_handles_canonical_or_ci_columns(tmp_path: Path):
     assert rid is not None
 
 
+def test_rescue_promotes_prevalence_and_absolute_risk_context(tmp_path: Path):
+    parent = tmp_path / "steps" / "03_association_model" / "outputs"
+    parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "variable": ["const", "exposed", "age"],
+            "odds_ratio": [0.10, 1.20, 1.04],
+            "ci_lower": [0.02, 1.05, 1.02],
+            "ci_upper": [0.50, 1.40, 1.06],
+        }
+    ).to_csv(parent / "adjusted_odds_ratios.csv", index=False)
+    pd.DataFrame(
+        {
+            "exposure": ["exposed"],
+            "definition": ["binary exposure"],
+            "n_denominator": [1000],
+            "n_positive": [320],
+            "prevalence": [0.32],
+            "prevalence_pct": [32.0],
+            "ci_low": [0.291],
+            "ci_high": [0.350],
+            "ci_low_pct": [29.1],
+            "ci_high_pct": [35.0],
+        }
+    ).to_csv(parent / "exposure_prevalence.csv", index=False)
+    pd.DataFrame(
+        {
+            "exposure_label": ["Exposure negative", "Exposure positive"],
+            "n": [680, 320],
+            "event_n": [61, 48],
+            "outcome_risk": [0.0897, 0.1500],
+            "outcome_risk_pct": [8.97, 15.0],
+            "ci_low": [0.071, 0.115],
+            "ci_high": [0.111, 0.193],
+            "ci_low_pct": [7.1, 11.5],
+            "ci_high_pct": [11.1, 19.3],
+        }
+    ).to_csv(parent / "outcome_by_exposure.csv", index=False)
+    out = tmp_path / "steps" / "03_association_model_figure" / "outputs"
+    out.mkdir(parents=True, exist_ok=True)
+
+    rid = rescue(
+        run_dir=tmp_path,
+        current_step_id="03_association_model_figure",
+        out_dir=out,
+    )
+
+    assert rid == "association_publication_bundle_from_parent_outputs_v3"
+    contract = json.loads(
+        (out / "publication_figure.figure_contract.json").read_text(encoding="utf-8")
+    )
+    assert [panel["role"] for panel in contract["panels"]] == [
+        "descriptive_result",
+        "primary_estimand",
+    ]
+    assert contract["panels"][0]["metadata"]["chart_type"] == "dot_interval_absolute_risk"
+    assert (out / "publication_figure_prevalence_source_data.csv").exists()
+    assert (out / "publication_figure_absolute_risk_source_data.csv").exists()
+    source_findings = FigureSourceDataValidator().audit(
+        step=AnalysisStep(
+            step_id="03_association_model_figure",
+            intent="Render the publication figure declared by step '03_association_model'.",
+        ),
+        out_dir=out,
+        run_dir=tmp_path,
+        step_summary={"rendering_only": True},
+    )
+    assert source_findings == []
+
+
+def test_rescue_uses_primary_summary_and_semantic_binary_risk_labels(tmp_path: Path):
+    parent = tmp_path / "steps" / "03_association_model" / "outputs"
+    parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "model": ["primary_adjusted"],
+            "outcome": ["death"],
+            "exposure": ["treated"],
+            "effect_scale": ["odds_ratio"],
+            "point_estimate": [1.18],
+            "ci_low": [1.04],
+            "ci_high": [1.34],
+        }
+    ).to_csv(parent / "adjusted_association_death.csv", index=False)
+    pd.DataFrame(
+        {
+            "term": ["treated", "age", "lab_missing"],
+            "odds_ratio": [1.18, 1.03, 2.10],
+            "ci_lower": [1.04, 1.01, 0.80],
+            "ci_upper": [1.34, 1.05, 5.50],
+        }
+    ).to_csv(parent / "adjusted_association_death_full_coefficients.csv", index=False)
+    pd.DataFrame(
+        {
+            "exposure": ["treated"],
+            "n_denominator": [1000],
+            "n_positive": [320],
+            "prevalence_pct": [32.0],
+            "ci_low_pct": [29.1],
+            "ci_high_pct": [35.0],
+        }
+    ).to_csv(parent / "exposure_prevalence.csv", index=False)
+    pd.DataFrame(
+        {
+            "treated": [0, 1, "risk_difference_1_minus_0"],
+            "n_total": [680, 320, 1000],
+            "death_events": [61, 48, 109],
+            "death_risk": [0.0897, 0.1500, 0.0603],
+            "death_risk_ci_low": [0.071, 0.115, None],
+            "death_risk_ci_high": [0.111, 0.193, None],
+        }
+    ).to_csv(parent / "outcome_by_exposure.csv", index=False)
+    out = tmp_path / "steps" / "03_association_model_figure" / "outputs"
+    out.mkdir(parents=True, exist_ok=True)
+
+    rid = rescue(
+        run_dir=tmp_path,
+        current_step_id="03_association_model_figure",
+        out_dir=out,
+    )
+
+    assert rid == "association_publication_bundle_from_parent_outputs_v3"
+    source = pd.read_csv(out / "publication_figure_source_data.csv")
+    assert source["source_table"].tolist() == ["adjusted_association_death.csv"]
+    assert source["exposure"].tolist() == ["treated"]
+    absolute = pd.read_csv(out / "publication_figure_absolute_risk_source_data.csv")
+    assert absolute["plot_group_label"].tolist() == [
+        "Treated Negative",
+        "Treated Positive",
+    ]
+    assert absolute["plot_ci_low_pct"].tolist() == pytest.approx([7.1, 11.5])
+    contract = json.loads(
+        (out / "publication_figure.figure_contract.json").read_text(encoding="utf-8")
+    )
+    assert contract["panels"][1]["title"] == "Primary adjusted association"
+    assert contract["panels"][1]["metadata"]["chart_type"] == "dot_interval"
+    source_findings = FigureSourceDataValidator().audit(
+        step=AnalysisStep(
+            step_id="03_association_model_figure",
+            intent="Render the publication figure declared by step '03_association_model'.",
+        ),
+        out_dir=out,
+        run_dir=tmp_path,
+        step_summary={"rendering_only": True},
+    )
+    assert source_findings == []
+
+
+def test_routed_rescue_prioritizes_primary_association_over_missingness(
+    tmp_path: Path,
+):
+    parent = (
+        tmp_path
+        / "steps"
+        / "03_primary_prevalence_and_adjusted_association"
+        / "outputs"
+    )
+    parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "term": ["const", "exposed"],
+            "effect_scale": ["odds_ratio", "odds_ratio"],
+            "estimate": [0.10, 1.20],
+            "ci_low": [0.02, 1.05],
+            "ci_high": [0.50, 1.40],
+        }
+    ).to_csv(parent / "adjusted_association_death.csv", index=False)
+    pd.DataFrame(
+        {
+            "exposure": ["exposed"],
+            "n_denominator": [1000],
+            "n_positive": [320],
+            "prevalence_pct": [32.0],
+            "ci_low_pct": [29.1],
+            "ci_high_pct": [35.0],
+        }
+    ).to_csv(parent / "sepsis3_prevalence.csv", index=False)
+    pd.DataFrame(
+        {
+            "sepsis3_label": ["Exposure negative", "Exposure positive"],
+            "n": [680, 320],
+            "death_n": [61, 48],
+            "death_risk_pct": [8.97, 15.0],
+            "ci_low_pct": [7.1, 11.5],
+            "ci_high_pct": [11.1, 19.3],
+        }
+    ).to_csv(parent / "outcome_by_sepsis3.csv", index=False)
+
+    missingness_parent = (
+        tmp_path
+        / "steps"
+        / "02_baseline_characteristics_and_data_quality"
+        / "outputs"
+    )
+    missingness_parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "concept": ["lactate"],
+            "label": ["Lactate"],
+            "n_total": [1000],
+            "value_missing_n": [400],
+            "value_missing_pct": [40.0],
+            "measured_one_n": [600],
+            "measured_one_pct": [60.0],
+        }
+    ).to_csv(missingness_parent / "missingness_measurement_audit.csv", index=False)
+
+    out = (
+        tmp_path
+        / "steps"
+        / "03_primary_prevalence_and_adjusted_association_figure"
+        / "outputs"
+    )
+
+    rid = routed_rescue(
+        run_dir=tmp_path,
+        current_step_id="03_primary_prevalence_and_adjusted_association_figure",
+        out_dir=out,
+        step_text="Render primary result figure with missingness/data-quality context.",
+    )
+
+    assert rid == "association_publication_bundle_from_parent_outputs_v3"
+    assert (out / "publication_figure.png").exists()
+    assert not (out / "missingness_measurement_panel.png").exists()
+
+
 def test_rescue_returns_none_without_or_ci_table(tmp_path: Path):
     _make_parent_step(
         tmp_path, "prevalence.csv", {"group": ["a"], "rate": [0.3]}
@@ -94,6 +381,186 @@ def test_rescue_returns_none_without_or_ci_table(tmp_path: Path):
     out = tmp_path / "steps" / "03_fig" / "outputs"
     out.mkdir(parents=True, exist_ok=True)
     assert rescue(run_dir=tmp_path, current_step_id="03_fig", out_dir=out) is None
+
+
+def test_cohort_overlap_rescue_writes_traceable_multipanel_bundle(tmp_path: Path):
+    parent = (
+        tmp_path
+        / "steps"
+        / "04_alternative_eligibility_definitions_and_overlap"
+        / "outputs"
+    )
+    parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "definition_id": ["primary", "relax_temp", "tight_los"],
+            "definition_label": [
+                "Primary cohort",
+                "Relax temperature requirement",
+                "Tighten ICU length-of-stay threshold",
+            ],
+            "definition_type": ["primary", "alternative", "alternative"],
+            "criteria": ["primary", "no temp", "los >=2"],
+            "n_included": [100, 112, 72],
+            "n_excluded": [50, 38, 78],
+            "included_pct_of_rows": [66.7, 74.7, 48.0],
+            "overlap_with_primary_n": [100, 100, 72],
+            "overlap_with_primary_pct_of_primary": [100.0, 100.0, 72.0],
+            "overlap_with_primary_pct_of_definition": [100.0, 89.3, 100.0],
+            "moved_in_vs_primary_n": [0, 12, 0],
+            "moved_out_vs_primary_n": [0, 0, 28],
+        }
+    ).to_csv(parent / "alternative_cohort_attrition.csv", index=False)
+    rows = []
+    sizes = {"primary": 100, "relax_temp": 112, "tight_los": 72}
+    intersections = {
+        ("primary", "primary"): 100,
+        ("primary", "relax_temp"): 100,
+        ("primary", "tight_los"): 72,
+        ("relax_temp", "primary"): 100,
+        ("relax_temp", "relax_temp"): 112,
+        ("relax_temp", "tight_los"): 72,
+        ("tight_los", "primary"): 72,
+        ("tight_los", "relax_temp"): 72,
+        ("tight_los", "tight_los"): 72,
+    }
+    for definition_a, n_a in sizes.items():
+        for definition_b, n_b in sizes.items():
+            intersection = intersections[(definition_a, definition_b)]
+            union = n_a + n_b - intersection
+            rows.append(
+                {
+                    "definition_a": definition_a,
+                    "definition_b": definition_b,
+                    "n_a": n_a,
+                    "n_b": n_b,
+                    "intersection_n": intersection,
+                    "union_n": union,
+                    "jaccard": intersection / union,
+                    "a_in_b_pct": intersection / n_a * 100,
+                    "b_in_a_pct": intersection / n_b * 100,
+                }
+            )
+    pd.DataFrame(rows).to_csv(parent / "cohort_overlap_matrix.csv", index=False)
+
+    out = (
+        tmp_path
+        / "steps"
+        / "04_alternative_eligibility_definitions_and_overlap_figure"
+        / "outputs"
+    )
+    out.mkdir(parents=True, exist_ok=True)
+
+    rid = cohort_overlap_rescue(
+        run_dir=tmp_path,
+        current_step_id="04_alternative_eligibility_definitions_and_overlap_figure",
+        out_dir=out,
+    )
+
+    assert rid == "cohort_overlap_publication_bundle_from_parent_outputs_v1"
+    assert (out / "publication_figure.png").exists()
+    assert (out / "publication_figure.svg").exists()
+    assert (out / "publication_figure_definition_source_data.csv").exists()
+    assert (out / "publication_figure_overlap_source_data.csv").exists()
+    contract_path = out / "publication_figure.figure_contract.json"
+    contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    assert [panel["panel_id"] for panel in contract["panels"]] == ["A", "B", "C"]
+    assert FigureContractQualityValidator().audit_contract_file(
+        contract_path,
+        manuscript_facing=True,
+    ) == []
+    source_findings = FigureSourceDataValidator().audit(
+        step=AnalysisStep(
+            step_id="04_alternative_eligibility_definitions_and_overlap_figure",
+            intent=(
+                "Render the publication figure declared by step "
+                "'04_alternative_eligibility_definitions_and_overlap'."
+            ),
+        ),
+        out_dir=out,
+        run_dir=tmp_path,
+        step_summary={"rendering_only": True},
+    )
+    assert source_findings == []
+
+
+def test_cohort_overlap_rescue_shortens_sepsis3_derivable_definition_labels(
+    tmp_path: Path,
+):
+    parent = (
+        tmp_path
+        / "steps"
+        / "04_alternative_eligibility_definitions_and_overlap"
+        / "outputs"
+    )
+    parent.mkdir(parents=True, exist_ok=True)
+    ids = [
+        "primary_adult_los1_all_vitals_sepsis3_derivable",
+        "alt_adult_no_los_all_vitals_sepsis3_derivable",
+        "alt_adult_los1_three_of_four_vitals_sepsis3_derivable",
+        "alt_adult_los1_no_temp_requirement_sepsis3_derivable",
+        "alt_adult_los2_all_vitals_sepsis3_derivable",
+    ]
+    pd.DataFrame(
+        {
+            "definition_id": ids,
+            "definition_label": [
+                "Primary cohort",
+                "Relax ICU length-of-stay threshold",
+                "Relax vital completeness to >=3 of 4",
+                "Relax temperature requirement",
+                "Tighten ICU length-of-stay threshold",
+            ],
+            "definition_type": ["primary", "alternative", "alternative", "alternative", "alternative"],
+            "n_included": [100, 100, 112, 111, 70],
+            "n_excluded": [20, 20, 8, 9, 50],
+            "included_pct_of_rows": [83.3, 83.3, 93.3, 92.5, 58.3],
+            "overlap_with_primary_n": [100, 100, 100, 100, 70],
+            "overlap_with_primary_pct_of_primary": [100, 100, 100, 100, 70],
+            "overlap_with_primary_pct_of_definition": [100, 100, 89.3, 90.1, 100],
+            "moved_in_vs_primary_n": [0, 0, 12, 11, 0],
+            "moved_out_vs_primary_n": [0, 0, 0, 0, 30],
+        }
+    ).to_csv(parent / "alternative_cohort_attrition.csv", index=False)
+    rows = []
+    for a in ids:
+        for b in ids:
+            rows.append(
+                {
+                    "definition_a": a,
+                    "definition_b": b,
+                    "n_a": 100,
+                    "n_b": 100,
+                    "intersection_n": 100 if a == b else 80,
+                    "union_n": 100 if a == b else 120,
+                    "jaccard": 1.0 if a == b else 2 / 3,
+                }
+            )
+    pd.DataFrame(rows).to_csv(parent / "cohort_overlap_matrix.csv", index=False)
+    out = (
+        tmp_path
+        / "steps"
+        / "04_alternative_eligibility_definitions_and_overlap_figure"
+        / "outputs"
+    )
+    out.mkdir(parents=True, exist_ok=True)
+
+    assert (
+        cohort_overlap_rescue(
+            run_dir=tmp_path,
+            current_step_id="04_alternative_eligibility_definitions_and_overlap_figure",
+            out_dir=out,
+        )
+        == "cohort_overlap_publication_bundle_from_parent_outputs_v1"
+    )
+    source = pd.read_csv(out / "publication_figure_definition_source_data.csv")
+    assert source["display_label"].tolist() == [
+        "Primary",
+        "No LOS threshold",
+        ">=3 of 4 vitals",
+        "No temperature",
+        "LOS >=2 d",
+    ]
 
 
 def test_sensitivity_rescue_writes_multipanel_contract_and_source_data(
@@ -120,7 +587,7 @@ def test_sensitivity_rescue_writes_multipanel_contract_and_source_data(
 
     rid = sensitivity_rescue(
         run_dir=tmp_path,
-        current_step_id="05_sensitivity_comparison_figure",
+        current_step_id="05_sensitivity_comparison_across_definitions_figure",
         out_dir=out,
     )
 
@@ -143,3 +610,18 @@ def test_sensitivity_rescue_writes_multipanel_contract_and_source_data(
         step_summary={"rendering_only": True},
     )
     assert source_findings == []
+
+    routed_out = (
+        tmp_path
+        / "steps"
+        / "05_sensitivity_comparison_across_definitions_figure_routed"
+        / "outputs"
+    )
+    routed_out.mkdir(parents=True, exist_ok=True)
+    routed_id = routed_rescue(
+        run_dir=tmp_path,
+        current_step_id="05_sensitivity_comparison_across_definitions_figure",
+        out_dir=routed_out,
+    )
+    assert routed_id == "sensitivity_publication_bundle_from_parent_outputs_v1"
+    assert (routed_out / "sensitivity_forest_source_data.csv").exists()

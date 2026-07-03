@@ -1,0 +1,201 @@
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+from easyicu.research_agent.deterministic_sensitivity import (
+    cohort_definition_overlap_code,
+    cohort_definition_sensitivity_comparison_code,
+)
+
+
+def test_cohort_definition_sensitivity_template_executes_from_parent_outputs(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path
+    parent = (
+        run_dir
+        / "steps"
+        / "04_alternative_eligibility_definitions_and_overlap"
+        / "outputs"
+    )
+    parent.mkdir(parents=True)
+
+    attrition = pd.DataFrame(
+        {
+            "definition_id": [
+                "primary_adult_los1_all_vitals_sep3_measured",
+                "alt_adult_no_los_all_vitals_sep3_measured",
+                "alt_adult_los1_three_of_four_vitals_sep3_measured",
+                "alt_adult_los1_no_temp_requirement_sep3_measured",
+                "alt_adult_los2_all_vitals_sep3_measured",
+            ],
+            "definition_label": [
+                "Primary cohort",
+                "Relax ICU length-of-stay threshold",
+                "Relax vital completeness to >=3 of 4",
+                "Relax temperature requirement",
+                "Tighten ICU length-of-stay threshold",
+            ],
+            "definition_type": [
+                "primary",
+                "alternative",
+                "alternative",
+                "alternative",
+                "alternative",
+            ],
+            "criteria": [
+                "age>=18 AND los_icu>=1 day AND map/hr/resp/temp measured AND sep3_sofa2_measured",
+                "age>=18 AND map/hr/resp/temp measured AND sep3_sofa2_measured",
+                "age>=18 AND los_icu>=1 day AND at least 3 of map/hr/resp/temp measured AND sep3_sofa2_measured",
+                "age>=18 AND los_icu>=1 day AND map/hr/resp measured AND sep3_sofa2_measured",
+                "age>=18 AND los_icu>=2 days AND map/hr/resp/temp measured AND sep3_sofa2_measured",
+            ],
+            "n_included": [128, 128, 144, 144, 96],
+        }
+    )
+    attrition.to_csv(parent / "alternative_cohort_attrition.csv", index=False)
+    pd.DataFrame(
+        {
+            "definition_a": ["primary_adult_los1_all_vitals_sep3_measured"],
+            "definition_b": ["primary_adult_los1_all_vitals_sep3_measured"],
+            "intersection_n": [128],
+            "union_n": [128],
+            "jaccard": [1.0],
+        }
+    ).to_csv(parent / "cohort_overlap_matrix.csv", index=False)
+
+    rng = np.random.default_rng(11)
+    n = 180
+    sepsis = rng.binomial(1, 0.42, n)
+    death_prob = 0.07 + 0.06 * sepsis + 0.015 * (np.arange(n) % 4 == 0)
+    death = rng.binomial(1, death_prob)
+    temp_measured = np.ones(n, dtype=int)
+    temp_measured[::8] = 0
+    lact = rng.lognormal(mean=0.2, sigma=0.45, size=n)
+    lact[::7] = np.nan
+    cohort = pd.DataFrame(
+        {
+            "stay_id": np.arange(n) + 1000,
+            "age": rng.normal(66, 9, n),
+            "sex": np.where(np.arange(n) % 2 == 0, "Male", "Female"),
+            "los_icu": np.where(np.arange(n) < 120, 2.4, 1.2),
+            "sep3_sofa2_max": sepsis,
+            "sep3_sofa2_measured": 1,
+            "hr_max": rng.normal(96, 15, n),
+            "hr_measured": 1,
+            "map_min": rng.normal(68, 11, n),
+            "map_measured": 1,
+            "resp_max": rng.normal(23, 5, n),
+            "resp_measured": 1,
+            "temp_max": rng.normal(37.3, 0.7, n),
+            "temp_measured": temp_measured,
+            "lact_max": lact,
+            "lact_measured": (~pd.isna(lact)).astype(int),
+            "bun_max": rng.normal(24, 8, n),
+            "bun_measured": 1,
+            "wbc_max": rng.normal(12, 4, n),
+            "wbc_measured": 1,
+            "death": death,
+        }
+    )
+    cohort_path = run_dir / "cohort_analysis.parquet"
+    cohort.to_parquet(cohort_path)
+
+    out_dir = run_dir / "steps" / "05_sensitivity_comparison_across_definitions" / "outputs"
+    out_dir.mkdir(parents=True)
+    script_path = tmp_path / "analysis.py"
+    script_path.write_text(
+        cohort_definition_sensitivity_comparison_code(),
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env.update(
+        {
+            "COHORT_PARQUET": str(cohort_path),
+            "STEP_OUT_DIR": str(out_dir),
+        }
+    )
+
+    result = subprocess.run(
+        [sys.executable, str(script_path)],
+        cwd=tmp_path,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    comparison = pd.read_csv(out_dir / "sensitivity_comparison.csv")
+    covariates = pd.read_csv(out_dir / "sensitivity_model_covariates.csv")
+    summary = (out_dir / "step_summary.json").read_text(encoding="utf-8")
+
+    assert {"OR", "RD"} <= set(comparison["effect_scale"].astype(str))
+    assert "full_export_step03_scope" in set(comparison["definition_id"])
+    assert "primary_lactate_complete_case" in set(comparison["definition_id"])
+    assert "primary_without_lactate_adjustment" in set(comparison["definition_id"])
+    assert not covariates["covariates_used"].str.contains("map", case=False).any()
+    assert "not identical to the stricter primary eligibility definition" in summary
+    assert (out_dir / "noninformative_sensitivity_audit.csv").exists()
+
+
+def test_cohort_definition_overlap_retains_sepsis3_negatives_when_measured_flag_is_positive_only(
+    tmp_path: Path,
+) -> None:
+    n = 120
+    sepsis = np.r_[np.ones(45, dtype=int), np.zeros(75, dtype=int)]
+    cohort = pd.DataFrame(
+        {
+            "stay_id": np.arange(n) + 2000,
+            "age": 65,
+            "los_icu": 1.5,
+            "sep3_sofa2_max": sepsis,
+            "sep3_sofa2_measured": sepsis,
+            "map_measured": 1,
+            "hr_measured": 1,
+            "resp_measured": 1,
+            "temp_measured": 1,
+        }
+    )
+    cohort_path = tmp_path / "cohort_analysis.parquet"
+    cohort.to_parquet(cohort_path)
+    out_dir = (
+        tmp_path
+        / "steps"
+        / "04_alternative_eligibility_definitions_and_overlap"
+        / "outputs"
+    )
+    out_dir.mkdir(parents=True)
+    script_path = tmp_path / "overlap.py"
+    script_path.write_text(cohort_definition_overlap_code(), encoding="utf-8")
+    env = os.environ.copy()
+    env.update(
+        {
+            "COHORT_PARQUET": str(cohort_path),
+            "STEP_OUT_DIR": str(out_dir),
+        }
+    )
+
+    result = subprocess.run(
+        [sys.executable, str(script_path)],
+        cwd=tmp_path,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    attrition = pd.read_csv(out_dir / "alternative_cohort_attrition.csv")
+    semantics = pd.read_csv(out_dir / "cohort_definition_semantics_audit.csv")
+    primary = attrition[attrition["definition_type"] == "primary"].iloc[0]
+
+    assert primary["n_included"] == n
+    assert semantics["measured_flag_positive_only"].iloc[0] == np.True_
+    assert "sep3_sofa2_measured == 1" in semantics["action"].iloc[0]

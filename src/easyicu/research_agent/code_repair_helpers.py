@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 _BINARY_MODEL_REPAIR_FAMILIES = {
     "association_study",
+    "cohort_definition_sensitivity",
     "prediction_model",
     "validation",
     "robustness",
@@ -256,7 +257,7 @@ def _infer_primary_association_predictor_from_code(
     list.
     """
 
-    for key in ("primary_predictor", "predictor", "exposure"):
+    for key in ("primary_predictor", "primary_exposure", "predictor", "exposure"):
         value = _normalise_predictor_column_candidate(step_summary.get(key), code)
         if value:
             return value
@@ -266,7 +267,7 @@ def _infer_primary_association_predictor_from_code(
         or {}
     )
     if isinstance(manifest, dict):
-        for key in ("primary_predictor", "predictor", "exposure"):
+        for key in ("primary_predictor", "primary_exposure", "predictor", "exposure"):
             value = _normalise_predictor_column_candidate(manifest.get(key), code)
             if value:
                 return value

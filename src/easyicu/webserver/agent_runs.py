@@ -59,6 +59,7 @@ _SIGNOFF_CONFIRMATIONS = {
     "claims_remain_locked",
     "no_patient_rows_persisted",
 }
+_AGENT_PREFLIGHT_FULL_SCAN_ROW_LIMIT = 1_000_000
 
 
 def make_agent_run_runner(
@@ -145,7 +146,10 @@ def make_agent_run_runner(
                 source=source,
             )
 
-        workspace = dataio.summarize_export_workspace(export_path)
+        if _use_metadata_workspace(source, resolved_run_type):
+            workspace = _metadata_workspace(source)
+        else:
+            workspace = dataio.summarize_export_workspace(export_path)
         if not workspace.get("ok"):
             raise ValueError(str(workspace.get("error") or "workspace_summary_failed"))
         summary = dict(workspace.get("summary") or {})
@@ -157,9 +161,14 @@ def make_agent_run_runner(
                 "current": 2,
                 "total": total_steps,
                 "step": "snapshot",
-                "label": "Export snapshot summarised",
+                "label": (
+                    "Export metadata snapshot resolved"
+                    if summary.get("snapshot_basis") == "registry_metadata"
+                    else "Export snapshot summarised"
+                ),
                 "stays": summary.get("stays"),
                 "modules": summary.get("modules"),
+                "snapshot_basis": summary.get("snapshot_basis", "bounded_row_level_sample"),
             }
         )
         if getattr(job, "cancel_requested", False):
@@ -768,6 +777,104 @@ def _quality_public(row: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _use_metadata_workspace(source: Dict[str, Any], run_type: str) -> bool:
+    if normalize_run_type(run_type) != "preflight":
+        return False
+    summary = source.get("summary") if isinstance(source, dict) else {}
+    try:
+        total_rows = int((summary or {}).get("total_rows") or 0)
+    except (TypeError, ValueError):
+        total_rows = 0
+    return total_rows > _AGENT_PREFLIGHT_FULL_SCAN_ROW_LIMIT
+
+
+def _metadata_workspace(source: Dict[str, Any]) -> Dict[str, Any]:
+    source_summary = dict(source.get("summary") or {})
+    files = [f for f in source.get("files", []) if isinstance(f, dict)]
+    modules = sorted(
+        {str(f.get("module") or "") for f in files if str(f.get("module") or "")}
+    )
+    stays = source_summary.get("stays")
+    summary = {
+        **source_summary,
+        "stays": stays,
+        "modules": source_summary.get("modules") or len(modules),
+        "file_count": source_summary.get("file_count") or len(files),
+        "total_rows": source_summary.get("total_rows"),
+        "snapshot_basis": "registry_metadata",
+        "artifact_scope": "metadata_only_large_export_preflight",
+        "row_scan_skipped": True,
+        "row_scan_skip_reason": "export_total_rows_exceeds_preflight_limit",
+        "preflight_row_limit": _AGENT_PREFLIGHT_FULL_SCAN_ROW_LIMIT,
+    }
+    cohort = {
+        "status": "metadata_only",
+        "basis": "registry_manifest",
+        "survived": None,
+        "deceased": None,
+        "characteristics": [
+            {
+                "label": "Cohort stays",
+                "value": stays,
+                "unit": "registry denominator",
+            },
+            {
+                "label": "Export modules",
+                "value": summary.get("modules"),
+                "unit": "manifest modules",
+            },
+            {
+                "label": "Declared rows",
+                "value": summary.get("total_rows"),
+                "unit": "manifest rows",
+            },
+        ],
+    }
+    denominator = _safe_positive_int(stays)
+    quality = []
+    for file_meta in files:
+        rows = _safe_positive_int(file_meta.get("rows"))
+        column_count = len(file_meta.get("columns") or [])
+        quality.append(
+            {
+                "module": file_meta.get("module"),
+                "file": file_meta.get("file"),
+                "rows": rows,
+                "columns": column_count,
+                "unique_stays": None,
+                "coverage_pct": None,
+                "coverage_basis": "manifest_file_inventory",
+                "denominator": denominator,
+                "status": "metadata_only",
+            }
+        )
+    return {
+        "ok": True,
+        "path": source.get("path"),
+        "database": source.get("database"),
+        "generated": source.get("generated"),
+        "files": files,
+        "summary": summary,
+        "quality": quality,
+        "cohort": cohort,
+    }
+
+
+def _safe_positive_int(value: Any) -> Optional[int]:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number >= 0 else None
+
+
+def _quality_audit_passed(quality: List[Dict[str, Any]], run_type: str) -> bool:
+    allowed = {"unique_stay_id_intersection"}
+    if normalize_run_type(run_type) == "preflight":
+        allowed.add("manifest_file_inventory")
+    return all(q.get("coverage_basis") in allowed for q in quality)
+
+
 def _gate(
     source: Dict[str, Any],
     summary: Dict[str, Any],
@@ -799,11 +906,11 @@ def _gate(
         {
             "id": "quality_audited",
             "label": "Module stay-id coverage audited",
-            "passed": all(
-                q.get("coverage_basis") == "unique_stay_id_intersection"
-                for q in quality
-            ),
+            "passed": _quality_audit_passed(quality, run_type),
             "modules": len(quality),
+            "coverage_bases": sorted(
+                {str(q.get("coverage_basis") or "") for q in quality}
+            ),
         },
         {
             "id": "no_bad_non_event_coverage",

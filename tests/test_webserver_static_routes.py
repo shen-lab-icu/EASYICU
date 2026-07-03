@@ -110,11 +110,12 @@ def test_native_shell_language_icon_is_stateful() -> None:
     )
     assert "window.EUPageGuide = { open, close, toggle, refreshLanguage }" in dock_js
     assert "setTimeout(refreshLanguage, 250)" in dock_js
+    assert "function shouldHideFab(route) { return route === 'guided' || route === 'agent'; }" in dock_js
     assert "window.setLang(val);" in settings_js
     assert "window.EU_LANG = val;" not in settings_js
     assert "window.EU_API.saveSetting('data_mode', m)" in i18n_js
     assert "js/i18n.js?v=20260626-language-refresh-dock" in index_html
-    assert "js/api.js?v=20260627-idea-plan" in index_html
+    assert "js/api.js?v=20260702-zotero-simple" in index_html
 
 
 def test_native_mobile_page_guide_fab_does_not_cover_bottom_nav() -> None:
@@ -165,10 +166,120 @@ def test_native_assistant_labels_disambiguate_page_guide_guided_copilot_and_agen
 
     assert "css/dock.css?v=20260625-stage99" in index_html
     assert "js/app.js?v=20260629-ux-readability" in index_html
-    assert "js/copilot-dock.js?v=20260629-ux-readability" in index_html
+    assert "js/copilot-dock.js?v=20260702-agent-fab-clear" in index_html
     assert "js/screens-extraction.js?v=20260630-gate-first-ia" in index_html
-    assert "js/screens-agent.js?v=20260630-gate-first-ia" in index_html
+    assert "js/screens-agent.js?v=20260702-agent-tab-scroll" in index_html
     assert "js/screens-help.js?v=20260626-tutorial-i18n" in index_html
+
+
+def test_agent_science_workbench_has_dedicated_owner_files_and_wiring() -> None:
+    index_html = _static_html("index.html")
+    api_js = _static_js("api.js")
+    agent_js = _static_js("screens-agent.js")
+    science_js = _static_js("screens-agent-science.js")
+    science_css = _static_css("agent-science.css")
+    science_detail_css = _static_css("agent-science-detail.css")
+    screens_css = _static_css("screens.css")
+    redesign_css = _static_css("redesign.css")
+
+    assert "css/agent-science.css?v=20260702-science-workbench-v11" in index_html
+    assert "css/agent-science-detail.css?v=20260702-science-workbench-v7" in index_html
+    assert "js/screens-agent-science.js?v=20260702-science-workbench-v8" in index_html
+    assert "/api/agent-runs/science-workbench" in api_js
+    assert "loadAgentScienceWorkbench" in api_js
+    assert "/api/capabilities" in api_js
+    assert "hydrateCapabilities" in api_js
+    assert "checkCapabilityTool" in api_js
+    assert "searchZotero" in api_js
+    assert "loadCapabilityAuditEvents" in api_js
+    assert "window.EU_AGENT_SCIENCE.render" in agent_js
+    assert "window.EU_AGENT_SCIENCE.wire" in agent_js
+
+    assert "window.EU_AGENT_SCIENCE" in science_js
+    assert "artifact_history" in science_js
+    assert "reviewer_gate" in science_js
+    assert "run_summary" in science_js
+    assert "workflow_scope" in science_js
+    assert "fig5_checklist" in science_js
+    assert "feature_alignment" in science_js
+    assert "discovery_pipeline" in science_js
+    assert "data-ag-sci-module" in science_js
+    assert "navMetric" in science_js
+    assert 'role="tab" aria-selected="' in science_js
+    assert 'aria-controls="ag-sci-module-panel"' in science_js
+    assert 'role="tabpanel"' in science_js
+    assert "scienceModuleBody" in science_js
+    assert "Module map / 模块地图" in science_js
+    assert "Evidence readiness checklist" in science_js
+    assert "Workbench coverage / 工作台覆盖" in science_js
+    assert "Discovery pipeline / 发现流程" in science_js
+    assert "Research tool stack / 研究工具栈" in science_js
+    assert "Skills / 技能" in science_js
+    assert "Connectors / 连接器" in science_js
+    assert "MCP tools / MCP 工具" in science_js
+    assert "Prompt contracts / 提示词契约" in science_js
+    assert "Tool audit / 工具审计" in science_js
+    assert "Compute / 计算环境" in science_js
+    assert "window.EU_SETTINGS" in science_js
+    assert "window.EU_CAPABILITIES" in science_js
+    assert "data && data.capability_policy" in science_js
+    assert "policySetting(data, 'science_skills_enabled'" in science_js
+    assert "Skills disabled in Settings" in science_js
+    assert "connector_pubmed_enabled" in science_js
+    assert "connector_zotero_enabled" in science_js
+    assert "mcp_tools_enabled" in science_js
+    assert "prompt_contracts_enabled" in science_js
+    assert "tool_audit_enabled" in science_js
+    assert "remote_compute_enabled" in science_js
+    assert "Current capability switches from Settings" in science_js
+    assert "data-ag-sci-open-settings" in science_js
+    assert "核对 Claude Science 可借鉴模式是否落到 EasyICU 真实功能" not in science_js
+    assert "Function alignment" not in science_js
+    assert "工作台对齐清单" not in science_js
+    assert "data-ag-sci-focus-art" in science_js
+    assert "data-ag-sci-open-ideas" in science_js
+    assert "reusable_protocols" in science_js
+    assert "native_renderers" in science_js
+    assert ".ag-sci-module-nav" in science_css
+    assert ".ag-sci-module-card" in science_css
+    assert ".ag-sci-capstack" in science_css
+    assert ".ag-sci-capgrid" in science_css
+    assert ".ag-sci-capcard" in science_css
+    assert "grid-template-columns:repeat(3,minmax(0,1fr));" in science_css
+    assert "grid-template-columns:repeat(2,minmax(0,1fr));" in science_css
+    assert "grid-template-columns:repeat(5,minmax(112px,1fr));" in science_css
+    assert "min-height:54px;" in science_css
+    assert "min-height:104px;" not in science_css
+    assert "grid-template-columns:repeat(4,minmax(0,1fr));" in science_css
+    assert "min-height:112px;" in science_css
+    assert "-webkit-line-clamp:2;" in science_css
+    assert ".ag-wrap.list-collapsed .ag-sci-summary" in science_css
+    assert "grid-template-columns:minmax(0,1.25fr) minmax(300px,.75fr);" in science_css
+    assert ".ag-wrap.list-collapsed .ag-sci-kpi-grid" in science_css
+    assert ".ag-sci-summary" in science_css
+    assert ".ag-sci-checklist" in science_css
+    assert ".ag-sci-align" in science_css
+    assert ".ag-sci-discovery" in science_css
+    assert ".ag-sci-layout" in science_detail_css
+    assert ".ag-sci-tabpanel" in science_detail_css
+    assert ".ag-sci-card-grid" in science_detail_css
+    assert ".ag-sci-renderer" in science_detail_css
+    assert ".ag-sci-layout" not in science_css
+    assert ".ag-sci-card-grid" not in science_css
+    assert ".ag-sci-layout" not in screens_css
+    assert ".ag-sci-summary" not in screens_css
+    assert ".ag-sci-align" not in screens_css
+    assert ".ag-sci-discovery" not in screens_css
+    assert ".ag-sci-capstack" not in screens_css
+    assert ".ag-sci-capgrid" not in screens_css
+    assert ".ag-sci-module-nav" not in screens_css
+    assert ".ag-sci-layout" not in redesign_css
+    assert ".ag-sci-summary" not in redesign_css
+    assert ".ag-sci-align" not in redesign_css
+    assert ".ag-sci-discovery" not in redesign_css
+    assert ".ag-sci-capstack" not in redesign_css
+    assert ".ag-sci-capgrid" not in redesign_css
+    assert ".ag-sci-module-nav" not in redesign_css
 
 
 def test_native_tutorial_screen_uses_active_language_without_mixed_copy() -> None:
@@ -223,7 +334,7 @@ def test_native_guided_and_page_guide_messages_are_bilingual() -> None:
         "js/screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan" in index_html
     )
     assert "js/screens-guided.js?v=20260630-guided-step-summary" in index_html
-    assert "js/copilot-dock.js?v=20260629-ux-readability" in index_html
+    assert "js/copilot-dock.js?v=20260702-agent-fab-clear" in index_html
 
 
 def test_native_page_guide_uses_backend_page_guide_contract() -> None:
@@ -264,8 +375,8 @@ def test_native_page_guide_uses_backend_page_guide_contract() -> None:
     assert "sendCopilotMessage" not in dock_js
     assert "runCopilotAction" not in dock_js
     assert "Page guide backend unavailable, using local fallback" in dock_js
-    assert "js/api.js?v=20260627-idea-plan" in index_html
-    assert "js/copilot-dock.js?v=20260629-ux-readability" in index_html
+    assert "js/api.js?v=20260702-zotero-simple" in index_html
+    assert "js/copilot-dock.js?v=20260702-agent-fab-clear" in index_html
 
 
 def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questions() -> (
@@ -414,7 +525,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
 
     assert "css/guided.css?v=20260630-guided-step-summary" in index_html
     assert "css/guided-idea-plan.css?v=20260627-ideas-feasibility-plan" in index_html
-    assert "js/api.js?v=20260627-idea-plan" in index_html
+    assert "js/api.js?v=20260702-zotero-simple" in index_html
     assert (
         "js/screens-guided-projects.js?v=20260626-guided-projects-split" in index_html
     )
@@ -460,15 +571,38 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
 def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     agent_js = _static_js("screens-agent.js")
     agent_css = _static_css("agent.css")
+    agent_layout_css = _static_css("agent-layout.css")
+    agent_header_css = _static_css("agent-header.css")
+    agent_review_css = _static_css("agent-review.css")
     agent_cap_css = _static_css("agent-capabilities.css")
+    screens_css = _static_css("screens.css")
+    redesign_css = _static_css("redesign.css")
     index_html = _static_html("index.html")
 
-    assert "js/screens-agent.js?v=20260630-gate-first-ia" in index_html
-    assert "css/agent.css?v=20260630-gate-first-ia" in index_html
+    assert "js/screens-agent.js?v=20260702-agent-tab-scroll" in index_html
+    assert "css/agent.css?v=20260702-agent-compact-header" in index_html
+    assert "css/agent-layout.css?v=20260702-agent-focus-layout" in index_html
+    assert "css/agent-header.css?v=20260702-agent-compact-header" in index_html
+    assert "css/agent-review.css?v=20260702-agent-review-compact" in index_html
     assert "css/agent-capabilities.css?v=20260627-agent-capabilities" in index_html
     assert "function artifactsForLive(live)" in agent_js
     assert "function reviewableRunForStudy()" in agent_js
+    assert "let agListMode = 'auto';" in agent_js
+    assert "const AG_FOCUS_TABS = new Set(['science', 'runs', 'outputs', 'notes', 'draft']);" in agent_js
+    assert "function agentListCollapsed()" in agent_js
+    assert "const detail = document.querySelector('#agHost .ag-detail');" in agent_js
+    assert "document.querySelector('#agHost .ag-body');" not in agent_js
+    assert "data-ag-toggle-list" in agent_js
+    assert 'aria-controls="agStudyList"' in agent_js
+    assert "ag-wrap ${listCollapsed ? 'list-collapsed' : 'list-open'}" in agent_js
+    assert 'data-ag-list-state="${listCollapsed ? \'collapsed\' : \'open\'}"' in agent_js
+    assert "const compactHeader = agTab !== 'overview' && agTab !== 'workflow';" in agent_js
+    assert "ag-dhead ${compactHeader ? 'compact' : ''}" in agent_js
     assert "function outputCountForStudy()" in agent_js
+    assert "ag-review-layout" in agent_js
+    assert "ag-review-claims" in agent_js
+    assert "Show all artifacts" in agent_js
+    assert "visibleArtifacts = artifacts.slice(0, 6)" in agent_js
     assert "['outputs', t('Outputs', '产出'), outputCountForStudy()]" in agent_js
     assert "No real output artifacts yet" in agent_js
     assert "placeholders are not shown in Real mode" in agent_js
@@ -508,6 +642,24 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     assert ".ag-pipe .pt" in agent_css
     assert ".ag-pipe .pd" in agent_css
     assert ".ag-wrap .chip" in agent_css
+    assert "Agent Projects focus layout" in agent_layout_css
+    assert ".ag-wrap.list-collapsed" in agent_layout_css
+    assert ".ag-wrap.list-collapsed .ag-list" in agent_layout_css
+    assert ".ag-wrap [data-ag-toggle-list]" in agent_layout_css
+    assert ".ag-wrap.list-collapsed" not in agent_css
+    assert ".ag-wrap.list-collapsed" not in screens_css
+    assert ".ag-wrap.list-collapsed" not in redesign_css
+    assert ".ag-dhead.compact" in agent_header_css
+    assert ".ag-dhead.compact + .ag-tabs" in agent_header_css
+    assert ".ag-dhead.compact" not in agent_css
+    assert ".ag-dhead.compact" not in redesign_css
+    assert ".ag-review-layout" in agent_review_css
+    assert ".ag-review-side" in agent_review_css
+    assert ".ag-review-claims" in agent_review_css
+    assert ".ag-review-layout" not in agent_css
+    assert ".ag-review-claims" not in agent_css
+    assert ".ag-review-layout" not in redesign_css
+    assert ".ag-review-claims" not in redesign_css
     assert "Agent Projects output review cards" in agent_css
     assert ".ag-wrap .ag-output-brief" in agent_css
     assert ".ag-wrap .ag-featured-results" in agent_css
@@ -559,8 +711,8 @@ def test_native_agent_research_blocks_are_project_owned() -> None:
     assert ".ag-wf-cell" in agent_css
     assert ".ag-lib-card" in agent_css
     assert ".ag-block-contract" in agent_css
-    assert "css/agent.css?v=20260630-gate-first-ia" in index_html
-    assert "js/screens-agent.js?v=20260630-gate-first-ia" in index_html
+    assert "css/agent.css?v=20260702-agent-compact-header" in index_html
+    assert "js/screens-agent.js?v=20260702-agent-tab-scroll" in index_html
 
     assert "ag-block-grid" not in app_js
     assert "Research Blocks" not in app_js
@@ -709,9 +861,11 @@ def test_native_route_qa_allows_only_explicit_truncation_and_scroll_regions() ->
 def test_native_settings_controls_are_backend_wired() -> None:
     api_js = _static_js("api.js")
     settings_js = _static_js("screens-settings.js")
+    settings_css = _static_css("settings.css")
     i18n_js = _static_js("i18n.js")
     tweaks_css = _static_css("tweaks.css")
     index_html = _static_html("index.html")
+    settings_py = (STATIC_DIR.parent / "settings.py").read_text(encoding="utf-8")
 
     assert "/api/settings/reset" in api_js
     assert "resetSettings" in settings_js
@@ -737,6 +891,40 @@ def test_native_settings_controls_are_backend_wired() -> None:
     assert "研究代理" in settings_js
     assert "选择默认导出文件夹" in settings_js
     assert "设置已恢复为后端默认值。" in settings_js
+    assert "dual('Capabilities', '能力')" in settings_js
+    assert "Research controls" in settings_js
+    assert "settingsCapabilityTab" in settings_js
+    assert "data-settings-cap-tab" in settings_js
+    assert "data-settings-open" in settings_js
+    assert "window.EU_CAPABILITIES" in settings_js
+    assert "cap('zotero_connector')" in settings_js
+    assert "cap('mcp_tools')" in settings_js
+    assert "cap('prompt_contracts')" in settings_js
+    assert "cap('tool_audit')" in settings_js
+    assert "cap('remote_compute')" in settings_js
+    assert "Zotero auto-connect" in settings_js
+    assert "Zotero local API" not in settings_js
+    assert "Backend policy" in settings_js
+    assert "Backend contract rules" in settings_js
+    assert "Compute adapter" in settings_js
+    assert "science_skills_enabled" in settings_js
+    assert "connector_pubmed_enabled" in settings_js
+    assert "connector_zotero_enabled" in settings_js
+    assert "mcp_tools_enabled" in settings_js
+    assert "prompt_contracts_enabled" in settings_js
+    assert "tool_audit_enabled" in settings_js
+    assert "remote_compute_enabled" in settings_js
+    assert "PubMed connector" in settings_js
+    assert "dual('MCP tools', 'MCP 工具')" in settings_js
+    assert "dual('Prompt contracts', '提示词契约')" in settings_js
+    assert "Tool audit ledger" in settings_js
+    assert "功能对齐" not in settings_js
+    assert '"connector_pubmed_enabled": True' in settings_py
+    assert '"connector_zotero_enabled": False' in settings_py
+    assert '"mcp_tools_enabled": False' in settings_py
+    assert '"prompt_contracts_enabled": True' in settings_py
+    assert '"tool_audit_enabled": True' in settings_py
+    assert '"remote_compute_enabled": False' in settings_py
     assert "crumbs: ['Home', 'Settings']" not in settings_js
     assert (
         "actionHtml: `<button class=\"btn\" data-settings-reset>${icon('refresh', 13)} Reset to defaults</button>`"
@@ -754,9 +942,37 @@ def test_native_settings_controls_are_backend_wired() -> None:
     assert (
         "window.applySettingsState(window.EU_SETTINGS, { syncStorage: true })" in api_js
     )
+    assert "window.EU_API.hydrateCapabilities = hydrateCapabilities" in api_js
+    assert "await hydrateCapabilities();" in api_js
+    assert "/api/capabilities/zotero/test" in api_js
+    assert "/api/capabilities/zotero/source" in api_js
+    assert "/api/capabilities/zotero/import" in api_js
+    assert "testZoteroConnection" in api_js
+    assert "zoteroSource" in api_js
+    assert "importZoteroSource" in api_js
+    assert "capabilities: C0()" in settings_js
+    assert "data-settings-zotero-test" in settings_js
+    assert "data-settings-audit-refresh" in settings_js
+    assert "settingsZoteroTest" in settings_js
+    assert "settingsAuditEvents" in settings_js
+    assert "Recent audit events" in settings_js
+    assert "连接测试" in settings_js
     assert 'body[data-reduce-motion="true"]' in tweaks_css
     assert "css/tweaks.css?v=20260625-stage96" in index_html
-    assert "js/screens-settings.js?v=20260626-settings-i18n" in index_html
+    assert "css/settings.css?v=20260702-zotero-simple" in index_html
+    assert "js/screens-settings.js?v=20260702-zotero-simple" in index_html
+    assert ".settings-cap-panel" in settings_css
+    assert ".settings-cap-tabs" in settings_css
+    assert ".settings-cap-tile" in settings_css
+    assert ".settings-cap-control" in settings_css
+    assert ".settings-zotero-test" in settings_css
+    assert ".settings-audit-log" in settings_css
+    assert ".settings-audit-list" in settings_css
+    assert ".settings-cap-panel" not in _static_css("pages.css")
+    assert ".settings-cap-panel" not in _static_css("screens.css")
+    assert ".settings-cap-panel" not in _static_css("redesign.css")
+    assert ".settings-zotero-test" not in _static_css("screens.css")
+    assert ".settings-audit-log" not in _static_css("redesign.css")
     assert "window.EU_API.saveSetting('data_mode', m)" in i18n_js
     assert "All controls are demo-interactive" not in settings_js
 
@@ -1015,9 +1231,12 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     api_js = _static_js("api.js")
     icons_js = _static_js("icons.js")
     ideas_js = _static_js("screens-ideas.js")
+    ideas_zotero_js = _static_js("screens-ideas-zotero.js")
     agent_js = _static_js("screens-agent.js")
     redesign_css = _static_css("redesign.css")
     ideas_css = _static_css("ideas.css")
+    ideas_review_css = _static_css("ideas-review.css")
+    ideas_connectors_css = _static_css("ideas-connectors.css")
     shell_css = _static_css("shell.css")
     index_html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
 
@@ -1050,7 +1269,10 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     assert "css/shell.css?v=20260626-owner" in index_html
     assert "js/icons.js?v=20260625-stage84" in index_html
     assert "js/app.js?v=20260629-ux-readability" in index_html
-    assert "js/screens-ideas.js?v=20260630-gate-first-ideas" in index_html
+    assert "css/ideas-review.css?v=20260702-idea-review-handoff" in index_html
+    assert "css/ideas-connectors.css?v=20260702-zotero-simple" in index_html
+    assert "js/screens-ideas-zotero.js?v=20260702-zotero-origin" in index_html
+    assert "js/screens-ideas.js?v=20260702-zotero-origin" in index_html
     assert "discoverIdeas" in api_js
     assert "/api/ideas/discover" in ideas_js
     assert "Discover papers" in ideas_js
@@ -1062,6 +1284,8 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     assert "/api/ideas/prior-art" in api_js
     assert "/api/ideas/plan" in api_js
     assert "planIdea" in api_js
+    assert "/api/ideas/bounded-feasibility" in api_js
+    assert "checkIdeaSampleFeasibility" in api_js
     assert "/api/ideas/handoff" in api_js
     assert "/api/ideas/create-agent-project" in api_js
     assert "/api/ideas/agent-projects" in api_js
@@ -1072,6 +1296,8 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     assert "Plan / replan before Agent" in ideas_js
     assert "Generate study plan" in ideas_js
     assert "Feasibility assessment on active export" in ideas_js
+    assert "Run bounded sample check" in ideas_js
+    assert "data-idea-sample-feasibility" in ideas_js
     assert "Literature inspiration" in ideas_js
     assert "ideas-plan-step" in ideas_js
     assert "normalizePlanStep" in ideas_js
@@ -1087,6 +1313,10 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     assert "if (!rows.some(r => String(r.id) === String(current.id)))" in ideas_js
     assert "Create Agent project" in ideas_js
     assert "Resolve source" in ideas_js
+    assert "sourceResolvedNote" in ideas_js
+    assert "display_status" in ideas_js
+    assert "Source ready" in ideas_js
+    assert "来源已就绪" in ideas_js
     assert "loadIdeaRun" in ideas_js
     assert "data-idea-record" in ideas_js
     assert "postLocalJSON('/api/ideas/run'" in ideas_js
@@ -1112,8 +1342,20 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     assert "ideas-feature-row" in ideas_js
     assert "ideas-compact-details" in ideas_js
     assert "ideas-prior-card" in ideas_js
+    assert "ideas-prior-gate" in ideas_js
     assert "ideas-query-details" in ideas_js
     assert "ideas-plan-edits" in ideas_js
+    assert "ideas-handoff-receipt" in ideas_js
+    assert "Source opt-in required" in ideas_js
+    assert "pubmedConnectorEnabled" in ideas_js
+    assert "sourceNetworkOptIn" in ideas_js
+    assert "window.EU_CAPABILITIES" in ideas_js
+    assert "connector_pubmed_enabled" in ideas_js
+    assert "PubMed connector is off" in ideas_js
+    assert "data-idea-open-settings" in ideas_js
+    assert "Agent project ready" in ideas_js
+    assert "可作为结果报告" in ideas_js
+    assert "querySelectorAll('#ideaNetworkOptIn')" in ideas_js
     assert "search: '<circle" in icons_js
     assert "rail-block" in ideas_js
     assert "setup-row" in ideas_js
@@ -1140,6 +1382,9 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     assert ".ideas-query-details" in ideas_css
     assert ".ideas-prior-card" in ideas_css
     assert ".ideas-plan-edits" in ideas_css
+    assert ".ideas-prior-gate" in ideas_review_css
+    assert ".ideas-handoff-receipt" in ideas_review_css
+    assert ".ideas-handoff-actions" in ideas_review_css
     assert "height:auto;" in ideas_css
     assert "min-height:92px;" in ideas_css
     assert "grid-template-columns:repeat(2,minmax(0,1fr));" in ideas_css
@@ -1154,6 +1399,9 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     assert ".ideas-step-nav" not in redesign_css
     assert ".ideas-advanced" not in redesign_css
     assert ".ideas-entry" not in redesign_css
+    assert ".ideas-prior-gate" not in redesign_css
+    assert ".ideas-handoff-receipt" not in redesign_css
+    assert ".ideas-handoff-receipt" not in ideas_css
     assert ".wsi-sub" not in redesign_css
     assert ".nav-sec" in shell_css
     assert ".ideas-entry" in shell_css
@@ -1181,6 +1429,39 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     assert "Literature folder mode scans local PDFs" in ideas_js
     assert "data-idea-pdf-pick" in ideas_js
     assert "data-idea-lit-scan" in ideas_js
+    assert "Zotero library" in ideas_js
+    assert "ideas-source-form zotero" in ideas_js
+    assert "window.EU_IDEA_ZOTERO.create" in ideas_js
+    assert "data-idea-zotero-search" in ideas_zotero_js
+    assert "data-idea-use-zotero" in ideas_zotero_js
+    assert "data-idea-zotero-import" in ideas_zotero_js
+    assert "ideaZoteroPaste" in ideas_zotero_js
+    assert "Use pasted source" in ideas_zotero_js
+    assert "使用粘贴文献" in ideas_zotero_js
+    assert "Literature source ready" in ideas_zotero_js
+    assert "文献来源已就绪" in ideas_zotero_js
+    assert "No Zotero setup required" in ideas_zotero_js
+    assert "不需要配置 Zotero" in ideas_zotero_js
+    assert "window.EU_API.zoteroSource" in ideas_zotero_js
+    assert "window.EU_API.importZoteroSource" in ideas_zotero_js
+    assert "setSourceType(value) { srcType = value; draft.source_type = value; }" in ideas_js
+    assert "citation_key" in ideas_js
+    assert "zotero_key" in ideas_js
+    assert "source_origin" in ideas_js
+    assert "source_origin_label" in ideas_js
+    assert "pasted_zotero_source_ready" not in ideas_js
+    assert "pasted_zotero_source_ready" not in ideas_zotero_js
+    assert "zotero_source_ready" not in ideas_js
+    assert "zotero_source_ready" not in ideas_zotero_js
+    assert ".ideas-zotero-source" in ideas_connectors_css
+    assert ".ideas-zotero-results" in ideas_connectors_css
+    assert ".ideas-zotero-row" in ideas_connectors_css
+    assert ".ideas-zotero-paste" in ideas_connectors_css
+    assert ".ideas-zotero-source" not in ideas_css
+    assert ".ideas-zotero-source" not in ideas_review_css
+    assert ".ideas-zotero-source" not in redesign_css
+    assert ".ideas-zotero-paste" not in ideas_css
+    assert ".ideas-zotero-paste" not in redesign_css
     assert "loadIdeaAgentProjects" in agent_js
     assert "seedStudy(row)" in agent_js
     assert "const DEMO_STUDIES" in agent_js
@@ -1754,7 +2035,7 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".cov-badge.derived" in deepdive_css
     assert ".cov-badge.unaudited" in deepdive_css
     assert "data-catalog.js?v=20260625-stage93" in index_html
-    assert "api.js?v=20260627-idea-plan" in index_html
+    assert "api.js?v=20260702-zotero-simple" in index_html
     assert "screens-dict.js?v=20260626-dictionary-db-coverage" in index_html
     assert "deepdive.css?v=20260625-stage85" in index_html
 
@@ -2001,7 +2282,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert ".gdf-memory" in guided_css
     assert ".gdf-card" in guided_css
     assert ".gd-handoff-ready" in guided_css
-    assert "api.js?v=20260627-idea-plan" in index_html
+    assert "api.js?v=20260702-zotero-simple" in index_html
     assert "screens-guided-projects.js?v=20260626-guided-projects-split" in index_html
     assert "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan" in index_html
     assert "screens-guided.js?v=20260630-guided-step-summary" in index_html
@@ -2033,6 +2314,11 @@ def test_native_agent_run_controls_are_reconnectable_and_cancelable() -> None:
     assert "Resume stream" in agent_js
     assert "Restart from active export" in agent_js
     assert "safe continuation is to restart from the active export" in agent_js
+    assert "seedGateBlocksRun" in agent_js
+    assert "project_seed_dir" in agent_js
+    assert "Agent preflight checks are not ready" in agent_js
+    assert "Run prior-art review or document a skip" in agent_js
+    assert "Refresh this project from Idea Mining" in agent_js
 
 
 def test_native_patient_source_radios_are_real_controls() -> None:

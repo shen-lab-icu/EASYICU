@@ -130,6 +130,12 @@ def _summarise_primary_association_table(path: Optional[Path]) -> Dict[str, Any]
 
 def _preferred_writer_evidence_names(evidence: EvidenceStore) -> List[str]:
     aliases = evidence.aliases()
+    def is_citable(name: str) -> bool:
+        record = evidence.get(name)
+        if record is None:
+            return False
+        return record.finding_severity not in {"warning", "error"}
+
     preferred = [
         "table_one",
         "cohort_summary",
@@ -144,15 +150,24 @@ def _preferred_writer_evidence_names(evidence: EvidenceStore) -> List[str]:
         "causal_audit_summary",
         "reporting_checklist",
     ]
-    out: List[str] = [name for name in preferred if name in aliases or evidence.get(name) is not None]
+    out: List[str] = [name for name in preferred if is_citable(name)]
     step_aliases = [
         name for name in sorted(aliases)
         if re.match(r"^\d{2}[_-]", name)
     ]
     for name in step_aliases:
-        if name not in out:
+        if name not in out and is_citable(name):
             out.append(name)
-    return out or evidence.resolvable_names()
+    if out:
+        return out
+    clean_names: List[str] = []
+    seen: set[str] = set()
+    for name in evidence.resolvable_names():
+        if name in seen or not is_citable(name):
+            continue
+        seen.add(name)
+        clean_names.append(name)
+    return clean_names or evidence.resolvable_names()
 
 
 # Module-level constant: the keys the "primary" writer digest pulls out

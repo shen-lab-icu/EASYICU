@@ -52,6 +52,14 @@ def build_agent_output_artifacts(
     quality: List[Dict[str, Any]],
 ) -> Dict[str, Dict[str, Any]]:
     """Return safe local output artifacts keyed by artifact filename."""
+    if _is_metadata_only_summary(summary):
+        return _metadata_only_output_artifacts(
+            source=source,
+            summary=summary,
+            cohort=cohort,
+            quality=quality,
+        )
+
     context = _load_context(export_path, source)
     frames = context["frames"]
     entity_ids = context["entity_ids"]
@@ -90,6 +98,164 @@ def build_agent_output_artifacts(
             death_by_entity=death_by_entity,
         ),
     }
+
+
+def _is_metadata_only_summary(summary: Dict[str, Any]) -> bool:
+    return str(summary.get("snapshot_basis") or "") == "registry_metadata"
+
+
+def _metadata_only_output_artifacts(
+    *,
+    source: Dict[str, Any],
+    summary: Dict[str, Any],
+    cohort: Dict[str, Any],
+    quality: List[Dict[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
+    return {
+        "table1_summary.json": _metadata_table1_payload(
+            source=source,
+            summary=summary,
+            cohort=cohort,
+        ),
+        "missingness_audit.json": _metadata_missingness_payload(
+            source=source,
+            summary=summary,
+            quality=quality,
+        ),
+        "roc_curve.json": _metadata_metric_payload("roc_curve", source, summary),
+        "calibration_curve.json": _metadata_metric_payload(
+            "calibration_curve", source, summary
+        ),
+    }
+
+
+def _metadata_table1_payload(
+    *,
+    source: Dict[str, Any],
+    summary: Dict[str, Any],
+    cohort: Dict[str, Any],
+) -> Dict[str, Any]:
+    denominator = _metadata_denominator(summary)
+    variables = [
+        {
+            "type": "metadata_only",
+            "module": item["module"],
+            "feature": item["feature"],
+            "label": _label(item["feature"]),
+            "status": "available_in_manifest",
+            "values": {},
+        }
+        for item in _metadata_features(source)[:120]
+    ]
+    return {
+        "kind": "table1_summary",
+        "status": "metadata_only",
+        "source": _source_summary(source),
+        "denominator": denominator,
+        "outcome": {
+            "event": "death",
+            "available": False,
+            "event_count": None,
+            "non_event_count": None,
+            "basis": "metadata_only_preflight",
+        },
+        "groups": [
+            {"id": "overall", "label": "Overall", "entities": denominator},
+            {"id": "survived", "label": "Survived", "entities": None},
+            {"id": "deceased", "label": "Deceased", "entities": None},
+        ],
+        "variables": variables,
+        "cohort_snapshot": {
+            "summary": summary,
+            "cohort": cohort,
+        },
+        "privacy": _privacy_scope(),
+    }
+
+
+def _metadata_missingness_payload(
+    *,
+    source: Dict[str, Any],
+    summary: Dict[str, Any],
+    quality: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    denominator = _metadata_denominator(summary)
+    rows = []
+    for item in _metadata_features(source):
+        rows.append(
+            {
+                "module": item["module"],
+                "feature": item["feature"],
+                "label": _label(item["feature"]),
+                "entities_observed": None,
+                "denominator": denominator,
+                "coverage_pct": None,
+                "missing_pct": None,
+                "records_non_missing": None,
+                "declared_module_rows": item.get("rows"),
+                "coverage_basis": "manifest_file_inventory",
+                "status": "metadata_only",
+            }
+        )
+    return {
+        "kind": "missingness_audit",
+        "status": "metadata_only",
+        "source": _source_summary(source),
+        "denominator": denominator,
+        "feature_count": len(rows),
+        "module_quality": quality,
+        "rows": rows[:250],
+        "summary": {
+            "features_with_full_coverage": None,
+            "features_below_80_pct": None,
+            "modules": summary.get("modules"),
+            "basis": "metadata_only_preflight",
+        },
+        "privacy": _privacy_scope(),
+    }
+
+
+def _metadata_metric_payload(
+    kind: str,
+    source: Dict[str, Any],
+    summary: Dict[str, Any],
+) -> Dict[str, Any]:
+    return {
+        "kind": kind,
+        "status": "not_available",
+        "source": _source_summary(source),
+        "summary": summary,
+        "reason": (
+            "requires a bounded sampled cohort with observed outcomes and "
+            "predictors; skipped for large-export metadata preflight"
+        ),
+        "predictor": None,
+        "privacy": _privacy_scope(),
+    }
+
+
+def _metadata_denominator(summary: Dict[str, Any]) -> Optional[int]:
+    try:
+        return int(summary.get("stays"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _metadata_features(source: Dict[str, Any]) -> List[Dict[str, Any]]:
+    features: List[Dict[str, Any]] = []
+    files = source.get("files") if isinstance(source, dict) else []
+    for meta in files or []:
+        if not isinstance(meta, dict):
+            continue
+        module = str(meta.get("module") or "").strip()
+        rows = meta.get("rows")
+        for column in meta.get("columns") or []:
+            feature = str(column or "").strip()
+            if not module or not feature or _is_hidden_column(feature):
+                continue
+            features.append({"module": module, "feature": feature, "rows": rows})
+    features.sort(key=lambda row: (row["module"], row["feature"]))
+    return features
 
 
 def _load_context(export_path: str, source: Dict[str, Any]) -> Dict[str, Any]:

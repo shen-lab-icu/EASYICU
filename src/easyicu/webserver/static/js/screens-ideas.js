@@ -20,6 +20,8 @@
   let priorArt = null;
   let planDraft = null;
   let projectSeed = null;
+  let sampleChecking = false;
+  let sampleFeasibility = null;
   let selectedRunId = null;
   let selectedRecordKey = null;
   let history = null;
@@ -30,6 +32,7 @@
   let pdfInfo = null;
   let literatureScanning = false;
   let literatureScan = null;
+  let zoteroWidget = null;
 
   function esc(v) {
     return String(v == null ? '' : v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -73,6 +76,21 @@
     if (activeStep === 'evidence') return t('Feasibility', '可行性');
     if (activeStep === 'handoff') return t('Plan / replan', '计划 / replan');
     return t('Source', '来源');
+  }
+  function pubmedConnectorEnabled() {
+    const policy = window.EU_CAPABILITIES || {};
+    const policySettings = policy.settings || {};
+    if (Object.prototype.hasOwnProperty.call(policySettings, 'connector_pubmed_enabled')) {
+      return policySettings.connector_pubmed_enabled !== false;
+    }
+    const settings = window.EU_SETTINGS || {};
+    return settings.connector_pubmed_enabled !== false;
+  }
+  function sourceNetworkOptIn() {
+    return fieldValue('allow_network') === 'true' || fieldValue('allow_network') === true;
+  }
+  function networkAllowed() {
+    return pubmedConnectorEnabled() && sourceNetworkOptIn();
   }
   function normalizePlanStep(row, i) {
     if (row && typeof row === 'object') {
@@ -183,12 +201,18 @@
       journal: inputValOr(root, '#ideaJournal', 'journal'),
       year: inputValOr(root, '#ideaYear', 'year'),
       doi: inputValOr(root, '#ideaDoi', 'doi'),
+      pmid: inputValOr(root, '#ideaPmid', 'pmid'),
       url: inputValOr(root, '#ideaUrl', 'url'),
+      abstract: inputValOr(root, '#ideaAbstract', 'abstract'),
+      citation_key: inputValOr(root, '#ideaCitationKey', 'citation_key'),
+      zotero_key: inputValOr(root, '#ideaZoteroKey', 'zotero_key'),
+      source_origin: inputValOr(root, '#ideaSourceOrigin', 'source_origin'),
+      source_origin_label: inputValOr(root, '#ideaSourceOriginLabel', 'source_origin_label'),
       source_file_name: (pdfInfo && pdfInfo.filename) || fieldValue('source_file_name'),
       source_file_sha256: (pdfInfo && pdfInfo.sha256) || fieldValue('source_file_sha256'),
       literature_folder: inputValOr(root, '#ideaLiteratureFolder', 'literature_folder'),
       literature_pdf_count: literatureScan && literatureScan.folder ? Number(literatureScan.folder.pdf_count || 0) : Number(fieldValue('literature_pdf_count') || 0),
-      allow_network: opt ? !!opt.checked : !!(draft && draft.allow_network),
+      allow_network: pubmedConnectorEnabled() && (opt ? !!opt.checked : !!(draft && draft.allow_network)),
     };
     return draft;
   }
@@ -223,6 +247,7 @@
       ['url', 'Article URL', '文章链接', 'Resolve bounded article metadata from a DOI or URL.'],
       ['pdf', 'PDF file', 'PDF 文件', 'Choose a local PDF; only bounded metadata is retained.'],
       ['literature_folder', 'Literature folder', '文献库文件夹', 'Scan a local folder of PDFs.'],
+      ['zotero', 'Zotero library', 'Zotero 文献库', 'Search the local Zotero Desktop library.'],
       ['frontier', 'Frontier topic', '前沿主题', 'Prepare or opt in to PubMed metadata discovery.'],
     ];
     return `
@@ -234,6 +259,7 @@
     if (srcType === 'url') return t('Article URL seed', '文章链接种子');
     if (srcType === 'pdf') return t('PDF file seed', 'PDF 文件种子');
     if (srcType === 'literature_folder') return t('Literature folder seed', '文献库文件夹种子');
+    if (srcType === 'zotero') return t('Zotero library seed', 'Zotero 文献库种子');
     if (srcType === 'frontier') return t('Frontier topic seed', '前沿主题种子');
     return t('Manual idea seed', '手动想法种子');
   }
@@ -242,6 +268,7 @@
     if (srcType === 'url') return t('Question this article suggests', '这篇文章启发的问题');
     if (srcType === 'pdf') return t('Question from this excerpt', '这段摘录启发的问题');
     if (srcType === 'literature_folder') return t('Review scope for this library', '这批文献的综述范围');
+    if (srcType === 'zotero') return t('Question this Zotero paper suggests', '这篇 Zotero 文献启发的问题');
     return t('Idea / research question', '想法 / 研究问题');
   }
   function modeExcerptLabel() {
@@ -249,6 +276,7 @@
     if (srcType === 'pdf') return t('Bounded PDF excerpt', '有界 PDF 摘录');
     if (srcType === 'url') return t('Abstract / quoted trigger sentence', '摘要 / 触发原文句子');
     if (srcType === 'literature_folder') return t('Library notes', '文献库备注');
+    if (srcType === 'zotero') return t('Abstract / trigger sentence', '摘要 / 触发句');
     return t('Source quote or rationale sentence', '来源引用或触发句');
   }
   function modePlaceholder() {
@@ -256,6 +284,7 @@
     if (srcType === 'url') return 'e.g. What ICU-database study could test this trial or review insight?';
     if (srcType === 'pdf') return 'e.g. The excerpt suggests a measurable ICU exposure, outcome, or subgroup.';
     if (srcType === 'literature_folder') return 'e.g. septic shock resuscitation reviews, ARDS ventilation editorials';
+    if (srcType === 'zotero') return 'e.g. What ICU-database question should this paper become?';
     return 'e.g. Vasopressor-first resuscitation and mortality among adult septic shock ICU patients';
   }
   function sourceModeHint() {
@@ -267,6 +296,9 @@
     }
     if (srcType === 'literature_folder') {
       return t('Literature folder mode scans local PDFs for metadata and candidate source clues. No full paper text or patient rows are stored in this screen.', '文献库文件夹模式会扫描本地 PDF 元数据和候选来源线索。本页不保存全文或患者行。');
+    }
+    if (srcType === 'zotero') {
+      return t('Zotero mode can auto-connect to Zotero Desktop, or you can paste DOI, BibTeX, RIS, or title/abstract directly. EasyICU stores metadata, citation key, hash, and a bounded abstract excerpt only.', 'Zotero 模式可自动连接 Zotero Desktop，也可直接粘贴 DOI、BibTeX、RIS 或标题摘要。EasyICU 只保存元数据、citation key、哈希和有界摘要摘录。');
     }
     if (srcType === 'frontier') {
       return t('Frontier mode can prepare queries without network access. If you opt in, it searches bounded PubMed metadata/abstracts, maps candidate ideas to the EasyICU dictionary, then lets you choose one for the local ledger.', '前沿模式在未联网时只准备检索式；如果你 opt-in，会检索有界 PubMed 元数据/摘要，把候选 idea 映射到 EasyICU 字典，并让你选择其中一个生成本地台账。');
@@ -290,6 +322,10 @@
       literature_folder: [
         [t('Point to a local paper folder', '选择本地文献文件夹'), t('Scan PDF metadata and representative snippets without storing full text.', '扫描 PDF 元数据和代表摘录，不保存全文。')],
         [t('Define the review scope', '定义综述范围'), t('Use the folder to surface candidate ICU-database questions, then choose one.', '用这批文献提出候选 ICU 数据库问题，再选择其中一个。')],
+      ],
+      zotero: [
+        [t('Auto-connect or paste a source', '自动连接或直接粘贴文献'), t('Search Zotero Desktop when available, or paste DOI/BibTeX/RIS/title metadata with no setup.', '可在 Zotero Desktop 可用时检索，也可无需配置直接粘贴 DOI/BibTeX/RIS/标题元数据。')],
+        [t('Use one paper as the source clue', '把一篇文献作为来源线索'), t('The title, DOI, abstract excerpt, and citation key feed the local idea ledger.', '标题、DOI、摘要摘录和 citation key 会进入本地 idea 台账。')],
       ],
       frontier: [
         [t('Describe the frontier topic', '描述前沿主题'), t('Without opt-in, EasyICU only prepares bounded queries and a local rationale.', '未 opt-in 时只准备有界检索式和本地理由。')],
@@ -319,6 +355,7 @@
     if (srcType === 'url' && !(hasTopic || hasExcerpt || hasTitle || payload.doi)) return t('Resolve the URL or add a title, DOI, abstract, excerpt, or rationale sentence before mining.', '请先解析链接，或补充标题、DOI、摘要、摘录或触发句再挖掘。');
     if (srcType === 'pdf' && !(hasExcerpt || payload.source_file_sha256 || hasTitle)) return t('Choose a local PDF or paste a bounded PDF excerpt before mining.', '请先选择本地 PDF 或粘贴有界 PDF 摘录。');
     if (srcType === 'literature_folder' && !payload.literature_folder) return t('Choose or paste a local literature folder before mining.', '请先选择或粘贴本地文献库文件夹。');
+    if (srcType === 'zotero' && !(hasTopic || hasExcerpt || hasTitle || payload.zotero_key)) return t('Search Zotero and select a paper, or add a title, question, or bounded abstract excerpt before mining.', '请先检索 Zotero 并选择一篇文献，或补充标题、问题、或有界摘要摘录再挖掘。');
     if (srcType === 'frontier' && !hasTopic) return t('Describe the frontier topic or journal scope before mining. Live search is a separate opt-in stage.', '请先描述前沿主题或期刊范围。真实检索属于单独 opt-in 阶段。');
     if (!(hasTopic || hasExcerpt || hasTitle || payload.url)) return t('Enter a topic, source title, URL, or excerpt before mining.', '请先输入主题、来源标题、链接或摘录。');
     return '';
@@ -334,7 +371,12 @@
       journal: source.journal || idea.source_journal || '',
       year: source.year || idea.source_year || '',
       doi: source.doi || '',
+      pmid: source.pmid || '',
       url: source.url || '',
+      citation_key: source.citation_key || '',
+      zotero_key: source.zotero_key || '',
+      source_origin: source.source_origin || '',
+      source_origin_label: source.source_origin_label || '',
       allow_network: false,
     };
   }
@@ -351,6 +393,7 @@
     selectedRecordKey = recordKey || runRecordKey(data || {}, 'current') || selectedRunId;
     priorArt = data && data.prior_art_check ? data.prior_art_check : null;
     planDraft = data && data.idea_plan ? data.idea_plan : null;
+    sampleFeasibility = data && data.bounded_sample_feasibility ? data.bounded_sample_feasibility : null;
     window.EU_IDEA_HANDOFF = data && data.handoff ? data.handoff : null;
     projectSeed = data && data.agent_project ? data.agent_project : null;
     draft = draftFromRun(data || {});
@@ -388,6 +431,23 @@
   function applySuggestedPayload(suggested) {
     if (!suggested) return;
     draft = Object.assign({}, draft, Object.fromEntries(Object.entries(suggested).filter(([, v]) => v != null && v !== '')));
+  }
+  function ideaZoteroWidget() {
+    if (zoteroWidget) return zoteroWidget;
+    if (!(window.EU_IDEA_ZOTERO && window.EU_IDEA_ZOTERO.create)) return null;
+    zoteroWidget = window.EU_IDEA_ZOTERO.create({
+      t,
+      icon,
+      fieldValue,
+      collectPayload,
+      applySuggestedPayload,
+      repaint,
+      setError(value) { err = value; },
+      setSourceResolved(value) { sourceResolved = value; },
+      setSourceType(value) { srcType = value; draft.source_type = value; },
+      ensureTopicFromTitle() { if (!draft.topic && draft.title) draft.topic = draft.title; },
+    });
+    return zoteroWidget;
   }
   function ingestPdfFile(file) {
     if (!file || pdfIngesting) return;
@@ -548,6 +608,8 @@
     if (srcType !== 'frontier' && !discovery) return '';
     const candidates = discovery && Array.isArray(discovery.idea_candidates) ? discovery.idea_candidates.slice(0, 6) : [];
     const queries = discovery && Array.isArray(discovery.queries_to_run) ? discovery.queries_to_run.slice(0, 4) : [];
+    const connectorOn = pubmedConnectorEnabled();
+    const allowed = networkAllowed();
     return `
       <div class="ideas-discovery mt-12">
         <div class="ideas-prior-top">
@@ -555,8 +617,9 @@
             <h3>${t('Frontier literature discovery', '前沿文献发现')}</h3>
             <p>${esc((discovery && discovery.reason) || t('Searches PubMed metadata/abstracts only after explicit network opt-in; then maps each article into an EasyICU idea candidate.', '只有明确网络 opt-in 后才检索 PubMed 元数据/摘要；随后把每篇文章映射成 EasyICU idea 候选。'))}</p>
           </div>
-          <button class="btn ${fieldValue('allow_network') === true || fieldValue('allow_network') === 'true' ? 'primary' : ''}" data-idea-discover ${discovering ? 'aria-disabled="true"' : ''}>${discovering ? '<span class="spin"></span>' : icon('search', 13)} ${t('Discover papers', '检索文章')}</button>
+          <button class="btn ${allowed ? 'primary' : ''}" data-idea-discover ${discovering || !connectorOn ? 'aria-disabled="true"' : ''}>${discovering ? '<span class="spin"></span>' : icon('search', 13)} ${t('Discover papers', '检索文章')}</button>
         </div>
+        ${!connectorOn ? `<div class="ideas-prior-gate blocked mt-10"><div>${icon('shield', 13)}</div><div><b>${t('PubMed connector is off', 'PubMed 连接器已关闭')}</b><span>${t('Turn on the PubMed connector in Settings before running frontier discovery.', '运行前沿发现前，请先在 Settings 打开 PubMed 连接器。')}</span></div><button class="btn sm" type="button" data-idea-open-settings>${t('Open Settings', '打开 Settings')}</button></div>` : ''}
         ${queries.length ? `<div class="ideas-query-list">${queries.map(q => `<code>${esc(q)}</code>`).join('')}</div>` : ''}
         ${candidates.length ? `<div class="ideas-feature-list mt-10">${candidates.map((row, i) => {
           const idea = row.idea || {};
@@ -571,15 +634,20 @@
       </div>`;
   }
   function optInBlock() {
+    const connectorOn = pubmedConnectorEnabled();
+    const checked = connectorOn && sourceNetworkOptIn();
     return `
       <details class="ideas-advanced mt-10">
-        <summary>${icon('shield', 13)} ${t('Network and provider opt-in', '网络与模型 opt-in')} <span>${t('off by default', '默认关闭')}</span></summary>
+        <summary>${icon('shield', 13)} ${t('Network and provider opt-in', '网络与模型 opt-in')} <span>${connectorOn ? t('source opt-in required', '需要来源 opt-in') : t('PubMed connector off', 'PubMed 连接器关闭')}</span></summary>
         <label class="rtodo-row mt-10 ideas-network-row">
-          <input type="checkbox" id="ideaNetworkOptIn" ${fieldValue('allow_network') === 'true' || fieldValue('allow_network') === true ? 'checked' : ''} />
+          <input type="checkbox" id="ideaNetworkOptIn" ${checked ? 'checked' : ''} ${connectorOn ? '' : 'disabled'} />
           <span class="rtodo-t">${t('Allow one bounded network metadata/prior-art request for this source', '允许本来源进行一次有界网络元数据 / prior-art 请求')}</span>
           <span class="rtodo-ref mono">opt-in</span>
         </label>
-        <div class="muted mt-8">${t('URL/DOI metadata and PubMed prior-art checks stay blocked until this source-level opt-in is checked. Provider calls still require provider readiness.', 'URL/DOI 元数据和 PubMed prior-art 检查在勾选本来源 opt-in 前保持阻断。Provider 调用仍需要 provider readiness。')}</div>
+        <div class="muted mt-8">${connectorOn
+          ? t('URL/DOI metadata and PubMed prior-art checks stay blocked until this source-level opt-in is checked. Provider calls still require provider readiness.', 'URL/DOI 元数据和 PubMed prior-art 检查在勾选本来源 opt-in 前保持阻断。Provider 调用仍需要 provider readiness。')
+          : t('The PubMed connector is disabled in Settings, so this source cannot make a network metadata request.', 'Settings 中 PubMed 连接器已关闭，因此本来源不能发起网络元数据请求。')}</div>
+        ${!connectorOn ? `<button class="btn sm mt-10" type="button" data-idea-open-settings>${t('Open Settings', '打开 Settings')}</button>` : ''}
       </details>`;
   }
   function pdfPickerBlock() {
@@ -608,6 +676,11 @@
       </div>
       ${folder ? `<div class="note ok mt-10"><div class="ico">${icon('check', 14)}</div><div class="body"><div class="t">${fmt(folder.pdf_count)} ${t('PDFs found', '个 PDF 已发现')}</div><div class="d">${esc(folder.path || fieldValue('literature_folder'))}</div></div></div>` : ''}
       ${docs.length ? `<div class="ideas-feature-list mt-10">${docs.map(doc => `<div class="ideas-feature-row"><div class="ideas-feature-name"><b>${esc(doc.title || doc.filename || 'PDF')}</b><span class="mono">${esc(doc.filename || doc.path || '')}</span></div><span class="mono">${esc(String(doc.sha256 || '').slice(0, 8))}</span></div>`).join('')}</div>` : ''}`;
+  }
+  function zoteroSearchBlock() {
+    const widget = ideaZoteroWidget();
+    if (widget) return widget.render();
+    return `<div class="note warn mt-10"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t">${t('Zotero source widget unavailable', 'Zotero 来源组件不可用')}</div><div class="d">${t('Enter title, DOI, and abstract manually below.', '请在下方手动填写标题、DOI 和摘要。')}</div></div></div>`;
   }
   function sourceSpecificForm() {
     if (srcType === 'manual') return `
@@ -648,6 +721,25 @@
         <label class="field ideas-field"><span>${modePrimaryLabel()}</span><textarea id="ideaTopic" rows="3" placeholder="${esc(modePlaceholder())}">${esc(fieldValue('topic'))}</textarea></label>
         ${optionalMetadataBlock(`<label class="field ideas-field"><span>${modeExcerptLabel()}</span><textarea id="ideaExcerpt" rows="3" placeholder="${t('Optional notes about what this literature folder should help explore.', '可选：说明这批文献主要想辅助探索什么。')}">${esc(fieldValue('excerpt'))}</textarea></label>`, t('Optional library notes', '可选文献库备注'))}
       </div>`;
+    if (srcType === 'zotero') return `
+      <div class="ideas-source-form zotero mt-14">
+        ${sourceModeGuide()}
+        ${zoteroSearchBlock()}
+        <label class="field ideas-field"><span>${modePrimaryLabel()}</span><textarea id="ideaTopic" rows="3" placeholder="${esc(modePlaceholder())}">${esc(fieldValue('topic'))}</textarea></label>
+        <label class="field ideas-field"><span>${modeExcerptLabel()}</span><textarea id="ideaExcerpt" rows="4" placeholder="${t('Optional: keep the abstract excerpt short and relevant to the ICU question.', '可选：保留一段与 ICU 问题相关的短摘要摘录。')}">${esc(fieldValue('excerpt'))}</textarea></label>
+        ${optionalMetadataBlock(`<div class="ideas-meta-grid">
+          <label class="field ideas-field"><span>Title</span><input id="ideaTitle" placeholder="${t('Selected Zotero title', '选中的 Zotero 标题')}" value="${esc(fieldValue('title'))}" /></label>
+          <label class="field ideas-field"><span>Journal</span><input id="ideaJournal" placeholder="${t('Journal or venue', '期刊或来源')}" value="${esc(fieldValue('journal'))}" /></label>
+          <label class="field ideas-field ideas-year"><span>Year</span><input id="ideaYear" placeholder="2026" value="${esc(fieldValue('year'))}" /></label>
+          <label class="field ideas-field"><span>DOI / PMID</span><input id="ideaDoi" placeholder="10.xxxx" value="${esc(fieldValue('doi'))}" /></label>
+          <label class="field ideas-field"><span>Zotero key</span><input id="ideaZoteroKey" placeholder="ABC123" value="${esc(fieldValue('zotero_key'))}" /></label>
+          <label class="field ideas-field"><span>Citation key</span><input id="ideaCitationKey" placeholder="smith2026..." value="${esc(fieldValue('citation_key'))}" /></label>
+          <label class="field ideas-field ideas-wide"><span>URL</span><input id="ideaUrl" placeholder="https://..." value="${esc(fieldValue('url'))}" /></label>
+        </div>
+        <input id="ideaSourceOrigin" type="hidden" value="${esc(fieldValue('source_origin'))}" />
+        <input id="ideaSourceOriginLabel" type="hidden" value="${esc(fieldValue('source_origin_label'))}" />
+        <textarea id="ideaAbstract" hidden>${esc(fieldValue('abstract'))}</textarea>`, t('Zotero metadata', 'Zotero 元数据'))}
+      </div>`;
     return `
       <div class="ideas-source-form frontier mt-14">
         ${sourceModeGuide()}
@@ -660,6 +752,15 @@
         ${optInBlock()}
         ${discoveryPanel()}
       </div>`;
+  }
+  function sourceResolvedNote() {
+    if (!sourceResolved) return '';
+    const adapter = sourceResolved.source_adapter || {};
+    const rawStatus = String(adapter.status || '');
+    const blocked = rawStatus.includes('blocked');
+    const title = adapter.display_status || adapter.label || (!rawStatus.includes('_') && rawStatus ? rawStatus : t('Source ready', '来源已就绪'));
+    const body = adapter.display_reason || adapter.reason || t('Bounded source metadata is ready for the idea ledger.', '有界来源元数据已就绪，可进入 idea 台账。');
+    return `<div class="note ${blocked ? 'warn' : 'ok'} mt-12"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t">${esc(title)}</div><div class="d">${esc(body)}</div></div></div>`;
   }
   function sourceForm() {
     return `
@@ -679,7 +780,7 @@
           <button class="btn" data-idea-resolve ${resolving ? 'aria-disabled="true"' : ''}>${resolving ? '<span class="spin"></span>' : icon('search', 14)} ${t('Resolve source', '解析来源')}</button>
           <button class="btn primary" data-idea-mine ${mining ? 'aria-disabled="true"' : ''}>${mining ? '<span class="spin"></span>' : icon('play', 14)} ${t('Create idea ledger', '生成 idea 台账')}</button>
         </div>
-        ${sourceResolved ? `<div class="note ${sourceResolved.source_adapter && sourceResolved.source_adapter.status && sourceResolved.source_adapter.status.includes('blocked') ? 'warn' : 'ok'} mt-12"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t">${esc((sourceResolved.source_adapter || {}).status || 'source resolved')}</div><div class="d">${esc((sourceResolved.source_adapter || {}).reason || 'Bounded source metadata is ready for the idea ledger.')}</div></div></div>` : ''}
+        ${sourceResolvedNote()}
       </div>`;
   }
   function historyBlock() {
@@ -781,6 +882,18 @@
     const queries = prior && Array.isArray(prior.queries_to_run) ? prior.queries_to_run : [];
     const status = prior ? (prior.status || (prior.search_performed ? 'checked' : 'blocked')) : 'not checked';
     const statusTone = prior && prior.search_performed ? 'ok' : 'warn';
+    const connectorOn = pubmedConnectorEnabled();
+    const allowed = networkAllowed();
+    const gateTitle = !connectorOn
+      ? t('PubMed connector is off', 'PubMed 连接器已关闭')
+      : allowed
+        ? t('Ready for one bounded search', '可运行一次有界检索')
+        : t('Source opt-in required', '需要本来源 opt-in');
+    const gateBody = !connectorOn
+      ? t('Turn on the PubMed connector in Settings first. The backend will keep network calls blocked while it is off.', '请先在 Settings 打开 PubMed 连接器；关闭期间后端会继续阻断网络请求。')
+      : allowed
+        ? t('This will query PubMed metadata for this idea only. It will not send patient rows or source full text.', '只会为这个 idea 查询 PubMed 元数据，不会发送患者行或来源全文。')
+        : t('Turn on the checkbox below before checking prior art. The default state keeps network calls blocked.', '先勾选下方选项，再检查已有文献。默认状态会阻断网络调用。');
     return `
       <div class="card pad ideas-core-card">
         <div class="section-head">
@@ -793,10 +906,15 @@
               <span class="pill ${statusTone}">${esc(status)}</span>
               <p>${esc((prior && (prior.opportunity_frame || prior.reason)) || t('No prior-art request has been made yet. The source article can still inspire a new subgroup, timing window, comparator, or outcome question.', '尚未发起已有研究检索。来源文章仍可启发新的亚组、时间窗、比较方式或结局问题。'))}</p>
             </div>
-            <button class="btn ${prior && prior.search_performed ? '' : 'primary'}" data-idea-prior-art ${priorArting ? 'aria-disabled="true"' : ''}>${priorArting ? '<span class="spin"></span>' : icon('search', 13)} ${t('Check literature', '检查已有文献')}</button>
+            <button class="btn ${prior && prior.search_performed ? '' : 'primary'}" data-idea-prior-art ${priorArting || !connectorOn ? 'aria-disabled="true"' : ''}>${priorArting ? '<span class="spin"></span>' : icon('search', 13)} ${t('Check literature', '检查已有文献')}</button>
+          </div>
+          <div class="ideas-prior-gate ${allowed ? 'ready' : 'blocked'}">
+            <div>${icon(allowed ? 'check' : 'shield', 13)}</div>
+            <div><b>${gateTitle}</b><span>${gateBody}</span></div>
+            ${!connectorOn ? `<button class="btn sm" type="button" data-idea-open-settings>${t('Open Settings', '打开 Settings')}</button>` : ''}
           </div>
           <label class="rtodo-row ideas-network-row">
-            <input type="checkbox" id="ideaNetworkOptIn" ${fieldValue('allow_network') === 'true' || fieldValue('allow_network') === true ? 'checked' : ''} />
+            <input type="checkbox" id="ideaNetworkOptIn" ${allowed ? 'checked' : ''} ${connectorOn ? '' : 'disabled'} />
             <span class="rtodo-t">${t('Allow one bounded PubMed metadata search for this idea', '允许为这个 idea 进行一次有界 PubMed 元数据检索')}</span>
             <span class="rtodo-ref mono">opt-in</span>
           </label>
@@ -809,32 +927,77 @@
         ${rows.length ? `<div class="ideas-prior-results mt-12">${rows.map(r => `<article><b>${esc(r.title || '')}</b><span>${esc(r.journal || '')} · ${fmt(r.year)} · PMID ${esc(r.pmid || '')}</span></article>`).join('')}</div>` : ''}
       </div>`;
   }
+  function handoffReceipt() {
+    const handoff = window.EU_IDEA_HANDOFF;
+    if (!handoff && !projectSeed) return '';
+    const plan = (handoff && handoff.handoff_plan) || {};
+    const steps = Array.isArray(plan.analysis_plan) ? plan.analysis_plan.length : 0;
+    const studyId = projectSeed && projectSeed.study_id ? projectSeed.study_id : '';
+    const projectDir = projectSeed && projectSeed.project_dir ? projectSeed.project_dir : '';
+    const question = (projectSeed && (projectSeed.question || projectSeed.title)) || plan.research_question || (handoff && handoff.candidate_topic) || t('Idea-derived study', '由 idea 生成的研究');
+    const ready = !!projectSeed;
+    const title = ready ? t('Agent project ready', '研究项目已创建') : t('Handoff frozen', '交接已冻结');
+    const body = ready
+      ? t('Open Agent Projects to continue from this seed. It includes the locked plan, feasibility context, and evidence boundaries.', '可以到研究项目继续推进。该种子包含已锁定计划、可行性上下文和证据边界。')
+      : t('The plan is frozen as a metadata-only handoff. Create a project seed when you are ready to run the study workflow.', '计划已冻结为仅元数据交接。准备运行研究流程时，再创建项目种子。');
+    return `
+      <div class="ideas-handoff-receipt ${ready ? 'ready' : 'frozen'} mt-12">
+        <div class="ideas-handoff-main">
+          <div class="ideas-handoff-icon">${icon(ready ? 'agent' : 'check', 16)}</div>
+          <div>
+            <div class="ideas-handoff-kicker">${title}</div>
+            <h3>${esc(question)}</h3>
+            <p>${body}</p>
+          </div>
+        </div>
+        <div class="ideas-handoff-grid">
+          <div><span>${t('Study ID', '研究 ID')}</span><b class="mono">${esc(studyId || (handoff && handoff.run_id) || '—')}</b></div>
+          <div><span>${t('Plan steps', '计划步骤')}</span><b>${fmt(steps)}</b></div>
+          <div><span>${t('Reportable', '可作为结果报告')}</span><b>${t('No', '否')}</b></div>
+          <div><span>${t('Draft access', '论文草稿')}</span><b>${t('Locked', '未解锁')}</b></div>
+        </div>
+        ${projectDir ? `<div class="ideas-handoff-path"><span>${t('Project folder', '项目文件夹')}</span><code>${esc(projectDir)}</code></div>` : ''}
+        <div class="ideas-handoff-actions">
+          ${ready ? `<button class="btn primary" data-nav="agent">${icon('agent', 13)} ${t('Open Agent Projects', '打开研究项目')}</button>` : `<button class="btn primary" data-idea-create-project ${projectCreating ? 'aria-disabled="true"' : ''}>${projectCreating ? '<span class="spin"></span>' : icon('agent', 13)} ${t('Create Agent project', '创建研究项目')}</button>`}
+          <button class="btn" data-nav="agent">${icon('agent', 13)} ${t('View project list', '查看项目列表')}</button>
+        </div>
+      </div>`;
+  }
   function preExperiment() {
     const pre = result && result.pre_experiment;
     if (!pre) return '';
     const stats = pre.feature_statistics || [];
+    const sampleStats = sampleFeasibility && Array.isArray(sampleFeasibility.feature_statistics) ? sampleFeasibility.feature_statistics : [];
     const visibleStats = stats.slice(0, 4);
     const hiddenStats = stats.slice(4);
     const isEventMetric = (s) => s && s.metric_kind === 'event_rate';
-    const riskCount = stats.filter(s => !isEventMetric(s) && (s.low_coverage || pct(s.coverage_pct) < 50)).length;
+    const isSchemaMetric = (s) => s && (s.metric_kind === 'schema_presence' || s.status === 'metadata_only' || s.coverage_basis === 'manifest_file_inventory');
+    const riskCount = stats.filter(s => !isEventMetric(s) && !isSchemaMetric(s) && (s.low_coverage || pct(s.coverage_pct) < 50)).length;
     const featureRow = (s) => {
       const n = s.numeric_summary || {};
       const eventMetric = isEventMetric(s);
-      const metricPct = eventMetric ? pct(s.event_rate_pct) : pct(s.coverage_pct);
-      const tone = eventMetric ? 'event' : coverageTone(metricPct);
-      const summary = eventMetric
+      const schemaMetric = isSchemaMetric(s);
+      const metricPct = schemaMetric ? 100 : (eventMetric ? pct(s.event_rate_pct) : pct(s.coverage_pct));
+      const tone = schemaMetric ? 'warn' : (eventMetric ? 'event' : coverageTone(metricPct));
+      const summary = schemaMetric
+        ? t('Schema present; run a bounded sample check before interpreting coverage.', '结构存在；解释覆盖率前先运行有界样本检查。')
+        : eventMetric
         ? t('binary/event indicator; non-events are not missing', '二分类/事件指标；阴性患者不是缺失')
         : (n.available ? `median ${fmt(n.median)} · min ${fmt(n.min)} · max ${fmt(n.max)}` : t('categorical, non-numeric, or empty', '分类、非数值或为空'));
-      const meta = eventMetric
+      const meta = schemaMetric
+        ? `<span>${t('Declared records', '声明记录')} ${fmt(s.records_declared)}</span><span>${esc(s.coverage_basis || 'schema')}</span>`
+        : eventMetric
         ? `<span>${t('Events', '事件')} ${fmt(s.event_entities ?? s.records)}</span><span>${t('Non-events', '非事件')} ${fmt(s.non_event_entities)}</span>`
         : `<span>${t('Records', '记录')} ${fmt(s.records)}</span><span>${t('Missing', '缺失')} ${pctLabel(s.missing_pct)}</span>`;
+      const headLabel = schemaMetric ? t('Schema', '结构') : (eventMetric ? t('Event rate', '事件率') : t('Coverage', '覆盖'));
+      const headValue = schemaMetric ? t('present', '存在') : pctLabel(eventMetric ? s.event_rate_pct : s.coverage_pct);
       return `<div class="ideas-feature-row ${tone}">
         <div class="ideas-feature-name">
           <b>${esc(s.label)}</b>
           <span class="mono">${esc(s.module || '')} · ${esc(s.concept_id || '')}</span>
         </div>
         <div class="ideas-feature-cov">
-          <div class="ideas-cov-head"><span>${eventMetric ? t('Event rate', '事件率') : t('Coverage', '覆盖')}</span><b>${pctLabel(eventMetric ? s.event_rate_pct : s.coverage_pct)}</b></div>
+          <div class="ideas-cov-head"><span>${headLabel}</span><b>${headValue}</b></div>
           <div class="ideas-cov-bar"><i style="width:${metricPct}%"></i></div>
         </div>
         <div class="ideas-feature-meta">
@@ -842,6 +1005,14 @@
         </div>
         <div class="ideas-feature-summary">${esc(summary)}</div>
       </div>`;
+    };
+    const noteText = (x) => {
+      const raw = String(x || '');
+      if (raw.includes('manifest/schema only')) return t(raw, '有特征目前只通过 manifest / schema 验证；解释覆盖率前请运行有界样本检查或研究项目。');
+      if (raw.includes('outcome-blind bounded sample check')) return t(raw, '这是不看结局效应的有界样本检查，可用于判断是否值得继续，但不是论文 source data。');
+      if (raw.includes('Low sample coverage remains')) return t(raw, '样本覆盖仍偏低；进入 Agent 执行前需要确认分母和缺失结构。');
+      if (raw.includes('Required concepts were sample-checked')) return t(raw, '必要概念已完成样本检查，且没有返回原始记录或直接标识符。');
+      return raw;
     };
     return `
       <div class="card pad ideas-core-card">
@@ -858,7 +1029,12 @@
         ${stats.length ? `<div class="ideas-feature-list mt-12">${visibleStats.map(featureRow).join('')}</div>
           ${hiddenStats.length ? `<details class="ideas-compact-details mt-10"><summary>${icon('list', 13)} ${t('Show all feature checks', '查看全部特征检查')} <span>${stats.length}</span></summary><div class="ideas-feature-list mt-10">${stats.map(featureRow).join('')}</div></details>` : ''}`
         : `<div class="note warn mt-12"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="t">${esc(pre.reason || 'No feature statistics available')}</div></div></div>`}
-        ${pre.interpretation && pre.interpretation.length ? `<div class="ideas-interpretation mt-10">${pre.interpretation.slice(0, 2).map(x => `<div>${icon('shield', 13)} <span>${esc(x)}</span></div>`).join('')}</div>` : ''}
+        ${pre.interpretation && pre.interpretation.length ? `<div class="ideas-interpretation mt-10">${pre.interpretation.slice(0, 2).map(x => `<div>${icon('shield', 13)} <span>${esc(noteText(x))}</span></div>`).join('')}</div>` : ''}
+        <div class="ideas-inline-actions mt-12">
+          <button class="btn" data-idea-sample-feasibility ${sampleChecking ? 'aria-disabled="true"' : ''}>${sampleChecking ? '<span class="spin"></span>' : icon('search', 13)} ${t('Run bounded sample check', '运行有界样本检查')}</button>
+          ${sampleFeasibility ? `<span class="mono">${esc(sampleFeasibility.status || 'checked')} · ${fmt((sampleFeasibility.sample || {}).max_records_per_feature)} ${t('records / feature', '条/特征')}</span>` : ''}
+        </div>
+        ${sampleFeasibility ? `<details class="ideas-compact-details mt-10" open><summary>${icon('shield', 13)} ${t('Bounded sample result', '有界样本结果')} <span>${sampleStats.length}</span></summary>${sampleFeasibility.interpretation && sampleFeasibility.interpretation.length ? `<div class="ideas-interpretation mt-10">${sampleFeasibility.interpretation.slice(0, 2).map(x => `<div>${icon('shield', 13)} <span>${esc(noteText(x))}</span></div>`).join('')}</div>` : ''}<div class="ideas-feature-list mt-10">${sampleStats.slice(0, 4).map(featureRow).join('')}</div></details>` : ''}
       </div>`;
   }
   function planBuilder() {
@@ -916,11 +1092,8 @@
         <div class="row gap-8 mt-12">
           <button class="btn" data-idea-replan ${planning ? 'aria-disabled="true"' : ''}>${planning ? '<span class="spin"></span>' : icon('refresh', 14)} ${t('Replan from notes', '根据说明重规划')}</button>
           <button class="btn primary" data-idea-handoff ${handoffing ? 'aria-disabled="true"' : ''}>${handoffing ? '<span class="spin"></span>' : icon('arrow', 14)} ${t('Freeze handoff for Agent', '冻结并交给 Agent')}</button>
-          ${window.EU_IDEA_HANDOFF ? `<button class="btn primary" data-idea-create-project ${projectCreating ? 'aria-disabled="true"' : ''}>${projectCreating ? '<span class="spin"></span>' : icon('agent', 13)} ${t('Create Agent project', '创建研究项目')}</button>` : ''}
-          <button class="btn" data-nav="agent">${icon('agent', 13)} ${t('Open Agent Projects', '打开 Agent Projects')}</button>
         </div>
-        ${window.EU_IDEA_HANDOFF ? `<div class="note ok mt-12"><div class="ico">${icon('check', 14)}</div><div class="body"><div class="t">${t('Handoff written', '交接已写入')}</div><div class="d mono">${esc(window.EU_IDEA_HANDOFF.run_id || '')}</div></div></div>` : ''}
-        ${projectSeed ? `<div class="note ok mt-12"><div class="ico">${icon('agent', 14)}</div><div class="body"><div class="t">${t('Agent project seed created', '研究项目种子已创建')}</div><div class="d mono">${esc(projectSeed.study_id || '')}</div></div></div>` : ''}
+        ${handoffReceipt()}
       </div>`;
   }
   function blockedPanel() {
@@ -1085,6 +1258,13 @@
       draft.allow_network = false;
       repaint();
     }));
+    root.querySelectorAll('#ideaNetworkOptIn').forEach(input => input.addEventListener('change', () => {
+      collectPayload(document);
+      repaint();
+    }));
+    root.querySelectorAll('[data-idea-open-settings]').forEach(btn => btn.addEventListener('click', () => {
+      location.hash = '#settings';
+    }));
     root.querySelectorAll('[data-idea-step]').forEach(btn => btn.addEventListener('click', () => {
       const step = btn.dataset.ideaStep || 'source';
       if (stepState(step) === 'locked') {
@@ -1095,7 +1275,7 @@
       repaint();
     }));
     root.querySelectorAll('[data-idea-new]').forEach(btn => btn.addEventListener('click', () => {
-      result = null; err = null; planEdits = ''; sourceResolved = null; discovery = null; priorArt = null; planDraft = null; projectSeed = null; selectedRunId = null; selectedRecordKey = null; draft = {}; activeStep = 'source'; window.EU_IDEA_HANDOFF = null; repaint();
+      result = null; err = null; planEdits = ''; sourceResolved = null; discovery = null; priorArt = null; planDraft = null; projectSeed = null; sampleFeasibility = null; selectedRunId = null; selectedRecordKey = null; if (zoteroWidget) zoteroWidget.reset(); draft = {}; activeStep = 'source'; window.EU_IDEA_HANDOFF = null; repaint();
     }));
     const resolveBtn = root.querySelector('[data-idea-resolve]');
     if (resolveBtn) resolveBtn.addEventListener('click', () => {
@@ -1111,6 +1291,7 @@
     });
     const discoverBtn = root.querySelector('[data-idea-discover]');
     if (discoverBtn) discoverBtn.addEventListener('click', () => {
+      if (discoverBtn.getAttribute('aria-disabled') === 'true') return;
       runIdeaDiscovery();
     });
     const pdfPick = root.querySelector('[data-idea-pdf-pick]');
@@ -1128,6 +1309,8 @@
     if (litScan) litScan.addEventListener('click', () => {
       scanLiteratureFolder();
     });
+    const widget = ideaZoteroWidget();
+    if (widget) widget.wire(root);
     root.querySelectorAll('[data-idea-use-discovery]').forEach(btn => btn.addEventListener('click', () => {
       useDiscoveryCandidate(btn.dataset.ideaUseDiscovery || 0);
     }));
@@ -1137,13 +1320,22 @@
       const payload = collectPayload(document);
       const validationError = validatePayload(payload);
       if (validationError) { err = validationError; repaint(); return; }
-      mining = true; err = null; result = null; priorArt = null; projectSeed = null; window.EU_IDEA_HANDOFF = null;
+      mining = true; err = null; result = null; priorArt = null; projectSeed = null; sampleFeasibility = null; window.EU_IDEA_HANDOFF = null;
       repaint();
       window.EU_API.mineIdeas(payload).then(data => {
         result = data; selectedRunId = data.run_id || null; selectedRecordKey = runRecordKey(data, 'current') || selectedRunId; err = null; planEdits = ''; planDraft = null; activeStep = 'ledger'; window.EU_IDEA_LAST_RUN = data; upsertHistoryRun(data);
       }).catch(e => {
         err = e.message || String(e);
       }).finally(() => { mining = false; repaint(); });
+    });
+    const sampleBtn = root.querySelector('[data-idea-sample-feasibility]');
+    if (sampleBtn) sampleBtn.addEventListener('click', () => {
+      if (sampleChecking || !result || !(window.EU_API && window.EU_API.checkIdeaSampleFeasibility)) return;
+      sampleChecking = true; err = null; repaint();
+      window.EU_API.checkIdeaSampleFeasibility({
+        run_id: result.run_id,
+        idea_id: result.selected_idea_id,
+      }).then(data => { sampleFeasibility = data; activeStep = 'evidence'; }).catch(e => { err = e.message || String(e); }).finally(() => { sampleChecking = false; repaint(); });
     });
     const planBox = root.querySelector('#ideaPlanEdits');
     if (planBox) planBox.addEventListener('input', () => {
@@ -1153,6 +1345,7 @@
     });
     const priorBtn = root.querySelector('[data-idea-prior-art]');
     if (priorBtn) priorBtn.addEventListener('click', () => {
+      if (priorBtn.getAttribute('aria-disabled') === 'true') return;
       if (priorArting || !result || !(window.EU_API && window.EU_API.checkIdeaPriorArt)) return;
       const payload = document.querySelector('#ideaTopic') || document.querySelector('#ideaNetworkOptIn') ? collectPayload(document) : draft;
       priorArting = true; err = null;

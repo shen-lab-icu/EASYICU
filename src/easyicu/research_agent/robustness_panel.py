@@ -268,6 +268,27 @@ def write_locked_robustness_specs(
     llm_signature: str,
 ) -> Path:
     specs = list(getattr(plan, "robustness_specs", []) or [])
+    path = run_dir / LOCK_FILENAME
+    if not specs and path.exists():
+        locked_specs = load_locked_robustness_specs(run_dir)
+        validate_robustness_specs(locked_specs)
+        if evidence.get("robustness_specs_locked") is None:
+            evidence.register_file(
+                kind="log",
+                description=(
+                    "Pre-specified robustness specifications locked after planning."
+                ),
+                source_path=path,
+                evidence_id="robustness_specs_locked",
+                aliases=["robustness_specs_locked"],
+                producer="planner",
+                generation_mode="system",
+                prompt_pack_version=prompt_pack_version,
+                metadata={"llm_signature": llm_signature, "lock_reused": True},
+            )
+        return path
+    if not specs:
+        specs = default_robustness_specs()
     validate_robustness_specs(specs)
     payload = {
         "schema_version": "easyicu.robustness_specs/1",
@@ -275,7 +296,6 @@ def write_locked_robustness_specs(
         "spec_sha256": robustness_specs_sha(specs),
         "specs": [spec.to_dict() for spec in specs],
     }
-    path = run_dir / LOCK_FILENAME
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     if evidence.get("robustness_specs_locked") is None:
         evidence.register_file(

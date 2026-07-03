@@ -52,6 +52,10 @@ from .agents import (
     StatisticalAnalysisAgent,
     VisualizationAgent,
 )
+from .article_contract import (
+    summarize_article_contract_coverage,
+    validate_run_against_article_contract,
+)
 from .audits.validators import (
     ClinicalConstraintValidator,
     ConceptUsageAuditor,
@@ -74,6 +78,10 @@ from .cohort_schema import (
     write_locked_cohort_definition,
 )
 from .contracts import ValidationFinding, _ExecutePhaseResult, _PlanPhaseResult
+from .deterministic_sensitivity import (
+    cohort_definition_overlap_code,
+    cohort_definition_sensitivity_comparison_code,
+)
 from .estimators import fit_robustness_rows_from_records
 from .llm import MockLLMClient
 from .pipeline import (
@@ -82,9 +90,7 @@ from .pipeline import (
     _has_figure_exports,
     _promote_prior_publication_bundle,
     _promote_sibling_figure_exports,
-    _render_association_publication_bundle_from_prior_outputs,
-    _render_prediction_publication_bundle_from_prior_outputs,
-    _render_sensitivity_publication_bundle_from_prior_outputs,
+    _render_publication_bundle_from_prior_outputs_for_step,
     _semantic_aliases_for,
 )
 from .publication_figures import make_figure_contract
@@ -132,6 +138,115 @@ logger = logging.getLogger(__name__)
 # the override directive; beyond that the run falls back to an honest
 # diagnostic_only rather than burning the replanner on a stuck plan.
 _MAX_DIRECTED_MODEL_REPLANS = 2
+
+
+def _is_terminal_publication_figure_repair_step(step: Any) -> bool:
+    """Return true for rendering-only terminal publication figure repair steps."""
+
+    expected_outputs = getattr(step, "expected_outputs", None) or []
+    haystack = " ".join(
+        str(part or "")
+        for part in (
+            getattr(step, "step_id", ""),
+            getattr(step, "intent", ""),
+            getattr(step, "method", ""),
+            " ".join(str(item) for item in expected_outputs),
+        )
+    )
+    lowered = haystack.lower().replace("_", "-")
+    if not all(token in lowered for token in ("publication", "figure", "repair")):
+        return False
+    step_id = str(getattr(step, "step_id", "") or "").lower()
+    return (
+        "rendering-only" in lowered
+        or "rendering only" in lowered
+        or step_id.endswith("publication_figure_repair")
+    )
+
+
+def _publication_bundle_has_primary_result_roles(outputs_dir: Path) -> bool:
+    """Check whether an output directory already has a primary-result figure bundle."""
+
+    contract_path = outputs_dir / "publication_figure.figure_contract.json"
+    if not contract_path.exists():
+        return False
+    try:
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    panels = contract.get("panels") if isinstance(contract, Mapping) else None
+    if not isinstance(panels, list):
+        return False
+    roles = {
+        str(panel.get("role") or "").strip()
+        for panel in panels
+        if isinstance(panel, Mapping)
+    }
+    if not {"descriptive_result", "primary_estimand"}.issubset(roles):
+        return False
+
+    export_formats = contract.get("export_formats")
+    if not isinstance(export_formats, list) or not export_formats:
+        export_formats = ["svg", "png", "pdf", "tiff"]
+    if not any(
+        (outputs_dir / f"publication_figure.{str(ext).lstrip('.')}").exists()
+        for ext in export_formats
+    ):
+        return False
+
+    source_data = contract.get("source_data")
+    if isinstance(source_data, list):
+        source_paths = [
+            outputs_dir / str(name)
+            for name in source_data
+            if isinstance(name, str) and Path(name).suffix
+        ]
+        if source_paths and not all(path.exists() for path in source_paths):
+            return False
+    return True
+
+
+def _terminal_publication_repair_replan_skip_detail(
+    *,
+    plan: Any,
+    completed_records: Optional[Sequence[Dict[str, Any]]],
+    run_dir: Path,
+) -> Optional[Dict[str, Any]]:
+    """Return a skip reason when replanning would only delay deterministic repairs."""
+
+    completed_ok = {
+        str(record.get("step_id") or "")
+        for record in (completed_records or [])
+        if record.get("status") == "ok" and record.get("step_id")
+    }
+    remaining_steps = [
+        step
+        for step in getattr(plan, "steps", []) or []
+        if str(getattr(step, "step_id", "") or "") not in completed_ok
+    ]
+    if not remaining_steps:
+        return None
+    if not all(
+        _is_terminal_publication_figure_repair_step(step) for step in remaining_steps
+    ):
+        return None
+
+    for record in reversed(list(completed_records or [])):
+        if record.get("status") != "ok" or not record.get("step_id"):
+            continue
+        step_id = str(record["step_id"])
+        outputs_dir = run_dir / "steps" / step_id / "outputs"
+        if _publication_bundle_has_primary_result_roles(outputs_dir):
+            return {
+                "remaining_step_ids": [
+                    str(getattr(step, "step_id", "") or "")
+                    for step in remaining_steps
+                ],
+                "satisfied_by_step_id": step_id,
+                "satisfied_by_outputs_dir": str(outputs_dir),
+            }
+    return None
+
 
 if TYPE_CHECKING:
     from .pipeline import ResearchAgentPipeline
@@ -807,6 +922,28 @@ def run_execute_phase(
             # bypasses this — it carries a new instruction the replanner has not
             # yet seen, so the prior no-op/budget verdict does not apply.
             return current_plan
+        terminal_repair_skip = _terminal_publication_repair_replan_skip_detail(
+            plan=current_plan,
+            completed_records=completed_records,
+            run_dir=run_dir,
+        )
+        if terminal_repair_skip is not None and not force:
+            findings.append(
+                ValidationFinding(
+                    validator="replanner",
+                    severity="info",
+                    message=(
+                        "Skipped replanner because only terminal rendering-only "
+                        "publication-figure repair steps remain, and a completed "
+                        "step already produced a primary-result publication bundle."
+                    ),
+                    detail={
+                        "reason": reason,
+                        **terminal_repair_skip,
+                    },
+                )
+            )
+            return current_plan
         replanner = ReplannerAgent(role_resolver("planner"))
         try:
             revised = replanner.run(
@@ -1143,6 +1280,7 @@ def run_execute_phase(
             "intent": step.intent,
         }
         resumed_code_reuse_used = False
+        preexecution_runner_repair_name: Optional[str] = None
         step_current = step_order.get(step.step_id, 0) + 1
         dependency_record = _failed_dependency_record(step)
         if dependency_record is not None:
@@ -1211,6 +1349,8 @@ def run_execute_phase(
         )
         step_record["semantics_family"] = local_runtime_state.analysis_family
 
+        deterministic_fallback_used = False
+
         def _use_resumed_code(
             resumed_code: Tuple[str, Dict[str, Any]],
             *,
@@ -1263,47 +1403,427 @@ def run_execute_phase(
             )
             return prior_code
 
-        preflight_resumed_code = resume_controller.prior_code_for_step(step.step_id)
-        if preflight_resumed_code is not None:
+        def _resume_summary_repair_code() -> Optional[str]:
+            nonlocal preexecution_runner_repair_name
+            if (
+                requested_resume_from_step_id != step.step_id
+                or not pipeline._enable_deterministic_runner_repair
+            ):
+                return None
+            resumed_code = resume_controller.prior_code_for_step(step.step_id)
+            if resumed_code is None:
+                return None
+            prior_code, _resumed_record = resumed_code
+            prior_summary_path = (
+                run_dir / "steps" / step.step_id / "outputs" / "step_summary.json"
+            )
+            if not prior_summary_path.exists():
+                return None
+            try:
+                prior_summary = json.loads(
+                    prior_summary_path.read_text(encoding="utf-8")
+                )
+            except Exception:
+                return None
+            if not isinstance(prior_summary, dict) or not prior_summary:
+                return None
+            repair = _deterministic_summary_repair(
+                code=prior_code,
+                step_summary=prior_summary,
+                previous_repair=None,
+                analysis_family=(
+                    local_runtime_state.analysis_family
+                    or prior_summary.get("analysis_family")
+                ),
+            )
+            if repair is None:
+                return None
+            repair_name, repaired_code = repair
+            _use_resumed_code(resumed_code)
+            preexecution_runner_repair_name = repair_name
+            step_record["runner_repair"] = repair_name
+            step_record["resume_summary_repair"] = repair_name
+            _record_repair(
+                repair_id=repair_name,
+                step_id=step.step_id,
+                trigger={
+                    "source": "resume_summary_repair_preflight",
+                    "step_summary_path": str(prior_summary_path),
+                    "step_summary_keys": sorted(str(k) for k in prior_summary),
+                },
+                transformation=(
+                    "Reused the explicitly resumed step's prior generated code "
+                    "after deterministic summary repair, before requesting a "
+                    "new coder script."
+                ),
+                before_code=prior_code,
+                after_code=repaired_code,
+                selection_rule=(
+                    "only when the prior step_summary triggers a case-neutral "
+                    "deterministic summary repair"
+                ),
+            )
+            with shared_lock:
+                findings.append(
+                    ValidationFinding(
+                        validator="coder",
+                        severity="info",
+                        message=(
+                            f"Applied deterministic resume-summary repair for "
+                            f"step {step.step_id}: {repair_name}."
+                        ),
+                        detail={
+                            "step_id": step.step_id,
+                            "repair_id": repair_name,
+                            "step_summary_path": str(prior_summary_path),
+                        },
+                    )
+                )
+            emit_progress(
+                "runner_repair",
+                (
+                    f"Applied deterministic resume-summary repair for "
+                    f"{step.step_id}: {repair_name}."
+                ),
+                run_id=run_id,
+                step_id=step.step_id,
+                current_step=step_current,
+                total_steps=total_steps,
+            )
+            return repaired_code
+
+        def _publication_figure_preflight_supported() -> bool:
+            blob = " ".join(
+                [
+                    str(step.step_id or ""),
+                    str(step.intent or ""),
+                    str(step.method or ""),
+                    *[str(item or "") for item in (step.expected_outputs or [])],
+                ]
+            ).lower()
+            return _step_expects_figure(step) and any(
+                token in blob
+                for token in (
+                    "association",
+                    "odds",
+                    "effect",
+                    "forest",
+                    "prediction",
+                    "calibration",
+                    "discrimination",
+                    "sensitivity",
+                    "robustness",
+                    "cohort",
+                    "eligibility",
+                    "overlap",
+                    "attrition",
+                    "definition",
+                    "missingness",
+                    "measurement",
+                    "data_quality",
+                    "quality",
+                )
+            )
+
+        def _deterministic_publication_figure_code(
+            reason: str,
+            *,
+            preflight: bool = False,
+        ) -> Optional[str]:
+            nonlocal deterministic_fallback_used
+            if (
+                deterministic_fallback_used
+                or not pipeline._enable_deterministic_runner_repair
+                or not _step_expects_figure(step)
+                or (preflight and not _publication_figure_preflight_supported())
+            ):
+                return None
+            deterministic_fallback_used = True
+            step_record["deterministic_code_fallback"] = reason
+            return """
+import json
+import os
+from pathlib import Path
+
+out_dir = Path(os.environ["STEP_OUT_DIR"])
+run_dir = out_dir.parents[2]
+current_step_id = out_dir.parent.name
+
+from easyicu.research_agent.pipeline import (
+    _render_publication_bundle_from_prior_outputs_for_step,
+)
+
+repair_id = _render_publication_bundle_from_prior_outputs_for_step(
+    run_dir=run_dir,
+    current_step_id=current_step_id,
+    out_dir=out_dir,
+)
+
+if repair_id is None:
+    summary = {
+        "rendering_only": True,
+        "deterministic_publication_figure_rescue": "no_parent_outputs",
+        "figure_files": [],
+        "warning": "No compatible parent outputs were available for deterministic figure rendering.",
+    }
+    with open(out_dir / "step_summary.json", "w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2)
+else:
+    print(json.dumps({"deterministic_publication_figure_rescue": repair_id}))
+"""
+
+        def _cohort_definition_sensitivity_preflight_supported() -> bool:
+            if _step_expects_figure(step):
+                return False
+            blob = " ".join(
+                [
+                    str(step.step_id or ""),
+                    str(step.intent or ""),
+                    str(step.method or ""),
+                    *[str(item or "") for item in (step.expected_outputs or [])],
+                ]
+            ).lower()
+            sensitivity_tokens = ("sensitivity", "robustness")
+            definition_tokens = (
+                "cohort",
+                "eligibility",
+                "definition",
+                "definitions",
+                "inclusion",
+                "exclusion",
+            )
+            return any(token in blob for token in sensitivity_tokens) and any(
+                token in blob for token in definition_tokens
+            )
+
+        def _cohort_definition_overlap_preflight_supported() -> bool:
+            if _step_expects_figure(step):
+                return False
+            blob = " ".join(
+                [
+                    str(step.step_id or ""),
+                    str(step.intent or ""),
+                    str(step.method or ""),
+                    *[str(item or "") for item in (step.expected_outputs or [])],
+                ]
+            ).lower()
+            expected = {str(item or "").lower() for item in step.expected_outputs or []}
+            has_overlap_outputs = any(
+                token in expected
+                for token in (
+                    "table:alternative_cohort_attrition",
+                    "table:cohort_overlap_matrix",
+                )
+            )
+            if has_overlap_outputs:
+                return True
+            return (
+                "cohort_definition_sensitivity" in blob
+                and any(token in blob for token in ("alternative", "eligibility"))
+                and any(token in blob for token in ("overlap", "attrition", "denominator"))
+            )
+
+        def _deterministic_cohort_definition_overlap_code(
+            reason: str,
+            *,
+            preflight: bool = False,
+        ) -> Optional[str]:
+            nonlocal deterministic_fallback_used
+            if (
+                deterministic_fallback_used
+                or not pipeline._enable_deterministic_runner_repair
+                or (preflight and not _cohort_definition_overlap_preflight_supported())
+            ):
+                return None
+            if not _cohort_definition_overlap_preflight_supported():
+                return None
+            deterministic_fallback_used = True
+            step_record["deterministic_code_fallback"] = reason
+            step_record["deterministic_standard_analysis"] = (
+                "cohort_definition_overlap"
+            )
+            emit_progress(
+                "coder",
+                f"Using deterministic cohort-definition overlap script for {step.step_id}.",
+                run_id=run_id,
+                step_id=step.step_id,
+                current_step=step_current,
+                total_steps=total_steps,
+                fallback_reason=reason,
+            )
+            return cohort_definition_overlap_code()
+
+        def _deterministic_cohort_definition_sensitivity_code(
+            reason: str,
+            *,
+            preflight: bool = False,
+        ) -> Optional[str]:
+            nonlocal deterministic_fallback_used
+            if (
+                deterministic_fallback_used
+                or not pipeline._enable_deterministic_runner_repair
+                or (
+                    preflight
+                    and not _cohort_definition_sensitivity_preflight_supported()
+                )
+            ):
+                return None
+            if not _cohort_definition_sensitivity_preflight_supported():
+                return None
+            deterministic_fallback_used = True
+            step_record["deterministic_code_fallback"] = reason
+            step_record["deterministic_standard_analysis"] = (
+                "cohort_definition_sensitivity"
+            )
+            emit_progress(
+                "coder",
+                f"Using deterministic cohort-definition sensitivity script for {step.step_id}.",
+                run_id=run_id,
+                step_id=step.step_id,
+                current_step=step_current,
+                total_steps=total_steps,
+                fallback_reason=reason,
+            )
+            return cohort_definition_sensitivity_comparison_code()
+
+        # ``--resume-from-step-id`` means the selected step is intentionally
+        # rerun. Completed predecessors stay checkpointed, but the selected
+        # step must not silently reuse its old script before the current
+        # coder/deterministic-standard path has a chance to run.
+        resume_summary_repair_code = _resume_summary_repair_code()
+        preflight_resumed_code = None
+        if (
+            resume_summary_repair_code is None
+            and requested_resume_from_step_id != step.step_id
+        ):
+            preflight_resumed_code = resume_controller.prior_code_for_step(step.step_id)
+        if resume_summary_repair_code is not None:
+            code = resume_summary_repair_code
+        elif preflight_resumed_code is not None:
             code = _use_resumed_code(preflight_resumed_code)
         else:
-            try:
-                emit_progress(
-                    "coder",
-                    f"Generating analysis script for {step.step_id}.",
-                    run_id=run_id,
-                    step_id=step.step_id,
-                    current_step=step_current,
-                    total_steps=total_steps,
+            preflight_figure_code = _deterministic_publication_figure_code(
+                "publication_figure_parent_outputs_preflight",
+                preflight=True,
+            )
+            if preflight_figure_code is not None:
+                code = preflight_figure_code
+                with shared_lock:
+                    findings.append(
+                        ValidationFinding(
+                            validator="coder",
+                            severity="info",
+                            message=(
+                                f"Using deterministic publication-figure renderer "
+                                f"for figure step {step.step_id} before requesting "
+                                "new coder code."
+                            ),
+                            detail={"step_id": step.step_id},
+                        )
+                    )
+            else:
+                preflight_overlap_code = _deterministic_cohort_definition_overlap_code(
+                    "cohort_definition_overlap_preflight",
+                    preflight=True,
                 )
-                code = coder.run(context=agent_context, step=step)
-            except Exception as exc:
-                resumed_code = resume_controller.prior_code_for_step(step.step_id)
-                if resumed_code is not None:
-                    code = _use_resumed_code(resumed_code, error=exc)
-                else:
+                if preflight_overlap_code is not None:
+                    code = preflight_overlap_code
                     with shared_lock:
                         findings.append(
                             ValidationFinding(
                                 validator="coder",
-                                severity="error",
-                                message=f"Coder agent failed for step {step.step_id}: {exc}",
+                                severity="info",
+                                message=(
+                                    "Using deterministic cohort-definition "
+                                    "overlap analysis before requesting new "
+                                    f"coder code for step {step.step_id}."
+                                ),
+                                detail={"step_id": step.step_id},
                             )
                         )
-                        step_record["status"] = "coder_failed"
-                        per_step_records.append(step_record)
-                        _flush_partial_manifest()
-                    emit_progress(
-                        "coder",
-                        f"Coder failed for {step.step_id}.",
-                        status="error",
-                        run_id=run_id,
-                        step_id=step.step_id,
-                        current_step=step_current,
-                        total_steps=total_steps,
+                else:
+                    preflight_sensitivity_code = (
+                        _deterministic_cohort_definition_sensitivity_code(
+                            "cohort_definition_sensitivity_preflight",
+                            preflight=True,
+                        )
                     )
-                    return step_record
-        deterministic_fallback_used = False
+                    if preflight_sensitivity_code is not None:
+                        code = preflight_sensitivity_code
+                        with shared_lock:
+                            findings.append(
+                                ValidationFinding(
+                                    validator="coder",
+                                    severity="info",
+                                    message=(
+                                        "Using deterministic cohort-definition "
+                                        "sensitivity comparison before requesting "
+                                        f"new coder code for step {step.step_id}."
+                                    ),
+                                    detail={"step_id": step.step_id},
+                                )
+                            )
+                    else:
+                        try:
+                            emit_progress(
+                                "coder",
+                                f"Generating analysis script for {step.step_id}.",
+                                run_id=run_id,
+                                step_id=step.step_id,
+                                current_step=step_current,
+                                total_steps=total_steps,
+                            )
+                            code = coder.run(context=agent_context, step=step)
+                        except Exception as exc:
+                            resumed_code = resume_controller.prior_code_for_step(
+                                step.step_id
+                            )
+                            if resumed_code is not None:
+                                code = _use_resumed_code(resumed_code, error=exc)
+                            else:
+                                fallback_code = _deterministic_publication_figure_code(
+                                    "publication_figure_coder_failed"
+                                )
+                                if fallback_code is not None:
+                                    code = fallback_code
+                                    with shared_lock:
+                                        findings.append(
+                                            ValidationFinding(
+                                                validator="coder",
+                                                severity="warning",
+                                                message=(
+                                                    f"Coder agent failed for figure step {step.step_id}; "
+                                                    "using deterministic publication-figure renderer "
+                                                    "from parent outputs."
+                                                ),
+                                                detail={
+                                                    "step_id": step.step_id,
+                                                    "error": str(exc)[:300],
+                                                },
+                                            )
+                                        )
+                                else:
+                                    with shared_lock:
+                                        findings.append(
+                                            ValidationFinding(
+                                                validator="coder",
+                                                severity="error",
+                                                message=f"Coder agent failed for step {step.step_id}: {exc}",
+                                            )
+                                        )
+                                        step_record["status"] = "coder_failed"
+                                        per_step_records.append(step_record)
+                                        _flush_partial_manifest()
+                                    emit_progress(
+                                        "coder",
+                                        f"Coder failed for {step.step_id}.",
+                                        status="error",
+                                        run_id=run_id,
+                                        step_id=step.step_id,
+                                        current_step=step_current,
+                                        total_steps=total_steps,
+                                    )
+                                    return step_record
 
         def _deterministic_fallback_code(reason: str) -> Optional[str]:
             nonlocal deterministic_fallback_used
@@ -1349,18 +1869,25 @@ def run_execute_phase(
                     step=step,
                 )
             )
-            if pipeline._enable_llm_concept_audit and resumed_code_reuse_used:
+            if pipeline._enable_llm_concept_audit and (
+                resumed_code_reuse_used or deterministic_fallback_used
+            ):
                 usage_findings.append(
                     ValidationFinding(
                         validator="llm_concept_auditor",
                         severity="warning",
                         message=(
-                            f"Skipped optional LLM concept audit for resumed code "
-                            f"in step {step.step_id}; deterministic audits still ran."
+                            f"Skipped optional LLM concept audit for deterministic "
+                            f"or resumed code in step {step.step_id}; deterministic "
+                            "audits still ran."
                         ),
                         detail={
                             "step_id": step.step_id,
-                            "generation_mode": "resumed_code_reuse",
+                            "generation_mode": (
+                                "resumed_code_reuse"
+                                if resumed_code_reuse_used
+                                else "deterministic_fallback"
+                            ),
                         },
                     )
                 )
@@ -1627,7 +2154,7 @@ def run_execute_phase(
         # nothing to fix the traceback — the step would fail-closed even though
         # the analysis it produced (e.g. the primary OR) was already valid.
         runtime_repair_attempts = 0
-        runner_repair_name: Optional[str] = None
+        runner_repair_name: Optional[str] = preexecution_runner_repair_name
         while True:
             run_label = "repaired script" if repair_attempts else "generated script"
             emit_progress(
@@ -2369,57 +2896,60 @@ def run_execute_phase(
                     transformation="Promoted sibling figure exports into canonical outputs directory.",
                 )
             else:
-                promoted = _promote_prior_publication_bundle(
+                rescued = _render_publication_bundle_from_prior_outputs_for_step(
                     run_dir=run_dir,
                     current_step_id=step.step_id,
                     out_dir=run_result.out_dir,
+                    step_text=f"{step.intent} {step.method}",
                 )
-                if promoted is not None:
-                    runner_repair_name = promoted
-                    step_record["runner_repair"] = promoted
+                if rescued is not None:
+                    runner_repair_name = rescued
+                    step_record["runner_repair"] = rescued
                     _record_repair(
-                        repair_id=promoted,
+                        repair_id=rescued,
                         step_id=step.step_id,
-                        trigger={"source": "publication_figure_prior_bundle_promotion"},
-                        transformation="Promoted prior publication figure bundle into current outputs directory.",
+                        trigger={"source": "typed_publication_bundle_rescue"},
+                        transformation=(
+                            "Rendered deterministic publication figure bundle "
+                            "from the registered parent outputs for this step type."
+                        ),
                     )
                 else:
-                    rescued = _render_prediction_publication_bundle_from_prior_outputs(
+                    promotion_text = (
+                        f"{step.step_id} {step.intent} {step.method}".lower()
+                    )
+                    association_promotion_roles: Optional[Sequence[str]] = None
+                    if any(
+                        token in promotion_text
+                        for token in (
+                            "association",
+                            "odds",
+                            "effect",
+                            "forest",
+                            "primary_result",
+                            "primary results",
+                            "main_result",
+                            "main results",
+                        )
+                    ):
+                        association_promotion_roles = (
+                            "descriptive_result",
+                            "primary_estimand",
+                        )
+                    promoted = _promote_prior_publication_bundle(
                         run_dir=run_dir,
                         current_step_id=step.step_id,
                         out_dir=run_result.out_dir,
+                        required_roles=association_promotion_roles,
                     )
-                    rescue_source = "prediction_publication_bundle_rescue"
-                    rescue_note = (
-                        "Rendered deterministic publication figure bundle "
-                        "from prior prediction outputs."
-                    )
-                    if rescued is None:
-                        # Association/regression figures: render an odds-ratio
-                        # forest plot from the parent coefficient table when the
-                        # figure-only child step failed (e.g. small model hard-
-                        # coded a wrong results filename).
-                        rescued = (
-                            _render_association_publication_bundle_from_prior_outputs(
-                                run_dir=run_dir,
-                                current_step_id=step.step_id,
-                                out_dir=run_result.out_dir,
-                            )
-                        )
-                        if rescued is not None:
-                            rescue_source = "association_publication_bundle_rescue"
-                            rescue_note = (
-                                "Rendered deterministic odds-ratio forest plot "
-                                "from prior association outputs."
-                            )
-                    if rescued is not None:
-                        runner_repair_name = rescued
-                        step_record["runner_repair"] = rescued
+                    if promoted is not None:
+                        runner_repair_name = promoted
+                        step_record["runner_repair"] = promoted
                         _record_repair(
-                            repair_id=rescued,
+                            repair_id=promoted,
                             step_id=step.step_id,
-                            trigger={"source": rescue_source},
-                            transformation=rescue_note,
+                            trigger={"source": "publication_figure_prior_bundle_promotion"},
+                            transformation="Promoted prior publication figure bundle into current outputs directory.",
                         )
 
         run_result.artefacts = sorted(
@@ -2714,31 +3244,35 @@ def run_execute_phase(
             token in f"{step.step_id} {step.intent} {step.method}".lower()
             for token in ("sensitivity", "robustness")
         )
+        cohort_publication_step = publication_step and any(
+            token in f"{step.step_id} {step.intent} {step.method}".lower()
+            for token in ("cohort", "eligibility", "overlap", "attrition", "definition")
+        )
+        missingness_publication_step = publication_step and any(
+            token in f"{step.step_id} {step.intent} {step.method}".lower()
+            for token in ("missingness", "measurement", "data_quality", "quality")
+        )
         if (
-            (association_publication_step or sensitivity_publication_step)
+            (
+                association_publication_step
+                or sensitivity_publication_step
+                or cohort_publication_step
+                or missingness_publication_step
+            )
             and figure_gate_errors
         ):
             _clear_output_dir(run_result.out_dir)
-            if association_publication_step:
-                repaired = _render_association_publication_bundle_from_prior_outputs(
-                    run_dir=run_dir,
-                    current_step_id=step.step_id,
-                    out_dir=run_result.out_dir,
-                )
-                transformation = (
-                    "Replaced invalid figure-step exports with a deterministic "
-                    "multi-panel association figure from the registered parent table."
-                )
-            else:
-                repaired = _render_sensitivity_publication_bundle_from_prior_outputs(
-                    run_dir=run_dir,
-                    current_step_id=step.step_id,
-                    out_dir=run_result.out_dir,
-                )
-                transformation = (
-                    "Replaced invalid figure-step exports with a deterministic "
-                    "multi-panel sensitivity figure from the registered parent table."
-                )
+            repaired = _render_publication_bundle_from_prior_outputs_for_step(
+                run_dir=run_dir,
+                current_step_id=step.step_id,
+                out_dir=run_result.out_dir,
+                step_text=f"{step.intent} {step.method}",
+            )
+            transformation = (
+                "Replaced invalid figure-step exports with a deterministic "
+                "publication figure from the registered parent table for this "
+                "step type."
+            )
             if repaired is not None:
                 runner_repair_name = repaired
                 step_record["runner_repair"] = repaired
@@ -2915,14 +3449,22 @@ def run_execute_phase(
             _flush_partial_manifest()
 
         interp_generation_mode = "llm"
-        if resumed_code_reuse_used:
-            interpretation = (
-                f"Step `{step.step_id}` was re-executed from resumed "
-                "agent-generated code. Review the registered step summary and "
-                "artefacts for numeric interpretation; no new LLM interpretation "
-                "was requested during resume."
+        if resumed_code_reuse_used or deterministic_fallback_used:
+            mode_label = (
+                "resumed agent-generated code"
+                if resumed_code_reuse_used
+                else "deterministic fallback code"
             )
-            interp_generation_mode = "resumed_code_reuse"
+            interpretation = (
+                f"Step `{step.step_id}` was executed from {mode_label}. "
+                "Review the registered step summary and artefacts for numeric "
+                "interpretation; no new LLM interpretation was requested."
+            )
+            interp_generation_mode = (
+                "resumed_code_reuse"
+                if resumed_code_reuse_used
+                else "deterministic_fallback"
+            )
         else:
             try:
                 interpretation = analyzer.run(
@@ -3237,6 +3779,60 @@ def run_execute_phase(
             final_visual_findings
         )
         findings += demoted_final_findings
+
+    try:
+        article_contract_status = summarize_article_contract_coverage(
+            context=context,
+            plan=plan,
+            evidence_records=evidence.records(),
+            per_step_records=per_step_records,
+            run_dir=run_dir,
+        )
+        article_contract_path = run_dir / "article_contract_audit.json"
+        article_contract_path.write_text(
+            json.dumps(
+                article_contract_status,
+                indent=2,
+                ensure_ascii=False,
+                default=str,
+            ),
+            encoding="utf-8",
+        )
+        if evidence.get("article_contract_audit") is None:
+            evidence.register_file(
+                kind="log",
+                description=(
+                    "Run-level article analysis contract audit: compares "
+                    "registered artifacts against required article display roles."
+                ),
+                source_path=article_contract_path,
+                evidence_id="article_contract_audit",
+                producer="article_contract",
+                generation_mode="system",
+            )
+        findings.extend(
+            validate_run_against_article_contract(
+                context=context,
+                plan=plan,
+                evidence_records=evidence.records(),
+                per_step_records=per_step_records,
+                run_dir=run_dir,
+            )
+        )
+        _flush_partial_manifest(
+            {"article_contract_audit": str(article_contract_path.relative_to(run_dir))}
+        )
+    except Exception as exc:
+        findings.append(
+            ValidationFinding(
+                validator="article_analysis_contract",
+                severity="warning",
+                message=(
+                    "Run-level article analysis contract audit failed: "
+                    f"{type(exc).__name__}: {exc}"
+                ),
+            )
+        )
 
     plan_result.plan = plan
     plan_result.plan_path = plan_path

@@ -12,6 +12,7 @@ frontend and the first real read-only endpoint, ``/api/catalog``.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from easyicu.webserver import agent_runs
+from easyicu.webserver import capabilities
 from easyicu.webserver import cohort_review
 from easyicu.webserver import copilot_sessions
 from easyicu.webserver import crossdb_review
@@ -31,6 +33,7 @@ from easyicu.webserver import guided_sessions
 from easyicu.webserver import patient_drilldown
 from easyicu.webserver import provider_adapter
 from easyicu.webserver import settings as settings_store
+from easyicu.webserver import science_workbench
 from easyicu.webserver import sources as source_store
 from easyicu.webserver.catalog import build_catalog
 from easyicu.webserver.ideas import mining as idea_mining_web
@@ -46,6 +49,21 @@ def _body_bool(body: Dict[str, Any], key: str, default: bool = False) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "on"}
     return bool(value)
+
+
+def _pubmed_connector_payload(body: Dict[str, Any]) -> Dict[str, Any]:
+    """Apply the global PubMed connector switch before network-capable idea APIs."""
+    settings = settings_store.load_settings()
+    if settings.get("connector_pubmed_enabled", True):
+        return body
+    patched = dict(body or {})
+    patched["allow_network"] = False
+    patched["connector_disabled_reason"] = "connector_pubmed_enabled_false"
+    capabilities.record_tool_event(
+        "pubmed_connector_blocked",
+        {"reason": "connector_pubmed_enabled_false", "path": "ideas"},
+    )
+    return patched
 
 
 @app.middleware("http")
@@ -91,6 +109,54 @@ def post_settings(patch: Dict[str, Any]) -> dict:
 def post_settings_reset() -> dict:
     """Reset local settings to backend defaults."""
     return {**settings_store.reset_settings(), "about": settings_store.about()}
+
+
+@app.get("/api/capabilities")
+def get_capabilities() -> dict:
+    """Return backend capability state consumed by Settings and Agent Science."""
+    return capabilities.capability_status()
+
+
+@app.post("/api/capabilities/tool-check")
+def post_capability_tool_check(body: Dict[str, Any]) -> dict:
+    """Check whether an MCP-style tool is allowed under current Settings."""
+    return capabilities.check_tool_allowed(str(body.get("tool_id") or ""))
+
+
+@app.post("/api/capabilities/zotero/search")
+def post_capability_zotero_search(body: Dict[str, Any]) -> dict:
+    """Search Zotero through the local Zotero Desktop API when enabled."""
+    return capabilities.search_zotero(
+        str(body.get("query") or ""), limit=int(body.get("limit") or 5)
+    )
+
+
+@app.post("/api/capabilities/zotero/test")
+def post_capability_zotero_test(body: Dict[str, Any] | None = None) -> dict:
+    """Probe the local Zotero Desktop API and record the decision."""
+    return capabilities.test_zotero_connection()
+
+
+@app.post("/api/capabilities/zotero/source")
+def post_capability_zotero_source(body: Dict[str, Any]) -> dict:
+    """Convert a selected Zotero item into an Idea Mining source payload."""
+    item = body.get("item") if isinstance(body.get("item"), dict) else None
+    return capabilities.zotero_source(
+        item=item,
+        item_key=str(body.get("item_key") or body.get("key") or ""),
+    )
+
+
+@app.post("/api/capabilities/zotero/import")
+def post_capability_zotero_import(body: Dict[str, Any]) -> dict:
+    """Parse pasted DOI/BibTeX/RIS/title metadata into an Idea Mining source."""
+    return capabilities.import_zotero_source(str(body.get("text") or ""))
+
+
+@app.post("/api/capabilities/audit-events")
+def post_capability_audit_events(body: Dict[str, Any] | None = None) -> dict:
+    """Read the local capability/tool audit log."""
+    return capabilities.audit_events(limit=int((body or {}).get("limit") or 20))
 
 
 @app.get("/api/fs/list")
@@ -366,6 +432,13 @@ def jobs_agent_run(body: Dict[str, Any]) -> dict:
     desc = dataio.describe_export_source(path)
     if not desc.get("ok"):
         raise HTTPException(status_code=400, detail=desc)
+    project_seed_dir = str(
+        body.get("project_seed_dir") or body.get("project_seed_path") or ""
+    ).strip()
+    if project_seed_dir:
+        seed_check = _validate_agent_project_seed_for_run(project_seed_dir, path)
+        if not seed_check.get("ok"):
+            raise HTTPException(status_code=400, detail=seed_check)
 
     run_type = str(
         body.get("run_type") or ("full" if body.get("full_run") else "preflight")
@@ -373,6 +446,9 @@ def jobs_agent_run(body: Dict[str, Any]) -> dict:
     llm_provider = str(body.get("llm_provider") or body.get("provider") or "mock")
     external_llm_opt_in = bool(body.get("external_llm_opt_in"))
     settings = settings_store.load_settings()
+    compute = capabilities.validate_compute_target(body)
+    if not compute.get("ok"):
+        raise HTTPException(status_code=400, detail=compute)
     try:
         agent_runs.validate_agent_run_config(
             run_type=run_type,
@@ -388,14 +464,109 @@ def jobs_agent_run(body: Dict[str, Any]) -> dict:
         study_id=str(body.get("study_id") or "study"),
         mode=str(body.get("mode") or "analysis"),
         question=body.get("question"),
-        project_root=body.get("project_root"),
+        project_root=body.get("project_root") or _agent_seed_run_root(project_seed_dir),
         run_type=run_type,
         llm_provider=llm_provider,
         external_llm_opt_in=external_llm_opt_in,
         ai_enabled=bool(settings.get("ai_enabled")),
     )
     job = MANAGER.submit("agent-run", runner)
+    capabilities.record_tool_event(
+        "agent_run_submitted",
+        {
+            "job_id": job.id,
+            "run_type": run_type,
+            "llm_provider": llm_provider,
+            "compute_target": compute.get("compute_target"),
+        },
+    )
     return {"job_id": job.id, "kind": job.kind, "status": job.status}
+
+
+def _validate_agent_project_seed_for_run(
+    project_seed_dir: str, export_path: str
+) -> Dict[str, Any]:
+    """Fail closed when an Idea-derived Agent seed is not ready to run."""
+
+    seed_path = Path(project_seed_dir).expanduser() / "project_seed.json"
+    try:
+        seed = json.loads(seed_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {
+            "ok": False,
+            "error": "agent_project_seed_not_found",
+            "project_seed_dir": project_seed_dir,
+        }
+    except json.JSONDecodeError:
+        return {
+            "ok": False,
+            "error": "agent_project_seed_invalid_json",
+            "project_seed_dir": project_seed_dir,
+        }
+
+    gate = seed.get("execution_gate") or {}
+    if _idea_seed_requires_gate(seed) and not gate:
+        return {
+            "ok": False,
+            "error": "agent_project_execution_gate_missing",
+            "blockers": [
+                "refresh Agent project from Idea Mining so preflight checks are available"
+            ],
+        }
+    blockers = [str(item) for item in gate.get("blockers") or [] if item]
+    if gate and not gate.get("agent_run_ready_after_human_confirmation"):
+        return {
+            "ok": False,
+            "error": "agent_project_execution_gate_blocked",
+            "blockers": blockers,
+            "execution_gate": gate,
+        }
+
+    contract = seed.get("active_export_contract") or {}
+    if contract.get("demo_like"):
+        return {
+            "ok": False,
+            "error": "agent_project_demo_export_blocked",
+            "blockers": ["prepare or select a real EasyICU export"],
+            "active_export_contract": contract,
+        }
+    contract_status = str(contract.get("status") or "").lower()
+    if contract_status and contract_status != "ready":
+        return {
+            "ok": False,
+            "error": "agent_project_export_contract_not_ready",
+            "blockers": ["re-extract or confirm missing required concepts"],
+            "active_export_contract": contract,
+        }
+
+    expected_hash = str(contract.get("path_hash") or "")
+    if expected_hash:
+        active_hash = hashlib.sha256(str(export_path or "").encode("utf-8")).hexdigest()[
+            :16
+        ]
+        if active_hash != expected_hash:
+            return {
+                "ok": False,
+                "error": "agent_project_active_export_changed",
+                "blockers": ["select the same active export used by Idea Mining"],
+                "expected_path_hash": expected_hash,
+                "active_path_hash": active_hash,
+            }
+    return {"ok": True}
+
+
+def _idea_seed_requires_gate(seed: Dict[str, Any]) -> bool:
+    return bool(
+        seed.get("source_run_id")
+        or seed.get("source_idea_id")
+        or seed.get("status") == "seeded_from_idea"
+    )
+
+
+def _agent_seed_run_root(project_seed_dir: str) -> str | None:
+    if not project_seed_dir:
+        return None
+    return str(Path(project_seed_dir).expanduser() / "runs")
 
 
 @app.get("/api/agent-runs/provider-status")
@@ -456,6 +627,25 @@ def post_agent_run_review(body: Dict[str, Any]) -> dict:
     result = agent_runs.read_run_review(str(body.get("project_dir") or ""))
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result)
+    return result
+
+
+@app.post("/api/agent-runs/science-workbench")
+def post_agent_run_science_workbench(body: Dict[str, Any]) -> dict:
+    """Return Claude-Science-style artifact history/reviewer summaries.
+
+    The endpoint is a bounded presentation adapter over local Agent artifacts.
+    It does not create runs, read raw patient rows, or unlock manuscript drafts.
+    """
+    result = science_workbench.build_science_workbench(
+        str(body.get("project_dir") or "").strip() or None
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result)
+    capabilities.record_tool_event(
+        "science_workbench_loaded",
+        {"project_dir": str(body.get("project_dir") or "").strip() or None},
+    )
     return result
 
 
@@ -658,7 +848,16 @@ def post_ideas_resolve_source(body: Dict[str, Any]) -> dict:
 def post_ideas_discover(body: Dict[str, Any]) -> dict:
     """Run or prepare opt-in PubMed/frontier literature discovery."""
     try:
-        return idea_mining_web.discover_literature(body)
+        payload = idea_mining_web.discover_literature(_pubmed_connector_payload(body))
+        capabilities.record_tool_event(
+            "pubmed_discovery",
+            {
+                "allow_network": bool((body or {}).get("allow_network")),
+                "search_performed": bool(payload.get("search_performed")),
+                "status": payload.get("status"),
+            },
+        )
+        return payload
     except idea_mining_web.IdeaMiningWebError as exc:
         raise HTTPException(status_code=400, detail=exc.detail) from exc
 
@@ -685,7 +884,18 @@ def post_ideas_literature_folder(body: Dict[str, Any]) -> dict:
 def post_ideas_prior_art(body: Dict[str, Any]) -> dict:
     """Run or prepare an opt-in bounded prior-art check for an idea."""
     try:
-        return idea_mining_web.check_prior_art(body)
+        payload = idea_mining_web.check_prior_art(_pubmed_connector_payload(body))
+        capabilities.record_tool_event(
+            "pubmed_prior_art",
+            {
+                "allow_network": bool((body or {}).get("allow_network")),
+                "search_performed": bool(
+                    (payload.get("prior_art") or {}).get("search_performed")
+                ),
+                "status": (payload.get("prior_art") or {}).get("status"),
+            },
+        )
+        return payload
     except idea_mining_web.IdeaMiningWebError as exc:
         raise HTTPException(status_code=400, detail=exc.detail) from exc
 
@@ -695,6 +905,15 @@ def post_ideas_plan(body: Dict[str, Any]) -> dict:
     """Create or revise the pre-Agent study plan for an idea."""
     try:
         return idea_mining_web.plan_idea(body)
+    except idea_mining_web.IdeaMiningWebError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
+
+
+@app.post("/api/ideas/bounded-feasibility")
+def post_ideas_bounded_feasibility(body: Dict[str, Any]) -> dict:
+    """Run a bounded sample feasibility check for a mined idea."""
+    try:
+        return idea_mining_web.bounded_sample_feasibility(body)
     except idea_mining_web.IdeaMiningWebError as exc:
         raise HTTPException(status_code=400, detail=exc.detail) from exc
 

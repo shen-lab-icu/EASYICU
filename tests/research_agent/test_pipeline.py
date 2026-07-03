@@ -144,6 +144,45 @@ def test_strict_evidence_failure_writes_structured_diagnostic_package(
     )
 
 
+def test_writer_failure_does_not_pass_empty_manuscript(
+    ra,
+    synthetic_cohort,
+    tmp_path: Path,
+    monkeypatch,
+):
+    def _raise_writer_failure(self, *, context, evidence_ids, evidence_digest=None):
+        raise RuntimeError("local writer endpoint unavailable")
+
+    monkeypatch.setattr(ra.ManuscriptAgent, "run", _raise_writer_failure)
+
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=ra.MockLLMClient(),
+        enable_literature=False,
+    )
+    result = pipeline.run(
+        question="Is admission SOFA-2 associated with ICU mortality?",
+        cohort=synthetic_cohort,
+        cohort_name="writer_failure_test",
+        database="synthetic",
+        target_outcome="death",
+    )
+
+    run_dir = Path(result.workdir)
+    bound = (run_dir / "manuscript_scaffold_bound.md").read_text(encoding="utf-8")
+    critique = json.loads((run_dir / "manuscript_critique.json").read_text(encoding="utf-8"))
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    run_status = json.loads((run_dir / "run_status.json").read_text(encoding="utf-8"))
+
+    assert "Manuscript scaffold not generated" in bound
+    assert critique["status"] == "blocked"
+    assert run_status["gates"]["manuscript_generated"] is False
+    assert run_status["gates"]["manuscript_ready"] is False
+    validators = {finding["validator"] for finding in manifest["findings"]}
+    assert "writer_agent" in validators
+    assert "evidence_bound_writer" in validators
+
+
 def test_pipeline_with_clinical_skill(ra, synthetic_cohort, tmp_path: Path):
     pipeline = ra.ResearchAgentPipeline(workdir=tmp_path, llm=ra.MockLLMClient())
     # No case-specific skill ships in the registry anymore; the caller supplies
@@ -656,6 +695,138 @@ print(json.dumps(summary))
     ]
 
 
+def test_figure_step_coder_failure_uses_parent_output_rescue(ra, tmp_path: Path):
+    class FigureCoderFailureLLM:
+        name = "figure-coder-failure-llm"
+
+        def __init__(self):
+            self.code_calls = 0
+
+        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
+            user = next(
+                (m.content for m in reversed(messages) if m.role == "user"), ""
+            )
+            upper = user.upper()
+            if "ICU-AWARE RESEARCH PLAN" in upper:
+                return json.dumps({
+                    "research_question": (
+                        "Estimate an association and render its publication figure."
+                    ),
+                    "steps": [
+                        {
+                            "step_id": "03_primary_association",
+                            "intent": "Estimate the adjusted odds ratio.",
+                            "inputs": ["sepsis3", "death", "age"],
+                            "expected_outputs": ["statistic:primary_association"],
+                            "method": "logistic",
+                            "icu_rule_refs": [],
+                        },
+                        {
+                            "step_id": "03_primary_association_figure",
+                            "intent": (
+                                "Render the publication figure(s) declared by "
+                                "step '03_primary_association'."
+                            ),
+                            "inputs": ["03_primary_association"],
+                            "expected_outputs": ["figure:publication_figure"],
+                            "method": "publication_figure_generation",
+                            "icu_rule_refs": [],
+                        },
+                    ],
+                    "rationale": "minimal figure rescue test",
+                })
+            if "WRITE THE PYTHON CODE" in upper:
+                self.code_calls += 1
+                if self.code_calls == 1:
+                    return """
+import json
+import os
+import pandas as pd
+
+out = os.environ["STEP_OUT_DIR"]
+pd.DataFrame({
+    "term": ["sepsis3", "age_per_10y"],
+    "reader_label": ["Sepsis-3 positive vs negative", "Age, per 10 years"],
+    "effect_scale": ["adjusted odds ratio", "adjusted odds ratio"],
+    "estimate": [1.24, 1.08],
+    "ci_low": [1.11, 1.02],
+    "ci_high": [1.38, 1.15],
+    "p_value": [0.001, 0.02],
+}).to_csv(os.path.join(out, "adjusted_association_death.csv"), index=False)
+summary = {
+    "primary_predictor": "sepsis3",
+    "primary_or": 1.24,
+    "primary_adjusted_association": {
+        "term": "sepsis3",
+        "estimate": 1.24,
+        "ci_low": 1.11,
+        "ci_high": 1.38,
+        "effect_scale": "adjusted odds ratio",
+        "covariates": ["sepsis3", "age_per_10y"],
+    },
+}
+with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
+    json.dump(summary, f)
+print(json.dumps(summary))
+"""
+                raise RuntimeError("simulated local LLM outage for figure coder")
+            if "INTERPRET THE RESULTS" in upper:
+                return "The step completed with registered evidence."
+            if "MANUSCRIPT SCAFFOLD" in upper:
+                return "# Title\n\n## Results\n\nAnalysis stopped after execution."
+            return "{}"
+
+    cohort = pd.DataFrame({
+        "sepsis3": [0, 1, 0, 1],
+        "death": [0, 1, 0, 1],
+        "age": [50, 60, 70, 80],
+    })
+    llm = FigureCoderFailureLLM()
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=llm,
+        enable_literature=False,
+        enable_llm_concept_audit=False,
+    )
+
+    result = pipeline.run(
+        question="Is Sepsis-3 associated with mortality?",
+        cohort=cohort,
+        cohort_name="figure_rescue_test",
+        database="synthetic",
+        target_outcome="death",
+        primary_exposure="sepsis3",
+        stop_after_analysis=True,
+    )
+
+    run_dir = Path(result.workdir)
+    out_dir = run_dir / "steps" / "03_primary_association_figure" / "outputs"
+    partial = json.loads((run_dir / "manifest_partial.json").read_text("utf-8"))
+    record = _step_record_by_id(
+        partial["per_step_records"], "03_primary_association_figure"
+    )
+    assert record["status"] == "ok"
+    assert (
+        record["deterministic_code_fallback"]
+        == "publication_figure_parent_outputs_preflight"
+    )
+    assert llm.code_calls == 1
+    assert (out_dir / "publication_figure.png").exists()
+    assert (out_dir / "publication_figure.svg").exists()
+    assert (out_dir / "publication_figure.figure_contract.json").exists()
+    assert (out_dir / "publication_figure_source_data.csv").exists()
+    assert not [
+        f
+        for f in record.get("contract_findings", [])
+        if f["severity"] == "error"
+    ]
+    assert not [
+        f
+        for f in record.get("figure_source_findings", [])
+        if f["severity"] == "error"
+    ]
+
+
 def test_promote_prior_publication_bundle_copies_real_figure_exports(tmp_path: Path):
     from easyicu.research_agent.pipeline import _promote_prior_publication_bundle
 
@@ -695,6 +866,65 @@ def test_promote_prior_publication_bundle_copies_real_figure_exports(tmp_path: P
         "publication_figure.svg",
         "publication_figure.tiff",
     ]
+
+
+def test_promote_prior_publication_bundle_filters_roles_for_primary_results(
+    tmp_path: Path,
+):
+    from easyicu.research_agent.pipeline import _promote_prior_publication_bundle
+
+    run_dir = tmp_path / "run"
+    cohort_dir = run_dir / "steps" / "02_cohort_overlap_figure" / "outputs"
+    target_dir = run_dir / "steps" / "03_primary_results_figure" / "outputs"
+    cohort_dir.mkdir(parents=True)
+    target_dir.mkdir(parents=True)
+
+    (cohort_dir / "publication_figure.png").write_bytes(b"cohort")
+    (cohort_dir / "publication_figure.figure_contract.json").write_text(
+        json.dumps(
+            {
+                "figure_id": "publication_figure",
+                "panels": [
+                    {"panel_id": "A", "role": "overview"},
+                    {"panel_id": "B", "role": "audit"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    repair = _promote_prior_publication_bundle(
+        run_dir=run_dir,
+        current_step_id="03_primary_results_figure",
+        out_dir=target_dir,
+        required_roles=("descriptive_result", "primary_estimand"),
+    )
+    assert repair is None
+    assert not (target_dir / "publication_figure.png").exists()
+
+    association_dir = run_dir / "steps" / "03_primary_association_figure" / "outputs"
+    association_dir.mkdir(parents=True)
+    (association_dir / "publication_figure.png").write_bytes(b"association")
+    (association_dir / "publication_figure.figure_contract.json").write_text(
+        json.dumps(
+            {
+                "figure_id": "publication_figure",
+                "panels": [
+                    {"panel_id": "A", "role": "primary_estimand"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    repair = _promote_prior_publication_bundle(
+        run_dir=run_dir,
+        current_step_id="03_primary_results_figure",
+        out_dir=target_dir,
+        required_roles=("descriptive_result", "primary_estimand"),
+    )
+    assert repair == "publication_bundle_promote_v1"
+    assert (target_dir / "publication_figure.png").read_bytes() == b"association"
 
 
 def test_pipeline_does_not_block_or_repair_advisory_ordinal_mean(ra, tmp_path: Path):
@@ -2575,7 +2805,7 @@ from sklearn.metrics import roc_auc_score, brier_score_loss, calibration_curve
     assert "from sklearn.calibration import calibration_curve" in patched
 
 
-def test_deterministic_runner_repair_regularizes_singular_logit(ra):
+def test_deterministic_runner_repair_rank_reduces_singular_logit(ra):
     from easyicu.research_agent.pipeline import _deterministic_runner_repair
 
     code = """
@@ -2589,9 +2819,62 @@ result = model.fit(disp=0, method='newton')
     )
     assert repaired is not None
     name, patched = repaired
-    assert name == "logit_regularized_fit_v1"
-    assert "_easyicu_safe_logit_fit_v1" in patched
-    assert "result = _easyicu_safe_logit_fit_v1(model)" in patched
+    assert name == "rank_safe_statsmodels_design_v1"
+    assert "_easyicu_rank_safe_design_v1" in patched
+    assert "model = sm.GLM(y, X, family=sm.families.Binomial())" in patched
+    assert "_easyicu_safe_exp_v1" in patched
+
+
+def test_deterministic_summary_repair_rank_reduces_nested_primary_model(ra):
+    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+
+    code = """
+import numpy as np
+import pandas as pd
+import statsmodels.api as sm
+
+def run_model():
+    np.random.seed(42)
+    n = 80
+    exposure_col = "exposure"
+    exposure = np.r_[np.zeros(n // 2), np.ones(n // 2)]
+    age = np.linspace(40, 80, n)
+    logits = -2.0 + 0.9 * exposure + 0.01 * (age - 60)
+    probabilities = 1 / (1 + np.exp(-logits))
+    y = pd.Series(np.random.binomial(1, probabilities), name="death")
+    X = pd.DataFrame({"exposure": exposure, "age": age, "age_dup": age})
+    X = sm.add_constant(X, has_constant="add")
+    model = sm.Logit(y, X)
+    return model.fit(disp=0, maxiter=200)
+
+result = run_model()
+"""
+    repaired = _deterministic_summary_repair(
+        code=code,
+        step_summary={
+            "analysis_family": "cohort_definition_sensitivity",
+            "primary_exposure": "exposure",
+            "target_outcome": "death",
+            "primary_model": {
+                "outcome": "death",
+                "exposure": "exposure",
+                "odds_ratio": None,
+                "or_ci_low": None,
+                "or_ci_high": None,
+                "converged": False,
+                "notes": "Model fit failed: LinAlgError: Singular matrix",
+            },
+        },
+        analysis_family="cohort_definition_sensitivity",
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "rank_safe_statsmodels_design_v1"
+    namespace = {}
+    exec(patched, namespace)
+    result = namespace["result"]
+    assert "exposure" in result.params.index
+    assert "age_dup" not in result.params.index
 
 
 def test_deterministic_runner_repair_promotes_publication_bundle_script(ra):
@@ -4379,7 +4662,15 @@ def test_readiness_artifacts_fail_closed_without_manuscript_ready(ra, tmp_path: 
     assert run_status["status"] == "diagnostic_only"
 
 
-def test_readiness_artifacts_emit_manuscript_ready_only_after_gates_pass(ra, tmp_path: Path):
+def _evidence_bound_demo_manuscript() -> str:
+    return (
+        "The manuscript reports the adjusted association, denominator audit, "
+        "and sensitivity context using registered source evidence "
+        "[model_evidence](evidence/model.csv).\n"
+    )
+
+
+def test_readiness_artifacts_reject_writer_failure_text(ra, tmp_path: Path):
     from easyicu.research_agent.evidence import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
 
@@ -4406,9 +4697,139 @@ def test_readiness_artifacts_emit_manuscript_ready_only_after_gates_pass(ra, tmp
     evidence = EvidenceStore(tmp_path)
     bound_path = tmp_path / "manuscript_scaffold_bound.md"
     bound_path.write_text(
-        "The model achieved an AUROC of 0.78 [model_performance](evidence/model.csv).\n",
+        "(writer failed: Error code: 401 - invalid proxy api key.)",
         encoding="utf-8",
     )
+
+    gates, artifact_paths = _write_readiness_artifacts(
+        context=context,
+        plan=plan,
+        findings=[],
+        per_step_records=[{"step_id": "01_model_training", "status": "ok"}],
+        evidence=evidence,
+        run_dir=tmp_path,
+        manuscript_path=bound_path,
+        stop_after_analysis=False,
+    )
+
+    assert gates["execution_complete"] is True
+    assert gates["manuscript_text_ready"] is False
+    assert gates["manuscript_generated"] is False
+    assert gates["manuscript_ready"] is False
+    assert gates["publication_ready"] is False
+    assert any("writer/runtime failure" in e for e in gates["manuscript_text_errors"])
+    assert "manuscript_ready" not in artifact_paths
+    assert not (tmp_path / "manuscript_ready.md").exists()
+    review_note = (tmp_path / "author_review_note.md").read_text(encoding="utf-8")
+    assert "Manuscript text gate" in review_note
+    assert "No blocking gate failures were detected" not in review_note
+
+
+def test_readiness_artifacts_reject_unresolved_manifest_comments(
+    ra,
+    tmp_path: Path,
+):
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.pipeline import _write_readiness_artifacts
+
+    context = ra.ResearchContext(
+        research_question="Estimate whether Sepsis-3 is associated with mortality.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_stays=10,
+            n_patients=10,
+        ),
+        variables=[],
+        target_outcome="death",
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            ra.AnalysisStep(
+                step_id="01_table_one",
+                intent="Summarise baseline characteristics.",
+                expected_outputs=["table:table_one"],
+            ),
+            ra.AnalysisStep(
+                step_id="02_model",
+                intent="Fit adjusted association model.",
+                expected_outputs=["table:adjusted_association"],
+            ),
+            ra.AnalysisStep(
+                step_id="03_sensitivity",
+                intent="Audit sensitivity and denominator robustness.",
+                expected_outputs=["figure:sensitivity_audit"],
+            ),
+        ],
+    )
+    evidence = EvidenceStore(tmp_path)
+    _register_complete_display_suite_for_readiness(evidence, tmp_path)
+    bound_path = tmp_path / "manuscript_scaffold_bound.md"
+    bound_path.write_text(
+        _evidence_bound_demo_manuscript()
+        + "\nThe estimate is linked to evidence "
+        "[model_evidence](evidence/model.csv)<!-- warning: see manifest -->.\n"
+        + "A remaining claim is also linked "
+        "[model_evidence](evidence/model.csv)<!-- error: see manifest -->.\n",
+        encoding="utf-8",
+    )
+
+    gates, artifact_paths = _write_readiness_artifacts(
+        context=context,
+        plan=plan,
+        findings=[],
+        per_step_records=[
+            {"step_id": "01_table_one", "status": "ok"},
+            {"step_id": "02_model", "status": "ok"},
+            {"step_id": "03_sensitivity", "status": "ok"},
+        ],
+        evidence=evidence,
+        run_dir=tmp_path,
+        manuscript_path=bound_path,
+        stop_after_analysis=False,
+    )
+
+    assert gates["execution_complete"] is True
+    assert gates["publication_figure_bundle_ready"] is True
+    assert gates["manuscript_text_ready"] is False
+    assert gates["manuscript_manifest_warning_count"] == 1
+    assert gates["manuscript_manifest_error_count"] == 1
+    assert any("manifest warning" in err for err in gates["manuscript_text_errors"])
+    assert any("manifest error" in err for err in gates["manuscript_text_errors"])
+    assert gates["manuscript_ready"] is False
+    assert gates["publication_ready"] is False
+    assert "manuscript_ready" not in artifact_paths
+    assert not (tmp_path / "manuscript_ready.md").exists()
+
+
+def test_readiness_artifacts_emit_manuscript_ready_only_after_gates_pass(ra, tmp_path: Path):
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.pipeline import _write_readiness_artifacts
+
+    context = ra.ResearchContext(
+        research_question="Estimate mortality risk.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_stays=10,
+            n_patients=10,
+        ),
+        variables=[],
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            ra.AnalysisStep(
+                step_id="01_model_training",
+                intent="Train model.",
+                expected_outputs=["table:model_performance"],
+            )
+        ],
+    )
+    evidence = EvidenceStore(tmp_path)
+    bound_path = tmp_path / "manuscript_scaffold_bound.md"
+    bound_path.write_text(_evidence_bound_demo_manuscript(), encoding="utf-8")
 
     gates, artifact_paths = _write_readiness_artifacts(
         context=context,
@@ -4441,12 +4862,30 @@ def _register_publication_bundle_for_readiness(
     *,
     contract: dict,
 ) -> None:
+    from easyicu.research_agent.publication_figures import (
+        PUBLICATION_FIGURE_SKILL_POLICY_VERSION,
+    )
+
     out = tmp_path / "publication_figures"
     out.mkdir(parents=True, exist_ok=True)
     contract_path = out / "easyicu_publication_figure.figure_contract.json"
     contract_path.write_text(json.dumps(contract), encoding="utf-8")
     source_path = out / "publication_figure_source_data.csv"
     source_path.write_text("term,estimate\nsepsis3,1.14\n", encoding="utf-8")
+    source_record = evidence.register_file(
+        kind="table",
+        description="Publication figure source data.",
+        source_path=source_path,
+        evidence_id="publication_figure_source_data",
+        producer="publication_figure_skill",
+        generation_mode="deterministic_figure_skill",
+    )
+    source_metadata = {
+        "figure_skill_policy_version": PUBLICATION_FIGURE_SKILL_POLICY_VERSION,
+        "source_evidence_id": source_record.evidence_id,
+        "source_evidence_ids": [source_record.evidence_id],
+        "source_evidence_sha256": {source_record.evidence_id: source_record.sha256},
+    }
     evidence.register_file(
         kind="log",
         description="Publication figure contract.",
@@ -4454,15 +4893,7 @@ def _register_publication_bundle_for_readiness(
         evidence_id="publication_figure_contract",
         producer="publication_figure_skill",
         generation_mode="deterministic_figure_skill",
-        metadata={"source_evidence_id": "publication_figure_source_data"},
-    )
-    evidence.register_file(
-        kind="table",
-        description="Publication figure source data.",
-        source_path=source_path,
-        evidence_id="publication_figure_source_data",
-        producer="publication_figure_skill",
-        generation_mode="deterministic_figure_skill",
+        metadata=source_metadata,
     )
     for suffix in ("svg", "png"):
         path = out / f"easyicu_publication_figure.{suffix}"
@@ -4477,7 +4908,7 @@ def _register_publication_bundle_for_readiness(
             metadata={
                 "figure_role": "publication_figure",
                 "figure_contract": "publication_figure_contract",
-                "source_evidence_id": "publication_figure_source_data",
+                **source_metadata,
             },
         )
 
@@ -4521,18 +4952,34 @@ def _register_complete_display_suite_for_readiness(
         tmp_path,
         contract={
             "figure_id": "easyicu_publication_figure",
-            "core_claim": "Primary effect and sensitivity audit are shown.",
+            "core_claim": "Absolute risk, primary effect, data quality, and sensitivity audit are shown.",
             "panels": [
                 {
                     "panel_id": "A",
-                    "title": "Adjusted odds-ratio estimate",
-                    "role": "relationship",
-                    "claim": "The primary effect estimate is drawn from source data.",
+                    "title": "Absolute outcome risk",
+                    "role": "descriptive_result",
+                    "chart_type": "dot_interval_absolute_risk",
+                    "claim": "Exposure prevalence and absolute outcome risk are shown before adjusted estimates.",
                 },
                 {
                     "panel_id": "B",
+                    "title": "Adjusted odds-ratio estimate",
+                    "role": "relationship",
+                    "chart_type": "forest",
+                    "claim": "The primary effect estimate is drawn from source data.",
+                },
+                {
+                    "panel_id": "C",
+                    "title": "Missingness and measurement availability",
+                    "role": "data_quality",
+                    "chart_type": "availability_panel",
+                    "claim": "Missingness and measurement availability are shown with source-data denominators.",
+                },
+                {
+                    "panel_id": "D",
                     "title": "Sensitivity and denominator audit",
-                    "role": "audit",
+                    "role": "robustness",
+                    "chart_type": "specification_grid",
                     "claim": "Robustness and denominator context are shown together.",
                 },
             ],
@@ -4591,10 +5038,7 @@ def test_readiness_publication_ready_requires_article_display_suite(
         },
     )
     bound_path = tmp_path / "manuscript_scaffold_bound.md"
-    bound_path.write_text(
-        "The adjusted association is described in the manuscript.\n",
-        encoding="utf-8",
-    )
+    bound_path.write_text(_evidence_bound_demo_manuscript(), encoding="utf-8")
 
     gates, artifact_paths = _write_readiness_artifacts(
         context=context,
@@ -4615,6 +5059,10 @@ def test_readiness_publication_ready_requires_article_display_suite(
     assert gates["display_suite_complete"] is False
     assert gates["publication_ready"] is False
     assert "display_suite_audit" in artifact_paths
+    assert "article_contract_audit" in artifact_paths
+    assert gates["article_contract_complete"] is False
+    assert "baseline_context" in gates["article_missing_artifact_roles"]
+    assert "data_quality" in gates["article_missing_artifact_roles"]
     assert any("Table 1" in err for err in gates["display_suite_errors"])
     assert any("fewer than two panels" in err for err in gates["display_suite_errors"])
 
@@ -4660,10 +5108,7 @@ def test_readiness_publication_ready_accepts_complete_display_suite(
     evidence = EvidenceStore(tmp_path)
     _register_complete_display_suite_for_readiness(evidence, tmp_path)
     bound_path = tmp_path / "manuscript_scaffold_bound.md"
-    bound_path.write_text(
-        "The adjusted association is described in the manuscript.\n",
-        encoding="utf-8",
-    )
+    bound_path.write_text(_evidence_bound_demo_manuscript(), encoding="utf-8")
 
     gates, artifact_paths = _write_readiness_artifacts(
         context=context,
@@ -4681,13 +5126,733 @@ def test_readiness_publication_ready_accepts_complete_display_suite(
     )
 
     assert gates["display_suite_complete"] is True
+    assert gates["article_contract_complete"] is True
+    assert gates["article_figure_strategy_complete"] is True
     assert gates["display_table_one_present"] is True
-    assert gates["display_contract_panel_count"] == 2
+    assert gates["display_contract_panel_count"] == 4
+    assert gates["display_absolute_risk_visual_present"] is True
+    assert "dot_interval_absolute_risk" in gates["display_chart_types"]
     assert gates["publication_ready"] is True
     assert (tmp_path / artifact_paths["display_suite_audit"]).exists()
+    assert (tmp_path / artifact_paths["article_contract_audit"]).exists()
+    assert (tmp_path / artifact_paths["article_figure_strategy_audit"]).exists()
 
 
-def test_readiness_supersedes_stale_publication_figure_audit_error(
+def test_display_suite_keeps_step_contracts_supporting_not_primary(
+    ra,
+    tmp_path: Path,
+):
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.pipeline import _write_readiness_artifacts
+
+    context = ra.ResearchContext(
+        research_question="Estimate whether Sepsis-3 is associated with mortality.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_stays=10,
+            n_patients=10,
+        ),
+        variables=[],
+        target_outcome="death",
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            ra.AnalysisStep(
+                step_id="01_table_one",
+                intent="Summarise baseline characteristics.",
+                expected_outputs=["table:table_one"],
+            ),
+            ra.AnalysisStep(
+                step_id="02_model",
+                intent="Fit adjusted association model.",
+                expected_outputs=["table:adjusted_association"],
+            ),
+            ra.AnalysisStep(
+                step_id="03_supporting",
+                intent="Render supporting sensitivity and data-quality figures.",
+                expected_outputs=["figure:supporting_sensitivity"],
+            ),
+        ],
+    )
+    evidence = EvidenceStore(tmp_path)
+    table_one_path = tmp_path / "table_one.csv"
+    table_one_path.write_text("variable,value\nage,64\n", encoding="utf-8")
+    evidence.register_file(
+        kind="table",
+        description="Table 1 baseline cohort characteristics.",
+        source_path=table_one_path,
+        evidence_id="table_table_one",
+        producer="coder",
+        generation_mode="llm_code",
+    )
+    _register_publication_bundle_for_readiness(
+        evidence,
+        tmp_path,
+        contract={
+            "figure_id": "easyicu_publication_figure",
+            "core_claim": "Adjusted association estimate.",
+            "panels": [
+                {
+                    "panel_id": "A",
+                    "title": "Adjusted association",
+                    "role": "primary_estimand",
+                    "chart_type": "forest",
+                    "claim": "The adjusted odds ratio is shown.",
+                }
+            ],
+        },
+    )
+    support_dir = tmp_path / "steps" / "03_supporting" / "outputs"
+    support_dir.mkdir(parents=True)
+    (support_dir / "supporting_sensitivity.png").write_text(
+        "supporting figure",
+        encoding="utf-8",
+    )
+    (support_dir / "supporting_sensitivity.figure_contract.json").write_text(
+        json.dumps(
+            {
+                "figure_id": "supporting_sensitivity",
+                "core_claim": (
+                    "Supporting absolute-risk, missingness, and sensitivity "
+                    "panels are available for supplement review."
+                ),
+                "panels": [
+                    {
+                        "panel_id": "B",
+                        "title": "Exposure prevalence and absolute outcome risk",
+                        "role": "descriptive_result",
+                        "chart_type": "dot_interval_absolute_risk",
+                        "claim": (
+                            "Exposure prevalence and absolute outcome risk "
+                            "are shown before adjusted estimates."
+                        ),
+                    },
+                    {
+                        "panel_id": "C",
+                        "title": "Missingness and measurement availability",
+                        "role": "data_quality",
+                        "chart_type": "availability_panel",
+                        "claim": "Missingness and measurement quality are visible.",
+                    },
+                    {
+                        "panel_id": "D",
+                        "title": "Sensitivity and denominator audit",
+                        "role": "robustness",
+                        "chart_type": "specification_grid",
+                        "claim": "Sensitivity and denominator audit context are shown.",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    bound_path = tmp_path / "manuscript_scaffold_bound.md"
+    bound_path.write_text(_evidence_bound_demo_manuscript(), encoding="utf-8")
+
+    gates, artifact_paths = _write_readiness_artifacts(
+        context=context,
+        plan=plan,
+        findings=[],
+        per_step_records=[
+            {"step_id": "01_table_one", "status": "ok"},
+            {"step_id": "02_model", "status": "ok"},
+            {"step_id": "03_supporting", "status": "ok"},
+        ],
+        evidence=evidence,
+        run_dir=tmp_path,
+        manuscript_path=bound_path,
+        stop_after_analysis=False,
+    )
+
+    assert gates["display_suite_complete"] is False
+    assert gates["publication_ready"] is False
+    assert gates["display_contract_panel_count"] == 4
+    assert gates["display_primary_publication_panel_count"] == 1
+    assert gates["display_supporting_panel_count"] == 3
+    assert gates["display_primary_publication_contract_paths"] == [
+        "publication_figures/easyicu_publication_figure.figure_contract.json"
+    ]
+    assert gates["display_supporting_figure_contract_paths"] == [
+        "steps/03_supporting/outputs/supporting_sensitivity.figure_contract.json"
+    ]
+    assert gates["display_absolute_risk_visual_present"] is True
+    assert gates["display_primary_publication_absolute_risk_visual_present"] is False
+    assert gates["display_supporting_absolute_risk_visual_present"] is True
+    assert any(
+        "Primary publication figure exposes fewer" in err
+        for err in gates["display_suite_errors"]
+    )
+    assert any(
+        "Primary publication figure lacks panel-role" in err
+        for err in gates["display_suite_errors"]
+    )
+    assert any(
+        "Primary association figure lacks" in err
+        for err in gates["display_suite_errors"]
+    )
+
+    display_audit = json.loads(
+        (tmp_path / artifact_paths["display_suite_audit"]).read_text(encoding="utf-8")
+    )
+    assert display_audit["schema_version"] == "easyicu.display_suite_audit/2"
+    assert display_audit["primary_publication_panel_count"] == 1
+    assert display_audit["supporting_panel_count"] == 3
+    assert display_audit["primary_publication_contract_paths"] == [
+        "publication_figures/easyicu_publication_figure.figure_contract.json"
+    ]
+    assert artifact_paths["review_artifacts"] == "review_artifacts.json"
+    assert artifact_paths["figure_gallery"] == "figure_gallery.json"
+    run_status = json.loads((tmp_path / "run_status.json").read_text(encoding="utf-8"))
+    canonical_outputs = run_status["canonical_outputs"]
+    assert (
+        canonical_outputs["primary_publication_figure"]
+        == "publication_figures/easyicu_publication_figure.png"
+    )
+    assert (
+        canonical_outputs["primary_publication_figure_contract"]
+        == "publication_figures/easyicu_publication_figure.figure_contract.json"
+    )
+    assert (
+        canonical_outputs["primary_publication_figure_png"]
+        == "publication_figures/easyicu_publication_figure.png"
+    )
+    assert (
+        canonical_outputs["primary_publication_figure_svg"]
+        == "publication_figures/easyicu_publication_figure.svg"
+    )
+    assert "steps/03_supporting/outputs/supporting_sensitivity.png" not in set(
+        canonical_outputs.values()
+    )
+
+    review_artifacts = json.loads(
+        (tmp_path / "review_artifacts.json").read_text(encoding="utf-8")
+    )
+    assert review_artifacts["schema_version"] == "easyicu.review_artifacts/1"
+    assert review_artifacts["policy"][
+        "supporting_step_figures_are_not_canonical_main_figures"
+    ] is True
+    assert review_artifacts["primary_publication_figures"][0]["tier"] == (
+        "primary_publication"
+    )
+    assert review_artifacts["primary_publication_figures"][0]["relative_path"] == (
+        "publication_figures/easyicu_publication_figure.png"
+    )
+    assert review_artifacts["primary_publication_figures"][0][
+        "review_recommendation"
+    ] == "review_first"
+    assert review_artifacts["supporting_figures"][0]["tier"] == "supporting_step"
+    assert review_artifacts["supporting_figures"][0]["relative_path"] == (
+        "steps/03_supporting/outputs/supporting_sensitivity.png"
+    )
+    assert review_artifacts["supporting_figures"][0]["review_recommendation"] == (
+        "supporting_context_not_primary"
+    )
+    assert review_artifacts["primary_publication_figures"][0]["data_url"].startswith(
+        "data:image/png;base64,"
+    )
+    assert "data_url" not in review_artifacts["supporting_figures"][0]
+
+    figure_gallery = json.loads(
+        (tmp_path / "figure_gallery.json").read_text(encoding="utf-8")
+    )
+    assert figure_gallery["kind"] == "figure_gallery"
+    assert figure_gallery["primary_count"] == 1
+    assert figure_gallery["supporting_count"] == 1
+    assert figure_gallery["figures"][0]["tier"] == "primary_publication"
+    assert figure_gallery["figures"][0]["data_url"].startswith(
+        "data:image/png;base64,"
+    )
+    assert figure_gallery["figures"][1]["tier"] == "supporting_step"
+    assert "data_url" not in figure_gallery["figures"][1]
+    author_review = (tmp_path / "author_review_note.md").read_text(encoding="utf-8")
+    assert "primary_publication_figure_contracts: `1`" in author_review
+    assert "supporting_figure_contracts: `1`" in author_review
+
+
+def test_review_gallery_archives_covered_and_duplicate_supporting_figures(
+    ra,
+    tmp_path: Path,
+):
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.pipeline import _write_readiness_artifacts
+
+    def write_support_contract(
+        step_id: str,
+        stem: str,
+        *,
+        figure_id: str,
+        roles: list[str],
+    ) -> None:
+        out = tmp_path / "steps" / step_id / "outputs"
+        out.mkdir(parents=True, exist_ok=True)
+        (out / f"{stem}.png").write_text("figure", encoding="utf-8")
+        (out / f"{stem}.figure_contract.json").write_text(
+            json.dumps(
+                {
+                    "figure_id": figure_id,
+                    "core_claim": f"{figure_id} supporting display.",
+                    "panels": [
+                        {
+                            "panel_id": chr(65 + index),
+                            "title": role.replace("_", " ").title(),
+                            "role": role,
+                            "chart_type": "dot_interval",
+                            "claim": f"{role} is shown.",
+                        }
+                        for index, role in enumerate(roles)
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    context = ra.ResearchContext(
+        research_question="Estimate whether Sepsis-3 is associated with mortality.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_stays=10,
+            n_patients=10,
+        ),
+        variables=[],
+        target_outcome="death",
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            ra.AnalysisStep(
+                step_id="01_table_one",
+                intent="Summarise baseline characteristics.",
+                expected_outputs=["table:table_one"],
+            ),
+            ra.AnalysisStep(
+                step_id="02_model",
+                intent="Fit adjusted association model.",
+                expected_outputs=["table:adjusted_association"],
+            ),
+            ra.AnalysisStep(
+                step_id="03_old_primary_render",
+                intent="Render an older primary-like step figure.",
+                expected_outputs=["figure:publication_figure"],
+            ),
+            ra.AnalysisStep(
+                step_id="04_supporting_missingness",
+                intent="Render a supporting missingness figure.",
+                expected_outputs=["figure:missingness_measurement_panel"],
+            ),
+            ra.AnalysisStep(
+                step_id="05_duplicate_missingness",
+                intent="Render a duplicate supporting missingness figure.",
+                expected_outputs=["figure:missingness_measurement_panel"],
+            ),
+            ra.AnalysisStep(
+                step_id="06_sensitivity",
+                intent="Render a robustness figure.",
+                expected_outputs=["figure:sensitivity_forest"],
+            ),
+        ],
+    )
+    evidence = EvidenceStore(tmp_path)
+    _register_complete_display_suite_for_readiness(evidence, tmp_path)
+    write_support_contract(
+        "03_old_primary_render",
+        "publication_figure",
+        figure_id="publication_figure",
+        roles=["descriptive_result", "relationship"],
+    )
+    write_support_contract(
+        "04_supporting_missingness",
+        "missingness_measurement_panel",
+        figure_id="missingness_measurement_panel",
+        roles=["audit"],
+    )
+    write_support_contract(
+        "05_duplicate_missingness",
+        "missingness_measurement_panel",
+        figure_id="missingness_measurement_panel",
+        roles=["audit"],
+    )
+    write_support_contract(
+        "06_sensitivity",
+        "sensitivity_forest",
+        figure_id="sensitivity_forest",
+        roles=["robustness"],
+    )
+    bound_path = tmp_path / "manuscript_scaffold_bound.md"
+    bound_path.write_text(_evidence_bound_demo_manuscript(), encoding="utf-8")
+
+    gates, artifact_paths = _write_readiness_artifacts(
+        context=context,
+        plan=plan,
+        findings=[],
+        per_step_records=[
+            {"step_id": "01_table_one", "status": "ok"},
+            {"step_id": "02_model", "status": "ok"},
+            {"step_id": "03_old_primary_render", "status": "ok"},
+            {"step_id": "04_supporting_missingness", "status": "ok"},
+            {"step_id": "05_duplicate_missingness", "status": "ok"},
+            {"step_id": "06_sensitivity", "status": "ok"},
+        ],
+        evidence=evidence,
+        run_dir=tmp_path,
+        manuscript_path=bound_path,
+        stop_after_analysis=False,
+    )
+
+    assert gates["display_suite_complete"] is True
+    review_artifacts = json.loads(
+        (tmp_path / artifact_paths["review_artifacts"]).read_text(encoding="utf-8")
+    )
+    visible_paths = [
+        row["relative_path"] for row in review_artifacts["supporting_figures"]
+    ]
+    assert visible_paths == [
+        "steps/04_supporting_missingness/outputs/missingness_measurement_panel.png",
+        "steps/06_sensitivity/outputs/sensitivity_forest.png",
+    ]
+    archived = review_artifacts["archived_supporting_figures"]
+    assert {
+        row["archive_reason"] for row in archived
+    } == {
+        "covered_by_primary_publication_figure",
+        "duplicate_supporting_figure_id",
+    }
+    assert all(row["status"] == "archived_supporting" for row in archived)
+
+    figure_gallery = json.loads(
+        (tmp_path / artifact_paths["figure_gallery"]).read_text(encoding="utf-8")
+    )
+    assert figure_gallery["primary_count"] == 1
+    assert figure_gallery["supporting_count"] == 2
+    assert figure_gallery["archived_supporting_count"] == 2
+    assert [
+        row["relative_path"] for row in figure_gallery["figures"]
+    ] == [
+        "publication_figures/easyicu_publication_figure.png",
+        "steps/04_supporting_missingness/outputs/missingness_measurement_panel.png",
+        "steps/06_sensitivity/outputs/sensitivity_forest.png",
+    ]
+    assert all(
+        "covered_by_primary_publication_figure" != row.get("archive_reason")
+        for row in figure_gallery["figures"]
+    )
+
+
+def test_article_figure_strategy_rejects_sparse_primary_publication_figure(
+    ra,
+    tmp_path: Path,
+):
+    from easyicu.research_agent.figure_strategy import (
+        summarize_article_figure_strategy_coverage,
+    )
+
+    context = ra.ResearchContext(
+        research_question="Estimate whether Sepsis-3 is associated with mortality.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_stays=10,
+            n_patients=10,
+        ),
+        variables=[],
+        target_outcome="death",
+    )
+    publication_dir = tmp_path / "publication_figures"
+    publication_dir.mkdir(parents=True)
+    (publication_dir / "easyicu_publication_figure.figure_contract.json").write_text(
+        json.dumps(
+            {
+                "figure_id": "easyicu_publication_figure",
+                "core_claim": "Prevalence and the primary adjusted estimate are shown.",
+                "panels": [
+                    {
+                        "panel_id": "A",
+                        "title": "Prevalence and absolute outcome risk",
+                        "role": "descriptive_result",
+                        "chart_type": "dot_interval_absolute_risk",
+                        "claim": "Exposure prevalence and absolute outcome risk are shown before adjusted estimates.",
+                    },
+                    {
+                        "panel_id": "B",
+                        "title": "Primary adjusted association",
+                        "role": "primary_estimand",
+                        "chart_type": "forest",
+                        "claim": "The adjusted odds ratio and confidence interval are shown.",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    support_dir = tmp_path / "steps" / "05_sensitivity" / "outputs"
+    support_dir.mkdir(parents=True)
+    (support_dir / "supporting_sensitivity.figure_contract.json").write_text(
+        json.dumps(
+            {
+                "figure_id": "supporting_sensitivity",
+                "core_claim": "Supporting data-quality and robustness panels are shown.",
+                "panels": [
+                    {
+                        "panel_id": "C",
+                        "title": "Sensitivity and denominator audit",
+                        "role": "robustness",
+                        "chart_type": "specification_grid",
+                        "claim": "Alternative definitions and denominators are shown.",
+                    },
+                    {
+                        "panel_id": "D",
+                        "title": "Missingness and measurement availability",
+                        "role": "data_quality",
+                        "chart_type": "availability_panel",
+                        "claim": "Missingness and measurement availability are visible.",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    status = summarize_article_figure_strategy_coverage(
+        context=context,
+        run_dir=tmp_path,
+    )
+
+    assert set(status["article_figure_strategy_covered_roles"]) == {
+        "data_quality",
+        "descriptive_result",
+        "primary_estimand",
+        "robustness",
+    }
+    assert status["article_figure_strategy_primary_publication_roles"] == [
+        "descriptive_result",
+        "primary_estimand",
+    ]
+    assert status["article_figure_strategy_complete"] is False
+    assert any(
+        "Primary publication figure covers fewer required visual roles" in err
+        for err in status["article_figure_strategy_errors"]
+    )
+
+
+def test_association_display_suite_rejects_generic_chart_only_bundle(
+    ra,
+    tmp_path: Path,
+):
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.pipeline import _write_readiness_artifacts
+
+    context = ra.ResearchContext(
+        research_question="Estimate whether Sepsis-3 is associated with mortality.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_stays=10,
+            n_patients=10,
+        ),
+        variables=[],
+        target_outcome="death",
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            ra.AnalysisStep(
+                step_id="01_table_one",
+                intent="Summarise baseline characteristics.",
+                expected_outputs=["table:table_one"],
+            ),
+            ra.AnalysisStep(
+                step_id="02_model",
+                intent="Fit adjusted association model.",
+                expected_outputs=["table:adjusted_association"],
+            ),
+            ra.AnalysisStep(
+                step_id="03_figures",
+                intent="Render forest, bar, and heatmap result panels.",
+                expected_outputs=["figure:publication_figure"],
+            ),
+        ],
+    )
+    evidence = EvidenceStore(tmp_path)
+    table_one_path = tmp_path / "table_one.csv"
+    table_one_path.write_text("variable,value\nage,64\n", encoding="utf-8")
+    evidence.register_file(
+        kind="table",
+        description="Table 1 baseline cohort characteristics.",
+        source_path=table_one_path,
+        evidence_id="table_table_one",
+        producer="coder",
+        generation_mode="llm_code",
+    )
+    _register_publication_bundle_for_readiness(
+        evidence,
+        tmp_path,
+        contract={
+            "figure_id": "easyicu_publication_figure",
+            "core_claim": "Generic audited result panels.",
+            "panels": [
+                {
+                    "panel_id": "A",
+                    "title": "Adjusted association forest",
+                    "role": "relationship",
+                    "chart_type": "forest",
+                    "claim": "Adjusted odds ratios are shown.",
+                },
+                {
+                    "panel_id": "B",
+                    "title": "Denominator bar chart",
+                    "role": "audit",
+                    "chart_type": "bar",
+                    "claim": "Denominators are audited.",
+                },
+                {
+                    "panel_id": "C",
+                    "title": "Overlap heatmap",
+                    "role": "robustness",
+                    "chart_type": "heatmap",
+                    "claim": "Definition overlap is shown.",
+                },
+            ],
+        },
+    )
+    bound_path = tmp_path / "manuscript_scaffold_bound.md"
+    bound_path.write_text(_evidence_bound_demo_manuscript(), encoding="utf-8")
+
+    gates, _ = _write_readiness_artifacts(
+        context=context,
+        plan=plan,
+        findings=[],
+        per_step_records=[
+            {"step_id": "01_table_one", "status": "ok"},
+            {"step_id": "02_model", "status": "ok"},
+            {"step_id": "03_figures", "status": "ok"},
+        ],
+        evidence=evidence,
+        run_dir=tmp_path,
+        manuscript_path=bound_path,
+        stop_after_analysis=False,
+    )
+
+    assert gates["display_suite_complete"] is False
+    assert gates["publication_ready"] is False
+    assert gates["display_chart_types"] == ["bar", "forest", "heatmap"]
+    assert gates["display_absolute_risk_visual_present"] is False
+    assert any("lacks a visual prevalence" in err for err in gates["display_suite_errors"])
+    assert any("generic bar/forest/heatmap" in err for err in gates["display_suite_errors"])
+
+
+def test_association_display_suite_rejects_risk_difference_without_absolute_risk_context(
+    ra,
+    tmp_path: Path,
+):
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.pipeline import _write_readiness_artifacts
+
+    context = ra.ResearchContext(
+        research_question="Estimate whether Sepsis-3 is associated with mortality.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_stays=10,
+            n_patients=10,
+        ),
+        variables=[],
+        target_outcome="death",
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            ra.AnalysisStep(
+                step_id="01_table_one",
+                intent="Summarise baseline characteristics.",
+                expected_outputs=["table:table_one"],
+            ),
+            ra.AnalysisStep(
+                step_id="02_model",
+                intent="Fit adjusted association model.",
+                expected_outputs=["table:adjusted_association"],
+            ),
+            ra.AnalysisStep(
+                step_id="03_sensitivity",
+                intent="Render adjusted estimate, risk difference, and denominator audit.",
+                expected_outputs=["figure:publication_figure"],
+            ),
+        ],
+    )
+    evidence = EvidenceStore(tmp_path)
+    table_one_path = tmp_path / "table_one.csv"
+    table_one_path.write_text("variable,value\nage,64\n", encoding="utf-8")
+    evidence.register_file(
+        kind="table",
+        description="Table 1 baseline cohort characteristics.",
+        source_path=table_one_path,
+        evidence_id="table_table_one",
+        producer="coder",
+        generation_mode="llm_code",
+    )
+    _register_publication_bundle_for_readiness(
+        evidence,
+        tmp_path,
+        contract={
+            "figure_id": "easyicu_publication_figure",
+            "core_claim": "Adjusted association, risk difference, and denominator audit.",
+            "panels": [
+                {
+                    "panel_id": "A",
+                    "title": "Adjusted odds-ratio estimate",
+                    "role": "relationship",
+                    "chart_type": "forest",
+                    "claim": "The adjusted odds ratio is shown.",
+                },
+                {
+                    "panel_id": "B",
+                    "title": "Risk difference sensitivity",
+                    "role": "relationship",
+                    "chart_type": "dot_interval",
+                    "claim": "Risk-difference sensitivity estimates are shown.",
+                },
+                {
+                    "panel_id": "C",
+                    "title": "Denominator audit",
+                    "role": "audit",
+                    "chart_type": "bar",
+                    "claim": "Analytic sample sizes are shown.",
+                },
+            ],
+        },
+    )
+    bound_path = tmp_path / "manuscript_scaffold_bound.md"
+    bound_path.write_text(_evidence_bound_demo_manuscript(), encoding="utf-8")
+
+    gates, _ = _write_readiness_artifacts(
+        context=context,
+        plan=plan,
+        findings=[],
+        per_step_records=[
+            {"step_id": "01_table_one", "status": "ok"},
+            {"step_id": "02_model", "status": "ok"},
+            {"step_id": "03_sensitivity", "status": "ok"},
+        ],
+        evidence=evidence,
+        run_dir=tmp_path,
+        manuscript_path=bound_path,
+        stop_after_analysis=False,
+    )
+
+    assert gates["display_suite_complete"] is False
+    assert gates["publication_ready"] is False
+    assert gates["display_absolute_risk_visual_present"] is False
+    assert "dot_interval" in gates["display_chart_types"]
+    assert gates["article_figure_strategy_complete"] is False
+    assert any("risk-difference sensitivity panels alone" in err for err in gates["display_suite_errors"])
+    assert any(
+        "descriptive_result" in err
+        for err in gates["article_figure_strategy_errors"]
+    )
+
+
+def test_readiness_supersedes_stale_publication_figure_contract_quality_error(
     ra,
     tmp_path: Path,
 ):
@@ -4733,28 +5898,25 @@ def test_readiness_supersedes_stale_publication_figure_audit_error(
         version=2,
         audit_findings=[
             {
-                "validator": "publication_figure_export",
+                "validator": "figure_contract_quality",
                 "severity": "warning",
-                "message": "SVG figure 'easyicu_publication_figure.svg' has text outside the canvas.",
+                "message": "Publication figure contract now has required panel roles.",
             }
         ],
     )
     bound_path = tmp_path / "manuscript_scaffold_bound.md"
-    bound_path.write_text(
-        "The adjusted association is described in the manuscript.\n",
-        encoding="utf-8",
-    )
+    bound_path.write_text(_evidence_bound_demo_manuscript(), encoding="utf-8")
 
     gates, _ = _write_readiness_artifacts(
         context=context,
         plan=plan,
         findings=[
             ValidationFinding(
-                validator="publication_figure_export",
+                validator="figure_contract_quality",
                 severity="error",
                 message=(
-                    "SVG figure 'easyicu_publication_figure.svg' has overlapping text "
-                    "elements; multi-panel labels need more spacing."
+                    "Publication figure 'easyicu_publication_figure' lacks "
+                    "required panel-role diversity."
                 ),
             )
         ],
@@ -4775,7 +5937,85 @@ def test_readiness_supersedes_stale_publication_figure_audit_error(
     assert gates["publication_ready"] is True
 
 
-def test_readiness_keeps_current_publication_figure_audit_error_active(
+def test_author_review_note_marks_superseded_publication_export_error_nonblocking(
+    ra,
+    tmp_path: Path,
+):
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.pipeline import _write_readiness_artifacts
+    from easyicu.research_agent.schema import ValidationFinding
+
+    context = ra.ResearchContext(
+        research_question="Estimate whether Sepsis-3 is associated with mortality.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_stays=10,
+            n_patients=10,
+        ),
+        variables=[],
+        target_outcome="death",
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            ra.AnalysisStep(
+                step_id="01_table_one",
+                intent="Summarise baseline characteristics.",
+                expected_outputs=["table:table_one"],
+            ),
+            ra.AnalysisStep(
+                step_id="02_model",
+                intent="Fit adjusted association model.",
+                expected_outputs=["table:adjusted_association"],
+            ),
+            ra.AnalysisStep(
+                step_id="03_sensitivity",
+                intent="Audit sensitivity and denominator robustness.",
+                expected_outputs=["figure:sensitivity_audit"],
+            ),
+        ],
+    )
+    evidence = EvidenceStore(tmp_path)
+    _register_complete_display_suite_for_readiness(evidence, tmp_path)
+    _write_publication_skill_summary(tmp_path, version=2, audit_findings=[])
+    stale_error = ValidationFinding(
+        validator="publication_figure_export",
+        severity="error",
+        message=(
+            "SVG figure 'easyicu_publication_figure.svg' has overlapping text "
+            "elements; multi-panel labels need more spacing."
+        ),
+    )
+    bound_path = tmp_path / "manuscript_scaffold_bound.md"
+    bound_path.write_text(_evidence_bound_demo_manuscript(), encoding="utf-8")
+
+    gates, _ = _write_readiness_artifacts(
+        context=context,
+        plan=plan,
+        findings=[stale_error],
+        per_step_records=[
+            {"step_id": "01_table_one", "status": "ok"},
+            {"step_id": "02_model", "status": "ok"},
+            {"step_id": "03_sensitivity", "status": "ok"},
+        ],
+        evidence=evidence,
+        run_dir=tmp_path,
+        manuscript_path=bound_path,
+        stop_after_analysis=False,
+    )
+
+    assert gates["superseded_error_count"] == 1
+    assert gates["publication_figure_bundle_ready"] is True
+    assert gates["publication_ready"] is True
+    author_review = (tmp_path / "author_review_note.md").read_text(encoding="utf-8")
+    blocking_section = author_review.split("## Superseded findings", maxsplit=1)[0]
+    assert "`publication_figure_export`" not in blocking_section
+    assert "## Superseded findings" in author_review
+    assert "`publication_figure_export`" in author_review
+
+
+def test_readiness_keeps_current_publication_figure_export_error_active(
     ra,
     tmp_path: Path,
 ):
@@ -4830,10 +6070,7 @@ def test_readiness_keeps_current_publication_figure_audit_error_active(
         audit_findings=[current_error],
     )
     bound_path = tmp_path / "manuscript_scaffold_bound.md"
-    bound_path.write_text(
-        "The adjusted association is described in the manuscript.\n",
-        encoding="utf-8",
-    )
+    bound_path.write_text(_evidence_bound_demo_manuscript(), encoding="utf-8")
 
     gates, _ = _write_readiness_artifacts(
         context=context,
@@ -4853,6 +6090,9 @@ def test_readiness_keeps_current_publication_figure_audit_error_active(
     assert gates["analysis_validated"] is False
     assert gates["analysis_error_count"] == 1
     assert gates["superseded_error_count"] == 0
+    assert gates["publication_figure_bundle_ready"] is False
+    assert gates["publication_figure_visual_qa_passed"] is False
+    assert gates["publication_figure_visual_qa_error_count"] == 1
     assert gates["publication_ready"] is False
 
 
@@ -4898,10 +6138,7 @@ def test_readiness_supersedes_stale_strict_writer_error_after_clean_bound_manusc
     evidence = EvidenceStore(tmp_path)
     _register_complete_display_suite_for_readiness(evidence, tmp_path)
     bound_path = tmp_path / "manuscript_scaffold_bound.md"
-    bound_path.write_text(
-        "The adjusted association is described in the manuscript.\n",
-        encoding="utf-8",
-    )
+    bound_path.write_text(_evidence_bound_demo_manuscript(), encoding="utf-8")
 
     gates, _ = _write_readiness_artifacts(
         context=context,
@@ -5055,10 +6292,7 @@ def test_readiness_supersedes_stale_critic_error_after_passed_current_critique(
     evidence = EvidenceStore(tmp_path)
     _register_complete_display_suite_for_readiness(evidence, tmp_path)
     bound_path = tmp_path / "manuscript_scaffold_bound.md"
-    bound_path.write_text(
-        "The adjusted association is described in the manuscript.\n",
-        encoding="utf-8",
-    )
+    bound_path.write_text(_evidence_bound_demo_manuscript(), encoding="utf-8")
     (tmp_path / "manuscript_critique.json").write_text(
         '{"status":"pass","concerns":[],"unsupported_claims":[]}',
         encoding="utf-8",
@@ -5174,10 +6408,29 @@ def test_publication_bundle_ready_groups_hash_suffixed_exports_under_one_stem(
 ):
     from easyicu.research_agent.evidence import EvidenceStore
     from easyicu.research_agent.pipeline import _publication_figure_bundle_ready
+    from easyicu.research_agent.publication_figures import (
+        PUBLICATION_FIGURE_SKILL_POLICY_VERSION,
+    )
 
     evidence = EvidenceStore(tmp_path)
     contract_path = tmp_path / "easyicu_publication_figure.figure_contract.json"
     contract_path.write_text("{}", encoding="utf-8")
+    source_path = tmp_path / "publication_figure_source.csv"
+    source_path.write_text("x,y\n1,2\n", encoding="utf-8")
+    source_record = evidence.register_file(
+        kind="table",
+        description="Publication figure source data.",
+        source_path=source_path,
+        evidence_id="publication_figure_source_demo",
+        producer="publication_figure_skill",
+        generation_mode="deterministic_figure_skill",
+    )
+    source_metadata = {
+        "figure_skill_policy_version": PUBLICATION_FIGURE_SKILL_POLICY_VERSION,
+        "source_evidence_id": source_record.evidence_id,
+        "source_evidence_ids": [source_record.evidence_id],
+        "source_evidence_sha256": {source_record.evidence_id: source_record.sha256},
+    }
     evidence.register_file(
         kind="log",
         description="Publication figure contract.",
@@ -5185,17 +6438,7 @@ def test_publication_bundle_ready_groups_hash_suffixed_exports_under_one_stem(
         evidence_id="publication_figure_contract",
         producer="publication_figure_skill",
         generation_mode="deterministic_figure_skill",
-        metadata={"source_evidence_id": "publication_figure_source_demo"},
-    )
-    source_path = tmp_path / "publication_figure_source.csv"
-    source_path.write_text("x,y\n1,2\n", encoding="utf-8")
-    evidence.register_file(
-        kind="table",
-        description="Publication figure source data.",
-        source_path=source_path,
-        evidence_id="publication_figure_source_demo",
-        producer="publication_figure_skill",
-        generation_mode="deterministic_figure_skill",
+        metadata=source_metadata,
     )
     for suffix in ("svg", "png", "pdf", "tiff"):
         path = tmp_path / f"easyicu_publication_figure.{suffix}"
@@ -5207,7 +6450,7 @@ def test_publication_bundle_ready_groups_hash_suffixed_exports_under_one_stem(
             evidence_id=f"publication_figure_{suffix}",
             producer="publication_figure_skill",
             generation_mode="deterministic_figure_skill",
-            metadata={"figure_role": "publication_figure"},
+            metadata={"figure_role": "publication_figure", **source_metadata},
         )
 
     readiness = _publication_figure_bundle_ready(evidence=evidence, run_dir=tmp_path)
@@ -5216,6 +6459,108 @@ def test_publication_bundle_ready_groups_hash_suffixed_exports_under_one_stem(
     assert readiness["publication_ready_stems"] == ["easyicu_publication_figure"]
     assert readiness["publication_figure_contract_ready"] is True
     assert readiness["publication_figure_source_data_ready"] is True
+
+
+def test_publication_bundle_ready_rejects_outdated_figure_policy(ra, tmp_path: Path):
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.pipeline import _publication_figure_bundle_ready
+
+    evidence = EvidenceStore(tmp_path)
+    contract_path = tmp_path / "easyicu_publication_figure.figure_contract.json"
+    contract_path.write_text("{}", encoding="utf-8")
+    source_path = tmp_path / "publication_figure_source.csv"
+    source_path.write_text("x,y\n1,2\n", encoding="utf-8")
+    source_record = evidence.register_file(
+        kind="table",
+        description="Publication figure source data.",
+        source_path=source_path,
+        evidence_id="publication_figure_source_demo",
+        producer="publication_figure_skill",
+        generation_mode="deterministic_figure_skill",
+    )
+    outdated_metadata = {
+        "source_evidence_id": source_record.evidence_id,
+        "source_evidence_ids": [source_record.evidence_id],
+        "source_evidence_sha256": {source_record.evidence_id: source_record.sha256},
+    }
+    evidence.register_file(
+        kind="log",
+        description="Publication figure contract.",
+        source_path=contract_path,
+        evidence_id="publication_figure_contract",
+        producer="publication_figure_skill",
+        generation_mode="deterministic_figure_skill",
+        metadata=outdated_metadata,
+    )
+    for suffix in ("svg", "png"):
+        path = tmp_path / f"easyicu_publication_figure.{suffix}"
+        path.write_text("x", encoding="utf-8")
+        evidence.register_file(
+            kind="figure",
+            description="Publication figure export.",
+            source_path=path,
+            evidence_id=f"publication_figure_{suffix}",
+            producer="publication_figure_skill",
+            generation_mode="deterministic_figure_skill",
+            metadata={"figure_role": "publication_figure", **outdated_metadata},
+        )
+
+    readiness = _publication_figure_bundle_ready(evidence=evidence, run_dir=tmp_path)
+
+    assert readiness["publication_figure_bundle_ready"] is False
+    assert readiness["publication_ready_stems"] == []
+
+
+def test_publication_bundle_ready_rejects_stale_publication_skill_exports(
+    ra,
+    tmp_path: Path,
+):
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.pipeline import _publication_figure_bundle_ready
+
+    evidence = EvidenceStore(tmp_path)
+    contract_path = tmp_path / "easyicu_publication_figure.figure_contract.json"
+    contract_path.write_text("{}", encoding="utf-8")
+    source_path = tmp_path / "publication_figure_source.csv"
+    source_path.write_text("x,y\n1,2\n", encoding="utf-8")
+    evidence.register_file(
+        kind="table",
+        description="Publication figure source data.",
+        source_path=source_path,
+        evidence_id="publication_figure_source_demo",
+        producer="publication_figure_skill",
+        generation_mode="deterministic_figure_skill",
+    )
+    stale_metadata = {
+        "source_evidence_id": "publication_figure_source_demo",
+        "source_evidence_ids": ["publication_figure_source_demo"],
+    }
+    evidence.register_file(
+        kind="log",
+        description="Publication figure contract.",
+        source_path=contract_path,
+        evidence_id="publication_figure_contract",
+        producer="publication_figure_skill",
+        generation_mode="deterministic_figure_skill",
+        metadata=stale_metadata,
+    )
+    for suffix in ("svg", "png"):
+        path = tmp_path / f"easyicu_publication_figure.{suffix}"
+        path.write_text("x", encoding="utf-8")
+        evidence.register_file(
+            kind="figure",
+            description="Publication figure export.",
+            source_path=path,
+            evidence_id=f"publication_figure_{suffix}",
+            producer="publication_figure_skill",
+            generation_mode="deterministic_figure_skill",
+            metadata={"figure_role": "publication_figure", **stale_metadata},
+        )
+
+    readiness = _publication_figure_bundle_ready(evidence=evidence, run_dir=tmp_path)
+
+    assert readiness["publication_figure_bundle_ready"] is False
+    assert readiness["publication_ready_stems"] == []
 
 
 def test_publication_bundle_ready_rejects_uncontracted_forest_plot_png_svg(
@@ -5247,11 +6592,30 @@ def test_publication_bundle_ready_rejects_uncontracted_forest_plot_png_svg(
 def test_publication_bundle_ready_blocks_visual_qa_errors(ra, tmp_path: Path):
     from easyicu.research_agent.evidence import EvidenceStore
     from easyicu.research_agent.pipeline import _publication_figure_bundle_ready
+    from easyicu.research_agent.publication_figures import (
+        PUBLICATION_FIGURE_SKILL_POLICY_VERSION,
+    )
     from easyicu.research_agent.schema import ValidationFinding
 
     evidence = EvidenceStore(tmp_path)
     contract_path = tmp_path / "easyicu_publication_figure.figure_contract.json"
     contract_path.write_text("{}", encoding="utf-8")
+    source_path = tmp_path / "publication_figure_source.csv"
+    source_path.write_text("x,y\n1,2\n", encoding="utf-8")
+    source_record = evidence.register_file(
+        kind="table",
+        description="Publication figure source data.",
+        source_path=source_path,
+        evidence_id="publication_figure_source_demo",
+        producer="publication_figure_skill",
+        generation_mode="deterministic_figure_skill",
+    )
+    source_metadata = {
+        "figure_skill_policy_version": PUBLICATION_FIGURE_SKILL_POLICY_VERSION,
+        "source_evidence_id": source_record.evidence_id,
+        "source_evidence_ids": [source_record.evidence_id],
+        "source_evidence_sha256": {source_record.evidence_id: source_record.sha256},
+    }
     evidence.register_file(
         kind="log",
         description="Publication figure contract.",
@@ -5259,17 +6623,7 @@ def test_publication_bundle_ready_blocks_visual_qa_errors(ra, tmp_path: Path):
         evidence_id="publication_figure_contract",
         producer="publication_figure_skill",
         generation_mode="deterministic_figure_skill",
-        metadata={"source_evidence_id": "publication_figure_source_demo"},
-    )
-    source_path = tmp_path / "publication_figure_source.csv"
-    source_path.write_text("x,y\n1,2\n", encoding="utf-8")
-    evidence.register_file(
-        kind="table",
-        description="Publication figure source data.",
-        source_path=source_path,
-        evidence_id="publication_figure_source_demo",
-        producer="publication_figure_skill",
-        generation_mode="deterministic_figure_skill",
+        metadata=source_metadata,
     )
     for suffix in ("svg", "png"):
         path = tmp_path / f"easyicu_publication_figure.{suffix}"
@@ -5284,7 +6638,7 @@ def test_publication_bundle_ready_blocks_visual_qa_errors(ra, tmp_path: Path):
             metadata={
                 "figure_role": "publication_figure",
                 "figure_contract": "publication_figure_contract",
-                "source_evidence_id": "publication_figure_source_demo",
+                **source_metadata,
             },
         )
 
@@ -5302,6 +6656,64 @@ def test_publication_bundle_ready_blocks_visual_qa_errors(ra, tmp_path: Path):
 
     assert readiness["publication_figure_bundle_ready"] is False
     assert readiness["publication_figure_visual_qa_passed"] is False
+
+
+def test_publication_bundle_ready_blocks_publication_export_visual_errors(
+    ra,
+    tmp_path: Path,
+):
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.pipeline import _publication_figure_bundle_ready
+    from easyicu.research_agent.schema import ValidationFinding
+
+    evidence = EvidenceStore(tmp_path)
+    _register_publication_bundle_for_readiness(
+        evidence,
+        tmp_path,
+        contract={
+            "figure_id": "easyicu_publication_figure",
+            "core_claim": "Publication figure is exported.",
+            "panels": [
+                {
+                    "panel_id": "A",
+                    "title": "Primary adjusted association",
+                    "role": "primary_estimand",
+                    "chart_type": "forest",
+                    "claim": "The adjusted association is shown.",
+                }
+            ],
+        },
+    )
+
+    readiness = _publication_figure_bundle_ready(
+        evidence=evidence,
+        run_dir=tmp_path,
+        findings=[
+            ValidationFinding(
+                validator="publication_figure_export",
+                severity="error",
+                message=(
+                    "SVG figure 'easyicu_publication_figure.svg' has overlapping "
+                    "text elements; multi-panel labels, annotations or axis text "
+                    "need more spacing."
+                ),
+            )
+        ],
+    )
+
+    assert readiness["publication_figure_bundle_ready"] is False
+    assert readiness["publication_figure_visual_qa_passed"] is False
+    assert readiness["publication_figure_visual_qa_error_count"] == 1
+    assert readiness["publication_figure_visual_qa_errors"] == [
+        {
+            "validator": "publication_figure_export",
+            "message": (
+                "SVG figure 'easyicu_publication_figure.svg' has overlapping text "
+                "elements; multi-panel labels, annotations or axis text need more "
+                "spacing."
+            ),
+        }
+    ]
 
 
 def test_salvage_minimal_contract_step_summary_from_table_one_csv(
@@ -6901,6 +8313,88 @@ def test_advanced_plan_contract_normalizes_robustness_steps(ra):
     assert step_ids == ["01_missingness", "03_complete_case_robustness"]
     assert any("statistic:primary_or" in step.expected_outputs for step in revised.steps)
     assert findings and findings[0].validator == "plan_contract"
+
+
+def test_terminal_publication_repair_replan_skip_requires_satisfied_bundle(
+    ra, tmp_path: Path
+):
+    from easyicu.research_agent.pipeline_execute import (
+        _terminal_publication_repair_replan_skip_detail,
+    )
+
+    completed_step_id = "03_primary_results_display_contract_audit"
+    repair_step_id = "03_primary_results_publication_figure_repair"
+    outputs_dir = tmp_path / "steps" / completed_step_id / "outputs"
+    outputs_dir.mkdir(parents=True)
+    (outputs_dir / "publication_figure.png").write_bytes(b"png")
+    (outputs_dir / "publication_figure_source_data.csv").write_text(
+        "term,or,ci_low,ci_high\nsepsis3,1.2,1.1,1.3\n",
+        encoding="utf-8",
+    )
+    (outputs_dir / "publication_figure.figure_contract.json").write_text(
+        json.dumps(
+            {
+                "figure_id": "publication_figure",
+                "panels": [
+                    {"panel_id": "A", "role": "descriptive_result"},
+                    {"panel_id": "B", "role": "primary_estimand"},
+                ],
+                "export_formats": ["png"],
+                "source_data": ["publication_figure_source_data.csv"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    plan = ra.AnalysisPlan(
+        research_question="Estimate prevalence and adjusted association.",
+        steps=[
+            ra.AnalysisStep(
+                step_id=completed_step_id,
+                intent="Audit and repair the primary results display contract.",
+                expected_outputs=["figure:publication_figure"],
+            ),
+            ra.AnalysisStep(
+                step_id=repair_step_id,
+                intent=(
+                    "Rendering-only repair from upstream results; produce the "
+                    "publication figure without re-analysing the cohort."
+                ),
+                method="rendering_only_repair_from_primary_results",
+                expected_outputs=["figure:adjusted_effect_forest_repair"],
+            ),
+        ],
+    )
+
+    detail = _terminal_publication_repair_replan_skip_detail(
+        plan=plan,
+        completed_records=[{"step_id": completed_step_id, "status": "ok"}],
+        run_dir=tmp_path,
+    )
+
+    assert detail is not None
+    assert detail["remaining_step_ids"] == [repair_step_id]
+    assert detail["satisfied_by_step_id"] == completed_step_id
+
+    plan_with_analysis_remaining = ra.AnalysisPlan(
+        research_question=plan.research_question,
+        steps=[
+            *plan.steps,
+            ra.AnalysisStep(
+                step_id="04_new_model",
+                intent="Fit an additional model.",
+                expected_outputs=["table:model"],
+            ),
+        ],
+    )
+    assert (
+        _terminal_publication_repair_replan_skip_detail(
+            plan=plan_with_analysis_remaining,
+            completed_records=[{"step_id": completed_step_id, "status": "ok"}],
+            run_dir=tmp_path,
+        )
+        is None
+    )
 
 
 def test_advanced_plan_contract_preserves_article_level_robustness_suite(ra):

@@ -1183,14 +1183,48 @@ class FigureSourceDataValidator:
     name = "figure_source_data"
     _SOURCE_DATA_GLOB = "*source_data*.csv"
     _KEY_COLUMNS = (
+        "definition_id",
+        "comparison_definition",
         "spec_id",
         "row_id",
+        "concept",
         "label",
         "variable",
         "term",
+        "exposure",
         "contrast",
     )
+    _COMPOSITE_KEY_COLUMNS = (
+        ("definition_a", "definition_b"),
+        ("primary_definition", "comparison_definition"),
+    )
     _NUMERIC_COLUMNS = (
+        "missing_pct",
+        "missing_n",
+        "value_missing_pct",
+        "value_missing_n",
+        "measured_pct",
+        "measured_n",
+        "measured_one_pct",
+        "measured_one_n",
+        "n_nonmissing",
+        "total_n",
+        "n_total",
+        "n_included",
+        "n_excluded",
+        "included_pct_of_rows",
+        "overlap_with_primary_n",
+        "overlap_with_primary_pct_of_primary",
+        "overlap_with_primary_pct_of_definition",
+        "moved_in_vs_primary_n",
+        "moved_out_vs_primary_n",
+        "n_a",
+        "n_b",
+        "intersection_n",
+        "union_n",
+        "jaccard",
+        "a_in_b_pct",
+        "b_in_a_pct",
         "point_estimate",
         "estimate",
         "ci_low",
@@ -1202,6 +1236,11 @@ class FigureSourceDataValidator:
         "p_value",
     )
     _TEXT_COLUMNS = ("effect_scale",)
+    _PCT_COUNT_RULES = (
+        ("missing_pct", "missing_n", "total_n"),
+        ("measured_pct", "measured_n", "total_n"),
+        ("measured_pct", "n_nonmissing", "total_n"),
+    )
 
     def audit(
         self,
@@ -1259,13 +1298,24 @@ class FigureSourceDataValidator:
                 continue
             if source_df.empty:
                 continue
+            findings.extend(
+                self._percentage_count_consistency_findings(
+                    source_df=source_df,
+                    source_path=source_path,
+                    step_id=step.step_id,
+                )
+            )
+            ordered_upstream_tables = self._prioritize_declared_source_tables(
+                source_df=source_df,
+                upstream_tables=upstream_tables,
+            )
             comparisons = [
                 self._compare_source_to_upstream(
                     source_df=source_df,
                     source_path=source_path,
                     upstream_path=upstream_path,
                 )
-                for upstream_path in upstream_tables
+                for upstream_path in ordered_upstream_tables
             ]
             if any(item.get("ok") for item in comparisons):
                 continue
@@ -1288,9 +1338,60 @@ class FigureSourceDataValidator:
                         "upstream_step_ids": sorted(upstream_step_ids),
                         "candidate_upstream_tables": [
                             str(p.relative_to(run_dir)) if p.is_relative_to(run_dir) else str(p)
-                            for p in upstream_tables
+                            for p in ordered_upstream_tables
                         ],
                         "best_mismatch": best,
+                    },
+                )
+            )
+        return findings
+
+    @classmethod
+    def _percentage_count_consistency_findings(
+        cls,
+        *,
+        source_df: pd.DataFrame,
+        source_path: Path,
+        step_id: str,
+    ) -> List[ValidationFinding]:
+        findings: List[ValidationFinding] = []
+        for pct_col, count_col, total_col in cls._PCT_COUNT_RULES:
+            if not {pct_col, count_col, total_col} <= set(source_df.columns):
+                continue
+            pct = pd.to_numeric(source_df[pct_col], errors="coerce")
+            count = pd.to_numeric(source_df[count_col], errors="coerce")
+            total = pd.to_numeric(source_df[total_col], errors="coerce")
+            valid = total > 0
+            if not valid.any():
+                continue
+            expected = 100.0 * count[valid] / total[valid]
+            observed = pct[valid]
+            diff = (observed - expected).abs()
+            bad = diff[(diff > 0.05) & ~(observed.isna() & expected.isna())]
+            if bad.empty:
+                continue
+            idx = int(bad.index[0])
+            findings.append(
+                ValidationFinding(
+                    validator=cls.name,
+                    severity="error",
+                    message=(
+                        f"Figure source-data table '{source_path.name}' has "
+                        f"inconsistent percentage/count columns: {pct_col} "
+                        f"does not match 100*{count_col}/{total_col}."
+                    ),
+                    detail={
+                        "step_id": step_id,
+                        "source_table": source_path.name,
+                        "pct_column": pct_col,
+                        "count_column": count_col,
+                        "total_column": total_col,
+                        "row_index": idx,
+                        "observed_pct": None if pd.isna(pct.loc[idx]) else float(pct.loc[idx]),
+                        "expected_pct": None
+                        if pd.isna(expected.loc[idx])
+                        else float(expected.loc[idx]),
+                        "abs_diff": float(bad.loc[idx]),
                     },
                 )
             )
@@ -1367,6 +1468,38 @@ class FigureSourceDataValidator:
         return tables
 
     @classmethod
+    def _prioritize_declared_source_tables(
+        cls,
+        *,
+        source_df: pd.DataFrame,
+        upstream_tables: Sequence[Path],
+    ) -> List[Path]:
+        """Put explicitly declared parent tables first.
+
+        Figure source-data tables are often clean, manuscript-facing
+        summaries derived from a registered audit table rather than byte-for-
+        byte row subsets. A ``source_table`` column is the deterministic
+        breadcrumb that says which parent table should be used for provenance
+        checks. Keep all tables as fallbacks, but score the declared parent
+        first so a coincidental key in an unrelated audit table does not drive
+        the mismatch explanation.
+        """
+
+        if "source_table" not in source_df.columns:
+            return list(upstream_tables)
+        declared = {
+            Path(str(item)).name
+            for item in source_df["source_table"].dropna().astype(str)
+            if str(item).strip()
+        }
+        if not declared:
+            return list(upstream_tables)
+        return sorted(
+            upstream_tables,
+            key=lambda path: (path.name not in declared, str(path)),
+        )
+
+    @classmethod
     def _compare_source_to_upstream(
         cls,
         *,
@@ -1391,56 +1524,119 @@ class FigureSourceDataValidator:
                 "message": f"upstream table {upstream_path.name} is empty",
             }
 
-        key = next(
+        key_cols = next(
             (
-                col
-                for col in cls._KEY_COLUMNS
-                if col in source_df.columns and col in upstream_df.columns
+                tuple(cols)
+                for cols in cls._COMPOSITE_KEY_COLUMNS
+                if all(col in source_df.columns and col in upstream_df.columns for col in cols)
             ),
             None,
         )
-        if key is None:
+        if key_cols is None:
+            key = next(
+                (
+                    col
+                    for col in cls._KEY_COLUMNS
+                    if col in source_df.columns and col in upstream_df.columns
+                ),
+                None,
+            )
+            key_cols = (key,) if key is not None else None
+        source = source_df.copy()
+        upstream = upstream_df.copy()
+        if key_cols is None and "source_row_index" in source.columns:
+            row_index = pd.to_numeric(source["source_row_index"], errors="coerce")
+            invalid = row_index.isna() | (row_index < 0) | (row_index >= len(upstream))
+            invalid = invalid | (row_index % 1 != 0)
+            if invalid.any():
+                first_bad = int(invalid[invalid].index[0])
+                return {
+                    "ok": False,
+                    "reason": "source_row_index_out_of_bounds",
+                    "upstream_table": upstream_path.name,
+                    "message": (
+                        "source_row_index values must be integer row positions "
+                        f"within {upstream_path.name}; first invalid row is {first_bad}"
+                    ),
+                }
+            source["_source_row_index"] = row_index.astype(int).astype(str)
+            upstream = upstream.reset_index().rename(columns={"index": "_source_row_index"})
+            upstream["_source_row_index"] = upstream["_source_row_index"].astype(str)
+            key_cols = ("_source_row_index",)
+        if key_cols is None:
             return {
                 "ok": False,
                 "reason": "no_shared_key",
                 "upstream_table": upstream_path.name,
                 "message": f"no shared key column with {upstream_path.name}",
             }
+        for key in key_cols:
+            source[key] = source[key].astype(str)
+            upstream[key] = upstream[key].astype(str)
 
-        source = source_df.copy()
-        upstream = upstream_df.copy()
-        source[key] = source[key].astype(str)
-        upstream[key] = upstream[key].astype(str)
-        upstream_keys = set(upstream[key].dropna())
-        missing_keys = sorted(set(source[key].dropna()) - upstream_keys)
+        def _key_set(frame: pd.DataFrame) -> Set[tuple[str, ...]]:
+            return set(
+                frame[list(key_cols)]
+                .dropna()
+                .astype(str)
+                .itertuples(index=False, name=None)
+            )
+
+        upstream_keys = _key_set(upstream)
+        missing_keys = sorted(_key_set(source) - upstream_keys)
+        key_label = "+".join(key_cols)
+
+        def _format_key(row: pd.Series) -> str:
+            return "|".join(str(row[col]) for col in key_cols)
+
         if missing_keys:
             return {
                 "ok": False,
                 "reason": "source_rows_not_in_upstream",
-                "key_column": key,
+                "key_column": key_label,
                 "upstream_table": upstream_path.name,
-                "missing_keys": missing_keys[:20],
+                "missing_keys": ["|".join(item) for item in missing_keys[:20]],
                 "n_missing_keys": len(missing_keys),
                 "message": (
-                    f"{len(missing_keys)} {key} value(s) are absent from "
+                    f"{len(missing_keys)} {key_label} value(s) are absent from "
                     f"{upstream_path.name}"
                 ),
             }
 
         merged = source.merge(
             upstream,
-            on=key,
+            on=list(key_cols),
             how="left",
             suffixes=("_source", "_upstream"),
         )
         mismatches: List[Dict[str, Any]] = []
-        for col in cls._NUMERIC_COLUMNS:
+        numeric_columns = list(cls._NUMERIC_COLUMNS)
+        ignored_for_dynamic_numeric = {
+            *key_cols,
+            "source_row_index",
+            "source_table",
+        }
+        for col in sorted(set(source.columns) & set(upstream.columns)):
+            if col in ignored_for_dynamic_numeric or col in numeric_columns:
+                continue
+            left_raw = source[col]
+            right_raw = upstream[col]
+            left_present = left_raw.notna() & left_raw.astype(str).str.strip().ne("")
+            right_present = right_raw.notna() & right_raw.astype(str).str.strip().ne("")
+            if not left_present.any() or not right_present.any():
+                continue
+            left_num = pd.to_numeric(left_raw[left_present], errors="coerce")
+            right_num = pd.to_numeric(right_raw[right_present], errors="coerce")
+            if left_num.notna().all() and right_num.notna().all():
+                numeric_columns.append(col)
+
+        for col in numeric_columns:
             source_col = f"{col}_source"
             upstream_col = f"{col}_upstream"
             if source_col not in merged.columns or upstream_col not in merged.columns:
                 continue
-            left = pd.to_numeric(merged[source_col], errors="coerce")
-            right = pd.to_numeric(merged[upstream_col], errors="coerce")
+            left = pd.to_numeric(merged[source_col], errors="coerce").astype(float)
+            right = pd.to_numeric(merged[upstream_col], errors="coerce").astype(float)
             diff = (left - right).abs()
             bad = diff[(diff > 1e-9) & ~(left.isna() & right.isna())]
             if not bad.empty:
@@ -1448,7 +1644,7 @@ class FigureSourceDataValidator:
                 mismatches.append(
                     {
                         "column": col,
-                        "key": merged.loc[idx, key],
+                        "key": _format_key(merged.loc[idx]),
                         "source": None if pd.isna(left.loc[idx]) else float(left.loc[idx]),
                         "upstream": None if pd.isna(right.loc[idx]) else float(right.loc[idx]),
                         "abs_diff": float(bad.iloc[0]),
@@ -1467,7 +1663,7 @@ class FigureSourceDataValidator:
                 mismatches.append(
                     {
                         "column": col,
-                        "key": merged.loc[idx, key],
+                        "key": _format_key(merged.loc[idx]),
                         "source": merged.loc[idx, source_col],
                         "upstream": merged.loc[idx, upstream_col],
                     }
@@ -1487,7 +1683,7 @@ class FigureSourceDataValidator:
             "reason": "source_subset_matches",
             "source_table": source_path.name,
             "upstream_table": upstream_path.name,
-            "key_column": key,
+            "key_column": key_label,
             "n_source_rows": int(len(source_df)),
         }
 
@@ -1512,6 +1708,17 @@ class FigureContractQualityValidator:
         "forest_risk_ratio",
         "association",
         "effect",
+        "descriptive_result",
+        "primary_estimand",
+        "model_performance",
+        "calibration",
+        "temporal_absolute_risk",
+        "survival_effect",
+        "phenotype_structure",
+        "phenotype_profile",
+        "stability",
+        "causal_contrast",
+        "distribution",
     }
     _RAW_IDENTIFIER_RE = re.compile(r"\b[a-z][a-z0-9]+(?:_[a-z0-9]+){1,}\b")
 

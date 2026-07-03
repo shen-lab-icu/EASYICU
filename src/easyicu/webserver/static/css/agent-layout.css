@@ -1,0 +1,32 @@
+/* Agent Projects focus layout. Owner: screens-agent.js / #agent route. */
+
+.ag-wrap.list-collapsed{
+  grid-template-columns:minmax(0,1fr);
+}
+
+.ag-wrap.list-collapsed .ag-list{
+  display:none;
+}
+
+.ag-wrap.list-collapsed .ag-detail{
+  min-width:0;
+}
+
+.ag-wrap [data-ag-toggle-list]{
+  white-space:nowrap;
+}
+
+.ag-wrap.list-collapsed .ag-tabs,
+.ag-wrap.list-collapsed .ag-body{
+  min-width:0;
+}
+
+.ag-wrap.list-collapsed .ag-sci-layout{
+  min-width:0;
+}
+
+@media (max-width:1024px){
+  .ag-wrap.list-open{
+    grid-template-columns:minmax(0,1fr);
+  }
+}

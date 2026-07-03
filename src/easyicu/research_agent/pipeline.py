@@ -119,6 +119,16 @@ from .context import (
 )
 from .context_numeric import register_context_numeric_claims
 from . import pipeline_cache as _pipeline_cache
+from .analysis_blueprint import (
+    build_analysis_blueprint,
+    render_analysis_blueprint_for_prompt,
+    validate_plan_against_analysis_blueprint,
+)
+from .article_contract import (
+    build_article_analysis_contract,
+    validate_plan_against_article_contract,
+)
+from .figure_strategy import build_article_figure_strategy
 from .pipeline_config import PipelineConfig
 from .contracts import _ExecutePhaseResult, _PlanPhaseResult, _WritePhaseResult
 from .concept_dict_audit import (
@@ -288,7 +298,6 @@ from .schema import (
 )
 from .study_design import (
     build_study_design_brief,
-    render_study_design_brief_for_prompt,
     validate_plan_against_study_design_brief,
 )
 from .skills import ClinicalSkill, get_skill, list_skills
@@ -1282,6 +1291,9 @@ class ResearchAgentPipeline:
                 )
 
         study_design_brief = None
+        article_contract = None
+        article_figure_strategy = None
+        analysis_blueprint = None
         try:
             study_design_brief = build_study_design_brief(agent_context)
             study_design_path = run_dir / "study_design_brief.json"
@@ -1302,7 +1314,74 @@ class ResearchAgentPipeline:
                     producer="study_design_scout",
                     generation_mode="deterministic_skill",
                 )
-            design_note = render_study_design_brief_for_prompt(study_design_brief)
+            article_contract = build_article_analysis_contract(
+                agent_context,
+                brief=study_design_brief,
+            )
+            article_contract_path = run_dir / "article_analysis_contract.json"
+            article_contract_path.write_text(
+                article_contract.model_dump_json(indent=2),
+                encoding="utf-8",
+            )
+            if evidence.get("article_analysis_contract") is None:
+                evidence.register_file(
+                    kind="log",
+                    description=(
+                        "Pre-plan article analysis contract: required "
+                        "article-level roles and display modules derived from "
+                        "the study-design brief."
+                    ),
+                    source_path=article_contract_path,
+                    evidence_id="article_analysis_contract",
+                    producer="study_design_scout",
+                    generation_mode="deterministic_skill",
+                )
+            article_figure_strategy = build_article_figure_strategy(agent_context)
+            figure_strategy_path = run_dir / "article_figure_strategy.json"
+            figure_strategy_path.write_text(
+                article_figure_strategy.model_dump_json(indent=2),
+                encoding="utf-8",
+            )
+            if evidence.get("article_figure_strategy") is None:
+                evidence.register_file(
+                    kind="log",
+                    description=(
+                        "Pre-plan article figure strategy: required visual "
+                        "roles, chart families, hero-role expectation, and "
+                        "figure anti-patterns derived from the study-design family."
+                    ),
+                    source_path=figure_strategy_path,
+                    evidence_id="article_figure_strategy",
+                    producer="study_design_scout",
+                    generation_mode="deterministic_skill",
+                )
+            analysis_blueprint = build_analysis_blueprint(
+                agent_context,
+                brief=study_design_brief,
+                contract=article_contract,
+                figure_strategy=article_figure_strategy,
+            )
+            analysis_blueprint_path = run_dir / "analysis_blueprint.json"
+            analysis_blueprint_path.write_text(
+                analysis_blueprint.model_dump_json(indent=2),
+                encoding="utf-8",
+            )
+            if evidence.get("analysis_blueprint") is None:
+                evidence.register_file(
+                    kind="log",
+                    description=(
+                        "Pre-plan analysis blueprint: question family, prior-art "
+                        "design brief, article roles, figure strategy, and "
+                        "validation gates used to shape planner output."
+                    ),
+                    source_path=analysis_blueprint_path,
+                    evidence_id="analysis_blueprint",
+                    producer="study_design_scout",
+                    generation_mode="deterministic_skill",
+                )
+            design_note = render_analysis_blueprint_for_prompt(
+                analysis_blueprint
+            )
             agent_notes = (
                 f"{agent_context.notes}\n\n{design_note}"
                 if agent_context.notes
@@ -1607,6 +1686,20 @@ class ResearchAgentPipeline:
                 validate_plan_against_study_design_brief(
                     plan=plan,
                     brief=study_design_brief,
+                )
+            )
+        if article_contract is not None:
+            findings.extend(
+                validate_plan_against_article_contract(
+                    plan=plan,
+                    contract=article_contract,
+                )
+            )
+        if analysis_blueprint is not None:
+            findings.extend(
+                validate_plan_against_analysis_blueprint(
+                    plan=plan,
+                    blueprint=analysis_blueprint,
                 )
             )
         plan_path = run_dir / "analysis_plan.json"
@@ -2851,6 +2944,7 @@ def _promote_prior_publication_bundle(
     run_dir: Path,
     current_step_id: str,
     out_dir: Path,
+    required_roles: Optional[Sequence[str]] = None,
 ) -> Optional[str]:
     """Promote the strongest earlier figure bundle into a publication step."""
     steps_dir = run_dir / "steps"
@@ -2860,6 +2954,11 @@ def _promote_prior_publication_bundle(
     figure_suffixes = {".png", ".svg", ".pdf", ".tiff", ".tif", ".pptx"}
     contract_suffix = ".figure_contract.json"
     best: Optional[tuple[tuple[int, int, int], str, Dict[str, Path]]] = None
+    role_filter = {
+        str(role).strip().lower()
+        for role in (required_roles or [])
+        if str(role).strip()
+    }
 
     for step_dir in sorted(steps_dir.iterdir()):
         if not step_dir.is_dir() or step_dir.name == current_step_id:
@@ -2880,6 +2979,10 @@ def _promote_prior_publication_bundle(
         for stem, files in bundles.items():
             figure_count = sum(1 for key in files if key.startswith("."))
             if figure_count == 0:
+                continue
+            if role_filter and not _publication_bundle_has_any_role(
+                files, role_filter
+            ):
                 continue
             score = (
                 1 if "publication_figure" in stem else 0,
@@ -2930,6 +3033,33 @@ def _promote_prior_publication_bundle(
         encoding="utf-8",
     )
     return "publication_bundle_promote_v1"
+
+
+def _publication_bundle_has_any_role(
+    files: Mapping[str, Path], required_roles: set[str]
+) -> bool:
+    contract_path = files.get("contract")
+    if contract_path is None or not contract_path.exists():
+        return False
+    try:
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    if not isinstance(contract, dict):
+        return False
+    roles: set[str] = set()
+    panels = contract.get("panels") or []
+    if isinstance(panels, list):
+        for panel in panels:
+            if not isinstance(panel, dict):
+                continue
+            role = str(panel.get("role") or "").strip().lower()
+            if role:
+                roles.add(role)
+    top_role = str(contract.get("role") or "").strip().lower()
+    if top_role:
+        roles.add(top_role)
+    return bool(roles & required_roles)
 
 
 def _render_prediction_publication_bundle_from_prior_outputs(
@@ -3130,6 +3260,966 @@ def _render_prediction_publication_bundle_from_prior_outputs(
     return "prediction_publication_bundle_from_parent_outputs_v1"
 
 
+def _render_cohort_overlap_publication_bundle_from_prior_outputs(
+    *,
+    run_dir: Path,
+    current_step_id: str,
+    out_dir: Path,
+) -> Optional[str]:
+    """Deterministically build a cohort-definition overlap figure.
+
+    Cohort eligibility and overlap steps do not emit OR/CI tables, so they
+    should never fall through to the generic association forest rescue. This
+    renderer consumes the immediate parent step's attrition and overlap tables
+    and writes traceable source-data copies keyed by cohort-definition ids.
+    """
+
+    steps_dir = run_dir / "steps"
+    if not steps_dir.exists():
+        return None
+
+    parent_step_id = current_step_id.removesuffix("_figure")
+    parent_outputs = steps_dir / parent_step_id / "outputs"
+    attrition_path = parent_outputs / "alternative_cohort_attrition.csv"
+    overlap_path = parent_outputs / "cohort_overlap_matrix.csv"
+    audit_path = parent_outputs / "cohort_definition_empirical_equivalence_audit.csv"
+    if not attrition_path.exists() or not overlap_path.exists():
+        return None
+
+    try:
+        attrition = pd.read_csv(attrition_path)
+        overlap = pd.read_csv(overlap_path)
+    except Exception:
+        return None
+
+    attrition_required = {
+        "definition_id",
+        "definition_label",
+        "definition_type",
+        "n_included",
+        "included_pct_of_rows",
+        "overlap_with_primary_pct_of_primary",
+        "moved_in_vs_primary_n",
+        "moved_out_vs_primary_n",
+    }
+    overlap_required = {"definition_a", "definition_b", "jaccard"}
+    if not attrition_required <= set(attrition.columns):
+        return None
+    if not overlap_required <= set(overlap.columns):
+        return None
+    if attrition.empty or overlap.empty:
+        return None
+
+    source_attrition = attrition.copy()
+    for col in (
+        "n_included",
+        "n_excluded",
+        "included_pct_of_rows",
+        "overlap_with_primary_n",
+        "overlap_with_primary_pct_of_primary",
+        "overlap_with_primary_pct_of_definition",
+        "moved_in_vs_primary_n",
+        "moved_out_vs_primary_n",
+    ):
+        if col in source_attrition.columns:
+            source_attrition[col] = pd.to_numeric(source_attrition[col], errors="coerce")
+
+    def _cohort_definition_display_label(row: Mapping[str, Any]) -> str:
+        definition_id = str(row.get("definition_id") or "").strip()
+        known = {
+            "primary_adult_los1_all_vitals_sepsis3_derivable": "Primary",
+            "alt_adult_no_los_all_vitals_sepsis3_derivable": "No LOS threshold",
+            "alt_adult_los1_three_of_four_vitals_sepsis3_derivable": ">=3 of 4 vitals",
+            "alt_adult_los1_no_temp_requirement_sepsis3_derivable": "No temperature",
+            "alt_adult_los2_all_vitals_sepsis3_derivable": "LOS >=2 d",
+            "primary_adult_los1_all_vitals_sep3_measured": "Primary",
+            "alt_adult_no_los_all_vitals_sep3_measured": "No LOS threshold",
+            "alt_adult_los1_three_of_four_vitals_sep3_measured": ">=3 of 4 vitals",
+            "alt_adult_los1_no_temp_requirement_sep3_measured": "No temperature",
+            "alt_adult_los2_all_vitals_sep3_measured": "LOS >=2 d",
+        }
+        if definition_id in known:
+            return known[definition_id]
+        label = str(row.get("definition_label") or definition_id or "").strip()
+        return label or "Definition"
+
+    source_attrition["display_label"] = [
+        _cohort_definition_display_label(row)
+        for row in source_attrition.to_dict(orient="records")
+    ]
+
+    source_overlap = overlap.copy()
+    for col in ("n_a", "n_b", "intersection_n", "union_n", "jaccard", "a_in_b_pct", "b_in_a_pct"):
+        if col in source_overlap.columns:
+            source_overlap[col] = pd.to_numeric(source_overlap[col], errors="coerce")
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    source_attrition_path = out_dir / "publication_figure_definition_source_data.csv"
+    source_overlap_path = out_dir / "publication_figure_overlap_source_data.csv"
+    source_attrition.to_csv(source_attrition_path, index=False)
+    source_overlap.to_csv(source_overlap_path, index=False)
+
+    plot_df = source_attrition.reset_index(drop=True).copy()
+    labels = plot_df["display_label"].astype(str).tolist()
+    y = list(range(len(plot_df)))
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from easyicu.research_agent.publication_figures import (
+        add_panel_label,
+        apply_publication_style,
+        make_figure_contract,
+        save_publication_figure,
+    )
+
+    palette = apply_publication_style()
+    fig = plt.figure(figsize=(183 / 25.4, 132 / 25.4), constrained_layout=False)
+    grid = fig.add_gridspec(
+        2,
+        2,
+        width_ratios=[1.05, 1.05],
+        height_ratios=[1.0, 0.88],
+        left=0.18,
+        right=0.98,
+        top=0.92,
+        bottom=0.16,
+        wspace=0.45,
+        hspace=0.58,
+    )
+    ax_n = fig.add_subplot(grid[0, 0])
+    ax_delta = fig.add_subplot(grid[1, 0])
+    ax_heat = fig.add_subplot(grid[:, 1])
+
+    colors = [
+        palette.get("blue", "#0F4D92")
+        if str(row.get("definition_type", "")).lower() == "primary"
+        else palette.get("teal", "#42949E")
+        for row in plot_df.to_dict(orient="records")
+    ]
+    ax_n.barh(y, plot_df["n_included"].astype(float), color=colors, height=0.58)
+    ax_n.set_yticks(y)
+    ax_n.set_yticklabels(labels)
+    ax_n.invert_yaxis()
+    ax_n.set_xlabel("Included ICU stays")
+    ax_n.set_title("Eligibility definitions", loc="left", pad=4)
+    ax_n.grid(axis="x", color=palette.get("neutral_light", "#D8D8D8"), linewidth=0.55)
+    add_panel_label(ax_n, "A", x=-0.20)
+
+    moved_in = plot_df["moved_in_vs_primary_n"].astype(float)
+    moved_out = -plot_df["moved_out_vs_primary_n"].astype(float)
+    ax_delta.barh(
+        y,
+        moved_in,
+        color=palette.get("green", "#008B5E"),
+        height=0.36,
+        label="Added vs primary",
+    )
+    ax_delta.barh(
+        y,
+        moved_out,
+        color=palette.get("orange", "#E28E2C"),
+        height=0.36,
+        label="Removed vs primary",
+    )
+    ax_delta.axvline(0, color=palette.get("neutral", "#8F8F8F"), linewidth=0.8)
+    ax_delta.set_yticks(y)
+    ax_delta.set_yticklabels(labels)
+    ax_delta.invert_yaxis()
+    ax_delta.set_xlabel("ICU-stay count change")
+    ax_delta.set_title("Movement relative to primary", loc="left", pad=4)
+    ax_delta.grid(axis="x", color=palette.get("neutral_light", "#D8D8D8"), linewidth=0.55)
+    ax_delta.legend(
+        frameon=False,
+        fontsize=6.2,
+        loc="lower center",
+        bbox_to_anchor=(0.54, -0.36),
+        ncol=2,
+    )
+    add_panel_label(ax_delta, "B", x=-0.20)
+
+    definition_order = plot_df["definition_id"].astype(str).tolist()
+    label_map = dict(zip(definition_order, labels))
+    heat = (
+        source_overlap.pivot_table(
+            index="definition_a",
+            columns="definition_b",
+            values="jaccard",
+            aggfunc="first",
+        )
+        .reindex(index=definition_order, columns=definition_order)
+        .astype(float)
+    )
+    image = ax_heat.imshow(
+        heat.to_numpy() * 100.0,
+        cmap="Blues",
+        vmin=0,
+        vmax=100,
+        aspect="auto",
+    )
+    ax_heat.set_xticks(range(len(definition_order)))
+    ax_heat.set_xticklabels(
+        [_short_figure_label(label_map.get(item, item), limit=18) for item in definition_order],
+        rotation=45,
+        ha="right",
+    )
+    ax_heat.set_yticks(range(len(definition_order)))
+    ax_heat.set_yticklabels(
+        [_short_figure_label(label_map.get(item, item), limit=18) for item in definition_order]
+    )
+    ax_heat.set_title("Pairwise cohort overlap", loc="left", pad=4)
+    for row_idx in range(len(definition_order)):
+        for col_idx in range(len(definition_order)):
+            value = heat.iat[row_idx, col_idx]
+            if pd.isna(value):
+                continue
+            ax_heat.text(
+                col_idx,
+                row_idx,
+                f"{value * 100:.0f}",
+                ha="center",
+                va="center",
+                fontsize=5.8,
+                color="#1F1F1F" if value < 0.72 else "white",
+            )
+    cbar = fig.colorbar(image, ax=ax_heat, fraction=0.046, pad=0.03)
+    cbar.set_label("Jaccard overlap (%)")
+    add_panel_label(ax_heat, "C", x=-0.12)
+
+    contract = make_figure_contract(
+        figure_id="publication_figure",
+        core_claim=(
+            "Alternative eligibility definitions change the cohort denominator "
+            "and overlap structure, which must be visible before interpreting "
+            "model sensitivity."
+        ),
+        panels=[
+            {
+                "panel_id": "A",
+                "title": "Eligibility denominators",
+                "role": "overview",
+                "claim": "Included ICU-stay counts are read from the parent attrition table.",
+                "evidence_ids": ["alternative_cohort_attrition"],
+            },
+            {
+                "panel_id": "B",
+                "title": "Movement relative to primary",
+                "role": "audit",
+                "claim": "Each alternative definition's added and removed stays are explicit.",
+                "evidence_ids": ["alternative_cohort_attrition"],
+            },
+            {
+                "panel_id": "C",
+                "title": "Pairwise overlap",
+                "role": "robustness",
+                "claim": "Jaccard overlap is computed from the parent overlap matrix.",
+                "evidence_ids": ["cohort_overlap_matrix"],
+            },
+        ],
+        source_data=[
+            "alternative_cohort_attrition",
+            "cohort_overlap_matrix",
+            "publication_figure_definition_source_data.csv",
+            "publication_figure_overlap_source_data.csv",
+        ],
+        statistics_note=(
+            "Generated deterministically from the parent cohort-definition "
+            "attrition and overlap tables; no values are inferred from the image."
+        ),
+    )
+    outputs = save_publication_figure(
+        fig,
+        out_dir / "publication_figure",
+        contract=contract,
+        dpi=300,
+    )
+    plt.close(fig)
+
+    step_summary_path = out_dir / "step_summary.json"
+    existing_summary: Dict[str, Any] = {}
+    if step_summary_path.exists():
+        try:
+            loaded = json.loads(step_summary_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                existing_summary = loaded
+        except Exception:
+            existing_summary = {}
+    existing_summary.update(
+        {
+            "step_id": current_step_id,
+            "method": "deterministic_cohort_overlap_publication_figure_repair",
+            "rendering_only": True,
+            "source_step_id": parent_step_id,
+            "source_attrition_table": str(attrition_path),
+            "source_overlap_table": str(overlap_path),
+            "source_equivalence_audit": str(audit_path) if audit_path.exists() else None,
+            "source_data_files": [
+                source_attrition_path.name,
+                source_overlap_path.name,
+            ],
+            "n_definitions": int(len(plot_df)),
+            "figure_files": [
+                path.name for key, path in outputs.items() if key != "contract"
+            ],
+            "figure_path": "publication_figure.png",
+        }
+    )
+    step_summary_path.write_text(
+        json.dumps(existing_summary, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
+    return "cohort_overlap_publication_bundle_from_parent_outputs_v1"
+
+
+def _render_missingness_publication_bundle_from_prior_outputs(
+    *,
+    run_dir: Path,
+    current_step_id: str,
+    out_dir: Path,
+) -> Optional[str]:
+    """Deterministically rebuild a missingness/measurement audit figure."""
+
+    steps_dir = run_dir / "steps"
+    if not steps_dir.exists():
+        return None
+    parent_step_id = current_step_id.removesuffix("_figure")
+    candidate_paths: List[Path] = []
+    if parent_step_id and parent_step_id != current_step_id:
+        parent_outputs = steps_dir / parent_step_id / "outputs"
+        if parent_outputs.exists():
+            candidate_paths.extend(sorted(parent_outputs.glob("*.csv")))
+    for step_dir in sorted(steps_dir.iterdir()):
+        if not step_dir.is_dir() or step_dir.name == current_step_id:
+            continue
+        text = step_dir.name.lower()
+        if not any(token in text for token in ("missing", "measurement", "quality")):
+            continue
+        outputs_dir = step_dir / "outputs"
+        if outputs_dir.exists():
+            candidate_paths.extend(sorted(outputs_dir.glob("*.csv")))
+
+    def _first_col(frame: pd.DataFrame, names: Sequence[str]) -> Optional[str]:
+        for name in names:
+            if name in frame.columns:
+                return name
+        return None
+
+    parent: Optional[tuple[Path, pd.DataFrame]] = None
+    for csv_path in candidate_paths:
+        try:
+            frame = pd.read_csv(csv_path)
+        except Exception:
+            continue
+        has_label = _first_col(frame, ("variable", "concept", "label", "value_col"))
+        has_total = _first_col(frame, ("total_n", "n_total", "denominator", "n"))
+        has_missing = _first_col(frame, ("missing_n", "value_missing_n"))
+        has_measured = _first_col(frame, ("measured_n", "measured_one_n", "n_nonmissing"))
+        has_pct = _first_col(frame, ("missing_pct", "value_missing_pct", "measured_pct", "measured_one_pct"))
+        if has_label and (has_total and (has_missing or has_measured) or has_pct):
+            parent = (csv_path, frame)
+            if "missingness" in csv_path.name.lower() or "measurement" in csv_path.name.lower():
+                break
+    if parent is None:
+        return None
+
+    table_path, frame = parent
+    label_col = _first_col(frame, ("variable", "concept", "value_col", "label"))
+    display_col = _first_col(frame, ("display_label", "label", "concept", "variable", "value_col"))
+    total_col = _first_col(frame, ("total_n", "n_total", "denominator", "n"))
+    missing_n_col = _first_col(frame, ("missing_n", "value_missing_n"))
+    measured_n_col = _first_col(frame, ("measured_n", "measured_one_n", "n_nonmissing"))
+    missing_pct_col = _first_col(frame, ("missing_pct", "value_missing_pct"))
+    measured_pct_col = _first_col(frame, ("measured_pct", "measured_one_pct"))
+    if label_col is None:
+        return None
+
+    source = frame.copy()
+    total = (
+        pd.to_numeric(source[total_col], errors="coerce")
+        if total_col is not None
+        else pd.Series(pd.NA, index=source.index, dtype="Float64")
+    )
+    missing_n = (
+        pd.to_numeric(source[missing_n_col], errors="coerce")
+        if missing_n_col is not None
+        else pd.Series(pd.NA, index=source.index, dtype="Float64")
+    )
+    measured_n = (
+        pd.to_numeric(source[measured_n_col], errors="coerce")
+        if measured_n_col is not None
+        else pd.Series(pd.NA, index=source.index, dtype="Float64")
+    )
+    if measured_n_col is None and total_col is not None and missing_n_col is not None:
+        measured_n = total - missing_n
+    present_but_measured_zero_col = _first_col(
+        source,
+        ("value_present_but_measured_zero_n", "value_present_but_n_zero_n"),
+    )
+    if (
+        present_but_measured_zero_col is not None
+        and total_col is not None
+        and missing_n_col is not None
+    ):
+        present_but_unflagged = pd.to_numeric(
+            source[present_but_measured_zero_col],
+            errors="coerce",
+        ).fillna(0)
+        use_value_availability = present_but_unflagged > 0
+        measured_n = measured_n.mask(use_value_availability, total - missing_n)
+    missing_pct = (
+        100.0 * missing_n / total
+        if total_col is not None and missing_n_col is not None
+        else pd.to_numeric(source[missing_pct_col], errors="coerce")
+        if missing_pct_col is not None
+        else pd.Series(pd.NA, index=source.index, dtype="Float64")
+    )
+    measured_pct = (
+        100.0 * measured_n / total
+        if total_col is not None and measured_n.notna().any()
+        else pd.to_numeric(source[measured_pct_col], errors="coerce")
+        if measured_pct_col is not None
+        else 100.0 - missing_pct
+    )
+    labels = source[label_col].astype(str)
+    display_labels = (
+        source[display_col].astype(str)
+        if display_col is not None
+        else labels.map(_publication_label)
+    )
+    source_data_payload: Dict[str, Any] = {
+        "variable": labels,
+        "display_label": display_labels,
+        "missing_pct": missing_pct.astype(float),
+        "missing_n": missing_n.astype(float),
+        "n_nonmissing": measured_n.astype(float),
+        "total_n": total.astype(float),
+        "measured_pct": measured_pct.astype(float),
+        "measured_n": measured_n.astype(float),
+        "source_table": table_path.name,
+        "source_transform": "missingness_measurement_summary_v1",
+    }
+    if "concept" in source.columns:
+        source_data_payload["concept"] = source["concept"].astype(str)
+    else:
+        source_data_payload["concept"] = labels
+    if "label" in source.columns:
+        source_data_payload["label"] = source["label"].astype(str)
+    if missing_n_col is not None:
+        source_data_payload["value_missing_n"] = pd.to_numeric(
+            source[missing_n_col],
+            errors="coerce",
+        )
+    if missing_pct_col is not None:
+        source_data_payload["value_missing_pct"] = pd.to_numeric(
+            source[missing_pct_col],
+            errors="coerce",
+        )
+    if total_col is not None:
+        source_data_payload["n_total"] = pd.to_numeric(source[total_col], errors="coerce")
+    if "measured_one_n" in source.columns:
+        source_data_payload["measured_one_n"] = pd.to_numeric(
+            source["measured_one_n"],
+            errors="coerce",
+        )
+    if "measured_one_pct" in source.columns:
+        source_data_payload["measured_one_pct"] = pd.to_numeric(
+            source["measured_one_pct"],
+            errors="coerce",
+        )
+    source_data = pd.DataFrame(source_data_payload).dropna(
+        subset=["missing_pct", "measured_pct"],
+        how="all",
+    )
+    if source_data.empty:
+        return None
+    source_data = source_data.sort_values("missing_pct", ascending=False).head(12)
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    source_data.to_csv(out_dir / "missingness_measurement_panel_source_data.csv", index=False)
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from easyicu.research_agent.publication_figures import (
+        add_panel_label,
+        apply_publication_style,
+        make_figure_contract,
+        save_publication_figure,
+    )
+
+    palette = apply_publication_style()
+    plot_df = source_data.reset_index(drop=True)
+    y = list(range(len(plot_df)))
+    labels = [
+        _short_figure_label(label, limit=30)
+        for label in plot_df["display_label"].astype(str)
+    ]
+    fig = plt.figure(figsize=(183 / 25.4, 104 / 25.4), constrained_layout=False)
+    grid = fig.add_gridspec(
+        1,
+        2,
+        width_ratios=[1.05, 0.95],
+        left=0.28,
+        right=0.98,
+        top=0.88,
+        bottom=0.16,
+        wspace=0.50,
+    )
+    ax_missing = fig.add_subplot(grid[0, 0])
+    ax_measured = fig.add_subplot(grid[0, 1], sharey=ax_missing)
+
+    missing = pd.to_numeric(plot_df["missing_pct"], errors="coerce").fillna(0)
+    measured = pd.to_numeric(plot_df["measured_pct"], errors="coerce").fillna(0)
+    ax_missing.barh(y, missing.clip(0, 100), color=palette.get("red", "#B2182B"), height=0.56)
+    ax_missing.axvline(20, color=palette.get("neutral", "#8F8F8F"), linestyle="--", linewidth=0.8)
+    ax_missing.set_yticks(y)
+    ax_missing.set_yticklabels(labels)
+    ax_missing.invert_yaxis()
+    ax_missing.set_xlabel("Missing values (%)")
+    ax_missing.set_title("Value missingness", loc="left", pad=4)
+    ax_missing.grid(axis="x", color=palette.get("neutral_light", "#D8D8D8"), linewidth=0.55)
+    add_panel_label(ax_missing, "A", x=0.0, y=1.08)
+
+    ax_measured.barh(y, measured.clip(0, 100), color=palette.get("blue", "#0F4D92"), height=0.56)
+    ax_measured.set_xlim(0, 100)
+    ax_measured.set_xlabel("Measured / available (%)")
+    ax_measured.set_title("Measurement availability", loc="left", pad=4)
+    ax_measured.tick_params(axis="y", labelleft=False)
+    ax_measured.grid(axis="x", color=palette.get("neutral_light", "#D8D8D8"), linewidth=0.55)
+    add_panel_label(ax_measured, "B", x=0.0, y=1.08)
+
+    contract = make_figure_contract(
+        figure_id="missingness_measurement_panel",
+        core_claim=(
+            "First-24h variable availability is shown directly from the "
+            "registered missingness and measurement audit table."
+        ),
+        panels=[
+            {
+                "panel_id": "A",
+                "title": "Value missingness",
+                "role": "data_quality",
+                "claim": (
+                    "Missing percentages are recomputed from missing counts "
+                    "and denominators in the parent audit table."
+                ),
+                "evidence_ids": ["missingness_measurement_audit"],
+            },
+            {
+                "panel_id": "B",
+                "title": "Measurement availability",
+                "role": "data_quality",
+                "claim": (
+                    "Measured or available percentages are recomputed from "
+                    "measurement counts and denominators in the parent audit table."
+                ),
+                "evidence_ids": ["missingness_measurement_audit"],
+            },
+        ],
+        source_data=["missingness_measurement_audit"],
+        statistics_note=(
+            "Generated deterministically from the registered parent-step "
+            "missingness/measurement audit; percentages are count-derived."
+        ),
+    )
+    outputs = save_publication_figure(
+        fig,
+        out_dir / "missingness_measurement_panel",
+        contract=contract,
+        dpi=300,
+    )
+    plt.close(fig)
+
+    step_summary_path = out_dir / "step_summary.json"
+    existing_summary: Dict[str, Any] = {}
+    if step_summary_path.exists():
+        try:
+            loaded = json.loads(step_summary_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                existing_summary = loaded
+        except Exception:
+            existing_summary = {}
+    existing_summary.update(
+        {
+            "step_id": current_step_id,
+            "method": "deterministic_missingness_publication_figure_repair",
+            "rendering_only": True,
+            "source_step_id": parent_step_id,
+            "source_missingness_table": str(table_path),
+            "source_data_csv": str(out_dir / "missingness_measurement_panel_source_data.csv"),
+            "n_variables_plotted": int(len(source_data)),
+            "figure_files": [
+                path.name for key, path in outputs.items() if key != "contract"
+            ],
+            "figure_path": "missingness_measurement_panel.png",
+        }
+    )
+    step_summary_path.write_text(
+        json.dumps(existing_summary, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
+    return "missingness_publication_bundle_from_parent_outputs_v1"
+
+
+def _iter_prior_output_tables(
+    *,
+    run_dir: Path,
+    current_step_id: str,
+) -> Sequence[Tuple[Path, pd.DataFrame]]:
+    steps_dir = run_dir / "steps"
+    if not steps_dir.exists():
+        return []
+    tables: List[Tuple[Path, pd.DataFrame]] = []
+    for step_dir in sorted(steps_dir.iterdir()):
+        if not step_dir.is_dir() or step_dir.name == current_step_id:
+            continue
+        outputs_dir = step_dir / "outputs"
+        if not outputs_dir.exists():
+            continue
+        for csv_path in sorted(outputs_dir.glob("*.csv")):
+            try:
+                tables.append((csv_path, pd.read_csv(csv_path)))
+            except Exception:
+                continue
+    return tables
+
+
+def _find_column(
+    frame: pd.DataFrame,
+    *,
+    exact: Sequence[str] = (),
+    suffixes: Sequence[str] = (),
+    contains: Sequence[str] = (),
+    exclude: Sequence[str] = (),
+) -> Optional[str]:
+    excluded = {item.lower() for item in exclude}
+    lower_to_orig = {str(c).lower(): c for c in frame.columns}
+    for candidate in exact:
+        key = candidate.lower()
+        if key in lower_to_orig and key not in excluded:
+            return str(lower_to_orig[key])
+    for column in frame.columns:
+        key = str(column).lower()
+        if key in excluded:
+            continue
+        if suffixes and any(key.endswith(suffix.lower()) for suffix in suffixes):
+            return str(column)
+        if contains and any(token.lower() in key for token in contains):
+            return str(column)
+    return None
+
+
+def _as_percent(row: pd.Series, column: Optional[str]) -> Optional[float]:
+    if not column:
+        return None
+    value = pd.to_numeric(pd.Series([row.get(column)]), errors="coerce").iloc[0]
+    if pd.isna(value):
+        return None
+    value = float(value)
+    return value * 100.0 if abs(value) <= 1.0 else value
+
+
+def _event_count_column(frame: pd.DataFrame, denominator_col: Optional[str]) -> Optional[str]:
+    excluded = {
+        "n",
+        "n_total",
+        "total_n",
+        "denominator",
+        "n_denominator",
+        str(denominator_col or "").lower(),
+    }
+    column = _find_column(
+        frame,
+        exact=("event_n", "events", "outcome_n", "n_positive"),
+        suffixes=("_event_n", "_events", "_n"),
+        exclude=tuple(excluded),
+    )
+    return column
+
+
+def _label_column(frame: pd.DataFrame) -> Optional[str]:
+    return _find_column(
+        frame,
+        exact=("label", "group_label", "exposure_label", "stratum_label", "category_label"),
+        suffixes=("_label",),
+    )
+
+
+_BINARY_GROUP_EXCLUDED_TOKENS = (
+    "n",
+    "count",
+    "event",
+    "events",
+    "death",
+    "mort",
+    "risk",
+    "rate",
+    "prevalence",
+    "incidence",
+    "ci",
+    "lower",
+    "upper",
+    "pct",
+    "percent",
+    "source",
+    "row",
+)
+
+
+def _binary_group_column(frame: pd.DataFrame) -> Optional[str]:
+    binary_tokens = {"0", "1", "0.0", "1.0", "false", "true", "no", "yes"}
+    for column in frame.columns:
+        key = str(column).lower()
+        if any(token in key for token in _BINARY_GROUP_EXCLUDED_TOKENS):
+            continue
+        values = [
+            str(value).strip().lower()
+            for value in frame[column].dropna().tolist()
+            if str(value).strip()
+        ]
+        if not values:
+            continue
+        binary_values = [value for value in values if value in binary_tokens]
+        allowed_extra_values = [
+            value
+            for value in values
+            if value not in binary_tokens and "risk_difference" not in value
+        ]
+        if len(set(binary_values)) >= 2 and not allowed_extra_values:
+            return str(column)
+    return None
+
+
+def _binary_group_label(column: str, value: Any) -> str:
+    normalized = str(value).strip().lower()
+    base = _publication_label(column)
+    if normalized in {"1", "1.0", "true", "yes"}:
+        return f"{base} positive"
+    if normalized in {"0", "0.0", "false", "no"}:
+        return f"{base} negative"
+    return _publication_label(value)
+
+
+def _is_risk_difference_row(row: pd.Series, *values: Any) -> bool:
+    haystack = " ".join([str(value or "") for value in values])
+    haystack = f"{haystack} {' '.join(str(value or '') for value in row.to_dict().values())}"
+    return "risk_difference" in haystack.lower() or "risk difference" in haystack.lower()
+
+
+def _context_axis_label(metric: Any, group: Any) -> str:
+    metric_text = str(metric or "").strip()
+    group_text = str(group or "").strip()
+    if metric_text.lower() == "exposure prevalence":
+        suffix = " prevalence"
+        if group_text.lower().endswith(suffix) and len(group_text) > len(suffix):
+            return (
+                f"{_short_figure_label(group_text[: -len(suffix)].strip(), limit=24)}\n"
+                "prevalence"
+            )
+        return _short_figure_label(group_text or metric_text, limit=28)
+    if metric_text and group_text and metric_text.lower() not in group_text.lower():
+        return (
+            f"{_short_figure_label(group_text, limit=24)}\n"
+            f"{_short_figure_label(metric_text, limit=24)}"
+        )
+    return _short_figure_label(group_text or metric_text or "Context", limit=28)
+
+
+def _association_descriptive_context(
+    *,
+    run_dir: Path,
+    current_step_id: str,
+    out_dir: Path,
+) -> Dict[str, Any]:
+    """Collect source-backed prevalence or absolute-risk rows for association figures.
+
+    The helper is deliberately keyed to generic column semantics
+    (prevalence/risk/event-rate), not to a benchmark variable name.
+    """
+
+    plot_rows: List[Dict[str, Any]] = []
+    source_files: List[str] = []
+    has_prevalence = False
+    has_outcome_risk = False
+
+    for table_path, frame in _iter_prior_output_tables(
+        run_dir=run_dir,
+        current_step_id=current_step_id,
+    ):
+        if frame.empty:
+            continue
+        prevalence_pct_col = _find_column(
+            frame,
+            exact=("prevalence_pct", "incidence_pct"),
+        )
+        prevalence_prop_col = _find_column(frame, exact=("prevalence", "incidence"))
+        if not has_prevalence and (prevalence_pct_col or prevalence_prop_col):
+            denominator_col = _find_column(
+                frame,
+                exact=("n_denominator", "denominator", "n_total", "total_n", "n"),
+            )
+            event_col = _find_column(frame, exact=("n_positive", "event_n", "events"))
+            label_col = _find_column(frame, exact=("exposure", "variable", "concept", "label"))
+            source_rows: List[Dict[str, Any]] = []
+            for idx, row in frame.iterrows():
+                estimate = _as_percent(row, prevalence_pct_col or prevalence_prop_col)
+                if estimate is None:
+                    continue
+                base_label = row.get(label_col) if label_col else "Exposure"
+                display_label = f"{_publication_label(base_label)} prevalence"
+                record = row.to_dict()
+                record.update(
+                    {
+                        "plot_metric": "Exposure prevalence",
+                        "plot_group_label": display_label,
+                        "plot_estimate_pct": estimate,
+                        "plot_ci_low_pct": _as_percent(
+                            row,
+                            _find_column(frame, exact=("ci_low_pct", "lower_pct"))
+                            or _find_column(frame, exact=("ci_low", "lower")),
+                        ),
+                        "plot_ci_high_pct": _as_percent(
+                            row,
+                            _find_column(frame, exact=("ci_high_pct", "upper_pct"))
+                            or _find_column(frame, exact=("ci_high", "upper")),
+                        ),
+                        "plot_denominator": row.get(denominator_col)
+                        if denominator_col
+                        else None,
+                        "plot_event_n": row.get(event_col) if event_col else None,
+                        "source_table": table_path.name,
+                        "source_row_index": int(idx),
+                    }
+                )
+                source_rows.append(record)
+                plot_rows.append(record)
+            if source_rows:
+                source_path = out_dir / "publication_figure_prevalence_source_data.csv"
+                pd.DataFrame(source_rows).to_csv(source_path, index=False)
+                source_files.append(source_path.name)
+                has_prevalence = True
+
+        risk_pct_col = _find_column(
+            frame,
+            exact=("outcome_risk_pct", "risk_pct", "event_rate_pct"),
+            suffixes=("_risk_pct", "_rate_pct"),
+            exclude=("prevalence_pct", "incidence_pct"),
+        )
+        risk_prop_col = _find_column(
+            frame,
+            exact=("outcome_risk", "risk", "event_rate"),
+            suffixes=("_risk", "_rate"),
+            exclude=("prevalence", "incidence"),
+        )
+        if not has_outcome_risk and (risk_pct_col or risk_prop_col):
+            denominator_col = _find_column(
+                frame,
+                exact=("n", "n_total", "total_n", "denominator", "n_denominator"),
+            )
+            event_col = _event_count_column(frame, denominator_col)
+            label_col = _label_column(frame) or _find_column(
+                frame,
+                exact=("group", "category", "stratum", "exposure"),
+            )
+            binary_group_col = None if label_col else _binary_group_column(frame)
+            metric_source = str(risk_pct_col or risk_prop_col or "outcome risk")
+            metric_label = _publication_label(
+                metric_source.replace("_pct", "").replace("_risk", " risk")
+            )
+            source_rows = []
+            for idx, row in frame.iterrows():
+                estimate = _as_percent(row, risk_pct_col or risk_prop_col)
+                if estimate is None:
+                    continue
+                if _is_risk_difference_row(
+                    row,
+                    row.get(label_col) if label_col else None,
+                    row.get(binary_group_col) if binary_group_col else None,
+                ):
+                    continue
+                if label_col:
+                    group_label = row.get(label_col)
+                elif binary_group_col:
+                    group_label = _binary_group_label(
+                        binary_group_col,
+                        row.get(binary_group_col),
+                    )
+                else:
+                    group_label = f"Group {idx + 1}"
+                record = row.to_dict()
+                record.update(
+                    {
+                        "plot_metric": metric_label,
+                        "plot_group_label": _publication_label(group_label),
+                        "plot_estimate_pct": estimate,
+                        "plot_ci_low_pct": _as_percent(
+                            row,
+                            _find_column(frame, exact=("ci_low_pct", "lower_pct"))
+                            or _find_column(
+                                frame,
+                                exact=("ci_low", "lower"),
+                                suffixes=("_ci_low_pct", "_ci_low", "_lower_pct", "_lower"),
+                            ),
+                        ),
+                        "plot_ci_high_pct": _as_percent(
+                            row,
+                            _find_column(frame, exact=("ci_high_pct", "upper_pct"))
+                            or _find_column(
+                                frame,
+                                exact=("ci_high", "upper"),
+                                suffixes=(
+                                    "_ci_high_pct",
+                                    "_ci_high",
+                                    "_upper_pct",
+                                    "_upper",
+                                ),
+                            ),
+                        ),
+                        "plot_denominator": row.get(denominator_col)
+                        if denominator_col
+                        else None,
+                        "plot_event_n": row.get(event_col) if event_col else None,
+                        "source_table": table_path.name,
+                        "source_row_index": int(idx),
+                    }
+                )
+                source_rows.append(record)
+                plot_rows.append(record)
+            if source_rows:
+                source_path = out_dir / "publication_figure_absolute_risk_source_data.csv"
+                pd.DataFrame(source_rows).to_csv(source_path, index=False)
+                source_files.append(source_path.name)
+                has_outcome_risk = True
+
+        if has_prevalence and has_outcome_risk:
+            break
+
+    if has_prevalence and has_outcome_risk:
+        title = "Prevalence and absolute outcome risk"
+        claim = "Exposure prevalence and absolute outcome risk are shown before adjusted relative estimates."
+    elif has_prevalence:
+        title = "Exposure prevalence"
+        claim = "Exposure prevalence is shown before adjusted relative estimates."
+    elif has_outcome_risk:
+        title = "Absolute outcome risk"
+        claim = "Absolute outcome risk is shown before adjusted relative estimates."
+    else:
+        title = ""
+        claim = ""
+    return {
+        "plot_rows": plot_rows,
+        "source_files": source_files,
+        "has_prevalence": has_prevalence,
+        "has_outcome_risk": has_outcome_risk,
+        "title": title,
+        "claim": claim,
+    }
+
+
 def _render_association_publication_bundle_from_prior_outputs(
     *,
     run_dir: Path,
@@ -3181,6 +4271,44 @@ def _render_association_publication_bundle_from_prior_outputs(
     def _resolve_or_ci_columns(frame: pd.DataFrame):
         lower_to_orig = {str(c).lower(): c for c in frame.columns}
         or_c = next((lower_to_orig[a] for a in _OR_ALIASES if a in lower_to_orig), None)
+        if or_c is None and any(
+            key in lower_to_orig
+            for key in ("estimate", "point_estimate", "effect_estimate")
+        ):
+            scale_col = next(
+                (
+                    lower_to_orig[a]
+                    for a in ("effect_scale", "scale", "measure")
+                    if a in lower_to_orig
+                ),
+                None,
+            )
+            if scale_col is not None:
+                scale_text = (
+                    frame[scale_col]
+                    .astype(str)
+                    .str.lower()
+                    .str.replace(r"[_-]+", " ", regex=True)
+                )
+                if scale_text.str.contains(
+                    r"\b(?:odds ratio|or)\b",
+                    regex=True,
+                    na=False,
+                ).any():
+                    estimate_key = next(
+                        (
+                            key
+                            for key in (
+                                "estimate",
+                                "point_estimate",
+                                "effect_estimate",
+                            )
+                            if key in lower_to_orig
+                        ),
+                        None,
+                    )
+                    if estimate_key is not None:
+                        or_c = lower_to_orig[estimate_key]
         lo_c = next(
             (lower_to_orig[a] for a in _CI_LOW_ALIASES if a in lower_to_orig), None
         )
@@ -3213,7 +4341,15 @@ def _render_association_publication_bundle_from_prior_outputs(
         return None
 
     table_path, frame, (or_col, lo_col, hi_col) = parent
-    var_col = "variable" if "variable" in frame.columns else frame.columns[0]
+    lower_to_orig = {str(c).lower(): c for c in frame.columns}
+    var_col = next(
+        (
+            str(lower_to_orig[key])
+            for key in ("term", "variable", "exposure", "predictor", "feature", "covariate")
+            if key in lower_to_orig
+        ),
+        str(frame.columns[0]),
+    )
     # Drop the intercept term; it is not an interpretable effect estimate.
     plot_df = frame[
         ~frame[var_col].astype(str).str.lower().isin({"const", "intercept"})
@@ -3238,7 +4374,11 @@ def _render_association_publication_bundle_from_prior_outputs(
 
     out_dir.mkdir(parents=True, exist_ok=True)
     labels = plot_df[var_col].astype(str).tolist()
-    display_labels = [_publication_label(label) for label in labels]
+    full_display_labels = [_publication_label(label) for label in labels]
+    display_labels = [
+        _short_figure_label(label.replace("Maximum ", "Max "), limit=32)
+        for label in full_display_labels
+    ]
     or_vals = plot_df[or_col].astype(float).to_numpy()
     lo = plot_df[lo_col].astype(float).to_numpy()
     hi = plot_df[hi_col].astype(float).to_numpy()
@@ -3247,7 +4387,9 @@ def _render_association_publication_bundle_from_prior_outputs(
     source_data = pd.DataFrame(
         {
             str(var_col): labels,
-            "display_label": display_labels,
+            "display_label": full_display_labels,
+            "plot_label": display_labels,
+            "point_estimate": or_vals,
             "odds_ratio": or_vals,
             "ci_low": lo,
             "ci_high": hi,
@@ -3256,24 +4398,125 @@ def _render_association_publication_bundle_from_prior_outputs(
         }
     )
     source_data.to_csv(out_dir / "publication_figure_source_data.csv", index=False)
+    descriptive_context = _association_descriptive_context(
+        run_dir=run_dir,
+        current_step_id=current_step_id,
+        out_dir=out_dir,
+    )
+    descriptive_rows = list(descriptive_context.get("plot_rows") or [])
+    association_panel_title = (
+        "Primary adjusted association" if len(labels) <= 3 else "Adjusted association"
+    )
+    association_panel_claim = (
+        "The primary adjusted odds ratio and 95% CI are read from the parent association table."
+        if len(labels) <= 3
+        else (
+            "Per-covariate adjusted odds ratios and 95% CIs are read "
+            "from the parent association table."
+        )
+    )
+    association_chart_type = "dot_interval" if len(labels) <= 3 else "forest"
 
     palette = apply_publication_style()
-    fig = plt.figure(
-        figsize=(183 / 25.4, max(72, 18 * len(labels) + 18) / 25.4),
-        constrained_layout=False,
-    )
-    grid = fig.add_gridspec(
-        1,
-        2,
-        width_ratios=[1.45, 0.85],
-        left=0.22,
-        right=0.98,
-        top=0.90,
-        bottom=0.18,
-        wspace=0.42,
-    )
-    ax = fig.add_subplot(grid[0, 0])
-    ax_width = fig.add_subplot(grid[0, 1], sharey=ax)
+    if descriptive_rows:
+        fig_height_mm = max(82, 18 * len(labels) + 22, 16 * len(descriptive_rows) + 28)
+        fig = plt.figure(
+            figsize=(183 / 25.4, fig_height_mm / 25.4),
+            constrained_layout=False,
+        )
+        grid = fig.add_gridspec(
+            1,
+            2,
+            width_ratios=[1.02, 1.28],
+            left=0.18,
+            right=0.98,
+            top=0.90,
+            bottom=0.18,
+            wspace=0.82,
+        )
+        ax_context = fig.add_subplot(grid[0, 0])
+        ax = fig.add_subplot(grid[0, 1])
+
+        context_df = pd.DataFrame(descriptive_rows)
+        context_labels = []
+        for _, row in context_df.iterrows():
+            metric = str(row.get("plot_metric") or "").strip()
+            group = str(row.get("plot_group_label") or "").strip()
+            context_labels.append(_context_axis_label(metric, group))
+        context_x = pd.to_numeric(
+            context_df["plot_estimate_pct"], errors="coerce"
+        ).to_numpy()
+        context_lo = pd.to_numeric(
+            context_df.get("plot_ci_low_pct", context_df["plot_estimate_pct"]),
+            errors="coerce",
+        ).fillna(pd.Series(context_x)).to_numpy()
+        context_hi = pd.to_numeric(
+            context_df.get("plot_ci_high_pct", context_df["plot_estimate_pct"]),
+            errors="coerce",
+        ).fillna(pd.Series(context_x)).to_numpy()
+        y_context = list(range(len(context_labels)))
+        ax_context.errorbar(
+            context_x,
+            y_context,
+            xerr=[
+                [max(0.0, center - lower) for center, lower in zip(context_x, context_lo)],
+                [max(0.0, upper - center) for center, upper in zip(context_x, context_hi)],
+            ],
+            fmt="o",
+            color=palette.get("teal", "#42949E"),
+            ecolor=palette.get("teal", "#42949E"),
+            elinewidth=1.0,
+            capsize=2.3,
+            markersize=4.0,
+        )
+        max_context = max([float(x) for x in context_hi if math.isfinite(float(x))] or [1.0])
+        ax_context.set_xlim(0, max(5.0, max_context + 8.0, max_context * 1.35))
+        ax_context.set_yticks(y_context)
+        ax_context.set_yticklabels(context_labels, fontsize=6.8)
+        ax_context.set_xlabel("Percent (95% CI)")
+        ax_context.set_title(str(descriptive_context["title"]), loc="left", pad=4)
+        ax_context.set_ylim(max(len(context_labels) + 1.8, 4.2), -0.5)
+        ax_context.grid(
+            axis="x",
+            color=palette.get("neutral_light", "#D8D8D8"),
+            linewidth=0.55,
+            alpha=0.8,
+        )
+        for row_idx, row in context_df.iterrows():
+            event_n = pd.to_numeric(pd.Series([row.get("plot_event_n")]), errors="coerce").iloc[0]
+            denom = pd.to_numeric(
+                pd.Series([row.get("plot_denominator")]), errors="coerce"
+            ).iloc[0]
+            if pd.notna(event_n) and pd.notna(denom):
+                label = f"{float(context_x[row_idx]):.1f}% ({int(event_n):,}/{int(denom):,})"
+            else:
+                label = f"{float(context_x[row_idx]):.1f}%"
+            ax_context.text(
+                max(float(context_hi[row_idx]), float(context_x[row_idx])) + 0.6,
+                row_idx,
+                label,
+                va="center",
+                fontsize=6.3,
+                color=palette.get("baseline", "#272727"),
+            )
+        add_panel_label(ax_context, "A", x=0.0, y=1.08)
+    else:
+        fig = plt.figure(
+            figsize=(183 / 25.4, max(72, 18 * len(labels) + 18) / 25.4),
+            constrained_layout=False,
+        )
+        grid = fig.add_gridspec(
+            1,
+            2,
+            width_ratios=[1.45, 0.85],
+            left=0.22,
+            right=0.98,
+            top=0.90,
+            bottom=0.18,
+            wspace=0.42,
+        )
+        ax = fig.add_subplot(grid[0, 0])
+        ax_width = fig.add_subplot(grid[0, 1], sharey=ax)
     ax.errorbar(
         or_vals,
         y,
@@ -3295,9 +4538,21 @@ def _render_association_publication_bundle_from_prior_outputs(
         linestyle="--",
     )
     ax.set_yticks(y)
-    ax.set_yticklabels(display_labels)
+    ax.set_yticklabels(display_labels, fontsize=6.6)
     ax.set_xlabel("Adjusted odds ratio (95% CI)")
-    ax.set_title("Adjusted association with the outcome", loc="left", pad=4)
+    ax.set_title(association_panel_title, loc="left", pad=4)
+    if len(labels) <= 3:
+        max_hi = max(float(value) for value in hi if math.isfinite(float(value)))
+        ax.set_xlim(left=max(0.01, min(float(value) for value in lo) * 0.96), right=max_hi * 1.28)
+        for row_idx, (center, lower, upper) in enumerate(zip(or_vals, lo, hi)):
+            ax.text(
+                float(upper) * 1.025,
+                row_idx,
+                f"OR {float(center):.2f} ({float(lower):.2f}-{float(upper):.2f})",
+                va="center",
+                fontsize=6.2,
+                color=palette.get("baseline", "#272727"),
+            )
     ax.invert_yaxis()
     ax.grid(
         axis="x",
@@ -3305,57 +4560,90 @@ def _render_association_publication_bundle_from_prior_outputs(
         linewidth=0.55,
         alpha=0.8,
     )
-    add_panel_label(ax, "A", x=-0.18)
+    add_panel_label(ax, "B" if descriptive_rows else "A", x=0.0, y=1.08)
 
-    ax_width.barh(
-        y,
-        ci_width,
-        color=palette.get("orange", "#E69F00"),
-        height=0.5,
-    )
-    ax_width.set_xlabel("95% CI width")
-    ax_width.set_title("Estimate precision", loc="left", pad=4)
-    ax_width.tick_params(axis="y", labelleft=False)
-    ax_width.grid(
-        axis="x",
-        color=palette.get("neutral_light", "#D8D8D8"),
-        linewidth=0.55,
-        alpha=0.8,
-    )
-    add_panel_label(ax_width, "B", x=-0.16)
+    if not descriptive_rows:
+        ax_width.barh(
+            y,
+            ci_width,
+            color=palette.get("orange", "#E69F00"),
+            height=0.5,
+        )
+        ax_width.set_xlabel("95% CI width")
+        ax_width.set_title("Estimate precision", loc="left", pad=4)
+        ax_width.tick_params(axis="y", labelleft=False)
+        ax_width.grid(
+            axis="x",
+            color=palette.get("neutral_light", "#D8D8D8"),
+            linewidth=0.55,
+            alpha=0.8,
+        )
+        add_panel_label(ax_width, "B", x=0.0, y=1.08)
 
-    contract = make_figure_contract(
-        figure_id="publication_figure",
-        core_claim=(
-            "Adjusted associations and their uncertainty are summarised from "
-            "the registered association coefficient table."
-        ),
-        panels=[
+    source_data_files = [
+        "publication_figure_source_data.csv",
+        *[str(item) for item in descriptive_context.get("source_files", [])],
+    ]
+    if descriptive_rows:
+        panels = [
             {
                 "panel_id": "A",
-                "title": "Adjusted odds-ratio forest plot",
-                "role": "association",
-                "claim": (
-                    "Per-covariate adjusted odds ratios and 95% CIs are read "
-                    "from the parent association table."
-                ),
-                "evidence_ids": ["table_association_results"],
+                "title": str(descriptive_context["title"]),
+                "role": "descriptive_result",
+                "chart_type": "dot_interval_absolute_risk",
+                "claim": str(descriptive_context["claim"]),
+                "evidence_ids": [
+                    item for item in descriptive_context.get("source_files", [])
+                ],
+            },
+            {
+                "panel_id": "B",
+                "title": association_panel_title,
+                "role": "primary_estimand",
+                "chart_type": association_chart_type,
+                "claim": association_panel_claim,
+                "evidence_ids": ["publication_figure_source_data.csv"],
+            },
+        ]
+        core_claim = (
+            "The figure pairs reader-facing prevalence or absolute-risk context "
+            "with the adjusted association estimate and uncertainty."
+        )
+    else:
+        panels = [
+            {
+                "panel_id": "A",
+                "title": association_panel_title,
+                "role": "primary_estimand",
+                "chart_type": association_chart_type,
+                "claim": association_panel_claim,
+                "evidence_ids": ["publication_figure_source_data.csv"],
             },
             {
                 "panel_id": "B",
                 "title": "Interval-width audit",
-                "role": "validation",
+                "role": "robustness",
+                "chart_type": "bar",
                 "claim": (
                     "The width of each 95% CI is shown to expose estimate "
                     "precision rather than hiding uncertainty in the forest plot."
                 ),
-                "evidence_ids": ["table_association_results"],
+                "evidence_ids": ["publication_figure_source_data.csv"],
             },
-        ],
-        source_data=["table_association_results"],
+        ]
+        core_claim = (
+            "Adjusted associations and their uncertainty are summarised from "
+            "the registered association coefficient table."
+        )
+    contract = make_figure_contract(
+        figure_id="publication_figure",
+        core_claim=core_claim,
+        panels=panels,
+        source_data=source_data_files,
         statistics_note=(
-            "Generated deterministically from the registered parent-step "
-            "association table after the figure-only step lacked canonical exports."
+            "Generated deterministically from registered parent-step tables; "
+            "the association panel uses the coefficient table and any context "
+            "panel uses prevalence or outcome-risk source tables when present."
         ),
     )
     outputs = save_publication_figure(
@@ -3378,6 +4666,7 @@ def _render_association_publication_bundle_from_prior_outputs(
             "mode": "association_forest_from_parent_outputs",
             "source_association_table": str(table_path),
             "source_data": "publication_figure_source_data.csv",
+            "descriptive_source_data": descriptive_context.get("source_files", []),
         }
     )
     figure_files = [path.name for key, path in outputs.items() if key != "contract"]
@@ -3388,6 +4677,8 @@ def _render_association_publication_bundle_from_prior_outputs(
         json.dumps(existing_summary, indent=2, ensure_ascii=False, default=str),
         encoding="utf-8",
     )
+    if descriptive_rows:
+        return "association_publication_bundle_from_parent_outputs_v3"
     return "association_publication_bundle_from_parent_outputs_v2"
 
 
@@ -3462,7 +4753,10 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
         plot_df["effect_scale"].astype(str).str.upper().isin({"RD", "RISK_DIFFERENCE"})
     ].copy()
     if not rd_df.empty:
-        rd_df["plot_label"] = "Risk difference"
+        rd_df["plot_label"] = [
+            _sensitivity_plot_label(row)
+            for row in rd_df.to_dict(orient="records")
+        ]
     n_df = source_data.copy()
     if "modeled_analytic_n" in n_df.columns:
         n_df["modeled_analytic_n"] = pd.to_numeric(
@@ -3491,7 +4785,7 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
         2,
         width_ratios=[1.35, 0.95],
         height_ratios=[1.0, 0.82],
-        left=0.24,
+        left=0.34,
         right=0.98,
         top=0.92,
         bottom=0.13,
@@ -3567,8 +4861,8 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
     _plot_interval_panel(
         ax_ratio,
         ratio_df,
-        title="Ratio-scale sensitivity estimates",
-        xlabel="Adjusted ratio estimate (95% CI)",
+        title="Ratio-scale estimates",
+        xlabel="Adjusted odds ratio (95% CI)",
         null_value=1.0,
         color=palette.get("blue", "#0F4D92"),
     )
@@ -3577,8 +4871,8 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
     _plot_interval_panel(
         ax_rd,
         rd_df,
-        title="Risk-difference sensitivity",
-        xlabel="Adjusted risk difference (95% CI)",
+        title="Risk difference",
+        xlabel="Risk difference (95% CI)",
         null_value=0.0,
         color=palette.get("green", "#008B5E"),
     )
@@ -3639,7 +4933,7 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
         panels=[
             {
                 "panel_id": "A",
-                "title": "Ratio-scale sensitivity estimates",
+                "title": "Ratio-scale estimates",
                 "role": "robustness",
                 "claim": (
                     "Adjusted odds-ratio and risk-ratio sensitivity estimates "
@@ -3649,11 +4943,12 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
             },
             {
                 "panel_id": "B",
-                "title": "Risk-difference sensitivity",
+                "title": "Risk difference",
                 "role": "effect",
                 "claim": (
-                    "The marginal-standardized risk difference is shown on its "
-                    "own scale rather than mixed with ratio estimates."
+                    "Risk-difference estimates are shown on their own scale "
+                    "rather than mixed with ratio estimates; the source-data "
+                    "table declares whether each row is adjusted or descriptive."
                 ),
                 "evidence_ids": ["sensitivity_comparison"],
             },
@@ -3718,6 +5013,74 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
     return "sensitivity_publication_bundle_from_parent_outputs_v1"
 
 
+def _render_publication_bundle_from_prior_outputs_for_step(
+    *,
+    run_dir: Path,
+    current_step_id: str,
+    out_dir: Path,
+    step_text: str = "",
+) -> Optional[str]:
+    """Route deterministic figure rescue to the renderer matching the step."""
+
+    step_id_text = str(current_step_id).lower()
+    full_text = f"{current_step_id} {step_text}".lower()
+    cohort_tokens = ("cohort", "eligibility", "overlap", "attrition", "definition")
+    prediction_tokens = ("prediction", "calibration", "discrimination", "model_performance")
+    sensitivity_tokens = ("sensitivity", "robustness", "specification")
+    association_tokens = ("association", "odds", "effect", "forest")
+    primary_result_tokens = (
+        "primary_result",
+        "primary_results",
+        "main_result",
+        "main_results",
+    )
+    missingness_tokens = ("missingness", "measurement", "data_quality", "quality")
+
+    if any(token in step_id_text for token in sensitivity_tokens) and any(
+        token in step_id_text for token in cohort_tokens
+    ):
+        renderers = (
+            _render_sensitivity_publication_bundle_from_prior_outputs,
+            _render_cohort_overlap_publication_bundle_from_prior_outputs,
+        )
+    elif any(token in step_id_text for token in cohort_tokens):
+        renderers = (_render_cohort_overlap_publication_bundle_from_prior_outputs,)
+    elif any(token in step_id_text for token in prediction_tokens):
+        renderers = (_render_prediction_publication_bundle_from_prior_outputs,)
+    elif any(token in step_id_text for token in sensitivity_tokens):
+        renderers = (_render_sensitivity_publication_bundle_from_prior_outputs,)
+    elif any(token in step_id_text for token in association_tokens) or any(
+        token in step_id_text for token in primary_result_tokens
+    ):
+        renderers = (_render_association_publication_bundle_from_prior_outputs,)
+    elif any(token in full_text for token in prediction_tokens):
+        renderers = (_render_prediction_publication_bundle_from_prior_outputs,)
+    elif any(token in full_text for token in sensitivity_tokens):
+        renderers = (_render_sensitivity_publication_bundle_from_prior_outputs,)
+    elif any(token in full_text for token in cohort_tokens):
+        renderers = (_render_cohort_overlap_publication_bundle_from_prior_outputs,)
+    elif any(token in full_text for token in association_tokens) or any(
+        token in full_text for token in primary_result_tokens
+    ):
+        renderers = (_render_association_publication_bundle_from_prior_outputs,)
+    elif any(token in step_id_text for token in missingness_tokens):
+        renderers = (_render_missingness_publication_bundle_from_prior_outputs,)
+    elif any(token in full_text for token in missingness_tokens):
+        renderers = (_render_missingness_publication_bundle_from_prior_outputs,)
+    else:
+        return None
+
+    for renderer in renderers:
+        repair_id = renderer(
+            run_dir=run_dir,
+            current_step_id=current_step_id,
+            out_dir=out_dir,
+        )
+        if repair_id is not None:
+            return repair_id
+    return None
+
+
 def _publication_label(value: Any) -> str:
     token = str(value or "").strip()
     mapping = {
@@ -3725,17 +5088,30 @@ def _publication_label(value: Any) -> str:
         "sep3_sofa2_max": "Sepsis-3",
         "age": "Age",
         "age_filled": "Age",
+        "age_per_10y": "Age, per 10 years",
         "sex_m": "Male sex",
+        "sex_male": "Male sex",
         "male": "Male sex",
         "hr_first": "Heart rate",
         "hr_first_filled": "Heart rate",
+        "hr_max_per_10bpm": "Maximum heart rate, per 10 bpm",
         "map_first": "Mean arterial pressure",
         "map_first_filled": "Mean arterial pressure",
+        "map_min": "Minimum mean arterial pressure",
+        "resp_max_per_5": "Maximum respiratory rate, per 5/min",
+        "temp_max_c": "Maximum temperature, per 1 deg C",
         "lactate": "Lactate",
         "lact": "Lactate",
+        "lact_max_mmol_l": "Maximum lactate, per 1 mmol/L",
         "lact_measured": "Lactate measured",
+        "bun_max_per_10": "Maximum BUN, per 10 units",
+        "wbc_max_per_10": "Maximum WBC, per 10 units",
         "sofa2": "SOFA-2",
         "death": "In-hospital mortality",
+        "alt_adult_no_los_all_vitals_sepsis3_derivable": "No LOS threshold",
+        "alt_adult_los1_three_of_four_vitals_sepsis3_derivable": ">=3 of 4 vitals",
+        "alt_adult_los1_no_temp_requirement_sepsis3_derivable": "No temperature",
+        "alt_adult_los2_all_vitals_sepsis3_derivable": "ICU LOS >=2 d",
     }
     lower = token.lower()
     if lower in mapping:
@@ -3755,12 +5131,22 @@ def _short_figure_label(value: Any, *, limit: int = 38) -> str:
 
 def _sensitivity_plot_label(row: Mapping[str, Any]) -> str:
     spec_id = str(row.get("spec_id") or "").strip().lower()
+    if spec_id.endswith("_crude_rd"):
+        spec_id = spec_id.removesuffix("_crude_rd")
     mapping = {
+        "full_export_step03_scope": "Full export",
         "primary_los_ge_1d": "Primary cohort",
         "primary": "Primary cohort",
         "cohort_no_los_restriction": "No ICU LOS restriction",
         "cohort_los_ge_2d": "ICU LOS >=2 d",
         "cohort_core_physiology_present": "Core physiology present",
+        "primary_adult_los1_all_vitals_sepsis3_derivable": "Primary cohort",
+        "alt_adult_no_los_all_vitals_sepsis3_derivable": "No LOS threshold",
+        "alt_adult_los1_three_of_four_vitals_sepsis3_derivable": ">=3 of 4 vitals",
+        "alt_adult_los1_no_temp_requirement_sepsis3_derivable": "No temperature",
+        "alt_adult_los2_all_vitals_sepsis3_derivable": "ICU LOS >=2 d",
+        "primary_lactate_complete_case": "Lactate obs.",
+        "primary_without_lactate_adjustment": "No lactate adj.",
         "missing_raw_complete_case": "Complete-case",
         "missing_drop_lactate": "Drop lactate",
         "effect_robust_poisson_rr": "Risk ratio",

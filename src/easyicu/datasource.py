@@ -214,28 +214,56 @@ def _close_duckdb_connections():
             pass
         _duckdb_local.con = None
 
-# 🚀 AUMC numericitems 优化：只加载 SOFA 相关的 itemids
-# 原始表 80GB，过滤后约 5GB，性能提升约 15 倍
-# 这些 itemids 来自 concept-dict.json 和 sofa2-dict.json 中 AUMC numericitems 源
-AUMC_NUMERICITEMS_ITEMIDS = {
-    6640, 6641, 6642, 6643, 6684, 6707, 6709, 6773, 6774, 6776, 6777, 6778, 6779, 
-    6786, 6789, 6796, 6797, 6800, 6801, 6803, 6806, 6807, 6808, 6810, 6812, 6813, 
-    6815, 6817, 6822, 6824, 6825, 6828, 6833, 6835, 6836, 6837, 6839, 6840, 6846, 
-    6848, 6850, 7433, 8658, 8794, 8874, 8884, 8885, 8903, 8915, 9553, 9555, 9556, 
-    9557, 9560, 9561, 9580, 9658, 9924, 9927, 9930, 9933, 9935, 9937, 9941, 9943, 
-    9945, 9947, 9952, 9960, 9962, 9964, 9965, 9967, 9968, 9989, 9990, 9992, 9994, 
-    9996, 10053, 10079, 10175, 10267, 10284, 10285, 10286, 10407, 10409, 11423, 
-    11545, 11586, 11679, 11690, 11692, 11710, 11812, 11846, 11856, 11893, 11902, 
-    11978, 11984, 11990, 11998, 12266, 12279, 12310, 12311, 12356, 12805, 13076, 
-    13952, 14216, 14252, 14254, 14256, 14258, 16110, 16166, 17982, 18666, 18952, 
-    19703, 20656, 21213, 21214,
-    # 🆕 SOFA-2 adv_resp (高级呼吸支持) itemids - 用于 PEEP 检测
-    # 6694=Eind exp. druk/PEEP (15.6M rows), 12284=PEEP Set (15.6M rows), 8862=PEEP/CPAP (85K rows)
-    6694, 12284, 8862,
-    # 🆕 SOFA-2 rrt (肾脏替代治疗) itemids
-    # 7666, 7667, 7668=透析相关, 8805=CRRT, 10736=血液透析, 12444=腹膜透析
-    7666, 7667, 7668, 8805, 10736, 12444,
-}
+# 🚀 AUMC numericitems 优化：只加载概念字典声明过的 itemids。
+# 原始表很大，过滤后性能提升明显。白名单必须跟随 concept-dict.json /
+# sofa2-dict.json 自动变化，避免字典新增 itemid 后被底层大表预过滤丢掉。
+AUMC_NUMERICITEMS_EXTRA_ITEMIDS: set[int] = set()
+
+
+def _source_ids(source_def: Mapping[str, Any]) -> set[int]:
+    ids = source_def.get("ids")
+    if isinstance(ids, int):
+        return {ids}
+    if isinstance(ids, list):
+        return {item for item in ids if isinstance(item, int)}
+    return set()
+
+
+def _aumc_numericitems_itemids_from_dictionaries() -> set[int]:
+    import json
+    from importlib import resources
+
+    itemids: set[int] = set()
+    data_package = "easyicu.data"
+    for filename in ("concept-dict.json", "sofa2-dict.json"):
+        resource = resources.files(data_package).joinpath(filename)
+        payload = json.loads(resource.read_text(encoding="utf8"))
+        if not isinstance(payload, Mapping):
+            continue
+        for concept_def in payload.values():
+            if not isinstance(concept_def, Mapping):
+                continue
+            sources = concept_def.get("sources")
+            if not isinstance(sources, Mapping):
+                continue
+            aumc_sources = sources.get("aumc", [])
+            if not isinstance(aumc_sources, list):
+                continue
+            for source_def in aumc_sources:
+                if not isinstance(source_def, Mapping):
+                    continue
+                if (
+                    source_def.get("table") == "numericitems"
+                    and source_def.get("sub_var") == "itemid"
+                ):
+                    itemids.update(_source_ids(source_def))
+    return itemids
+
+
+AUMC_NUMERICITEMS_ITEMIDS = (
+    _aumc_numericitems_itemids_from_dictionaries()
+    | AUMC_NUMERICITEMS_EXTRA_ITEMIDS
+)
 
 # 🚀 MIIV chartevents 优化：只加载 SOFA 相关的 93 个 itemids
 # 原始表 11GB，过滤后大幅减少

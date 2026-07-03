@@ -2698,11 +2698,15 @@
           "ids": [
             6836,
             9941,
-            14216
+            14216,
+            13069,
+            14479,
+            16637
           ],
           "table": "numericitems",
           "sub_var": "itemid",
-          "callback": "convert_unit(binary_op(`*`, 0.011309), 'mg/dL')"
+          "callback": "convert_unit(binary_op(`*`, 0.011309), 'mg/dL')",
+          "_comment": "2026-07-02 AUMC raw dictionary audit: added A_/RA_/MCA_Serum_Kreatinine channels, all umol/l."
         }
       ],
       "eicu": [
@@ -2730,11 +2734,26 @@
       ],
       "miiv": [
         {
-          "ids": 50912,
+          "ids": [
+            50912,
+            52546,
+            52024
+          ],
           "table": "labevents",
           "sub_var": "itemid",
           "index_var": "charttime",
-          "value_var": "valuenum"
+          "value_var": "valuenum",
+          "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV duplicate blood/whole-blood creatinine itemids."
+        },
+        {
+          "ids": [
+            220615,
+            229761
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "index_var": "charttime",
+          "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV charted serum/whole-blood creatinine channels."
         }
       ],
       "mimic": [
@@ -2742,6 +2761,17 @@
           "ids": 50912,
           "table": "labevents",
           "sub_var": "itemid"
+        },
+        {
+          "ids": [
+            791,
+            1525,
+            3750,
+            220615
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted chemistry creatinine channels."
         }
       ],
       "mimic_demo": [
@@ -2749,6 +2779,17 @@
           "ids": 50912,
           "table": "labevents",
           "sub_var": "itemid"
+        },
+        {
+          "ids": [
+            791,
+            1525,
+            3750,
+            220615
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted chemistry creatinine channels."
         }
       ],
       "sic": [
@@ -2957,9 +2998,13 @@
     "sources": {
       "aumc": [
         {
-          "ids": 6643,
+          "ids": [
+            6643,
+            6680
+          ],
           "table": "numericitems",
-          "sub_var": "itemid"
+          "sub_var": "itemid",
+          "_comment": "2026-07-02 source-dictionary audit: added non-invasive diastolic blood pressure channel."
         }
       ],
       "eicu": [
@@ -5377,10 +5422,19 @@
     "sources": {
       "aumc": [
         {
-          "ids": 12279,
+          "ids": [
+            6699,
+            12279,
+            12282,
+            12329,
+            12369,
+            16246,
+            20134
+          ],
           "table": "numericitems",
           "sub_var": "itemid",
-          "value_var": "value"
+          "value_var": "value",
+          "_comment": "2026-07-02 AUMC raw dictionary audit: added primary/secondary FiO2 percent channels with numeric 21-100-compatible values."
         },
         {
           "ids": [
@@ -5458,11 +5512,26 @@
       "mimic": [
         {
           "ids": [
+            189,
+            190,
+            191,
+            727,
+            1040,
+            1206,
+            1863,
+            2518,
+            2981,
             3420,
+            3422,
+            5955,
+            7041,
+            7570,
             223835
           ],
           "table": "chartevents",
-          "sub_var": "itemid"
+          "sub_var": "itemid",
+          "callback": "transform_fun(percent_as_numeric)",
+          "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III CareVue/respiratory FiO2 channels; percent_as_numeric handles 0.21-1 and 21-100 encodings."
         },
         {
           "ids": 50816,
@@ -5473,11 +5542,26 @@
       "mimic_demo": [
         {
           "ids": [
+            189,
+            190,
+            191,
+            727,
+            1040,
+            1206,
+            1863,
+            2518,
+            2981,
             3420,
+            3422,
+            5955,
+            7041,
+            7570,
             223835
           ],
           "table": "chartevents",
-          "sub_var": "itemid"
+          "sub_var": "itemid",
+          "callback": "transform_fun(percent_as_numeric)",
+          "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III CareVue/respiratory FiO2 channels; percent_as_numeric handles 0.21-1 and 21-100 encodings."
         },
         {
           "ids": 50816,
@@ -6172,23 +6256,65 @@
       ],
       "miiv": [
         {
-          "ids": 51222,
+          "ids": [
+            51222,
+            50811,
+            51640
+          ],
           "table": "labevents",
-          "sub_var": "itemid"
+          "sub_var": "itemid",
+          "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV blood-gas/chemistry hemoglobin duplicate itemids."
+        },
+        {
+          "ids": [
+            220228
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "index_var": "charttime",
+          "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV charted hemoglobin channel."
         }
       ],
       "mimic": [
         {
-          "ids": 51222,
+          "ids": [
+            51222,
+            50811
+          ],
           "table": "labevents",
           "sub_var": "itemid"
+        },
+        {
+          "ids": [
+            814,
+            1165,
+            3759,
+            220228
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted hematology hemoglobin channels."
         }
       ],
       "mimic_demo": [
         {
-          "ids": 51222,
+          "ids": [
+            51222,
+            50811
+          ],
           "table": "labevents",
           "sub_var": "itemid"
+        },
+        {
+          "ids": [
+            814,
+            1165,
+            3759,
+            220228
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted hematology hemoglobin channels."
         }
       ],
       "sic": [
@@ -6216,9 +6342,14 @@
     "sources": {
       "aumc": [
         {
-          "ids": 6640,
+          "ids": [
+            6640,
+            13075,
+            14055
+          ],
           "table": "numericitems",
-          "sub_var": "itemid"
+          "sub_var": "itemid",
+          "_comment": "2026-07-02 source-dictionary audit: added A_Hartfrequentie and PiCCO HF heart-rate channels."
         }
       ],
       "eicu": [
@@ -6927,17 +7058,27 @@
       ],
       "hirid": [
         {
-          "ids": 24000524,
+          "ids": [
+            24000524,
+            24000732,
+            24000485
+          ],
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class_name": "hrd_itm",
+          "_comment": "2026-07-02 source-dictionary audit: added HiRID venous lactate raw variable ids."
         }
       ],
       "miiv": [
         {
-          "ids": 50813,
+          "ids": [
+            50813,
+            52442,
+            53154
+          ],
           "table": "labevents",
-          "sub_var": "itemid"
+          "sub_var": "itemid",
+          "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV blood lactate duplicate itemids; lactated fluids and LDH remain excluded."
         }
       ],
       "mimic": [
@@ -7587,9 +7728,13 @@
     "sources": {
       "aumc": [
         {
-          "ids": 6642,
+          "ids": [
+            6642,
+            6679
+          ],
           "table": "numericitems",
-          "sub_var": "itemid"
+          "sub_var": "itemid",
+          "_comment": "2026-07-02 source-dictionary audit: added non-invasive mean blood pressure channel."
         }
       ],
       "eicu": [
@@ -7901,10 +8046,12 @@
       "aumc": [
         {
           "ids": [
-            12278
+            12278,
+            12362
           ],
           "table": "numericitems",
-          "sub_var": "itemid"
+          "sub_var": "itemid",
+          "_comment": "2026-07-02 added secondary mean airway pressure channel."
         }
       ],
       "eicu": [
@@ -8719,11 +8866,14 @@
         {
           "ids": [
             8875,
-            12273
+            12273,
+            12276,
+            12357,
+            16244
           ],
           "table": "numericitems",
           "sub_var": "itemid",
-          "_comment": "added 8875 Mv Spontaan (l/min) per audit 2026-05-27"
+          "_comment": "added 8875 Mv Spontaan (l/min) per audit 2026-05-27; 2026-07-02 added inspiratory/expiratory/device-specific minute-volume channels with l/min-compatible values."
         }
       ],
       "eicu": [
@@ -10008,6 +10158,16 @@
           "ids": 50818,
           "table": "labevents",
           "sub_var": "itemid"
+        },
+        {
+          "ids": [
+            778,
+            3784,
+            3835
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted arterial/blood PCO2 channels; body-fluid and mixed-venous labels remain excluded."
         }
       ],
       "mimic_demo": [
@@ -10015,6 +10175,16 @@
           "ids": 50818,
           "table": "labevents",
           "sub_var": "itemid"
+        },
+        {
+          "ids": [
+            778,
+            3784,
+            3835
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted arterial/blood PCO2 channels; body-fluid and mixed-venous labels remain excluded."
         }
       ],
       "sic": [
@@ -10043,10 +10213,15 @@
             6694,
             12284,
             8862,
-            8879
+            8879,
+            9666,
+            12336,
+            12354,
+            16250
           ],
           "table": "numericitems",
-          "sub_var": "itemid"
+          "sub_var": "itemid",
+          "_comment": "2026-07-02 added low-volume secondary/device-specific applied PEEP channels; PEEP tot remains excluded pending semantic adjudication."
         }
       ],
       "eicu": [
@@ -10149,6 +10324,16 @@
           "table": "labevents",
           "sub_var": "itemid",
           "index_var": "charttime"
+        },
+        {
+          "ids": [
+            220274,
+            223830
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "index_var": "charttime",
+          "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV charted venous/arterial pH channels; dipstick/GI/SOFT channels remain excluded."
         }
       ],
       "mimic": [
@@ -10156,6 +10341,23 @@
           "ids": 50820,
           "table": "labevents",
           "sub_var": "itemid"
+        },
+        {
+          "ids": [
+            780,
+            860,
+            1126,
+            1673,
+            3777,
+            3839,
+            4202,
+            4753,
+            220274,
+            223830
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted blood/arterial/venous pH channels; GI/dipstick/body-fluid channels remain excluded."
         }
       ],
       "mimic_demo": [
@@ -10163,6 +10365,23 @@
           "ids": 50820,
           "table": "labevents",
           "sub_var": "itemid"
+        },
+        {
+          "ids": [
+            780,
+            860,
+            1126,
+            1673,
+            3777,
+            3839,
+            4202,
+            4753,
+            220274,
+            223830
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted blood/arterial/venous pH channels; GI/dipstick/body-fluid channels remain excluded."
         }
       ],
       "sic": [
@@ -10432,11 +10651,13 @@
             12281,
             8852,
             8877,
-            6698
+            6698,
+            12365,
+            16239
           ],
           "table": "numericitems",
           "sub_var": "itemid",
-          "_comment": "6698='PIP'(cmH2O, primary peak insp pressure) added 2026-06-08 ricu-audit; same unit as 12281 Piek druk. Excluded 12365 Piek druk (2) = secondary channel."
+          "_comment": "6698='PIP'(cmH2O, primary peak insp pressure) added 2026-06-08 ricu-audit; 2026-07-02 added secondary Piek druk and Zephyros Ppeak channels."
         }
       ],
       "eicu": [
@@ -10673,10 +10894,23 @@
       ],
       "miiv": [
         {
-          "ids": 51265,
+          "ids": [
+            51265,
+            53189
+          ],
           "table": "labevents",
           "sub_var": "itemid",
-          "index_var": "charttime"
+          "index_var": "charttime",
+          "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV blood platelet-count duplicate itemid."
+        },
+        {
+          "ids": [
+            227457
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "index_var": "charttime",
+          "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV charted platelet-count channel."
         }
       ],
       "mimic": [
@@ -10684,6 +10918,16 @@
           "ids": 51265,
           "table": "labevents",
           "sub_var": "itemid"
+        },
+        {
+          "ids": [
+            828,
+            3789,
+            227457
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted platelet-count channels; platelet transfusion/intake items remain excluded."
         }
       ],
       "mimic_demo": [
@@ -10691,6 +10935,16 @@
           "ids": 51265,
           "table": "labevents",
           "sub_var": "itemid"
+        },
+        {
+          "ids": [
+            828,
+            3789,
+            227457
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted platelet-count channels; platelet transfusion/intake items remain excluded."
         }
       ],
       "sic": [
@@ -10759,6 +11013,17 @@
           "ids": 50821,
           "table": "labevents",
           "sub_var": "itemid"
+        },
+        {
+          "ids": [
+            490,
+            779,
+            3785,
+            3837
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted arterial/blood PO2 channels; mixed-venous/body-fluid labels remain excluded."
         }
       ],
       "mimic_demo": [
@@ -10766,6 +11031,17 @@
           "ids": 50821,
           "table": "labevents",
           "sub_var": "itemid"
+        },
+        {
+          "ids": [
+            490,
+            779,
+            3785,
+            3837
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted arterial/blood PO2 channels; mixed-venous/body-fluid labels remain excluded."
         }
       ],
       "sic": [
@@ -11182,10 +11458,13 @@
         {
           "ids": [
             12286,
-            12285
+            12285,
+            12338,
+            16251
           ],
           "table": "numericitems",
-          "sub_var": "itemid"
+          "sub_var": "itemid",
+          "_comment": "2026-07-02 added secondary/device-specific PS above PEEP channels; pressure-control above PEEP remains excluded."
         }
       ],
       "eicu": [
@@ -11589,10 +11868,16 @@
         {
           "ids": [
             8874,
-            12266
+            12266,
+            7726,
+            9654,
+            13092,
+            14455,
+            16613
           ],
           "table": "numericitems",
-          "sub_var": "itemid"
+          "sub_var": "itemid",
+          "_comment": "2026-07-02 source-dictionary audit: added spontaneous and arterial/RA/MCA respiratory-rate channels; ventilator Evita frequency remains in vent_rate."
         }
       ],
       "eicu": [
@@ -11794,7 +12079,10 @@
           "table": "numericitems",
           "sub_var": "itemid",
           "ids": [
-            6684
+            6684,
+            8806,
+            8808,
+            12091
           ],
           "callback": "transform_fun(set_val(TRUE))"
         }
@@ -12078,9 +12366,13 @@
     "sources": {
       "aumc": [
         {
-          "ids": 6641,
+          "ids": [
+            6641,
+            6678
+          ],
           "table": "numericitems",
-          "sub_var": "itemid"
+          "sub_var": "itemid",
+          "_comment": "2026-07-02 source-dictionary audit: added non-invasive systolic blood pressure channel."
         }
       ],
       "eicu": [
@@ -12768,11 +13060,14 @@
           "ids": [
             12275,
             12277,
-            16243
+            16243,
+            8872,
+            12358,
+            12360
           ],
           "table": "numericitems",
           "sub_var": "itemid",
-          "_comment": "added 16243 Zephyros Vte (ml) per audit 2026-05-27"
+          "_comment": "added 16243 Zephyros Vte (ml) per audit 2026-05-27; 2026-07-02 added spirometer and secondary inspiratory/expiratory tidal-volume channels."
         }
       ],
       "eicu": [
@@ -12853,10 +13148,12 @@
         {
           "ids": [
             8851,
-            12291
+            12291,
+            9646
           ],
           "table": "numericitems",
-          "sub_var": "itemid"
+          "sub_var": "itemid",
+          "_comment": "2026-07-02 added low-volume secondary tidal-volume set channel."
         }
       ],
       "eicu": [
@@ -13620,9 +13917,18 @@
     "sources": {
       "aumc": [
         {
-          "ids": 8794,
+          "ids": [
+            8794,
+            8796,
+            8798,
+            8800,
+            8803,
+            19921,
+            19922
+          ],
           "table": "numericitems",
-          "sub_var": "itemid"
+          "sub_var": "itemid",
+          "_comment": "2026-07-02 AUMC raw dictionary audit: added explicit urine-output side channels; urine chemistry and dialysis fluid channels remain excluded."
         }
       ],
       "eicu": [
@@ -14108,10 +14414,17 @@
         {
           "ids": [
             12283,
-            8850
+            8850,
+            8873,
+            12287,
+            12322,
+            12348,
+            16241,
+            16248
           ],
           "table": "numericitems",
-          "sub_var": "itemid"
+          "sub_var": "itemid",
+          "_comment": "2026-07-02 added set/measured ventilator-frequency channels; spontaneous respiratory-rate channels remain excluded."
         }
       ],
       "eicu": [
@@ -14582,23 +14895,68 @@
       ],
       "miiv": [
         {
-          "ids": 51301,
+          "ids": [
+            51301,
+            51300,
+            51755,
+            51756
+          ],
           "table": "labevents",
-          "sub_var": "itemid"
+          "sub_var": "itemid",
+          "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV blood WBC duplicate itemids."
+        },
+        {
+          "ids": [
+            220546
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "index_var": "charttime",
+          "_comment": "2026-07-02 source-dictionary audit: added MIMIC-IV charted WBC channel."
         }
       ],
       "mimic": [
         {
-          "ids": 51301,
+          "ids": [
+            51301,
+            51300
+          ],
           "table": "labevents",
           "sub_var": "itemid"
+        },
+        {
+          "ids": [
+            861,
+            1127,
+            1542,
+            4200,
+            220546
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted hematology WBC channels; body-fluid WBC remains excluded."
         }
       ],
       "mimic_demo": [
         {
-          "ids": 51301,
+          "ids": [
+            51301,
+            51300
+          ],
           "table": "labevents",
           "sub_var": "itemid"
+        },
+        {
+          "ids": [
+            861,
+            1127,
+            1542,
+            4200,
+            220546
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "_comment": "2026-07-02 source-dictionary audit: added MIMIC-III charted hematology WBC channels; body-fluid WBC remains excluded."
         }
       ],
       "sic": [
