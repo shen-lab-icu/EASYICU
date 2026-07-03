@@ -132,6 +132,53 @@ def test_locked_robustness_specs_restore_after_replan_drop(ra, tmp_path: Path) -
     assert [spec.spec_id for spec in restored] == [spec.spec_id for spec in specs]
 
 
+def test_write_locked_robustness_specs_reuses_existing_lock_on_resume(
+    ra,
+    tmp_path: Path,
+) -> None:
+    from types import SimpleNamespace
+
+    from easyicu.research_agent.robustness_panel import (
+        default_robustness_specs,
+        write_locked_robustness_specs,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    specs = default_robustness_specs()
+    plan = AnalysisPlan(
+        research_question="Does severity predict mortality?",
+        steps=[
+            AnalysisStep(
+                step_id="01_model",
+                intent="Fit the primary model.",
+                expected_outputs=["statistic:primary_or"],
+            )
+        ],
+        robustness_specs=specs,
+    )
+    evidence = ra.EvidenceStore(tmp_path)
+    locked = write_locked_robustness_specs(
+        run_dir=tmp_path,
+        plan=plan,
+        evidence=evidence,
+        prompt_pack_version="test",
+        llm_signature="mock",
+    )
+    before = locked.read_text(encoding="utf-8")
+
+    resume_plan_without_specs = SimpleNamespace(robustness_specs=[])
+    reused = write_locked_robustness_specs(
+        run_dir=tmp_path,
+        plan=resume_plan_without_specs,
+        evidence=evidence,
+        prompt_pack_version="test",
+        llm_signature="mock",
+    )
+
+    assert reused == locked
+    assert locked.read_text(encoding="utf-8") == before
+
+
 def test_plan_payload_normalizer_drops_extra_robustness_spec_keys(ra) -> None:
     from easyicu.research_agent.agents import _normalise_plan_payload
     from easyicu.research_agent.robustness_panel import default_robustness_specs

@@ -39,6 +39,9 @@ _MAX_PDF_BYTES = 20 * 1024 * 1024
 _MAX_PDF_EXTRACT_PAGES = 8
 _MAX_PDF_EXCERPT = 1_200
 _MAX_LITERATURE_PDFS = 80
+_IDEA_FEATURE_ROW_SCAN_LIMIT = 1_000_000
+_IDEA_SAMPLE_DEFAULT_RECORDS = 100_000
+_IDEA_SAMPLE_MAX_RECORDS = 250_000
 _NETWORK_TIMEOUT_SEC = 8
 _TIME_COLUMNS = {
     "charttime",
@@ -71,7 +74,18 @@ _SEVERITY_PRIORITY = (
     "uo_6h",
     "mech_vent",
 )
-_EVENT_TRUE_STRINGS = {"1", "true", "t", "yes", "y", "positive", "present"}
+_EVENT_TRUE_STRINGS = {
+    "1",
+    "true",
+    "t",
+    "yes",
+    "y",
+    "positive",
+    "present",
+    "invasive",
+    "noninvasive",
+    "non-invasive",
+}
 _EVENT_FALSE_STRINGS = {"0", "false", "f", "no", "n", "negative", "absent"}
 
 
@@ -300,6 +314,10 @@ def resolve_source(body: Dict[str, Any]) -> Dict[str, Any]:
         "doi": source.get("doi"),
         "pmid": source.get("pmid"),
         "url": source.get("url"),
+        "citation_key": source.get("citation_key"),
+        "zotero_key": source.get("zotero_key"),
+        "source_origin": source.get("source_origin"),
+        "source_origin_label": source.get("source_origin_label"),
     }
     if source_type == "url" and source.get("url") and not allow_network:
         adapter["status"] = "blocked_network_opt_in_required"
@@ -661,6 +679,124 @@ def plan_idea(body: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def bounded_sample_feasibility(body: Dict[str, Any]) -> Dict[str, Any]:
+    """Run a bounded row-level feasibility pass for one mined idea.
+
+    This upgrades metadata-only concept presence into a capped local sample
+    check.  It is still pre-analysis: no raw rows, entity identifiers, or effect
+    estimates leave the backend payload.
+    """
+
+    run_id = str(body.get("run_id") or "").strip()
+    idea_id = str(body.get("idea_id") or "").strip()
+    payload = _load_run(run_id)
+    if not payload:
+        raise IdeaMiningWebError({"error": "idea_run_not_found", "run_id": run_id})
+    idea = _selected_idea(payload, idea_id)
+    if not idea:
+        raise IdeaMiningWebError({"error": "idea_not_found", "idea_id": idea_id})
+    export = _active_export()
+    if not export:
+        raise IdeaMiningWebError(
+            {
+                "error": "active_export_required",
+                "reason": "Select a real EasyICU export before running sample feasibility.",
+            }
+        )
+
+    source, desc = export
+    export_index = _export_index(export)
+    concept_to_file = export_index.get("concept_to_file") or {}
+    required = [
+        str(row.get("concept_id") or "")
+        for row in idea.get("mapped_concepts") or []
+        if row.get("concept_id")
+    ]
+    concepts = [cid for cid in required if cid in concept_to_file]
+    max_records = _sample_record_limit(body.get("max_records"))
+    root = Path(str(desc.get("path") or source.get("path") or ""))
+    entity_ids = export_index.get("entity_ids") or set()
+    denominator = max(len(entity_ids), 1)
+
+    stats = [
+        row
+        for row in (
+            _bounded_feature_sample_stat(
+                root,
+                concept_id=cid,
+                item=concept_to_file.get(cid) or {},
+                denominator=denominator,
+                max_records=max_records,
+            )
+            for cid in concepts[:_MAX_FEATURE_STATS]
+        )
+        if row
+    ]
+    sampled = {row.get("concept_id") for row in stats}
+    missing_required = [cid for cid in required if cid not in sampled]
+    low = [
+        row
+        for row in stats
+        if row.get("metric_kind") != "event_rate" and row.get("low_coverage")
+    ]
+    status = "ready" if stats and not missing_required else "blocked"
+    if status == "ready" and low:
+        status = "needs_review"
+
+    out = {
+        "ok": True,
+        "schema_version": "easyicu.web_idea_bounded_sample_feasibility/1",
+        "created_at": _now(),
+        "run_id": run_id,
+        "idea_id": idea.get("idea_id"),
+        "status": status,
+        "reportable": False,
+        "claim_level": "feasibility_sample_not_reportable",
+        "sample": {
+            "basis": "bounded_file_head_sample",
+            "max_records_per_feature": max_records,
+            "scope": "first available records only; use as feasibility evidence, not as a clinical result",
+        },
+        "source": {
+            "label": source.get("label") or desc.get("label") or "Local export",
+            "path_hash": _sha256(str(source.get("path") or desc.get("path") or ""))[
+                :16
+            ],
+            "database": desc.get("database"),
+            "demo_like": bool(export_index.get("demo_like")),
+        },
+        "cohort": {
+            "entities": len(entity_ids)
+            if entity_ids
+            else (desc.get("summary") or {}).get("stays"),
+            "modules": (desc.get("summary") or {}).get("modules"),
+            "total_records": (desc.get("summary") or {}).get("total_rows"),
+        },
+        "feature_statistics": stats,
+        "missing_required_concepts": missing_required,
+        "interpretation": _bounded_sample_interpretation(
+            stats,
+            missing_required=missing_required,
+            low_coverage=low,
+        ),
+        "privacy": {
+            "patient_rows_returned": False,
+            "direct_identifiers_returned": False,
+            "source_text_stored": False,
+            "full_text_stored": False,
+            "network_calls": 0,
+            "external_llm_calls": 0,
+        },
+    }
+    _assert_no_row_payload(out)
+    run_dir = _run_dir(run_id)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "bounded_sample_feasibility.json").write_text(
+        json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    return out
+
+
 def create_handoff(body: Dict[str, Any]) -> Dict[str, Any]:
     """Freeze an idea-mining plan for the downstream Agent module."""
     run_id = str(body.get("run_id") or "").strip()
@@ -689,6 +825,17 @@ def create_handoff(body: Dict[str, Any]) -> Dict[str, Any]:
     elif plan_artifact:
         plan["selection_mode"] = plan.get("selection_mode") or "planned_before_agent_handoff"
         plan["plan_status"] = plan.get("plan_status") or "planned_requires_final_confirmation"
+    prior_art_check = _load_prior_art(run_id)
+    pre_experiment = payload.get("pre_experiment") or {}
+    plan["active_export_contract"] = plan.get(
+        "active_export_contract"
+    ) or _active_export_contract(pre_experiment)
+    plan["prior_art_review"] = _prior_art_review(prior_art_check)
+    plan["execution_gate"] = _execution_gate(
+        idea,
+        pre_experiment,
+        prior_art_check,
+    )
     handoff = {
         "ok": True,
         "schema_version": "easyicu.web_idea_handoff/1",
@@ -700,7 +847,8 @@ def create_handoff(body: Dict[str, Any]) -> Dict[str, Any]:
         "go_no_go_reason": idea.get("go_no_go_reason"),
         "selected_ledger_row": idea,
         "source_evidence": payload.get("source_evidence") or [],
-        "pre_experiment": payload.get("pre_experiment") or {},
+        "pre_experiment": pre_experiment,
+        "prior_art_check": prior_art_check,
         "handoff_plan": plan,
         "agent_seed": {
             "study_id": _slug(idea.get("idea_title") or "idea"),
@@ -735,6 +883,12 @@ def create_agent_project(body: Dict[str, Any]) -> Dict[str, Any]:
         handoff = create_handoff(body)
     if idea_id and str(handoff.get("idea_id") or "") != idea_id:
         handoff = create_handoff(body)
+    elif _handoff_needs_refresh(handoff, run_id):
+        refresh_body = dict(body)
+        current_notes = (handoff.get("handoff_plan") or {}).get("human_plan_notes")
+        if current_notes and not refresh_body.get("plan_edits"):
+            refresh_body["plan_edits"] = current_notes
+        handoff = create_handoff(refresh_body)
     seed = _agent_project_seed(handoff)
     project_dir = _AGENT_PROJECTS_ROOT / str(seed["study_id"])
     project_dir.mkdir(parents=True, exist_ok=True)
@@ -814,6 +968,9 @@ def get_run(body: Dict[str, Any] | None = None) -> Dict[str, Any]:
     plan = _load_plan(run_id)
     if plan:
         out["idea_plan"] = plan
+    sample = _load_bounded_sample(run_id)
+    if sample:
+        out["bounded_sample_feasibility"] = sample
     project = _project_for_run(run_id)
     if project:
         out["agent_project"] = project
@@ -839,6 +996,15 @@ def _source_record(body: Dict[str, Any]) -> Dict[str, Any]:
     doi = _clean(body.get("doi") or "", 180)
     pmid = _clean(body.get("pmid") or "", 80)
     source_type = _clean(body.get("source_type") or "manual", 40)
+    source_origin = _clean(body.get("source_origin") or "", 80)
+    if not source_origin:
+        if source_type == "zotero" and body.get("zotero_key"):
+            source_origin = "zotero_desktop"
+        elif source_type == "zotero":
+            source_origin = "pasted_literature"
+        else:
+            source_origin = source_type
+    source_origin_label = _clean(body.get("source_origin_label") or "", 120)
     excerpt = _clean(
         body.get("excerpt") or body.get("source_quote") or "", _MAX_SOURCE_QUOTE
     )
@@ -848,11 +1014,14 @@ def _source_record(body: Dict[str, Any]) -> Dict[str, Any]:
     citation_key = _slug(
         "|".join([title, str(year or ""), journal, doi, pmid]) or topic or "source"
     )
+    source_hash = _sha256(
+        "|".join([source_origin, title, journal, str(year), doi, pmid, url])
+    )[:12]
     record = {
-        "source_id": "source_"
-        + _sha256("|".join([title, journal, str(year), doi, pmid, url]))[:12],
+        "source_id": f"source_{source_hash}",
         "citation_key": citation_key,
         "source_type": source_type,
+        "source_origin": source_origin,
         "title": title,
         "year": year,
         "journal": journal or None,
@@ -865,6 +1034,8 @@ def _source_record(body: Dict[str, Any]) -> Dict[str, Any]:
         "source_text_stored": False,
         "rights_note": "Only metadata, hash and a bounded user-supplied quote are persisted.",
     }
+    if source_origin_label:
+        record["source_origin_label"] = source_origin_label
     if body.get("source_file_name"):
         record["source_file_name"] = _clean(body.get("source_file_name"), 240)
     if body.get("source_file_sha256"):
@@ -873,6 +1044,10 @@ def _source_record(body: Dict[str, Any]) -> Dict[str, Any]:
         record["literature_folder"] = _norm_path(
             str(body.get("literature_folder") or "")
         )
+    if body.get("citation_key"):
+        record["citation_key"] = _clean(body.get("citation_key"), 180)
+    if body.get("zotero_key"):
+        record["zotero_key"] = _clean(body.get("zotero_key"), 80)
     if body.get("literature_pdf_count") is not None:
         try:
             record["literature_pdf_count"] = int(body.get("literature_pdf_count") or 0)
@@ -895,6 +1070,8 @@ def _require_source_seed(body: Dict[str, Any]) -> None:
         "pmid",
         "source_file_sha256",
         "literature_folder",
+        "zotero_key",
+        "citation_key",
     )
     if any(str(body.get(field) or "").strip() for field in fields):
         return
@@ -1210,10 +1387,18 @@ def _handoff_plan(
         "selection_mode": "human_confirm_before_agent_run",
         "research_question": question,
         "source_provenance": {
+            "source_type": source.get("source_type"),
+            "source_origin": source.get("source_origin"),
+            "source_origin_label": source.get("source_origin_label"),
             "title": source.get("title"),
             "year": source.get("year"),
             "journal": source.get("journal"),
+            "doi": source.get("doi"),
+            "pmid": source.get("pmid"),
+            "citation_key": source.get("citation_key"),
+            "zotero_key": source.get("zotero_key"),
             "quote": source.get("evidence_quote"),
+            "source_text_hash": source.get("source_text_sha256"),
         },
         "cohort": {
             "default": "adult ICU cohort from active EasyICU export",
@@ -1242,6 +1427,9 @@ def _handoff_plan(
             "entities": (pre_experiment.get("cohort") or {}).get("entities"),
             "feature_count": len(pre_experiment.get("feature_statistics") or []),
         },
+        "active_export_contract": _active_export_contract(pre_experiment),
+        "prior_art_review": _prior_art_review(None),
+        "execution_gate": _execution_gate(idea, pre_experiment, None),
         "analysis_plan": _agent_style_steps(
             str(idea.get("analysis_family") or "association"), mapped
         )[:4],
@@ -1289,6 +1477,8 @@ def _analysis_plan_draft(
             "required_user_confirmations": _required_plan_confirmations(
                 pre_experiment, prior_art
             ),
+            "prior_art_review": _prior_art_review(prior_art),
+            "execution_gate": _execution_gate(idea, pre_experiment, prior_art),
             "agent_boundary": {
                 "can_create_agent_seed_after_confirmation": True,
                 "agent_run_created": False,
@@ -1603,8 +1793,6 @@ def _feature_stats(
     export_index: Dict[str, Any],
     entity_ids: set[str],
 ) -> List[Dict[str, Any]]:
-    import pandas as pd
-
     out: List[Dict[str, Any]] = []
     concept_to_file = export_index.get("concept_to_file") or {}
     denominator = max(len(entity_ids), 1)
@@ -1618,7 +1806,14 @@ def _feature_stats(
         selected = [c for c in ["stay_id", *_TIME_COLUMNS, concept_id] if c in columns]
         if "stay_id" not in selected or concept_id not in selected:
             continue
+        if _feature_scan_too_large(item):
+            out.append(_metadata_feature_stat(concept_id, item, denominator, columns))
+            if len(out) >= _MAX_FEATURE_STATS:
+                break
+            continue
         try:
+            import pandas as pd
+
             if path.suffix.lower() == ".parquet":
                 frame = pd.read_parquet(path, columns=selected)
             elif path.suffix.lower() == ".xlsx":
@@ -1689,6 +1884,244 @@ def _feature_stats(
         if len(out) >= _MAX_FEATURE_STATS:
             break
     return out
+
+
+def _bounded_feature_sample_stat(
+    root: Path,
+    *,
+    concept_id: str,
+    item: Dict[str, Any],
+    denominator: int,
+    max_records: int,
+) -> Optional[Dict[str, Any]]:
+    file_name = str(item.get("file") or "")
+    if not file_name:
+        return None
+    path = root / file_name
+    columns = [str(c) for c in item.get("columns") or []]
+    selected = _selected_feature_columns(columns, concept_id)
+    if "stay_id" not in selected or concept_id not in selected:
+        stat = _metadata_feature_stat(concept_id, item, denominator, columns)
+        stat.update(
+            {
+                "status": "sample_unavailable",
+                "summary_label": "Concept is present, but the table cannot be sampled without an entity key.",
+            }
+        )
+        return stat
+    try:
+        frame = _read_bounded_feature_frame(path, selected, max_records)
+    except Exception as exc:
+        stat = _metadata_feature_stat(concept_id, item, denominator, columns)
+        stat.update(
+            {
+                "status": "sample_unavailable",
+                "sample_limit_records": max_records,
+                "error_type": exc.__class__.__name__,
+                "summary_label": "The bounded sample could not be read safely; only manifest/schema presence is available.",
+            }
+        )
+        return stat
+    if frame.empty or concept_id not in frame.columns:
+        return {
+            "concept_id": concept_id,
+            "label": _concept_label(concept_id),
+            "module": str(item.get("module") or ""),
+            "metric_kind": "coverage",
+            "records": 0,
+            "sample_records": int(len(frame)),
+            "records_declared": _safe_nonnegative_int(item.get("rows")),
+            "observed_entities": 0,
+            "sample_entities": 0,
+            "denominator_entities": denominator,
+            "coverage_pct": 0.0,
+            "missing_pct": 100.0,
+            "low_coverage": True,
+            "time_indexed": any(col in frame.columns for col in _TIME_COLUMNS),
+            "coverage_basis": "bounded_file_head_sample",
+            "sample_limit_records": max_records,
+            "numeric_summary": {"available": False, "kind": "empty_sample"},
+            "summary_label": "No usable values were found in the bounded sample.",
+            "status": "missing",
+        }
+    entity_col = frame["stay_id"].map(dataio._norm_id)
+    sample_entities = max(int(entity_col.nunique()), 1)
+    is_event_rate = _is_event_rate_concept(concept_id)
+    if is_event_rate:
+        event_mask = _event_positive_mask(frame[concept_id])
+        event_entities = int(entity_col[event_mask].nunique())
+        event_records = int(event_mask.sum())
+        event_rate = round(event_entities / sample_entities * 100, 1)
+        return {
+            "concept_id": concept_id,
+            "label": _concept_label(concept_id),
+            "module": str(item.get("module") or ""),
+            "metric_kind": "event_rate",
+            "records": event_records,
+            "sample_records": int(len(frame)),
+            "records_declared": _safe_nonnegative_int(item.get("rows")),
+            "observed_entities": event_entities,
+            "sample_entities": sample_entities,
+            "event_entities": event_entities,
+            "non_event_entities": max(sample_entities - event_entities, 0),
+            "denominator_entities": denominator,
+            "event_rate_pct": event_rate,
+            "coverage_pct": event_rate,
+            "missing_pct": None,
+            "low_coverage": False,
+            "time_indexed": any(col in frame.columns for col in _TIME_COLUMNS),
+            "coverage_basis": "bounded_file_head_sample",
+            "sample_limit_records": max_records,
+            "numeric_summary": {"available": False, "kind": "event_indicator"},
+            "summary_label": "Sampled binary/event indicator; non-events are not missing.",
+            "status": "ready",
+        }
+    non_null_mask = frame[concept_id].notna()
+    non_null = frame[non_null_mask].copy()
+    records = int(len(non_null))
+    observed_entities = int(entity_col[non_null_mask].nunique())
+    coverage = round(observed_entities / sample_entities * 100, 1)
+    nums = dataio._numeric_values(non_null[concept_id])[:10000]
+    return {
+        "concept_id": concept_id,
+        "label": _concept_label(concept_id),
+        "module": str(item.get("module") or ""),
+        "metric_kind": "coverage",
+        "records": records,
+        "sample_records": int(len(frame)),
+        "records_declared": _safe_nonnegative_int(item.get("rows")),
+        "observed_entities": observed_entities,
+        "sample_entities": sample_entities,
+        "denominator_entities": denominator,
+        "coverage_pct": coverage,
+        "missing_pct": round(100 - coverage, 1),
+        "low_coverage": coverage < 50,
+        "time_indexed": any(col in frame.columns for col in _TIME_COLUMNS),
+        "coverage_basis": "bounded_file_head_sample",
+        "sample_limit_records": max_records,
+        "numeric_summary": _numeric_summary(nums),
+        "summary_label": "Coverage is computed inside the bounded sample only.",
+        "status": "ready" if records else "missing",
+    }
+
+
+def _selected_feature_columns(columns: List[str], concept_id: str) -> List[str]:
+    selected: List[str] = []
+    for col in ["stay_id", *_TIME_COLUMNS, concept_id]:
+        if col in columns and col not in selected:
+            selected.append(col)
+    return selected
+
+
+def _read_bounded_feature_frame(path: Path, columns: List[str], max_records: int) -> Any:
+    import pandas as pd
+
+    suffix = path.suffix.lower()
+    if suffix == ".parquet":
+        import pyarrow.parquet as pq
+
+        parquet = pq.ParquetFile(path)
+        remaining = max(0, max_records)
+        frames = []
+        for batch in parquet.iter_batches(
+            batch_size=max(1, min(remaining or max_records, 65_536)),
+            columns=columns,
+        ):
+            frame = batch.to_pandas()
+            piece = frame.head(remaining)
+            frames.append(piece)
+            remaining -= len(piece)
+            if remaining <= 0:
+                break
+        if not frames:
+            return pd.DataFrame(columns=columns)
+        return pd.concat(frames, ignore_index=True)
+    if suffix == ".xlsx":
+        return pd.read_excel(path, usecols=columns, nrows=max_records)
+    return pd.read_csv(path, usecols=columns, nrows=max_records)
+
+
+def _sample_record_limit(value: Any) -> int:
+    rows = _safe_nonnegative_int(value)
+    if rows is None:
+        return _IDEA_SAMPLE_DEFAULT_RECORDS
+    return max(100, min(rows, _IDEA_SAMPLE_MAX_RECORDS))
+
+
+def _bounded_sample_interpretation(
+    stats: List[Dict[str, Any]],
+    *,
+    missing_required: List[str],
+    low_coverage: List[Dict[str, Any]],
+) -> List[str]:
+    notes = [
+        "This is an outcome-blind bounded sample check. It can support feasibility triage but is not manuscript source data.",
+    ]
+    unavailable = [row for row in stats if row.get("status") == "sample_unavailable"]
+    if unavailable:
+        notes.append(
+            f"{len(unavailable)} feature(s) still have schema-only evidence because bounded sampling was unavailable."
+        )
+    if missing_required:
+        notes.append(
+            f"{len(missing_required)} required concept(s) were not verified in the bounded sample."
+        )
+    if low_coverage:
+        labels = ", ".join(_concept_label(row.get("concept_id")) for row in low_coverage[:4])
+        notes.append(
+            f"Low sample coverage remains for: {labels}. Confirm denominator and missingness before Agent execution."
+        )
+    if len(notes) == 1:
+        notes.append(
+            "Required concepts were sample-checked without returning raw records or direct identifiers."
+        )
+    return notes
+
+
+def _feature_scan_too_large(item: Dict[str, Any]) -> bool:
+    rows = _safe_nonnegative_int(item.get("rows"))
+    return rows is not None and rows > _IDEA_FEATURE_ROW_SCAN_LIMIT
+
+
+def _metadata_feature_stat(
+    concept_id: str,
+    item: Dict[str, Any],
+    denominator: int,
+    columns: List[str],
+) -> Dict[str, Any]:
+    return {
+        "concept_id": concept_id,
+        "label": _concept_label(concept_id),
+        "module": str(item.get("module") or ""),
+        "metric_kind": "schema_presence",
+        "records": None,
+        "records_declared": _safe_nonnegative_int(item.get("rows")),
+        "observed_entities": None,
+        "denominator_entities": denominator,
+        "coverage_pct": None,
+        "missing_pct": None,
+        "low_coverage": None,
+        "time_indexed": any(col in columns for col in _TIME_COLUMNS),
+        "numeric_summary": {
+            "available": False,
+            "kind": "metadata_only",
+        },
+        "summary_label": (
+            "Concept is present in the export schema; row-level feasibility was "
+            "deferred because the module exceeds the Idea Mining preflight scan limit."
+        ),
+        "coverage_basis": "manifest_file_inventory",
+        "scan_limit_rows": _IDEA_FEATURE_ROW_SCAN_LIMIT,
+        "status": "metadata_only",
+    }
+
+
+def _safe_nonnegative_int(value: Any) -> Optional[int]:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number >= 0 else None
 
 
 def _concept_unit(concept_id: str) -> str:
@@ -1891,6 +2324,15 @@ def _load_plan(run_id: str) -> Optional[Dict[str, Any]]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _load_bounded_sample(run_id: str) -> Optional[Dict[str, Any]]:
+    if not run_id:
+        return None
+    path = _run_dir(run_id) / "bounded_sample_feasibility.json"
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def _load_prior_art(run_id: str) -> Optional[Dict[str, Any]]:
     if not run_id:
         return None
@@ -1959,6 +2401,19 @@ def _read_agent_projects() -> List[Dict[str, Any]]:
     return valid
 
 
+def _handoff_needs_refresh(handoff: Dict[str, Any], run_id: str) -> bool:
+    prior_art_check = _load_prior_art(run_id)
+    if prior_art_check and not handoff.get("prior_art_check"):
+        return True
+    if not prior_art_check:
+        return False
+    prior = prior_art_check.get("prior_art") or {}
+    plan_review = (handoff.get("handoff_plan") or {}).get("prior_art_review") or {}
+    return bool(prior.get("search_performed")) != bool(
+        plan_review.get("search_performed")
+    ) or str(prior.get("status") or "") != str(plan_review.get("status") or "")
+
+
 def _agent_project_seed(handoff: Dict[str, Any]) -> Dict[str, Any]:
     idea = handoff.get("selected_ledger_row") or {}
     plan = handoff.get("handoff_plan") or {}
@@ -1973,6 +2428,18 @@ def _agent_project_seed(handoff: Dict[str, Any]) -> Dict[str, Any]:
     )
     source = (handoff.get("source_evidence") or [{}])[0]
     pre = handoff.get("pre_experiment") or {}
+    prior_art_check = handoff.get("prior_art_check")
+    active_export_contract = (
+        plan.get("active_export_contract") or _active_export_contract(pre)
+    )
+    prior_art_review = plan.get("prior_art_review") or _prior_art_review(
+        prior_art_check
+    )
+    execution_gate = plan.get("execution_gate") or _execution_gate(
+        idea,
+        pre,
+        prior_art_check,
+    )
     concepts = [
         {
             "role": row.get("role") or "feature",
@@ -1997,14 +2464,20 @@ def _agent_project_seed(handoff: Dict[str, Any]) -> Dict[str, Any]:
         "source_run_id": handoff.get("run_id"),
         "source_idea_id": handoff.get("idea_id"),
         "question": plan.get("research_question") or agent_seed.get("question"),
-        "cohort": (plan.get("cohort") or {}).get("default")
+        "cohort": _seed_cohort_label(active_export_contract)
+        or (plan.get("cohort") or {}).get("default")
         or "adult ICU cohort from active EasyICU export",
         "source": {
+            "source_type": source.get("source_type"),
+            "source_origin": source.get("source_origin"),
+            "source_origin_label": source.get("source_origin_label"),
             "title": source.get("title"),
             "year": source.get("year"),
             "journal": source.get("journal"),
             "doi": source.get("doi"),
             "pmid": source.get("pmid"),
+            "citation_key": source.get("citation_key"),
+            "zotero_key": source.get("zotero_key"),
             "quote": source.get("evidence_quote"),
             "source_text_hash": source.get("source_text_sha256"),
         },
@@ -2015,6 +2488,9 @@ def _agent_project_seed(handoff: Dict[str, Any]) -> Dict[str, Any]:
             "entities": (pre.get("cohort") or {}).get("entities"),
             "feature_count": len(pre.get("feature_statistics") or []),
         },
+        "active_export_contract": active_export_contract,
+        "prior_art_review": prior_art_review,
+        "execution_gate": execution_gate,
         "analysis_plan": list(plan.get("analysis_plan") or []),
         "human_plan_notes": plan.get("human_plan_notes"),
         "reportable": False,
@@ -2027,9 +2503,145 @@ def _agent_project_seed(handoff: Dict[str, Any]) -> Dict[str, Any]:
                 "scope": "metadata seed",
                 "status": "complete",
                 "created_at": handoff.get("created_at"),
-            }
+            },
+            *_seed_gate_runs(active_export_contract, prior_art_review),
         ],
     }
+
+
+def _active_export_contract(pre_experiment: Dict[str, Any]) -> Dict[str, Any]:
+    """Build a row-safe contract for the active export used by Idea Mining."""
+
+    source = pre_experiment.get("source") or {}
+    cohort = pre_experiment.get("cohort") or {}
+    stats = pre_experiment.get("feature_statistics") or []
+    missing = [
+        str(cid)
+        for cid in pre_experiment.get("missing_required_concepts") or []
+        if cid
+    ]
+    return {
+        "status": pre_experiment.get("status") or "blocked",
+        "payload_scope": pre_experiment.get("payload_scope") or "no_patient_rows",
+        "label": source.get("label"),
+        "database": source.get("database"),
+        "path_hash": source.get("path_hash"),
+        "demo_like": bool(source.get("demo_like")),
+        "entities": cohort.get("entities"),
+        "modules": cohort.get("modules"),
+        "total_rows": cohort.get("total_rows"),
+        "feature_count": len(stats),
+        "feature_concepts": [
+            row.get("concept_id") for row in stats[:12] if row.get("concept_id")
+        ],
+        "missing_required_concepts": missing,
+        "reportable": False,
+        "reason": pre_experiment.get("reason"),
+    }
+
+
+def _prior_art_review(prior_art_check: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    prior = (prior_art_check or {}).get("prior_art") or {}
+    return {
+        "status": prior.get("status") or "not_checked",
+        "search_performed": bool(prior.get("search_performed")),
+        "network_calls": int(prior.get("network_calls") or 0),
+        "result_count": int(prior.get("result_count") or 0),
+        "public_database_used_by_prior_work": prior.get(
+            "public_database_used_by_prior_work"
+        )
+        or "unknown_until_search",
+        "queries_to_run": list(prior.get("queries_to_run") or [])[:4],
+        "direct_same_topic_hit_count": len(prior.get("direct_same_topic_hits") or []),
+        "opportunity_frame": prior.get("opportunity_frame"),
+        "next_use": prior.get("next_use"),
+        "reason": prior.get("reason")
+        or "Prior-art review has not been run or explicitly skipped.",
+    }
+
+
+def _execution_gate(
+    idea: Dict[str, Any],
+    pre_experiment: Dict[str, Any],
+    prior_art_check: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    export_status = str(pre_experiment.get("status") or "blocked").lower()
+    missing = [
+        str(cid)
+        for cid in pre_experiment.get("missing_required_concepts") or []
+        if cid
+    ]
+    prior = (prior_art_check or {}).get("prior_art") or {}
+    blockers: List[str] = []
+    if export_status in {"", "blocked", "demo_only"} or "demo" in export_status:
+        blockers.append("prepare or select a real EasyICU export")
+    elif export_status == "partial" or missing:
+        blockers.append("re-extract or confirm missing required concepts")
+    if not bool(prior.get("search_performed")):
+        blockers.append("run prior-art review or document an explicit skip")
+    if idea.get("go_no_go") != "recommend":
+        blockers.append("resolve idea feasibility before Agent execution")
+    return {
+        "project_seed_allowed": True,
+        "agent_run_ready_after_human_confirmation": not blockers,
+        "reportable": False,
+        "draft_unlocked": False,
+        "blockers": blockers,
+        "export_status": pre_experiment.get("status") or "blocked",
+        "prior_art_status": prior.get("status") or "not_checked",
+        "go_no_go": idea.get("go_no_go"),
+    }
+
+
+def _seed_cohort_label(active_export_contract: Dict[str, Any]) -> Optional[str]:
+    label = str(active_export_contract.get("label") or "").strip()
+    entities = active_export_contract.get("entities")
+    if not label and entities is None:
+        return None
+    prefix = "adult ICU cohort"
+    if label:
+        prefix = f"{prefix} from {label}"
+    if entities is None:
+        return prefix
+    try:
+        count = f"{int(entities):,}"
+    except (TypeError, ValueError):
+        count = str(entities)
+    return f"{prefix} (n={count})"
+
+
+def _seed_gate_runs(
+    active_export_contract: Dict[str, Any],
+    prior_art_review: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    runs: List[Dict[str, Any]] = []
+    export_status = str(active_export_contract.get("status") or "").strip()
+    if export_status:
+        runs.append(
+            {
+                "label": "export feasibility",
+                "scope": (
+                    f"{export_status} · "
+                    f"{active_export_contract.get('feature_count') or 0} feature(s)"
+                ),
+                "status": export_status,
+                "created_at": _now(),
+            }
+        )
+    prior_status = str(prior_art_review.get("status") or "").strip()
+    if prior_status and prior_status != "not_checked":
+        runs.append(
+            {
+                "label": "prior-art review",
+                "scope": (
+                    f"{prior_status} · "
+                    f"{prior_art_review.get('result_count') or 0} metadata hit(s)"
+                ),
+                "status": prior_status,
+                "created_at": _now(),
+            }
+        )
+    return runs
 
 
 def _prior_art_queries(source: Dict[str, Any], title: str) -> List[str]:
@@ -2743,9 +3355,15 @@ def _pre_experiment_interpretation(
         for row in stats
         if row.get("metric_kind") != "event_rate"
         and float(row.get("coverage_pct") or 0) < 50
+        and row.get("status") != "metadata_only"
     ]
     event_rows = [row for row in stats if row.get("metric_kind") == "event_rate"]
+    metadata_rows = [row for row in stats if row.get("status") == "metadata_only"]
     notes = [f"{len(stats)} mapped feature(s) were summarized from the active export."]
+    if metadata_rows:
+        notes.append(
+            f"{len(metadata_rows)} feature(s) were verified by manifest/schema only because their module exceeded the preflight scan limit; run a bounded sample or Agent pipeline stage before interpreting coverage."
+        )
     if event_rows:
         notes.append(
             f"{len(event_rows)} boolean/event indicator(s) are reported as positive rates; negative patients are not treated as missing."

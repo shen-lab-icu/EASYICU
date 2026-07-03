@@ -848,10 +848,13 @@
             7668,
             10736,
             12444,
-            6684
+            6684,
+            8806,
+            8808,
+            12091
           ],
           "callback": "transform_fun(set_val(TRUE))",
-          "_comment": "CRRT indicators: 8805=CVVH Onttrokken (98K), 7666=Arteriele druk (83K), 7667=Pre Filter PBE (83K), 7668=Veneuze druk (83K), 10736=Bloed-flow (79K), 12444=Bloedflow ingesteld (70K), 6684=Vloeistofvolume ingesteld (68K)"
+          "_comment": "CRRT/RRT indicators: 8805=CVVH Onttrokken (98K), 7666=Arteriele druk (83K), 7667=Pre Filter PBE (83K), 7668=Veneuze druk (83K), 10736=Bloed-flow (79K), 12444=Bloedflow ingesteld (70K), 6684=Vloeistofvolume ingesteld (68K); 2026-07-02 added hemodialysis/peritoneal/CVVH fluid-loss channels 8806, 8808, 12091."
         }
       ],
       "mimic": [

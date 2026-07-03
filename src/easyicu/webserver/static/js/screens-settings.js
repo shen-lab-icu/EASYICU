@@ -16,11 +16,23 @@
     agent_model_mode: 'local',
     token_budget: 120000,
     auto_repair: true,
+    science_skills_enabled: true,
+    connector_pubmed_enabled: true,
+    connector_zotero_enabled: false,
+    mcp_tools_enabled: false,
+    prompt_contracts_enabled: true,
+    tool_audit_enabled: true,
+    remote_compute_enabled: false,
     density: 'comfortable',
     reduce_motion: false,
   };
   let settingsPickerEl = null;
   let settingsNotice = '';
+  let settingsCapabilityTab = 'overview';
+  let settingsAuditEvents = null;
+  let settingsAuditLoading = false;
+  let settingsZoteroTesting = false;
+  let settingsZoteroTest = null;
 
   function sw(on, extra = '', settingKey = '') {
     const ds = settingKey ? ` data-setting="${settingKey}"` : '';
@@ -35,6 +47,12 @@
   }
 
   function S0() { return window.EU_SETTINGS || {}; }
+  function C0() { return window.EU_CAPABILITIES || {}; }
+  function cap(id) {
+    const policy = C0();
+    const caps = policy && policy.capabilities ? policy.capabilities : {};
+    return caps[id] || {};
+  }
   function h(value) {
     return String(value == null ? '' : value).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
   }
@@ -48,6 +66,207 @@
   }
   function truthCtl(label) {
     return `<span class="pill ok-setting">${icon('check', 12)} ${h(label)}</span>`;
+  }
+
+  function statusText(status) {
+    if (!status) return '';
+    const statusMap = {
+      literature_source_ready: dual('literature source ready', '文献来源已就绪'),
+      pasted_source_ready: dual('pasted source ready', '粘贴文献已就绪'),
+    };
+    const reasonMap = {
+      connector_zotero_enabled_false: dual('off; pasted source import still works in Idea Mining', '已关闭；Idea Mining 仍可粘贴文献导入'),
+      local_zotero_api_ready: dual('desktop link ready', '桌面连接已就绪'),
+      local_zotero_api_http_error: dual('desktop link returned an error', '桌面连接返回错误'),
+      local_zotero_api_unavailable: dual('desktop app not reachable', '暂时无法连接桌面应用'),
+      local_zotero_search_failed: dual('desktop search failed', '桌面检索失败'),
+      local_zotero_item_fetch_failed: dual('paper fetch failed', '文献读取失败'),
+      pasted_source_ready: dual('pasted source ready', '粘贴文献已就绪'),
+      literature_source_ready: dual('literature source ready', '文献来源已就绪'),
+    };
+    const state = statusMap[status.status] || status.status;
+    const reason = reasonMap[status.reason] || status.reason;
+    return [state, reason].filter(Boolean).join(' · ');
+  }
+
+  function zoteroTestBlock(zotero) {
+    const status = settingsZoteroTest || zotero || {};
+    const ready = !!status.available;
+    const tone = ready ? 'ok' : status.enabled ? 'warn' : 'idle';
+    const label = statusText(status) || dual('Not checked yet', '尚未检查');
+    return `
+      <div class="settings-zotero-test ${tone}">
+        <div class="settings-inline-main">
+          <b>${dual('Connection test', '连接测试')}</b>
+          <span>${h(label)}</span>
+        </div>
+        <button type="button" class="btn sm" data-settings-zotero-test ${settingsZoteroTesting ? 'aria-disabled="true"' : ''}>${settingsZoteroTesting ? '<span class="spin"></span>' : icon('search', 12)} ${settingsZoteroTesting ? dual('Checking', '检查中') : dual('Test Zotero', '测试 Zotero')}</button>
+      </div>`;
+  }
+
+  function auditEventsBlock(audit) {
+    const payload = settingsAuditEvents || {};
+    const rows = Array.isArray(payload.events) ? payload.events.slice().reverse() : [];
+    const count = settingsAuditEvents ? Number(payload.count || rows.length || 0) : Number((audit || {}).event_count || 0);
+    return `
+      <div class="settings-audit-log">
+        <div class="settings-inline-main">
+          <b>${dual('Recent audit events', '最近审计事件')}</b>
+          <span>${count} ${dual('events recorded locally', '条事件保存在本机')}</span>
+        </div>
+        <button type="button" class="btn sm" data-settings-audit-refresh ${settingsAuditLoading ? 'aria-disabled="true"' : ''}>${settingsAuditLoading ? '<span class="spin"></span>' : icon('refresh', 12)} ${settingsAuditLoading ? dual('Loading', '加载中') : dual('Refresh', '刷新')}</button>
+        ${rows.length ? `<div class="settings-audit-list">
+          ${rows.slice(0, 8).map(event => `<div class="settings-audit-event">
+            <span class="settings-audit-type">${h(event.event_type || 'tool_event')}</span>
+            <span class="settings-audit-meta">${h(event.ts || '')}</span>
+          </div>`).join('')}
+        </div>` : `<div class="settings-audit-empty">${dual('Refresh to inspect the local audit ledger.', '点击刷新查看本地审计账本。')}</div>`}
+        <div class="settings-audit-path mono">${h((payload && payload.path) || (audit && audit.path) || '')}</div>
+      </div>`;
+  }
+
+  function dual(en, zh) {
+    return `${en} / ${zh}`;
+  }
+
+  function settingOn(key, fallback) {
+    const capSettings = (C0() && C0().settings) || {};
+    if (Object.prototype.hasOwnProperty.call(capSettings, key)) return !!capSettings[key];
+    const settings = S0();
+    if (Object.prototype.hasOwnProperty.call(settings, key)) return !!settings[key];
+    return !!fallback;
+  }
+
+  function capStatus(on) {
+    return `<span class="settings-cap-status ${on ? 'on' : 'off'}"><span class="dot"></span>${on ? dual('On', '开启') : dual('Off', '关闭')}</span>`;
+  }
+
+  function capRow(key, title, desc, fallback) {
+    const on = settingOn(key, fallback);
+    return row(title, desc, `<div class="settings-cap-control">${capStatus(on)}${sw(on, '', key)}</div>`);
+  }
+
+  function capabilityTabs() {
+    return [
+      ['overview', dual('Overview', '总览')],
+      ['skills', dual('Skills', '技能')],
+      ['connectors', dual('Connectors', '连接器')],
+      ['mcp', dual('MCP tools', 'MCP 工具')],
+      ['prompts', dual('Prompt contracts', '提示词契约')],
+      ['audit', dual('Audit & compute', '审计与计算')],
+    ];
+  }
+
+  function capabilityKeys() {
+    return [
+      ['science_skills_enabled', true],
+      ['connector_pubmed_enabled', true],
+      ['connector_zotero_enabled', false],
+      ['mcp_tools_enabled', false],
+      ['prompt_contracts_enabled', true],
+      ['tool_audit_enabled', true],
+      ['remote_compute_enabled', false],
+    ];
+  }
+
+  function capabilitySummaryTile(iconName, label, enabled, detail) {
+    return `<div class="settings-cap-tile ${enabled ? 'on' : 'off'}">
+      <span class="settings-cap-tile-icon">${icon(iconName, 14)}</span>
+      <div><b>${label}</b><span>${detail}</span></div>
+      ${capStatus(enabled)}
+    </div>`;
+  }
+
+  function capabilityBody() {
+    const pubmedOn = settingOn('connector_pubmed_enabled', true);
+    const zoteroOn = settingOn('connector_zotero_enabled', false);
+    const mcpOn = settingOn('mcp_tools_enabled', false);
+    const zotero = cap('zotero_connector');
+    const mcp = cap('mcp_tools');
+    const prompts = cap('prompt_contracts');
+    const audit = cap('tool_audit');
+    const remote = cap('remote_compute');
+    const allowedTools = Array.isArray(mcp.allowed_tools) ? mcp.allowed_tools.length : 0;
+    const blockedTools = Array.isArray(mcp.blocked_tools) ? mcp.blocked_tools.length : 0;
+    const promptRules = Array.isArray(prompts.rules) ? prompts.rules.length : 0;
+    const enabledCount = capabilityKeys().filter(([key, fallback]) => settingOn(key, fallback)).length;
+    if (settingsCapabilityTab === 'skills') {
+      return `<div class="settings-cap-rows">
+        ${capRow('science_skills_enabled', dual('Research skills', '研究技能'), dual('Reusable ICU workflows, figure-review protocols, and handoff templates stay available in Agent Science.', '在 Agent Science 中启用可复用 ICU 工作流、图件审阅 protocol 和交接模板。'), true)}
+        ${row(dual('Skill scope', '技能范围'), dual('Skills are local workflow templates. They do not send patient rows outside this machine.', '技能是本地工作流模板，不会把患者行发出本机。'), lockedCtl(dual('local template', '本地模板'), dual('Skills reuse local prompts and audit checklists.', '技能复用本地提示词和审计清单。')))}
+        ${row(dual('Runtime effect', '运行时效果'), dual('Turning this off removes reusable workflow cards from Agent Science and marks that coverage item unavailable.', '关闭后，Agent Science 会隐藏可复用工作流卡片，并把该覆盖项标记为不可用。'), truthCtl(settingOn('science_skills_enabled', true) ? dual('templates visible', '模板可见') : dual('templates hidden', '模板已隐藏')))}
+      </div>`;
+    }
+    if (settingsCapabilityTab === 'connectors') {
+      return `<div class="settings-cap-rows">
+        ${capRow('connector_pubmed_enabled', dual('PubMed connector', 'PubMed 连接器'), dual('Controls whether Idea Mining may use PubMed metadata after a source-level opt-in.', '控制 Idea Mining 在来源级 opt-in 后是否可以查询 PubMed 元数据。'), true)}
+        ${capRow('connector_zotero_enabled', dual('Zotero desktop link', 'Zotero 桌面连接'), dual('Optional shortcut for searching Zotero Desktop. Idea Mining can still import pasted DOI, BibTeX, RIS, or title/abstract metadata without this switch.', '用于检索 Zotero Desktop 的可选快捷方式。即使不开启，Idea Mining 也能直接导入粘贴的 DOI、BibTeX、RIS 或标题摘要元数据。'), false)}
+        ${row(dual('Source opt-in', '来源 opt-in'), dual('Connectors are only a global availability switch. Each URL, paper, or topic still requires an explicit one-time network opt-in.', '连接器只是全局可用开关；每个 URL、文章或主题仍需单次网络 opt-in。'), truthCtl(dual('required per source', '按来源要求')))}
+        ${row(dual('Zotero auto-connect', 'Zotero 自动连接'), dual('When enabled, EasyICU checks whether Zotero Desktop is reachable before library search. Pasted source import does not need this.', '启用后，EasyICU 会检查是否能连接 Zotero Desktop 再检索文献库。粘贴文献导入不需要这一步。'), lockedCtl(statusText(zotero) || dual('disabled', '未启用'), dual('Zotero Desktop connection check', 'Zotero Desktop 连接检查')))}
+        ${zoteroTestBlock(zotero)}
+      </div>`;
+    }
+    if (settingsCapabilityTab === 'mcp') {
+      return `<div class="settings-cap-rows">
+        ${capRow('mcp_tools_enabled', dual('MCP tools layer', 'MCP 工具层'), dual('Enables the standard tool boundary for future external systems. Current patient-data workflows remain local.', '为后续外部系统启用标准工具边界；当前患者数据工作流仍保持本地。'), false)}
+        ${row(dual('Tool allowlist', '工具白名单'), dual('External tools must be explicitly scoped before they can be used from research workflows.', '外部工具必须先明确作用域，之后才能在研究工作流中使用。'), lockedCtl(dual('required', '必须要求'), dual('Tool scope is an audit contract, not a cosmetic preference.', '工具作用域是审计契约，不是视觉选项。')))}
+        ${row(dual('Backend policy', '后端策略'), dual('The API now returns allow/block decisions for the registered tool boundary.', 'API 现在会返回注册工具边界的允许/阻止决策。'), truthCtl(`${allowedTools} ${dual('allowed', '允许')} · ${blockedTools} ${dual('blocked', '阻止')}`))}
+      </div>`;
+    }
+    if (settingsCapabilityTab === 'prompts') {
+      return `<div class="settings-cap-rows">
+        ${capRow('prompt_contracts_enabled', dual('Prompt contracts', '提示词契约'), dual('Keeps global prompts case-neutral while storing project-specific rules in protocols and rubrics.', '保持全局提示词 case-neutral，并把项目特定规则写入 protocol 和 rubric。'), true)}
+        ${row(dual('Case-specific rules', '个案规则'), dual('Study variables, figures, and benchmark cases belong in project protocols, not global prompts.', '研究变量、图件和 benchmark case 应写进项目 protocol，而不是全局提示词。'), truthCtl(dual('protocol-owned', '由 protocol 管理')))}
+        ${row(dual('Backend contract rules', '后端契约规则'), dual('The workbench payload exposes the active prompt-contract rule set for review.', '工作台 payload 会暴露当前启用的提示词契约规则，便于审阅。'), truthCtl(`${promptRules} ${dual('active rules', '条有效规则')}`))}
+      </div>`;
+    }
+    if (settingsCapabilityTab === 'audit') {
+      return `<div class="settings-cap-rows">
+        ${capRow('tool_audit_enabled', dual('Tool audit ledger', '工具审计账本'), dual('Records claims, tool use, citations, calculations, hashes, and reviewer-check state before draft release.', '草稿放行前记录论断、工具使用、引用、计算、哈希和审阅检查状态。'), true)}
+        ${capRow('remote_compute_enabled', dual('Remote compute control', '远程计算控制'), dual('Keeps remote or HPC execution disabled until credentials, data boundary, and artifact return rules are configured.', '在凭证、数据边界和产物回传规则配置前，保持远程或 HPC 执行关闭。'), false)}
+        ${row(dual('Audit events', '审计事件'), dual('Tool and connector decisions are written only when the audit ledger switch is on.', '只有工具审计账本开启时，工具和连接器决策才会写入。'), truthCtl(`${Number(audit.event_count || 0)} ${dual('recent events', '条近期事件')}`))}
+        ${auditEventsBlock(audit)}
+        ${row(dual('Compute adapter', '计算适配器'), dual('Non-local compute requests are rejected unless the remote compute switch and adapter are both ready.', '只有远程计算开关和适配器都就绪时，才允许非本地计算请求。'), lockedCtl(dual(String(remote.status || 'disabled'), String(remote.reason || '未启用')), dual('Remote compute backend status', '远程计算后端状态')))}
+      </div>`;
+    }
+    return `<div class="settings-cap-overview">
+      <div class="settings-cap-meter">
+        <b>${enabledCount}/${capabilityKeys().length}</b>
+        <span>${dual('enabled capabilities', '已启用能力')}</span>
+      </div>
+      <div class="settings-cap-grid">
+        ${capabilitySummaryTile('layers', dual('Skills', '技能'), settingOn('science_skills_enabled', true), dual('local workflow templates', '本地工作流模板'))}
+        ${capabilitySummaryTile('db', dual('Connectors', '连接器'), pubmedOn || zoteroOn, pubmedOn ? dual('PubMed ready; source opt-in still required', 'PubMed 可用；仍需来源 opt-in') : dual('off', '关闭'))}
+        ${capabilitySummaryTile('globe', dual('MCP tools', 'MCP 工具'), mcpOn, `${allowedTools}/${allowedTools + blockedTools || 0} ${dual('tools allowed', '工具允许')}`)}
+        ${capabilitySummaryTile('file', dual('Prompt contracts', '提示词契约'), settingOn('prompt_contracts_enabled', true), `${promptRules} ${dual('backend rules', '条后端规则')}`)}
+        ${capabilitySummaryTile('shield', dual('Audit', '审计'), settingOn('tool_audit_enabled', true), `${Number(audit.event_count || 0)} ${dual('events', '事件')}`)}
+        ${capabilitySummaryTile('gear', dual('Compute', '计算'), settingOn('remote_compute_enabled', false), dual(String(remote.status || 'local only'), String(remote.reason || '默认本地优先')))}
+      </div>
+      <div class="settings-cap-actions">
+        <button class="btn sm" data-settings-open="agent">${icon('agent', 12)} ${dual('Open Agent Science', '打开 Agent Science')}</button>
+        <button class="btn sm" data-settings-open="ideas">${icon('spark', 12)} ${dual('Open Idea Mining', '打开 Idea Mining')}</button>
+      </div>
+    </div>`;
+  }
+
+  function capabilityManager() {
+    const tabs = capabilityTabs();
+    if (!tabs.some(([id]) => id === settingsCapabilityTab)) settingsCapabilityTab = 'overview';
+    return `
+      <div class="sec-stack" id="set-capabilities"><div class="lbl">${dual('Capabilities', '能力')}</div><h2>${dual('Research capability manager', '研究能力管理')}</h2></div>
+      <section class="settings-cap-panel">
+        <div class="settings-cap-head">
+          <div>
+            <div class="eyebrow">${dual('Research controls', '研究控制')}</div>
+            <p>${dual('Manage research skills, connectors, MCP tools, prompt contracts, audit, and compute controls from one local settings surface.', '在一个本地设置界面管理研究技能、连接器、MCP 工具、提示词契约、审计和计算控制。')}</p>
+          </div>
+          <span class="pill info"><span class="dot"></span>${dual('local settings', '本地设置')}</span>
+        </div>
+        <div class="settings-cap-tabs" role="tablist" aria-label="${dual('Research capability tabs', '研究能力分栏')}">
+          ${tabs.map(([id, label]) => `<button type="button" class="settings-cap-tab ${settingsCapabilityTab === id ? 'on' : ''}" role="tab" aria-selected="${settingsCapabilityTab === id ? 'true' : 'false'}" data-settings-cap-tab="${id}">${label}</button>`).join('')}
+        </div>
+        <div class="settings-cap-body" role="tabpanel">${capabilityBody()}</div>
+      </section>`;
   }
 
   function pathCtl(key, fallback, iconName) {
@@ -168,6 +387,7 @@
       generated_at: new Date().toISOString(),
       scope: 'settings_diagnostics_no_secrets',
       settings: Object.assign({}, S0()),
+      capabilities: C0(),
       registry: window.EU_WORKSPACE_REGISTRY || null,
     };
     if (payload.settings && payload.settings.about) {
@@ -195,6 +415,7 @@
         <div class="rail-head"><span class="t">${T('Settings', '设置')}</span></div>
         <div class="set-nav col gap-6" style="font-size:12.5px;">
           ${[
+            [dual('Capabilities', '能力'), 'layers', 'set-capabilities'],
             [T('Workspace', '工作区'), 'folder', 'set-workspace'],
             [T('Data mode', '数据模式'), 'flask', 'set-data-mode'],
             [T('Privacy', '隐私'), 'shield', 'set-privacy'],
@@ -219,6 +440,8 @@
         <p class="lead">${T('Configure how EasyICU reads data, runs the agent, and presents the workspace. Everything is local and reversible.', '配置 EasyICU 如何读取数据、运行研究代理并呈现工作区。所有设置都保存在本地，且可以撤销。')}</p>
       </div>
       ${settingsNotice ? `<div class="note ok mt-12" data-settings-notice><div class="ico">${icon('check', 14)}</div><div class="body"><div class="t">${T('Settings updated', '设置已更新')}</div><div class="d">${h(settingsNotice)}</div></div></div>` : ''}
+
+      ${capabilityManager()}
 
       <div class="sec-stack" id="set-workspace"><div class="lbl">${T('Workspace', '工作区')}</div><h2>${T('Local paths', '本地路径')}</h2></div>
       <div class="card pad">
@@ -293,11 +516,76 @@
       const persist = (key, value, msg) => {
         if (key && window.EU_API && window.EU_API.saveSetting) {
           window.EU_API.saveSetting(key, value).then(() => {
-            if (msg) setNotice(msg);
+            setNotice(msg || `${key.replace(/_/g, ' ')} saved`);
           }).catch(err =>
-            console.error('[EasyICU] saveSetting failed', key, err));
+          {
+            console.error('[EasyICU] saveSetting failed', key, err);
+            setNotice(T('Save failed. Check the browser console for details.', '保存失败，请查看浏览器 console。'));
+          });
         }
       };
+      root.querySelectorAll('[data-settings-cap-tab]').forEach(btn => {
+        btn.addEventListener('click', e => {
+          e.preventDefault();
+          settingsCapabilityTab = btn.getAttribute('data-settings-cap-tab') || 'overview';
+          rerender();
+        });
+      });
+      root.querySelectorAll('[data-settings-open]').forEach(btn => {
+        btn.addEventListener('click', e => {
+          e.preventDefault();
+          const target = btn.getAttribute('data-settings-open');
+          if (target === 'agent') location.hash = '#agent';
+          if (target === 'ideas') location.hash = '#ideas';
+        });
+      });
+      root.querySelectorAll('[data-settings-zotero-test]').forEach(btn => {
+        btn.addEventListener('click', e => {
+          e.preventDefault();
+          if (settingsZoteroTesting || !(window.EU_API && window.EU_API.testZoteroConnection)) return;
+          settingsZoteroTesting = true;
+          settingsZoteroTest = null;
+          settingsNotice = '';
+          rerender();
+          window.EU_API.testZoteroConnection({})
+            .then(data => {
+              settingsZoteroTest = data && data.status ? data.status : null;
+              if (window.EU_API.loadCapabilities) return window.EU_API.loadCapabilities();
+              return null;
+            })
+            .then(() => { settingsNotice = T('Zotero connection check finished.', 'Zotero 连接检查完成。'); })
+            .catch(error => {
+              console.error('[EasyICU] Zotero test failed', error);
+              settingsNotice = T('Zotero connection check failed. See console for details.', 'Zotero 连接检查失败，请查看 console。');
+            })
+            .finally(() => {
+              settingsZoteroTesting = false;
+              rerender();
+            });
+        });
+      });
+      root.querySelectorAll('[data-settings-audit-refresh]').forEach(btn => {
+        btn.addEventListener('click', e => {
+          e.preventDefault();
+          if (settingsAuditLoading || !(window.EU_API && window.EU_API.loadCapabilityAuditEvents)) return;
+          settingsAuditLoading = true;
+          settingsNotice = '';
+          rerender();
+          window.EU_API.loadCapabilityAuditEvents({ limit: 20 })
+            .then(data => {
+              settingsAuditEvents = data;
+              settingsNotice = T('Audit ledger refreshed.', '审计账本已刷新。');
+            })
+            .catch(error => {
+              console.error('[EasyICU] audit refresh failed', error);
+              settingsNotice = T('Audit refresh failed. See console for details.', '审计刷新失败，请查看 console。');
+            })
+            .finally(() => {
+              settingsAuditLoading = false;
+              rerender();
+            });
+        });
+      });
       root.querySelectorAll('[data-settings-jump]').forEach(btn => {
         btn.addEventListener('click', e => {
           e.preventDefault();
@@ -361,8 +649,10 @@
       root.querySelectorAll('[data-settings-reset]').forEach(btn => {
         btn.addEventListener('click', () => {
           if (!window.EU_API || !window.EU_API.resetSettings) return;
-          window.EU_API.resetSettings().then(() => setNotice(T('Settings reset to backend defaults.', '设置已恢复为后端默认值。'))).catch(err =>
-            console.error('[EasyICU] resetSettings failed', err));
+          window.EU_API.resetSettings().then(() => setNotice(T('Settings reset to backend defaults.', '设置已恢复为后端默认值。'))).catch(err => {
+            console.error('[EasyICU] resetSettings failed', err);
+            setNotice(T('Reset failed. Check the browser console for details.', '恢复失败，请查看浏览器 console。'));
+          });
         });
       });
       root.querySelectorAll('[data-settings-diagnostics]').forEach(btn => {

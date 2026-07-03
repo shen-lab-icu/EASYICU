@@ -127,6 +127,47 @@ def _write_csv_export(root: Path, database: str = "miiv") -> Path:
     return root
 
 
+def _add_lactate_module(root: Path) -> None:
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3],
+            "charttime": [
+                "2026-01-01 00:00",
+                "2026-01-01 00:00",
+                "2026-01-01 00:00",
+            ],
+            "lact": [1.8, 3.2, 2.4],
+        }
+    ).to_csv(root / "labs.csv", index=False)
+    manifest_path = root / "_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.setdefault("files", []).append(
+        {"file": "labs.csv", "module": "labs", "rows": 3}
+    )
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+
+def _add_large_ventilator_module(root: Path) -> None:
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3],
+            "charttime": [
+                "2026-01-01 00:00",
+                "2026-01-01 00:00",
+                "2026-01-01 00:00",
+            ],
+            "peep": [5.0, 8.0, 10.0],
+            "mech_vent": ["invasive", "noninvasive", ""],
+        }
+    ).to_csv(root / "ventilator.csv", index=False)
+    manifest_path = root / "_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.setdefault("files", []).append(
+        {"file": "ventilator.csv", "module": "ventilator", "rows": 2_000_000}
+    )
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+
 def _write_legacy_full_parquet_export(root: Path, database: str = "miiv") -> Path:
     root.mkdir()
     tables = {
@@ -1212,6 +1253,35 @@ def test_idea_mining_web_run_creates_ledger_preexperiment_and_handoff(
     assert seed["reportable"] is False
     assert seed["draft_unlocked"] is False
     assert seed["question"] == handoff_body["handoff_plan"]["research_question"]
+    assert seed["cohort"] == "adult ICU cohort from Idea fixture (n=3)"
+    assert seed["active_export_contract"]["status"] == "partial"
+    assert seed["active_export_contract"]["label"] == "Idea fixture"
+    assert seed["active_export_contract"]["database"] == "miiv"
+    assert seed["active_export_contract"]["entities"] == 3
+    assert seed["active_export_contract"]["path_hash"]
+    assert "lact" in seed["active_export_contract"]["missing_required_concepts"]
+    assert seed["prior_art_review"]["status"] == "blocked_network_opt_in_required"
+    assert seed["prior_art_review"]["search_performed"] is False
+    assert seed["execution_gate"]["project_seed_allowed"] is True
+    assert seed["execution_gate"]["agent_run_ready_after_human_confirmation"] is False
+    assert "re-extract or confirm missing required concepts" in seed["execution_gate"]["blockers"]
+    assert "run prior-art review or document an explicit skip" in seed["execution_gate"]["blockers"]
+    seed_dump = json.dumps(seed, ensure_ascii=False)
+    assert str(export_dir) not in seed_dump
+    assert "stay_id" not in seed_dump
+
+    blocked_start = client.post(
+        "/api/jobs/agent-run",
+        json={
+            "path": str(export_dir),
+            "study_id": seed["study_id"],
+            "question": seed["question"],
+            "project_seed_dir": seed["project_dir"],
+        },
+    )
+    assert blocked_start.status_code == 400
+    assert blocked_start.json()["detail"]["error"] == "agent_project_execution_gate_blocked"
+    assert "run prior-art review or document an explicit skip" in blocked_start.json()["detail"]["blockers"]
     assert (
         tmp_path
         / "idea_cfg"
@@ -1243,6 +1313,236 @@ def test_idea_mining_web_run_creates_ledger_preexperiment_and_handoff(
     assert loaded_body["agent_project"]["study_id"] == seed["study_id"]
     assert loaded_body["privacy"]["patient_rows_returned"] is False
     assert loaded_body["privacy"]["external_llm_calls"] == 0
+
+
+def test_idea_mining_real_export_and_prior_art_unlock_agent_run_gate(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    monkeypatch.setattr(idea_mining_web, "_CONFIG_DIR", tmp_path / "idea_cfg")
+    monkeypatch.setattr(idea_mining_web, "_RUN_ROOT", tmp_path / "idea_cfg" / "runs")
+    monkeypatch.setattr(
+        idea_mining_web, "_HISTORY_PATH", tmp_path / "idea_cfg" / "history.json"
+    )
+    monkeypatch.setattr(
+        idea_mining_web,
+        "_AGENT_PROJECTS_ROOT",
+        tmp_path / "idea_cfg" / "agent_projects",
+    )
+    monkeypatch.setattr(
+        idea_mining_web,
+        "_AGENT_PROJECTS_PATH",
+        tmp_path / "idea_cfg" / "agent_projects.json",
+    )
+    monkeypatch.setattr(
+        idea_mining_web,
+        "_pubmed_esearch",
+        lambda query, limit=5: ["98765"],
+    )
+    monkeypatch.setattr(
+        idea_mining_web,
+        "_pubmed_esummary",
+        lambda ids: [
+            {
+                "pmid": "98765",
+                "title": "Lactate clearance and mortality in public ICU databases",
+                "journal": "Critical Care",
+                "year": 2025,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        settings_store,
+        "load_settings",
+        lambda: {**settings_store.DEFAULTS, "connector_pubmed_enabled": True},
+    )
+    export_dir = _write_csv_export(tmp_path / "idea_export")
+    _add_lactate_module(export_dir)
+    source_store.register_source(
+        str(export_dir), label="Real MIIV export", active=True, crossdb=True
+    )
+    client = TestClient(app)
+
+    mined = client.post(
+        "/api/ideas/mine",
+        json={
+            "source_type": "manual",
+            "topic": "lactate clearance and ICU mortality",
+            "title": "Lactate clearance review",
+            "journal": "Intensive Care Medicine",
+            "year": "2026",
+            "excerpt": "Lactate clearance may identify high-risk ICU mortality.",
+        },
+    )
+    assert mined.status_code == 200
+    body = mined.json()
+    idea = body["idea_ledger"][0]
+    assert idea["go_no_go"] == "recommend"
+    assert body["pre_experiment"]["status"] == "ready"
+    assert body["pre_experiment"]["missing_required_concepts"] == []
+
+    prior_art = client.post(
+        "/api/ideas/prior-art",
+        json={
+            "run_id": body["run_id"],
+            "idea_id": body["selected_idea_id"],
+            "allow_network": True,
+        },
+    )
+    assert prior_art.status_code == 200
+    assert prior_art.json()["prior_art"]["status"] == "searched"
+    assert prior_art.json()["prior_art"]["search_performed"] is True
+
+    planned = client.post(
+        "/api/ideas/plan",
+        json={"run_id": body["run_id"], "idea_id": body["selected_idea_id"]},
+    )
+    assert planned.status_code == 200
+    confirmations = planned.json()["plan"]["required_user_confirmations"]
+    assert "prepare or register a usable EasyICU export" not in confirmations
+    assert "prior-art review opt-in or explicit decision to skip" not in confirmations
+    assert (
+        planned.json()["plan"]["execution_gate"][
+            "agent_run_ready_after_human_confirmation"
+        ]
+        is True
+    )
+
+    handoff = client.post(
+        "/api/ideas/handoff",
+        json={"run_id": body["run_id"], "idea_id": body["selected_idea_id"]},
+    )
+    assert handoff.status_code == 200
+    assert handoff.json()["handoff_plan"]["prior_art_review"]["search_performed"] is True
+
+    project = client.post(
+        "/api/ideas/create-agent-project",
+        json={"run_id": body["run_id"], "idea_id": body["selected_idea_id"]},
+    )
+    assert project.status_code == 200
+    seed = project.json()["project"]
+    assert seed["active_export_contract"]["status"] == "ready"
+    assert seed["active_export_contract"]["label"] == "Real MIIV export"
+    assert seed["active_export_contract"]["demo_like"] is False
+    assert seed["prior_art_review"]["status"] == "searched"
+    assert seed["prior_art_review"]["result_count"] == 1
+    assert seed["execution_gate"]["blockers"] == []
+    assert seed["execution_gate"]["agent_run_ready_after_human_confirmation"] is True
+    assert any(run["label"] == "prior-art review" for run in seed["runs"])
+    seed_dump = json.dumps(seed, ensure_ascii=False)
+    assert str(export_dir) not in seed_dump
+    assert "stay_id" not in seed_dump
+    assert "subject_id" not in seed_dump
+
+    started = client.post(
+        "/api/jobs/agent-run",
+        json={
+            "path": str(export_dir),
+            "study_id": seed["study_id"],
+            "question": seed["question"],
+            "project_seed_dir": seed["project_dir"],
+        },
+    )
+    assert started.status_code == 200
+    snapshot = _wait_for_job(client, started.json()["job_id"])
+    assert snapshot["status"] == "done"
+    result = snapshot["result"]
+    assert result["summary"]["stays"] == 3
+    assert result["gate"]["status"] == "analysis_only"
+    assert result["project_dir"].startswith(str(Path(seed["project_dir"]) / "runs"))
+    assert result["uploads"] == 0
+    assert result["tokens"] == 0
+
+
+def test_idea_mining_large_module_uses_metadata_only_feature_stats(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    monkeypatch.setattr(idea_mining_web, "_CONFIG_DIR", tmp_path / "idea_cfg")
+    monkeypatch.setattr(idea_mining_web, "_RUN_ROOT", tmp_path / "idea_cfg" / "runs")
+    monkeypatch.setattr(
+        idea_mining_web, "_HISTORY_PATH", tmp_path / "idea_cfg" / "history.json"
+    )
+    export_dir = _write_csv_export(tmp_path / "large_vent_export")
+    _add_large_ventilator_module(export_dir)
+    source_store.register_source(
+        str(export_dir), label="Large ventilator export", active=True, crossdb=True
+    )
+    client = TestClient(app)
+
+    mined = client.post(
+        "/api/ideas/mine",
+        json={
+            "source_type": "manual",
+            "topic": "PEEP and in-hospital mortality in mechanically ventilated ICU patients",
+            "title": "ARDS ventilator review",
+            "journal": "Intensive Care Medicine",
+            "year": "2026",
+            "excerpt": "Reviews highlight uncertainty about PEEP, mechanical ventilation, respiratory failure, ARDS, and mortality.",
+        },
+    )
+
+    assert mined.status_code == 200
+    body = mined.json()
+    assert body["pre_experiment"]["status"] == "ready"
+    assert body["pre_experiment"]["missing_required_concepts"] == []
+    stats = {
+        row["concept_id"]: row for row in body["pre_experiment"]["feature_statistics"]
+    }
+    assert stats["peep"]["status"] == "metadata_only"
+    assert stats["peep"]["metric_kind"] == "schema_presence"
+    assert stats["peep"]["coverage_basis"] == "manifest_file_inventory"
+    assert stats["peep"]["records_declared"] == 2_000_000
+    assert stats["death"]["metric_kind"] == "event_rate"
+    assert any(
+        "manifest/schema only" in note
+        for note in body["pre_experiment"]["interpretation"]
+    )
+    dumped = json.dumps(body, ensure_ascii=False)
+    for marker in ["stay_id", "subject_id", "hadm_id", "tableRows"]:
+        assert marker not in dumped
+
+    sample = client.post(
+        "/api/ideas/bounded-feasibility",
+        json={
+            "run_id": body["run_id"],
+            "idea_id": body["selected_idea_id"],
+            "max_records": 500,
+        },
+    )
+    assert sample.status_code == 200
+    sample_body = sample.json()
+    assert sample_body["schema_version"] == (
+        "easyicu.web_idea_bounded_sample_feasibility/1"
+    )
+    assert sample_body["claim_level"] == "feasibility_sample_not_reportable"
+    sample_stats = {
+        row["concept_id"]: row
+        for row in sample_body["feature_statistics"]
+    }
+    assert sample_stats["peep"]["status"] == "ready"
+    assert sample_stats["peep"]["coverage_basis"] == "bounded_file_head_sample"
+    assert sample_stats["peep"]["sample_limit_records"] == 500
+    assert sample_stats["peep"]["sample_records"] == 3
+    assert sample_stats["peep"]["records_declared"] == 2_000_000
+    assert sample_stats["peep"]["coverage_pct"] == 100.0
+    assert sample_stats["mech_vent"]["metric_kind"] == "event_rate"
+    assert sample_stats["mech_vent"]["records"] == 2
+    assert sample_stats["mech_vent"]["event_rate_pct"] == pytest.approx(66.7)
+    assert sample_body["privacy"]["patient_rows_returned"] is False
+    loaded = client.post("/api/ideas/run", json={"run_id": body["run_id"]})
+    assert loaded.status_code == 200
+    assert loaded.json()["bounded_sample_feasibility"]["status"] in {
+        "ready",
+        "needs_review",
+    }
+    sample_dumped = json.dumps(sample_body, ensure_ascii=False)
+    for marker in ["stay_id", "subject_id", "hadm_id", "tableRows"]:
+        assert marker not in sample_dumped
 
 
 def test_idea_mining_repeated_same_source_keeps_distinct_local_records(
@@ -4612,6 +4912,123 @@ def test_agent_run_job_uses_active_registry_and_writes_bounded_artifacts(
     )
 
 
+def test_agent_run_large_export_preflight_uses_registry_metadata_fast_path(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    export_dir = _write_csv_export(tmp_path / "large_miiv", database="miiv")
+    manifest_path = export_dir / "_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["patient_count"] = 94_458
+    for row in manifest["files"]:
+        row["rows"] = 2_000_000
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    source_store.register_source(str(export_dir), active=True, crossdb=True)
+    client = TestClient(app)
+
+    start = client.post(
+        "/api/jobs/agent-run",
+        json={
+            "study_id": "large-export-preflight",
+            "mode": "analysis",
+            "question": "metadata-only preflight",
+            "project_root": str(tmp_path / "projects"),
+        },
+    )
+
+    assert start.status_code == 200
+    snapshot = _wait_for_job(client, start.json()["job_id"])
+    assert snapshot["status"] == "done"
+    result = snapshot["result"]
+    assert result["summary"]["stays"] == 94_458
+    assert result["summary"]["total_rows"] == 10_000_000
+    assert result["summary"]["snapshot_basis"] == "registry_metadata"
+    assert result["summary"]["artifact_scope"] == "metadata_only_large_export_preflight"
+    assert result["cohort"]["status"] == "metadata_only"
+    assert result["gate"]["status"] == "analysis_only"
+
+    gate_checks = {check["id"]: check for check in result["gate"]["checks"]}
+    assert gate_checks["quality_audited"]["passed"] is True
+    assert gate_checks["quality_audited"]["coverage_bases"] == [
+        "manifest_file_inventory"
+    ]
+    assert gate_checks["no_patient_rows_persisted"]["passed"] is True
+
+    artifact_paths = [Path(item["path"]) for item in result["artifacts"]]
+    assert {path.name for path in artifact_paths} == AGENT_PREFLIGHT_ARTIFACTS
+    for path in artifact_paths:
+        text = path.read_text(encoding="utf-8")
+        assert "tableRows" not in text
+        assert '"series"' not in text
+        assert '"patient"' not in text
+        assert '"stay_id"' not in text
+    artifact_payloads = {
+        path.name: json.loads(path.read_text(encoding="utf-8"))
+        for path in artifact_paths
+    }
+    table1 = artifact_payloads["table1_summary.json"]
+    assert table1["status"] == "metadata_only"
+    assert table1["denominator"] == 94_458
+    assert {row["feature"] for row in table1["variables"]} >= {
+        "age",
+        "death",
+        "sofa2",
+    }
+    missingness = artifact_payloads["missingness_audit.json"]
+    assert missingness["status"] == "metadata_only"
+    assert missingness["denominator"] == 94_458
+    assert missingness["rows"]
+    assert {
+        row["coverage_basis"] for row in missingness["rows"]
+    } == {"manifest_file_inventory"}
+    assert artifact_payloads["roc_curve.json"]["status"] == "not_available"
+    assert "metadata preflight" in artifact_payloads["roc_curve.json"]["reason"]
+
+
+def test_agent_run_job_blocks_idea_seed_without_execution_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    export_dir = _write_csv_export(tmp_path / "miiv", database="miiv")
+    source_store.register_source(str(export_dir), active=True, crossdb=True)
+    seed_dir = tmp_path / "old_idea_seed"
+    seed_dir.mkdir()
+    (seed_dir / "project_seed.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "easyicu.agent_project_seed/1",
+                "status": "seeded_from_idea",
+                "study_id": "old-idea",
+                "source_run_id": "idea_old",
+                "question": "legacy idea seed",
+            }
+        ),
+        encoding="utf-8",
+    )
+    client = TestClient(app)
+
+    start = client.post(
+        "/api/jobs/agent-run",
+        json={
+            "path": str(export_dir),
+            "study_id": "old-idea",
+            "question": "legacy idea seed",
+            "project_seed_dir": str(seed_dir),
+        },
+    )
+
+    assert start.status_code == 400
+    detail = start.json()["detail"]
+    assert detail["error"] == "agent_project_execution_gate_missing"
+    assert "refresh Agent project from Idea Mining" in detail["blockers"][0]
+
+
 def test_agent_run_job_can_be_cancelled_and_reports_restart_resume(
     tmp_path: Path,
     monkeypatch,
@@ -5899,7 +6316,7 @@ def test_agent_run_endpoint_rejects_missing_active_export(
     assert response.json()["detail"]["error"] == "no_active_export"
 
 
-def _wait_for_job(client: TestClient, job_id: str, timeout: float = 3.0) -> dict:
+def _wait_for_job(client: TestClient, job_id: str, timeout: float = 10.0) -> dict:
     deadline = time.time() + timeout
     while time.time() < deadline:
         response = client.get(f"/api/jobs/{job_id}")

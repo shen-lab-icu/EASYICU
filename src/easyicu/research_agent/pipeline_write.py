@@ -14,6 +14,7 @@ all phase modules share one handoff vocabulary.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -91,6 +92,33 @@ def _writer_probe_banner(failed_steps: Sequence[str]) -> str:
         "> be used as a manuscript scaffold for publication.\n"
         f"> Failed steps: {failed_text}"
     )
+
+
+_MANIFEST_COMMENT_RE = re.compile(
+    r"<!--\s*(?P<level>warning|error)\s*:\s*see manifest\s*-->",
+    flags=re.I,
+)
+
+
+def _manifest_comment_counts(text: str) -> Dict[str, int]:
+    counts = {"warning": 0, "error": 0}
+    for match in _MANIFEST_COMMENT_RE.finditer(text or ""):
+        level = match.group("level").lower()
+        counts[level] = counts.get(level, 0) + 1
+    return counts
+
+
+def _has_substantive_manuscript_text(text: str) -> bool:
+    stripped = re.sub(r"<!--.*?-->", "", text or "", flags=re.S).strip()
+    if not stripped:
+        return False
+    prose_lines = [
+        line.strip()
+        for line in stripped.splitlines()
+        if line.strip()
+        and not line.lstrip().startswith(("#", "[", "|", "<!--"))
+    ]
+    return any(re.search(r"[A-Za-z0-9]", line) for line in prose_lines)
 
 
 def run_write_phase(
@@ -424,6 +452,7 @@ def run_write_phase(
                 generation_mode="system",
                 prompt_pack_version=prompt_version,
             )
+    writer_error_message: Optional[str] = None
     try:
         if pipeline._writer_digest_widened:
             writer_evidence_digest = _render_writer_evidence_digest_v2(
@@ -465,7 +494,22 @@ def run_write_phase(
             evidence_digest=writer_evidence_digest,
         )
     except Exception as exc:
-        scaffold = f"(writer failed: {exc})"
+        writer_error_message = f"{type(exc).__name__}: {exc}"
+        scaffold = ""
+        findings.append(
+            ValidationFinding(
+                validator="writer_agent",
+                severity="error",
+                message=(
+                    "WriterAgent failed before producing a manuscript scaffold: "
+                    f"{writer_error_message}"
+                ),
+                detail={
+                    "exception_type": type(exc).__name__,
+                    "writer_digest_widened": bool(pipeline._writer_digest_widened),
+                },
+            )
+        )
     scaffold, placeholder_repairs = _repair_common_writer_placeholders(
         scaffold,
         context=context,
@@ -576,6 +620,48 @@ def run_write_phase(
                 detail=language_guard_detail,
             )
         )
+    manifest_comment_counts = _manifest_comment_counts(bound)
+    manifest_comment_total = sum(manifest_comment_counts.values())
+    if manifest_comment_total:
+        findings.append(
+            ValidationFinding(
+                validator="evidence_bound_writer",
+                severity="error",
+                message=(
+                    "Bound manuscript cites evidence records with unresolved "
+                    f"manifest caveats: {manifest_comment_counts['error']} error "
+                    f"and {manifest_comment_counts['warning']} warning comment(s)."
+                ),
+                detail={"manifest_comment_counts": manifest_comment_counts},
+            )
+        )
+    manuscript_output_blockers: List[str] = []
+    if writer_error_message:
+        manuscript_output_blockers.append(
+            "WriterAgent failed before producing a manuscript scaffold."
+        )
+    if not _has_substantive_manuscript_text(bound):
+        manuscript_output_blockers.append(
+            "Bound manuscript has no substantive evidence-bound prose after filtering."
+        )
+    if manuscript_output_blockers:
+        findings.append(
+            ValidationFinding(
+                validator="evidence_bound_writer",
+                severity="error",
+                message=(
+                    "Bound manuscript is empty or non-substantive after writer "
+                    "execution and evidence filtering."
+                ),
+                detail={"blockers": manuscript_output_blockers},
+            )
+        )
+        bound = (
+            "# Manuscript scaffold not generated\n\n"
+            "The manuscript writer failed or produced no substantive "
+            "evidence-bound prose for this run. See manifest findings for the "
+            "writer and evidence-binding errors.\n"
+        )
     # Value-level provenance binding: attach a footnote next to every
     # numeric value in the manuscript pointing to the exact step /
     # field / evidence id that produced it. STRICT mode raises when a
@@ -673,6 +759,36 @@ def run_write_phase(
         scaffold=bound,
         available_evidence_ids=evidence.resolvable_names(),
     )
+    if manuscript_output_blockers:
+        manuscript_critique = manuscript_critique.model_copy(
+            update={
+                "status": "blocked",
+                "unsupported_claims": list(manuscript_critique.unsupported_claims)
+                + manuscript_output_blockers,
+                "concerns": list(manuscript_critique.concerns)
+                + [
+                    "The writer did not produce a usable evidence-bound manuscript; "
+                    "the run must remain analysis-only until writer output is regenerated."
+                ],
+            }
+        )
+    if manifest_comment_total:
+        manuscript_critique = manuscript_critique.model_copy(
+            update={
+                "status": "blocked",
+                "unsupported_claims": list(manuscript_critique.unsupported_claims)
+                + [
+                    "Bound manuscript contains unresolved manifest caveat comments "
+                    f"({manifest_comment_counts['error']} error, "
+                    f"{manifest_comment_counts['warning']} warning)."
+                ],
+                "concerns": list(manuscript_critique.concerns)
+                + [
+                    "Manuscript cites records that are not manuscript-facing clean "
+                    "because their evidence records carry active warning/error caveats."
+                ],
+            }
+        )
     if manuscript_numeric_findings:
         manuscript_critique = manuscript_critique.model_copy(
             update={

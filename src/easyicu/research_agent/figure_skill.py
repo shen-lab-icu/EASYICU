@@ -10,16 +10,19 @@ it consumes registered tables/statistics, creates a claim-first
 
 from __future__ import annotations
 
+import json
+import re
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 
 from .audits.validators import FigureContractQualityValidator
 from .evidence import EvidenceStore
 from .publication_figures import (
+    PUBLICATION_FIGURE_SKILL_POLICY_VERSION,
     add_panel_label,
     apply_publication_style,
     audit_publication_exports,
@@ -28,6 +31,7 @@ from .publication_figures import (
 )
 from .robustness_panel import RobustnessPanel, load_robustness_panel
 from .schema import AnalysisPlan, EvidenceRecord, ResearchContext, ValidationFinding
+from .study_design import infer_study_design_family
 
 
 @dataclass
@@ -74,12 +78,168 @@ class PublicationFigureSkill:
         run_dir: Path,
         prompt_pack_version: Optional[str] = None,
     ) -> PublicationFigureSkillResult:
-        if _has_curated_publication_figure_bundle(evidence, run_dir=run_dir):
+        if _has_curated_publication_figure_bundle(
+            evidence,
+            run_dir=run_dir,
+            context=context,
+        ):
             return PublicationFigureSkillResult(
                 generated=False,
                 skipped_reason="existing_curated_publication_figure_bundle",
             )
-        robustness_record = evidence.get("robustness_panel")
+        primary = _select_primary_association_record(
+            evidence,
+            run_dir=run_dir,
+            context=context,
+            names=[
+                "primary_association",
+                "primary_association_table",
+                "table_primary_association",
+                "adjusted_association",
+                "adjusted_association_death",
+                "association_table",
+            ],
+        )
+        if primary is None:
+            primary = _first_existing_record(
+                evidence,
+            [
+                "primary_association",
+                "primary_association_table",
+                "table_primary_association",
+                "adjusted_association",
+                "adjusted_association_death",
+                "association_table",
+            ],
+            )
+        promoted_bundle = _select_existing_step_publication_figure_bundle(evidence)
+        if promoted_bundle is not None and (
+            primary is None or _bundle_primary_strategy_ready(context, promoted_bundle)
+        ):
+            return self._promote_registered_publication_figure(
+                context=context,
+                evidence=evidence,
+                run_dir=run_dir,
+                bundle=promoted_bundle,
+                prompt_pack_version=prompt_pack_version,
+            )
+        if primary is None:
+            robustness_record = _latest_record_for_basename(
+                evidence,
+                "robustness_panel.json",
+                kind="statistic",
+            )
+            robustness_panel = load_robustness_panel(run_dir / "robustness_panel.json")
+            if robustness_record is not None and robustness_panel is not None:
+                try:
+                    return self._render_robustness_panel(
+                        context=context,
+                        evidence=evidence,
+                        run_dir=run_dir,
+                        source_record=robustness_record,
+                        panel=robustness_panel,
+                        prompt_pack_version=prompt_pack_version,
+                    )
+                except Exception as exc:
+                    return self._write_skip_summary(
+                        reason="robustness_panel_render_failed",
+                        context=context,
+                        plan=plan,
+                        evidence=evidence,
+                        run_dir=run_dir,
+                        prompt_pack_version=prompt_pack_version,
+                        findings=[
+                            ValidationFinding(
+                                validator=self.name,
+                                severity="warning",
+                                message=(
+                                    "PublicationFigureSkill skipped robustness-panel "
+                                    f"rendering: {exc}"
+                                ),
+                                evidence_ids=[robustness_record.evidence_id],
+                            )
+                        ],
+                    )
+        if not _plan_requests_figures(plan):
+            return PublicationFigureSkillResult(
+                generated=False,
+                skipped_reason="plan_has_no_figure_outputs",
+            )
+
+        prediction_bundle = _select_existing_prediction_figure_bundle(evidence)
+        if prediction_bundle is not None:
+            return self._promote_prediction_validation_figure(
+                context=context,
+                evidence=evidence,
+                run_dir=run_dir,
+                figure_records=prediction_bundle,
+                summary_record=_first_existing_statistic_record(
+                    evidence,
+                    [
+                        "01_model_training",
+                        "model_performance",
+                        "baseline_prevalence",
+                    ],
+                ),
+                prompt_pack_version=prompt_pack_version,
+            )
+        if primary is not None:
+            try:
+                frame = _read_table(run_dir / primary.relative_path)
+                strata = _first_existing_record(
+                    evidence,
+                    [
+                        "stratified_mortality",
+                        "stratified_mortality_incidence",
+                        "outcome_by_exposure",
+                        "outcome_by_primary_exposure",
+                        "outcome_by_group",
+                        "outcome_by_sepsis3",
+                    ],
+                )
+                missingness = _first_existing_record(
+                    evidence,
+                    [
+                        "missingness",
+                        "missingness_summary",
+                        "table_missingness",
+                        "measurement_missingness",
+                        "cohort_missingness_audit",
+                    ],
+                )
+                return self._render_primary_association(
+                    context=context,
+                    plan=plan,
+                    evidence=evidence,
+                    run_dir=run_dir,
+                    source_record=primary,
+                    frame=frame,
+                    strata_record=strata,
+                    missingness_record=missingness,
+                    prompt_pack_version=prompt_pack_version,
+                )
+            except Exception as exc:
+                finding = ValidationFinding(
+                    validator=self.name,
+                    severity="warning",
+                    message=f"PublicationFigureSkill skipped rendering: {exc}",
+                    evidence_ids=[primary.evidence_id],
+                )
+                skipped = self._write_skip_summary(
+                    reason="render_failed",
+                    context=context,
+                    plan=plan,
+                    evidence=evidence,
+                    run_dir=run_dir,
+                    prompt_pack_version=prompt_pack_version,
+                    findings=[finding],
+                )
+                return skipped
+        robustness_record = _latest_record_for_basename(
+            evidence,
+            "robustness_panel.json",
+            kind="statistic",
+        )
         robustness_panel = load_robustness_panel(run_dir / "robustness_panel.json")
         if robustness_record is not None and robustness_panel is not None:
             try:
@@ -111,88 +271,14 @@ class PublicationFigureSkill:
                         )
                     ],
                 )
-        if not _plan_requests_figures(plan):
-            return PublicationFigureSkillResult(
-                generated=False,
-                skipped_reason="plan_has_no_figure_outputs",
-            )
-
-        primary = _first_existing_record(
-            evidence,
-            [
-                "primary_association",
-                "primary_association_table",
-                "table_primary_association",
-            ],
+        return self._write_skip_summary(
+            reason="no_supported_source_table",
+            context=context,
+            plan=plan,
+            evidence=evidence,
+            run_dir=run_dir,
+            prompt_pack_version=prompt_pack_version,
         )
-        prediction_bundle = _select_existing_prediction_figure_bundle(evidence)
-        if prediction_bundle is not None:
-            return self._promote_prediction_validation_figure(
-                context=context,
-                evidence=evidence,
-                run_dir=run_dir,
-                figure_records=prediction_bundle,
-                summary_record=_first_existing_statistic_record(
-                    evidence,
-                    [
-                        "01_model_training",
-                        "model_performance",
-                        "baseline_prevalence",
-                    ],
-                ),
-                prompt_pack_version=prompt_pack_version,
-            )
-        if primary is None:
-            return self._write_skip_summary(
-                reason="no_supported_source_table",
-                context=context,
-                plan=plan,
-                evidence=evidence,
-                run_dir=run_dir,
-                prompt_pack_version=prompt_pack_version,
-            )
-
-        try:
-            frame = _read_table(run_dir / primary.relative_path)
-            strata = _first_existing_record(
-                evidence,
-                [
-                    "stratified_mortality",
-                    "stratified_mortality_incidence",
-                ],
-            )
-            missingness = _first_existing_record(
-                evidence,
-                ["missingness", "missingness_summary", "table_missingness"],
-            )
-            return self._render_primary_association(
-                context=context,
-                plan=plan,
-                evidence=evidence,
-                run_dir=run_dir,
-                source_record=primary,
-                frame=frame,
-                strata_record=strata,
-                missingness_record=missingness,
-                prompt_pack_version=prompt_pack_version,
-            )
-        except Exception as exc:
-            finding = ValidationFinding(
-                validator=self.name,
-                severity="warning",
-                message=f"PublicationFigureSkill skipped rendering: {exc}",
-                evidence_ids=[primary.evidence_id],
-            )
-            skipped = self._write_skip_summary(
-                reason="render_failed",
-                context=context,
-                plan=plan,
-                evidence=evidence,
-                run_dir=run_dir,
-                prompt_pack_version=prompt_pack_version,
-                findings=[finding],
-            )
-            return skipped
 
     def _render_primary_association(
         self,
@@ -213,7 +299,10 @@ class PublicationFigureSkill:
         import matplotlib.pyplot as plt
         import numpy as np
 
-        plot_df = _normalise_association_frame(frame)
+        plot_df = _normalise_association_frame(
+            frame,
+            primary_exposure=context.primary_exposure,
+        )
         if plot_df.empty:
             raise ValueError("primary association table has no plottable rows")
         axis_meta = _association_axis_metadata(plot_df)
@@ -260,24 +349,45 @@ class PublicationFigureSkill:
         n_side_panels = int(not strata_df.empty) + int(not missingness_df.empty)
         if n_side_panels:
             fig = plt.figure(figsize=(183 / 25.4, 112 / 25.4), constrained_layout=False)
-            grid = fig.add_gridspec(
-                2,
-                2,
-                width_ratios=[1.45, 0.92],
-                height_ratios=[1.0, 0.78],
-                left=0.08,
-                right=0.98,
-                top=0.96,
-                bottom=0.13,
-                wspace=0.4,
-                hspace=0.46,
-            )
-            ax = fig.add_subplot(grid[:, 0])
-            side_axes = []
-            if not strata_df.empty:
-                side_axes.append(("strata", fig.add_subplot(grid[0, 1])))
-            if not missingness_df.empty:
-                side_axes.append(("missingness", fig.add_subplot(grid[1, 1])))
+            compact_primary = len(plot_df) <= 2 and n_side_panels >= 2
+            if compact_primary:
+                grid = fig.add_gridspec(
+                    2,
+                    2,
+                    width_ratios=[1.16, 1.0],
+                    height_ratios=[0.86, 1.0],
+                    left=0.16,
+                    right=0.98,
+                    top=0.94,
+                    bottom=0.14,
+                    wspace=0.42,
+                    hspace=0.72,
+                )
+                ax = fig.add_subplot(grid[0, 0])
+                side_axes = []
+                if not strata_df.empty:
+                    side_axes.append(("strata", fig.add_subplot(grid[0, 1])))
+                if not missingness_df.empty:
+                    side_axes.append(("missingness", fig.add_subplot(grid[1, :])))
+            else:
+                grid = fig.add_gridspec(
+                    2,
+                    2,
+                    width_ratios=[1.45, 0.92],
+                    height_ratios=[1.0, 0.78],
+                    left=0.08,
+                    right=0.98,
+                    top=0.96,
+                    bottom=0.13,
+                    wspace=0.4,
+                    hspace=0.46,
+                )
+                ax = fig.add_subplot(grid[:, 0])
+                side_axes = []
+                if not strata_df.empty:
+                    side_axes.append(("strata", fig.add_subplot(grid[0, 1])))
+                if not missingness_df.empty:
+                    side_axes.append(("missingness", fig.add_subplot(grid[1, 1])))
         else:
             height = max(2.3, 0.42 * len(plot_df) + 1.05)
             fig, ax = plt.subplots(
@@ -350,10 +460,11 @@ class PublicationFigureSkill:
         text_x = right_anchor + right_pad * 0.12
         ax.text(
             text_x,
-            -0.55,
+            0.96,
             str(axis_meta["header"]),
+            transform=ax.get_xaxis_transform(),
             ha="left",
-            va="bottom",
+            va="top",
             fontsize=6.8,
             color=palette.get("baseline", "#272727"),
         )
@@ -404,7 +515,8 @@ class PublicationFigureSkill:
             {
                 "panel_id": "A",
                 "title": "Adjusted association",
-                "role": "relationship",
+                "role": "primary_estimand",
+                "chart_type": "dot_interval",
                 "claim": "The association estimate and interval are drawn from the registered primary association table.",
                 "evidence_ids": [source_record.evidence_id],
                 "review_risk": "Interpretability depends on the upstream model specification and validator findings.",
@@ -416,8 +528,9 @@ class PublicationFigureSkill:
                 {
                     "panel_id": "B",
                     "title": f"Outcome by {score_label}",
-                    "role": "audit",
-                    "claim": f"Outcome rates by {score_label} are shown directly from the registered stratum audit table.",
+                    "role": "descriptive_result",
+                    "chart_type": "event_rate_panel",
+                    "claim": f"Observed outcome risk by {score_label} is shown before adjusted relative estimates.",
                     "evidence_ids": [strata_record.evidence_id],
                     "review_risk": "Sparse high-score strata should be interpreted with their denominators.",
                 }
@@ -427,7 +540,8 @@ class PublicationFigureSkill:
                 {
                     "panel_id": chr(ord("A") + len(panels)),
                     "title": "Missingness audit",
-                    "role": "validation",
+                    "role": "data_quality",
+                    "chart_type": "availability_panel",
                     "claim": "Feature-level missingness is displayed rather than hidden from the manuscript figure.",
                     "evidence_ids": [missingness_record.evidence_id],
                     "review_risk": "Zero-missingness summaries can otherwise look like empty plots if not annotated.",
@@ -461,6 +575,10 @@ class PublicationFigureSkill:
         )
         figure_ids: List[str] = []
         contract_evidence_id: Optional[str] = None
+        source_metadata = _source_fingerprint_metadata(
+            evidence,
+            [record.evidence_id for record in source_records],
+        )
         for key, path in paths.items():
             suffix = path.suffix.lower()
             if key == "contract" or suffix.endswith(".json"):
@@ -473,7 +591,7 @@ class PublicationFigureSkill:
                     producer=self.name,
                     generation_mode="deterministic_figure_skill",
                     prompt_pack_version=prompt_pack_version,
-                    metadata={"source_evidence_id": source_record.evidence_id},
+                    metadata=source_metadata,
                     on_sha_change="new_id",
                 )
                 contract_evidence_id = record.evidence_id
@@ -491,7 +609,7 @@ class PublicationFigureSkill:
                 generation_mode="deterministic_figure_skill",
                 prompt_pack_version=prompt_pack_version,
                 metadata={
-                    "source_evidence_id": source_record.evidence_id,
+                    **source_metadata,
                     "figure_contract": "publication_figure_contract",
                     "figure_role": "publication_figure",
                 },
@@ -508,13 +626,14 @@ class PublicationFigureSkill:
             producer=self.name,
             generation_mode="deterministic_figure_skill",
             prompt_pack_version=prompt_pack_version,
-            metadata={"source_evidence_id": source_record.evidence_id},
+            metadata=source_metadata,
             on_sha_change="new_id",
         )
 
         summary = {
             "stage": self.name,
             "generated": True,
+            "generation_mode": "primary_association_publication_figure",
             "figure_id": contract.figure_id,
             "core_claim": contract.core_claim,
             "source_evidence_ids": [record.evidence_id for record in source_records],
@@ -923,6 +1042,10 @@ class PublicationFigureSkill:
         )
         contract_evidence_id: Optional[str] = None
         figure_ids: List[str] = []
+        source_metadata = _source_fingerprint_metadata(
+            evidence,
+            [source_record.evidence_id],
+        )
         for key, path in paths.items():
             suffix = path.suffix.lower()
             if key == "contract" or suffix.endswith(".json"):
@@ -938,7 +1061,7 @@ class PublicationFigureSkill:
                     producer=self.name,
                     generation_mode="deterministic_figure_skill",
                     prompt_pack_version=prompt_pack_version,
-                    metadata={"source_evidence_id": source_record.evidence_id},
+                    metadata=source_metadata,
                     on_sha_change="new_id",
                 )
                 contract_evidence_id = record.evidence_id
@@ -959,7 +1082,7 @@ class PublicationFigureSkill:
                 generation_mode="deterministic_figure_skill",
                 prompt_pack_version=prompt_pack_version,
                 metadata={
-                    "source_evidence_id": source_record.evidence_id,
+                    **source_metadata,
                     "figure_contract": "publication_figure_contract",
                     "figure_role": "publication_figure",
                 },
@@ -976,7 +1099,7 @@ class PublicationFigureSkill:
             producer=self.name,
             generation_mode="deterministic_figure_skill",
             prompt_pack_version=prompt_pack_version,
-            metadata={"source_evidence_id": source_record.evidence_id},
+            metadata=source_metadata,
             on_sha_change="new_id",
         )
         axis_summary_record = evidence.register_file(
@@ -991,7 +1114,7 @@ class PublicationFigureSkill:
             producer=self.name,
             generation_mode="deterministic_figure_skill",
             prompt_pack_version=prompt_pack_version,
-            metadata={"source_evidence_id": source_record.evidence_id},
+            metadata=source_metadata,
             on_sha_change="new_id",
         )
         summary = {
@@ -1022,6 +1145,166 @@ class PublicationFigureSkill:
         return PublicationFigureSkillResult(
             generated=True,
             contract_evidence_id=contract_evidence_id,
+            figure_evidence_ids=figure_ids,
+            summary_evidence_id=summary_record.evidence_id,
+            findings=audit_findings,
+        )
+
+    def _promote_registered_publication_figure(
+        self,
+        *,
+        context: ResearchContext,
+        evidence: EvidenceStore,
+        run_dir: Path,
+        bundle: Dict[str, Any],
+        prompt_pack_version: Optional[str],
+    ) -> PublicationFigureSkillResult:
+        """Promote a step-level manuscript figure bundle to the run-level bundle."""
+
+        from PIL import Image
+
+        figure_records: Dict[str, EvidenceRecord] = bundle["figures"]
+        contract_source: EvidenceRecord = bundle["contract"]
+        source_records: List[EvidenceRecord] = list(bundle.get("source_records") or [])
+        svg_record = figure_records.get("svg")
+        png_record = figure_records.get("png")
+        if svg_record is None or png_record is None:
+            return self._write_skip_summary(
+                reason="registered_publication_bundle_missing_svg_or_png",
+                context=context,
+                plan=AnalysisPlan(
+                    research_question=context.research_question,
+                    steps=[],
+                ),
+                evidence=evidence,
+                run_dir=run_dir,
+                prompt_pack_version=prompt_pack_version,
+            )
+
+        out_dir = run_dir / "publication_figures"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        targets = {
+            "svg": out_dir / "easyicu_publication_figure.svg",
+            "png": out_dir / "easyicu_publication_figure.png",
+            "pdf": out_dir / "easyicu_publication_figure.pdf",
+            "tiff": out_dir / "easyicu_publication_figure.tiff",
+        }
+        for suffix, target in targets.items():
+            source = figure_records.get(suffix)
+            if source is not None:
+                shutil.copy2(run_dir / source.relative_path, target)
+        if not targets["pdf"].exists() or not targets["tiff"].exists():
+            image = Image.open(targets["png"]).convert("RGB")
+            if not targets["pdf"].exists():
+                image.save(targets["pdf"], "PDF", resolution=300.0)
+            if not targets["tiff"].exists():
+                image.save(targets["tiff"], compression="tiff_lzw", dpi=(300, 300))
+            image.close()
+
+        source_ids = _unique_evidence_ids(
+            [
+                *figure_records.values(),
+                contract_source,
+                *source_records,
+            ]
+        )
+        source_metadata = _source_fingerprint_metadata(evidence, source_ids)
+        contract = _contract_promoted_from_source(
+            run_dir / contract_source.relative_path,
+            source_ids=source_ids,
+        )
+        contract_path = out_dir / "easyicu_publication_figure.figure_contract.json"
+        contract_path.write_text(contract.to_json(indent=2), encoding="utf-8")
+
+        paths = {
+            "svg": targets["svg"],
+            "png": targets["png"],
+            "pdf": targets["pdf"],
+            "tiff": targets["tiff"],
+            "contract": contract_path,
+        }
+        audit_findings = list(audit_publication_exports(paths.values()))
+        audit_findings.extend(
+            FigureContractQualityValidator().audit_contract_file(
+                contract_path,
+                manuscript_facing=True,
+            )
+        )
+
+        contract_record = evidence.register_file(
+            kind="log",
+            description=(
+                "Publication figure contract promoted from registered step-level "
+                "publication figure evidence."
+            ),
+            source_path=contract_path,
+            evidence_id="publication_figure_contract",
+            aliases=["publication_figure_contract", "figure_contract"],
+            producer=self.name,
+            generation_mode="deterministic_figure_skill",
+            prompt_pack_version=prompt_pack_version,
+            metadata={
+                **source_metadata,
+                "figure_role": "publication_figure",
+                "promoted_from_step_id": bundle.get("step_id"),
+                "promoted_from_stem": bundle.get("stem"),
+            },
+            on_sha_change="new_id",
+        )
+
+        figure_ids: List[str] = []
+        for suffix in ("svg", "png", "pdf", "tiff"):
+            record = evidence.register_file(
+                kind="figure",
+                description=(
+                    f"Publication figure export ({suffix}) promoted from "
+                    "registered step-level publication figure evidence."
+                ),
+                source_path=targets[suffix],
+                evidence_id=f"publication_figure_{suffix}",
+                aliases=["publication_figure", f"publication_figure_{suffix}"],
+                producer=self.name,
+                generation_mode="deterministic_figure_skill",
+                prompt_pack_version=prompt_pack_version,
+                metadata={
+                    **source_metadata,
+                    "figure_contract": contract_record.evidence_id,
+                    "figure_role": "publication_figure",
+                    "promoted_from_step_id": bundle.get("step_id"),
+                    "promoted_from_stem": bundle.get("stem"),
+                },
+                on_sha_change="new_id",
+            )
+            figure_ids.append(record.evidence_id)
+
+        summary = {
+            "stage": self.name,
+            "generated": True,
+            "generation_mode": "promoted_step_publication_figure",
+            "figure_id": contract.figure_id,
+            "core_claim": contract.core_claim,
+            "source_evidence_ids": source_ids,
+            "figure_evidence_ids": figure_ids,
+            "contract_evidence_id": contract_record.evidence_id,
+            "promoted_from_step_id": bundle.get("step_id"),
+            "promoted_from_stem": bundle.get("stem"),
+            "audit_findings": [f.model_dump(mode="json") for f in audit_findings],
+        }
+        summary_record = evidence.register_json(
+            kind="log",
+            description="PublicationFigureSkill summary.",
+            payload=summary,
+            filename="publication_figure_skill_summary.json",
+            evidence_id="publication_figure_skill_summary",
+            aliases=["publication_figure_skill_summary"],
+            producer=self.name,
+            generation_mode="deterministic_figure_skill",
+            prompt_pack_version=prompt_pack_version,
+            on_sha_change="new_id",
+        )
+        return PublicationFigureSkillResult(
+            generated=True,
+            contract_evidence_id=contract_record.evidence_id,
             figure_evidence_ids=figure_ids,
             summary_evidence_id=summary_record.evidence_id,
             findings=audit_findings,
@@ -1071,6 +1354,7 @@ class PublicationFigureSkill:
         source_ids = [svg_record.evidence_id, png_record.evidence_id]
         if summary_record is not None:
             source_ids.append(summary_record.evidence_id)
+        source_metadata = _source_fingerprint_metadata(evidence, source_ids)
         contract = make_figure_contract(
             figure_id="easyicu_publication_figure",
             core_claim=(
@@ -1127,7 +1411,7 @@ class PublicationFigureSkill:
             generation_mode="deterministic_figure_skill",
             prompt_pack_version=prompt_pack_version,
             metadata={
-                "source_evidence_ids": source_ids,
+                **source_metadata,
                 "figure_role": "publication_figure",
             },
             on_sha_change="new_id",
@@ -1153,7 +1437,7 @@ class PublicationFigureSkill:
                 generation_mode="deterministic_figure_skill",
                 prompt_pack_version=prompt_pack_version,
                 metadata={
-                    "source_evidence_ids": source_ids,
+                    **source_metadata,
                     "figure_contract": contract_record.evidence_id,
                     "figure_role": "publication_figure",
                 },
@@ -1302,25 +1586,557 @@ def _select_existing_prediction_figure_bundle(
     return None
 
 
+def _select_existing_step_publication_figure_bundle(
+    evidence: EvidenceStore,
+) -> Optional[Dict[str, Any]]:
+    groups: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    records = evidence.records()
+    for order, record in enumerate(records):
+        metadata = record.metadata or {}
+        step_id = str(metadata.get("step_id") or "")
+        if record.kind == "figure":
+            if _is_run_level_publication_figure(record):
+                continue
+            if str(metadata.get("figure_role") or "").lower() != "publication_figure":
+                continue
+            suffix = Path(record.relative_path).suffix.lower().lstrip(".")
+            if suffix not in {"svg", "png", "pdf", "tiff", "tif"}:
+                continue
+            stem = _record_artifact_stem(record)
+            key = (step_id, stem)
+            group = groups.setdefault(
+                key,
+                {
+                    "step_id": step_id,
+                    "stem": stem,
+                    "figures": {},
+                    "contract": None,
+                    "contract_payload": {},
+                    "source_records": [],
+                    "order": order,
+                },
+            )
+            group["figures"]["tiff" if suffix == "tif" else suffix] = record
+            group["order"] = max(int(group.get("order", 0)), order)
+            continue
+        if record.kind == "log" and _record_artifact_basename(record).endswith(
+            ".figure_contract.json"
+        ):
+            stem = _record_artifact_basename(record).removesuffix(
+                ".figure_contract.json"
+            )
+            key = (step_id, stem)
+            group = groups.setdefault(
+                key,
+                {
+                    "step_id": step_id,
+                    "stem": stem,
+                    "figures": {},
+                    "contract": None,
+                    "contract_payload": {},
+                    "source_records": [],
+                    "order": order,
+                },
+            )
+            group["contract"] = record
+            group["contract_payload"] = _read_contract_payload(evidence, record)
+            group["order"] = max(int(group.get("order", 0)), order)
+            continue
+        if record.kind == "table":
+            basename = _record_artifact_basename(record).lower()
+            if "source_data" not in basename:
+                continue
+            for key, group in groups.items():
+                if key[0] == step_id:
+                    group.setdefault("source_records", []).append(record)
+                    group["order"] = max(int(group.get("order", 0)), order)
+
+    viable = [
+        group
+        for group in groups.values()
+        if {"svg", "png"} <= set(group.get("figures", {}))
+        and group.get("contract") is not None
+        and group.get("source_records")
+    ]
+    if not viable:
+        return None
+    ranked = sorted(viable, key=_step_publication_bundle_rank)
+    return ranked[0]
+
+
+_PRIMARY_RESULT_PANEL_ROLES = {
+    "descriptive_result",
+    "primary_estimand",
+    "temporal_absolute_risk",
+    "survival_effect",
+    "clinical_utility",
+}
+_VALIDATION_PANEL_ROLES = {
+    "model_performance",
+    "calibration",
+    "validation",
+    "explainability",
+    "transportability",
+}
+_CONTEXT_PANEL_ROLES = {
+    "cohort_accounting",
+    "baseline_context",
+    "data_quality",
+    "overview",
+    "relationship",
+    "heterogeneity",
+    "distribution",
+}
+_SUPPLEMENTAL_PANEL_ROLES = {
+    "robustness",
+    "audit",
+    "diagnostics",
+    "stability",
+    "supplementary_provenance",
+}
+_PRIMARY_CONTEXT_CHART_TOKENS = (
+    "absolute_risk",
+    "event_rate",
+    "prevalence",
+    "incidence",
+    "survival",
+)
+_PRIMARY_PUBLICATION_ROLE_POOLS: Dict[str, set[str]] = {
+    "association": {
+        "descriptive_result",
+        "primary_estimand",
+        "robustness",
+        "data_quality",
+    },
+    "prediction": {
+        "model_performance",
+        "calibration",
+        "validation",
+        "data_quality",
+    },
+    "time_to_event": {
+        "temporal_absolute_risk",
+        "survival_effect",
+        "diagnostics",
+    },
+    "phenotyping": {
+        "phenotype_structure",
+        "phenotype_profile",
+        "stability",
+        "data_quality",
+    },
+    "causal_emulation": {
+        "causal_protocol",
+        "balance_positivity",
+        "causal_contrast",
+        "robustness",
+    },
+    "descriptive": {
+        "distribution",
+        "cohort_accounting",
+        "data_quality",
+    },
+}
+_PRIMARY_PUBLICATION_HERO_ROLES: Dict[str, str] = {
+    "association": "descriptive_result",
+    "prediction": "calibration",
+    "time_to_event": "temporal_absolute_risk",
+    "phenotyping": "phenotype_structure",
+    "causal_emulation": "causal_protocol",
+    "descriptive": "distribution",
+}
+_PRIMARY_PUBLICATION_MIN_ROLE_COUNTS: Dict[str, int] = {
+    "association": 3,
+    "prediction": 3,
+    "time_to_event": 2,
+    "phenotyping": 3,
+    "causal_emulation": 3,
+    "descriptive": 2,
+}
+
+
+def _bundle_primary_strategy_ready(
+    context: ResearchContext,
+    bundle: Dict[str, Any],
+) -> bool:
+    """Return True when a step-level bundle is rich enough for the main figure."""
+
+    payload = bundle.get("contract_payload")
+    if not isinstance(payload, dict):
+        return False
+    return _contract_primary_strategy_ready(context, payload)
+
+
+def _contract_primary_strategy_ready(
+    context: ResearchContext,
+    payload: Dict[str, Any],
+) -> bool:
+    """Return True when a figure contract is rich enough for the main figure."""
+
+    family = str(infer_study_design_family(context))
+    role_pool = _PRIMARY_PUBLICATION_ROLE_POOLS.get(family)
+    if not role_pool:
+        return True
+    roles = _contract_payload_roles(payload)
+    hero_role = _PRIMARY_PUBLICATION_HERO_ROLES.get(family)
+    if hero_role and hero_role not in roles:
+        return False
+    minimum = min(
+        len(role_pool),
+        _PRIMARY_PUBLICATION_MIN_ROLE_COUNTS.get(family, min(3, len(role_pool))),
+    )
+    return len(roles & role_pool) >= minimum
+
+
+def _step_publication_bundle_rank(bundle: Dict[str, Any]) -> Tuple[int, int, int, int, str]:
+    roles = _bundle_contract_roles(bundle)
+    chart_types = _bundle_contract_chart_types(bundle)
+    step_text = str(bundle.get("step_id") or "").lower()
+    stem_text = str(bundle.get("stem") or "").lower()
+    text = f"{step_text} {stem_text}"
+    generic_penalty = 1 if stem_text in {"publication_figure", "figure"} else 0
+    primary_role_count = len(roles & _PRIMARY_RESULT_PANEL_ROLES)
+    has_absolute_context = any(
+        any(token in chart_type for token in _PRIMARY_CONTEXT_CHART_TOKENS)
+        for chart_type in chart_types
+    )
+    supplemental_only = bool(roles) and roles <= _SUPPLEMENTAL_PANEL_ROLES
+    sensitivity_or_robustness = "sensitivity" in text or "robust" in text
+
+    if {"descriptive_result", "primary_estimand"} <= roles:
+        family_rank = 0
+    elif primary_role_count and has_absolute_context:
+        family_rank = 1
+    elif primary_role_count:
+        family_rank = 2
+    elif "prediction" in text or "calibration" in text or "discrimination" in text:
+        family_rank = 3
+    elif roles & _VALIDATION_PANEL_ROLES:
+        family_rank = 4
+    elif "overlap" in text or "eligibility" in text or "definition" in text:
+        family_rank = 5
+    elif roles & _CONTEXT_PANEL_ROLES:
+        family_rank = 6
+    elif sensitivity_or_robustness or supplemental_only:
+        family_rank = 7
+    elif "primary" in text or "association" in text:
+        family_rank = 8
+    else:
+        family_rank = 9
+    return (
+        family_rank,
+        1 if supplemental_only else 0,
+        generic_penalty,
+        -int(bundle.get("order", 0)),
+        str(bundle.get("stem") or ""),
+    )
+
+
+def _read_contract_payload(
+    evidence: EvidenceStore,
+    record: EvidenceRecord,
+) -> Dict[str, Any]:
+    try:
+        payload = json.loads((evidence.root / record.relative_path).read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _bundle_contract_roles(bundle: Dict[str, Any]) -> set[str]:
+    payload = bundle.get("contract_payload")
+    if not isinstance(payload, dict):
+        return set()
+    return _contract_payload_roles(payload)
+
+
+def _contract_payload_roles(payload: Dict[str, Any]) -> set[str]:
+    roles: set[str] = set()
+    for panel in payload.get("panels") or []:
+        if not isinstance(panel, dict):
+            continue
+        role = str(panel.get("role") or "").strip().lower()
+        if role:
+            roles.add(role)
+    for key in ("hero_role", "primary_role", "figure_role"):
+        role = str(payload.get(key) or "").strip().lower()
+        if role and role != "publication_figure":
+            roles.add(role)
+    return roles
+
+
+def _bundle_contract_chart_types(bundle: Dict[str, Any]) -> set[str]:
+    payload = bundle.get("contract_payload")
+    if not isinstance(payload, dict):
+        return set()
+    return _contract_payload_chart_types(payload)
+
+
+def _contract_payload_chart_types(payload: Dict[str, Any]) -> set[str]:
+    chart_types: set[str] = set()
+    for panel in payload.get("panels") or []:
+        if not isinstance(panel, dict):
+            continue
+        candidates = [panel.get("chart_type")]
+        metadata = panel.get("metadata")
+        if isinstance(metadata, dict):
+            candidates.append(metadata.get("chart_type"))
+        for value in candidates:
+            chart_type = str(value or "").strip().lower()
+            if chart_type:
+                chart_types.add(chart_type)
+    return chart_types
+
+
+def _promoted_contract_preserves_preferred_chart_types(
+    contract_path: Path,
+    preferred_step_bundle: Optional[Dict[str, Any]],
+) -> bool:
+    if preferred_step_bundle is None:
+        return True
+    expected = _bundle_contract_chart_types(preferred_step_bundle)
+    if not expected:
+        return True
+    try:
+        payload = json.loads(contract_path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    if not isinstance(payload, dict):
+        return False
+    observed = _contract_payload_chart_types(payload)
+    return expected <= observed
+
+
+def _record_artifact_basename(record: EvidenceRecord) -> str:
+    return Path(record.relative_path).name.split("__", 1)[-1]
+
+
+def _record_artifact_stem(record: EvidenceRecord) -> str:
+    basename = _record_artifact_basename(record)
+    return Path(basename).with_suffix("").name
+
+
+def _is_run_level_publication_figure(record: EvidenceRecord) -> bool:
+    basename = _record_artifact_basename(record)
+    return (
+        record.producer == PublicationFigureSkill.name
+        and basename.startswith("easyicu_publication_figure.")
+    )
+
+
+def _unique_evidence_ids(records: Sequence[EvidenceRecord]) -> List[str]:
+    ids: List[str] = []
+    seen: set[str] = set()
+    for record in records:
+        if record.evidence_id in seen:
+            continue
+        seen.add(record.evidence_id)
+        ids.append(record.evidence_id)
+    return ids
+
+
+def _source_fingerprint_metadata(
+    evidence: EvidenceStore,
+    source_ids: Sequence[str],
+) -> Dict[str, Any]:
+    ids = list(dict.fromkeys(str(eid) for eid in source_ids if str(eid)))
+    fingerprints: Dict[str, str] = {}
+    for evidence_id in ids:
+        record = evidence.get(evidence_id)
+        if record is not None:
+            fingerprints[evidence_id] = record.sha256
+    metadata: Dict[str, Any] = {
+        "figure_skill_policy_version": PUBLICATION_FIGURE_SKILL_POLICY_VERSION,
+        "source_evidence_ids": ids,
+        "source_evidence_sha256": fingerprints,
+    }
+    if len(ids) == 1:
+        metadata["source_evidence_id"] = ids[0]
+    return metadata
+
+
+def _bundle_source_ids(bundle: Dict[str, Any]) -> List[str]:
+    return _unique_evidence_ids(
+        [
+            *dict(bundle.get("figures") or {}).values(),
+            bundle["contract"],
+            *list(bundle.get("source_records") or []),
+        ]
+    )
+
+
+def _source_fingerprints_match(
+    evidence: EvidenceStore,
+    metadata: Dict[str, Any],
+) -> bool:
+    source_ids = metadata.get("source_evidence_ids")
+    if isinstance(source_ids, str):
+        ids = [source_ids]
+    elif isinstance(source_ids, (list, tuple, set)):
+        ids = [str(eid) for eid in source_ids if str(eid)]
+    else:
+        ids = []
+    single = metadata.get("source_evidence_id")
+    if single and str(single) not in ids:
+        ids.append(str(single))
+    fingerprints = metadata.get("source_evidence_sha256")
+    if not ids or not isinstance(fingerprints, dict) or not fingerprints:
+        return False
+    for evidence_id in ids:
+        record = evidence.get(evidence_id)
+        if record is None or fingerprints.get(evidence_id) != record.sha256:
+            return False
+    return True
+
+
+def _figure_skill_policy_matches(metadata: Dict[str, Any]) -> bool:
+    return (
+        metadata.get("figure_skill_policy_version")
+        == PUBLICATION_FIGURE_SKILL_POLICY_VERSION
+    )
+
+
+def _latest_record_for_basename(
+    evidence: EvidenceStore,
+    basename: str,
+    *,
+    kind: Optional[str] = None,
+) -> Optional[EvidenceRecord]:
+    matches = [
+        record
+        for record in evidence.records()
+        if _record_artifact_basename(record) == basename
+        and (kind is None or record.kind == kind)
+    ]
+    return matches[-1] if matches else None
+
+
+def _contract_promoted_from_source(
+    contract_path: Path,
+    *,
+    source_ids: Sequence[str],
+):
+    try:
+        payload = json.loads(contract_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            payload = {}
+    except Exception:
+        payload = {}
+    source_panels = payload.get("panels")
+    panels: List[Dict[str, Any]] = []
+    if isinstance(source_panels, list):
+        for idx, panel in enumerate(source_panels, start=1):
+            if not isinstance(panel, dict):
+                continue
+            panel_id = str(panel.get("panel_id") or panel.get("id") or idx)
+            metadata = dict(panel.get("metadata") or {})
+            for key in ("chart_type", "scale", "visual_role"):
+                if panel.get(key) is not None and key not in metadata:
+                    metadata[key] = panel.get(key)
+            promoted_panel = {
+                "panel_id": panel_id,
+                "title": str(panel.get("title") or f"Panel {panel_id}"),
+                "role": panel.get("role") or "validation",
+                "claim": str(
+                    panel.get("claim")
+                    or panel.get("purpose")
+                    or "This panel is promoted from registered figure evidence."
+                ),
+                "evidence_ids": list(source_ids),
+                "review_risk": panel.get("review_risk"),
+            }
+            if metadata:
+                promoted_panel["metadata"] = metadata
+            panels.append(promoted_panel)
+    if not panels:
+        panels = [
+            {
+                "panel_id": "A",
+                "title": "Registered manuscript figure",
+                "role": "validation",
+                "claim": (
+                    "The run-level figure is promoted from registered step-level "
+                    "figure evidence with source data."
+                ),
+                "evidence_ids": list(source_ids),
+                "review_risk": (
+                    "Interpretation depends on the upstream figure contract and "
+                    "source-data table."
+                ),
+            }
+        ]
+    try:
+        return make_figure_contract(
+            figure_id="easyicu_publication_figure",
+            core_claim=str(
+                payload.get("core_claim")
+                or "The manuscript-facing figure is promoted from registered step-level evidence."
+            ),
+            panels=panels,
+            source_data=list(source_ids),
+            statistics_note=(
+                "This run-level bundle promotes a registered step-level "
+                "publication figure and preserves its source evidence."
+            ),
+        )
+    except Exception:
+        return make_figure_contract(
+            figure_id="easyicu_publication_figure",
+            core_claim=(
+                "The manuscript-facing figure is promoted from registered "
+                "step-level evidence."
+            ),
+            panels=[
+                {
+                    "panel_id": "A",
+                    "title": "Registered manuscript figure",
+                    "role": "validation",
+                    "claim": "The figure is copied from a registered step-level figure bundle.",
+                    "evidence_ids": list(source_ids),
+                }
+            ],
+            source_data=list(source_ids),
+            statistics_note=(
+                "This run-level bundle promotes a registered step-level "
+                "publication figure and preserves its source evidence."
+            ),
+        )
+
+
 def _has_curated_publication_figure_bundle(
     evidence: EvidenceStore,
     *,
     run_dir: Path,
+    context: Optional[ResearchContext] = None,
 ) -> bool:
-    found_bundle = False
+    preferred_step_bundle = _select_existing_step_publication_figure_bundle(evidence)
+    preferred_source_ids = (
+        set(_bundle_source_ids(preferred_step_bundle))
+        if preferred_step_bundle is not None
+        else set()
+    )
+    fresh_bundle = False
     for record in evidence.records():
-        haystack = f"{record.evidence_id} {record.relative_path}".lower()
+        metadata = record.metadata or {}
         if (
             record.kind == "figure"
-            and "publication_figure" in haystack
-            and (
-                record.producer == PublicationFigureSkill.name
-                or record.generation_mode == "deterministic_figure_skill"
-            )
+            and _is_run_level_publication_figure(record)
+            and _source_fingerprints_match(evidence, metadata)
+            and _figure_skill_policy_matches(metadata)
         ):
-            found_bundle = True
+            if preferred_step_bundle is not None and (
+                metadata.get("promoted_from_step_id")
+                != preferred_step_bundle.get("step_id")
+                or metadata.get("promoted_from_stem") != preferred_step_bundle.get("stem")
+            ):
+                continue
+            if preferred_source_ids and not preferred_source_ids <= set(
+                metadata.get("source_evidence_ids") or []
+            ):
+                continue
+            fresh_bundle = True
             break
-    if not found_bundle:
+    if not fresh_bundle:
         return False
 
     contract_candidates: List[Path] = []
@@ -1339,7 +2155,24 @@ def _has_curated_publication_figure_bundle(
             contract_path,
             manuscript_facing=True,
         )
-        return not any(finding.severity == "error" for finding in findings)
+        if any(finding.severity == "error" for finding in findings):
+            continue
+        if context is not None:
+            try:
+                payload = json.loads(contract_path.read_text(encoding="utf-8"))
+            except Exception:
+                payload = {}
+            if isinstance(payload, dict) and not _contract_primary_strategy_ready(
+                context,
+                payload,
+            ):
+                continue
+        if not _promoted_contract_preserves_preferred_chart_types(
+            contract_path,
+            preferred_step_bundle,
+        ):
+            continue
+        return True
     return False
 
 
@@ -1368,6 +2201,69 @@ def _first_existing_record(
     return None
 
 
+def _select_primary_association_record(
+    evidence: EvidenceStore,
+    *,
+    run_dir: Path,
+    context: ResearchContext,
+    names: Sequence[str],
+) -> Optional[EvidenceRecord]:
+    name_set = {str(name).lower() for name in names}
+    candidates: List[tuple[float, int, EvidenceRecord]] = []
+    seen: set[str] = set()
+
+    def consider(record: Optional[EvidenceRecord], order: int) -> None:
+        if record is None or record.kind != "table" or record.evidence_id in seen:
+            return
+        seen.add(record.evidence_id)
+        basename = Path(record.relative_path).stem.lower()
+        if not any(token in basename for token in name_set) and record.evidence_id.lower() not in name_set:
+            return
+        score = float(order) * 0.001
+        severity = str(getattr(record, "finding_severity", "") or "").lower()
+        if severity == "error":
+            score -= 100.0
+        elif severity == "warning":
+            score -= 2.0
+        if "full_coefficients" in basename or "all_coefficients" in basename:
+            score -= 25.0
+        try:
+            frame = _read_table(run_dir / record.relative_path)
+            cols = {str(c).lower(): c for c in frame.columns}
+            if "point_estimate" in cols:
+                score += 18.0
+            if "exposure" in cols or "primary_exposure" in cols:
+                score += 8.0
+            normalised = _normalise_association_frame(
+                frame,
+                primary_exposure=context.primary_exposure,
+            )
+            if not normalised.empty:
+                score += 20.0
+                if len(normalised) == 1:
+                    score += 10.0
+                if str(context.primary_exposure or "").strip():
+                    labels = " ".join(normalised["label"].astype(str).tolist())
+                    if _match_token(context.primary_exposure) in _match_token(labels):
+                        score += 6.0
+        except Exception:
+            score -= 50.0
+        candidates.append((score, order, record))
+
+    for order, name in enumerate(names):
+        consider(evidence.get(name), order)
+    base_order = len(names)
+    for offset, record in enumerate(evidence.records()):
+        consider(record, base_order + offset)
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    best_score, _, best = candidates[0]
+    if best_score < -20.0:
+        return None
+    return best
+
+
 def _read_table(path: Path) -> pd.DataFrame:
     suffix = path.suffix.lower()
     if suffix == ".csv":
@@ -1381,14 +2277,58 @@ def _read_table(path: Path) -> pd.DataFrame:
     raise ValueError(f"unsupported table format for figure skill: {path.name}")
 
 
-def _normalise_association_frame(frame: pd.DataFrame) -> pd.DataFrame:
+def _normalise_association_frame(
+    frame: pd.DataFrame,
+    *,
+    primary_exposure: Optional[str] = None,
+) -> pd.DataFrame:
     if frame.empty:
         return pd.DataFrame(columns=["label", "estimate", "lower", "upper"])
     cols = {str(c).lower(): c for c in frame.columns}
-    label_col = _first_col(cols, ["variable", "predictor", "term", "feature"])
+    primary_token = _match_token(primary_exposure)
+    if primary_token:
+        match_cols = [
+            col
+            for name, col in cols.items()
+            if name
+            in {
+                "exposure",
+                "primary_exposure",
+                "predictor",
+                "variable",
+                "term",
+                "feature",
+                "reader_label",
+                "label",
+                "contrast",
+            }
+        ]
+        primary_mask = pd.Series(False, index=frame.index)
+        for col in match_cols:
+            primary_mask = primary_mask | frame[col].map(
+                lambda value: primary_token in _match_token(value)
+            )
+        if primary_mask.any():
+            frame = frame.loc[primary_mask].copy()
+            cols = {str(c).lower(): c for c in frame.columns}
+    label_col = _first_col(
+        cols,
+        [
+            "exposure",
+            "primary_exposure",
+            "reader_label",
+            "label",
+            "contrast",
+            "variable",
+            "predictor",
+            "term",
+            "feature",
+        ],
+    )
     estimate_col = _first_col(
         cols,
         [
+            "point_estimate",
             "odds_ratio",
             "adjusted_or",
             "or",
@@ -1473,7 +2413,7 @@ def _normalise_association_frame(frame: pd.DataFrame) -> pd.DataFrame:
     else:
         out["upper"] = out["estimate"]
     raw_label = frame[label_col].astype(str).str.strip().str.lower()
-    out = out.loc[raw_label.ne("intercept")].copy()
+    out = out.loc[~raw_label.isin({"intercept", "const", "constant"})].copy()
     out = out.replace([float("inf"), float("-inf")], pd.NA).dropna(subset=["estimate"])
     out["lower"] = out["lower"].fillna(out["estimate"])
     out["upper"] = out["upper"].fillna(out["estimate"])
@@ -1489,7 +2429,14 @@ def _effect_measure_token(
     cols: Dict[str, str],
     estimate_col: Any,
 ) -> str:
-    for meta_name in ("effect_type", "estimate_type", "measure", "metric", "scale"):
+    for meta_name in (
+        "effect_type",
+        "effect_scale",
+        "estimate_type",
+        "measure",
+        "metric",
+        "scale",
+    ):
         meta_col = cols.get(meta_name)
         if meta_col is None:
             continue
@@ -1500,9 +2447,13 @@ def _effect_measure_token(
     return str(estimate_col or "")
 
 
+def _match_token(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+
 def _association_axis_from_token(token: str) -> Dict[str, Any]:
-    normalized = str(token or "").strip().lower().replace("-", "_").replace(" ", "_")
-    if normalized in {"or", "odds_ratio", "adjusted_or"} or "odds_ratio" in normalized:
+    normalized = _match_token(token)
+    if normalized in {"or", "oddsratio", "adjustedor"} or "oddsratio" in normalized:
         return {
             "xlabel": "Odds ratio",
             "header": "OR (95% CI)",
@@ -1510,8 +2461,8 @@ def _association_axis_from_token(token: str) -> Dict[str, Any]:
             "ratio_scale": True,
         }
     if (
-        normalized in {"hr", "hazard_ratio", "adjusted_hr"}
-        or "hazard_ratio" in normalized
+        normalized in {"hr", "hazardratio", "adjustedhr"}
+        or "hazardratio" in normalized
         or "hazard" in normalized
     ):
         return {
@@ -1521,8 +2472,8 @@ def _association_axis_from_token(token: str) -> Dict[str, Any]:
             "ratio_scale": True,
         }
     if (
-        normalized in {"rr", "risk_ratio", "relative_risk"}
-        or "risk_ratio" in normalized
+        normalized in {"rr", "riskratio", "relativerisk"}
+        or "riskratio" in normalized
     ):
         return {
             "xlabel": "Risk ratio",
@@ -1531,8 +2482,8 @@ def _association_axis_from_token(token: str) -> Dict[str, Any]:
             "ratio_scale": True,
         }
     if (
-        normalized in {"ate", "average_treatment_effect"}
-        or "treatment_effect" in normalized
+        normalized in {"ate", "averagetreatmenteffect"}
+        or "treatmenteffect" in normalized
     ):
         return {
             "xlabel": "Average treatment effect",
@@ -1540,14 +2491,14 @@ def _association_axis_from_token(token: str) -> Dict[str, Any]:
             "null_value": 0.0,
             "ratio_scale": False,
         }
-    if "risk_difference" in normalized:
+    if "riskdifference" in normalized:
         return {
             "xlabel": "Risk difference",
             "header": "Risk difference (95% CI)",
             "null_value": 0.0,
             "ratio_scale": False,
         }
-    if "mean_difference" in normalized:
+    if "meandifference" in normalized:
         return {
             "xlabel": "Mean difference",
             "header": "Mean difference (95% CI)",
@@ -1597,27 +2548,114 @@ def _normalise_strata_frame(frame: pd.DataFrame) -> pd.DataFrame:
             "gcs_score",
             "kdigo",
             "kdigo_stage",
+            "exposure",
+            "exposure_label",
+            "group",
+            "group_label",
+            "status",
+            "category",
+            "level",
+            "sepsis3",
+            "sepsis_3",
+            "exposure_status",
         ],
     )
     rate_col = _first_col(
-        cols, ["death_rate", "mortality_rate", "outcome_rate", "rate"]
+        cols,
+        [
+            "death_rate",
+            "mortality_rate",
+            "outcome_rate",
+            "outcome_risk",
+            "event_rate",
+            "death_pct",
+            "mortality_pct",
+            "event_pct",
+            "outcome_pct",
+            "risk",
+            "rate",
+            "death_risk",
+        ],
     )
     n_col = _first_col(cols, ["n", "count", "n_total"])
     if score_col is None or rate_col is None:
         return pd.DataFrame(columns=["score", "rate"])
+    raw_score = frame[score_col]
+    numeric_score = pd.to_numeric(raw_score, errors="coerce")
+    semantic_category = _score_column_is_semantic_category(score_col)
+    score_is_numeric = bool(numeric_score.notna().all()) and not semantic_category
+    score_values = (
+        numeric_score
+        if score_is_numeric
+        else raw_score.map(lambda value: _score_category_label(score_col, value))
+    )
+    score_order = (
+        numeric_score
+        if numeric_score.notna().any()
+        else pd.Series(range(len(frame)), index=frame.index)
+    )
     out = pd.DataFrame(
         {
-            "score": pd.to_numeric(frame[score_col], errors="coerce"),
+            "score": score_values,
             "rate": pd.to_numeric(frame[rate_col], errors="coerce"),
+            "_score_order": score_order,
         }
     ).dropna(subset=["score", "rate"])
     if n_col is not None:
         out["n"] = pd.to_numeric(frame.loc[out.index, n_col], errors="coerce")
     if not out.empty and out["rate"].max() > 1.0:
         out["rate"] = out["rate"] / 100.0
-    result = out.sort_values("score").reset_index(drop=True)
+    result = (
+        out.sort_values("score").drop(columns=["_score_order"]).reset_index(drop=True)
+        if score_is_numeric
+        else out.sort_values("_score_order")
+        .drop(columns=["_score_order"])
+        .reset_index(drop=True)
+    )
     result.attrs["score_label"] = _score_axis_label(score_col)
+    result.attrs["score_is_numeric"] = score_is_numeric
     return result
+
+
+def _score_column_is_semantic_category(column: Any) -> bool:
+    normalized = str(column or "").strip().lower().replace("-", "_").replace(" ", "_")
+    return normalized in {
+        "exposure",
+        "exposure_label",
+        "group",
+        "group_label",
+        "status",
+        "category",
+        "level",
+        "sepsis3",
+        "sepsis_3",
+        "exposure_status",
+    }
+
+
+def _score_category_label(column: Any, value: Any) -> str:
+    normalized_col = (
+        str(column or "").strip().lower().replace("-", "_").replace(" ", "_")
+    )
+    state = _binary_state_label(value)
+    if normalized_col in {"sepsis3", "sepsis_3"} and state is not None:
+        return f"Sepsis-3 {state}"
+    if normalized_col in {"exposure", "exposure_status"} and state is not None:
+        return "Exposed" if state == "positive" else "Unexposed"
+    if normalized_col == "status" and state is not None:
+        return state.capitalize()
+    if normalized_col in {"group", "group_label"}:
+        return f"Group {_prettify_label(value)}"
+    return _prettify_label(value)
+
+
+def _binary_state_label(value: Any) -> Optional[str]:
+    token = str(value).strip().lower()
+    if token in {"1", "1.0", "true", "yes", "y", "positive", "present"}:
+        return "positive"
+    if token in {"0", "0.0", "false", "no", "n", "negative", "absent"}:
+        return "negative"
+    return None
 
 
 def _normalise_missingness_frame(frame: pd.DataFrame) -> pd.DataFrame:
@@ -1631,8 +2669,12 @@ def _normalise_missingness_frame(frame: pd.DataFrame) -> pd.DataFrame:
     n_col = _first_col(cols, ["n", "n_total", "total"])
     if variable_col is None:
         return pd.DataFrame(columns=["variable", "missing_fraction"])
+    raw_variable = frame[variable_col].astype(str)
     out = pd.DataFrame(
-        {"variable": frame[variable_col].astype(str).map(_prettify_label)}
+        {
+            "source_variable": raw_variable.map(_prettify_label),
+            "measurement_family": raw_variable.map(_missingness_family_label),
+        }
     )
     if frac_col is not None:
         out["missing_fraction"] = pd.to_numeric(frame[frac_col], errors="coerce")
@@ -1647,41 +2689,134 @@ def _normalise_missingness_frame(frame: pd.DataFrame) -> pd.DataFrame:
     out = out.replace([float("inf"), float("-inf")], pd.NA).dropna(
         subset=["missing_fraction"]
     )
+    if out.empty:
+        return pd.DataFrame(columns=["variable", "missing_fraction"])
+    grouped = (
+        out.groupby("measurement_family", dropna=False)
+        .agg(
+            missing_fraction=("missing_fraction", "max"),
+            feature_count=("source_variable", "nunique"),
+            source_variable=("source_variable", "first"),
+        )
+        .reset_index()
+    )
+    grouped["variable"] = grouped.apply(
+        lambda row: row["measurement_family"]
+        if int(row["feature_count"]) > 1
+        else row["source_variable"],
+        axis=1,
+    )
+    if (grouped["missing_fraction"] > 0).any():
+        grouped = grouped.loc[grouped["missing_fraction"] > 0].copy()
     return (
-        out.sort_values("missing_fraction", ascending=False)
+        grouped[["variable", "missing_fraction", "feature_count"]]
+        .sort_values("missing_fraction", ascending=False)
         .head(8)
         .reset_index(drop=True)
     )
+
+
+def _missingness_family_label(value: Any) -> str:
+    raw = str(value or "").strip()
+    tokens = [token for token in re.split(r"[^a-z0-9]+", raw.lower()) if token]
+    suffixes = {
+        "first",
+        "last",
+        "min",
+        "max",
+        "mean",
+        "median",
+        "avg",
+        "average",
+        "sd",
+        "std",
+        "value",
+        "val",
+    }
+    while len(tokens) > 1 and tokens[-1] in suffixes:
+        tokens.pop()
+    if not tokens:
+        return _prettify_label(raw)
+    base = "_".join(tokens)
+    family_labels = {
+        "lact": "Lactate",
+        "lactate": "Lactate",
+        "temp": "Temperature",
+        "temperature": "Temperature",
+        "bun": "BUN",
+        "creat": "Creatinine",
+        "creatinine": "Creatinine",
+        "wbc": "WBC",
+        "hr": "Heart rate",
+        "heart_rate": "Heart rate",
+        "rr": "Resp. rate",
+        "resp": "Resp. rate",
+        "resp_rate": "Resp. rate",
+        "spo2": "SpO2",
+    }
+    if base in family_labels:
+        return family_labels[base]
+    return _prettify_label(base)
 
 
 def _draw_strata_panel(
     ax: Any, frame: pd.DataFrame, *, palette: Dict[str, str], outcome: str
 ) -> None:
     import matplotlib.ticker as mticker
+    import numpy as np
 
-    x = frame["score"].astype(float)
-    y = frame["rate"].astype(float)
+    y_values = frame["rate"].astype(float)
     score_label = _strata_score_label(frame)
-    ax.plot(
-        x,
-        y,
-        color=palette.get("blue", "#0F4D92"),
-        linewidth=1.4,
-        marker="o",
-        markersize=3.4,
-    )
+    if bool(frame.attrs.get("score_is_numeric", True)):
+        x = frame["score"].astype(float)
+        ax.plot(
+            x,
+            y_values,
+            color=palette.get("blue", "#0F4D92"),
+            linewidth=1.4,
+            marker="o",
+            markersize=3.4,
+        )
+        ax.set_xlabel(score_label)
+        ax.set_ylabel(f"{_prettify_label(outcome)} rate")
+        ymax = max(0.05, min(1.0, float(y_values.max()) * 1.25 if len(y_values) else 0.05))
+        ax.set_ylim(0, ymax)
+        ax.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=1.0, decimals=0))
+        ax.grid(
+            axis="y",
+            color=palette.get("neutral_light", "#D8D8D8"),
+            linewidth=0.5,
+            alpha=0.7,
+        )
+    else:
+        y = np.arange(len(frame))
+        ax.hlines(
+            y,
+            xmin=0,
+            xmax=y_values,
+            color=palette.get("neutral_light", "#D8D8D8"),
+            linewidth=1.2,
+        )
+        ax.plot(
+            y_values,
+            y,
+            "o",
+            color=palette.get("blue", "#0F4D92"),
+            markersize=3.8,
+        )
+        ax.set_yticks(y, frame["score"].astype(str).tolist())
+        ax.invert_yaxis()
+        ax.set_xlabel(f"{_prettify_label(outcome)} rate")
+        xmax = max(0.05, min(1.0, float(y_values.max()) * 1.35 if len(y_values) else 0.05))
+        ax.set_xlim(0, xmax)
+        ax.xaxis.set_major_formatter(mticker.PercentFormatter(xmax=1.0, decimals=0))
+        ax.grid(
+            axis="x",
+            color=palette.get("neutral_light", "#D8D8D8"),
+            linewidth=0.5,
+            alpha=0.7,
+        )
     ax.set_title(f"Observed outcome by {score_label}", loc="left", pad=3)
-    ax.set_xlabel(score_label)
-    ax.set_ylabel(f"{_prettify_label(outcome)} rate")
-    ymax = max(0.05, min(1.0, float(y.max()) * 1.25 if len(y) else 0.05))
-    ax.set_ylim(0, ymax)
-    ax.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=1.0, decimals=0))
-    ax.grid(
-        axis="y",
-        color=palette.get("neutral_light", "#D8D8D8"),
-        linewidth=0.5,
-        alpha=0.7,
-    )
 
 
 def _strata_score_label(frame: pd.DataFrame) -> str:
@@ -1705,11 +2840,24 @@ def _score_axis_label(column: Any) -> str:
         "gcs_score": "GCS score",
         "kdigo": "KDIGO stage",
         "kdigo_stage": "KDIGO stage",
+        "exposure": "Exposure group",
+        "exposure_label": "Exposure group",
+        "group": "Group",
+        "group_label": "Group",
+        "status": "Status",
+        "category": "Category",
+        "level": "Level",
+        "sepsis3": "Sepsis-3 status",
+        "sepsis_3": "Sepsis-3 status",
+        "exposure_status": "Exposure status",
     }
     if normalized in mapping:
         return mapping[normalized]
     pretty = _prettify_label(raw)
-    if any(word in pretty.lower() for word in ("score", "stratum", "stage")):
+    if any(
+        word in pretty.lower()
+        for word in ("score", "stratum", "stage", "group", "status", "category")
+    ):
         return pretty
     return f"{pretty} score"
 
@@ -1728,7 +2876,17 @@ def _draw_missingness_panel(
     y = np.arange(len(plot))
     values = plot["missing_fraction"].astype(float).clip(lower=0)
     ax.barh(y, values, color=palette.get("teal", "#42949E"), height=0.58)
-    ax.set_yticks(y, plot["variable"].astype(str).tolist())
+    labels: List[str] = []
+    for _, row in plot.iterrows():
+        label = str(row["variable"])
+        try:
+            feature_count = int(row.get("feature_count", 1))
+        except (TypeError, ValueError):
+            feature_count = 1
+        if feature_count > 1:
+            label = f"{label} ({feature_count})"
+        labels.append(label)
+    ax.set_yticks(y, labels)
     ax.invert_yaxis()
     ax.set_title("Feature missingness", loc="left", pad=3)
     ax.set_xlabel("Missing")
@@ -1846,10 +3004,14 @@ def _prettify_label(value: Any) -> str:
     token = str(value or "").strip()
     mapping = {
         "sofa2": "SOFA-2",
+        "sepsis3": "Sepsis-3",
+        "sepsis_3": "Sepsis-3",
         "sex_m": "Male sex",
         "death": "ICU mortality",
+        "icu_mortality": "ICU mortality",
         "lact": "Lactate",
         "creat": "Creatinine",
+        "resp": "Respiratory rate",
         "map": "MAP",
         "los_icu": "ICU LOS",
         "stay_id": "ICU stay",

@@ -90,17 +90,32 @@
     return window.EU_SETTINGS;
   }
 
+  async function hydrateCapabilities() {
+    window.EU_CAPABILITIES = await getJSON('/api/capabilities');
+    return window.EU_CAPABILITIES;
+  }
+
   // Persist a single setting; updates the local cache from the server reply.
   async function saveSetting(key, value) {
     const patch = {}; patch[key] = value;
     window.EU_SETTINGS = await postJSON('/api/settings', patch);
     if (window.applySettingsState) window.applySettingsState(window.EU_SETTINGS);
+    try {
+      await hydrateCapabilities();
+    } catch (err) {
+      console.warn('[EasyICU] capability refresh failed after setting save', err);
+    }
     return window.EU_SETTINGS;
   }
 
   async function resetSettings() {
     window.EU_SETTINGS = await postJSON('/api/settings/reset', {});
     if (window.applySettingsState) window.applySettingsState(window.EU_SETTINGS, { syncStorage: true });
+    try {
+      await hydrateCapabilities();
+    } catch (err) {
+      console.warn('[EasyICU] capability refresh failed after reset', err);
+    }
     return window.EU_SETTINGS;
   }
 
@@ -182,6 +197,11 @@
   async function boot() {
     try {
       await Promise.all([hydrateCatalog(), hydrateSettings(), hydrateWorkspaceRegistry()]);
+      try {
+        await hydrateCapabilities();
+      } catch (err) {
+        console.warn('[EasyICU] capability fetch failed:', err);
+      }
       rerender();
       console.info('[EasyICU] hydrated: %d concepts, settings loaded (ai_enabled=%s)',
         window.EU_CATALOG.totalConcepts, window.EU_SETTINGS.ai_enabled);
@@ -257,6 +277,30 @@
   }
   function loadAgentRunReview(projectDir) {
     return postJSON('/api/agent-runs/review', { project_dir: projectDir });
+  }
+  function loadAgentScienceWorkbench(body) {
+    return postJSON('/api/agent-runs/science-workbench', body || {});
+  }
+  function loadCapabilities() {
+    return hydrateCapabilities();
+  }
+  function checkCapabilityTool(body) {
+    return postJSON('/api/capabilities/tool-check', body || {});
+  }
+  function searchZotero(body) {
+    return postJSON('/api/capabilities/zotero/search', body || {});
+  }
+  function testZoteroConnection(body) {
+    return postJSON('/api/capabilities/zotero/test', body || {});
+  }
+  function zoteroSource(body) {
+    return postJSON('/api/capabilities/zotero/source', body || {});
+  }
+  function importZoteroSource(body) {
+    return postJSON('/api/capabilities/zotero/import', body || {});
+  }
+  function loadCapabilityAuditEvents(body) {
+    return postJSON('/api/capabilities/audit-events', body || {});
   }
   function signoffAgentRun(projectDir, body) {
     const payload = Object.assign({}, body || {}, { project_dir: projectDir });
@@ -337,6 +381,9 @@
   function planIdea(body) {
     return postJSON('/api/ideas/plan', body || {});
   }
+  function checkIdeaSampleFeasibility(body) {
+    return postJSON('/api/ideas/bounded-feasibility', body || {});
+  }
   function handoffIdea(body) {
     return postJSON('/api/ideas/handoff', body || {});
   }
@@ -381,6 +428,7 @@
   window.EU_API.postBlob = postBlob;
   window.EU_API.hydrateCatalog = hydrateCatalog;
   window.EU_API.hydrateSettings = hydrateSettings;
+  window.EU_API.hydrateCapabilities = hydrateCapabilities;
   window.EU_API.hydrateWorkspaceRegistry = hydrateWorkspaceRegistry;
   window.EU_API.saveSetting = saveSetting;
   window.EU_API.resetSettings = resetSettings;
@@ -410,6 +458,14 @@
   window.EU_API.loadJobSnapshot = loadJobSnapshot;
   window.EU_API.cancelJob = cancelJob;
   window.EU_API.loadAgentRunReview = loadAgentRunReview;
+  window.EU_API.loadAgentScienceWorkbench = loadAgentScienceWorkbench;
+  window.EU_API.loadCapabilities = loadCapabilities;
+  window.EU_API.checkCapabilityTool = checkCapabilityTool;
+  window.EU_API.searchZotero = searchZotero;
+  window.EU_API.testZoteroConnection = testZoteroConnection;
+  window.EU_API.zoteroSource = zoteroSource;
+  window.EU_API.importZoteroSource = importZoteroSource;
+  window.EU_API.loadCapabilityAuditEvents = loadCapabilityAuditEvents;
   window.EU_API.signoffAgentRun = signoffAgentRun;
   window.EU_API.loadAgentRunHistory = loadAgentRunHistory;
   window.EU_API.createGuidedDraft = createGuidedDraft;
@@ -436,6 +492,7 @@
   window.EU_API.scanIdeaLiteratureFolder = scanIdeaLiteratureFolder;
   window.EU_API.checkIdeaPriorArt = checkIdeaPriorArt;
   window.EU_API.planIdea = planIdea;
+  window.EU_API.checkIdeaSampleFeasibility = checkIdeaSampleFeasibility;
   window.EU_API.handoffIdea = handoffIdea;
   window.EU_API.createIdeaAgentProject = createIdeaAgentProject;
   window.EU_API.loadIdeaAgentProjects = loadIdeaAgentProjects;

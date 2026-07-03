@@ -12,6 +12,10 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
+
+from easyicu.research_agent.audits.validators import FigureSourceDataValidator
+from easyicu.research_agent.schema import AnalysisStep
 
 
 def _ctx_with_sofa(ra) -> "ra.ResearchContext":
@@ -52,6 +56,81 @@ def test_concept_usage_flags_mean_of_sofa(ra):
         f.severity == "error" and "misleading" in f.message.lower()
         for f in findings
     ), findings
+
+
+def test_figure_source_data_validator_accepts_source_row_index_trace(tmp_path: Path):
+    parent = tmp_path / "steps" / "02_descriptive_results" / "outputs"
+    parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "group_label": ["Group A", "Group B"],
+            "n": [100, 120],
+            "event_n": [10, 24],
+            "outcome_risk_pct": [10.0, 20.0],
+        }
+    ).to_csv(parent / "outcome_by_group.csv", index=False)
+
+    out = tmp_path / "steps" / "02_descriptive_results_figure" / "outputs"
+    out.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "group_label": ["Group B"],
+            "n": [120],
+            "event_n": [24],
+            "outcome_risk_pct": [20.0],
+            "source_table": ["outcome_by_group.csv"],
+            "source_row_index": [1],
+        }
+    ).to_csv(out / "figure_panel_source_data.csv", index=False)
+
+    findings = FigureSourceDataValidator().audit(
+        step=AnalysisStep(
+            step_id="02_descriptive_results_figure",
+            intent="Render figure for step '02_descriptive_results'.",
+        ),
+        out_dir=out,
+        run_dir=tmp_path,
+        step_summary={"rendering_only": True},
+    )
+
+    assert findings == []
+
+
+def test_figure_source_data_validator_handles_shared_boolean_columns(
+    tmp_path: Path,
+):
+    parent = tmp_path / "steps" / "05_sensitivity" / "outputs"
+    parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "term": ["primary"],
+            "estimate": [1.2],
+            "converged": [True],
+        }
+    ).to_csv(parent / "sensitivity_results.csv", index=False)
+
+    out = tmp_path / "steps" / "05_sensitivity_figure" / "outputs"
+    out.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "term": ["primary"],
+            "estimate": [1.2],
+            "converged": [True],
+            "source_table": ["sensitivity_results.csv"],
+        }
+    ).to_csv(out / "figure_panel_source_data.csv", index=False)
+
+    findings = FigureSourceDataValidator().audit(
+        step=AnalysisStep(
+            step_id="05_sensitivity_figure",
+            intent="Render figure for step '05_sensitivity'.",
+        ),
+        out_dir=out,
+        run_dir=tmp_path,
+        step_summary={"rendering_only": True},
+    )
+
+    assert findings == []
 
 
 def test_concept_usage_mean_of_sofa_blocks_under_strict_ablation(ra, monkeypatch):
@@ -367,6 +446,103 @@ def test_figure_source_data_validator_accepts_upstream_subset(ra, tmp_path: Path
     assert findings == []
 
 
+def test_figure_source_data_validator_accepts_definition_id_key(ra, tmp_path: Path):
+    run_dir = tmp_path / "run"
+    upstream = (
+        run_dir
+        / "steps"
+        / "04_alternative_eligibility_definitions_and_overlap"
+        / "outputs"
+    )
+    figure = (
+        run_dir
+        / "steps"
+        / "04_alternative_eligibility_definitions_and_overlap_figure"
+        / "outputs"
+    )
+    upstream.mkdir(parents=True)
+    figure.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "definition_id": ["primary", "relax_temp"],
+            "n_included": [100, 112],
+            "moved_in_vs_primary_n": [0, 12],
+        }
+    ).to_csv(upstream / "alternative_cohort_attrition.csv", index=False)
+    pd.DataFrame(
+        {
+            "definition_id": ["primary", "relax_temp"],
+            "n_included": [100, 112],
+            "moved_in_vs_primary_n": [0, 12],
+        }
+    ).to_csv(figure / "publication_figure_definition_source_data.csv", index=False)
+
+    findings = ra.FigureSourceDataValidator().audit(
+        step=ra.schema.AnalysisStep(
+            step_id="04_alternative_eligibility_definitions_and_overlap_figure",
+            intent=(
+                "Render the publication figure declared by step "
+                "'04_alternative_eligibility_definitions_and_overlap'."
+            ),
+        ),
+        out_dir=figure,
+        run_dir=run_dir,
+        step_summary={"rendering_only": True},
+    )
+    assert findings == []
+
+
+def test_figure_source_data_validator_accepts_pairwise_definition_key(
+    ra,
+    tmp_path: Path,
+):
+    run_dir = tmp_path / "run"
+    upstream = (
+        run_dir
+        / "steps"
+        / "04_alternative_eligibility_definitions_and_overlap"
+        / "outputs"
+    )
+    figure = (
+        run_dir
+        / "steps"
+        / "04_alternative_eligibility_definitions_and_overlap_figure"
+        / "outputs"
+    )
+    upstream.mkdir(parents=True)
+    figure.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "definition_a": ["primary", "primary", "relax_temp"],
+            "definition_b": ["primary", "relax_temp", "primary"],
+            "intersection_n": [100, 100, 100],
+            "jaccard": [1.0, 0.893, 0.893],
+        }
+    ).to_csv(upstream / "cohort_overlap_matrix.csv", index=False)
+    pd.DataFrame(
+        {
+            "definition_a": ["primary", "relax_temp"],
+            "definition_b": ["relax_temp", "primary"],
+            "intersection_n": [100, 100],
+            "jaccard": [0.893, 0.893],
+        }
+    ).to_csv(figure / "publication_figure_overlap_source_data.csv", index=False)
+
+    findings = ra.FigureSourceDataValidator().audit(
+        step=ra.schema.AnalysisStep(
+            step_id="04_alternative_eligibility_definitions_and_overlap_figure",
+            intent=(
+                "Render the publication figure declared by step "
+                "'04_alternative_eligibility_definitions_and_overlap'."
+            ),
+        ),
+        out_dir=figure,
+        run_dir=run_dir,
+        step_summary={"rendering_only": True},
+    )
+    assert findings == []
+
+
 def test_figure_source_data_validator_blocks_resume_evidence_pollution(
     ra,
     tmp_path: Path,
@@ -439,6 +615,131 @@ def test_figure_source_data_validator_blocks_numeric_drift(ra, tmp_path: Path):
         and f.detail["best_mismatch"]["reason"] == "source_values_disagree"
         for f in findings
     ), findings
+
+
+def test_figure_source_data_validator_blocks_inconsistent_percent_counts(
+    ra,
+    tmp_path: Path,
+):
+    run_dir = tmp_path / "run"
+    upstream = (
+        run_dir
+        / "steps"
+        / "02_baseline_characteristics_and_data_quality"
+        / "outputs"
+    )
+    figure = (
+        run_dir
+        / "steps"
+        / "02_baseline_characteristics_and_data_quality_figure"
+        / "outputs"
+    )
+    upstream.mkdir(parents=True)
+    figure.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "variable": ["resp_max"],
+            "missing_pct": [0.2512394927],
+            "missing_n": [188],
+            "total_n": [74829],
+        }
+    ).to_csv(upstream / "missingness_measurement_panel_source_data.csv", index=False)
+    pd.DataFrame(
+        {
+            "variable": ["resp_max"],
+            "missing_pct": [25.12394927],
+            "missing_n": [188],
+            "total_n": [74829],
+        }
+    ).to_csv(figure / "missingness_measurement_panel_source_data.csv", index=False)
+
+    findings = ra.FigureSourceDataValidator().audit(
+        step=ra.schema.AnalysisStep(
+            step_id="02_baseline_characteristics_and_data_quality_figure",
+            intent=(
+                "Render the publication figure declared by step "
+                "'02_baseline_characteristics_and_data_quality'."
+            ),
+        ),
+        out_dir=figure,
+        run_dir=run_dir,
+        step_summary={"rendering_only": True},
+    )
+
+    assert any(
+        f.severity == "error"
+        and "100*missing_n/total_n" in f.message
+        and f.detail
+        and f.detail["expected_pct"] == pytest.approx(0.2512394927)
+        for f in findings
+    ), findings
+
+
+def test_figure_source_data_validator_accepts_derived_missingness_source_data(
+    ra,
+    tmp_path: Path,
+):
+    run_dir = tmp_path / "run"
+    upstream = (
+        run_dir
+        / "steps"
+        / "02_baseline_characteristics_and_data_quality"
+        / "outputs"
+    )
+    figure = (
+        run_dir
+        / "steps"
+        / "02_baseline_characteristics_and_data_quality_figure"
+        / "outputs"
+    )
+    upstream.mkdir(parents=True)
+    figure.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "concept": ["resp", "lact"],
+            "label": ["Respiratory rate", "Lactate"],
+            "n_total": [74829, 74829],
+            "value_missing_n": [188, 30490],
+            "value_missing_pct": [0.2512394927100456, 40.74623474856005],
+            "measured_one_n": [74641, 44339],
+            "measured_one_pct": [99.74876050728996, 59.25376525143995],
+        }
+    ).to_csv(upstream / "missingness_measurement_audit.csv", index=False)
+    pd.DataFrame(
+        {
+            "variable": ["resp", "lact"],
+            "concept": ["resp", "lact"],
+            "label": ["Respiratory rate", "Lactate"],
+            "display_label": ["Respiratory rate", "Lactate"],
+            "missing_pct": [0.2512394927100456, 40.74623474856005],
+            "missing_n": [188, 30490],
+            "total_n": [74829, 74829],
+            "value_missing_pct": [0.2512394927100456, 40.74623474856005],
+            "value_missing_n": [188, 30490],
+            "n_total": [74829, 74829],
+            "measured_pct": [99.74876050728996, 59.25376525143995],
+            "measured_n": [74641, 44339],
+            "measured_one_pct": [99.74876050728996, 59.25376525143995],
+            "measured_one_n": [74641, 44339],
+            "source_table": ["missingness_measurement_audit.csv"] * 2,
+            "source_transform": ["missingness_measurement_summary_v1"] * 2,
+        }
+    ).to_csv(figure / "missingness_measurement_panel_source_data.csv", index=False)
+
+    findings = ra.FigureSourceDataValidator().audit(
+        step=ra.schema.AnalysisStep(
+            step_id="02_baseline_characteristics_and_data_quality_figure",
+            intent=(
+                "Render the publication figure declared by step "
+                "'02_baseline_characteristics_and_data_quality'."
+            ),
+        ),
+        out_dir=figure,
+        run_dir=run_dir,
+        step_summary={"rendering_only": True},
+    )
+
+    assert findings == []
 
 
 def test_figure_contract_quality_blocks_rescue_publication_contract(ra, tmp_path: Path):

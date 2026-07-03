@@ -1,0 +1,24 @@
+/* Agent Projects compact detail header. Owner: screens-agent.js / #agent. */
+
+.ag-dhead.compact{
+  padding-bottom:12px;
+  border-bottom:1px solid var(--hair);
+}
+
+.ag-dhead.compact .ag-dtop{
+  align-items:center;
+}
+
+.ag-dhead.compact .ag-title{
+  font-size:18px;
+  line-height:1.25;
+  overflow-wrap:anywhere;
+}
+
+.ag-dhead.compact .ag-src{
+  margin-top:5px;
+}
+
+.ag-dhead.compact + .ag-tabs{
+  padding-top:0;
+}

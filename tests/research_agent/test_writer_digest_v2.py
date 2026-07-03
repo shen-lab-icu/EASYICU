@@ -24,6 +24,7 @@ from pathlib import Path
 from easyicu.research_agent.evidence import EvidenceStore
 from easyicu.research_agent.pipeline_writer_aux import (
     WRITER_DIGEST_PREFERRED_KEYS,
+    _preferred_writer_evidence_names,
     _render_writer_evidence_digest,
     _render_writer_evidence_digest_v2,
 )
@@ -31,6 +32,41 @@ from easyicu.research_agent.pipeline_writer_aux import (
 
 def _record(step_id: str, status: str, summary: dict) -> dict:
     return {"step_id": step_id, "status": status, "step_summary": summary}
+
+
+def test_preferred_writer_evidence_names_excludes_records_with_active_findings(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(tmp_path)
+    clean = tmp_path / "table_one.csv"
+    clean.write_text("variable,value\nage,64\n", encoding="utf-8")
+    flagged = tmp_path / "primary_association.csv"
+    flagged.write_text("term,or\nexposure,1.2\n", encoding="utf-8")
+    store.register_file(
+        kind="table",
+        description="Clean table one.",
+        source_path=clean,
+        evidence_id="table_table_one",
+        aliases=["table_one"],
+    )
+    record = store.register_file(
+        kind="table",
+        description="Flagged primary association.",
+        source_path=flagged,
+        evidence_id="primary_association_table",
+        aliases=["primary_association"],
+    )
+    store.update_record(
+        record.evidence_id,
+        finding_severity="warning",
+        finding_messages=["visual or analysis caveat"],
+    )
+
+    names = _preferred_writer_evidence_names(store)
+
+    assert "table_one" in names
+    assert "primary_association" not in names
+    assert "primary_association_table" not in names
 
 
 def test_v2_empty_records_returns_v1_output() -> None:

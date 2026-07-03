@@ -55,6 +55,7 @@ _FAMILY_TEMPLATES: Dict[StudyDesignFamily, Dict[str, object]] = {
         "main_text_displays": [
             "cohort flow / attrition",
             "Table 1 baseline characteristics",
+            "exposure prevalence and absolute outcome risk",
             "primary adjusted effect estimate",
             "sensitivity / robustness summary",
             "missingness or data-quality summary",
@@ -341,6 +342,18 @@ _FAMILY_DISPLAY_MODULES: Dict[StudyDesignFamily, List[DisplayModuleSpec]] = {
                 "forest plot",
                 "coefficient plot",
                 "marginal-effect panel",
+            ),
+        ),
+        _module(
+            "absolute_risk_context",
+            "descriptive_result",
+            "core",
+            "Readers need the exposure prevalence and absolute outcome risks before interpreting adjusted relative estimates.",
+            (
+                "prevalence estimate with CI",
+                "absolute outcome risk by exposure",
+                "risk-difference panel",
+                "event-rate panel",
             ),
         ),
         _module(

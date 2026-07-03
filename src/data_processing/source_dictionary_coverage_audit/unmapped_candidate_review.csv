@@ -1,0 +1,1480 @@
+concept,db,table,item_id,label,unit,category,extra,status
+bili,aumc,numericitems,6812,Bilirubine geconjugeerd,µmol,,,unmapped_candidate
+bili,aumc,numericitems,9946,BILIRUBINE (overig),µmol/l,,,unmapped_candidate
+bili,aumc,numericitems,17993,Bilirubine ascitesvocht (ascitesvocht),µmol/l,,,unmapped_candidate
+bili,aumc,numericitems,18851,Bilirubine drainvocht (drain),µmol/l,,,unmapped_candidate
+bili,mimic,chartevents,4948,Bilirubin,,,,unmapped_candidate
+bili,mimic,chartevents,225690,Total Bilirubin,,Labs,,unmapped_candidate
+bili,mimic,labevents,50838,"Bilirubin, Total, Ascites",,Chemistry,Ascites,unmapped_candidate
+bili,mimic,labevents,51012,"Bilirubin, Total, CSF",,Chemistry,Cerebrospinal Fluid (CSF),unmapped_candidate
+bili,mimic,labevents,51028,"Bilirubin, Total, Body Fluid",,Chemistry,Other Body Fluid,unmapped_candidate
+bili,mimic,labevents,51049,"Bilirubin, Total, Pleural",,Chemistry,Pleural,unmapped_candidate
+bili,miiv,chartevents,225690,Total Bilirubin,None,Labs,,unmapped_candidate
+bili,miiv,labevents,50838,"Bilirubin, Total, Ascites",,Chemistry,Ascites,unmapped_candidate
+bili,miiv,labevents,51028,"Bilirubin, Total, Body Fluid",,Chemistry,Other Body Fluid,unmapped_candidate
+bili,miiv,labevents,51049,"Bilirubin, Total, Pleural",,Chemistry,Pleural,unmapped_candidate
+bili,miiv,labevents,51568,"Bilirubin, Neonatal",,Chemistry,Blood,unmapped_candidate
+bili,miiv,labevents,51783,"Bilirubin, Total, CSF",,Chemistry,Cerebrospinal Fluid,unmapped_candidate
+bili,miiv,labevents,51812,"Bilirubin, Total, Joint Fluid",,Chemistry,Joint Fluid,unmapped_candidate
+bili,miiv,labevents,51932,"Bilirubin, Total, Stool",,Chemistry,Stool,unmapped_candidate
+bili,miiv,labevents,53089,"Bilirubin, Total",,Chemistry,Blood,unmapped_candidate
+crea,aumc,numericitems,9942,Kreatinine (Jaffé) (overig),µmol/l,,,unmapped_candidate
+crea,aumc,numericitems,12191,Kreatinine (Jaffé)  (overig),mmol/l,,,unmapped_candidate
+crea,aumc,numericitems,14441,Kreatinine (overig),µmol/l,,,unmapped_candidate
+crea,aumc,numericitems,18430,Kreatinine dialysaat (dialysaat),µmol/l,,,unmapped_candidate
+crea,mimic,labevents,50841,"Creatinine, Ascites",,Chemistry,Ascites,unmapped_candidate
+crea,mimic,labevents,51021,"Creatinine, Joint Fluid",,Chemistry,Joint Fluid,unmapped_candidate
+crea,mimic,labevents,51032,"Creatinine, Body Fluid",,Chemistry,Other Body Fluid,unmapped_candidate
+crea,mimic,labevents,51052,"Creatinine, Pleural",,Chemistry,Pleural,unmapped_candidate
+crea,miiv,labevents,50841,"Creatinine, Ascites",,Chemistry,Ascites,unmapped_candidate
+crea,miiv,labevents,51021,"Creatinine, Joint Fluid",,Chemistry,Joint Fluid,unmapped_candidate
+crea,miiv,labevents,51032,"Creatinine, Body Fluid",,Chemistry,Other Body Fluid,unmapped_candidate
+crea,miiv,labevents,51052,"Creatinine, Pleural",,Chemistry,Pleural,unmapped_candidate
+crea,miiv,labevents,51787,"Creatinine, CSF",,Chemistry,Cerebrospinal Fluid,unmapped_candidate
+crea,miiv,labevents,51937,"Creatinine, Stool",,Chemistry,Stool,unmapped_candidate
+crea,eicu,lab,urinary creatinine,urinary creatinine,mg/dL,,,unmapped_candidate
+fio2,mimic,chartevents,7018,ecmo fio2,,,,unmapped_candidate
+fio2,miiv,chartevents,229238,FiO2 Challenge,,Hemodynamics,,unmapped_candidate
+fio2,miiv,chartevents,229239,FiO2 Challenge Result,,Hemodynamics,,unmapped_candidate
+fio2,miiv,chartevents,229280,FiO2 (ECMO),%,ECMO,,unmapped_candidate
+fio2,miiv,chartevents,229841,FiO2 (CH),%,ECMO,,unmapped_candidate
+hgb,aumc,numericitems,9961,Hb (overig),mmol/l,,,unmapped_candidate
+hgb,aumc,numericitems,11543,SO2 (Hb) (bloed),Geen,,,unmapped_candidate
+hgb,aumc,numericitems,11690,CO-Hb (bloed),Geen,,,unmapped_candidate
+hgb,aumc,numericitems,11692,Met-Hb (bloed),Geen,,,unmapped_candidate
+hgb,aumc,numericitems,11810,Hb A2 (bloed),Geen,,,unmapped_candidate
+hgb,aumc,numericitems,11811,Hb F (bloed),Geen,,,unmapped_candidate
+hgb,aumc,numericitems,14412,Met-Hb  (bloed),Geen,,,unmapped_candidate
+hgb,aumc,numericitems,18376,Hb ascitesvocht (ascitesvocht),mmol/l,,,unmapped_candidate
+hgb,aumc,numericitems,18860,Hb pleuravocht (pleurapunct.),mmol/l,,,unmapped_candidate
+hgb,aumc,numericitems,20019,Streef Hb onderwaarde,mmol/l,,,unmapped_candidate
+hgb,aumc,numericitems,20659,ECMO - Hb (g/dl),g/dl,,,unmapped_candidate
+hgb,mimic,chartevents,7965,methhemoglobin,,,,unmapped_candidate
+hgb,mimic,labevents,50805,Carboxyhemoglobin,,Blood Gas,Blood,unmapped_candidate
+hgb,mimic,labevents,50814,Methemoglobin,,Blood Gas,Blood,unmapped_candidate
+hgb,mimic,labevents,50852,% Hemoglobin A1c,,Chemistry,Blood,unmapped_candidate
+hgb,mimic,labevents,50855,Absolute Hemoglobin,,Chemistry,Blood,unmapped_candidate
+hgb,mimic,labevents,51212,Fetal Hemoglobin,,Hematology,Blood,unmapped_candidate
+hgb,mimic,labevents,51223,Hemoglobin A2,,Hematology,Blood,unmapped_candidate
+hgb,mimic,labevents,51224,Hemoglobin C,,Hematology,Blood,unmapped_candidate
+hgb,mimic,labevents,51225,Hemoglobin F,,Hematology,Blood,unmapped_candidate
+hgb,mimic,labevents,51285,"Reticulocyte, Cellular Hemoglobin",,Hematology,Blood,unmapped_candidate
+hgb,miiv,labevents,50805,Carboxyhemoglobin,,Blood Gas,Blood,unmapped_candidate
+hgb,miiv,labevents,50814,Methemoglobin,,Blood Gas,Blood,unmapped_candidate
+hgb,miiv,labevents,50852,% Hemoglobin A1c,,Chemistry,Blood,unmapped_candidate
+hgb,miiv,labevents,50855,Absolute Hemoglobin,,Chemistry,Blood,unmapped_candidate
+hgb,miiv,labevents,51212,Fetal Hemoglobin,,Hematology,Blood,unmapped_candidate
+hgb,miiv,labevents,51223,Hemoglobin A2,,Hematology,Blood,unmapped_candidate
+hgb,miiv,labevents,51224,Hemoglobin C,,Hematology,Blood,unmapped_candidate
+hgb,miiv,labevents,51225,Hemoglobin F,,Hematology,Blood,unmapped_candidate
+hgb,miiv,labevents,51285,"Reticulocyte, Cellular Hemoglobin",,Hematology,Blood,unmapped_candidate
+hgb,miiv,labevents,51631,Glycated Hemoglobin,,Chemistry,Blood,unmapped_candidate
+hgb,miiv,labevents,51641,Hemoglobin  A,,Chemistry,Blood,unmapped_candidate
+hgb,miiv,labevents,51642,Hemoglobin  A1,,Chemistry,Blood,unmapped_candidate
+hgb,miiv,labevents,51643,Hemoglobin  A2,,Chemistry,Blood,unmapped_candidate
+hgb,miiv,labevents,51644,Hemoglobin  C,,Chemistry,Blood,unmapped_candidate
+hgb,miiv,labevents,51645,"Hemoglobin, Calculated",,Chemistry,Blood,unmapped_candidate
+hgb,miiv,labevents,51646,Hemoglobin  F,,Chemistry,Blood,unmapped_candidate
+hgb,miiv,labevents,51647,Hemoglobin  S,,Chemistry,Blood,unmapped_candidate
+hgb,miiv,labevents,52032,P50 of Hemoglobin,,Blood Gas,Blood,unmapped_candidate
+hgb,miiv,labevents,52128,Hemoglobin H Inclusion,,Hematology,Blood,unmapped_candidate
+hgb,miiv,labevents,52129,Hemoglobin Other,,Hematology,Blood,unmapped_candidate
+hgb,miiv,labevents,52144,Methemoglobin,,Hematology,Blood,unmapped_candidate
+hgb,miiv,labevents,52157,Plasma Hemoglobin,,Hematology,Blood,unmapped_candidate
+hgb,miiv,labevents,52183,Sulf Hgb,,Hematology,Blood,unmapped_candidate
+hgb,miiv,labevents,52351,Fetal Hgb,,Hematology,Other Body Fluid,unmapped_candidate
+hgb,eicu,lab,Carboxyhemoglobin,Carboxyhemoglobin,%,,,unmapped_candidate
+hgb,eicu,lab,Methemoglobin,Methemoglobin,%,,,unmapped_candidate
+hgb,eicu,lab,Oxyhemoglobin,Oxyhemoglobin,%,,,unmapped_candidate
+hr,mimic,chartevents,964,THAM CC/HR,,,,unmapped_candidate
+hr,mimic,chartevents,1097,Pantoprazole  mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,1106,Meperidine mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,611,Replace Rate ml/hr,,,,unmapped_candidate
+hr,mimic,chartevents,146,Dialysate Flow ml/hr,,,,unmapped_candidate
+hr,mimic,chartevents,481,Orthostat HR sitting,,,,unmapped_candidate
+hr,mimic,chartevents,485,Orthostatic HR lying,,,,unmapped_candidate
+hr,mimic,chartevents,493,PCA 1 Hr Limit (mg),,,,unmapped_candidate
+hr,mimic,chartevents,5556,TPA mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,5587,CYCLOSPORIN --MG/HR,,,,unmapped_candidate
+hr,mimic,chartevents,5588,cyclosporin 3mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,7863,Mag Sulfate    mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,7865,mag sulfate gm/hr,,,,unmapped_candidate
+hr,mimic,chartevents,7928,glucagon mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,7958,Amiodorone mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,7998,Versed mg/kg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,8025,Panpropazole mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,1226,Pantoprazole mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,1331,Protonix mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,3099,T3 CC/HR,,,,unmapped_candidate
+hr,mimic,chartevents,3134,solumed mg/kg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,3147,TPA #2 mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,3148,TPA#1 mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,3192,BUMEX MG/HR,,,,unmapped_candidate
+hr,mimic,chartevents,3257,XIGRIS @ 1.66 MG/HR,,,,unmapped_candidate
+hr,mimic,chartevents,3269,XIGRIS MG/HR,,,,unmapped_candidate
+hr,mimic,chartevents,3270,aprotinin ml/hr,,,,unmapped_candidate
+hr,mimic,chartevents,3277,NICARDIPINE--MG/HR,,,,unmapped_candidate
+hr,mimic,chartevents,3281,Xigres mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,3488,Lipid Change Q 12 hr,,,,unmapped_candidate
+hr,mimic,chartevents,3494,Lowest Heart Rate,,,,unmapped_candidate
+hr,mimic,chartevents,1715,Nicardipine mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,1717,tPA            mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,1819,Protonix ml/hr,,,,unmapped_candidate
+hr,mimic,chartevents,1826,lepirudin  mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,1853,protonix mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,1876,PROTONIX MG/HR,,,,unmapped_candidate
+hr,mimic,chartevents,1888,pitressin u/hr,,,,unmapped_candidate
+hr,mimic,chartevents,1949,famotidine mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,1970,magnesium 2gm/hr,,,,unmapped_candidate
+hr,mimic,chartevents,5728,Solumedrol  mg/kg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,5783,aprotinen cc/hr,,,,unmapped_candidate
+hr,mimic,chartevents,5790,Cyclosporine mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,5892,tpa mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,1485,Bivalirudin mg/kg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,1586,Xigris mcg/kg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,1587,xigris mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,1597,Flolan chart cc/hr,,,,unmapped_candidate
+hr,mimic,chartevents,1605,METHYLPRED 450MG/HR,,,,unmapped_candidate
+hr,mimic,chartevents,1677,Altepase mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,2101,nicardipine mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,2141,Glucagon mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,2161,aprotinin cc/hr,,,,unmapped_candidate
+hr,mimic,chartevents,2164,NIMBEX MG/KG/HR,,,,unmapped_candidate
+hr,mimic,chartevents,2166,PRECEDEX MCG/KG/HR,,,,unmapped_candidate
+hr,mimic,chartevents,2188,precedex mcg/kg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,2274,APROTININ U/HR,,,,unmapped_candidate
+hr,mimic,chartevents,2283,PRECEDEX MG/K/HR,,,,unmapped_candidate
+hr,mimic,chartevents,2287,APROTININ CC/HR,,,,unmapped_candidate
+hr,mimic,chartevents,2296,Precedex (mcg/kg/hr),,,,unmapped_candidate
+hr,mimic,chartevents,2297,Aggrastat cc/hr,,,,unmapped_candidate
+hr,mimic,chartevents,2301,CIS/CURIUM MG/KG/HR,,,,unmapped_candidate
+hr,mimic,chartevents,2334,vasopressin u/hr,,,,unmapped_candidate
+hr,mimic,chartevents,2344,TPA MG/HR,,,,unmapped_candidate
+hr,mimic,chartevents,2349,APROTONIN U/HR,,,,unmapped_candidate
+hr,mimic,chartevents,2355,solumedrol mg/kg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,2373,APROTININ ML/HR,,,,unmapped_candidate
+hr,mimic,chartevents,2390,cisatracurium mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,2418,CARIPORIDE 20MG/HR,,,,unmapped_candidate
+hr,mimic,chartevents,2460,CARIPORIDE ML/HR,,,,unmapped_candidate
+hr,mimic,chartevents,2461,APROTANIN ML/HR,,,,unmapped_candidate
+hr,mimic,chartevents,2464,epidural ml/hr,,,,unmapped_candidate
+hr,mimic,chartevents,2467,DEXTROSE GM/HR,,,,unmapped_candidate
+hr,mimic,chartevents,2468,NAHCO3- MEQ/HR,,,,unmapped_candidate
+hr,mimic,chartevents,2478,Amiodarone mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,2481,Amicar cc/hr,,,,unmapped_candidate
+hr,mimic,chartevents,2482,SOLUMEDROL  MG/KG/HR,,,,unmapped_candidate
+hr,mimic,chartevents,2487,carioride cc/hr,,,,unmapped_candidate
+hr,mimic,chartevents,2498,CARIPORIDE CC/HR,,,,unmapped_candidate
+hr,mimic,chartevents,2509,APROTONIN CC/HR,,,,unmapped_candidate
+hr,mimic,chartevents,2517,Cisatracu mg/kg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,2547,Precedex mcg/kg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,2548,nimbex mg/kg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,2556,Cisatra.  MG/KG/HR,,,,unmapped_candidate
+hr,mimic,chartevents,2561,VASOPRESSIN U/HR,,,,unmapped_candidate
+hr,mimic,chartevents,2573,cistra  mgm/kg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,2577,CARIIPORIDE ML/HR,,,,unmapped_candidate
+hr,mimic,chartevents,2593,PENTOBARB DRIP MG/HR,,,,unmapped_candidate
+hr,mimic,chartevents,2605,CARAIPORIDE CC/HR,,,,unmapped_candidate
+hr,mimic,chartevents,2622,CA GLUC GM/HR,,,,unmapped_candidate
+hr,mimic,chartevents,2628,bivalirudin mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,2655,ALCOHOL 10%DRIP G/HR,,,,unmapped_candidate
+hr,mimic,chartevents,2656,SOLUMEDROL MG/KG/HR,,,,unmapped_candidate
+hr,mimic,chartevents,2661,ALCOHOL 5% DRIP G/HR,,,,unmapped_candidate
+hr,mimic,chartevents,2667,alteplase mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,2672,fentanyl mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,2679,PENTOBARBITAL MG/HR,,,,unmapped_candidate
+hr,mimic,chartevents,2684,Cisat mcg/kg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,2694,LEPIRUDIN MG/HR,,,,unmapped_candidate
+hr,mimic,chartevents,2705,TPA - left   mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,2706,TPA -right mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,2755,XIGRIS CC/HR,,,,unmapped_candidate
+hr,mimic,chartevents,2757,KETAMINE MG/HR,,,,unmapped_candidate
+hr,mimic,chartevents,2764,Aprotinin cc/hr,,,,unmapped_candidate
+hr,mimic,chartevents,2804,10% alcohol/ cc/hr,,,,unmapped_candidate
+hr,mimic,chartevents,2806,ALCOHOL GTT ML/HR,,,,unmapped_candidate
+hr,mimic,chartevents,2809,xigris mcg/kg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,2861,TPA mg/HR,,,,unmapped_candidate
+hr,mimic,chartevents,2869,PORK INSULIN U/HR,,,,unmapped_candidate
+hr,mimic,chartevents,2874,lepirudin mg/kg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,2876,10% ALCOHOL CC/HR,,,,unmapped_candidate
+hr,mimic,chartevents,2946,APPROTININ CC/HR,,,,unmapped_candidate
+hr,mimic,chartevents,2947,approtinin cc/hr,,,,unmapped_candidate
+hr,mimic,chartevents,2959,Solumedrolmg/kg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,2960,lepirudin mgs/kg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,2983,solumedrol mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,2989,APOTININ CC/HR,,,,unmapped_candidate
+hr,mimic,chartevents,3001,Solumedrol mg/kg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,3005,Aprotiinin ml/hr,,,,unmapped_candidate
+hr,mimic,chartevents,3010,Integrellin cc/hr,,,,unmapped_candidate
+hr,mimic,chartevents,3044,10% ETOH CC/HR,,,,unmapped_candidate
+hr,mimic,chartevents,8169,Amicar mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,8262,ketamine mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,8285,TPA            mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,8289,Mucomyst       mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,6352,fentanyl mcg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,7107,Acetylcysteine mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,7112,PAPAVERINE MG/HR,,,,unmapped_candidate
+hr,mimic,chartevents,7132,mucomyst mg/kg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,7158,AMIODARONE CC/HR,,,,unmapped_candidate
+hr,mimic,chartevents,7221,Protonix       mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,7245,CALCIUM GLUC ML/HR,,,,unmapped_candidate
+hr,mimic,chartevents,7272,Solu-Medrol Mg/Kg/Hr,,,,unmapped_candidate
+hr,mimic,chartevents,7341,Vasopressin  u/hr,,,,unmapped_candidate
+hr,mimic,chartevents,7425,Solu-medrol mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,7435,Cyclosporine   mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,7439,walking hr,,,,unmapped_candidate
+hr,mimic,inputevents_cv,40582,Meperidine cc/hr,,Free Form Intake,,unmapped_candidate
+hr,mimic,chartevents,7654,mucomyst mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,7743,ACETYLCYSTEINE MG/HR,,,,unmapped_candidate
+hr,mimic,chartevents,7757,NARCAN MG/HR,,,,unmapped_candidate
+hr,mimic,chartevents,7809,Bumetandime mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,7822,genta irrig cc/hr,,,,unmapped_candidate
+hr,mimic,chartevents,6423,Octreotide mcg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,6429,Glucagon       mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,6541,methadone mg /hr,,,,unmapped_candidate
+hr,mimic,chartevents,6573,MgSO4          mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,6616,Pantoprazole   mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,6635,Aprotinin ml/hr,,,,unmapped_candidate
+hr,mimic,chartevents,6651,ca gluc ml/hr,,,,unmapped_candidate
+hr,mimic,chartevents,6741,pantoprazole mgm/hr,,,,unmapped_candidate
+hr,mimic,chartevents,6806,Mucomyst mg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,6846,Primo study cc/hr,,,,unmapped_candidate
+hr,mimic,chartevents,6930,STUDY DRUG CC/HR,,,,unmapped_candidate
+hr,mimic,chartevents,6964,Epidural ml/hr,,,,unmapped_candidate
+hr,mimic,chartevents,6969,APROTININ  ML/HR,,,,unmapped_candidate
+hr,mimic,inputevents_cv,41525,PROTONIX MG/HR,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,41962,PRECEDEX CC/HR,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,41002,TPA .5mg/hr,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,41111,METHYLPRED 450MG/HR,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,41189,Nicardipine mg/hr,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,42291,NIMBEX CC/HR,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,42309,CISATRA CC/HR,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,42310,cisatricurium cc/hr,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,42325,CARIPORIDE CC/HR,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,42334,APRTININ CC/HR,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,42337,NAHCO3- CC/HR,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,42342,Amiodarone mg/hr,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,42343,CARIPORIDE ML/HR,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,42407,Precedex mcg/kg/hr,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,42422,SOLUMEDROL DRIPMG/HR,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,42564,ALCOHOL 10%DRIP G/HR,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,42565,TROMETHAMINE CC/HR,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,42608,Cisat mcg/kg/hr,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,42669,KETAMINE MG/HR,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,42709,ALCOHOL GTT ML/HR,,Free Form Intake,,unmapped_candidate
+hr,mimic,outputevents,43171,URINE CC/KG/HR,,,,unmapped_candidate
+hr,mimic,outputevents,43173,urinecc/kg/hr,,,,unmapped_candidate
+hr,mimic,inputevents_cv,41797,protonix gtt cc/hr,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,42044,aprotinin cc/hr,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,42051,AMPHOTERCIN CC HR,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,42062,Precedex (mcg/kg/hr),,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,42174,nimbex cc/hr,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,40796,Protonix mg/hr,,,,unmapped_candidate
+hr,mimic,outputevents,43355,urine/k/hr,,,,unmapped_candidate
+hr,mimic,outputevents,43365,urine output/kg/hr,,,,unmapped_candidate
+hr,mimic,inputevents_cv,43366,ur.cc/kg/hr,,,,unmapped_candidate
+hr,mimic,outputevents,43373,urine cc/kg/hr,,,,unmapped_candidate
+hr,mimic,outputevents,43374,URINE CC?KG?HR,,,,unmapped_candidate
+hr,mimic,outputevents,43379,URINECC/KG/HR,,,,unmapped_candidate
+hr,mimic,outputevents,43380,urine outpt cc/kg/hr,,,,unmapped_candidate
+hr,mimic,inputevents_cv,43381,cc/kg/hr,,,,unmapped_candidate
+hr,mimic,outputevents,43431,Urine cc/k/hr,,,,unmapped_candidate
+hr,mimic,inputevents_cv,43472,ur/kg/hr,,,,unmapped_candidate
+hr,mimic,outputevents,43522,Urine cc/kg/hr,,,,unmapped_candidate
+hr,mimic,inputevents_cv,43526,ur/cc/kg/hr,,,,unmapped_candidate
+hr,mimic,inputevents_cv,42246,CISATRICARIUM CC/HR,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,44653,OCTREOTIDE MCG/HR,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,42802,VASOPRESSIN  CC/HR.,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,42811,Aprotinin cc/hr,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,42965,xigris mcg/kg/hr,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,43018,magnesium 1gm/hr,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,44324,cyclosporin 2mg/hr,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,44331,cyclosporin 4mg/hr,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,44415,urcc/kg/hr,,,,unmapped_candidate
+hr,mimic,inputevents_cv,44500,Rituximab 50mg/hr,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,44529,Primo study cc/hr,,Free Form Intake,,unmapped_candidate
+hr,mimic,outputevents,45304,Urine output cc/k/hr,,,,unmapped_candidate
+hr,mimic,inputevents_cv,46522,Pantoprazole 8mg/hr,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,46565,pantoprazole mg/hr,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,46603,Sodium Citrate ml/hr,,Free Form Intake,,unmapped_candidate
+hr,mimic,outputevents,43576,24hr Urine cc/kg/hr,,,,unmapped_candidate
+hr,mimic,outputevents,43589,urine cc/k/hr,,,,unmapped_candidate
+hr,mimic,inputevents_cv,43639,UR.cc/kg/hr,,,,unmapped_candidate
+hr,mimic,outputevents,43653,ostomy cc/kg/hr,,,,unmapped_candidate
+hr,mimic,outputevents,43811,urine out: cc/k/hr,,,,unmapped_candidate
+hr,mimic,outputevents,43812,urine out:cc/k/hr,,,,unmapped_candidate
+hr,mimic,inputevents_cv,46174,Protonix gtt 8mg/hr,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,46543,Acetylcysteine mg/hr,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,46561,TPA MG/HR,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,46203,pantoprazole 8mg/hr,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,45872,tpa cc/hr,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,42563,SOLUMEDROL MG/KG/HR,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,42577,ALCOHOL 5% DRIP G/HR,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,43125,xigris cc/hr,,Free Form Intake,,unmapped_candidate
+hr,mimic,outputevents,43333,urine cc's/k/hr,,,,unmapped_candidate
+hr,mimic,outputevents,43445,stool cc/kg/hr,,,,unmapped_candidate
+hr,mimic,inputevents_cv,45004,PROTONIX 8MG/HR,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,44759,protonix gtt 8mg/hr,,Free Form Intake,,unmapped_candidate
+hr,mimic,outputevents,43638,urine output cc/k/hr,,,,unmapped_candidate
+hr,mimic,outputevents,43654,urine o/p cc/kg/hr,,,,unmapped_candidate
+hr,mimic,inputevents_cv,43521,ml/kg/hr,,Free Form Intake,,unmapped_candidate
+hr,mimic,inputevents_cv,43548,ur cc/kg/hr,,,,unmapped_candidate
+hr,mimic,chartevents,224366,Epidural Infusion Rate (mL/hr),ml/hr,Pain/Sedation,,unmapped_candidate
+hr,mimic,chartevents,224721,HR > 140,,Respiratory,,unmapped_candidate
+hr,mimic,chartevents,227916,Rest HR -  Aerobic Activity Response,,OT Notes,,unmapped_candidate
+hr,mimic,chartevents,227923,Activity HR - Aerobic Activity Response,,OT Notes,,unmapped_candidate
+hr,mimic,chartevents,224647,Orthostatic HR standing,bpm,Routine Vital Signs,,unmapped_candidate
+hr,mimic,chartevents,227930,Recovery HR - Aerobic Activity Response,,OT Notes,,unmapped_candidate
+hr,mimic,chartevents,227858,Rest HR - Aerobic Capacity,,OT Notes,,unmapped_candidate
+hr,mimic,chartevents,227864,Activity HR - Aerobic Capacity,,OT Notes,,unmapped_candidate
+hr,mimic,chartevents,227870,Recovery HR - Aerobic Capacity,,OT Notes,,unmapped_candidate
+hr,mimic,chartevents,223764,Orthostatic HR lying,bpm,Routine Vital Signs,,unmapped_candidate
+hr,mimic,chartevents,223765,Orthostatic HR sitting,bpm,Routine Vital Signs,,unmapped_candidate
+hr,mimic,labevents,51066,24 hr Calcium,,Chemistry,Urine,unmapped_candidate
+hr,mimic,labevents,51067,24 hr Creatinine,,Chemistry,Urine,unmapped_candidate
+hr,mimic,labevents,51068,24 hr Protein,,Chemistry,Urine,unmapped_candidate
+hr,miiv,chartevents,223764,Orthostatic HR lying,bpm,Routine Vital Signs,,unmapped_candidate
+hr,miiv,chartevents,223765,Orthostatic HR sitting,bpm,Routine Vital Signs,,unmapped_candidate
+hr,miiv,chartevents,224366,Epidural Infusion Rate (mL/hr),ml/hr,Pain/Sedation,,unmapped_candidate
+hr,miiv,chartevents,224647,Orthostatic HR standing,bpm,Routine Vital Signs,,unmapped_candidate
+hr,miiv,chartevents,224721,HR > 140,,Respiratory,,unmapped_candidate
+hr,miiv,chartevents,227858,Rest HR - Aerobic Capacity,None,OT Notes,,unmapped_candidate
+hr,miiv,chartevents,227864,Activity HR - Aerobic Capacity,None,OT Notes,,unmapped_candidate
+hr,miiv,chartevents,227870,Recovery HR - Aerobic Capacity,None,OT Notes,,unmapped_candidate
+hr,miiv,chartevents,227916,Rest HR -  Aerobic Activity Response,None,OT Notes,,unmapped_candidate
+hr,miiv,chartevents,227923,Activity HR - Aerobic Activity Response,None,OT Notes,,unmapped_candidate
+hr,miiv,chartevents,227930,Recovery HR - Aerobic Activity Response,None,OT Notes,,unmapped_candidate
+hr,miiv,chartevents,230037,HR per min,,RDOS,,unmapped_candidate
+hr,miiv,chartevents,230051,PNC-1 Infusion Rate (mL/hr),ml/hr,Pain/Sedation,,unmapped_candidate
+hr,miiv,chartevents,230058,PNC-2 Infusion Rate (mL/hr),ml/hr,Pain/Sedation,,unmapped_candidate
+hr,miiv,chartevents,230152,CFS-HR,,Neurological,,unmapped_candidate
+hr,miiv,labevents,51066,24 hr Calcium,,Chemistry,Urine,unmapped_candidate
+hr,miiv,labevents,51067,24 hr Creatinine,,Chemistry,Urine,unmapped_candidate
+hr,miiv,labevents,51068,24 hr Protein,,Chemistry,Urine,unmapped_candidate
+hr,miiv,labevents,51829,72 Hr Fat,,Chemistry,Other Body Fluid,unmapped_candidate
+hr,miiv,labevents,51925,72 Hr Fat,,Chemistry,Stool,unmapped_candidate
+hr,miiv,labevents,52068,24 Hr,,Hematology,Blood,unmapped_candidate
+hr,eicu,respiratorycharting,HR Post,HR Post,,,,unmapped_candidate
+hr,eicu,respiratorycharting,HR,HR,,,,unmapped_candidate
+hr,eicu,nursecharting,Heart Rate,Heart Rate,,,,unmapped_candidate
+hr,eicu,intakeoutput,8 Hr Total Fluid Removed ,8 Hr Total Fluid Removed ,,,,unmapped_candidate
+hr,eicu,intakeoutput,Citrate ml/hr,Citrate ml/hr,,,,unmapped_candidate
+hr,eicu,intakeoutput,24 HR TOTAL INTAKE  0700-0659	Yes,24 HR TOTAL INTAKE  0700-0659	Yes,,,,unmapped_candidate
+hr,eicu,intakeoutput,24 HR TOTAL INTAKE  0700-0659,24 HR TOTAL INTAKE  0700-0659,,,,unmapped_candidate
+hr,eicu,intakeoutput,24 HR TOTAL OUTPUT  0700-0659,24 HR TOTAL OUTPUT  0700-0659,,,,unmapped_candidate
+hr,eicu,intakeoutput,24 HR TOTAL OUTPUT  0700-0659	Yes,24 HR TOTAL OUTPUT  0700-0659	Yes,,,,unmapped_candidate
+hr,eicu,intakeoutput,Enteral pivot 1.5 @ 25ml/hr,Enteral pivot 1.5 @ 25ml/hr,,,,unmapped_candidate
+hr,eicu,intakeoutput,nafcillin 500mg/hr,nafcillin 500mg/hr,,,,unmapped_candidate
+lact,aumc,drugitems,7316,Ri-Lac (Ringers lactaat),,,,unmapped_candidate
+lact,aumc,numericitems,10304,Lactaat (overig),mmol/l,,,unmapped_candidate
+lact,aumc,numericitems,10390,Lactaat (liquor),mmol/l,,,unmapped_candidate
+lact,mimic,chartevents,1634,lactated ringers,,,,unmapped_candidate
+lact,mimic,chartevents,2638,CEREBRAL LACTATE,,,,unmapped_candidate
+lact,mimic,chartevents,2773,sjlactate,,,,unmapped_candidate
+lact,mimic,inputevents_cv,30021,Lactated Ringers,,,,unmapped_candidate
+lact,mimic,inputevents_cv,44370,INAMRINONE LACTATE,,Free Form Intake,,unmapped_candidate
+lact,mimic,inputevents_cv,45532,IR Lactated ringers,,Free Form Intake,,unmapped_candidate
+lact,mimic,inputevents_mv,220955,Ringers Lactate,mL,Fluids - Other (Not In Use),,unmapped_candidate
+lact,mimic,inputevents_mv,220967,Dextrose 5% / Ringers Lactate,mL,Fluids - Other (Not In Use),,unmapped_candidate
+lact,mimic,inputevents_mv,220968,Dextrose 10% / Ringers Lactate,mL,Fluids - Other (Not In Use),,unmapped_candidate
+lact,mimic,inputevents_mv,220980,Hextend (Hetastarch 6% in Lactate),mL,Fluids - Other (Not In Use),,unmapped_candidate
+lact,mimic,labevents,50843,"Lactate Dehydrogenase, Ascites",,Chemistry,Ascites,unmapped_candidate
+lact,mimic,labevents,50954,Lactate Dehydrogenase (LD),,Chemistry,Blood,unmapped_candidate
+lact,mimic,labevents,51015,"Lactate Dehydrogenase, CSF",,Chemistry,Cerebrospinal Fluid (CSF),unmapped_candidate
+lact,mimic,labevents,51054,"Lactate Dehydrogenase, Pleural",,Chemistry,Pleural,unmapped_candidate
+lact,miiv,ingredientevents,220948,Lactate (ingr),mg,Ingredients - general (Not In Use),,unmapped_candidate
+lact,miiv,inputevents,220955,Ringers Lactate,mL,Fluids - Other (Not In Use),,unmapped_candidate
+lact,miiv,inputevents,220967,Dextrose 5% / Ringers Lactate,mL,Fluids - Other (Not In Use),,unmapped_candidate
+lact,miiv,inputevents,220968,Dextrose 10% / Ringers Lactate,mL,Fluids - Other (Not In Use),,unmapped_candidate
+lact,miiv,inputevents,220980,Hextend (Hetastarch 6% in Lactate),mL,Fluids - Other (Not In Use),,unmapped_candidate
+lact,miiv,labevents,50843,"Lactate Dehydrogenase, Ascites",,Chemistry,Ascites,unmapped_candidate
+lact,miiv,labevents,50954,Lactate Dehydrogenase (LD),,Chemistry,Blood,unmapped_candidate
+lact,miiv,labevents,51054,"Lactate Dehydrogenase, Pleural",,Chemistry,Pleural,unmapped_candidate
+lact,miiv,labevents,51795,"Lactate Dehydrogenase, CSF",,Chemistry,Cerebrospinal Fluid,unmapped_candidate
+lact,miiv,labevents,51944,"Lactate Dehydrogenase, Stool",,Chemistry,Stool,unmapped_candidate
+lact,eicu,intakeoutput,Volume (mL)-lactated ringers infusion,Volume (mL)-lactated ringers infusion,,,,unmapped_candidate
+lact,eicu,intakeoutput,Volume (mL)-lactated ringers bolus 500 mL,Volume (mL)-lactated ringers bolus 500 mL,,,,unmapped_candidate
+lact,eicu,intakeoutput,"Volume (mL)-lactated ringers bolus 1,000 mL","Volume (mL)-lactated ringers bolus 1,000 mL",,,,unmapped_candidate
+lact,eicu,intakeoutput,Volume (mL)-dextrose 5 % / lactated ringers infusion,Volume (mL)-dextrose 5 % / lactated ringers infusion,,,,unmapped_candidate
+lact,eicu,intakeoutput,"Volume (mL)-lactated ringers 1,000 mL with potassium chloride 20 mEq infusion","Volume (mL)-lactated ringers 1,000 mL with potassium chloride 20 mEq infusion",,,,unmapped_candidate
+lact,eicu,intakeoutput,"Volume (mL)-lactated ringers infusion 1,000 mL","Volume (mL)-lactated ringers infusion 1,000 mL",,,,unmapped_candidate
+lact,eicu,intakeoutput,Volume (mL)-dextrose 5 % in lactated ringers infusion,Volume (mL)-dextrose 5 % in lactated ringers infusion,,,,unmapped_candidate
+lact,eicu,intakeoutput,Volume (mL)-lactated ringers infusion 500 mL,Volume (mL)-lactated ringers infusion 500 mL,,,,unmapped_candidate
+lact,eicu,intakeoutput,"Volume (mL)-lactated ringers 1,000 mL with thiamine 100 mg, folic acid 1 mg, magnesium sulfate 2 g infusion","Volume (mL)-lactated ringers 1,000 mL with thiamine 100 mg, folic acid 1 mg, magnesium sulfate 2 g infusion",,,,unmapped_candidate
+lact,eicu,intakeoutput,Lactated Ringers Volume,Lactated Ringers Volume,,,,unmapped_candidate
+map,mimic,chartevents,1199,HFO MAP,,,,unmapped_candidate
+map,mimic,chartevents,438,MAP,,,,unmapped_candidate
+map,mimic,chartevents,1321,map,,,,unmapped_candidate
+map,mimic,chartevents,672,TCPCV-MAP,,,,unmapped_candidate
+map,mimic,chartevents,3067,FEM MAP,,,,unmapped_candidate
+map,mimic,chartevents,5680,RADIAL MAP,,,,unmapped_candidate
+map,mimic,chartevents,5804,sheath MAP,,,,unmapped_candidate
+map,mimic,chartevents,2309,FEM ALINE MAP,,,,unmapped_candidate
+map,mimic,chartevents,2353,R FEM MAP,,,,unmapped_candidate
+map,mimic,chartevents,2369,fem map,,,,unmapped_candidate
+map,mimic,chartevents,2522,HFO-MAP,,,,unmapped_candidate
+map,mimic,chartevents,2544,FEM ART MAP,,,,unmapped_candidate
+map,mimic,chartevents,2770,left radial MAP,,,,unmapped_candidate
+map,mimic,chartevents,2974,FEM LINE MAP,,,,unmapped_candidate
+map,mimic,chartevents,6399,ART MAP,,,,unmapped_candidate
+map,mimic,chartevents,6579,IR Sheath MAP,,,,unmapped_candidate
+map,mimic,chartevents,6605,Fem sheath MAP,,,,unmapped_candidate
+mean_airway_pres,mimic,chartevents,1209,HFO mean airway Pres,,,,unmapped_candidate
+mean_airway_pres,mimic,chartevents,1864,HFO-Max mean airway,,,,unmapped_candidate
+mean_airway_pres,mimic,chartevents,1865,HFO-Min mean airway,,,,unmapped_candidate
+mean_airway_pres,mimic,chartevents,1672,MEAN AIRWAY PRESS,,,,unmapped_candidate
+minute_vol,aumc,numericitems,8870,VE,l/min,,,unmapped_candidate
+minute_vol,aumc,numericitems,9619,Mv Lekkage,l/min,,,unmapped_candidate
+minute_vol,aumc,numericitems,9663,Mv Spontaan(2),l/min,,,unmapped_candidate
+minute_vol,aumc,numericitems,9668,VE(2),l/min,,,unmapped_candidate
+minute_vol,mimic,chartevents,448,Minute Volume,,,,unmapped_candidate
+minute_vol,mimic,chartevents,449,Minute Volume (Set),,,,unmapped_candidate
+minute_vol,mimic,chartevents,450,Minute Volume(Obser),,,,unmapped_candidate
+minute_vol,mimic,chartevents,5563,HIGH MINUTE VOLUMER,,,,unmapped_candidate
+minute_vol,mimic,chartevents,5585,MINUTE VOL. HIGH,,,,unmapped_candidate
+minute_vol,mimic,chartevents,1340,high minute volume,,,,unmapped_candidate
+minute_vol,mimic,chartevents,1383,high minute vol.,,,,unmapped_candidate
+minute_vol,mimic,chartevents,650,Spon Minute VE L/min,,,,unmapped_candidate
+minute_vol,mimic,chartevents,3063,High MV Limits,,,,unmapped_candidate
+minute_vol,mimic,chartevents,3098,hi mv,,,,unmapped_candidate
+minute_vol,mimic,chartevents,3100,LOW MV,,,,unmapped_candidate
+minute_vol,mimic,chartevents,3101,High Minute volume,,,,unmapped_candidate
+minute_vol,mimic,chartevents,3119,HI MINUTE VOL,,,,unmapped_candidate
+minute_vol,mimic,chartevents,3160,HIGH MV LIMIT,,,,unmapped_candidate
+minute_vol,mimic,chartevents,3161,Hi Minute Volume,,,,unmapped_candidate
+minute_vol,mimic,chartevents,3190,high  minute vol,,,,unmapped_candidate
+minute_vol,mimic,chartevents,3200,High Minute Volume m,,,,unmapped_candidate
+minute_vol,mimic,chartevents,3236,HI MINUTE VOLUME,,,,unmapped_candidate
+minute_vol,mimic,chartevents,3254,High minute Vent.,,,,unmapped_candidate
+minute_vol,mimic,chartevents,3259,mv,,,,unmapped_candidate
+minute_vol,mimic,chartevents,1705,Vent Sens Thresh mV,,,,unmapped_candidate
+minute_vol,mimic,chartevents,1706,Ventricular Pacemaker Sense [mV],,,,unmapped_candidate
+minute_vol,mimic,chartevents,1718,High Minute Vent.,,,,unmapped_candidate
+minute_vol,mimic,chartevents,1720,high exhale MV,,,,unmapped_candidate
+minute_vol,mimic,chartevents,1723,HIGH EXHALE MV,,,,unmapped_candidate
+minute_vol,mimic,chartevents,1724,High exhaled MV,,,,unmapped_candidate
+minute_vol,mimic,chartevents,1746,hi MV,,,,unmapped_candidate
+minute_vol,mimic,chartevents,1883,Spont Minute vols,,,,unmapped_candidate
+minute_vol,mimic,chartevents,1990,High minute vent.,,,,unmapped_candidate
+minute_vol,mimic,chartevents,2012,lo MV,,,,unmapped_candidate
+minute_vol,mimic,chartevents,6041,hi Ve,,,,unmapped_candidate
+minute_vol,mimic,chartevents,6065,High minute Volume,,,,unmapped_candidate
+minute_vol,mimic,chartevents,6073,MV HI,,,,unmapped_candidate
+minute_vol,mimic,chartevents,6078,MV,,,,unmapped_candidate
+minute_vol,mimic,chartevents,5651,High Ve,,,,unmapped_candidate
+minute_vol,mimic,chartevents,5675,High Mv.,,,,unmapped_candidate
+minute_vol,mimic,chartevents,5726,Hi Ve,,,,unmapped_candidate
+minute_vol,mimic,chartevents,5727,Hi MV,,,,unmapped_candidate
+minute_vol,mimic,chartevents,5758,MV hi,,,,unmapped_candidate
+minute_vol,mimic,chartevents,5766,High mv,,,,unmapped_candidate
+minute_vol,mimic,chartevents,5778,low mv,,,,unmapped_candidate
+minute_vol,mimic,chartevents,5779,high    mv,,,,unmapped_candidate
+minute_vol,mimic,chartevents,5782,High Minute Ventilan,,,,unmapped_candidate
+minute_vol,mimic,chartevents,5801,high ve            n,,,,unmapped_candidate
+minute_vol,mimic,chartevents,5847,MV Hi,,,,unmapped_candidate
+minute_vol,mimic,chartevents,5902,yi MV,,,,unmapped_candidate
+minute_vol,mimic,chartevents,1486,High Minute Volume,,,,unmapped_candidate
+minute_vol,mimic,chartevents,1507,HIGH MINUTE VOL,,,,unmapped_candidate
+minute_vol,mimic,chartevents,1510,high Ve,,,,unmapped_candidate
+minute_vol,mimic,chartevents,1546,high ve,,,,unmapped_candidate
+minute_vol,mimic,chartevents,1551,high MV,,,,unmapped_candidate
+minute_vol,mimic,chartevents,1562,High Minute Ventil.,,,,unmapped_candidate
+minute_vol,mimic,chartevents,1565,High MV Limit,,,,unmapped_candidate
+minute_vol,mimic,chartevents,1575,HIGH MINUTE VOL.,,,,unmapped_candidate
+minute_vol,mimic,chartevents,1577,high minute vent,,,,unmapped_candidate
+minute_vol,mimic,chartevents,1596,HIGH MV,,,,unmapped_candidate
+minute_vol,mimic,chartevents,1599,HIGH MINUTE VENT.,,,,unmapped_candidate
+minute_vol,mimic,chartevents,1600,HIGH MINUTE VOLUME,,,,unmapped_candidate
+minute_vol,mimic,chartevents,1616,High MV.,,,,unmapped_candidate
+minute_vol,mimic,chartevents,1639,High MV,,,,unmapped_candidate
+minute_vol,mimic,chartevents,1650,high mv,,,,unmapped_candidate
+minute_vol,mimic,chartevents,1654,HIGH VE,,,,unmapped_candidate
+minute_vol,mimic,chartevents,1681,high MV.,,,,unmapped_candidate
+minute_vol,mimic,chartevents,1683,Low minute volume,,,,unmapped_candidate
+minute_vol,mimic,chartevents,1685,HI MV,,,,unmapped_candidate
+minute_vol,mimic,chartevents,1687,high minute vol,,,,unmapped_candidate
+minute_vol,mimic,chartevents,1694,HI VE,,,,unmapped_candidate
+minute_vol,mimic,chartevents,1695,Atr Sens Thresh mV,,,,unmapped_candidate
+minute_vol,mimic,chartevents,1697,Atrial Pacemaker Sense [mV],,,,unmapped_candidate
+minute_vol,mimic,chartevents,2033,High VE,,,,unmapped_candidate
+minute_vol,mimic,chartevents,2046,hi minute vol,,,,unmapped_candidate
+minute_vol,mimic,chartevents,2050,Low MV,,,,unmapped_candidate
+minute_vol,mimic,chartevents,2053,high VE,,,,unmapped_candidate
+minute_vol,mimic,chartevents,2058,Hi VE,,,,unmapped_candidate
+minute_vol,mimic,chartevents,2076,HI(GH MV,,,,unmapped_candidate
+minute_vol,mimic,chartevents,2103,High minute volume,,,,unmapped_candidate
+minute_vol,mimic,chartevents,2105,hi minute volume,,,,unmapped_candidate
+minute_vol,mimic,chartevents,2123,High exhale MV,,,,unmapped_candidate
+minute_vol,mimic,chartevents,2127,high exhale mv,,,,unmapped_candidate
+minute_vol,mimic,chartevents,2973,High Mv,,,,unmapped_candidate
+minute_vol,mimic,chartevents,6096,MV-HI,,,,unmapped_candidate
+minute_vol,mimic,chartevents,6168,hi VE,,,,unmapped_candidate
+minute_vol,mimic,chartevents,6208,Ve High,,,,unmapped_candidate
+minute_vol,mimic,chartevents,3046,HIGH MINUTE VENT.  N,,,,unmapped_candidate
+minute_vol,mimic,chartevents,3049,spont Ve,,,,unmapped_candidate
+minute_vol,mimic,chartevents,6873,low MV,,,,unmapped_candidate
+minute_vol,mimic,chartevents,6932,exh. ve,,,,unmapped_candidate
+minute_vol,mimic,chartevents,6934,inhaled ve,,,,unmapped_candidate
+minute_vol,mimic,chartevents,223958,Temporary Venticular Sens Threshold mV,mV,Cardiovascular (Pacer Data),,unmapped_candidate
+minute_vol,mimic,chartevents,224687,Minute Volume,L/min,Respiratory,,unmapped_candidate
+minute_vol,mimic,chartevents,224752,Temporary Atrial Sens Threshold mV,mV,Cardiovascular (Pacer Data),,unmapped_candidate
+minute_vol,mimic,chartevents,224753,Temporary Atrial Sens Setting mV,mV,Cardiovascular (Pacer Data),,unmapped_candidate
+minute_vol,mimic,chartevents,224837,Temporary Ventricular Sens Setting mV,mV,Cardiovascular (Pacer Data),,unmapped_candidate
+minute_vol,miiv,chartevents,223958,Temporary Venticular Sens Threshold mV,mV,Cardiovascular (Pacer Data),,unmapped_candidate
+minute_vol,miiv,chartevents,224752,Temporary Atrial Sens Threshold mV,mV,Cardiovascular (Pacer Data),,unmapped_candidate
+minute_vol,miiv,chartevents,224753,Temporary Atrial Sens Setting mV,mV,Cardiovascular (Pacer Data),,unmapped_candidate
+minute_vol,miiv,chartevents,224837,Temporary Ventricular Sens Setting mV,mV,Cardiovascular (Pacer Data),,unmapped_candidate
+minute_vol,miiv,chartevents,229659,% Minute Volume,None,Respiratory,,unmapped_candidate
+minute_vol,eicu,respiratorycharting,"Minute Volume, Spontaneous","Minute Volume, Spontaneous",,,,unmapped_candidate
+minute_vol,eicu,respiratorycharting,Minute Volume Leak,Minute Volume Leak,,,,unmapped_candidate
+minute_vol,eicu,respiratorycharting,Minute Ventilation Set(L/min),Minute Ventilation Set(L/min),,,,unmapped_candidate
+o2sat,aumc,numericitems,11425,O2sat (overig),Geen,,,unmapped_candidate
+o2sat,aumc,numericitems,19611,Streef SpO2,None,,,unmapped_candidate
+o2sat,aumc,numericitems,20658,ECMO - Veneuze saturatie,Geen,,,unmapped_candidate
+o2sat,mimic,chartevents,3545,O2 Sat W/Seizure,,,,unmapped_candidate
+o2sat,mimic,chartevents,5501,O2 sat probe change,,,,unmapped_candidate
+o2sat,mimic,chartevents,5505,O2 sat probe site,,,,unmapped_candidate
+o2sat,mimic,chartevents,3288,O2 sat [Pre],,,,unmapped_candidate
+o2sat,mimic,chartevents,5636,2nd O2 Sat,,,,unmapped_candidate
+o2sat,mimic,chartevents,5896,VEN0US O2 SAT,,,,unmapped_candidate
+o2sat,mimic,chartevents,2842,JV O2 Sat,,,,unmapped_candidate
+o2sat,mimic,chartevents,8208,Postductal O2 Sat,,,,unmapped_candidate
+o2sat,mimic,chartevents,8209,Preductal O2 Sat,,,,unmapped_candidate
+o2sat,mimic,chartevents,7440,walking o2 sat,,,,unmapped_candidate
+o2sat,mimic,chartevents,8498,O2 sat [Post],,,,unmapped_candidate
+o2sat,mimic,chartevents,6719,SpO2-L,,,,unmapped_candidate
+o2sat,mimic,chartevents,226860,RA %O2 Saturation (PA Line),%,PA Line Insertion,,unmapped_candidate
+o2sat,mimic,chartevents,226861,ART %O2 saturation (PA Line),%,PA Line Insertion,,unmapped_candidate
+o2sat,mimic,chartevents,226862,PA %O2 Saturation (PA Line),%,PA Line Insertion,,unmapped_candidate
+o2sat,mimic,chartevents,226863,PVR %O2 Saturation (PA Line),dynes*sec/cm5,PA Line Insertion,,unmapped_candidate
+o2sat,mimic,chartevents,226865,SVR %O2 Saturation (PA Line),dynes*sec/cm5,PA Line Insertion,,unmapped_candidate
+o2sat,mimic,chartevents,227919,Rest O2 Sat - Aerobic Activity Response,%,OT Notes,,unmapped_candidate
+o2sat,mimic,chartevents,227926,Activity O2 sat - Aerobic Activity Response,%,OT Notes,,unmapped_candidate
+o2sat,mimic,chartevents,227873,Recovery O2 Sat - Aerobic Capacity,%,OT Notes,,unmapped_candidate
+o2sat,mimic,chartevents,228232,PAR-Oxygen saturation,,Routine Vital Signs,,unmapped_candidate
+o2sat,mimic,chartevents,220227,Arterial O2 Saturation,%,Labs,,unmapped_candidate
+o2sat,mimic,chartevents,227933,Recovery O2 sat - Aerobic Activity Response,%,OT Notes,,unmapped_candidate
+o2sat,mimic,chartevents,227861,Rest O2 Sat - Aerobic Capacity,%,OT Notes,,unmapped_candidate
+o2sat,mimic,chartevents,227867,Activity O2 Sat - Aerobic Capacity,%,OT Notes,,unmapped_candidate
+o2sat,miiv,chartevents,226860,RA %O2 Saturation (PA Line),%,PA Line Insertion,,unmapped_candidate
+o2sat,miiv,chartevents,226861,ART %O2 saturation (PA Line),%,PA Line Insertion,,unmapped_candidate
+o2sat,miiv,chartevents,226862,PA %O2 Saturation (PA Line),%,PA Line Insertion,,unmapped_candidate
+o2sat,miiv,chartevents,226863,PVR %O2 Saturation (PA Line),dynes*sec/cm5,PA Line Insertion,,unmapped_candidate
+o2sat,miiv,chartevents,226865,SVR %O2 Saturation (PA Line),dynes*sec/cm5,PA Line Insertion,,unmapped_candidate
+o2sat,miiv,chartevents,227861,Rest O2 Sat - Aerobic Capacity,%,OT Notes,,unmapped_candidate
+o2sat,miiv,chartevents,227867,Activity O2 Sat - Aerobic Capacity,%,OT Notes,,unmapped_candidate
+o2sat,miiv,chartevents,227873,Recovery O2 Sat - Aerobic Capacity,%,OT Notes,,unmapped_candidate
+o2sat,miiv,chartevents,227919,Rest O2 Sat - Aerobic Activity Response,%,OT Notes,,unmapped_candidate
+o2sat,miiv,chartevents,227926,Activity O2 sat - Aerobic Activity Response,%,OT Notes,,unmapped_candidate
+o2sat,miiv,chartevents,227933,Recovery O2 sat - Aerobic Activity Response,%,OT Notes,,unmapped_candidate
+o2sat,miiv,chartevents,228232,PAR-Oxygen saturation,,Routine Vital Signs,,unmapped_candidate
+o2sat,miiv,chartevents,229862,Forehead SpO2 Sensor in Place,,Routine Vital Signs,,unmapped_candidate
+o2sat,eicu,respiratorycharting,Adult Con Pt/Vent SpO2,Adult Con Pt/Vent SpO2,,,,unmapped_candidate
+o2sat,eicu,nursecharting,O2 Saturation,O2 Saturation,,,,unmapped_candidate
+pco2,aumc,numericitems,9991,pCO2 (overig),mmHg,,,unmapped_candidate
+pco2,aumc,numericitems,16837,Streef Onderwaarde pCO2,mmHg,,,unmapped_candidate
+pco2,aumc,numericitems,16838,Streef Bovenwaarde pCO2,mmHg,,,unmapped_candidate
+pco2,mimic,chartevents,4201,pCO2 (cap),,Other ABGs,,unmapped_candidate
+pco2,mimic,chartevents,3774,Mix Venous PCO2,,Mixed VBGs,,unmapped_candidate
+pco2,mimic,chartevents,3836,pCO2 (other),,Other ABGs,,unmapped_candidate
+pco2,mimic,labevents,50830,"pCO2, Body Fluid",,Blood Gas,Other Body Fluid,unmapped_candidate
+pco2,miiv,labevents,50830,"pCO2, Body Fluid",,Blood Gas,Other Body Fluid,unmapped_candidate
+pco2,miiv,labevents,52040,pCO2,,Blood Gas,Fluid,unmapped_candidate
+peep,aumc,numericitems,8882,Intrinsic PEEP,mbar,,,unmapped_candidate
+peep,aumc,numericitems,9661,Intrinsic PEEP(2),mbar,,,unmapped_candidate
+peep,aumc,numericitems,12285,PC boven PEEP (Set),cmH2O,,,unmapped_candidate
+peep,aumc,numericitems,12286,PS boven PEEP (Set),cmH2O,,,unmapped_candidate
+peep,aumc,numericitems,12297,T peep (Set),sec,,,unmapped_candidate
+peep,aumc,numericitems,12335,PC boven PEEP (Set) (2),cmH2O,,,unmapped_candidate
+peep,aumc,numericitems,12338,PS boven PEEP (Set) (2),cmH2O,,,unmapped_candidate
+peep,aumc,numericitems,12342,T peep (Set) (2),sec,,,unmapped_candidate
+peep,mimic,chartevents,1096,Auto-PEEP level,,,,unmapped_candidate
+peep,mimic,chartevents,60,Auto-PEEP Level,,,,unmapped_candidate
+peep,mimic,chartevents,437,Low Peep,,,,unmapped_candidate
+peep,mimic,chartevents,8053,SIGH PEEP LEVEL,,,,unmapped_candidate
+peep,mimic,chartevents,8345,Sigh peep level,,,,unmapped_candidate
+peep,mimic,chartevents,8357,Sigh Peep,,,,unmapped_candidate
+peep,mimic,chartevents,6985,Sigh PEEP level,,,,unmapped_candidate
+peep,mimic,chartevents,7534,Intrinsic peep,,,,unmapped_candidate
+peep,mimic,chartevents,7802,high peep,,,,unmapped_candidate
+peep,mimic,chartevents,7803,low peep,,,,unmapped_candidate
+peep,mimic,chartevents,6489,auto-peep,,,,unmapped_candidate
+peep,mimic,chartevents,6601,Auto PeeP,,,,unmapped_candidate
+peep,mimic,chartevents,6859,Insp press mius PEEP,,,,unmapped_candidate
+peep,mimic,chartevents,6889,PEEP Sigh level,,,,unmapped_candidate
+peep,mimic,chartevents,6924,MEASURED PEEP,,,,unmapped_candidate
+peep,mimic,chartevents,6943,LOW PEEP,,,,unmapped_candidate
+peep,mimic,chartevents,224699,ZAuto Peep Level,cmH2O,Respiratory,,unmapped_candidate
+peep,mimic,labevents,50819,PEEP,,Blood Gas,Blood,unmapped_candidate
+peep,miiv,chartevents,224699,ZAuto Peep Level,cmH2O,Respiratory,,unmapped_candidate
+peep,miiv,labevents,50819,PEEP,,Blood Gas,Blood,unmapped_candidate
+peep,eicu,lab,PEEP,PEEP,cm H2O,,,unmapped_candidate
+peep,eicu,respiratorycharting,PS above PEEP,PS above PEEP,,,,unmapped_candidate
+ph,aumc,numericitems,11424,pH (overig),Geen,,,unmapped_candidate
+ph,aumc,numericitems,11519,pH semen (semen),Geen,,,unmapped_candidate
+ph,aumc,numericitems,11550,pH-gemeten (overig),Geen,,,unmapped_candidate
+ph,aumc,numericitems,11551,pH (faeces),Geen,,,unmapped_candidate
+ph,aumc,numericitems,18490,pH pleuravocht (pleurapunct.),Geen,,,unmapped_candidate
+ph,mimic,chartevents,7966,pleural fluid pH,,,,unmapped_candidate
+ph,mimic,chartevents,6003,ph level,,,,unmapped_candidate
+ph,mimic,chartevents,2640,SJ PH,,,,unmapped_candidate
+ph,mimic,chartevents,7459,Ph,,,,unmapped_candidate
+ph,mimic,chartevents,8385,Emesis [pH],,,,unmapped_candidate
+ph,mimic,chartevents,8387,GI [pH],,,,unmapped_candidate
+ph,mimic,inputevents_cv,40505,ph of ogt,,,,unmapped_candidate
+ph,mimic,inputevents_cv,43487,Stomach asp.PH,,Free Form Intake,,unmapped_candidate
+ph,mimic,chartevents,227586,GI pH,,GI/GU,,unmapped_candidate
+ph,mimic,chartevents,228243,PH (SOFT),,Labs,,unmapped_candidate
+ph,mimic,chartevents,220734,PH (dipstick),,Labs,,unmapped_candidate
+ph,mimic,labevents,50831,pH,,Blood Gas,Other Body Fluid,unmapped_candidate
+ph,miiv,chartevents,220734,PH (dipstick),None,Labs,,unmapped_candidate
+ph,miiv,chartevents,227586,GI pH,None,GI/GU,,unmapped_candidate
+ph,miiv,chartevents,228243,PH (SOFT),None,Labs,,unmapped_candidate
+ph,miiv,labevents,50831,pH,,Blood Gas,Other Body Fluid,unmapped_candidate
+ph,miiv,labevents,52041,pH,,Blood Gas,Fluid,unmapped_candidate
+pip,mimic,chartevents,507,PIP,,,,unmapped_candidate
+pip,mimic,chartevents,6105,High PIP,,,,unmapped_candidate
+pip,mimic,chartevents,6236,high pip,,,,unmapped_candidate
+plateau_pres,miiv,chartevents,228866,Plateau Pressure (IABP),mmHg,IABP,,unmapped_candidate
+plt,aumc,drugitems,7369,Thrombocyten suspensie,,,,unmapped_candidate
+plt,mimic,chartevents,6256,Platelet Count,,,,unmapped_candidate
+plt,mimic,inputevents_cv,30006,Platelets,,,,unmapped_candidate
+plt,mimic,inputevents_cv,30105,OR Platelets,,,,unmapped_candidate
+plt,mimic,inputevents_mv,225170,Platelets,mL,Blood Products/Colloids,,unmapped_candidate
+plt,mimic,inputevents_mv,227071,PACU Platelet Intake,mL,Blood Products/Colloids,,unmapped_candidate
+plt,mimic,inputevents_mv,221004,Thrombocyte suspension,mL,Fluids - Other (Not In Use),,unmapped_candidate
+plt,mimic,inputevents_mv,226369,OR Platelet Intake,mL,Blood Products/Colloids,,unmapped_candidate
+plt,mimic,labevents,51240,Large Platelets,,Hematology,Blood,unmapped_candidate
+plt,miiv,inputevents,221004,Thrombocyte suspension,mL,Fluids - Other (Not In Use),,unmapped_candidate
+plt,miiv,inputevents,225170,Platelets,mL,Blood Products/Colloids,,unmapped_candidate
+plt,miiv,inputevents,226369,OR Platelet Intake,mL,Blood Products/Colloids,,unmapped_candidate
+plt,miiv,inputevents,227071,PACU Platelet Intake,mL,Blood Products/Colloids,,unmapped_candidate
+plt,miiv,labevents,51240,Large Platelets,,Hematology,Blood,unmapped_candidate
+plt,eicu,intakeoutput,Platelets,Platelets,,,,unmapped_candidate
+po2,aumc,numericitems,9545,Cerebrale PaO2,mmHg,,,unmapped_candidate
+po2,aumc,numericitems,9997,pO2 (overig),mmHg,,,unmapped_candidate
+po2,aumc,numericitems,16835,Streef Onderwaarde pO2,mmHg,,,unmapped_candidate
+po2,aumc,drugitems,20922,O2-ICU Laag-normaal PaO2 (60-90mmHg),,,,unmapped_candidate
+po2,aumc,drugitems,20923,O2-ICU Hoog-normaal PaO2 (105-130mmHg),,,,unmapped_candidate
+po2,mimic,chartevents,4203,pO2 (cap),,Other ABGs,,unmapped_candidate
+po2,mimic,chartevents,3775,Mix Venous PO2,,Mixed VBGs,,unmapped_candidate
+po2,mimic,chartevents,3838,pO2 (other),,Other ABGs,,unmapped_candidate
+po2,mimic,chartevents,227516,PO2 (Mixed Venous),mmHg,Labs,,unmapped_candidate
+po2,mimic,labevents,50832,"pO2, Body Fluid",,Blood Gas,Other Body Fluid,unmapped_candidate
+po2,miiv,chartevents,227516,PO2 (Mixed Venous),mmHg,Labs,,unmapped_candidate
+po2,miiv,labevents,50832,"pO2, Body Fluid",,Blood Gas,Other Body Fluid,unmapped_candidate
+po2,miiv,labevents,52042,pO2,,Blood Gas,Fluid,unmapped_candidate
+ps,aumc,numericitems,12298,PS boven P hoog (Set),cmH2O,,,unmapped_candidate
+ps,aumc,numericitems,12337,PS boven P hoog (Set) (2),cmH2O,,,unmapped_candidate
+ps,eicu,lab,Pressure Support,Pressure Support,cm H2O,,,unmapped_candidate
+ps,eicu,respiratorycharting,Pressure to Trigger PS,Pressure to Trigger PS,,,,unmapped_candidate
+ps,eicu,respiratorycharting,PS,PS,,,,unmapped_candidate
+resp,aumc,numericitems,8873,Ademfrequentie Evita,None,,,unmapped_candidate
+resp,mimic,chartevents,613,Resp Quotient - (R),,,,unmapped_candidate
+resp,mimic,chartevents,614,Resp Rate (Spont),,,,unmapped_candidate
+resp,mimic,chartevents,615,Resp Rate (Total),,,,unmapped_candidate
+resp,mimic,chartevents,219,High Resp. Rate,,,,unmapped_candidate
+resp,mimic,chartevents,653,Spont. Resp. Rate,,,,unmapped_candidate
+resp,mimic,chartevents,1884,Spont Resp rate,,,,unmapped_candidate
+resp,mimic,chartevents,8113,Resp. Rate,,,,unmapped_candidate
+resp,mimic,chartevents,1635,HIGH Resp Rate,,,,unmapped_candidate
+resp,mimic,chartevents,3603,Resp Rate,,,,unmapped_candidate
+resp,eicu,lab,Respiratory Rate,Respiratory Rate,/min,,,unmapped_candidate
+resp,eicu,respiratorycharting,Resp Rate Total,Resp Rate Total,,,,unmapped_candidate
+resp,eicu,respiratorycharting,VS RESP RATE,VS RESP RATE,,,,unmapped_candidate
+resp,eicu,respiratorycharting,Spontaneous Respiratory Rate,Spontaneous Respiratory Rate,,,,unmapped_candidate
+resp,eicu,nursecharting,Respiratory Rate,Respiratory Rate,,,,unmapped_candidate
+rrt,aumc,drugitems,9475,Vit B/C (vlgs CVVH-protocol),,,,unmapped_candidate
+rrt,aumc,drugitems,10738,CVVH-Vocht teruggave,,,,unmapped_candidate
+rrt,aumc,drugitems,13474,Citraat - CVVH - Studie,,,,unmapped_candidate
+rrt,aumc,drugitems,20093,Bio CVVH  - Studie,,,,unmapped_candidate
+rrt,aumc,numericitems,20537,CVVH behandel afspraken APTT (bloed),sec,,,unmapped_candidate
+rrt,aumc,numericitems,20538,CVVH behandel afspraken Bloedflow,ml/min,,,unmapped_candidate
+rrt,aumc,numericitems,20539,CVVH behandel afspraken Ca-ion (7.4) (bloed),mmol/l,,,unmapped_candidate
+rrt,aumc,numericitems,20543,CVVH behandel afspraken Onttrekken,ml/uur,,,unmapped_candidate
+rrt,aumc,numericitems,20544,CVVH behandel afspraken PostDilutie Volume,ml,,,unmapped_candidate
+rrt,aumc,numericitems,20547,CVVH behandel afspraken PreDilutie Volume,ml,,,unmapped_candidate
+rrt,mimic,chartevents,148,Dialysis Access Site,,,,unmapped_candidate
+rrt,mimic,chartevents,149,Dialysis Access Type,,,,unmapped_candidate
+rrt,mimic,chartevents,150,Dialysis Machine,,,,unmapped_candidate
+rrt,mimic,chartevents,151,Dialysis Site Appear,,,,unmapped_candidate
+rrt,mimic,chartevents,152,Dialysis Type,,,,unmapped_candidate
+rrt,mimic,chartevents,7949,Calcium for CVVH,,,,unmapped_candidate
+rrt,mimic,outputevents,40425,dialysis output,,,,unmapped_candidate
+rrt,mimic,outputevents,40507,Dialysis out,,,,unmapped_candidate
+rrt,mimic,outputevents,41527,HEMODIALYSIS,,,,unmapped_candidate
+rrt,mimic,outputevents,41250,HEMODIALYSIS OUT,,,,unmapped_candidate
+rrt,mimic,outputevents,41374,Dialysis Out,,,,unmapped_candidate
+rrt,mimic,outputevents,41417,Hemodialysis Out,,,,unmapped_candidate
+rrt,mimic,outputevents,41897,CVVH OUTPUT FROM OR,,,,unmapped_candidate
+rrt,mimic,outputevents,40881,Hemodialysis,,,,unmapped_candidate
+rrt,mimic,outputevents,40910,PERITONEAL DIALYSIS,,,,unmapped_candidate
+rrt,mimic,outputevents,41016,hemodialysis out,,,,unmapped_candidate
+rrt,mimic,outputevents,41034,dialysis in,,Free Form Intake,,unmapped_candidate
+rrt,mimic,outputevents,42289,dialysis off,,,,unmapped_candidate
+rrt,mimic,outputevents,42388,DIALYSIS OUTPUT,,,,unmapped_candidate
+rrt,mimic,outputevents,42524,HemoDialysis,,,,unmapped_candidate
+rrt,mimic,outputevents,42536,Dialysis output,,,,unmapped_candidate
+rrt,mimic,outputevents,40386,hemodialysis,,,,unmapped_candidate
+rrt,mimic,outputevents,41635,Hemodialysis removal,,,,unmapped_candidate
+rrt,mimic,outputevents,41842,Dialysis Output.,,,,unmapped_candidate
+rrt,mimic,outputevents,40624,dialysis,,,,unmapped_candidate
+rrt,mimic,outputevents,40690,DIALYSIS,,,,unmapped_candidate
+rrt,mimic,outputevents,41500,hemodialysis output,,,,unmapped_candidate
+rrt,mimic,outputevents,43941,dialysis/intake,,Free Form Intake,,unmapped_candidate
+rrt,mimic,outputevents,44199,HEMODIALYSIS O/P,,,,unmapped_candidate
+rrt,mimic,outputevents,44901,Dialysis Removed,,,,unmapped_candidate
+rrt,mimic,inputevents_cv,44927,CRRT HEPARIN,,Free Form Intake,,unmapped_candidate
+rrt,mimic,inputevents_cv,44954,OR CVVHDF,,,,unmapped_candidate
+rrt,mimic,outputevents,42928,HEMODIALYSIS.,,,,unmapped_candidate
+rrt,mimic,outputevents,42972,HEMODIALYSIS OFF,,,,unmapped_candidate
+rrt,mimic,outputevents,43016,DIALYSIS TOTAL OUT,,,,unmapped_candidate
+rrt,mimic,outputevents,43052,DIALYSIS REMOVED,,,,unmapped_candidate
+rrt,mimic,outputevents,43098,hemodialysis crystal,,Free Form Intake,,unmapped_candidate
+rrt,mimic,outputevents,44567,Hemodialysis.,,,,unmapped_candidate
+rrt,mimic,inputevents_cv,46389,CRRT FLUSH,,Free Form Intake,,unmapped_candidate
+rrt,mimic,outputevents,46394,Peritoneal dialysis,,,,unmapped_candidate
+rrt,mimic,inputevents_cv,45157,ca+ gtt for cvvh,,Free Form Intake,,unmapped_candidate
+rrt,mimic,inputevents_cv,45268,CALCIUM FOR CVVHD,,Free Form Intake,,unmapped_candidate
+rrt,mimic,inputevents_cv,45353,KCL for CVVH,,Free Form Intake,,unmapped_candidate
+rrt,mimic,inputevents_cv,46681,CRRT Rescue Flush,,Free Form Intake,,unmapped_candidate
+rrt,mimic,outputevents,46713,KCL-10 MEQ-DIALYSIS,,Free Form Intake,,unmapped_candidate
+rrt,mimic,outputevents,46741,dialysis removed,,,,unmapped_candidate
+rrt,mimic,inputevents_cv,46773,CVVHD NS line flush,,Free Form Intake,,unmapped_candidate
+rrt,mimic,outputevents,40745,Dialysis,,,,unmapped_candidate
+rrt,mimic,outputevents,44843,peritoneal dialysis,,Free Form Intake,,unmapped_candidate
+rrt,mimic,outputevents,43687,crystalloid/dialysis,,Free Form Intake,,unmapped_candidate
+rrt,mimic,outputevents,45479,Dialysis In,,Free Form Intake,,unmapped_candidate
+rrt,mimic,inputevents_cv,46172,CVVHDF CA GLUC,,Free Form Intake,,unmapped_candidate
+rrt,mimic,outputevents,46230,Dialysis 1.5% IN,,Free Form Intake,,unmapped_candidate
+rrt,mimic,outputevents,46232,dialysis flush,,Free Form Intake,,unmapped_candidate
+rrt,mimic,inputevents_cv,46250,EBL  CVVH,,,,unmapped_candidate
+rrt,mimic,inputevents_cv,46293,CRRT Citrate,,Free Form Intake,,unmapped_candidate
+rrt,mimic,inputevents_cv,46013,KCL CVVHDF,,Free Form Intake,,unmapped_candidate
+rrt,mimic,inputevents_cv,46574,CRRT rescue line NS,,Free Form Intake,,unmapped_candidate
+rrt,mimic,outputevents,46712,CALCIUM-DIALYSIS,,Free Form Intake,,unmapped_candidate
+rrt,mimic,outputevents,46715,Citrate - dialysis,,Free Form Intake,,unmapped_candidate
+rrt,mimic,outputevents,44027,dialysis fluid off,,,,unmapped_candidate
+rrt,mimic,outputevents,44085,DIALYSIS OFF,,,,unmapped_candidate
+rrt,mimic,outputevents,44193,Dialysis.,,,,unmapped_candidate
+rrt,mimic,outputevents,44216,Hemodialysis out,,,,unmapped_candidate
+rrt,mimic,outputevents,44286,Dialysis indwelling,,Free Form Intake,,unmapped_candidate
+rrt,mimic,inputevents_cv,46173,CVVHDF KCL,,Free Form Intake,,unmapped_candidate
+rrt,mimic,inputevents_cv,46292,CRRT Irrigation,,Free Form Intake,,unmapped_candidate
+rrt,mimic,inputevents_cv,46311,crrt irrigation,,Free Form Intake,,unmapped_candidate
+rrt,mimic,outputevents,45828,Hemo dialysis out,,,,unmapped_candidate
+rrt,mimic,inputevents_cv,46012,CA GLUC CVVHDF,,Free Form Intake,,unmapped_candidate
+rrt,mimic,outputevents,46464,Hemodialysis OUT,,,,unmapped_candidate
+rrt,mimic,outputevents,42868,hemodialysis off,,,,unmapped_candidate
+rrt,mimic,outputevents,43115,dialysis net,,,,unmapped_candidate
+rrt,mimic,outputevents,41750,dialysis  out,,,,unmapped_candidate
+rrt,mimic,outputevents,41829,HEMODIALYSIS OUTPUT,,,,unmapped_candidate
+rrt,mimic,outputevents,40426,dialysis out,,,,unmapped_candidate
+rrt,mimic,outputevents,40613,DIALYSIS OUT,,,,unmapped_candidate
+rrt,mimic,outputevents,44845,Dialysis fluids,,Free Form Intake,,unmapped_candidate
+rrt,mimic,outputevents,44857,dialysis- fluid off,,,,unmapped_candidate
+rrt,mimic,outputevents,42464,hemodialysis ultrafe,,,,unmapped_candidate
+rrt,mimic,chartevents,224191,Hourly Patient Fluid Removal,mL,Dialysis,,unmapped_candidate
+rrt,mimic,chartevents,224135,Dialysis Access Site,,Dialysis,,unmapped_candidate
+rrt,mimic,chartevents,224139,Dialysis Site Appearance,,Dialysis,,unmapped_candidate
+rrt,mimic,chartevents,224144,Blood Flow (ml/min),ml/min,Dialysis,,unmapped_candidate
+rrt,mimic,chartevents,224146,System Integrity,,Dialysis,,unmapped_candidate
+rrt,mimic,chartevents,224149,Access Pressure,mmHg,Dialysis,,unmapped_candidate
+rrt,mimic,chartevents,224150,Filter Pressure,mmHg,Dialysis,,unmapped_candidate
+rrt,mimic,chartevents,224151,Effluent Pressure,mmHg,Dialysis,,unmapped_candidate
+rrt,mimic,chartevents,224152,Return Pressure,mmHg,Dialysis,,unmapped_candidate
+rrt,mimic,chartevents,224153,Replacement Rate,ml/hr,Dialysis,,unmapped_candidate
+rrt,mimic,chartevents,224154,Dialysate Rate,ml/hr,Dialysis,,unmapped_candidate
+rrt,mimic,inputevents_mv,227525,Calcium Gluconate (CRRT),grams,Medications,,unmapped_candidate
+rrt,mimic,chartevents,227438,Volume not removed,mL,Dialysis,,unmapped_candidate
+rrt,mimic,procedureevents_mv,225805,Peritoneal Dialysis,,Dialysis,,unmapped_candidate
+rrt,mimic,chartevents,225806,Volume In (PD),mL,Dialysis,,unmapped_candidate
+rrt,mimic,chartevents,225807,Volume Out (PD),mL,Dialysis,,unmapped_candidate
+rrt,mimic,chartevents,225810,Dwell Time (Peritoneal Dialysis),hour,Dialysis,,unmapped_candidate
+rrt,mimic,inputevents_mv,227536,KCl (CRRT),mEq.,Medications,,unmapped_candidate
+rrt,mimic,chartevents,224404,ART Lumen Volume,mL,Dialysis,,unmapped_candidate
+rrt,mimic,chartevents,224406,VEN Lumen Volume,mL,Dialysis,,unmapped_candidate
+rrt,mimic,chartevents,225959,Medication Added Amount  #1 (Peritoneal Dialysis),,Dialysis,,unmapped_candidate
+rrt,mimic,chartevents,225961,Medication Added Units #1 (Peritoneal Dialysis),,Dialysis,,unmapped_candidate
+rrt,mimic,microbiologyevents,70029,DIALYSIS FLUID,,SPECIMEN,,unmapped_candidate
+rrt,mimic,chartevents,227638,Medication Added #2 (Peritoneal Dialysis),,Dialysis,,unmapped_candidate
+rrt,mimic,chartevents,227639,Medication Added Amount  #2 (Peritoneal Dialysis),,Dialysis,,unmapped_candidate
+rrt,mimic,chartevents,227640,Medication Added Units #2 (Peritoneal Dialysis),,Dialysis,,unmapped_candidate
+rrt,mimic,chartevents,228004,Citrate (ACD-A),ml/hr,Dialysis,,unmapped_candidate
+rrt,mimic,chartevents,228005,PBP (Prefilter) Replacement Rate,ml/hr,Dialysis,,unmapped_candidate
+rrt,mimic,chartevents,228006,Post Filter Replacement Rate,ml/hr,Dialysis,,unmapped_candidate
+rrt,mimic,chartevents,225976,Replacement Fluid,,Dialysis,,unmapped_candidate
+rrt,mimic,chartevents,225977,Dialysate Fluid,,Dialysis,,unmapped_candidate
+rrt,mimic,chartevents,225951,Peritoneal Dialysis Fluid Appearance,,Dialysis,,unmapped_candidate
+rrt,mimic,chartevents,225952,Medication Added #1 (Peritoneal Dialysis),,Dialysis,,unmapped_candidate
+rrt,mimic,chartevents,225953,Solution (Peritoneal Dialysis),,Dialysis,,unmapped_candidate
+rrt,mimic,chartevents,225954,Dialysis Access Type,,Dialysis,,unmapped_candidate
+rrt,mimic,procedureevents_mv,225955,Dialysis - SCUF,,Dialysis,,unmapped_candidate
+rrt,mimic,chartevents,225958,Heparin Concentration (units/mL),,Dialysis,,unmapped_candidate
+rrt,mimic,chartevents,226499,Hemodialysis Output,mL,Dialysis,,unmapped_candidate
+rrt,mimic,chartevents,225126,Dialysis patient,,Adm History/FHPA,,unmapped_candidate
+rrt,mimic,datetimeevents,225128,Last dialysis,,Adm History/FHPA,,unmapped_candidate
+rrt,mimic,inputevents_cv,45352,CA GLUC for CVVH,,Free Form Intake,,unmapped_candidate
+rrt,mimic,chartevents,226457,Ultrafiltrate Output,mL,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,224135,Dialysis Access Site,,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,224139,Dialysis Site Appearance,,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,224144,Blood Flow (ml/min),ml/min,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,224146,System Integrity,,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,224149,Access Pressure,mmHg,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,224150,Filter Pressure,mmHg,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,224151,Effluent Pressure,mmHg,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,224152,Return Pressure,mmHg,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,224153,Replacement Rate,ml/hr,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,224154,Dialysate Rate,ml/hr,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,224191,Hourly Patient Fluid Removal,mL,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,224404,ART Lumen Volume,mL,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,224406,VEN Lumen Volume,mL,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,225126,Dialysis patient,,Adm History/FHPA,,unmapped_candidate
+rrt,miiv,datetimeevents,225128,Last dialysis,,Adm History/FHPA,,unmapped_candidate
+rrt,miiv,chartevents,225806,Volume In (PD),mL,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,225807,Volume Out (PD),mL,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,225810,Dwell Time (Peritoneal Dialysis),hour,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,225951,Peritoneal Dialysis Fluid Appearance,,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,225952,Medication Added #1 (Peritoneal Dialysis),,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,225953,Solution (Peritoneal Dialysis),,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,225954,Dialysis Access Type,,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,225958,Heparin Concentration (units/mL),,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,225959,Medication Added Amount  #1 (Peritoneal Dialysis),None,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,225961,Medication Added Units #1 (Peritoneal Dialysis),,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,225976,Replacement Fluid,,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,225977,Dialysate Fluid,,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,226457,Ultrafiltrate Output,mL,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,226499,Hemodialysis Output,mL,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,227438,Volume not removed,mL,Dialysis,,unmapped_candidate
+rrt,miiv,inputevents,227525,Calcium Gluconate (CRRT),grams,Medications,,unmapped_candidate
+rrt,miiv,inputevents,227536,KCl (CRRT),mEq.,Medications,,unmapped_candidate
+rrt,miiv,chartevents,227638,Medication Added #2 (Peritoneal Dialysis),,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,227639,Medication Added Amount  #2 (Peritoneal Dialysis),None,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,227640,Medication Added Units #2 (Peritoneal Dialysis),,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,228004,Citrate (ACD-A),ml/hr,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,228005,PBP (Prefilter) Replacement Rate,ml/hr,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,228006,Post Filter Replacement Rate,ml/hr,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,229247,Trans Membrane Pressure,mmHg,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,229248,Pressure Drop,mmHg,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,229881,Dialysis/Pheresis Biopatch,,Access Lines - Invasive,,unmapped_candidate
+rrt,miiv,inputevents,230044,Heparin Sodium (CRRT-Prefilter),units,Medications,,unmapped_candidate
+rrt,miiv,chartevents,230083,Replacement Fluid (Pre-Filter),,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,230084,Replacement Fluid (Post-Filter),,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,230085,Dialysate Fluid,,Dialysis,,unmapped_candidate
+rrt,miiv,chartevents,230177,CRRT - Filter Type,,Dialysis,,unmapped_candidate
+rrt,eicu,intakeoutput,"Volume (mL)-calcium chloride 100 mEq in sodium chloride 0.9 % 1,000 mL infusion (CRRT with citrate anticoag)","Volume (mL)-calcium chloride 100 mEq in sodium chloride 0.9 % 1,000 mL infusion (CRRT with citrate anticoag)",,,,unmapped_candidate
+rrt,eicu,intakeoutput,CRRT FLUSH,CRRT FLUSH,,,,unmapped_candidate
+rrt,eicu,intakeoutput,CRRT- UF removed,CRRT- UF removed,,,,unmapped_candidate
+rrt,eicu,intakeoutput,CRRT - UF removed,CRRT - UF removed,,,,unmapped_candidate
+rrt,eicu,intakeoutput,CRRT flush,CRRT flush,,,,unmapped_candidate
+rrt,eicu,intakeoutput,CRRT Flush,CRRT Flush,,,,unmapped_candidate
+rrt,eicu,intakeoutput,Hemofiltration,Hemofiltration,,,,unmapped_candidate
+rrt,eicu,intakeoutput,"CRRT Actual Pt Fluid Removed (""C"")","CRRT Actual Pt Fluid Removed (""C"")",,,,unmapped_candidate
+rrt,eicu,intakeoutput,CRRT Out,CRRT Out,,,,unmapped_candidate
+sbp,miiv,chartevents,230154,CFS-SBP,,Neurological,,unmapped_candidate
+spo2,aumc,numericitems,11425,O2sat (overig),Geen,,,unmapped_candidate
+spo2,aumc,numericitems,12311,O2-Saturatie (bloed),Geen,,,unmapped_candidate
+spo2,aumc,numericitems,19611,Streef SpO2,None,,,unmapped_candidate
+spo2,aumc,numericitems,20658,ECMO - Veneuze saturatie,Geen,,,unmapped_candidate
+spo2,mimic,chartevents,3545,O2 Sat W/Seizure,,,,unmapped_candidate
+spo2,mimic,chartevents,5501,O2 sat probe change,,,,unmapped_candidate
+spo2,mimic,chartevents,5505,O2 sat probe site,,,,unmapped_candidate
+spo2,mimic,chartevents,3288,O2 sat [Pre],,,,unmapped_candidate
+spo2,mimic,chartevents,5636,2nd O2 Sat,,,,unmapped_candidate
+spo2,mimic,chartevents,5896,VEN0US O2 SAT,,,,unmapped_candidate
+spo2,mimic,chartevents,2842,JV O2 Sat,,,,unmapped_candidate
+spo2,mimic,chartevents,8208,Postductal O2 Sat,,,,unmapped_candidate
+spo2,mimic,chartevents,8209,Preductal O2 Sat,,,,unmapped_candidate
+spo2,mimic,chartevents,7440,walking o2 sat,,,,unmapped_candidate
+spo2,mimic,chartevents,8498,O2 sat [Post],,,,unmapped_candidate
+spo2,mimic,chartevents,6719,SpO2-L,,,,unmapped_candidate
+spo2,mimic,chartevents,226860,RA %O2 Saturation (PA Line),%,PA Line Insertion,,unmapped_candidate
+spo2,mimic,chartevents,226861,ART %O2 saturation (PA Line),%,PA Line Insertion,,unmapped_candidate
+spo2,mimic,chartevents,226862,PA %O2 Saturation (PA Line),%,PA Line Insertion,,unmapped_candidate
+spo2,mimic,chartevents,226863,PVR %O2 Saturation (PA Line),dynes*sec/cm5,PA Line Insertion,,unmapped_candidate
+spo2,mimic,chartevents,226865,SVR %O2 Saturation (PA Line),dynes*sec/cm5,PA Line Insertion,,unmapped_candidate
+spo2,mimic,chartevents,227919,Rest O2 Sat - Aerobic Activity Response,%,OT Notes,,unmapped_candidate
+spo2,mimic,chartevents,227926,Activity O2 sat - Aerobic Activity Response,%,OT Notes,,unmapped_candidate
+spo2,mimic,chartevents,227873,Recovery O2 Sat - Aerobic Capacity,%,OT Notes,,unmapped_candidate
+spo2,mimic,chartevents,228232,PAR-Oxygen saturation,,Routine Vital Signs,,unmapped_candidate
+spo2,mimic,chartevents,220227,Arterial O2 Saturation,%,Labs,,unmapped_candidate
+spo2,mimic,chartevents,227933,Recovery O2 sat - Aerobic Activity Response,%,OT Notes,,unmapped_candidate
+spo2,mimic,chartevents,227861,Rest O2 Sat - Aerobic Capacity,%,OT Notes,,unmapped_candidate
+spo2,mimic,chartevents,227867,Activity O2 Sat - Aerobic Capacity,%,OT Notes,,unmapped_candidate
+spo2,mimic,labevents,50817,Oxygen Saturation,,Blood Gas,Blood,unmapped_candidate
+spo2,miiv,chartevents,220227,Arterial O2 Saturation,%,Labs,,unmapped_candidate
+spo2,miiv,chartevents,226860,RA %O2 Saturation (PA Line),%,PA Line Insertion,,unmapped_candidate
+spo2,miiv,chartevents,226861,ART %O2 saturation (PA Line),%,PA Line Insertion,,unmapped_candidate
+spo2,miiv,chartevents,226862,PA %O2 Saturation (PA Line),%,PA Line Insertion,,unmapped_candidate
+spo2,miiv,chartevents,226863,PVR %O2 Saturation (PA Line),dynes*sec/cm5,PA Line Insertion,,unmapped_candidate
+spo2,miiv,chartevents,226865,SVR %O2 Saturation (PA Line),dynes*sec/cm5,PA Line Insertion,,unmapped_candidate
+spo2,miiv,chartevents,227861,Rest O2 Sat - Aerobic Capacity,%,OT Notes,,unmapped_candidate
+spo2,miiv,chartevents,227867,Activity O2 Sat - Aerobic Capacity,%,OT Notes,,unmapped_candidate
+spo2,miiv,chartevents,227873,Recovery O2 Sat - Aerobic Capacity,%,OT Notes,,unmapped_candidate
+spo2,miiv,chartevents,227919,Rest O2 Sat - Aerobic Activity Response,%,OT Notes,,unmapped_candidate
+spo2,miiv,chartevents,227926,Activity O2 sat - Aerobic Activity Response,%,OT Notes,,unmapped_candidate
+spo2,miiv,chartevents,227933,Recovery O2 sat - Aerobic Activity Response,%,OT Notes,,unmapped_candidate
+spo2,miiv,chartevents,228232,PAR-Oxygen saturation,,Routine Vital Signs,,unmapped_candidate
+spo2,miiv,chartevents,229862,Forehead SpO2 Sensor in Place,,Routine Vital Signs,,unmapped_candidate
+spo2,miiv,labevents,50817,Oxygen Saturation,,Blood Gas,Blood,unmapped_candidate
+spo2,eicu,lab,O2 Sat (%),O2 Sat (%),%,,,unmapped_candidate
+spo2,eicu,respiratorycharting,Adult Con Pt/Vent SpO2,Adult Con Pt/Vent SpO2,,,,unmapped_candidate
+spo2,eicu,nursecharting,O2 Saturation,O2 Saturation,,,,unmapped_candidate
+tidal_vol,aumc,numericitems,8871,VTe,l,,,unmapped_candidate
+tidal_vol,aumc,numericitems,9669,VTe(2),l,,,unmapped_candidate
+tidal_vol,aumc,numericitems,12373,Vt (Bipap Vision),ml,,,unmapped_candidate
+tidal_vol,mimic,chartevents,1448,Vd/Vt:,,,,unmapped_candidate
+tidal_vol,mimic,chartevents,65,BIPAP - Est. Vt,,,,unmapped_candidate
+tidal_vol,mimic,chartevents,435,Low Exhaled Vt,,,,unmapped_candidate
+tidal_vol,mimic,chartevents,5593,MMV tidal volume,,,,unmapped_candidate
+tidal_vol,mimic,chartevents,639,Sigh Tidal Volume,,,,unmapped_candidate
+tidal_vol,mimic,chartevents,652,Spon. Vt (L) (Mech.),,,,unmapped_candidate
+tidal_vol,mimic,chartevents,654,Spont. Tidal Volume,,,,unmapped_candidate
+tidal_vol,mimic,chartevents,684,Tidal Volume (Spont),,,,unmapped_candidate
+tidal_vol,mimic,chartevents,715,Vd/Vt Ratio (40-60%),,,,unmapped_candidate
+tidal_vol,mimic,chartevents,3082,HIGH TIDAL VOL,,,,unmapped_candidate
+tidal_vol,mimic,chartevents,3083,spont Tidal volumes,,,,unmapped_candidate
+tidal_vol,mimic,chartevents,3086,spont Vt's,,,,unmapped_candidate
+tidal_vol,mimic,chartevents,5942,HIGH VT,,,,unmapped_candidate
+tidal_vol,mimic,chartevents,1514,Hi Tidal Vol,,,,unmapped_candidate
+tidal_vol,mimic,chartevents,1570,HI TIDAL VOL,,,,unmapped_candidate
+tidal_vol,mimic,chartevents,1618,high tidal vol,,,,unmapped_candidate
+tidal_vol,mimic,chartevents,1651,High Tidal Volume,,,,unmapped_candidate
+tidal_vol,mimic,chartevents,1660,High Tidal volume,,,,unmapped_candidate
+tidal_vol,mimic,chartevents,2043,Tidal Vol (P High),,,,unmapped_candidate
+tidal_vol,mimic,chartevents,2044,Tidal Vol (P Low),,,,unmapped_candidate
+tidal_vol,mimic,chartevents,2049,HI TIDAL VOLUME,,,,unmapped_candidate
+tidal_vol,mimic,chartevents,2065,HIGH TIDAL VOLUME,,,,unmapped_candidate
+tidal_vol,mimic,chartevents,2069,hi tidal volume,,,,unmapped_candidate
+tidal_vol,mimic,chartevents,2094,Spont VT,,,,unmapped_candidate
+tidal_vol,mimic,chartevents,2311,VT,,,,unmapped_candidate
+tidal_vol,mimic,chartevents,2400,tidal volumes,,,,unmapped_candidate
+tidal_vol,mimic,chartevents,2402,sp tidal volumes,,,,unmapped_candidate
+tidal_vol,mimic,chartevents,2408,tidal vol,,,,unmapped_candidate
+tidal_vol,mimic,chartevents,2420,TIDAL VOLUME,,,,unmapped_candidate
+tidal_vol,mimic,chartevents,2534,tidal volume,,,,unmapped_candidate
+tidal_vol,mimic,chartevents,2566,Spontaneous VT,,,,unmapped_candidate
+tidal_vol,mimic,chartevents,2990,High Tidal Vol,,,,unmapped_candidate
+tidal_vol,mimic,chartevents,2998,Vt,,,,unmapped_candidate
+tidal_vol,mimic,chartevents,3003,SPNIOT TIDAL VOLUMES,,,,unmapped_candidate
+tidal_vol,mimic,chartevents,3004,spontaneous VT,,,,unmapped_candidate
+tidal_vol,mimic,chartevents,3688,Vt [Spontaneous],,,,unmapped_candidate
+tidal_vol,mimic,chartevents,3689,Vt [Ventilator],,,,unmapped_candidate
+tidal_vol,mimic,chartevents,3045,SPONT VT,,,,unmapped_candidate
+tidal_vol,mimic,chartevents,3050,spont tidal volumes,,,,unmapped_candidate
+tidal_vol,mimic,chartevents,6289,spontaneous vt,,,,unmapped_candidate
+tidal_vol,mimic,chartevents,7229,low Vt,,,,unmapped_candidate
+tidal_vol,mimic,chartevents,6933,exh. vt,,,,unmapped_candidate
+tidal_vol,mimic,chartevents,6935,insp. vt,,,,unmapped_candidate
+tidal_vol,mimic,chartevents,6945,LOW VT,,,,unmapped_candidate
+tidal_vol,mimic,chartevents,224421,Spont Vt,mL,Respiratory,,unmapped_candidate
+tidal_vol,mimic,chartevents,224743,Vd/Vt Ratio,,Respiratory,,unmapped_candidate
+tidal_vol,mimic,labevents,50826,Tidal Volume,,Blood Gas,Blood,unmapped_candidate
+tidal_vol,miiv,chartevents,224421,Spont Vt,mL,Respiratory,,unmapped_candidate
+tidal_vol,miiv,chartevents,224743,Vd/Vt Ratio,None,Respiratory,,unmapped_candidate
+tidal_vol,miiv,labevents,50826,Tidal Volume,,Blood Gas,Blood,unmapped_candidate
+tidal_vol,eicu,respiratorycharting,"Tidal Volume, Delivered","Tidal Volume, Delivered",,,,unmapped_candidate
+tidal_vol,eicu,respiratorycharting,PULSE OX RESULTS VT,PULSE OX RESULTS VT,,,,unmapped_candidate
+tidal_vol,eicu,respiratorycharting,A1: High Exhaled Vt,A1: High Exhaled Vt,,,,unmapped_candidate
+tidal_vol,eicu,respiratorycharting,4. RSBI (RR/Vt),4. RSBI (RR/Vt),,,,unmapped_candidate
+tidal_vol,eicu,respiratorycharting,Adult Con Setting Spont Exp Vt,Adult Con Setting Spont Exp Vt,,,,unmapped_candidate
+tidal_vol,eicu,respiratorycharting,Vt Spontaneous (mL),Vt Spontaneous (mL),,,,unmapped_candidate
+urine,aumc,numericitems,7101,Kalium in urine,mmol/l,,,unmapped_candidate
+urine,aumc,numericitems,7136,Soortelijkgewicht urine,g/l,,,unmapped_candidate
+urine,aumc,numericitems,7839,LH in urine,IE/ml,,,unmapped_candidate
+urine,aumc,numericitems,7846,Ureum in urine,mmol/l,,,unmapped_candidate
+urine,aumc,numericitems,7848,Natrium in urine,mmol/l,,,unmapped_candidate
+urine,aumc,numericitems,8917,Chloor in Urine,mol/l,,,unmapped_candidate
+urine,aumc,numericitems,8922,Amylase in Urine,mmol/l,,,unmapped_candidate
+urine,aumc,numericitems,9978,IgG (urine),mg/l,,,unmapped_candidate
+urine,aumc,numericitems,9982,Transferrine (urine),mg/l,,,unmapped_candidate
+urine,aumc,numericitems,10068,Citraat (urine),mmol/l,,,unmapped_candidate
+urine,aumc,numericitems,10082,Gluc.Kwan. (urine),mmol/l,,,unmapped_candidate
+urine,aumc,numericitems,10164,B2-Microglobuline (urine),µg/l,,,unmapped_candidate
+urine,aumc,numericitems,10165,B2-MICRO (urine),µg/l,,,unmapped_candidate
+urine,aumc,numericitems,10252,DHEA-sulfaat (verz. urine),µmol/24uur,,,unmapped_candidate
+urine,aumc,numericitems,10258,Metanefrine (verz. urine),µmol/24uur,,,unmapped_candidate
+urine,aumc,numericitems,10259,Normetanefrine (verz. urine),µmol/24uur,,,unmapped_candidate
+urine,aumc,numericitems,10269,Natrium (urine),mmol/l,,,unmapped_candidate
+urine,aumc,numericitems,10270,Natrium  (verz. urine),mmol/l,,,unmapped_candidate
+urine,aumc,numericitems,10271,Kalium (urine),mmol/l,,,unmapped_candidate
+urine,aumc,numericitems,10272,Kalium  (verz. urine),mmol/l,,,unmapped_candidate
+urine,aumc,numericitems,10273,Chloor (urine),mmol/l,,,unmapped_candidate
+urine,aumc,numericitems,10274,CHLOOR (verz. urine),mmol/l,,,unmapped_candidate
+urine,aumc,numericitems,10275,Calcium totaal (urine),mmol/l,,,unmapped_candidate
+urine,aumc,numericitems,10276,CALCIUM (verz. urine),mmol/l,,,unmapped_candidate
+urine,aumc,numericitems,10277,Fosfaat (urine),mmol/l,,,unmapped_candidate
+urine,aumc,numericitems,10278,Fosfaat  (verz. urine),mmol/l,,,unmapped_candidate
+urine,aumc,numericitems,10280,Ureum (urine),mmol/l,,,unmapped_candidate
+urine,aumc,numericitems,10281,Ureum  (verz. urine),mmol/l,,,unmapped_candidate
+urine,aumc,numericitems,10287,Volume (verz.urine),ml,,,unmapped_candidate
+urine,aumc,numericitems,10294,Magnesium (urine),mmol/l,,,unmapped_candidate
+urine,aumc,numericitems,10295,Magnesium  (verz. urine),mmol/l,,,unmapped_candidate
+urine,aumc,numericitems,10300,H.O.P. (urine),mmol/l,,,unmapped_candidate
+urine,aumc,numericitems,10301,H.O.P. (verz. urine),mmol/l,,,unmapped_candidate
+urine,aumc,numericitems,10318,Porfyrine (urine),µmol/l,,,unmapped_candidate
+urine,aumc,numericitems,10319,Porfyrine  (verz. urine),µmol/l,,,unmapped_candidate
+urine,aumc,numericitems,10321,P.B.G. (urine),µmol/l,,,unmapped_candidate
+urine,aumc,numericitems,10322,P.B.G.   (verz. urine ),µmol/l,,,unmapped_candidate
+urine,aumc,numericitems,10324,D-Ala (urine),µmol/l,,,unmapped_candidate
+urine,aumc,numericitems,10325,D-Ala  (verz. urine),µmol/l,,,unmapped_candidate
+urine,aumc,numericitems,10346,Totaal Stikstof (urine),g/l,,,unmapped_candidate
+urine,aumc,numericitems,10347,TOT.STIKST (verz. urine),g/l,,,unmapped_candidate
+urine,aumc,numericitems,10351,IG-G (verz. urine),mg/l,,,unmapped_candidate
+urine,aumc,numericitems,10353,TRANSFER. (verz. urine),mg/l,,,unmapped_candidate
+urine,aumc,numericitems,10369,Koper (urine),µmol/l,,,unmapped_candidate
+urine,aumc,numericitems,10370,KOPER (verz. urine),µmol/l,,,unmapped_candidate
+urine,aumc,numericitems,10373,Gluc.Kwan. ( verz. urine),mmol/l,,,unmapped_candidate
+urine,aumc,numericitems,10381,Ammoniak  (urine),µmol/l,,,unmapped_candidate
+urine,aumc,numericitems,10382,Micro-albumine (urine),mg/l,,,unmapped_candidate
+urine,aumc,numericitems,10383,MICRO-ALB. (verz. urine),mg/l,,,unmapped_candidate
+urine,aumc,numericitems,11492,S.M. (urine),Geen,,,unmapped_candidate
+urine,aumc,numericitems,11494,Eo's (urine),Geen,,,unmapped_candidate
+urine,aumc,numericitems,11863,Para % TE  (urine),Geen,,,unmapped_candidate
+urine,aumc,numericitems,11900,Kreat.klaring (urine),ml/min,,,unmapped_candidate
+urine,aumc,numericitems,11901,KREAT.KLAR (verz. urine),ml/min,,,unmapped_candidate
+urine,aumc,numericitems,11941,Vrij Cortisol (verz. urine),nmol/24uur,,,unmapped_candidate
+urine,aumc,numericitems,11988,Amylase (urine),E/l,,,unmapped_candidate
+urine,aumc,numericitems,12162,D-Ala (verz. urine),µmol/24uur,,,unmapped_candidate
+urine,aumc,numericitems,12196,Leuco sed (urine),/veld,,,unmapped_candidate
+urine,aumc,numericitems,12213,P.B.G.  (verz. urine ),µmol/24uur,,,unmapped_candidate
+urine,aumc,numericitems,12215,Porfyrine (verz. urine),µmol/24uur,,,unmapped_candidate
+urine,aumc,numericitems,12217,Calcium totaal (verz. urine),mmol/24uur,,,unmapped_candidate
+urine,aumc,numericitems,12219,Chloor  (verz. urine),mmol/24uur,,,unmapped_candidate
+urine,aumc,numericitems,12223,Fosfaat (verz. urine),mmol/24uur,,,unmapped_candidate
+urine,aumc,numericitems,12228,Kalium (verz. urine),mmol/24uur,,,unmapped_candidate
+urine,aumc,numericitems,12232,Magnesium (verz. urine),mmol/24uur,,,unmapped_candidate
+urine,aumc,numericitems,12234,Natrium (verz. urine),mmol/24uur,,,unmapped_candidate
+urine,aumc,numericitems,12241,Micro-albumine (verz. urine),mg/24uur,,,unmapped_candidate
+urine,aumc,numericitems,12252,Ureum (verz. urine),mmol/24uur,,,unmapped_candidate
+urine,aumc,numericitems,14322,A1-Microglobuline (urine),mg/l,,,unmapped_candidate
+urine,aumc,numericitems,14327,VRY-KAPPA (verz. urine),mg/l,,,unmapped_candidate
+urine,aumc,numericitems,14330,VRY-LAMBDA (verz. urine),mg/l,,,unmapped_candidate
+urine,aumc,numericitems,14333,vryK/Lratio  (urine),Geen,,,unmapped_candidate
+urine,aumc,numericitems,14364,Mpro-Band1 (urine),g/l,,,unmapped_candidate
+urine,aumc,numericitems,14365,Mpro-band1 (verz. urine),g/l,,,unmapped_candidate
+urine,aumc,numericitems,18486,P.B.G. (verz. urine),µmol/24uur,,,unmapped_candidate
+urine,aumc,numericitems,18572,Verzamelperiode (verz. urine),uur,,,unmapped_candidate
+urine,aumc,numericitems,18927,3-Methoxythyramine (verz. urine),µmol/24uur,,,unmapped_candidate
+urine,aumc,numericitems,19353,Can-Kreat ratio (urine),µg/mmol,,,unmapped_candidate
+urine,mimic,chartevents,941,urine culture,,,,unmapped_candidate
+urine,mimic,chartevents,4855,Urine culture,,,,unmapped_candidate
+urine,mimic,chartevents,706,Urine [Color],,,,unmapped_candidate
+urine,mimic,chartevents,707,Urine Source,,,,unmapped_candidate
+urine,mimic,chartevents,3140,Urine Cl-,,,,unmapped_candidate
+urine,mimic,chartevents,1917,Urine Na+,,,,unmapped_candidate
+urine,mimic,chartevents,1918,Urine Osm,,,,unmapped_candidate
+urine,mimic,chartevents,1919,Urine creat,,,,unmapped_candidate
+urine,mimic,chartevents,5810,urine calcium,,,,unmapped_candidate
+urine,mimic,chartevents,5812,Urine lytes,,,,unmapped_candidate
+urine,mimic,chartevents,5898,urine na,,,,unmapped_candidate
+urine,mimic,chartevents,3817,Urine Heme,,Urine,,unmapped_candidate
+urine,mimic,chartevents,3818,Urine Ketones,,Urine,,unmapped_candidate
+urine,mimic,chartevents,3819,Urine Leukocytes,,Urine,,unmapped_candidate
+urine,mimic,chartevents,2224,URINE CREAT,,,,unmapped_candidate
+urine,mimic,chartevents,2225,URINE NA,,,,unmapped_candidate
+urine,mimic,chartevents,2226,URINE OSMO,,,,unmapped_candidate
+urine,mimic,chartevents,2688,URINE CL.,,,,unmapped_candidate
+urine,mimic,chartevents,2690,URINE OSM,,,,unmapped_candidate
+urine,mimic,chartevents,2691,URINE POTASSIUM,,,,unmapped_candidate
+urine,mimic,chartevents,2692,URINE SODIUM,,,,unmapped_candidate
+urine,mimic,chartevents,6204,urine for CMV,,,,unmapped_candidate
+urine,mimic,chartevents,6226,urine for AA,,,,unmapped_candidate
+urine,mimic,chartevents,6304,urine cath,,,,unmapped_candidate
+urine,mimic,chartevents,7292,Urine source #2,,,,unmapped_candidate
+urine,mimic,outputevents,40534,urine flush,,Free Form Intake,,unmapped_candidate
+urine,mimic,chartevents,8480,Urine [Appearance],,,,unmapped_candidate
+urine,mimic,outputevents,41857,urine out in er,,,,unmapped_candidate
+urine,mimic,outputevents,42001,ER URINE,,,,unmapped_candidate
+urine,mimic,outputevents,42362,CATH LAB URINE OUTPT,,,,unmapped_candidate
+urine,mimic,outputevents,42463,cath lab urine,,,,unmapped_candidate
+urine,mimic,outputevents,42507,TRUE URINE,,,,unmapped_candidate
+urine,mimic,outputevents,42510,Urine in cath lab,,,,unmapped_candidate
+urine,mimic,outputevents,42556,CC6 URINE,,,,unmapped_candidate
+urine,mimic,outputevents,42676,ANGIO URINE OUTPUT,,,,unmapped_candidate
+urine,mimic,outputevents,43171,URINE CC/KG/HR,,,,unmapped_candidate
+urine,mimic,outputevents,40288,PACU Out PACU Urine,,,,unmapped_candidate
+urine,mimic,outputevents,42042,ANGIO URINE OUT,,,,unmapped_candidate
+urine,mimic,outputevents,42068,angio Urine output,,,,unmapped_candidate
+urine,mimic,outputevents,42111,ANGIO FOLEY URINE,,,,unmapped_candidate
+urine,mimic,outputevents,42119,urine output-angio,,,,unmapped_candidate
+urine,mimic,outputevents,42209,IRRIGANT AND URINE,,,,unmapped_candidate
+urine,mimic,outputevents,40061,OR Out OR Urine,,,,unmapped_candidate
+urine,mimic,outputevents,43897,urine in er.,,,,unmapped_candidate
+urine,mimic,outputevents,43931,Floor urine out,,,,unmapped_candidate
+urine,mimic,outputevents,43966,real urine output,,,,unmapped_candidate
+urine,mimic,outputevents,44080,EW Urine,,,,unmapped_candidate
+urine,mimic,outputevents,44103,ER urine out,,,,unmapped_candidate
+urine,mimic,outputevents,44132,Procedure urine out,,,,unmapped_candidate
+urine,mimic,outputevents,44237,E.R. urine out,,,,unmapped_candidate
+urine,mimic,outputevents,44313,f10 urine,,,,unmapped_candidate
+urine,mimic,outputevents,43348,urine output/kg,,,,unmapped_candidate
+urine,mimic,outputevents,43355,urine/k/hr,,,,unmapped_candidate
+urine,mimic,outputevents,43365,urine output/kg/hr,,,,unmapped_candidate
+urine,mimic,outputevents,43372,24hr urine output,,,,unmapped_candidate
+urine,mimic,outputevents,43373,urine cc/kg/hr,,,,unmapped_candidate
+urine,mimic,outputevents,43374,URINE CC?KG?HR,,,,unmapped_candidate
+urine,mimic,outputevents,43380,urine outpt cc/kg/hr,,,,unmapped_candidate
+urine,mimic,outputevents,43431,Urine cc/k/hr,,,,unmapped_candidate
+urine,mimic,outputevents,43462,urine,,,,unmapped_candidate
+urine,mimic,outputevents,43522,Urine cc/kg/hr,,,,unmapped_candidate
+urine,mimic,outputevents,44706,urine output,,,,unmapped_candidate
+urine,mimic,outputevents,44911,urine output farr-10,,,,unmapped_candidate
+urine,mimic,outputevents,44925,true urine,,,,unmapped_candidate
+urine,mimic,outputevents,42810,angio urine out,,,,unmapped_candidate
+urine,mimic,outputevents,42859,ANGIO URINE,,,,unmapped_candidate
+urine,mimic,outputevents,43093,URINE ED,,,,unmapped_candidate
+urine,mimic,outputevents,44325,ED URINE OUTPUT,,,,unmapped_candidate
+urine,mimic,outputevents,44506,farr7-output/urine,,,,unmapped_candidate
+urine,mimic,outputevents,43856,urine cc/k/ghr,,,,unmapped_candidate
+urine,mimic,outputevents,45304,Urine output cc/k/hr,,,,unmapped_candidate
+urine,mimic,outputevents,46532,Floor urine,,,,unmapped_candidate
+urine,mimic,outputevents,46578,URINE OUTPUT-ER,,,,unmapped_candidate
+urine,mimic,outputevents,46658,ED Urine output,,,,unmapped_candidate
+urine,mimic,outputevents,46748,Cath Lab Urine Out,,,,unmapped_candidate
+urine,mimic,outputevents,40651,Urine Out Ureteral Stent #2,,,,unmapped_candidate
+urine,mimic,outputevents,44752,inc urine,,,,unmapped_candidate
+urine,mimic,outputevents,44824,EW urine output,,,,unmapped_candidate
+urine,mimic,outputevents,44837,ED URINE,,,,unmapped_candidate
+urine,mimic,outputevents,43576,24hr Urine cc/kg/hr,,,,unmapped_candidate
+urine,mimic,outputevents,43589,urine cc/k/hr,,,,unmapped_candidate
+urine,mimic,outputevents,43633,"Urine,cc/kg/day",,,,unmapped_candidate
+urine,mimic,outputevents,43811,urine out: cc/k/hr,,,,unmapped_candidate
+urine,mimic,outputevents,43812,urine out:cc/k/hr,,,,unmapped_candidate
+urine,mimic,outputevents,46177,URINE OUT-ANGIO,,,,unmapped_candidate
+urine,mimic,outputevents,46727,urine from floor,,,,unmapped_candidate
+urine,mimic,outputevents,46804,Farr  5 urine,,,,unmapped_candidate
+urine,mimic,outputevents,43987,urine out or,,,,unmapped_candidate
+urine,mimic,outputevents,44051,floor urine,,,,unmapped_candidate
+urine,mimic,outputevents,44253,Urine out angio,,,,unmapped_candidate
+urine,mimic,outputevents,44278,ER urine,,,,unmapped_candidate
+urine,mimic,outputevents,46180,urine out-angio,,,,unmapped_candidate
+urine,mimic,outputevents,45804,URINE OUTPUT-E.D.,,,,unmapped_candidate
+urine,mimic,outputevents,45841,bladder irrig/urine,,,,unmapped_candidate
+urine,mimic,outputevents,45927,True Urine,,,,unmapped_candidate
+urine,mimic,outputevents,42592,VICU URINE OUT,,,,unmapped_candidate
+urine,mimic,outputevents,42666,E.R. URINE OUT,,,,unmapped_candidate
+urine,mimic,outputevents,42765,FARR 6 URINE OUT,,,,unmapped_candidate
+urine,mimic,outputevents,42892,EW URINE OUT,,,,unmapped_candidate
+urine,mimic,outputevents,43053,URINE OUT,,,,unmapped_candidate
+urine,mimic,outputevents,43057,FARR 6 URINE,,,,unmapped_candidate
+urine,mimic,outputevents,42130,ANGIO URINE O/P,,,,unmapped_candidate
+urine,mimic,outputevents,41922,angio urine,,,,unmapped_candidate
+urine,mimic,outputevents,43333,urine cc's/k/hr,,,,unmapped_candidate
+urine,mimic,outputevents,43347,urine cc/kg,,,,unmapped_candidate
+urine,mimic,outputevents,44684,floor urine out,,,,unmapped_candidate
+urine,mimic,outputevents,44834,er urine out,,,,unmapped_candidate
+urine,mimic,outputevents,43638,urine output cc/k/hr,,,,unmapped_candidate
+urine,mimic,outputevents,43654,urine o/p cc/kg/hr,,,,unmapped_candidate
+urine,mimic,outputevents,43519,urine amnt,,,,unmapped_candidate
+urine,mimic,outputevents,43537,urine o/p,,,,unmapped_candidate
+urine,mimic,outputevents,42366,angio urine output,,,,unmapped_candidate
+urine,mimic,outputevents,45991,ew-urine output,,,,unmapped_candidate
+urine,mimic,procedureevents_mv,225454,Urine Culture,,6-Cultures,,unmapped_candidate
+urine,mimic,chartevents,224015,Urine Source,,GI/GU,,unmapped_candidate
+urine,mimic,chartevents,224016,Urine Color,,GI/GU,,unmapped_candidate
+urine,mimic,outputevents,227489,GU Irrigant/Urine Volume Out,mL,Output,,unmapped_candidate
+urine,mimic,chartevents,227471,Specific Gravity (urine),,Labs,,unmapped_candidate
+urine,mimic,microbiologyevents,70077,URINE,,SPECIMEN,,unmapped_candidate
+urine,mimic,microbiologyevents,70078,"URINE,PROSTATIC MASSAGE",,SPECIMEN,,unmapped_candidate
+urine,mimic,microbiologyevents,70079,URINE,,SPECIMEN,,unmapped_candidate
+urine,mimic,microbiologyevents,70080,"URINE,KIDNEY",,SPECIMEN,,unmapped_candidate
+urine,mimic,microbiologyevents,70081,URINE,,SPECIMEN,,unmapped_candidate
+urine,mimic,microbiologyevents,70082,"URINE,SUPRAPUBIC ASPIRATE",,SPECIMEN,,unmapped_candidate
+urine,mimic,chartevents,220799,ZSpecific Gravity (urine),,Labs,,unmapped_candidate
+urine,mimic,chartevents,224876,Urine Appearance,,GI/GU,,unmapped_candidate
+urine,mimic,outputevents,45415,ED Urine OUT,,,,unmapped_candidate
+urine,mimic,outputevents,226627,OR Urine,mL,Output,,unmapped_candidate
+urine,mimic,outputevents,226631,PACU Urine,mL,Output,,unmapped_candidate
+urine,mimic,labevents,51461,Ammonium Biurate,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51463,Bacteria,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51464,Bilirubin,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51465,Bilirubin Crystals,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51466,Blood,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51467,Broad Casts,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51468,Calcium Carbonate Crystals,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51469,Calcium Oxalate Crystals,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51471,Cellular Cast,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51472,Cholesterol Crystals,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51066,24 hr Calcium,,Chemistry,Urine,unmapped_candidate
+urine,mimic,labevents,51069,"Albumin, Urine",,Chemistry,Urine,unmapped_candidate
+urine,mimic,labevents,51072,"Amylase, Urine",,Chemistry,Urine,unmapped_candidate
+urine,mimic,labevents,51074,"Barbiturate Screen, Urine",,Chemistry,Urine,unmapped_candidate
+urine,mimic,labevents,51075,"Benzodiazepine Screen, Urine",,Chemistry,Urine,unmapped_candidate
+urine,mimic,labevents,51076,"Bicarbonate, Urine",,Chemistry,Urine,unmapped_candidate
+urine,mimic,labevents,51077,"Calcium, Urine",,Chemistry,Urine,unmapped_candidate
+urine,mimic,labevents,51078,"Chloride, Urine",,Chemistry,Urine,unmapped_candidate
+urine,mimic,labevents,51079,"Cocaine, Urine",,Chemistry,Urine,unmapped_candidate
+urine,mimic,labevents,51083,"Ethanol, Urine",,Chemistry,Urine,unmapped_candidate
+urine,mimic,labevents,51085,"HCG, Urine, Qualitative",,Chemistry,Urine,unmapped_candidate
+urine,mimic,labevents,51086,"Immunofixation, Urine",,Chemistry,Urine,unmapped_candidate
+urine,mimic,labevents,51087,Length of Urine Collection,,Chemistry,Urine,unmapped_candidate
+urine,mimic,labevents,51088,"Magnesium, Urine",,Chemistry,Urine,unmapped_candidate
+urine,mimic,labevents,51089,Marijuana,,Chemistry,Urine,unmapped_candidate
+urine,mimic,labevents,51090,"Methadone, Urine",,Chemistry,Urine,unmapped_candidate
+urine,mimic,labevents,51091,"Myoglobin, Urine",,Chemistry,Urine,unmapped_candidate
+urine,mimic,labevents,51092,"Opiate Screen, Urine",,Chemistry,Urine,unmapped_candidate
+urine,mimic,labevents,51097,"Potassium, Urine",,Chemistry,Urine,unmapped_candidate
+urine,mimic,labevents,51100,"Sodium, Urine",,Chemistry,Urine,unmapped_candidate
+urine,mimic,labevents,51101,Total Collection Time,,Chemistry,Urine,unmapped_candidate
+urine,mimic,labevents,51103,Uhold,,Chemistry,Urine,unmapped_candidate
+urine,mimic,labevents,51104,"Urea Nitrogen, Urine",,Chemistry,Urine,unmapped_candidate
+urine,mimic,labevents,51105,"Uric Acid, Urine",,Chemistry,Urine,unmapped_candidate
+urine,mimic,labevents,51107,"Urine tube, held",,Chemistry,Urine,unmapped_candidate
+urine,mimic,labevents,51108,Urine Volume,,Chemistry,Urine,unmapped_candidate
+urine,mimic,labevents,51109,"Urine Volume, Total",,Chemistry,Urine,unmapped_candidate
+urine,mimic,labevents,51473,Cysteine Crystals,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51475,Epithelial Casts,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51476,Epithelial Cells,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51477,Free Fat,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51479,Granular Casts,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51480,Hematocrit,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51481,Hemosiderin,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51482,Hyaline Casts,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51484,Ketone,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51485,Leucine Crystals,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51486,Leukocytes,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51487,Nitrite,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51488,Non-squamous Epithelial Cells,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51489,NonSquamous Epithelial Cell,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51490,Oval Fat Body,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51493,RBC,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51494,RBC Casts,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51495,RBC Clumps,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51496,"Reducing Substances, Urine",,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51497,Renal Epithelial Cells,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51498,Specific Gravity,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51499,Sperm,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51500,Sulfonamides,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51501,Transitional Epithelial Cells,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51502,Trichomonas,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51504,Tyrosine Crystals,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51505,Uric Acid Crystals,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51506,Urine Appearance,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51507,"Urine Casts, Other",,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51508,Urine Color,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51509,Urine Comments,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51510,"Urine Crystals, Other",,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51511,Urine Fat Bodies,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51512,Urine Mucous,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51513,Urine Specimen Type,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51514,Urobilinogen,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51515,Waxy Casts,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51516,WBC,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51517,WBC Casts,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51518,WBC Clumps,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51519,Yeast,,Hematology,Urine,unmapped_candidate
+urine,mimic,labevents,51523,GR HOLD,,CHEMISTRY,URINE,unmapped_candidate
+urine,mimic,labevents,51524,FATTY,,HEMATOLOGY,URINE,unmapped_candidate
+urine,mimic,labevents,51531,STDYURINE,,CHEMISTRY,URINE,unmapped_candidate
+urine,mimic,labevents,51542,PROBLEM SPECIMEN,,HEMATOLOGY,URINE,unmapped_candidate
+urine,mimic,labevents,51548,VOIDED SPECIMEN,,HEMATOLOGY,URINE,unmapped_candidate
+urine,mimic,labevents,51553,VOIDED SPECIMEN,,CHEMISTRY,URINE,unmapped_candidate
+urine,miiv,chartevents,220799,ZSpecific Gravity (urine),None,Labs,,unmapped_candidate
+urine,miiv,chartevents,224015,Urine Source,,GI/GU,,unmapped_candidate
+urine,miiv,chartevents,224016,Urine Color,,GI/GU,,unmapped_candidate
+urine,miiv,chartevents,224876,Urine Appearance,,GI/GU,,unmapped_candidate
+urine,miiv,procedureevents,225454,Urine Culture,None,6-Cultures,,unmapped_candidate
+urine,miiv,outputevents,226627,OR Urine,mL,Output,,unmapped_candidate
+urine,miiv,outputevents,226631,PACU Urine,mL,Output,,unmapped_candidate
+urine,miiv,chartevents,227471,Specific Gravity (urine),None,Labs,,unmapped_candidate
+urine,miiv,outputevents,227489,GU Irrigant/Urine Volume Out,mL,Output,,unmapped_candidate
+urine,miiv,labevents,51066,24 hr Calcium,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51069,"Albumin, Urine",,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51072,"Amylase, Urine",,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51074,"Barbiturate Screen, Urine",,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51075,"Benzodiazepine Screen, Urine",,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51076,"Bicarbonate, Urine",,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51077,"Calcium, Urine",,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51078,"Chloride, Urine",,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51079,"Cocaine, Urine",,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51083,"Ethanol, Urine",,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51085,"HCG, Urine, Qualitative",,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51086,"Immunofixation, Urine",,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51087,Length of Urine Collection,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51088,"Magnesium, Urine",,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51089,Marijuana,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51090,"Methadone, Urine",,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51091,"Myoglobin, Urine",,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51092,"Opiate Screen, Urine",,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51097,"Potassium, Urine",,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51100,"Sodium, Urine",,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51101,Total Collection Time,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51103,Uhold,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51104,"Urea Nitrogen, Urine",,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51105,"Uric Acid, Urine",,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51107,"Urine tube, held",,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51108,Urine Volume,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51109,"Urine Volume, Total",,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51461,Ammonium Biurate,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51463,Bacteria,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51464,Bilirubin,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51465,Bilirubin Crystals,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51466,Blood,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51467,Broad Casts,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51468,Calcium Carbonate Crystals,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51469,Calcium Oxalate Crystals,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51471,Cellular Cast,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51472,Cholesterol Crystals,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51473,Cysteine Crystals,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51475,Epithelial Casts,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51476,Epithelial Cells,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51477,Free Fat,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51479,Granular Casts,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51480,Hematocrit,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51481,Hemosiderin,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51482,Hyaline Casts,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51484,Ketone,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51485,Leucine Crystals,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51486,Leukocytes,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51487,Nitrite,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51488,Non-squamous Epithelial Cells,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51489,NonSquamous Epithelial Cell,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51490,Oval Fat Body,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51493,RBC,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51494,RBC Casts,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51495,RBC Clumps,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51496,"Reducing Substances, Urine",,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51497,Renal Epithelial Cells,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51498,Specific Gravity,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51499,Sperm,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51500,Sulfonamides,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51501,Transitional Epithelial Cells,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51502,Trichomonas,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51504,Tyrosine Crystals,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51505,Uric Acid Crystals,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51506,Urine Appearance,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51507,"Urine Casts, Other",,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51508,Urine Color,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51509,Urine Comments,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51510,"Urine Crystals, Other",,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51511,Urine Fat Bodies,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51512,Urine Mucous,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51513,Urine Specimen Type,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51514,Urobilinogen,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51515,Waxy Casts,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51516,WBC,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51517,WBC Casts,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51518,WBC Clumps,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51519,Yeast,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,51957,17-Hydroxycorticosteroids,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51958,"17-Ketosteroids, Urine",,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51959,"5-HIAA, Urine",,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51960,Aldolase,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51964,"Amylase, Serum",,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51965,Beta,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51966,Bilirubin,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51967,Blood,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51968,Camp,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51969,"Catecholamines, Urine",,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51970,Cben,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51971,Ccoc,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51972,Chlamydia trachomatis,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51973,Copi,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51974,"Copper, Urine",,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51976,"Cortisol, Urine",,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51978,DirList,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51979,"Estriol, Urine",,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51980,Fentanyl,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51983,"Iron, Urine",,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51984,Ketone,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51985,Leukocytes,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51986,Neisseria gonorrhoeae,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51987,Nitrite,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51988,O & P,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51989,Oxycodone,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51993,Referred,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51994,Specific Gravity,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51995,Study Urine,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51996,Trichomonas vaginalis,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51997,UIFEgel,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51998,UPEPgel,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,51999,Urine Amylase,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,52001,"Urine PEP, Gamma region",,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,52002,Urobilinogen,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,52004,UTX1,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,52005,UTX2,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,52006,UTX3,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,52007,UTX4,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,52008,UTX5,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,52009,UTX6,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,52010,UTX7,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,52011,UTX8,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,52012,UTX9,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,52013,Vanillylmandelic Acid,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,52014,Voided Specimen,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,52015,Xylose,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,52016,Z,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,52017,"Zinc, Urine",,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,52018,PAN1,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,52019,PAN2,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,52020,UTX10,,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,52046,"Potassium, Urine",,Blood Gas,Urine,unmapped_candidate
+urine,miiv,labevents,52047,"Sodium, Urine",,Blood Gas,Urine,unmapped_candidate
+urine,miiv,labevents,52408,Bacturia,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,52409,Budding Yeast,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,52410,Fatty Casts,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,52411,Hgb,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,52412,HPF,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,52413,Leuks,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,52414,LEUKS,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,52415,LPF,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,52416,Myoglobin,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,52417,Pku,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,52418,Problem Specimen,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,52419,Voided Specimen,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,52420,ZZDUMMY,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,52421,GATE,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,52422,RUN,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,52423,SKIP,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,52424,RFXUCU,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,52425,XUCU,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,52426,UCU1,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,52427,UCU2,,Hematology,Urine,unmapped_candidate
+urine,miiv,labevents,52703,"Albumin, Urine",,Chemistry,Urine,unmapped_candidate
+urine,miiv,labevents,52720,"HCG, Urine, Qualitative",,Chemistry,Urine,unmapped_candidate
+urine,eicu,lab,WBC's in urine,WBC's in urine,,,,unmapped_candidate
+urine,eicu,lab,24 h urine urea nitrogen,24 h urine urea nitrogen,G/24HR,,,unmapped_candidate
+urine,eicu,intakeoutput,incontinent urine,incontinent urine,,,,unmapped_candidate
+urine,eicu,intakeoutput,OR urine,OR urine,,,,unmapped_candidate
+urine,eicu,intakeoutput,Urine Incontinence,Urine Incontinence,,,,unmapped_candidate
+urine,eicu,intakeoutput,Urine Count,Urine Count,,,,unmapped_candidate
+urine,eicu,intakeoutput,SN Urine Output(ml),SN Urine Output(ml),,,,unmapped_candidate
+urine,eicu,intakeoutput,Suprapubic Urine Output,Suprapubic Urine Output,,,,unmapped_candidate
+urine,eicu,intakeoutput,urine count,urine count,,,,unmapped_candidate
+urine,eicu,intakeoutput,urine incontinence,urine incontinence,,,,unmapped_candidate
+urine,eicu,intakeoutput,Urine Occurrence,Urine Occurrence,,,,unmapped_candidate
+urine,eicu,intakeoutput,Urine Output-Foley,Urine Output-Foley,,,,unmapped_candidate
+urine,eicu,intakeoutput,Urine Output-foley,Urine Output-foley,,,,unmapped_candidate
+urine,eicu,intakeoutput,Urine Output-FOLEY,Urine Output-FOLEY,,,,unmapped_candidate
+urine,eicu,intakeoutput,Urine Output-Urine Output,Urine Output-Urine Output,,,,unmapped_candidate
+urine,eicu,intakeoutput,"Urine, void:","Urine, void:",,,,unmapped_candidate
+urine,eicu,intakeoutput,Mixed Urine/Stool Volume,Mixed Urine/Stool Volume,,,,unmapped_candidate
+vent_rate,aumc,numericitems,6640,Hartfrequentie,/min,,,unmapped_candidate
+vent_rate,aumc,numericitems,8874,Ademfrequentie Monitor,None,,,unmapped_candidate
+vent_rate,aumc,numericitems,9469,Pacemaker Frequentie,None,,,unmapped_candidate
+vent_rate,aumc,numericitems,13075,A_Hartfrequentie,/min,,,unmapped_candidate
+vent_rate,aumc,numericitems,13092,A_Ademfrequentie,/min,,,unmapped_candidate
+vent_rate,aumc,numericitems,14055,PiCCO HF Hartfrequentie,/min,,,unmapped_candidate
+vent_rate,aumc,numericitems,14455,RA_Ademfrequentie,/min,,,unmapped_candidate
+vent_rate,aumc,numericitems,16613,MCA_Ademfrequentie,/min,,,unmapped_candidate
+vent_rate,mimic,chartevents,224688,Respiratory Rate (Set),insp/min,Respiratory,,unmapped_candidate
+vent_rate,mimic,labevents,50827,Ventilation Rate,,Blood Gas,Blood,unmapped_candidate
+vent_rate,miiv,labevents,50827,Ventilation Rate,,Blood Gas,Blood,unmapped_candidate
+vent_rate,eicu,lab,Vent Rate,Vent Rate,/min,,,unmapped_candidate
+wbc,aumc,numericitems,11678,Tot.WBC*10^8 (overig),10^8,,,unmapped_candidate
+wbc,aumc,numericitems,18553,Tot. WBC*10^8 (HPC-A Allogeen),10^8,,,unmapped_candidate
+wbc,aumc,numericitems,18554,Tot. WBC*10^8 (HPC-A Autoloog),10^8,,,unmapped_candidate
+wbc,aumc,numericitems,18557,Tot. WBC*10^8 (Tcellen concentraat),10^8,,,unmapped_candidate
+wbc,mimic,labevents,51384,"WBC, Joint Fluid",,Hematology,Joint Fluid,unmapped_candidate
+wbc,mimic,labevents,51439,"WBC, Other Fluid",,Hematology,Other Body Fluid,unmapped_candidate
+wbc,mimic,labevents,51458,"WBC, Pleural",,Hematology,Pleural,unmapped_candidate
+wbc,mimic,labevents,51128,"WBC, Ascites",,Hematology,Ascites,unmapped_candidate
+wbc,mimic,labevents,51241,Leukocyte Alkaline Phosphatase,,Hematology,Blood,unmapped_candidate
+wbc,miiv,labevents,51241,Leukocyte Alkaline Phosphatase,,Hematology,Blood,unmapped_candidate
+wbc,eicu,lab,WBC's in cerebrospinal fluid,WBC's in cerebrospinal fluid,,,,unmapped_candidate
+wbc,eicu,lab,WBC's in synovial fluid,WBC's in synovial fluid,,,,unmapped_candidate
+wbc,eicu,lab,WBC's in body fluid,WBC's in body fluid,,,,unmapped_candidate
+wbc,eicu,lab,WBC's in pleural fluid,WBC's in pleural fluid,,,,unmapped_candidate
+wbc,eicu,lab,WBC's in peritoneal fluid,WBC's in peritoneal fluid,,,,unmapped_candidate
+wbc,eicu,lab,WBC's in pericardial fluid,WBC's in pericardial fluid,,,,unmapped_candidate

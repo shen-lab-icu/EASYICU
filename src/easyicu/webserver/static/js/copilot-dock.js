@@ -220,6 +220,7 @@
   };
 
   function routeOf() { const r = (location.hash || '#entry').slice(1); return CTX[r] ? r : (window.SCREENS && window.SCREENS[r] ? r : 'entry'); }
+  function shouldHideFab(route) { return route === 'guided' || route === 'agent'; }
   function ctxFor(r) { return CTX[r] || CTX.entry; }
 
   /* ---- rendering ---- */
@@ -337,7 +338,7 @@
   }
   function close() {
     dock.classList.remove('open'); backdrop.classList.remove('open');
-    if (routeOf() !== 'guided') fab.hidden = false;
+    if (!shouldHideFab(routeOf())) fab.hidden = false;
     try { localStorage.setItem('easyicu_dock', '0'); } catch (e) {}
   }
   function toggle() { dock.classList.contains('open') ? close() : open(); }
@@ -431,7 +432,7 @@
     // react to navigation: hide FAB on the full guided screen; update context if open
     window.addEventListener('hashchange', () => {
       const r = routeOf();
-      if (r === 'guided') { close(); fab.hidden = true; }
+      if (shouldHideFab(r)) { close(); fab.hidden = true; }
       else { if (!dock.classList.contains('open')) fab.hidden = false; }
       if (r !== lastRoute && r !== 'guided') {
         // Keep the context label in sync with the route even while the dock is
@@ -445,7 +446,7 @@
     window.addEventListener('easyicu:languagechange', refreshLanguage);
 
     lastRoute = routeOf();
-    if (routeOf() === 'guided') fab.hidden = true;
+    if (shouldHideFab(routeOf())) fab.hidden = true;
   }
 
   function init() {

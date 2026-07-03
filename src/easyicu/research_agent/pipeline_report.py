@@ -42,7 +42,12 @@ import textwrap
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
+from .article_contract import summarize_article_contract_coverage
+from .display_suite import summarize_display_suite_status
 from .evidence import EvidenceStore
+from .figure_strategy import summarize_article_figure_strategy_coverage
+from .publication_figures import PUBLICATION_FIGURE_SKILL_POLICY_VERSION
+from .review_artifacts import build_review_artifact_payloads
 from .schema import AnalysisPlan, ResearchContext, ValidationFinding
 
 
@@ -202,6 +207,52 @@ def _blocked_outcome_manuscript_leaks(manuscript_text: str) -> List[str]:
     return leaks
 
 
+def _record_artifact_basename(record: Any) -> str:
+    return Path(str(record.relative_path)).name.split("__", 1)[-1]
+
+
+def _source_fingerprints_match(evidence: EvidenceStore, metadata: Dict[str, Any]) -> bool:
+    source_ids = metadata.get("source_evidence_ids")
+    if isinstance(source_ids, str):
+        ids = [source_ids]
+    elif isinstance(source_ids, (list, tuple, set)):
+        ids = [str(eid) for eid in source_ids if str(eid)]
+    else:
+        ids = []
+    single = metadata.get("source_evidence_id")
+    if single and str(single) not in ids:
+        ids.append(str(single))
+    fingerprints = metadata.get("source_evidence_sha256")
+    if not ids or not isinstance(fingerprints, dict) or not fingerprints:
+        return False
+    for evidence_id in ids:
+        source = evidence.get(evidence_id)
+        if source is None or fingerprints.get(evidence_id) != source.sha256:
+            return False
+    return True
+
+
+def _publication_figure_policy_matches(metadata: Dict[str, Any]) -> bool:
+    return (
+        metadata.get("figure_skill_policy_version")
+        == PUBLICATION_FIGURE_SKILL_POLICY_VERSION
+    )
+
+
+def _run_level_publication_skill_record(record: Any) -> bool:
+    return (
+        record.producer == "publication_figure_skill"
+        and _record_artifact_basename(record).startswith("easyicu_publication_figure.")
+    )
+
+
+_PUBLICATION_FIGURE_VISUAL_ERROR_VALIDATORS = {
+    "publication_figure_export",
+    "visual_qa",
+    "vlm_visual_qa",
+}
+
+
 def _publication_figure_bundle_ready(
     *,
     evidence: EvidenceStore,
@@ -215,7 +266,7 @@ def _publication_figure_bundle_ready(
         finding
         for finding in (findings or [])
         if finding.severity == "error"
-        and finding.validator in {"visual_qa", "vlm_visual_qa"}
+        and finding.validator in _PUBLICATION_FIGURE_VISUAL_ERROR_VALIDATORS
     ]
     for record in evidence.records():
         metadata = record.metadata or {}
@@ -246,6 +297,11 @@ def _publication_figure_bundle_ready(
         )
         if not is_explicit_publication:
             continue
+        if _run_level_publication_skill_record(record) and (
+            not _source_fingerprints_match(evidence, metadata)
+            or not _publication_figure_policy_matches(metadata)
+        ):
+            continue
         if (
             metadata.get("source_evidence_id")
             or metadata.get("source_evidence_ids")
@@ -273,245 +329,11 @@ def _publication_figure_bundle_ready(
         "publication_figure_contract_ready": contract_ready,
         "publication_figure_source_data_ready": source_ready,
         "publication_figure_visual_qa_passed": visual_qa_passed,
-    }
-
-
-_TABLE_ONE_DIRECT_TERMS = (
-    "table_one",
-    "table one",
-    "table 1",
-    "baseline characteristic",
-)
-_TABLE_ONE_SUBJECT_TERMS = (
-    "cohort",
-    "covariate",
-    "patient",
-    "baseline",
-    "demographic",
-)
-_TABLE_ONE_DESCRIPTOR_TERMS = ("summary", "characteristic", "overview")
-_AUDIT_DISPLAY_CATEGORIES = {
-    "audit",
-    "data_quality",
-    "missingness",
-    "provenance",
-    "sensitivity",
-    "robustness",
-}
-
-
-def _display_table_key(relative_path: str) -> str:
-    return Path(str(relative_path or "")).name.split("__", 1)[-1]
-
-
-def _declares_table_one_text(text: str) -> bool:
-    lowered = str(text or "").lower()
-    if any(term in lowered for term in _TABLE_ONE_DIRECT_TERMS):
-        return True
-    return any(term in lowered for term in _TABLE_ONE_SUBJECT_TERMS) and any(
-        term in lowered for term in _TABLE_ONE_DESCRIPTOR_TERMS
-    )
-
-
-def _plan_expects_table_one(plan: Optional[AnalysisPlan]) -> bool:
-    if plan is None:
-        return False
-    for step in plan.steps:
-        items = [step.intent, step.method, *(step.expected_outputs or [])]
-        for item in items:
-            text = str(item or "")
-            if "table" in text.lower() and _declares_table_one_text(text):
-                return True
-    return False
-
-
-def _display_categories_for_text(text: str) -> set[str]:
-    lowered = str(text or "").lower()
-    categories: set[str] = set()
-    if _declares_table_one_text(lowered):
-        categories.add("table_one")
-    if any(term in lowered for term in ("attrition", "denominator", "flow")):
-        categories.add("cohort_flow")
-    if any(
-        term in lowered
-        for term in (
-            "association",
-            "effect",
-            "odds ratio",
-            "risk ratio",
-            "risk difference",
-            "primary",
-            "regression",
-            "estimate",
-        )
-    ):
-        categories.add("primary_effect")
-    if any(term in lowered for term in ("sensitivity", "robustness", "variant")):
-        categories.add("sensitivity")
-    if any(
-        term in lowered
-        for term in (
-            "audit",
-            "quality",
-            "missingness",
-            "measurement",
-            "provenance",
-            "source definition",
-            "zero fill",
-            "complete case",
-            "coercion",
-            "convergence",
-        )
-    ):
-        categories.add("data_quality")
-    if any(
-        term in lowered
-        for term in ("auroc", "calibration", "discrimination", "prediction")
-    ):
-        categories.add("prediction")
-    return categories
-
-
-def _contract_text_for_display(raw: Dict[str, Any]) -> str:
-    parts: List[str] = [
-        str(raw.get("figure_id") or ""),
-        str(raw.get("title") or ""),
-        str(raw.get("core_claim") or ""),
-        str(raw.get("statistics_note") or ""),
-    ]
-    panels = raw.get("panels")
-    if isinstance(panels, list):
-        for panel in panels:
-            if not isinstance(panel, dict):
-                continue
-            parts.extend(
-                [
-                    str(panel.get("title") or ""),
-                    str(panel.get("role") or ""),
-                    str(panel.get("claim") or ""),
-                    str(panel.get("review_risk") or ""),
-                ]
-            )
-    return "\n".join(part for part in parts if part)
-
-
-def _figure_contract_paths(run_dir: Path) -> List[Path]:
-    paths = [
-        *run_dir.glob("publication_figures/*.figure_contract.json"),
-        *run_dir.glob("steps/*/outputs/*.figure_contract.json"),
-    ]
-    seen: set[str] = set()
-    unique: List[Path] = []
-    for path in sorted(paths):
-        key = str(path.resolve())
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(path)
-    return unique
-
-
-def _display_suite_status(
-    *,
-    plan: Optional[AnalysisPlan],
-    evidence: EvidenceStore,
-    run_dir: Path,
-    publication: Dict[str, Any],
-) -> Dict[str, Any]:
-    """Summarise article-level display coverage.
-
-    This gate is intentionally above individual figure validation. A result
-    figure can be technically valid while the manuscript package is still too
-    thin or repetitive for article use.
-    """
-    table_keys: set[str] = set()
-    categories: set[str] = set()
-    for record in evidence.records():
-        text = " ".join(
-            [
-                record.evidence_id,
-                record.kind,
-                record.description,
-                _display_table_key(record.relative_path),
-                json.dumps(record.metadata or {}, ensure_ascii=False, default=str),
-            ]
-        )
-        categories.update(_display_categories_for_text(text))
-        if record.kind == "table":
-            table_keys.add(_display_table_key(record.relative_path))
-
-    contract_paths = _figure_contract_paths(run_dir)
-    panel_count = 0
-    role_names: set[str] = set()
-    result_like_contracts = 0
-    for contract_path in contract_paths:
-        try:
-            raw = json.loads(contract_path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        if not isinstance(raw, dict):
-            continue
-        text = _contract_text_for_display(raw)
-        categories.update(_display_categories_for_text(text))
-        panels = raw.get("panels")
-        if not isinstance(panels, list):
-            continue
-        panel_count += len(panels)
-        contract_roles: set[str] = set()
-        for panel in panels:
-            if not isinstance(panel, dict):
-                continue
-            role = str(panel.get("role") or "").strip().lower()
-            if role:
-                role_names.add(role)
-                contract_roles.add(role)
-        if any(
-            token in text.lower()
-            for token in (
-                "association",
-                "effect",
-                "risk ratio",
-                "risk difference",
-                "odds ratio",
-                "sensitivity",
-                "robustness",
-                "prediction",
-            )
-        ):
-            result_like_contracts += 1
-
-    table_one_expected = _plan_expects_table_one(plan)
-    has_table_one = "table_one" in categories
-    has_audit_context = bool(categories & _AUDIT_DISPLAY_CATEGORIES)
-    figure_contract_count = len(contract_paths)
-    errors: List[str] = []
-    if table_one_expected and not has_table_one:
-        errors.append("Table 1/baseline cohort display was declared but not registered.")
-    if not publication.get("publication_figure_bundle_ready"):
-        errors.append("No complete publication figure bundle is registered.")
-    if result_like_contracts == 0:
-        errors.append("No result-bearing figure contract is registered.")
-    if panel_count < 2:
-        errors.append("Manuscript-facing result figures expose fewer than two panels.")
-    if len(role_names) < 2:
-        errors.append("Figure contracts lack panel-role diversity.")
-    if not has_audit_context:
-        errors.append("No audit, sensitivity, robustness, missingness, or provenance display is registered.")
-    if len(categories) < 3:
-        errors.append("Display suite covers fewer than three article content categories.")
-
-    return {
-        "display_suite_complete": not errors,
-        "display_table_count": len(table_keys),
-        "display_figure_contract_count": figure_contract_count,
-        "display_result_figure_contract_count": result_like_contracts,
-        "display_contract_panel_count": panel_count,
-        "display_contract_role_count": len(role_names),
-        "display_categories": sorted(categories),
-        "display_table_one_expected": table_one_expected,
-        "display_table_one_present": has_table_one,
-        "display_audit_context_present": has_audit_context,
-        "display_suite_errors": errors,
+        "publication_figure_visual_qa_error_count": len(visual_errors),
+        "publication_figure_visual_qa_errors": [
+            {"validator": finding.validator, "message": finding.message}
+            for finding in visual_errors
+        ],
     }
 
 
@@ -653,7 +475,71 @@ def _manuscript_numeric_bound_clean(manuscript_text: str) -> bool:
         return False
     if "Manuscript scaffold not generated" in manuscript_text[:300]:
         return False
-    return "<!-- UNTRACED:" not in manuscript_text and "<!-- AMBIGUOUS:" not in manuscript_text
+    return (
+        "<!-- UNTRACED:" not in manuscript_text
+        and "<!-- AMBIGUOUS:" not in manuscript_text
+        and not _MANIFEST_COMMENT_RE.search(manuscript_text)
+    )
+
+
+_WRITER_FAILURE_RE = re.compile(
+    r"\b(?:writer failed|error code|invalid proxy api key|api key|"
+    r"connection error|rate limit|authentication)\b",
+    flags=re.IGNORECASE,
+)
+
+_MANIFEST_COMMENT_RE = re.compile(
+    r"<!--\s*(?P<level>warning|error)\s*:\s*see manifest\s*-->",
+    flags=re.IGNORECASE,
+)
+
+
+def _manuscript_text_status(manuscript_text: str) -> Dict[str, Any]:
+    """Validate that a manuscript file contains a real evidence-bound draft.
+
+    Readiness used to treat any non-placeholder manuscript path as generated.
+    That allowed a one-line writer exception such as ``(writer failed: ...)`` or
+    an empty bound file to pass downstream gates. The check intentionally stays
+    case-neutral: it validates draft substance and evidence binding, not any
+    particular benchmark topic, variable, or figure.
+    """
+
+    text = str(manuscript_text or "")
+    stripped = text.strip()
+    errors: List[str] = []
+    if not stripped:
+        errors.append("manuscript draft is empty")
+    head = stripped[:600]
+    if "Manuscript scaffold not generated" in head:
+        errors.append("manuscript scaffold was not generated")
+    if _WRITER_FAILURE_RE.search(head):
+        errors.append("manuscript draft contains a writer/runtime failure message")
+    word_count = len(re.findall(r"[A-Za-z][A-Za-z0-9-]*", stripped))
+    if word_count < 8:
+        errors.append("manuscript draft has too little prose content")
+    if not re.search(r"(?:\]\(evidence/|\{evidence:|\[\^claim_)", stripped):
+        errors.append("manuscript draft has no evidence-bound claim links")
+    manifest_comment_counts = {"warning": 0, "error": 0}
+    for match in _MANIFEST_COMMENT_RE.finditer(stripped):
+        level = match.group("level").lower()
+        manifest_comment_counts[level] = manifest_comment_counts.get(level, 0) + 1
+    if manifest_comment_counts["error"]:
+        errors.append(
+            "manuscript draft contains "
+            f"{manifest_comment_counts['error']} unresolved manifest error comment(s)"
+        )
+    if manifest_comment_counts["warning"]:
+        errors.append(
+            "manuscript draft contains "
+            f"{manifest_comment_counts['warning']} unresolved manifest warning comment(s)"
+        )
+    return {
+        "manuscript_text_ready": not errors,
+        "manuscript_text_errors": errors,
+        "manuscript_word_count": word_count,
+        "manuscript_manifest_warning_count": manifest_comment_counts["warning"],
+        "manuscript_manifest_error_count": manifest_comment_counts["error"],
+    }
 
 
 _PUBLICATION_FIGURE_SUMMARY_RE = re.compile(
@@ -807,6 +693,7 @@ def _partition_findings_by_supersession(
 
 def _compute_readiness_gates(
     *,
+    context: ResearchContext,
     plan: Optional[AnalysisPlan],
     per_step_records: Sequence[Dict[str, Any]],
     findings: Sequence[ValidationFinding],
@@ -902,10 +789,11 @@ def _compute_readiness_gates(
         "blocked outcome gate leaked into manuscript: " + leak
         for leak in blocked_outcome_leaks
     ]
+    manuscript_text_gate = _manuscript_text_status(manuscript_text)
     manuscript_generated = (
         not writer_probe_mode
         and manuscript_path.exists()
-        and "Manuscript scaffold not generated" not in manuscript_text[:300]
+        and manuscript_text_gate["manuscript_text_ready"]
         and not stop_after_analysis
     )
     evidence_complete = manuscript_generated and missing_evidence_count == 0 and not evidence_errors
@@ -923,11 +811,23 @@ def _compute_readiness_gates(
         run_dir=run_dir,
         findings=active_findings,
     )
-    display_suite = _display_suite_status(
+    display_suite = summarize_display_suite_status(
+        context=context,
         plan=plan,
         evidence=evidence,
         run_dir=run_dir,
         publication=publication,
+    )
+    article_contract = summarize_article_contract_coverage(
+        context=context,
+        plan=plan,
+        evidence_records=evidence.records(),
+        per_step_records=per_step_records,
+        run_dir=run_dir,
+    )
+    figure_strategy = summarize_article_figure_strategy_coverage(
+        context=context,
+        run_dir=run_dir,
     )
     return {
         **execution,
@@ -937,8 +837,11 @@ def _compute_readiness_gates(
         "manuscript_ready": manuscript_ready,
         "publication_ready": manuscript_ready
         and publication["publication_figure_bundle_ready"]
-        and display_suite["display_suite_complete"],
+        and display_suite["display_suite_complete"]
+        and article_contract["article_contract_complete"]
+        and figure_strategy["article_figure_strategy_complete"],
         "manuscript_generated": manuscript_generated,
+        **manuscript_text_gate,
         "writer_probe_mode": bool(writer_probe_mode),
         "writer_probe_failed_steps": list(writer_probe_failed_steps or []),
         "missing_evidence_count": missing_evidence_count,
@@ -964,6 +867,8 @@ def _compute_readiness_gates(
         ],
         **publication,
         **display_suite,
+        **article_contract,
+        **figure_strategy,
     }
 
 
@@ -981,6 +886,7 @@ def write_readiness_artifacts(
     writer_probe_failed_steps: Optional[Sequence[str]] = None,
 ) -> tuple[Dict[str, Any], Dict[str, str]]:
     gates = _compute_readiness_gates(
+        context=context,
         plan=plan,
         per_step_records=per_step_records,
         findings=findings,
@@ -1056,13 +962,53 @@ def write_readiness_artifacts(
 
     display_suite_path = run_dir / "display_suite_audit.json"
     display_suite_payload = {
-        "schema_version": "easyicu.display_suite_audit/1",
+        "schema_version": "easyicu.display_suite_audit/2",
         "display_suite_complete": gates["display_suite_complete"],
         "table_count": gates["display_table_count"],
         "figure_contract_count": gates["display_figure_contract_count"],
         "result_figure_contract_count": gates["display_result_figure_contract_count"],
+        "primary_publication_figure_contract_count": gates[
+            "display_primary_publication_figure_contract_count"
+        ],
+        "supporting_figure_contract_count": gates[
+            "display_supporting_figure_contract_count"
+        ],
+        "other_figure_contract_count": gates["display_other_figure_contract_count"],
+        "primary_publication_contract_paths": gates[
+            "display_primary_publication_contract_paths"
+        ],
+        "supporting_figure_contract_paths": gates[
+            "display_supporting_figure_contract_paths"
+        ],
+        "other_figure_contract_paths": gates["display_other_figure_contract_paths"],
         "contract_panel_count": gates["display_contract_panel_count"],
+        "primary_publication_panel_count": gates[
+            "display_primary_publication_panel_count"
+        ],
+        "supporting_panel_count": gates["display_supporting_panel_count"],
         "contract_role_count": gates["display_contract_role_count"],
+        "primary_publication_role_count": gates[
+            "display_primary_publication_role_count"
+        ],
+        "supporting_role_count": gates["display_supporting_role_count"],
+        "chart_types": gates["display_chart_types"],
+        "primary_publication_chart_types": gates[
+            "display_primary_publication_chart_types"
+        ],
+        "supporting_chart_types": gates["display_supporting_chart_types"],
+        "absolute_risk_visual_present": gates["display_absolute_risk_visual_present"],
+        "primary_publication_absolute_risk_visual_present": gates[
+            "display_primary_publication_absolute_risk_visual_present"
+        ],
+        "supporting_absolute_risk_visual_present": gates[
+            "display_supporting_absolute_risk_visual_present"
+        ],
+        "primary_publication_result_figure_contract_count": gates[
+            "display_primary_publication_result_figure_contract_count"
+        ],
+        "supporting_result_figure_contract_count": gates[
+            "display_supporting_result_figure_contract_count"
+        ],
         "categories": gates["display_categories"],
         "table_one_expected": gates["display_table_one_expected"],
         "table_one_present": gates["display_table_one_present"],
@@ -1075,6 +1021,81 @@ def write_readiness_artifacts(
     )
     artifact_paths["display_suite_audit"] = str(
         display_suite_path.relative_to(run_dir)
+    )
+
+    article_contract_path = run_dir / "article_contract_audit.json"
+    article_contract_payload = {
+        "schema_version": gates["article_contract_audit_schema_version"],
+        "article_contract_complete": gates["article_contract_complete"],
+        "analysis_family": gates["article_contract_family"],
+        "required_roles": gates["article_required_roles"],
+        "plan_roles": gates["article_plan_roles"],
+        "artifact_roles": gates["article_artifact_roles"],
+        "missing_plan_roles": gates["article_missing_plan_roles"],
+        "missing_artifact_roles": gates["article_missing_artifact_roles"],
+        "missing_artifact_modules": gates["article_missing_artifact_modules"],
+        "errors": gates["article_contract_errors"],
+        "contract": gates["article_contract"],
+    }
+    article_contract_path.write_text(
+        json.dumps(
+            article_contract_payload,
+            indent=2,
+            ensure_ascii=False,
+            default=str,
+        ),
+        encoding="utf-8",
+    )
+    artifact_paths["article_contract_audit"] = str(
+        article_contract_path.relative_to(run_dir)
+    )
+
+    figure_strategy_path = run_dir / "article_figure_strategy_audit.json"
+    figure_strategy_payload = {
+        "schema_version": gates["article_figure_strategy_audit_schema_version"],
+        "article_figure_strategy_complete": gates[
+            "article_figure_strategy_complete"
+        ],
+        "analysis_family": gates["article_figure_strategy_family"],
+        "archetype": gates["article_figure_strategy_archetype"],
+        "hero_role": gates["article_figure_strategy_hero_role"],
+        "required_roles": gates["article_figure_strategy_required_roles"],
+        "covered_roles": gates["article_figure_strategy_covered_roles"],
+        "missing_roles": gates["article_figure_strategy_missing_roles"],
+        "chart_types": gates["article_figure_strategy_chart_types"],
+        "primary_publication_roles": gates[
+            "article_figure_strategy_primary_publication_roles"
+        ],
+        "primary_publication_chart_types": gates[
+            "article_figure_strategy_primary_publication_chart_types"
+        ],
+        "primary_publication_panel_count": gates[
+            "article_figure_strategy_primary_publication_panel_count"
+        ],
+        "primary_publication_minimum_required_role_count": gates[
+            "article_figure_strategy_primary_publication_minimum_required_role_count"
+        ],
+        "primary_publication_role_panels": gates[
+            "article_figure_strategy_primary_publication_role_panels"
+        ],
+        "minimum_distinct_chart_types": gates[
+            "article_figure_strategy_minimum_distinct_chart_types"
+        ],
+        "role_panels": gates["article_figure_strategy_role_panels"],
+        "errors": gates["article_figure_strategy_errors"],
+        "strategy": gates["article_figure_strategy"],
+    }
+    figure_strategy_path.write_text(
+        json.dumps(
+            figure_strategy_payload,
+            indent=2,
+            ensure_ascii=False,
+            default=str,
+        ),
+        encoding="utf-8",
+    )
+    artifact_paths["article_figure_strategy_audit"] = str(
+        figure_strategy_path.relative_to(run_dir)
     )
 
     claim_ledger_path = run_dir / "claim_ledger.csv"
@@ -1118,7 +1139,33 @@ def write_readiness_artifacts(
     elif manuscript_ready_path.exists():
         manuscript_ready_path.unlink()
 
-    run_status_payload["canonical_outputs"] = artifact_paths
+    review_payload, figure_gallery_payload, canonical_figure_paths = (
+        build_review_artifact_payloads(run_dir=run_dir, gates=gates)
+    )
+    review_artifacts_path = run_dir / "review_artifacts.json"
+    review_artifacts_path.write_text(
+        json.dumps(review_payload, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
+    artifact_paths["review_artifacts"] = str(
+        review_artifacts_path.relative_to(run_dir)
+    )
+    figure_gallery_path = run_dir / "figure_gallery.json"
+    figure_gallery_path.write_text(
+        json.dumps(
+            figure_gallery_payload,
+            indent=2,
+            ensure_ascii=False,
+            default=str,
+        ),
+        encoding="utf-8",
+    )
+    artifact_paths["figure_gallery"] = str(figure_gallery_path.relative_to(run_dir))
+
+    run_status_payload["canonical_outputs"] = {
+        **artifact_paths,
+        **canonical_figure_paths,
+    }
     run_status_path.write_text(
         json.dumps(run_status_payload, indent=2, ensure_ascii=False, default=str),
         encoding="utf-8",
@@ -1154,6 +1201,24 @@ def write_readiness_artifacts(
             "table",
             "Ledger of manuscript claims and evidence links.",
             claim_ledger_path,
+        ),
+        (
+            "article_figure_strategy_audit",
+            "log",
+            "Article figure-strategy audit for publication gating.",
+            figure_strategy_path,
+        ),
+        (
+            "review_artifacts",
+            "log",
+            "Reviewer-facing artifact manifest with primary and supporting figure tiers.",
+            review_artifacts_path,
+        ),
+        (
+            "figure_gallery",
+            "log",
+            "Reviewer-facing figure gallery with primary and supporting figure tiers.",
+            figure_gallery_path,
         ),
         (
             "author_review_note",
@@ -1271,9 +1336,18 @@ def _render_author_review_note(
         f"- analysis_validated: `{gates['analysis_validated']}`",
         f"- manuscript_ready: `{gates['manuscript_ready']}`",
         f"- display_suite_complete: `{gates.get('display_suite_complete')}`",
+        "- primary_publication_figure_contracts: "
+        f"`{gates.get('display_primary_publication_figure_contract_count')}`",
+        "- supporting_figure_contracts: "
+        f"`{gates.get('display_supporting_figure_contract_count')}`",
         f"- publication_ready: `{gates['publication_ready']}`",
         "",
     ]
+    superseded_error_keys = {
+        (str(item.get("validator") or ""), str(item.get("message") or ""))
+        for item in (gates.get("superseded_errors") or [])
+        if isinstance(item, dict)
+    }
     failed_steps = gates.get("failed_steps") or []
     missing_steps = gates.get("missing_steps") or []
     if failed_steps or missing_steps:
@@ -1294,13 +1368,48 @@ def _render_author_review_note(
         for error in gates.get("display_suite_errors") or []:
             lines.append(f"- {error}")
         lines.append("")
-    error_findings = [f for f in findings if f.severity == "error"]
+    if gates.get("manuscript_text_errors"):
+        lines.extend(["", "## Manuscript text gate", ""])
+        for error in gates.get("manuscript_text_errors") or []:
+            lines.append(f"- {error}")
+        lines.append("")
+    error_findings = [
+        f
+        for f in findings
+        if f.severity == "error"
+        and (str(f.validator or ""), str(f.message or "")) not in superseded_error_keys
+    ]
+    superseded_error_findings = [
+        f
+        for f in findings
+        if f.severity == "error"
+        and (str(f.validator or ""), str(f.message or "")) in superseded_error_keys
+    ]
     if error_findings:
         lines.extend(["## Blocking findings", ""])
         for finding in error_findings:
             lines.append(f"- `{finding.validator}`: {finding.message}")
         lines.append("")
-    if not error_findings and not failed_steps and not missing_steps:
+    if superseded_error_findings:
+        lines.extend(
+            [
+                "## Superseded findings",
+                "",
+                "These findings are retained in the manifest audit trail but do "
+                "not block the current readiness gates.",
+                "",
+            ]
+        )
+        for finding in superseded_error_findings:
+            lines.append(f"- `{finding.validator}`: {finding.message}")
+        lines.append("")
+    manuscript_text_errors = gates.get("manuscript_text_errors") or []
+    if (
+        not error_findings
+        and not failed_steps
+        and not missing_steps
+        and not manuscript_text_errors
+    ):
         lines.extend(
             [
                 "## Review",
@@ -1385,6 +1494,20 @@ def render_report(
             "publication_ready={publication_ready}".format(**readiness)
         )
         parts.append("")
+        primary_contracts = readiness.get("display_primary_publication_contract_paths") or []
+        supporting_contracts = readiness.get("display_supporting_figure_contract_paths") or []
+        if primary_contracts or supporting_contracts:
+            parts.append("## Figure display tiers")
+            parts.append("")
+            if primary_contracts:
+                parts.append("- Primary publication contracts:")
+                parts.extend(f"  - `{path}`" for path in primary_contracts)
+            else:
+                parts.append("- Primary publication contracts: none")
+            if supporting_contracts:
+                parts.append("- Supporting step contracts:")
+                parts.extend(f"  - `{path}`" for path in supporting_contracts)
+            parts.append("")
 
     if plan:
         parts.append("## Plan")

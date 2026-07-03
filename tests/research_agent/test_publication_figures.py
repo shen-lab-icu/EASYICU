@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from easyicu.research_agent.publication_figures import (
+    PUBLICATION_FIGURE_SKILL_POLICY_VERSION,
     PanelSpec,
     apply_publication_style,
     audit_figure_contract,
@@ -230,6 +231,530 @@ def test_publication_figure_skill_rebuilds_stale_single_panel_bundle(
     assert any(eid.endswith("_v2") for eid in result.figure_evidence_ids)
 
 
+def test_curated_publication_bundle_requires_current_policy_version(ra, tmp_path: Path):
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.figure_skill import (
+        _has_curated_publication_figure_bundle,
+        _source_fingerprint_metadata,
+    )
+
+    evidence = EvidenceStore(tmp_path)
+    source_path = tmp_path / "publication_figure_source_data.csv"
+    source_path.write_text("term,estimate\nsepsis3,1.05\n", encoding="utf-8")
+    source_record = evidence.register_file(
+        kind="table",
+        description="Publication source data.",
+        source_path=source_path,
+        evidence_id="publication_figure_source_data",
+    )
+    current_metadata = _source_fingerprint_metadata(
+        evidence, [source_record.evidence_id]
+    )
+    assert (
+        current_metadata["figure_skill_policy_version"]
+        == PUBLICATION_FIGURE_SKILL_POLICY_VERSION
+    )
+    stale_metadata = {
+        key: value
+        for key, value in current_metadata.items()
+        if key != "figure_skill_policy_version"
+    }
+    contract_path = tmp_path / "easyicu_publication_figure.figure_contract.json"
+    contract_path.write_text(
+        json.dumps(
+            {
+                "figure_id": "easyicu_publication_figure",
+                "core_claim": "Current figure contract.",
+                "panels": [
+                    {
+                        "panel_id": "A",
+                        "title": "Primary estimate",
+                        "role": "primary_estimand",
+                        "claim": "Primary estimate is shown.",
+                        "evidence_ids": [source_record.evidence_id],
+                    }
+                ],
+                "source_data": [source_record.evidence_id],
+            }
+        ),
+        encoding="utf-8",
+    )
+    evidence.register_file(
+        kind="log",
+        description="Publication figure contract.",
+        source_path=contract_path,
+        evidence_id="publication_figure_contract",
+        producer="publication_figure_skill",
+        generation_mode="deterministic_figure_skill",
+        metadata=stale_metadata,
+    )
+    for suffix in ("svg", "png"):
+        path = tmp_path / f"easyicu_publication_figure.{suffix}"
+        path.write_text("<svg></svg>" if suffix == "svg" else "png", encoding="utf-8")
+        evidence.register_file(
+            kind="figure",
+            description="Publication figure export.",
+            source_path=path,
+            evidence_id=f"publication_figure_{suffix}",
+            producer="publication_figure_skill",
+            generation_mode="deterministic_figure_skill",
+            metadata={"figure_role": "publication_figure", **stale_metadata},
+        )
+
+    assert (
+        _has_curated_publication_figure_bundle(evidence, run_dir=tmp_path) is False
+    )
+
+
+def test_publication_figure_skill_promotes_step_publication_bundle_before_robustness(
+    ra,
+    tmp_path: Path,
+):
+    from PIL import Image
+
+    from easyicu.research_agent.robustness_panel import (
+        RobustnessPanel,
+        RobustnessPanelRow,
+        write_robustness_panel,
+    )
+
+    run_dir = tmp_path / "run"
+    evidence = ra.EvidenceStore(run_dir)
+    outputs = (
+        run_dir
+        / "steps"
+        / "05_sensitivity_comparison_across_definitions_figure"
+        / "outputs"
+    )
+    outputs.mkdir(parents=True, exist_ok=True)
+    svg = outputs / "sensitivity_forest.svg"
+    svg.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="140">'
+        '<rect width="240" height="140" fill="white"/>'
+        '<text x="16" y="32">Sensitivity forest</text>'
+        '<text x="16" y="64">No lactate covariate</text>'
+        "</svg>",
+        encoding="utf-8",
+    )
+    png = outputs / "sensitivity_forest.png"
+    Image.new("RGB", (240, 140), "white").save(png)
+    source = outputs / "sensitivity_forest_source_data.csv"
+    source.write_text(
+        "spec_id,effect_scale,point_estimate,ci_low,ci_high\n"
+        "primary,OR,1.05,0.99,1.11\n"
+        "no_lactate,OR,1.24,1.18,1.31\n",
+        encoding="utf-8",
+    )
+    contract = make_figure_contract(
+        figure_id="sensitivity_forest",
+        core_claim="Registered sensitivity estimates show which design choices drive the association.",
+        panels=[
+            {
+                "panel_id": "A",
+                "title": "Ratio-scale sensitivity",
+                "role": "robustness",
+                "claim": "The ratio-scale estimates are drawn from the sensitivity table.",
+            },
+            {
+                "panel_id": "B",
+                "title": "Denominator audit",
+                "role": "audit",
+                "claim": "Analytic sample sizes are shown next to the sensitivity estimates.",
+            },
+        ],
+        source_data=["sensitivity_forest_source_data.csv"],
+    )
+    contract_path = outputs / "sensitivity_forest.figure_contract.json"
+    contract_path.write_text(contract.to_json(indent=2), encoding="utf-8")
+
+    metadata = {
+        "figure_role": "publication_figure",
+        "step_id": "05_sensitivity_comparison_across_definitions_figure",
+        "generation_mode": "fallback",
+    }
+    for path, kind, evidence_id in (
+        (svg, "figure", "figure_sensitivity_forest_svg"),
+        (png, "figure", "figure_sensitivity_forest_png"),
+        (contract_path, "log", "log_sensitivity_forest_contract"),
+        (source, "table", "table_sensitivity_forest_source_data"),
+    ):
+        evidence.register_file(
+            kind=kind,
+            description="Registered sensitivity forest bundle.",
+            source_path=path,
+            evidence_id=evidence_id,
+            producer="runner",
+            generation_mode="fallback",
+            metadata=metadata if kind != "table" else {"step_id": metadata["step_id"]},
+        )
+
+    panel = RobustnessPanel.from_rows(
+        [
+            RobustnessPanelRow("primary", "primary", 100, 9.99, 9.0, 11.0, 0.1, "e1", True),
+            RobustnessPanelRow("alt", "cohort", 90, 8.88, 8.0, 10.0, 0.2, "e2", True),
+        ],
+        locked_at="2026-07-02T00:00:00Z",
+    )
+    write_robustness_panel(
+        run_dir=run_dir,
+        panel=panel,
+        evidence=evidence,
+        prompt_pack_version="test",
+    )
+    context = ra.ResearchContext(
+        research_question="Is Sepsis-3 associated with mortality?",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_patients=100,
+            n_stays=100,
+        ),
+        variables=[],
+        target_outcome="death",
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            ra.AnalysisStep(
+                step_id="05_sensitivity_comparison_across_definitions_figure",
+                intent="Render a sensitivity comparison figure.",
+                expected_outputs=["figure:sensitivity_forest"],
+            )
+        ],
+    )
+
+    result = ra.PublicationFigureSkill().run(
+        context=context,
+        plan=plan,
+        evidence=evidence,
+        run_dir=run_dir,
+        prompt_pack_version="test",
+    )
+
+    assert result.generated is True
+    summary = json.loads(
+        (
+            run_dir
+            / "evidence"
+            / "publication_figure_skill_summary__publication_figure_skill_summary.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert summary["generation_mode"] == "promoted_step_publication_figure"
+    assert summary["promoted_from_stem"] == "sensitivity_forest"
+    promoted_contract = json.loads(
+        (
+            run_dir
+            / "publication_figures"
+            / "easyicu_publication_figure.figure_contract.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert "sensitivity estimates" in promoted_contract["core_claim"]
+    assert "robustness panel" not in promoted_contract["statistics_note"].lower()
+
+
+def test_publication_figure_skill_prefers_primary_bundle_over_sensitivity(
+    ra,
+    tmp_path: Path,
+):
+    from PIL import Image
+
+    run_dir = tmp_path / "run"
+    evidence = ra.EvidenceStore(run_dir)
+
+    def register_bundle(
+        *,
+        step_id: str,
+        stem: str,
+        core_claim: str,
+        panel_roles: list[str],
+    ) -> None:
+        outputs = run_dir / "steps" / step_id / "outputs"
+        outputs.mkdir(parents=True, exist_ok=True)
+        svg = outputs / f"{stem}.svg"
+        svg.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="140">'
+            '<rect width="240" height="140" fill="white"/>'
+            f'<text x="16" y="32">{stem}</text>'
+            "</svg>",
+            encoding="utf-8",
+        )
+        png = outputs / f"{stem}.png"
+        Image.new("RGB", (240, 140), "white").save(png)
+        source = outputs / f"{stem}_source_data.csv"
+        source.write_text("term,value\nprimary,1.05\n", encoding="utf-8")
+        contract = make_figure_contract(
+            figure_id=stem,
+            core_claim=core_claim,
+            panels=[
+                {
+                    "panel_id": chr(ord("A") + idx),
+                    "title": f"Panel {idx + 1}",
+                    "role": role,
+                    "chart_type": (
+                        "dot_interval_absolute_risk"
+                        if role == "descriptive_result"
+                        else "forest"
+                    ),
+                    "claim": f"{role} evidence is displayed.",
+                }
+                for idx, role in enumerate(panel_roles)
+            ],
+            source_data=[source.name],
+        )
+        contract_path = outputs / f"{stem}.figure_contract.json"
+        contract_path.write_text(contract.to_json(indent=2), encoding="utf-8")
+
+        metadata = {
+            "figure_role": "publication_figure",
+            "step_id": step_id,
+            "generation_mode": "fallback",
+        }
+        for path, kind, evidence_id in (
+            (svg, "figure", f"figure_{stem}_svg"),
+            (png, "figure", f"figure_{stem}_png"),
+            (contract_path, "log", f"log_{stem}_contract"),
+            (source, "table", f"table_{stem}_source_data"),
+        ):
+            evidence.register_file(
+                kind=kind,
+                description=f"Registered {stem} bundle.",
+                source_path=path,
+                evidence_id=evidence_id,
+                producer="runner",
+                generation_mode="fallback",
+                metadata=metadata if kind != "table" else {"step_id": step_id},
+            )
+
+    register_bundle(
+        step_id="03_primary_results_publication_figure_repair",
+        stem="primary_results_figure",
+        core_claim="The primary results show prevalence, absolute risk, and adjusted effect.",
+        panel_roles=["descriptive_result", "primary_estimand"],
+    )
+    register_bundle(
+        step_id="05_sensitivity_comparison_across_definitions_figure",
+        stem="sensitivity_forest",
+        core_claim="Sensitivity estimates show which design choices drive the association.",
+        panel_roles=["robustness", "audit"],
+    )
+    context = ra.ResearchContext(
+        research_question="Is Sepsis-3 associated with mortality?",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_patients=100,
+            n_stays=100,
+        ),
+        variables=[],
+        target_outcome="death",
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            ra.AnalysisStep(
+                step_id="03_primary_results_publication_figure_repair",
+                intent="Render the primary manuscript figure.",
+                expected_outputs=["figure:publication_figure"],
+            ),
+            ra.AnalysisStep(
+                step_id="05_sensitivity_comparison_across_definitions_figure",
+                intent="Render a sensitivity comparison figure.",
+                expected_outputs=["figure:sensitivity_forest"],
+            ),
+        ],
+    )
+
+    result = ra.PublicationFigureSkill().run(
+        context=context,
+        plan=plan,
+        evidence=evidence,
+        run_dir=run_dir,
+        prompt_pack_version="test",
+    )
+
+    assert result.generated is True
+    summary = json.loads(
+        (
+            run_dir
+            / "evidence"
+            / "publication_figure_skill_summary__publication_figure_skill_summary.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert summary["promoted_from_step_id"] == "03_primary_results_publication_figure_repair"
+    assert summary["promoted_from_stem"] == "primary_results_figure"
+    promoted_contract = json.loads(
+        (
+            run_dir
+            / "publication_figures"
+            / "easyicu_publication_figure.figure_contract.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert "primary results" in promoted_contract["core_claim"]
+    assert promoted_contract["panels"][0]["metadata"]["chart_type"] == (
+        "dot_interval_absolute_risk"
+    )
+    assert promoted_contract["panels"][1]["metadata"]["chart_type"] == "forest"
+
+
+def test_publication_figure_skill_rebuilds_sparse_primary_bundle_when_source_tables_exist(
+    ra,
+    tmp_path: Path,
+):
+    from PIL import Image
+
+    run_dir = tmp_path / "run"
+    evidence = ra.EvidenceStore(run_dir)
+    outputs = run_dir / "steps" / "03_primary_results_figure" / "outputs"
+    outputs.mkdir(parents=True, exist_ok=True)
+    svg = outputs / "primary_results_figure.svg"
+    svg.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="140">'
+        '<rect width="240" height="140" fill="white"/>'
+        '<text x="16" y="32">Sparse primary figure</text>'
+        "</svg>",
+        encoding="utf-8",
+    )
+    png = outputs / "primary_results_figure.png"
+    Image.new("RGB", (240, 140), "white").save(png)
+    sparse_source = outputs / "primary_results_figure_source_data.csv"
+    sparse_source.write_text("term,value\nprimary,1.05\n", encoding="utf-8")
+    sparse_contract = make_figure_contract(
+        figure_id="primary_results_figure",
+        core_claim="Prevalence and the primary adjusted estimate are shown.",
+        panels=[
+            {
+                "panel_id": "A",
+                "title": "Prevalence and absolute outcome risk",
+                "role": "descriptive_result",
+                "chart_type": "dot_interval_absolute_risk",
+                "claim": "Exposure prevalence and absolute outcome risk are shown.",
+            },
+            {
+                "panel_id": "B",
+                "title": "Primary adjusted association",
+                "role": "primary_estimand",
+                "chart_type": "dot_interval",
+                "claim": "The adjusted odds ratio and interval are shown.",
+            },
+        ],
+        source_data=[sparse_source.name],
+    )
+    sparse_contract_path = outputs / "primary_results_figure.figure_contract.json"
+    sparse_contract_path.write_text(sparse_contract.to_json(indent=2), encoding="utf-8")
+    metadata = {
+        "figure_role": "publication_figure",
+        "step_id": "03_primary_results_figure",
+        "generation_mode": "fallback",
+    }
+    for path, kind, evidence_id in (
+        (svg, "figure", "figure_sparse_primary_svg"),
+        (png, "figure", "figure_sparse_primary_png"),
+        (sparse_contract_path, "log", "log_sparse_primary_contract"),
+        (sparse_source, "table", "table_sparse_primary_source"),
+    ):
+        evidence.register_file(
+            kind=kind,
+            description="Registered sparse primary bundle.",
+            source_path=path,
+            evidence_id=evidence_id,
+            producer="runner",
+            generation_mode="fallback",
+            metadata=metadata if kind != "table" else {"step_id": metadata["step_id"]},
+        )
+
+    primary_table = tmp_path / "adjusted_association.csv"
+    primary_table.write_text(
+        "term,odds_ratio,ci_low,ci_high\nsepsis3,1.05,0.99,1.10\n",
+        encoding="utf-8",
+    )
+    outcome_table = tmp_path / "outcome_by_exposure.csv"
+    outcome_table.write_text(
+        "exposure_label,n,outcome_rate\nUnexposed,680,0.085\nExposed,320,0.122\n",
+        encoding="utf-8",
+    )
+    missingness_table = tmp_path / "missingness.csv"
+    missingness_table.write_text(
+        "variable,missing_fraction\nlactate,0.43\ncreatinine,0.02\n",
+        encoding="utf-8",
+    )
+    evidence.register_file(
+        kind="table",
+        description="Primary adjusted association table.",
+        source_path=primary_table,
+        evidence_id="primary_association_table",
+        aliases=["primary_association"],
+    )
+    evidence.register_file(
+        kind="table",
+        description="Observed outcome by exposure group.",
+        source_path=outcome_table,
+        evidence_id="outcome_by_exposure",
+    )
+    evidence.register_file(
+        kind="table",
+        description="Feature missingness table.",
+        source_path=missingness_table,
+        evidence_id="missingness",
+    )
+    context = ra.ResearchContext(
+        research_question="Estimate whether Sepsis-3 is associated with mortality.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_patients=100,
+            n_stays=100,
+        ),
+        variables=[],
+        target_outcome="death",
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            ra.AnalysisStep(
+                step_id="03_primary_results_figure",
+                intent="Render the primary manuscript figure.",
+                expected_outputs=["figure:publication_figure"],
+            )
+        ],
+    )
+
+    result = ra.PublicationFigureSkill().run(
+        context=context,
+        plan=plan,
+        evidence=evidence,
+        run_dir=run_dir,
+        prompt_pack_version="test",
+    )
+
+    assert result.generated is True
+    summary = json.loads(
+        (
+            run_dir
+            / "evidence"
+            / "publication_figure_skill_summary__publication_figure_skill_summary.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert summary["generation_mode"] == "primary_association_publication_figure"
+    contract = json.loads(
+        (
+            run_dir
+            / "publication_figures"
+            / "easyicu_publication_figure.figure_contract.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert [panel["role"] for panel in contract["panels"]] == [
+        "primary_estimand",
+        "descriptive_result",
+        "data_quality",
+    ]
+    from PIL import Image
+
+    image = Image.open(
+        run_dir / "publication_figures" / "easyicu_publication_figure.png"
+    )
+    assert image.height / image.width < 1.2
+
+
 def test_figure_contract_enforces_unique_panel_ids():
     with pytest.raises(ValueError):
         make_figure_contract(
@@ -353,6 +878,46 @@ def test_make_figure_contract_accepts_agent_role_aliases_and_source_dicts():
 
     assert [p.role for p in contract.panels] == ["overview", "robustness"]
     assert contract.source_data == ["incidence.csv", "assoc.csv"]
+
+
+def test_make_figure_contract_preserves_article_level_panel_roles():
+    contract = make_figure_contract(
+        figure_id="FigureArticleRoles",
+        core_claim="Prevalence, absolute risk, adjusted effect, and data quality are visible.",
+        panels=[
+            {
+                "panel_id": "A",
+                "title": "Absolute outcome risk",
+                "role": "descriptive_result",
+                "chart_type": "dot_interval_absolute_risk",
+                "claim": "Exposure prevalence and absolute outcome risk are shown.",
+                "evidence_ids": ["absolute_risk_source"],
+            },
+            {
+                "panel_id": "B",
+                "title": "Adjusted effect",
+                "role": "primary_estimand",
+                "chart_type": "forest",
+                "claim": "The adjusted effect estimate is shown with uncertainty.",
+                "evidence_ids": ["primary_model_source"],
+            },
+            {
+                "panel_id": "C",
+                "title": "Measurement availability",
+                "role": "data_quality",
+                "chart_type": "availability_panel",
+                "claim": "Measurement availability is shown for the analytic denominator.",
+                "evidence_ids": ["missingness_source"],
+            },
+        ],
+    )
+
+    assert [panel.role for panel in contract.panels] == [
+        "descriptive_result",
+        "primary_estimand",
+        "data_quality",
+    ]
+    assert contract.panels[0].metadata["chart_type"] == "dot_interval_absolute_risk"
 
 
 def test_make_figure_contract_accepts_legacy_positional_signature():
@@ -792,6 +1357,244 @@ def test_association_forest_axis_metadata_tracks_effect_measure(ra):
     assert ate_frame.attrs["ratio_scale"] is False
 
 
+def test_association_frame_filters_to_primary_exposure_and_point_estimate(ra):
+    from easyicu.research_agent.figure_skill import _normalise_association_frame
+
+    frame = _normalise_association_frame(
+        pd.DataFrame(
+            {
+                "term": ["const", "sepsis3", "age_per_10y"],
+                "point_estimate": [0.15, 1.05, 1.26],
+                "ci_low": [0.15, 0.99, 1.23],
+                "ci_high": [0.15, 1.10, 1.28],
+            }
+        ),
+        primary_exposure="sepsis3",
+    )
+
+    assert frame["label"].tolist() == ["Sepsis-3"]
+    assert frame["estimate"].tolist() == [1.05]
+
+
+def test_publication_figure_skill_e1_like_layout_has_no_svg_overlap_errors(
+    ra,
+    tmp_path: Path,
+):
+    run_dir = tmp_path / "run"
+    evidence = ra.EvidenceStore(run_dir)
+    primary = tmp_path / "adjusted_association_death.csv"
+    pd.DataFrame(
+        {
+            "exposure": ["sepsis3"],
+            "point_estimate": [1.05],
+            "ci_low": [0.99],
+            "ci_high": [1.10],
+            "effect_scale": ["adjusted odds ratio"],
+        }
+    ).to_csv(primary, index=False)
+    strata = tmp_path / "outcome_by_exposure.csv"
+    pd.DataFrame(
+        {
+            "sepsis3": [0, 1],
+            "death_pct": [8.5, 12.2],
+            "n": [46600, 28229],
+        }
+    ).to_csv(strata, index=False)
+    missingness = tmp_path / "cohort_missingness_audit.csv"
+    pd.DataFrame(
+        {
+            "variable": [
+                "lact_mean",
+                "lact_min",
+                "lact_max",
+                "lact_first",
+                "temp_mean",
+                "temp_min",
+                "temp_max",
+                "temp_first",
+                "resp_mean",
+                "resp_min",
+                "resp_max",
+                "resp_first",
+                "sep3_sofa2_n",
+            ],
+            "missing_fraction": [
+                0.407,
+                0.407,
+                0.407,
+                0.407,
+                0.027,
+                0.027,
+                0.027,
+                0.027,
+                0.003,
+                0.003,
+                0.003,
+                0.003,
+                0.0,
+            ],
+        }
+    ).to_csv(missingness, index=False)
+    evidence.register_file(
+        kind="table",
+        description="Primary adjusted association.",
+        source_path=primary,
+        evidence_id="table_adjusted_association_death",
+        aliases=["adjusted_association_death"],
+    )
+    evidence.register_file(
+        kind="table",
+        description="Outcome by primary exposure.",
+        source_path=strata,
+        evidence_id="table_outcome_by_exposure",
+        aliases=["outcome_by_exposure"],
+    )
+    evidence.register_file(
+        kind="table",
+        description="Cohort missingness audit.",
+        source_path=missingness,
+        evidence_id="table_cohort_missingness_audit",
+        aliases=["cohort_missingness_audit"],
+    )
+    context = ra.ResearchContext(
+        research_question="Is Sepsis-3 associated with ICU mortality?",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_patients=74829,
+            n_stays=74829,
+        ),
+        variables=[],
+        target_outcome="icu_mortality",
+        primary_exposure="sepsis3",
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            ra.AnalysisStep(
+                step_id="03_primary_results",
+                intent="Render primary association and audit context.",
+                expected_outputs=["figure:publication"],
+            )
+        ],
+    )
+
+    result = ra.PublicationFigureSkill().run(
+        context=context,
+        plan=plan,
+        evidence=evidence,
+        run_dir=run_dir,
+        prompt_pack_version="test",
+    )
+
+    assert result.generated is True
+    assert not any(
+        finding.severity == "error" and "overlapping text" in finding.message
+        for finding in result.findings
+    )
+    assert not any("outside the canvas" in finding.message for finding in result.findings)
+    source = pd.read_csv(
+        run_dir / "publication_figures" / "publication_figure_source_missingness.csv"
+    )
+    assert source["variable"].tolist() == ["Lactate", "Temperature", "Resp. rate"]
+
+
+def test_primary_association_selector_prefers_single_primary_estimand(ra, tmp_path: Path):
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.figure_skill import _select_primary_association_record
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    evidence = EvidenceStore(run_dir)
+    full = run_dir / "adjusted_association_death_full_coefficients.csv"
+    full.write_text(
+        "term,estimate,ci_low,ci_high,effect_scale\n"
+        "const,0.15,0.15,0.15,adjusted odds ratio\n"
+        "sepsis3,1.01,0.96,1.07,adjusted odds ratio\n"
+        "age,1.26,1.23,1.28,adjusted odds ratio\n",
+        encoding="utf-8",
+    )
+    single = run_dir / "adjusted_association_death.csv"
+    single.write_text(
+        "exposure,point_estimate,ci_low,ci_high,effect_scale\n"
+        "sepsis3,1.05,0.99,1.10,adjusted odds ratio\n",
+        encoding="utf-8",
+    )
+    evidence.register_file(
+        kind="table",
+        description="Full coefficient table.",
+        source_path=full,
+        evidence_id="full_coefficients",
+    )
+    evidence.register_file(
+        kind="table",
+        description="Primary adjusted association.",
+        source_path=single,
+        evidence_id="single_primary",
+    )
+    context = ra.ResearchContext(
+        research_question="Estimate whether Sepsis-3 is associated with mortality.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_patients=100,
+            n_stays=100,
+        ),
+        variables=[],
+        target_outcome="death",
+        primary_exposure="sepsis3",
+    )
+
+    selected = _select_primary_association_record(
+        evidence,
+        run_dir=run_dir,
+        context=context,
+        names=["adjusted_association_death"],
+    )
+
+    assert selected is not None
+    assert selected.evidence_id == "single_primary"
+
+
+def test_missingness_frame_deduplicates_variable_labels(ra):
+    from easyicu.research_agent.figure_skill import _normalise_missingness_frame
+
+    frame = _normalise_missingness_frame(
+        pd.DataFrame(
+            {
+                "variable": ["lact_max", "lact_max", "bun_max"],
+                "missing_fraction": [0.41, 0.39, 0.02],
+            }
+        )
+    )
+
+    assert frame["variable"].tolist() == ["Lact Max", "Bun Max"]
+
+
+def test_missingness_frame_groups_measurement_summary_features(ra):
+    from easyicu.research_agent.figure_skill import _normalise_missingness_frame
+
+    frame = _normalise_missingness_frame(
+        pd.DataFrame(
+            {
+                "variable": [
+                    "lact_mean",
+                    "lact_min",
+                    "lact_max",
+                    "lact_first",
+                    "temp_mean",
+                    "temp_min",
+                ],
+                "missing_fraction": [0.407, 0.407, 0.407, 0.407, 0.027, 0.027],
+            }
+        )
+    )
+
+    assert frame["variable"].tolist() == ["Lactate", "Temperature"]
+    assert frame["feature_count"].tolist() == [4, 2]
+    assert frame["missing_fraction"].round(3).tolist() == [0.407, 0.027]
+
+
 def test_strata_axis_label_comes_from_score_column(ra):
     from easyicu.research_agent.figure_skill import (
         _normalise_strata_frame,
@@ -807,6 +1610,23 @@ def test_strata_axis_label_comes_from_score_column(ra):
         pd.DataFrame({"score": [1, 2, 3], "outcome_rate": [0.1, 0.2, 0.3]})
     )
     assert _strata_score_label(generic_frame) == "Score"
+
+    exposure_frame = _normalise_strata_frame(
+        pd.DataFrame(
+            {
+                "sepsis3": [0, 1],
+                "death_pct": [8.5, 12.2],
+                "n": [46600, 28229],
+            }
+        )
+    )
+    assert _strata_score_label(exposure_frame) == "Sepsis-3 status"
+    assert exposure_frame["rate"].round(3).tolist() == [0.085, 0.122]
+    assert exposure_frame["score"].tolist() == [
+        "Sepsis-3 negative",
+        "Sepsis-3 positive",
+    ]
+    assert exposure_frame.attrs["score_is_numeric"] is False
 
 
 def test_publication_figure_skill_renders_from_robustness_panel_without_table(

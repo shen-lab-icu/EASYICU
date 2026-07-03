@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from easyicu.datasource import AUMC_NUMERICITEMS_ITEMIDS
 from easyicu.resources import load_dictionary
 from easyicu.concept.catalog import (
     COMPOSITE_CONCEPT_OUTPUT_SOURCES,
@@ -41,6 +42,36 @@ def _load_json(filename: str) -> dict | list:
 def _data_source_tables() -> dict[str, dict]:
     data_sources = _load_json("data-sources.json")
     return {source["name"]: source["tables"] for source in data_sources}
+
+
+def _aumc_numericitems_prefilter_ids() -> set[int]:
+    return set(AUMC_NUMERICITEMS_ITEMIDS)
+
+
+def _source_ids(source_def: dict) -> set[int]:
+    ids = source_def.get("ids")
+    if isinstance(ids, int):
+        return {ids}
+    if isinstance(ids, list):
+        return {item for item in ids if isinstance(item, int)}
+    return set()
+
+
+def _aumc_numericitems_source_ids() -> set[int]:
+    source_ids: set[int] = set()
+    for filename in ("concept-dict.json", "sofa2-dict.json"):
+        dictionary = _load_json(filename)
+        for concept_def in dictionary.values():
+            sources = concept_def.get("sources")
+            if not isinstance(sources, dict):
+                continue
+            for source_def in sources.get("aumc", []):
+                if (
+                    source_def.get("table") == "numericitems"
+                    and source_def.get("sub_var") == "itemid"
+                ):
+                    source_ids.update(_source_ids(source_def))
+    return source_ids
 
 
 def test_web_catalog_groups_are_unique_and_complete() -> None:
@@ -116,3 +147,20 @@ def test_dictionary_source_tables_and_columns_exist() -> None:
                             )
 
     assert problems == []
+
+
+def test_aumc_ventilator_dictionary_items_are_prefiltered() -> None:
+    dictionary = _load_json("concept-dict.json")
+    prefilter_ids = _aumc_numericitems_prefilter_ids()
+
+    fio2_ids = set(dictionary["fio2"]["sources"]["aumc"][0]["ids"])
+    peep_ids = set(dictionary["peep"]["sources"]["aumc"][0]["ids"])
+
+    assert {6699, 12279, 12282} <= fio2_ids
+    assert {6694, 8862, 8879, 12284} <= peep_ids
+    assert fio2_ids <= prefilter_ids
+    assert peep_ids <= prefilter_ids
+
+
+def test_all_aumc_numericitems_dictionary_sources_are_prefiltered() -> None:
+    assert _aumc_numericitems_source_ids() == _aumc_numericitems_prefilter_ids()

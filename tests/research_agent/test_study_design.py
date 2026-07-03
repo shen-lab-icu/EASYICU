@@ -132,6 +132,54 @@ def test_association_plan_validator_flags_single_display_plan(ra, tmp_path: Path
     assert any("too narrow" in f.message for f in findings)
 
 
+def test_article_contract_flags_and_can_augment_narrow_association_plan(ra):
+    from easyicu.research_agent.article_contract import (
+        augment_plan_for_article_contract,
+        build_article_analysis_contract,
+        roles_covered_by_plan,
+        validate_plan_against_article_contract,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    context = _context(
+        ra,
+        "Estimate exposure prevalence and whether exposure X is associated "
+        "with mortality after adjustment.",
+        exposure="x",
+    )
+    contract = build_article_analysis_contract(context)
+    narrow = AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            AnalysisStep(
+                step_id="01_forest",
+                intent="Fit adjusted model and draw a forest plot.",
+                method="logistic regression",
+                expected_outputs=["figure:forest_plot"],
+            )
+        ],
+    )
+
+    findings = validate_plan_against_article_contract(
+        plan=narrow,
+        contract=contract,
+    )
+    assert findings
+    assert "baseline_context" in findings[0].detail["missing_roles"]
+    assert "data_quality" in findings[0].detail["missing_roles"]
+    assert "descriptive_result" in findings[0].detail["missing_roles"]
+
+    augmented, augment_findings = augment_plan_for_article_contract(
+        plan=narrow,
+        contract=contract,
+    )
+
+    assert augment_findings
+    assert len(augmented.steps) > len(narrow.steps)
+    covered = roles_covered_by_plan(augmented, contract)
+    assert set(contract.required_roles) <= covered
+
+
 def test_association_plan_validator_accepts_article_level_display_suite(ra):
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
     from easyicu.research_agent.study_design import (
@@ -271,6 +319,58 @@ def test_family_playbooks_are_distinct_and_not_effect_only(ra):
     assert "causal_protocol" in role_sets["causal_emulation"]
 
 
+def test_article_figure_strategies_are_family_specific(ra):
+    from easyicu.research_agent.figure_strategy import (
+        build_article_figure_strategy,
+        render_article_figure_strategy_for_prompt,
+    )
+
+    cases = {
+        "association": (
+            "Is exposure X associated with mortality after adjustment?",
+            "descriptive_result",
+        ),
+        "prediction": (
+            "Build a mortality prediction model with AUROC and calibration.",
+            "calibration",
+        ),
+        "time_to_event": (
+            "Estimate survival time-to-event with Cox regression.",
+            "temporal_absolute_risk",
+        ),
+        "phenotyping": (
+            "Discover ICU trajectory phenotypes using clustering.",
+            "phenotype_structure",
+        ),
+        "causal_emulation": (
+            "Emulate a target trial for treatment effect using propensity weighting.",
+            "causal_protocol",
+        ),
+        "descriptive": (
+            "Describe age, sex, LOS, organ support, and mortality distributions.",
+            "distribution",
+        ),
+    }
+
+    for expected_family, (question, hero_role) in cases.items():
+        strategy = build_article_figure_strategy(_context(ra, question))
+        prompt = render_article_figure_strategy_for_prompt(strategy)
+        roles = {role.role for role in strategy.role_strategies if role.required}
+
+        assert strategy.analysis_family == expected_family
+        assert strategy.hero_role == hero_role
+        assert hero_role in roles
+        assert "ARTICLE FIGURE STRATEGY" in prompt
+
+    association = build_article_figure_strategy(
+        _context(ra, cases["association"][0], exposure="x")
+    )
+    assert any(
+        "risk-difference sensitivity" in anti_pattern.lower()
+        for anti_pattern in association.anti_patterns
+    )
+
+
 def test_cross_database_context_adds_transportability_module(ra):
     from easyicu.research_agent.study_design import build_study_design_brief
 
@@ -285,3 +385,76 @@ def test_cross_database_context_adds_transportability_module(ra):
     modules = {module.module_id: module for module in brief.display_modules}
     assert "cross_database_heterogeneity" in modules
     assert modules["cross_database_heterogeneity"].role == "transportability"
+
+
+def test_analysis_blueprint_combines_prior_art_contract_and_figure_strategy(ra):
+    from easyicu.research_agent.analysis_blueprint import (
+        build_analysis_blueprint,
+        render_analysis_blueprint_for_prompt,
+    )
+
+    context = _context(
+        ra,
+        "Build a mortality prediction model with external validation, AUROC, "
+        "calibration, and triage threshold utility.",
+    )
+
+    blueprint = build_analysis_blueprint(context)
+    prompt = render_analysis_blueprint_for_prompt(blueprint)
+
+    assert blueprint.analysis_family == "prediction"
+    assert blueprint.prior_art_design_brief.source_mode == (
+        "deterministic_family_playbook"
+    )
+    assert "calibration" in blueprint.required_article_roles
+    assert "model_performance" in blueprint.required_article_roles
+    assert "validation" in blueprint.required_article_roles
+    assert blueprint.figure_hero_role == "calibration"
+    assert any(role.role == "calibration" for role in blueprint.visual_roles)
+    assert any("supplement" in item.lower() for item in blueprint.prior_art_design_brief.design_questions)
+    assert "ANALYSIS BLUEPRINT" in prompt
+    assert "PRIOR-ART DESIGN BRIEF" in prompt
+    assert "ARTICLE ANALYSIS CONTRACT" in prompt
+    assert "ARTICLE FIGURE STRATEGY" in prompt
+    dumped = blueprint.model_dump_json()
+    assert "E1" not in dumped
+    assert "Sepsis" not in dumped
+    assert "MIMIC" not in dumped
+
+
+def test_analysis_blueprint_flags_auroc_only_prediction_plan(ra):
+    from easyicu.research_agent.analysis_blueprint import (
+        build_analysis_blueprint,
+        validate_plan_against_analysis_blueprint,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    context = _context(
+        ra,
+        "Build a mortality prediction model with external validation, AUROC, "
+        "calibration, and triage threshold utility.",
+    )
+    blueprint = build_analysis_blueprint(context)
+    plan = AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            AnalysisStep(
+                step_id="01_auroc",
+                intent="Fit a model and report AUROC.",
+                method="logistic regression",
+                expected_outputs=["figure:roc_curve", "table:auroc"],
+            )
+        ],
+    )
+
+    findings = validate_plan_against_analysis_blueprint(
+        plan=plan,
+        blueprint=blueprint,
+    )
+
+    assert findings
+    details = " ".join(str(f.detail) for f in findings if f.detail)
+    assert "calibration" in details
+    assert "validation" in details
+    assert "data_quality" in details
+    assert any("too narrow" in finding.message for finding in findings)

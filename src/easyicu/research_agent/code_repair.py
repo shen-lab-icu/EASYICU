@@ -93,6 +93,145 @@ _NULL_PRIMARY_EFFECT_MARKERS = (
 )
 
 
+def _patch_rank_safe_statsmodels_design(code: str) -> Optional[str]:
+    """Insert a rank-safe design-matrix reducer before statsmodels binary fits.
+
+    Generated scripts sometimes catch ``Singular matrix`` internally and write a
+    null primary effect while exiting successfully. This patch keeps the
+    generated analysis structure intact, but removes constant / perfectly
+    collinear columns before fitting. It preserves the intercept and the primary
+    coefficient target when the generated script exposes it as ``exposure_col``,
+    ``predictor_col`` or ``primary_predictor``; otherwise it keeps the first
+    non-intercept column, matching the convention used by association templates.
+    """
+
+    if "_easyicu_rank_safe_design_v1" in code:
+        return None
+    helper = textwrap.dedent(
+        """
+
+        def _easyicu_safe_exp_v1(value):
+            import math as _math
+
+            try:
+                numeric = float(value)
+            except Exception:
+                return None
+            if not _math.isfinite(numeric):
+                return None
+            try:
+                result = _math.exp(numeric)
+            except OverflowError:
+                return None
+            return float(result) if _math.isfinite(result) else None
+
+
+        def _easyicu_rank_safe_design_v1(X, keep=None):
+            import numpy as _np
+            import pandas as _pd
+
+            X_work = X.copy() if hasattr(X, "copy") else _pd.DataFrame(X)
+            if not hasattr(X_work, "columns"):
+                X_work = _pd.DataFrame(X_work)
+            if hasattr(X_work, "replace"):
+                X_work = X_work.replace([_np.inf, -_np.inf], _np.nan)
+            X_work = X_work.apply(_pd.to_numeric, errors="coerce").astype(float)
+            columns = list(X_work.columns)
+            requested_keep = [c for c in (keep or []) if c in columns]
+            const_cols = [c for c in columns if str(c).lower() == "const"]
+            if not requested_keep:
+                first_signal = next(
+                    (c for c in columns if str(c).lower() != "const"),
+                    None,
+                )
+                requested_keep = const_cols + ([first_signal] if first_signal is not None else [])
+            else:
+                requested_keep = const_cols + [c for c in requested_keep if c not in const_cols]
+            requested_keep = list(dict.fromkeys(requested_keep))
+
+            variances = X_work.var(axis=0, ddof=0)
+            zero_variance = [
+                c
+                for c in columns
+                if c not in requested_keep and not (float(variances.get(c, 0.0)) > 0.0)
+            ]
+            working = X_work.drop(columns=zero_variance)
+            ordered = requested_keep + [c for c in working.columns if c not in requested_keep]
+            kept = []
+            matrix = None
+            rank = 0
+            for col in ordered:
+                if col not in working.columns:
+                    continue
+                vec = working[col].to_numpy(dtype=float).reshape(-1, 1)
+                if not _np.isfinite(vec).all():
+                    continue
+                trial = vec if matrix is None else _np.hstack([matrix, vec])
+                trial_rank = int(_np.linalg.matrix_rank(trial))
+                if trial_rank > rank:
+                    kept.append(col)
+                    matrix = trial
+                    rank = trial_rank
+            if not kept:
+                return X_work, columns
+            dropped = [c for c in columns if c not in kept]
+            reduced = X_work[kept]
+            try:
+                reduced.attrs["easyicu_dropped_rank_deficient_columns"] = [
+                    str(c) for c in dropped
+                ]
+            except Exception:
+                pass
+            return reduced, dropped
+        """
+    ).strip("\n")
+
+    model_call = re.compile(
+        r"(?m)^(?P<indent>\s*)(?P<lhs>[A-Za-z_]\w*)\s*=\s*sm\.Logit\("
+        r"(?P<y>[^,\n)]+?)\s*,\s*(?P<X>[A-Za-z_]\w*)"
+        r"(?P<kwargs>,\s*[^)\n]+)?\)\s*$"
+    )
+
+    def _rewrite(match: re.Match[str]) -> str:
+        indent = match.group("indent")
+        x_expr = match.group("X").strip()
+        y_expr = match.group("y").strip()
+        kwargs = match.group("kwargs") or ""
+        lhs = match.group("lhs")
+        keep_expr = (
+            "[c for c in ["
+            "'const', "
+            "locals().get('exposure_col'), "
+            "locals().get('predictor_col'), "
+            "locals().get('primary_predictor')"
+            f"] if c is not None and hasattr({x_expr}, 'columns') and c in {x_expr}.columns]"
+        )
+        return (
+            f"{indent}{x_expr}, _easyicu_dropped_rank_cols_v1 = "
+            f"_easyicu_rank_safe_design_v1({x_expr}, keep={keep_expr})\n"
+        f"{indent}{lhs} = sm.GLM({y_expr}, {x_expr}, family=sm.families.Binomial(){kwargs})"
+        )
+
+    repaired = model_call.sub(_rewrite, code, count=1)
+    if repaired == code:
+        return None
+    repaired = re.sub(
+        r"float\(math\.exp\((?P<expr>[^()\n]+)\)\)",
+        lambda match: f"_easyicu_safe_exp_v1({match.group('expr').strip()})",
+        repaired,
+    )
+
+    insert_after = repaired.find("import statsmodels.api as sm")
+    if insert_after >= 0:
+        line_end = repaired.find("\n", insert_after)
+        repaired = (
+            repaired[: line_end + 1] + "\n" + helper + "\n" + repaired[line_end + 1 :]
+        )
+    else:
+        repaired = helper + "\n\n" + repaired
+    return repaired
+
+
 def _patch_age_covariate_coding_without_indicator(code: str) -> Optional[str]:
     marker = '        elif var == "sex":\n'
     if marker not in code or "meas_var = measured_vars[var]" not in code:
@@ -313,8 +452,10 @@ def _deterministic_summary_repair(
     )
     predictor = str(
         step_summary.get("primary_predictor")
+        or step_summary.get("primary_exposure")
         or step_summary.get("predictor")
         or manifest.get("primary_predictor")
+        or manifest.get("primary_exposure")
         or (predictor_match.group(1) if predictor_match else "")
         or ""
     ).strip()
@@ -494,6 +635,24 @@ def _deterministic_summary_repair(
                     ),
                 )
                 return repair_name, code.rstrip() + "\n\n" + fallback + "\n"
+        nested_primary_singular = (
+            null_model_summary
+            and "singular matrix" in summary_text
+            and (
+                '"primary_model"' in summary_text
+                or "primary association" in summary_text
+                or "primary estimand" in summary_text
+                or "primary_exposure" in summary_text
+                or "primary_predictor" in summary_text
+            )
+            and "sm.logit(" in code.lower()
+        )
+        if nested_primary_singular and binary_model_repair_allowed:
+            repair_name = "rank_safe_statsmodels_design_v1"
+            if previous_repair != repair_name:
+                repaired = _patch_rank_safe_statsmodels_design(code)
+                if repaired is not None and repaired != code:
+                    return repair_name, repaired
         glm_primary_effect_null = (
             null_model_summary
             and (
@@ -2133,6 +2292,11 @@ def _deterministic_runner_repair(
 
     singular_logit = "singular matrix" in lowered and "sm.logit(" in code.lower()
     if singular_logit and binary_model_repair_allowed:
+        repair_name = "rank_safe_statsmodels_design_v1"
+        if previous_repair != repair_name:
+            patched = _patch_rank_safe_statsmodels_design(code)
+            if patched is not None and patched != code:
+                return repair_name, patched
         repair_name = "logit_regularized_fit_v1"
         if previous_repair != repair_name:
             helper = textwrap.dedent(

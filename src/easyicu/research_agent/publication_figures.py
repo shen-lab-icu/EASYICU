@@ -26,6 +26,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from .schema import ValidationFinding
 
 
+PUBLICATION_FIGURE_SKILL_POLICY_VERSION = "publication_figure_skill_policy_v6"
+
+
 FigureArchetype = Literal[
     "quantitative_grid",
     "schematic_led_composite",
@@ -44,6 +47,29 @@ PanelRole = Literal[
     "mechanism",
     "audit",
     "workflow",
+    "cohort_accounting",
+    "baseline_context",
+    "data_quality",
+    "descriptive_result",
+    "primary_estimand",
+    "heterogeneity",
+    "model_performance",
+    "calibration",
+    "clinical_utility",
+    "explainability",
+    "temporal_absolute_risk",
+    "survival_effect",
+    "diagnostics",
+    "phenotype_structure",
+    "phenotype_profile",
+    "stability",
+    "downstream_characterization",
+    "causal_protocol",
+    "balance_positivity",
+    "causal_contrast",
+    "distribution",
+    "transportability",
+    "supplementary_provenance",
 ]
 
 
@@ -324,6 +350,29 @@ def _canonical_panel_role(value: object, index: int, panel: Mapping[str, Any]) -
             "mechanism",
             "audit",
             "workflow",
+            "cohort_accounting",
+            "baseline_context",
+            "data_quality",
+            "descriptive_result",
+            "primary_estimand",
+            "heterogeneity",
+            "model_performance",
+            "calibration",
+            "clinical_utility",
+            "explainability",
+            "temporal_absolute_risk",
+            "survival_effect",
+            "diagnostics",
+            "phenotype_structure",
+            "phenotype_profile",
+            "stability",
+            "downstream_characterization",
+            "causal_protocol",
+            "balance_positivity",
+            "causal_contrast",
+            "distribution",
+            "transportability",
+            "supplementary_provenance",
         }:
             return role  # type: ignore[return-value]
         aliases = {
@@ -339,6 +388,16 @@ def _canonical_panel_role(value: object, index: int, panel: Mapping[str, Any]) -
             "mortality_comparison": "relationship",
             "discrimination": "validation",
             "calibration": "validation",
+            "absolute_risk": "descriptive_result",
+            "prevalence": "descriptive_result",
+            "event_rate": "descriptive_result",
+            "effect_estimate": "primary_estimand",
+            "primary_effect": "primary_estimand",
+            "performance": "model_performance",
+            "phenotype_embedding": "phenotype_structure",
+            "cluster_profile": "phenotype_profile",
+            "balance": "balance_positivity",
+            "target_trial": "causal_protocol",
         }
         if role in aliases:
             return aliases[role]  # type: ignore[return-value]

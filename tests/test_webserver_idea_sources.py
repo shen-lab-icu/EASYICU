@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from easyicu.webserver import capabilities
 from easyicu.webserver import provider_adapter
 from easyicu.webserver import settings as settings_store
 from easyicu.webserver.ideas import mining as idea_mining
@@ -181,6 +182,133 @@ def test_idea_mining_maps_resolved_nejm_title_to_vasopressor_fluid_concepts(
     assert "death and death" not in idea["rationale"].lower()
 
 
+def test_idea_mining_accepts_zotero_source_payload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(idea_mining, "_RUN_ROOT", tmp_path / "idea_runs")
+    monkeypatch.setattr(idea_mining, "_HISTORY_PATH", tmp_path / "idea_history.json")
+    monkeypatch.setattr(idea_mining, "_active_export", lambda: None)
+
+    response = TestClient(app).post(
+        "/api/ideas/mine",
+        json={
+            "source_type": "zotero",
+            "source_origin": "zotero_desktop",
+            "source_origin_label": "Zotero Desktop",
+            "topic": "Early Vasopressors in Septic Shock",
+            "title": "Early Vasopressors in Septic Shock",
+            "journal": "Intensive Care Medicine",
+            "year": 2026,
+            "doi": "10.1000/example",
+            "citation_key": "smith2026vasopressors",
+            "zotero_key": "ABC123",
+            "excerpt": "Early vasopressors may define a measurable ICU exposure.",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    source = body["source_evidence"][0]
+    assert source["source_type"] == "zotero"
+    assert source["source_origin"] == "zotero_desktop"
+    assert source["source_origin_label"] == "Zotero Desktop"
+    assert source["citation_key"] == "smith2026vasopressors"
+    assert source["zotero_key"] == "ABC123"
+    assert source["source_text_stored"] is False
+    assert body["privacy"]["patient_rows_returned"] is False
+    assert "stay_id" not in str(body)
+    assert "subject_id" not in str(body)
+
+
+def test_pasted_literature_source_flows_to_agent_project_list(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(capabilities, "_STATE_DIR", tmp_path)
+    monkeypatch.setattr(
+        capabilities,
+        "_AUDIT_PATH",
+        tmp_path / "capability_tool_audit.jsonl",
+    )
+    monkeypatch.setattr(idea_mining, "_RUN_ROOT", tmp_path / "idea_runs")
+    monkeypatch.setattr(idea_mining, "_HISTORY_PATH", tmp_path / "idea_history.json")
+    monkeypatch.setattr(
+        idea_mining,
+        "_AGENT_PROJECTS_ROOT",
+        tmp_path / "agent_project_seeds",
+    )
+    monkeypatch.setattr(
+        idea_mining,
+        "_AGENT_PROJECTS_PATH",
+        tmp_path / "agent_projects.json",
+    )
+    monkeypatch.setattr(idea_mining, "_active_export", lambda: None)
+    client = TestClient(app)
+
+    imported = client.post(
+        "/api/capabilities/zotero/import",
+        json={
+            "text": """@article{smith2026shock,
+              title={Early Vasopressors in Septic Shock},
+              journal={Intensive Care Medicine},
+              year={2026},
+              doi={10.1000/example},
+              abstract={Early vasopressors may define a measurable ICU exposure.}
+            }"""
+        },
+    )
+    assert imported.status_code == 200
+    source_payload = imported.json()["suggested_payload"]
+    assert source_payload["source_origin"] == "pasted_literature"
+
+    mined = client.post("/api/ideas/mine", json=source_payload)
+    assert mined.status_code == 200
+    run = mined.json()
+    source = run["source_evidence"][0]
+    idea = run["idea_ledger"][0]
+    assert source["source_origin"] == "pasted_literature"
+    assert source["source_type"] == "zotero"
+    assert source["citation_key"] == "smith2026shock"
+
+    planned = client.post(
+        "/api/ideas/plan",
+        json={
+            "run_id": run["run_id"],
+            "idea_id": idea["idea_id"],
+            "mode": "plan",
+            "plan_edits": "Keep the pasted literature seed as hypothesis-generating.",
+        },
+    )
+    assert planned.status_code == 200
+
+    handoff = client.post(
+        "/api/ideas/handoff",
+        json={"run_id": run["run_id"], "idea_id": idea["idea_id"]},
+    )
+    assert handoff.status_code == 200
+
+    created = client.post(
+        "/api/ideas/create-agent-project",
+        json={"run_id": run["run_id"], "idea_id": idea["idea_id"]},
+    )
+    assert created.status_code == 200
+    project = created.json()["project"]
+    assert project["source_run_id"] == run["run_id"]
+    assert project["source"]["source_origin"] == "pasted_literature"
+    assert project["source"]["source_type"] == "zotero"
+    assert project["source"]["citation_key"] == "smith2026shock"
+    assert project["source"]["title"] == "Early Vasopressors in Septic Shock"
+
+    listed = client.post("/api/ideas/agent-projects", json={"limit": 10})
+    assert listed.status_code == 200
+    listed_body = listed.json()
+    assert listed_body["privacy"]["patient_rows_returned"] is False
+    assert any(row["study_id"] == project["study_id"] for row in listed_body["projects"])
+    assert "stay_id" not in str(listed_body)
+    assert "subject_id" not in str(listed_body)
+
+
 def test_idea_plan_stage_precedes_agent_handoff_and_stays_metadata_only(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -336,6 +464,32 @@ def test_idea_literature_discovery_blocks_without_network_opt_in(monkeypatch: py
     assert payload["source_candidates"] == []
     assert payload["idea_candidates"] == []
     assert payload["queries_to_run"]
+
+
+def test_pubmed_connector_setting_blocks_idea_discovery_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_network(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("network should not be called when connector is off")
+
+    monkeypatch.setattr(idea_mining, "_pubmed_esearch", fail_network)
+    monkeypatch.setattr(
+        settings_store,
+        "load_settings",
+        lambda: {**settings_store.DEFAULTS, "connector_pubmed_enabled": False},
+    )
+
+    response = TestClient(app).post(
+        "/api/ideas/discover",
+        json={"topic": "septic shock vasopressor fluid mortality", "allow_network": True},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["status"] == "blocked_network_opt_in_required"
+    assert payload["search_performed"] is False
+    assert payload["privacy"]["network_calls"] == 0
 
 
 def test_idea_literature_discovery_maps_pubmed_candidates_metadata_only(

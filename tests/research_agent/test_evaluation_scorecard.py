@@ -624,6 +624,61 @@ def test_score_run_from_dir_flags_overadjustment(tmp_path: Path):
     assert clean.result_validity.level is None
 
 
+def test_score_run_from_dir_prefers_current_manifest_primary_model_covariates(
+    tmp_path: Path,
+):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "run_status.json").write_text(
+        json.dumps({"gates": _gates()}), encoding="utf-8"
+    )
+    evidence_dir = run_dir / "evidence"
+    evidence_dir.mkdir()
+    with (evidence_dir / "stale_adjusted_association.csv").open(
+        "w", newline="", encoding="utf-8"
+    ) as fh:
+        w = csv.DictWriter(fh, fieldnames=["term", "effect_scale", "estimate"])
+        w.writeheader()
+        w.writerow({"term": "sepsis3", "effect_scale": "odds_ratio", "estimate": "1.2"})
+        w.writerow({"term": "map_min", "effect_scale": "odds_ratio", "estimate": "0.9"})
+
+    current_outputs = (
+        run_dir
+        / "steps"
+        / "03_primary_prevalence_and_adjusted_association"
+        / "outputs"
+    )
+    current_outputs.mkdir(parents=True)
+    with (current_outputs / "adjusted_association_death.csv").open(
+        "w", newline="", encoding="utf-8"
+    ) as fh:
+        w = csv.DictWriter(fh, fieldnames=["term", "effect_scale", "estimate"])
+        w.writeheader()
+        w.writerow({"term": "sepsis3", "effect_scale": "odds_ratio", "estimate": "1.1"})
+        w.writerow({"term": "age", "effect_scale": "odds_ratio", "estimate": "1.02"})
+    (run_dir / "manifest_partial.json").write_text(
+        json.dumps(
+            {
+                "per_step_records": [
+                    {
+                        "step_id": "03_primary_prevalence_and_adjusted_association",
+                        "status": "ok",
+                        "step_summary": {"primary_model": {"exposure": "sepsis3"}},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    card = sc.score_run_from_dir(
+        _task(), run_dir, exposure_concept="sepsis3", run_id="current"
+    )
+
+    assert card.result_validity.level is None
+    assert not any("overadjustment" in n for n in card.result_validity.notes)
+
+
 def test_score_run_from_dir_flags_outcome_leakage(tmp_path: Path):
     # A model that conditions on its own declared outcome is target leakage ->
     # gold-free Fail, distinct from the honest unscored state.

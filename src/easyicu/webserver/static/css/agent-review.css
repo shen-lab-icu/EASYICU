@@ -1,0 +1,94 @@
+/* Agent Projects review tab owner styles.
+   Route owner: screens-agent.js / #agent Draft-Review tab.
+   Keep review-tab layout rules out of agent.css, redesign.css, and app.css. */
+
+.ag-review-layout{
+  align-items:start;
+}
+
+.ag-review-main,
+.ag-review-side{
+  min-width:0;
+}
+
+.ag-review-side{
+  align-self:start;
+  max-height:calc(100vh - 210px);
+  overflow:auto;
+}
+
+.ag-review-claims,
+.ag-review-more{
+  border:1px solid var(--hair);
+  border-radius:var(--r-2);
+  background:var(--surface-2);
+}
+
+.ag-review-claims summary,
+.ag-review-more summary{
+  min-height:36px;
+  display:flex;
+  align-items:center;
+  gap:8px;
+  padding:0 11px;
+  list-style:none;
+  cursor:pointer;
+  color:var(--ink-2);
+  font-size:12px;
+  font-weight:700;
+}
+
+.ag-review-claims summary::-webkit-details-marker,
+.ag-review-more summary::-webkit-details-marker{
+  display:none;
+}
+
+.ag-review-claims summary span,
+.ag-review-more summary span{
+  margin-left:auto;
+  color:var(--ink-4);
+  font-family:var(--font-mono);
+  font-size:10.5px;
+}
+
+.ag-review-claim-list{
+  display:grid;
+  gap:8px;
+  padding:0 10px 10px;
+}
+
+.ag-review-claim{
+  min-width:0;
+  padding:9px 10px;
+  border:1px solid var(--hair);
+  border-radius:var(--r-1);
+  background:var(--surface);
+}
+
+.ag-review-claim .mono{
+  color:var(--ink-4);
+  font-size:10.5px;
+}
+
+.ag-review-claim p{
+  margin:4px 0;
+  color:var(--ink-2);
+  font-size:12px;
+  line-height:1.45;
+}
+
+.ag-review-claim code{
+  display:block;
+  color:var(--ink-4);
+  font-family:var(--font-mono);
+  font-size:10.5px;
+  line-height:1.35;
+  overflow-wrap:anywhere;
+}
+
+@media (max-width:1100px){
+  .ag-review-side{
+    max-height:none;
+    overflow:visible;
+  }
+}
