@@ -1939,7 +1939,7 @@
             ${[24, 50, 100].map(n => `<option value="${n}" ${Number(patientTablePageSize) === n ? 'selected' : ''}>${n}</option>`).join('')}
           </select>
         </label>
-        <button type="button" class="btn sm" data-pt-page-next ${hasNext ? '' : 'disabled'}>${t('Next', '下一页')} ${icon('arrow-right', 13)}</button>
+        <button type="button" class="btn sm" data-pt-page-next ${hasNext ? '' : 'disabled'}>${t('Next', '下一页')} ${icon('arrow', 13)}</button>
       </div>
       <div class="row wrap gap-6 mt-8" style="font-size:11.5px;color:var(--ink-4);">
         <span>${fmtInt(previewColumns.length)} / ${fmtInt(activePreview && activePreview.columns_total)} ${t('columns', '列')}</span>

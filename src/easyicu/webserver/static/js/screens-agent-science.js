@@ -66,6 +66,10 @@
     state.error = null;
     state.data = null;
     state.artifact = null;
+    // Request token: the workbench endpoint can be slow (it probes the
+    // Zotero connector), so a fetch for a previously selected project can
+    // resolve AFTER the current one and would otherwise overwrite it.
+    const seq = (state.seq = (state.seq || 0) + 1);
     if (!window.EU_API || !window.EU_API.loadAgentScienceWorkbench) {
       state.loading = false;
       state.error = 'Science Workbench API is not available.';
@@ -73,6 +77,7 @@
       return;
     }
     window.EU_API.loadAgentScienceWorkbench(dir ? { project_dir: dir } : {}).then(data => {
+      if (seq !== state.seq) return;
       state.loading = false;
       state.error = null;
       state.data = data;
@@ -83,6 +88,7 @@
       state.artifact = items[0] ? items[0].name : null;
       repaint(onDone);
     }).catch(err => {
+      if (seq !== state.seq) return;
       state.loading = false;
       state.error = err.message || String(err);
       state.data = null;
@@ -469,7 +475,7 @@
           </div>
           <div class="row gap-8 wrap" style="justify-content:flex-end;">
             <span class="pill ${ready ? 'ok' : 'warn'}"><span class="dot"></span>${esc(pipeline.status_label || bi('Needs review', '待审阅'))}</span>
-            <button class="btn sm" data-ag-sci-open-ideas>${icon('arrow-right', 12)} ${bi('Open Idea Mining', '打开 Idea Mining')}</button>
+            <button class="btn sm" data-ag-sci-open-ideas>${icon('arrow', 12)} ${bi('Open Idea Mining', '打开 Idea Mining')}</button>
           </div>
         </div>
         <div class="ag-sci-discovery-stats">

@@ -52,11 +52,14 @@
     }
 
     function applySource(data, fallbackItem) {
-      setSourceResolved(data);
       if (data && data.blocked) {
+        // Blocked payloads carry no source_adapter, so storing them as the
+        // resolved source made the ideas note render a green "Source ready".
+        setSourceResolved(null);
         setError(t('Auto-connect is blocked. Paste DOI, BibTeX, RIS, or title/abstract below to continue.', '自动连接被阻断。请在下方粘贴 DOI、BibTeX、RIS 或标题摘要继续。'));
         return;
       }
+      setSourceResolved(data);
       state.selected = (data && data.item) || fallbackItem || null;
       applySuggestedPayload(data && data.suggested_payload);
       setSourceType('zotero');

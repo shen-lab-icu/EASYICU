@@ -51,19 +51,26 @@ def _body_bool(body: Dict[str, Any], key: str, default: bool = False) -> bool:
     return bool(value)
 
 
-def _pubmed_connector_payload(body: Dict[str, Any]) -> Dict[str, Any]:
-    """Apply the global PubMed connector switch before network-capable idea APIs."""
+def _pubmed_connector_gate(
+    body: Dict[str, Any],
+) -> tuple[Dict[str, Any], Optional[str]]:
+    """Apply the global PubMed connector switch before network-capable idea APIs.
+
+    Returns the (possibly patched) request body plus the block reason when the
+    connector is off. The reason must be surfaced on the RESPONSE by the
+    route — writing it into the request body is invisible to the caller.
+    """
     settings = settings_store.load_settings()
     if settings.get("connector_pubmed_enabled", True):
-        return body
+        return body, None
     patched = dict(body or {})
     patched["allow_network"] = False
-    patched["connector_disabled_reason"] = "connector_pubmed_enabled_false"
+    reason = "connector_pubmed_enabled_false"
     capabilities.record_tool_event(
         "pubmed_connector_blocked",
-        {"reason": "connector_pubmed_enabled_false", "path": "ideas"},
+        {"reason": reason, "path": "ideas"},
     )
-    return patched
+    return patched, reason
 
 
 @app.middleware("http")
@@ -503,6 +510,14 @@ def _validate_agent_project_seed_for_run(
             "error": "agent_project_seed_invalid_json",
             "project_seed_dir": project_seed_dir,
         }
+    except (OSError, UnicodeDecodeError):
+        # NotADirectoryError/IsADirectoryError/PermissionError/bad encoding:
+        # keep the structured seed-error contract instead of raising a 500.
+        return {
+            "ok": False,
+            "error": "agent_project_seed_unreadable",
+            "project_seed_dir": project_seed_dir,
+        }
 
     gate = seed.get("execution_gate") or {}
     if _idea_seed_requires_gate(seed) and not gate:
@@ -848,7 +863,10 @@ def post_ideas_resolve_source(body: Dict[str, Any]) -> dict:
 def post_ideas_discover(body: Dict[str, Any]) -> dict:
     """Run or prepare opt-in PubMed/frontier literature discovery."""
     try:
-        payload = idea_mining_web.discover_literature(_pubmed_connector_payload(body))
+        patched, connector_reason = _pubmed_connector_gate(body)
+        payload = idea_mining_web.discover_literature(patched)
+        if connector_reason:
+            payload["connector_disabled_reason"] = connector_reason
         capabilities.record_tool_event(
             "pubmed_discovery",
             {
@@ -884,7 +902,10 @@ def post_ideas_literature_folder(body: Dict[str, Any]) -> dict:
 def post_ideas_prior_art(body: Dict[str, Any]) -> dict:
     """Run or prepare an opt-in bounded prior-art check for an idea."""
     try:
-        payload = idea_mining_web.check_prior_art(_pubmed_connector_payload(body))
+        patched, connector_reason = _pubmed_connector_gate(body)
+        payload = idea_mining_web.check_prior_art(patched)
+        if connector_reason:
+            payload["connector_disabled_reason"] = connector_reason
         capabilities.record_tool_event(
             "pubmed_prior_art",
             {

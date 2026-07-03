@@ -354,12 +354,15 @@
   function gateBlockerLabel(raw) {
     const text = String(raw || '');
     if (/refresh Agent project/i.test(text)) return t('Refresh this project from Idea Mining', '回到 Idea Mining 刷新这个项目');
-    if (/prior-art/i.test(text)) return t('Run prior-art review or document a skip', '完成 prior-art 审阅或记录跳过原因');
+    if (/prior-art/i.test(text)) return t('Run prior-art review before Agent execution', '在 Agent 执行前完成 prior-art 审阅');
     if (/missing required concepts|re-extract/i.test(text)) return t('Re-extract or confirm missing required concepts', '重新抽取或确认缺失的必要概念');
     if (/real EasyICU export|real export|select a real/i.test(text)) return t('Select a real EasyICU export', '选择真实 EasyICU 导出');
     if (/idea feasibility/i.test(text)) return t('Resolve idea feasibility before execution', '先解决 idea 可行性问题');
     if (/same active export/i.test(text)) return t('Select the same active export used by Idea Mining', '选择 Idea Mining 使用的同一个 active export');
-    return esc(text);
+    // Plain text — callers escape at their own HTML insertion point.
+    // Returning esc() here double-escaped agRun.error, which is escaped again
+    // by the run-error nextbar.
+    return text;
   }
   function seedGateBlockerText(s) {
     const gate = seedExecutionGate(s);
@@ -1358,7 +1361,7 @@
       return `
       <div class="nextbar gate">
         <div class="nb-ico">${icon('shield', 16)}</div>
-        <div class="grow"><div class="nb-t">${t('Agent preflight checks are not ready', 'Agent 预检条件尚未就绪')}</div><div class="nb-d">${seedGateBlockerText(s)}</div></div>
+        <div class="grow"><div class="nb-t">${t('Agent preflight checks are not ready', 'Agent 预检条件尚未就绪')}</div><div class="nb-d">${esc(seedGateBlockerText(s))}</div></div>
         <button class="btn" data-nav="ideas">${icon('spark', 13)} ${t('Review in Idea Mining', '回到 Idea Mining 审阅')}</button>
       </div>`;
     }

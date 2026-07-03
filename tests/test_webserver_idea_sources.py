@@ -621,3 +621,57 @@ def test_provider_config_route_writes_private_env_without_returning_secret(
     assert "sk-test-provider-config" in env_path.read_text(encoding="utf-8")
     assert "sk-test-provider-config" not in str(payload)
     assert "http://127.0.0.1:8787/v1" not in str(payload)
+
+
+def test_blocked_prior_art_recheck_does_not_clobber_successful_review(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A casual re-check without network opt-in must not re-block the seed."""
+    monkeypatch.setattr(idea_mining, "_RUN_ROOT", tmp_path)
+    run_id = "priorartkeep"
+    run_dir = tmp_path / run_id
+    run_dir.mkdir(parents=True)
+    successful = {
+        "ok": True,
+        "run_id": run_id,
+        "idea_id": "vasopressor-timing",
+        "prior_art": {
+            "status": "searched_no_hits",
+            "search_performed": True,
+            "results": [],
+        },
+    }
+    (run_dir / "prior_art_check.json").write_text(
+        json.dumps(successful, ensure_ascii=False), encoding="utf-8"
+    )
+
+    blocked = idea_mining.check_prior_art(
+        {"run_id": run_id, "idea_title": "vasopressor timing", "allow_network": False}
+    )
+
+    assert blocked["prior_art"]["search_performed"] is False
+    assert blocked["persisted"] is False
+    assert blocked["retained_prior_art_status"] == "searched_no_hits"
+    on_disk = json.loads(
+        (run_dir / "prior_art_check.json").read_text(encoding="utf-8")
+    )
+    assert on_disk["prior_art"]["search_performed"] is True
+    assert on_disk["prior_art"]["status"] == "searched_no_hits"
+
+
+def test_execution_gate_treats_failed_prior_art_search_as_unreviewed() -> None:
+    """status=search_failed returned no reviewable metadata; the gate stays closed."""
+    idea = {"go_no_go": "recommend"}
+    pre_experiment = {"status": "ready", "missing_required_concepts": []}
+    failed_check = {
+        "prior_art": {"status": "search_failed", "search_performed": True}
+    }
+    gate = idea_mining._execution_gate(idea, pre_experiment, failed_check)
+    assert "run prior-art review before Agent execution" in gate["blockers"]
+
+    reviewed_check = {
+        "prior_art": {"status": "searched_no_hits", "search_performed": True}
+    }
+    gate_ok = idea_mining._execution_gate(idea, pre_experiment, reviewed_check)
+    assert gate_ok["blockers"] == []
+    assert gate_ok["agent_run_ready_after_human_confirmation"] is True
