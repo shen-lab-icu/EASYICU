@@ -8978,11 +8978,12 @@
             12273,
             12276,
             12357,
-            16244
+            16244,
+            12578
           ],
           "table": "numericitems",
           "sub_var": "itemid",
-          "_comment": "added 8875 Mv Spontaan (l/min) per audit 2026-05-27; 2026-07-02 added inspiratory/expiratory/device-specific minute-volume channels with l/min-compatible values; 2026-07-03 semantic coverage review added VE/VE(2) and Mv Spontaan(2), excluded Mv Lekkage."
+          "_comment": "added 8875 Mv Spontaan (l/min) per audit 2026-05-27; 2026-07-02 added inspiratory/expiratory/device-specific minute-volume channels with l/min-compatible values; 2026-07-03 semantic coverage review added VE/VE(2) and Mv Spontaan(2), excluded Mv Lekkage. 2026-07-04 within-concept variant audit: added 12578 MVe Spontaan nieuw (new-software-version channel, ~14M rows; distribution matches mapped 8875 Mv Spontaan)."
         }
       ],
       "eicu": [
@@ -12059,11 +12060,12 @@
             9654,
             13092,
             14455,
-            16613
+            16613,
+            12577
           ],
           "table": "numericitems",
           "sub_var": "itemid",
-          "_comment": "2026-07-02 source-dictionary audit: added spontaneous and arterial/RA/MCA respiratory-rate channels; ventilator Evita frequency remains in vent_rate."
+          "_comment": "2026-07-02 source-dictionary audit: added spontaneous and arterial/RA/MCA respiratory-rate channels; ventilator Evita frequency remains in vent_rate. 2026-07-04 added 12577 Ademfreq. Spontaan nieuw (new-software-version spontaneous rate)."
         }
       ],
       "eicu": [
@@ -14983,11 +14985,12 @@
             12322,
             12348,
             16241,
-            16248
+            16248,
+            12287
           ],
           "table": "numericitems",
           "sub_var": "itemid",
-          "_comment": "2026-07-02 added set/measured ventilator-frequency channels; spontaneous respiratory-rate channels remain excluded. 12287 SIMV Frequentie (Set) remains excluded because the AUMC source dictionary reports unit l/min, not /min."
+          "_comment": "2026-07-02 added set/measured ventilator-frequency channels; spontaneous respiratory-rate channels remain in resp. 2026-07-04 within-concept audit: added 12287 SIMV Frequentie (Set) — the AUMC source dictionary labels its unit l/min but validated values are 6-28/min (median 15), a genuine set ventilator rate; the catalog unit label is wrong metadata."
         }
       ],
       "eicu": [
