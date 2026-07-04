@@ -153,6 +153,27 @@ def _pick_secondary_sort_column(columns, partition_col: str):
     return None
 
 
+# Default row-group size for the opt-in patient-clustering pass. Finer groups
+# prune more row groups for a patient cohort but add per-group metadata/read
+# overhead. Benchmarked (3.6M-row synthetic, scattered 0.3% cohort, sorted by
+# (itemid, stay_id)): 20k prunes ~36% and is 1.4x faster even fully in cache;
+# 5k prunes ~73% but is ~break-even in cache; 1k prunes ~90% but is slower in
+# cache (tiny-group overhead). On a large out-of-cache table the I/O saved by
+# pruning dominates the overhead, so 20k is a safe default that wins in both
+# regimes; power users can pass a finer size for very large disk-resident tables.
+DEFAULT_CLUSTER_ROW_GROUP_SIZE = 20_000
+
+
+def _sql_str(path) -> str:
+    """Quote a path/string as a SQL single-quoted literal (doubling quotes).
+
+    The data root can contain non-ASCII (e.g. ``外置硬盘``) and, in principle,
+    a single quote; parameter binding isn't available for COPY targets, so we
+    escape by hand.
+    """
+    return "'" + str(path).replace("'", "''") + "'"
+
+
 class ConversionStatus:
     """Tracks the conversion status of data files."""
     
@@ -2466,7 +2487,161 @@ class DataConverter:
                 }
         
         return status
-    
+
+    # ------------------------------------------------------------------
+    # Opt-in patient-clustering pass (scattered-cohort row-group pruning)
+    # ------------------------------------------------------------------
+    def _find_table_shards(self, table_name: str) -> List[Path]:
+        """Locate a converted table's parquet files.
+
+        Returns the numbered shard files under ``<data_path>/<table>/`` if the
+        table was sharded, else the single ``<data_path>/<table>.parquet``.
+        Empty list if neither exists.
+        """
+        shard_dir = self.data_path / table_name
+        if shard_dir.is_dir():
+            shards = [
+                p for p in shard_dir.iterdir()
+                if p.suffix == ".parquet" and p.stem.isdigit()
+            ]
+            if shards:
+                return sorted(shards, key=lambda p: int(p.stem))
+        single = self.data_path / f"{table_name}.parquet"
+        return [single] if single.exists() else []
+
+    def cluster_table_by_patient(
+        self,
+        table_name: str,
+        row_group_size: Optional[int] = None,
+        memory_limit: str = "2GB",
+    ) -> Dict[str, Any]:
+        """Rewrite a converted table's shards clustered by patient id.
+
+        Each shard is globally sorted by ``(partition_col, patient_id)`` and
+        rewritten with fine row groups, so parquet row-group zone-maps let
+        DuckDB prune a patient-cohort filter (``stay_id IN (...)``) — including
+        the *scattered* cohorts that the streaming per-chunk sort (perf Z2)
+        cannot prune. The partition column stays the leading sort key, so the
+        dominant itemid-filtered extraction workload keeps its pruning.
+
+        This is **opt-in** and costs one extra read+write pass over the table.
+        The sort is out-of-core (DuckDB spills past ``memory_limit``), so it is
+        safe on a shard far larger than RAM. Idempotent: re-clustering an
+        already-clustered table just re-sorts it.
+
+        Returns a summary dict with per-shard row counts and row-group counts.
+        """
+        import duckdb
+        import shutil
+
+        rg = int(row_group_size or DEFAULT_CLUSTER_ROW_GROUP_SIZE)
+        shards = self._find_table_shards(table_name)
+        if not shards:
+            raise FileNotFoundError(
+                f"No converted parquet found for table '{table_name}' under "
+                f"{self.data_path} — convert it before clustering."
+            )
+        partition_col = (self._get_partitioning_config(table_name) or {}).get("col")
+
+        spill_dir = self.data_path / f".duckdb_spill_{table_name}"
+        spill_dir.mkdir(parents=True, exist_ok=True)
+        con = duckdb.connect()
+        con.execute(f"SET memory_limit={_sql_str(memory_limit)}")
+        con.execute("SET preserve_insertion_order=false")
+        con.execute(f"SET temp_directory={_sql_str(spill_dir)}")
+
+        per_shard = []
+        clustered = 0
+        skipped = 0
+        try:
+            for shard in shards:
+                cols = [
+                    row[0]
+                    for row in con.execute(
+                        f"DESCRIBE SELECT * FROM read_parquet({_sql_str(shard)})"
+                    ).fetchall()
+                ]
+                pcol = _pick_secondary_sort_column(cols, partition_col)
+                if pcol is None:
+                    skipped += 1
+                    per_shard.append({"shard": shard.name, "skipped": "no patient id column"})
+                    continue
+                order_cols = [
+                    c for c in (partition_col, pcol) if c and c in cols
+                ]
+                order = ", ".join(f'"{c}"' for c in order_cols)
+                before = con.execute(
+                    f"SELECT count(*) FROM read_parquet({_sql_str(shard)})"
+                ).fetchone()[0]
+
+                tmp = shard.with_name(shard.name + ".clustering.tmp")
+                con.execute(
+                    f"COPY (SELECT * FROM read_parquet({_sql_str(shard)}) "
+                    f"ORDER BY {order}) TO {_sql_str(tmp)} "
+                    f"(FORMAT parquet, ROW_GROUP_SIZE {rg}, "
+                    f"COMPRESSION {_sql_str(self.parquet_compression)})"
+                )
+                after = con.execute(
+                    f"SELECT count(*) FROM read_parquet({_sql_str(tmp)})"
+                ).fetchone()[0]
+                if after != before:
+                    tmp.unlink(missing_ok=True)
+                    raise RuntimeError(
+                        f"Clustering row-count mismatch for {shard.name}: "
+                        f"{before} -> {after}; original left untouched."
+                    )
+                n_rg = con.execute(
+                    f"SELECT count(DISTINCT row_group_id) "
+                    f"FROM parquet_metadata({_sql_str(tmp)})"
+                ).fetchone()[0]
+                os.replace(tmp, shard)  # atomic within the same directory
+                clustered += 1
+                per_shard.append({
+                    "shard": shard.name, "rows": int(before),
+                    "row_groups": int(n_rg), "sort_by": order_cols,
+                })
+                if self.verbose:
+                    logger.info(
+                        f"  🧬 clustered {table_name}/{shard.name} by "
+                        f"{order_cols}: {before:,} rows, {n_rg} row groups"
+                    )
+        finally:
+            con.close()
+            shutil.rmtree(spill_dir, ignore_errors=True)
+
+        return {
+            "table": table_name,
+            "shards_clustered": clustered,
+            "shards_skipped": skipped,
+            "row_group_size": rg,
+            "per_shard": per_shard,
+        }
+
+    def cluster_tables_by_patient(
+        self,
+        table_names: Optional[List[str]] = None,
+        row_group_size: Optional[int] = None,
+        memory_limit: str = "2GB",
+    ) -> Dict[str, Any]:
+        """Cluster several tables by patient id (see cluster_table_by_patient).
+
+        ``table_names=None`` clusters every id-partitioned table configured for
+        this database (the large wide tables that benefit most). Tables with no
+        converted parquet are skipped, not errored.
+        """
+        if table_names is None:
+            table_names = sorted(PARTITIONING_CONFIG.get(self.database, {}).keys())
+        out = {}
+        for name in table_names:
+            if not self._find_table_shards(name):
+                if self.verbose:
+                    logger.info(f"  ⏭️  cluster: no parquet for '{name}', skipping")
+                continue
+            out[name] = self.cluster_table_by_patient(
+                name, row_group_size=row_group_size, memory_limit=memory_limit
+            )
+        return out
+
     def convert_all(
         self,
         force: bool = False,
@@ -2474,6 +2649,7 @@ class DataConverter:
         write_manifest: bool = True,
         evidence_root: Optional[str | Path] = None,
         progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+        cluster_by_patient: Optional[bool] = None,
     ) -> Dict[str, Dict[str, Any]]:
         """
         Convert all CSV files to Parquet.
@@ -2486,10 +2662,21 @@ class DataConverter:
             progress_callback: Optional callable invoked once per converted file
                 with ``{'file', 'current', 'total', 'status', 'result'}``. Lets a
                 UI render per-file progress without re-implementing the loop.
+            cluster_by_patient: Opt-in — after conversion, rewrite the
+                id-partitioned tables globally sorted by patient id with fine
+                row groups so patient-cohort queries prune row groups (see
+                ``cluster_table_by_patient``). Costs one extra read+write pass;
+                only worth it for patient-centric query workloads. Default None
+                reads env ``EASYICU_CLUSTER_BY_PATIENT`` (1/true to enable);
+                otherwise off.
 
         Returns:
             Dictionary of conversion results
         """
+        if cluster_by_patient is None:
+            cluster_by_patient = os.environ.get(
+                "EASYICU_CLUSTER_BY_PATIENT", ""
+            ).strip().lower() in ("1", "true", "yes", "on")
         # HiRID ships its bulk tables as tar.gz archives; extract them so
         # _get_csv_files / sharding see the unpacked data. Idempotent — skips
         # when shards already exist.
@@ -2576,11 +2763,21 @@ class DataConverter:
                 result = self._convert_file(csv_path)
                 results[csv_path.name] = result
                 _emit(csv_path, result, done)
-        if write_manifest:
-            self.write_conversion_manifest(results, evidence_root=evidence_root)
         # 🚀 perf A1/A2: drop bucket/shard cache so a subsequent call sees
         # the new shards/buckets written by this run.
         self._invalidate_dir_caches()
+        # Opt-in patient-clustering pass (extra read+write; see method docs).
+        if cluster_by_patient:
+            try:
+                if self.verbose:
+                    logger.info("🧬 clustering id-partitioned tables by patient id...")
+                cluster_summary = self.cluster_tables_by_patient()
+                for tname, csum in cluster_summary.items():
+                    results.setdefault(tname, {})["cluster_by_patient"] = csum
+            except Exception as exc:  # noqa: BLE001 — clustering is best-effort
+                logger.warning(f"patient-clustering pass failed: {exc}")
+        if write_manifest:
+            self.write_conversion_manifest(results, evidence_root=evidence_root)
         return results
 
     def is_ready(self) -> Tuple[bool, List[str]]:
@@ -2928,7 +3125,20 @@ def main():
         action="store_true",
         help="Show table information",
     )
-    
+    parser.add_argument(
+        "--cluster-by-patient",
+        action="store_true",
+        help="After conversion, rewrite id-partitioned tables sorted by patient "
+             "id with fine row groups so patient-cohort queries prune row groups "
+             "(opt-in; costs one extra read+write pass).",
+    )
+    parser.add_argument(
+        "--cluster-only",
+        action="store_true",
+        help="Skip conversion; only run the patient-clustering pass on already-"
+             "converted tables.",
+    )
+
     args = parser.parse_args()
     
     # Setup logging
@@ -2974,17 +3184,31 @@ def main():
                 print(f"    Format: {fmt}, Size: {size:.1f} MB, Rows: {rows}, Columns: {cols}")
             return
         
+        if args.cluster_only:
+            print(f"\n🧬 Clustering converted tables by patient id: {args.data_path}")
+            print(f"   Database type: {converter.database}")
+            print("=" * 60)
+            summary = converter.cluster_tables_by_patient()
+            for tname, csum in sorted(summary.items()):
+                print(f"  ✅ {tname}: {csum['shards_clustered']} shards clustered "
+                      f"(rg={csum['row_group_size']})")
+            if not summary:
+                print("  (no id-partitioned tables found to cluster)")
+            return
+
         # Perform conversion
         print(f"\n🔄 Converting database: {args.data_path}")
         print(f"   Database type: {converter.database}")
         print("=" * 60)
-        
-        results = converter.convert_all(force=args.force)
-        
+
+        results = converter.convert_all(
+            force=args.force, cluster_by_patient=args.cluster_by_patient
+        )
+
         # Summary
         completed = sum(1 for r in results.values() if r.get('status') == ConversionStatus.COMPLETED)
         failed = sum(1 for r in results.values() if r.get('status') == ConversionStatus.FAILED)
-        
+
         print("\n" + "=" * 60)
         print(f"✅ Completed: {completed}")
         if failed:
