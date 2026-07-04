@@ -132,6 +132,27 @@ PARTITIONING_CONFIG = {
 }
 
 
+# Patient/stay-id columns, finest-grained first. Used as a SECONDARY sort key
+# during ID-partitioned conversion so parquet row-group zone-maps also carry a
+# narrow [min,max] on the patient id. This lets DuckDB skip row groups on a
+# patient-only cohort filter (`stay_id IN (...)`) even when the shard partition
+# column is itemid/variableid. When the partition column already IS the patient
+# id (e.g. eICU vitalperiodic on patientunitstayid) no secondary key is added.
+PATIENT_ID_SORT_COLUMNS = (
+    "stay_id", "patientunitstayid", "admissionid", "patientid",
+    "icustay_id", "CaseID", "subject_id", "hadm_id",
+)
+
+
+def _pick_secondary_sort_column(columns, partition_col: str):
+    """First patient-id column present in ``columns`` that isn't partition_col."""
+    available = set(columns)
+    for candidate in PATIENT_ID_SORT_COLUMNS:
+        if candidate != partition_col and candidate in available:
+            return candidate
+    return None
+
+
 class ConversionStatus:
     """Tracks the conversion status of data files."""
     
@@ -1730,8 +1751,19 @@ class DataConverter:
                 # 200-patient cohort this prunes ~70-95% of row groups
                 # within each shard — much bigger win than re-partitioning.
                 # Cost: pandas sort_values on a 1M-row chunk is sub-second.
+                #
+                # 🚀 perf Z2 (patient-only cohort pruning): add the patient-id
+                # column as a SECONDARY sort key when the shard is partitioned
+                # by itemid/variableid. Within each itemid the rows are then
+                # ordered by patient id, so row-group zone-maps also prune a
+                # `stay_id IN (...)` filter that carries no itemid predicate —
+                # previously such queries had to scan every shard in full.
+                _sort_cols = [partition_col]
+                _secondary = _pick_secondary_sort_column(chunk.columns, partition_col)
+                if _secondary is not None:
+                    _sort_cols.append(_secondary)
                 chunk = chunk.sort_values(
-                    [partition_col], kind='mergesort'
+                    _sort_cols, kind='mergesort'
                 )
 
                 # 🚀 perf A6: single groupby pass instead of N boolean
@@ -2266,8 +2298,15 @@ class DataConverter:
                     continue
                 # Drop helper col, then sort by the partition column so each
                 # parquet row group carries a narrow zone-map (cohort filters
-                # can skip row groups) — parity with the pandas path.
-                sub = sub.drop(['__part']).sort_by(partition_col)
+                # can skip row groups) — parity with the pandas path. Add the
+                # patient-id column as a secondary key (perf Z2) so a
+                # patient-only cohort filter can prune row groups too.
+                sub = sub.drop(['__part'])
+                _sort_keys = [(partition_col, 'ascending')]
+                _secondary = _pick_secondary_sort_column(sub.column_names, partition_col)
+                if _secondary is not None:
+                    _sort_keys.append((_secondary, 'ascending'))
+                sub = sub.sort_by(_sort_keys)
                 if p not in writers:
                     writers[p] = pq.ParquetWriter(
                         shard_dir / f"{p}.parquet", schema, compression=self.parquet_compression
