@@ -153,7 +153,7 @@
   const GUIDED_EXTRACT_MODULES = [
     ['demographics', 'Demographics', '人口统计', 6, true],
     ['vitals', 'Vital signs', '生命体征', 11, true],
-    ['chemistry', 'Lab — Chemistry', '实验室-生化', 48, true],
+    ['chemistry', 'Lab — Chemistry', '实验室-生化', 49, true],
     ['sofa2_score', 'SOFA-2 scores', 'SOFA-2 评分', 7, true],
     ['sepsis3_sofa2', 'Sepsis-3 (SOFA-2)', 'Sepsis-3 (SOFA-2)', 1, true],
     ['outcome', 'Outcome', '结局', 10, true],
@@ -163,7 +163,7 @@
     ['respiratory', 'Respiratory', '呼吸系统', 15, false],
     ['ventilator', 'Ventilator', '呼吸机参数', 12, false],
     ['blood_gas', 'Blood gas', '血气分析', 9, false],
-    ['hematology', 'Lab — Hematology', '实验室-血液学', 24, false],
+    ['hematology', 'Lab — Hematology', '实验室-血液学', 25, false],
     ['vasopressors', 'Vasopressors', '血管活性药物', 17, false],
     ['medications', 'Other medications', '其他药物', 49, false],
     ['renal', 'Renal & urine output', '肾脏与尿量', 22, false],

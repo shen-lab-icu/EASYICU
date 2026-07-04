@@ -17985,5 +17985,106 @@
         }
       ]
     }
+  },
+  "t4": {
+    "unit": [
+      "µg/dL",
+      "ug/dL"
+    ],
+    "min": 0,
+    "max": 25,
+    "description": "total thyroxine (total T4, blood)",
+    "category": "chemistry",
+    "sources": {
+      "miiv": [
+        {
+          "ids": 50994,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": 50994,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": 50994,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "eicu": [
+        {
+          "ids": "T4",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "ids": "T4",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ]
+    }
+  },
+  "retic": {
+    "unit": [
+      "%"
+    ],
+    "min": 0,
+    "max": 50,
+    "description": "reticulocyte fraction (percent, automated)",
+    "category": "hematology",
+    "_comment": "2026-07-04 verified via 3-lens adversarial mapping check: kept automated/percent items (~2%); dropped absolute-count (miiv 51282/sic 312), reticulocyte-Hb-content (miiv 51285/sic 567), manual (consistency outlier), and the AUMC per-mille channel (unit-mixing risk).",
+    "sources": {
+      "miiv": [
+        {
+          "ids": 51283,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": 51283,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": 51283,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "sic": [
+        {
+          "ids": 238,
+          "table": "laboratory",
+          "sub_var": "LaboratoryID"
+        }
+      ],
+      "eicu": [
+        {
+          "ids": "reticulocyte count",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "ids": "reticulocyte count",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ]
+    }
   }
 }
