@@ -6490,9 +6490,13 @@
     "sources": {
       "aumc": [
         {
-          "ids": 11893,
+          "ids": [
+            11893,
+            11894
+          ],
           "table": "numericitems",
-          "sub_var": "itemid"
+          "sub_var": "itemid",
+          "_comment": "2026-07-04 variant audit: added 11894 'Prothrombinetijd  (bloed)' (double-space duplicate of 11893, 127k rows, median 1.27)."
         }
       ],
       "eicu": [
@@ -8409,9 +8413,13 @@
     "sources": {
       "aumc": [
         {
-          "ids": 11692,
+          "ids": [
+            11692,
+            14412
+          ],
           "table": "numericitems",
-          "sub_var": "itemid"
+          "sub_var": "itemid",
+          "_comment": "2026-07-04 variant audit: added 14412 'Met-Hb  (bloed)' (double-space duplicate label of 11692, 334k rows, median 0.8 matches)."
         }
       ],
       "eicu": [
@@ -11767,9 +11775,13 @@
     "sources": {
       "aumc": [
         {
-          "ids": 17982,
+          "ids": [
+            17982,
+            11944
+          ],
           "table": "numericitems",
-          "sub_var": "itemid"
+          "sub_var": "itemid",
+          "_comment": "2026-07-04 variant audit: added 11944 'APTT  (bloed)' (double-space duplicate of 17982, 130k rows, median 46)."
         }
       ],
       "eicu": [
@@ -12145,9 +12157,13 @@
       ],
       "sic": [
         {
-          "ids": 719,
+          "ids": [
+            719,
+            2282
+          ],
           "table": "data_float_h",
-          "sub_var": "DataID"
+          "sub_var": "DataID",
+          "_comment": "2026-07-04 variant audit: added 2282 'RespRate' (second RespRate channel, 241k rows, median 14; mirrors 719)."
         }
       ]
     }
@@ -15038,9 +15054,13 @@
       ],
       "sic": [
         {
-          "ids": 719,
+          "ids": [
+            719,
+            2282
+          ],
           "table": "data_float_h",
-          "sub_var": "DataID"
+          "sub_var": "DataID",
+          "_comment": "2026-07-04 variant audit: added 2282 'RespRate' (second RespRate channel; mirrors 719, which is mapped to both resp and vent_rate)."
         }
       ],
       "mimic_demo": [
