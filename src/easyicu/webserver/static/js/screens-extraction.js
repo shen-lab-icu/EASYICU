@@ -248,7 +248,7 @@
     // —— recommended core ——
     ['Demographics', '人口统计', 6, true, true],
     ['Vital signs', '生命体征', 11, true, true],
-    ['Lab — Chemistry', '实验室-生化', 42, true, true],
+    ['Lab — Chemistry', '实验室-生化', 48, true, true],
     ['SOFA-2 scores', 'SOFA-2 评分', 7, true, true],
     ['Sepsis-3 (SOFA-2)', 'Sepsis-3 (SOFA-2)', 1, true, true],
     ['Outcome', '结局', 10, true, true],

@@ -17721,5 +17721,269 @@
         }
       ]
     }
+  },
+  "iron": {
+    "unit": [
+      "µg/dL",
+      "ug/dL"
+    ],
+    "min": 0,
+    "max": 500,
+    "description": "serum iron (Fe)",
+    "category": "chemistry",
+    "sources": {
+      "miiv": [
+        {
+          "ids": 50952,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": 50952,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": 50952,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "sic": [
+        {
+          "ids": 249,
+          "table": "laboratory",
+          "sub_var": "LaboratoryID"
+        }
+      ],
+      "eicu": [
+        {
+          "ids": "Fe",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "ids": "Fe",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ]
+    }
+  },
+  "tibc": {
+    "unit": [
+      "µg/dL",
+      "ug/dL"
+    ],
+    "min": 0,
+    "max": 800,
+    "description": "total iron binding capacity",
+    "category": "chemistry",
+    "sources": {
+      "miiv": [
+        {
+          "ids": 50953,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": 50953,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": 50953,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "eicu": [
+        {
+          "ids": "TIBC",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "ids": "TIBC",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ]
+    }
+  },
+  "transferrin": {
+    "unit": [
+      "mg/dL",
+      "mg/dl"
+    ],
+    "min": 0,
+    "max": 600,
+    "description": "transferrin (blood)",
+    "category": "chemistry",
+    "sources": {
+      "miiv": [
+        {
+          "ids": 50998,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": 50998,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": 50998,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "sic": [
+        {
+          "ids": 384,
+          "table": "laboratory",
+          "sub_var": "LaboratoryID"
+        }
+      ],
+      "eicu": [
+        {
+          "ids": "transferrin",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "ids": "transferrin",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ]
+    }
+  },
+  "ft4": {
+    "unit": [
+      "ng/dL",
+      "ng/dl"
+    ],
+    "min": 0,
+    "max": 12,
+    "description": "free thyroxine (free T4)",
+    "category": "chemistry",
+    "sources": {
+      "miiv": [
+        {
+          "ids": 50995,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": 50995,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": 50995,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "eicu": [
+        {
+          "ids": "free T4",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "ids": "free T4",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ]
+    }
+  },
+  "prealbumin": {
+    "unit": [
+      "mg/dL",
+      "mg/dl"
+    ],
+    "min": 0,
+    "max": 100,
+    "description": "prealbumin (transthyretin)",
+    "category": "chemistry",
+    "_comment": "2026-07-04 eICU-only: no prealbumin item in MIMIC/AUMC/SIC/HiRID catalogs.",
+    "sources": {
+      "eicu": [
+        {
+          "ids": "prealbumin",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "ids": "prealbumin",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ]
+    }
+  },
+  "myoglobin": {
+    "unit": [
+      "ng/mL",
+      "µg/L",
+      "ug/L"
+    ],
+    "min": 0,
+    "max": 20000,
+    "description": "myoglobin (blood)",
+    "category": "chemistry",
+    "_comment": "2026-07-04 sic+eICU: MIMIC-IV 51695 'Myoglobin' is a 0-row catalog phantom; MIMIC-III/AUMC/HiRID none.",
+    "sources": {
+      "sic": [
+        {
+          "ids": 260,
+          "table": "laboratory",
+          "sub_var": "LaboratoryID"
+        }
+      ],
+      "eicu": [
+        {
+          "ids": "myoglobin",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "ids": "myoglobin",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ]
+    }
   }
 }
