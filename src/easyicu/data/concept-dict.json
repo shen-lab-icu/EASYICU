@@ -1437,14 +1437,20 @@
       ],
       "eicu": [
         {
-          "ids": "bicarbonate",
+          "ids": [
+            "bicarbonate",
+            "HCO3"
+          ],
           "table": "lab",
           "sub_var": "labname"
         }
       ],
       "eicu_demo": [
         {
-          "ids": "bicarbonate",
+          "ids": [
+            "bicarbonate",
+            "HCO3"
+          ],
           "table": "lab",
           "sub_var": "labname"
         }
@@ -4854,6 +4860,20 @@
           ],
           "table": "laboratory",
           "sub_var": "LaboratoryID"
+        }
+      ],
+      "eicu": [
+        {
+          "ids": "ESR",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "ids": "ESR",
+          "table": "lab",
+          "sub_var": "labname"
         }
       ]
     }
@@ -10386,6 +10406,11 @@
             "PEEP",
             "PEEP/CPAP"
           ]
+        },
+        {
+          "ids": "PEEP",
+          "table": "lab",
+          "sub_var": "labname"
         }
       ],
       "hirid": [
@@ -10834,6 +10859,11 @@
           "ids": [
             "Peak Insp. Pressure"
           ]
+        },
+        {
+          "ids": "Peak Airway/Pressure",
+          "table": "lab",
+          "sub_var": "labname"
         }
       ],
       "hirid": [
@@ -11663,6 +11693,11 @@
             "Pressure Support",
             "PS above PEEP"
           ]
+        },
+        {
+          "ids": "Pressure Support",
+          "table": "lab",
+          "sub_var": "labname"
         }
       ],
       "miiv": [
@@ -13528,17 +13563,22 @@
           "table": "respiratorycharting",
           "sub_var": "respchartvaluelabel",
           "val_var": "respchartvalue",
-              "ids": [
-                "Exhaled TV (machine)",
-                "Exhaled TV (patient)",
-                "Exhaled Vt",
-                "Tidal Volume Observed (VT)",
-                "Tidal Volume, Delivered",
-                "Vt Spontaneous (mL)"
-              ],
-              "_comment": "2026-07-03 semantic coverage review: added delivered/spontaneous observed tidal-volume labels; settings and RSBI-derived labels remain excluded."
-            }
+          "ids": [
+            "Exhaled TV (machine)",
+            "Exhaled TV (patient)",
+            "Exhaled Vt",
+            "Tidal Volume Observed (VT)",
+            "Tidal Volume, Delivered",
+            "Vt Spontaneous (mL)"
           ],
+          "_comment": "2026-07-03 semantic coverage review: added delivered/spontaneous observed tidal-volume labels; settings and RSBI-derived labels remain excluded."
+        },
+        {
+          "ids": "TV",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ],
       "hirid": [
         {
           "ids": [
@@ -13551,11 +13591,11 @@
       ],
       "miiv": [
         {
-              "ids": [
-                224421,
-                224685,
-                224686
-              ],
+          "ids": [
+            224421,
+            224685,
+            224686
+          ],
           "table": "chartevents",
           "sub_var": "itemid",
           "index_var": "charttime",
@@ -13572,12 +13612,12 @@
             681,
             682,
             684,
-                2094,
-                2311,
-                2400,
-                2402,
-                2408,
-                2420,
+            2094,
+            2311,
+            2400,
+            2402,
+            2408,
+            2420,
             2534,
             2566,
             2998,
@@ -13588,10 +13628,10 @@
             3083,
             3086,
             5593,
-                6289,
-                224421,
-                224685,
-                224686
+            6289,
+            224421,
+            224685,
+            224686
           ],
           "table": "chartevents",
           "sub_var": "itemid",
@@ -13627,12 +13667,12 @@
             681,
             682,
             684,
-                2094,
-                2311,
-                2400,
-                2402,
-                2408,
-                2420,
+            2094,
+            2311,
+            2400,
+            2402,
+            2408,
+            2420,
             2534,
             2566,
             2998,
@@ -13643,10 +13683,10 @@
             3083,
             3086,
             5593,
-                6289,
-                224421,
-                224685,
-                224686
+            6289,
+            224421,
+            224685,
+            224686
           ],
           "table": "chartevents",
           "sub_var": "itemid",
@@ -15018,6 +15058,11 @@
             "Vent Rate",
             "Adult Con Setting Set RR"
           ]
+        },
+        {
+          "ids": "Vent Rate",
+          "table": "lab",
+          "sub_var": "labname"
         }
       ],
       "hirid": [
@@ -17330,6 +17375,20 @@
           "sub_var": "variableid",
           "class_name": "hrd_itm",
           "callback": "convert_unit(binary_op(`/`, 27.59), 'µg/dL')"
+        }
+      ],
+      "eicu": [
+        {
+          "ids": "cortisol",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "ids": "cortisol",
+          "table": "lab",
+          "sub_var": "labname"
         }
       ]
     }
