@@ -1256,7 +1256,7 @@ def test_native_extraction_module_counts_match_backend_catalog() -> None:
     keys = dict(re.findall(r"'([^']+)':\s*'([^']+)'", key_block))
 
     assert len(entries) == len(cc.CONCEPT_GROUPS_INTERNAL) == 19
-    assert len(cc.CONCEPT_DICTIONARY) == 264
+    assert len(cc.CONCEPT_DICTIONARY) == 269
     assert "function moduleConceptCount(m)" in extraction_js
     assert "window.EU_CATALOG && window.EU_CATALOG.groupConcepts" in extraction_js
 

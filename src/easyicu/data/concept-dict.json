@@ -17429,5 +17429,297 @@
         }
       ]
     }
+  },
+  "bnp": {
+    "unit": [
+      "pg/mL",
+      "ng/L"
+    ],
+    "min": 0,
+    "max": 50000,
+    "description": "B-type natriuretic peptide (BNP); distinct from NT-proBNP",
+    "category": "chemistry",
+    "_comment": "2026-07-04 eICU-only: MIMIC/AUMC/SIC carry NT-proBNP (ntprobnp) not BNP; HiRID none.",
+    "sources": {
+      "eicu": [
+        {
+          "ids": "BNP",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "ids": "BNP",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ]
+    }
+  },
+  "uric_acid": {
+    "unit": [
+      "mg/dL",
+      "mg/dl"
+    ],
+    "min": 0,
+    "max": 30,
+    "description": "uric acid (blood); AUMC µmol/L converted to mg/dL (÷59.48)",
+    "category": "chemistry",
+    "sources": {
+      "miiv": [
+        {
+          "ids": 51007,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": 51007,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": 51007,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "aumc": [
+        {
+          "ids": [
+            9950
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid",
+          "callback": "transform_fun(binary_op(`/`, 59.48))"
+        }
+      ],
+      "sic": [
+        {
+          "ids": 354,
+          "table": "laboratory",
+          "sub_var": "LaboratoryID"
+        }
+      ],
+      "eicu": [
+        {
+          "ids": "uric acid",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "ids": "uric acid",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ]
+    }
+  },
+  "cholesterol": {
+    "unit": [
+      "mg/dL",
+      "mg/dl"
+    ],
+    "min": 0,
+    "max": 1000,
+    "description": "total cholesterol (blood); AUMC mmol/L converted to mg/dL (×38.67)",
+    "category": "chemistry",
+    "sources": {
+      "miiv": [
+        {
+          "ids": 50907,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": 50907,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": 50907,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "aumc": [
+        {
+          "ids": [
+            9954
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid",
+          "callback": "transform_fun(binary_op(`*`, 38.67))"
+        }
+      ],
+      "sic": [
+        {
+          "ids": 338,
+          "table": "laboratory",
+          "sub_var": "LaboratoryID"
+        }
+      ],
+      "eicu": [
+        {
+          "ids": "total cholesterol",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "ids": "total cholesterol",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ]
+    }
+  },
+  "hdl": {
+    "unit": [
+      "mg/dL",
+      "mg/dl"
+    ],
+    "min": 0,
+    "max": 200,
+    "description": "HDL cholesterol (blood); AUMC mmol/L converted to mg/dL (×38.67)",
+    "category": "chemistry",
+    "sources": {
+      "miiv": [
+        {
+          "ids": 50904,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": 50904,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": 50904,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "aumc": [
+        {
+          "ids": [
+            10056
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid",
+          "callback": "transform_fun(binary_op(`*`, 38.67))"
+        }
+      ],
+      "sic": [
+        {
+          "ids": 350,
+          "table": "laboratory",
+          "sub_var": "LaboratoryID"
+        }
+      ],
+      "eicu": [
+        {
+          "ids": "HDL",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "ids": "HDL",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ]
+    }
+  },
+  "ldl": {
+    "unit": [
+      "mg/dL",
+      "mg/dl"
+    ],
+    "min": 0,
+    "max": 500,
+    "description": "LDL cholesterol (blood, calculated/measured); AUMC mmol/L converted to mg/dL (×38.67)",
+    "category": "chemistry",
+    "sources": {
+      "miiv": [
+        {
+          "ids": [
+            50905,
+            50906
+          ],
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": [
+            50905,
+            50906
+          ],
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": [
+            50905,
+            50906
+          ],
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "aumc": [
+        {
+          "ids": [
+            10057
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid",
+          "callback": "transform_fun(binary_op(`*`, 38.67))"
+        }
+      ],
+      "sic": [
+        {
+          "ids": 373,
+          "table": "laboratory",
+          "sub_var": "LaboratoryID"
+        }
+      ],
+      "eicu": [
+        {
+          "ids": "LDL",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "ids": "LDL",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ]
+    }
   }
 }
