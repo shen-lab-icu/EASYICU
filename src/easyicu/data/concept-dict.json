@@ -3481,6 +3481,14 @@
           "sub_var": "itemid",
           "callback": "transform_fun(set_val(TRUE))"
         }
+      ],
+      "sic": [
+        {
+          "ids": 1747,
+          "table": "medication",
+          "sub_var": "DrugID",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
       ]
     }
   },
@@ -13758,7 +13766,10 @@
       ],
       "hirid": [
         {
-          "ids": 24000806,
+          "ids": [
+            24000806,
+            24000538
+          ],
           "table": "observations",
           "sub_var": "variableid",
           "callback": "convert_unit(binary_op(`/`, 1000), 'ng/mL')",
@@ -16806,6 +16817,14 @@
           "table": "lab",
           "sub_var": "labname"
         }
+      ],
+      "hirid": [
+        {
+          "ids": 24000664,
+          "table": "observations",
+          "sub_var": "variableid",
+          "class_name": "hrd_itm"
+        }
       ]
     }
   },
@@ -17009,6 +17028,322 @@
           "table": "observations",
           "sub_var": "variableid",
           "class_name": "hrd_itm"
+        }
+      ]
+    }
+  },
+  "icp": {
+    "unit": "mmHg",
+    "min": 0,
+    "max": 100,
+    "description": "intracranial pressure",
+    "category": "neurological",
+    "_comment": "2026-07-04 recall sweep: MIMIC-IV has no clean ICP value item (only line-admin/checkbox itemids); mapped MIMIC-III 226, eICU vitalperiodic.icp, HiRID observations.",
+    "sources": {
+      "mimic": [
+        {
+          "ids": 226,
+          "table": "chartevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": 226,
+          "table": "chartevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "eicu": [
+        {
+          "table": "vitalperiodic",
+          "val_var": "icp",
+          "class_name": "col_itm",
+          "unit_val": "mmHg"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "table": "vitalperiodic",
+          "val_var": "icp",
+          "class_name": "col_itm",
+          "unit_val": "mmHg"
+        }
+      ],
+      "hirid": [
+        {
+          "ids": [
+            510,
+            15001597,
+            15004303
+          ],
+          "table": "observations",
+          "sub_var": "variableid",
+          "class_name": "hrd_itm"
+        }
+      ]
+    }
+  },
+  "svo2": {
+    "unit": "%",
+    "min": 0,
+    "max": 100,
+    "description": "mixed venous oxygen saturation (SvO2)",
+    "category": "cardiovascular",
+    "sources": {
+      "miiv": [
+        {
+          "ids": [
+            223772,
+            225674
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": [
+            664,
+            823,
+            838
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": [
+            664,
+            823,
+            838
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "aumc": [
+        {
+          "ids": [
+            12534
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid"
+        }
+      ],
+      "hirid": [
+        {
+          "ids": 4200,
+          "table": "observations",
+          "sub_var": "variableid",
+          "class_name": "hrd_itm"
+        }
+      ]
+    }
+  },
+  "scvo2": {
+    "unit": "%",
+    "min": 0,
+    "max": 100,
+    "description": "central venous oxygen saturation (ScvO2)",
+    "category": "cardiovascular",
+    "sources": {
+      "miiv": [
+        {
+          "ids": [
+            226541
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": [
+            1624
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": [
+            1624
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "hirid": [
+        {
+          "ids": [
+            20001000,
+            24000737
+          ],
+          "table": "observations",
+          "sub_var": "variableid",
+          "class_name": "hrd_itm"
+        }
+      ]
+    }
+  },
+  "pawp": {
+    "unit": "mmHg",
+    "min": 0,
+    "max": 50,
+    "description": "pulmonary artery wedge / occlusion pressure (PCWP/PAOP)",
+    "category": "cardiovascular",
+    "sources": {
+      "miiv": [
+        {
+          "ids": [
+            223771
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": [
+            504
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": [
+            504
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "eicu": [
+        {
+          "table": "vitalaperiodic",
+          "val_var": "paop",
+          "class_name": "col_itm",
+          "unit_val": "mmHg"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "table": "vitalaperiodic",
+          "val_var": "paop",
+          "class_name": "col_itm",
+          "unit_val": "mmHg"
+        }
+      ],
+      "aumc": [
+        {
+          "ids": [
+            6657
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid"
+        }
+      ],
+      "hirid": [
+        {
+          "ids": 800,
+          "table": "observations",
+          "sub_var": "variableid",
+          "class_name": "hrd_itm"
+        }
+      ]
+    }
+  },
+  "cortisol": {
+    "unit": [
+      "µg/dL",
+      "ug/dL"
+    ],
+    "min": 0,
+    "max": 200,
+    "description": "cortisol (blood); AUMC/HiRID nmol/L converted to µg/dL (÷27.59)",
+    "category": "chemistry",
+    "sources": {
+      "miiv": [
+        {
+          "ids": 50909,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": 50909,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": 50909,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "aumc": [
+        {
+          "ids": [
+            10238,
+            10751
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid",
+          "callback": "transform_fun(binary_op(`/`, 27.59))"
+        }
+      ],
+      "hirid": [
+        {
+          "ids": 24000665,
+          "table": "observations",
+          "sub_var": "variableid",
+          "class_name": "hrd_itm",
+          "callback": "convert_unit(binary_op(`/`, 27.59), 'µg/dL')"
+        }
+      ]
+    }
+  },
+  "pct": {
+    "unit": [
+      "ng/mL",
+      "µg/L",
+      "ug/L"
+    ],
+    "min": 0,
+    "max": 1000,
+    "description": "procalcitonin (blood)",
+    "category": "chemistry",
+    "sources": {
+      "aumc": [
+        {
+          "ids": [
+            15775
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid"
+        }
+      ],
+      "hirid": [
+        {
+          "ids": 24000570,
+          "table": "observations",
+          "sub_var": "variableid",
+          "class_name": "hrd_itm"
+        }
+      ],
+      "sic": [
+        {
+          "ids": 263,
+          "table": "laboratory",
+          "sub_var": "LaboratoryID"
         }
       ]
     }

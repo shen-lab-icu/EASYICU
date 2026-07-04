@@ -319,6 +319,12 @@ CONCEPT_DICTIONARY = {
     'ntprobnp': ('NT-proBNP', 'N末端脑钠肽前体', 'pg/mL'),
     'monos': ('Monocytes', '单核细胞', '%'),
     'mpv': ('Mean Platelet Volume', '平均血小板体积', 'fL'),
+    'icp': ('Intracranial Pressure', '颅内压', 'mmHg'),
+    'svo2': ('Mixed Venous O₂ Saturation', '混合静脉血氧饱和度', '%'),
+    'scvo2': ('Central Venous O₂ Saturation', '中心静脉血氧饱和度', '%'),
+    'pawp': ('Pulmonary Artery Wedge Pressure', '肺动脉楔压', 'mmHg'),
+    'cortisol': ('Cortisol', '皮质醇', 'µg/dL'),
+    'pct': ('Procalcitonin', '降钙素原', 'ng/mL'),
 }
 
 # 特征详细描述（英文和中文）
@@ -456,7 +462,7 @@ CONCEPT_GROUPS_INTERNAL = {
     'respiratory': ['pafi', 'safi', 'fio2', 'supp_o2', 'vent_ind', 'vent_start', 'vent_end', 'o2sat', 'sao2', 'mech_vent', 'ett_gcs', 'ecmo', 'ecmo_indication', 'adv_resp', 'oxygenation_index'],
     'ventilator': ['peep', 'tidal_vol', 'tidal_vol_set', 'pip', 'plateau_pres', 'mean_airway_pres', 'minute_vol', 'vent_rate', 'etco2', 'compliance', 'driving_pres', 'ps'],
     'blood_gas': ['be', 'cai', 'hbco', 'lact', 'methb', 'pco2', 'ph', 'po2', 'tco2'],
-    'chemistry': ['alb', 'alp', 'alt', 'ast', 'anion_gap', 'bicar', 'bili', 'bili_dir', 'bun', 'ca', 'ck', 'ckmb', 'cl', 'crea', 'crp', 'glu', 'k', 'mg', 'na', 'phos', 'tnt', 'tri', 'ammonia', 'amylase', 'd_dimer', 'ferritin', 'ldh', 'lipase', 'osmolality', 'corrected_calcium', 'ggt', 'trig', 'tsh', 'total_protein', 'ntprobnp'],
+    'chemistry': ['alb', 'alp', 'alt', 'ast', 'anion_gap', 'bicar', 'bili', 'bili_dir', 'bun', 'ca', 'ck', 'ckmb', 'cl', 'crea', 'crp', 'glu', 'k', 'mg', 'na', 'phos', 'tnt', 'tri', 'ammonia', 'amylase', 'd_dimer', 'ferritin', 'ldh', 'lipase', 'osmolality', 'corrected_calcium', 'ggt', 'trig', 'tsh', 'total_protein', 'ntprobnp', 'cortisol', 'pct'],
     'hematology': ['bnd', 'basos', 'eos', 'esr', 'fgn', 'hba1c', 'hct', 'hgb', 'inr_pt', 'lymph', 'mch', 'mchc', 'mcv', 'neut', 'plt', 'pt', 'ptt', 'rbc', 'rdw', 'wbc', 'nlr', 'plr', 'monos', 'mpv'],
     'vasopressors': ['norepi_rate', 'norepi_dur', 'norepi_equiv', 'norepi60', 'epi_rate', 'epi_dur', 'epi60', 'dopa_rate', 'dopa_dur', 'dopa60', 'dobu_rate', 'dobu_dur', 'dobu60', 'adh_rate', 'phn_rate', 'vaso_ind', 'other_vaso'],
     'medications': ['abx', 'albumin_iv', 'bicarbonate', 'calcium_iv', 'cort', 'dex', 'dexamethasone', 'dextrose50', 'ffp', 'ins', 'amiodarone', 'cisatracurium', 'dexmedetomidine', 'fentanyl', 'fentanyl_rate', 'furosemide', 'heparin', 'ketamine', 'levetiracetam', 'lorazepam', 'magnesium_iv', 'mannitol', 'meropenem', 'midazolam', 'midazolam_rate', 'milrinone', 'morphine', 'neostigmine', 'nitroglycerin', 'octreotide', 'packed_rbc', 'pantoprazole', 'platelets', 'potassium_iv', 'propofol', 'propofol_rate', 'rocuronium', 'vancomycin', 'vecuronium', 'apixaban', 'aspirin', 'diltiazem', 'enoxaparin', 'esmolol', 'insulin', 'labetalol', 'nicardipine', 'phenytoin', 'warfarin'],
@@ -468,8 +474,8 @@ CONCEPT_GROUPS_INTERNAL = {
               'fluid_balance', 'fluid_balance_cumulative', 'total_input_ml',
               # 衍生肾功能指数 (Tier 1, 2026-06-22)
               'bun_creatinine_ratio', 'egfr'],
-    'neurological': ['avpu', 'egcs', 'gcs', 'mgcs', 'rass', 'tgcs', 'vgcs', 'sedated_gcs', 'motor_response', 'delirium_positive', 'delirium_tx'],
-    'circulatory': ['mech_circ_support', 'circ_failure', 'circ_event', 'pap_sys', 'pap_dia', 'pap_mean', 'co'],  # 🔧 添加循环衰竭特征 + 肺动脉压/心输出量 (2026-07-04)
+    'neurological': ['avpu', 'egcs', 'gcs', 'mgcs', 'rass', 'tgcs', 'vgcs', 'sedated_gcs', 'motor_response', 'delirium_positive', 'delirium_tx', 'icp'],
+    'circulatory': ['mech_circ_support', 'circ_failure', 'circ_event', 'pap_sys', 'pap_dia', 'pap_mean', 'co', 'svo2', 'scvo2', 'pawp'],  # 🔧 添加循环衰竭特征 + 肺动脉压/心输出量 + 静脉血氧/楔压 (2026-07-04)
     'demographics': ['age', 'bmi', 'height', 'sex', 'weight', 'adm'],
     'other_scores': ['qsofa', 'sirs', 'mews', 'news', 'apache_iv', 'apache_iv_pred_hosp_mort', 'saps3', 'charlson', 'elixhauser'],
     'outcome': ['death', 'los_icu', 'los_hosp', 'mort_28d', 'mort_90d', 'mort_365d', 'icu_free_days_28', 'vent_free_days_28', 'icu_readmission', 'persistent_critical_illness'],
