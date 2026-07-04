@@ -9,29 +9,6 @@
       "aumc": [
         {
           "ids": [
-            2,
-            13,
-            19,
-            24,
-            28,
-            29,
-            57,
-            59,
-            82,
-            103,
-            240,
-            247,
-            333,
-            1133,
-            1199,
-            1300,
-            1371,
-            1795,
-            2284,
-            2834,
-            3237,
-            3741,
-            5576,
             6834,
             6847,
             6871,
@@ -46,7 +23,6 @@
             7208,
             7227,
             7235,
-            8064,
             8394,
             8942,
             9029,
@@ -59,27 +35,18 @@
             9142,
             9151,
             9152,
-            12262,
-            12389,
             12398,
             12956,
             12997,
             13057,
             13094,
             13102,
-            15591,
-            18860,
             19137,
-            19773,
-            20563,
-            23166,
-            24241,
-            25776,
-            27617,
-            29321
+            19773
           ],
           "table": "drugitems",
           "sub_var": "itemid",
+          "_comment": "2026-07-03 full dictionary audit: removed legacy/non-current AUMC ids absent from drugitems.csv; 18860 was Hb pleural fluid in numericitems, not antibiotic.",
           "callback": "transform_fun(set_val(TRUE))"
         }
       ],
@@ -1754,10 +1721,21 @@
       ],
       "miiv": [
         {
-          "ids": 50885,
+          "ids": [
+            50885,
+            53089
+          ],
           "table": "labevents",
           "sub_var": "itemid",
-          "index_var": "charttime"
+          "index_var": "charttime",
+          "_comment": "2026-07-03 semantic coverage review: added MIMIC-IV duplicate blood total bilirubin itemid 53089."
+        },
+        {
+          "ids": 225690,
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "index_var": "charttime",
+          "_comment": "2026-07-03 semantic coverage review: added MIMIC-IV charted Total Bilirubin; body-fluid/neonatal/stool/CSF bilirubin labels remain excluded."
         }
       ],
       "mimic": [
@@ -2633,6 +2611,16 @@
           "ids": 3120,
           "table": "data_float_h",
           "sub_var": "DataID"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": [
+            131,
+            132
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid"
         }
       ]
     }
@@ -4119,42 +4107,52 @@
           "table": "chartevents",
           "sub_var": "itemid",
           "ids": [
-            224660,
-            228193
+            229268,
+            229270,
+            229277,
+            229278,
+            229280,
+            229274,
+            229266,
+            228193,
+            224660
           ],
-          "callback": "transform_fun(set_val(TRUE))"
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "2026-07-03 audit: synchronized with SOFA-2 ECMO coverage; includes circuit configuration, flow/speed/sweep/FiO2, oxygenator/cannula indicators, and legacy ECMO hemodynamics."
         }
       ],
       "eicu": [
         {
           "table": "treatment",
           "sub_var": "treatmentstring",
-          "regex": "ECMO",
+          "regex": "ECMO|extracorporeal membrane",
           "class_name": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))"
         },
         {
           "table": "nursecharting",
-          "sub_var": "nursingchartcelltypevallabel",
+          "sub_var": "nursingchartvalue",
           "regex": "ECMO",
           "class_name": "rgx_itm",
-          "callback": "transform_fun(set_val(TRUE))"
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "2026-07-03 audit: ECMO appears in the nursecharting value, not the label."
         }
       ],
       "eicu_demo": [
         {
           "table": "treatment",
           "sub_var": "treatmentstring",
-          "regex": "ECMO",
+          "regex": "ECMO|extracorporeal membrane",
           "class_name": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))"
         },
         {
           "table": "nursecharting",
-          "sub_var": "nursingchartcelltypevallabel",
+          "sub_var": "nursingchartvalue",
           "regex": "ECMO",
           "class_name": "rgx_itm",
-          "callback": "transform_fun(set_val(TRUE))"
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "2026-07-03 audit: ECMO appears in the nursecharting value, not the label."
         }
       ],
       "aumc": [
@@ -4169,7 +4167,7 @@
         {
           "table": "procedureorderitems",
           "sub_var": "item",
-          "regex": "ECMO",
+          "regex": "ECMO|extracorporeal",
           "class_name": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))"
         }
@@ -4186,10 +4184,11 @@
           "table": "chartevents",
           "sub_var": "itemid",
           "ids": [
-            224660,
-            228193
+            229268
           ],
-          "callback": "transform_fun(set_val('respiratory'))"
+          "val_var": "value",
+          "callback": "apply_map(c(`VV` = 'respiratory', `VA` = 'cardiovascular', `VAV` = 'cardiovascular'), var = 'value')",
+          "_comment": "2026-07-03 audit: 229268 Circuit Configuration carries VV/VA/VAV indication; flow/checkbox ECMO itemids cannot distinguish indication."
         }
       ],
       "eicu": [
@@ -4206,13 +4205,6 @@
           "regex": "VA.*ECMO|ECMO.*cardio",
           "class_name": "rgx_itm",
           "callback": "transform_fun(set_val('cardiovascular'))"
-        },
-        {
-          "table": "nursecharting",
-          "sub_var": "nursingchartcelltypevallabel",
-          "regex": "ECMO",
-          "class_name": "rgx_itm",
-          "callback": "transform_fun(set_val('cardiovascular'))"
         }
       ],
       "eicu_demo": [
@@ -4227,13 +4219,6 @@
           "table": "treatment",
           "sub_var": "treatmentstring",
           "regex": "VA.*ECMO|ECMO.*cardio",
-          "class_name": "rgx_itm",
-          "callback": "transform_fun(set_val('cardiovascular'))"
-        },
-        {
-          "table": "nursecharting",
-          "sub_var": "nursingchartcelltypevallabel",
-          "regex": "ECMO",
           "class_name": "rgx_itm",
           "callback": "transform_fun(set_val('cardiovascular'))"
         }
@@ -4393,13 +4378,13 @@
             1000863,
             1000864,
             1000865,
-            1000866,
-            1000867
+            1000895,
+            1001016
           ],
           "table": "pharma",
           "sub_var": "pharmaid",
           "class_name": "hrd_itm",
-          "_comment": "2026-05-27 added via HiRID Pharma reference table audit",
+          "_comment": "2026-07-03 full dictionary audit: HiRID reference has Clexane 0.2/0.4/0.8/0.6/1.0 ml as 1000863/1000864/1000865/1000895/1001016; removed absent 1000866 and Nitriate 1000867.",
           "callback": "transform_fun(set_val(TRUE))"
         }
       ]
@@ -4947,6 +4932,16 @@
           "sub_var": "respchartvaluelabel",
           "val_var": "respchartvalue",
           "class_name": "rgx_itm"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": [
+            228640,
+            1817
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid"
         }
       ]
     }
@@ -5574,6 +5569,13 @@
           "ids": 2283,
           "table": "data_float_h",
           "sub_var": "DataID"
+        },
+        {
+          "ids": 684,
+          "table": "laboratory",
+          "sub_var": "LaboratoryID",
+          "callback": "transform_fun(percent_as_numeric)",
+          "_comment": "2026-07-03 semantic coverage review: SIC 684 = FiO2 (BGA), %, observed range 0-100 with mode 21; added as lab FiO2 analogue."
         }
       ]
     }
@@ -5887,6 +5889,14 @@
           "table": "labevents",
           "sub_var": "itemid"
         }
+      ],
+      "sic": [
+        {
+          "ids": 214,
+          "table": "laboratory",
+          "sub_var": "LaboratoryID",
+          "_comment": "2026-07-03 module coverage audit: SIC d_references 214 = HbA1c (ZL), %, kept; 474 = HbA1c IFCC mmol/mol excluded pending NGSP conversion."
+        }
       ]
     }
   },
@@ -5922,6 +5932,30 @@
           "table": "observations",
           "sub_var": "variableid",
           "class_name": "hrd_itm"
+        }
+      ],
+      "miiv": [
+        {
+          "ids": 50805,
+          "table": "labevents",
+          "sub_var": "itemid",
+          "_comment": "2026-07-03 module coverage audit: MIMIC-IV d_labitems 50805 = Carboxyhemoglobin, Blood Gas."
+        }
+      ],
+      "mimic": [
+        {
+          "ids": 50805,
+          "table": "labevents",
+          "sub_var": "itemid",
+          "_comment": "2026-07-03 module coverage audit: MIMIC-III d_labitems 50805 = Carboxyhemoglobin, Blood Gas."
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": 50805,
+          "table": "labevents",
+          "sub_var": "itemid",
+          "_comment": "2026-07-03 module coverage audit: MIMIC-III d_labitems 50805 = Carboxyhemoglobin, Blood Gas."
         }
       ]
     }
@@ -7787,30 +7821,60 @@
         {
           "ids": [
             52,
+            438,
             443,
             456,
             6072,
+            1321,
+            2309,
+            2353,
+            2369,
+            2544,
+            2770,
+            2974,
+            3067,
+            5680,
+            5804,
+            6399,
+            6579,
+            6605,
             220052,
             220181,
             225312
           ],
           "table": "chartevents",
-          "sub_var": "itemid"
+          "sub_var": "itemid",
+          "_comment": "2026-07-03 audit: added MIMIC-III CareVue generic/femoral/radial/sheath arterial MAP channels; HFO/TCPCV airway MAP labels remain excluded."
         }
       ],
       "mimic_demo": [
         {
           "ids": [
             52,
+            438,
             443,
             456,
             6072,
+            1321,
+            2309,
+            2353,
+            2369,
+            2544,
+            2770,
+            2974,
+            3067,
+            5680,
+            5804,
+            6399,
+            6579,
+            6605,
             220052,
             220181,
             225312
           ],
           "table": "chartevents",
-          "sub_var": "itemid"
+          "sub_var": "itemid",
+          "_comment": "2026-07-03 audit: added MIMIC-III CareVue generic/femoral/radial/sheath arterial MAP channels; HFO/TCPCV airway MAP labels remain excluded."
         }
       ],
       "sic": [
@@ -8100,6 +8164,16 @@
           "table": "data_float_h",
           "sub_var": "DataID"
         }
+      ],
+      "mimic_demo": [
+        {
+          "ids": [
+            224697,
+            444
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid"
+        }
       ]
     }
   },
@@ -8113,19 +8187,41 @@
           "table": "chartevents",
           "sub_var": "itemid",
           "ids": [
-            224272,
+            224309,
+            224652,
+            224654,
+            224311,
+            224310,
             224322,
+            227980,
+            228866,
             225979,
+            228154,
+            228156,
+            228151,
+            228158,
+            228198,
+            229254,
             220128
           ],
-          "callback": "transform_fun(set_val(TRUE))"
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "2026-07-03 audit: synchronized with SOFA-2 MIIV mechanical circulatory support coverage for IABP, Impella, Tandem Heart, LVAD, and RVAD."
+        },
+        {
+          "table": "procedureevents",
+          "sub_var": "itemid",
+          "ids": [
+            224272
+          ],
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "224272 IABP line is a MIMIC-IV procedureevents item, not chartevents."
         }
       ],
       "eicu": [
         {
           "table": "treatment",
           "sub_var": "treatmentstring",
-          "regex": "IABP|balloon pump|LVAD|Impella",
+          "regex": "IABP|intra.?aortic|balloon pump|LVAD|VAD|Impella|Tandem|ventricular assist",
           "class_name": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))"
         }
@@ -8134,7 +8230,7 @@
         {
           "table": "procedureorderitems",
           "sub_var": "item",
-          "regex": "(IABP|balloon|Impella|LVAD)",
+          "regex": "(IABP|intra.?aortic|balloon|Impella|LVAD|VAD|ventricular assist)",
           "class_name": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))"
         },
@@ -8865,7 +8961,10 @@
       "aumc": [
         {
           "ids": [
+            8870,
             8875,
+            9663,
+            9668,
             12273,
             12276,
             12357,
@@ -8873,7 +8972,7 @@
           ],
           "table": "numericitems",
           "sub_var": "itemid",
-          "_comment": "added 8875 Mv Spontaan (l/min) per audit 2026-05-27; 2026-07-02 added inspiratory/expiratory/device-specific minute-volume channels with l/min-compatible values."
+          "_comment": "added 8875 Mv Spontaan (l/min) per audit 2026-05-27; 2026-07-02 added inspiratory/expiratory/device-specific minute-volume channels with l/min-compatible values; 2026-07-03 semantic coverage review added VE/VE(2) and Mv Spontaan(2), excluded Mv Lekkage."
         }
       ],
       "eicu": [
@@ -8884,7 +8983,8 @@
           "ids": [
             "Exhaled MV",
             "Measured Ve",
-            "Adult Con Pt/Vent MinuteVentil"
+            "Adult Con Pt/Vent MinuteVentil",
+            "Minute Volume, Spontaneous"
           ]
         }
       ],
@@ -8901,12 +9001,21 @@
       "mimic": [
         {
           "ids": [
-            224688,
-            224690,
-            445
+            224687,
+            445,
+            448,
+            450,
+            650,
+            1883,
+            3049,
+            3259,
+            6078,
+            6932,
+            6934
           ],
           "table": "chartevents",
-          "sub_var": "itemid"
+          "sub_var": "itemid",
+          "_comment": "2026-07-03 audit: removed respiratory-rate itemids 224688/224690; added 224687 Minute Volume; semantic coverage review added MIMIC-III measured/spontaneous/inhaled/exhaled minute-volume CareVue labels, excluding set/alarm/low-limit labels."
         }
       ],
       "sic": [
@@ -8918,6 +9027,26 @@
           "table": "data_float_h",
           "sub_var": "DataID",
           "_comment": "713=MV (exp); 2019=MV (total minute volume); both unit L. 2019 added 2026-06-08 ricu-audit (docs/ricu_audit_results_20260608.md)"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": [
+            224687,
+            445,
+            448,
+            450,
+            650,
+            1883,
+            3049,
+            3259,
+            6078,
+            6932,
+            6934
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "_comment": "2026-07-03 audit: removed respiratory-rate itemids 224688/224690; added 224687 Minute Volume; semantic coverage review added MIMIC-III measured/spontaneous/inhaled/exhaled minute-volume CareVue labels, excluding set/alarm/low-limit labels."
         }
       ]
     }
@@ -9237,7 +9366,8 @@
           "ids": 24000550,
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class_name": "hrd_itm",
+          "_comment": "2026-07-04 HiRID 24000550 stores absolute neutrophil count (~9), not % despite its '/100 leukocytes' label. Kept as-is because lymph@hirid (24000480) is also absolute (G/l) and HiRID has no lymphocyte-% variable, so nlr@hirid = abs/abs is the correct NLR. Do NOT switch to 24000556 (segmented-only %) — it would break nlr."
         }
       ],
       "miiv": [
@@ -9787,13 +9917,15 @@
         {
           "ids": [
             646,
+            6719,
             834,
+            220227,
             220277,
-            226253,
-            50817
+            226253
           ],
           "table": "chartevents",
-          "sub_var": "itemid"
+          "sub_var": "itemid",
+          "_comment": "2026-07-03 full dictionary audit: 50817 is d_labitems Oxygen Saturation and is kept only in labevents; semantic coverage review added 6719 SpO2-L and 220227 Arterial O2 Saturation."
         },
         {
           "ids": 50817,
@@ -9805,13 +9937,15 @@
         {
           "ids": [
             646,
+            6719,
             834,
+            220227,
             220277,
-            226253,
-            50817
+            226253
           ],
           "table": "chartevents",
-          "sub_var": "itemid"
+          "sub_var": "itemid",
+          "_comment": "2026-07-03 full dictionary audit: 50817 is d_labitems Oxygen Saturation and is kept only in labevents; semantic coverage review added 6719 SpO2-L and 220227 Arterial O2 Saturation."
         },
         {
           "ids": 50817,
@@ -10276,6 +10410,19 @@
           "table": "data_float_h",
           "sub_var": "DataID"
         }
+      ],
+      "mimic_demo": [
+        {
+          "ids": [
+            505,
+            506,
+            220339,
+            224700
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "_comment": "2026-05-27 audit fix: removed [535, 543] (wrong concept); added [505, 506]"
+        }
       ]
     }
   },
@@ -10707,6 +10854,17 @@
           "table": "data_float_h",
           "sub_var": "DataID"
         }
+      ],
+      "mimic_demo": [
+        {
+          "ids": [
+            535,
+            224695
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "_comment": "2026-05-27 audit fix: removed [506] (wrong concept); added []"
+        }
       ]
     }
   },
@@ -10762,6 +10920,16 @@
         }
       ],
       "mimic": [
+        {
+          "ids": [
+            224696,
+            543
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic_demo": [
         {
           "ids": [
             224696,
@@ -11509,6 +11677,21 @@
           "table": "data_float_h",
           "sub_var": "DataID"
         }
+      ],
+      "mimic_demo": [
+        {
+          "ids": [
+            578,
+            6339,
+            7332,
+            7587,
+            7595,
+            224701
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "_comment": "2026-05-27 audit fix: removed [502] (wrong concept); added [578, 6339, 7332, 7587, 7595]"
+        }
       ]
     }
   },
@@ -11518,14 +11701,8 @@
     "description": "prothrombine time",
     "omopid": 4245261,
     "category": "hematology",
+    "_comment_aumc": "2026-07-04 removed aumc numericitems 6789 'Protrombinetijd': 98.8% of values are in INR range (median 1.38, not PT seconds). No PT-in-seconds item exists in AUMC; 6789 could seed a future 'inr' concept.",
     "sources": {
-      "aumc": [
-        {
-          "ids": 6789,
-          "table": "numericitems",
-          "sub_var": "itemid"
-        }
-      ],
       "eicu": [
         {
           "ids": "PT",
@@ -11844,7 +12021,6 @@
       "sic": [
         {
           "ids": [
-            3319,
             3119
           ],
           "table": "laboratory",
@@ -11909,7 +12085,6 @@
         {
           "ids": [
             220210,
-            224688,
             224689,
             224690
           ],
@@ -11922,28 +12097,38 @@
         {
           "ids": [
             618,
-            619,
+            614,
+            615,
+            653,
+            1884,
+            3603,
+            8113,
             220210,
-            224688,
             224689,
             224690
           ],
           "table": "chartevents",
-          "sub_var": "itemid"
+          "sub_var": "itemid",
+          "_comment": "2026-07-03 audit: removed CareVue 619 Respiratory Rate Set; keep measured/spontaneous/total respiratory-rate signals only. Semantic coverage review added CareVue spontaneous/total/generic respiratory-rate channels 614, 615, 653, 1884, 3603, 8113; high-threshold and respiratory-quotient labels remain excluded."
         }
       ],
       "mimic_demo": [
         {
           "ids": [
             618,
-            619,
+            614,
+            615,
+            653,
+            1884,
+            3603,
+            8113,
             220210,
-            224688,
             224689,
             224690
           ],
           "table": "chartevents",
-          "sub_var": "itemid"
+          "sub_var": "itemid",
+          "_comment": "2026-07-03 audit: removed CareVue 619 Respiratory Rate Set; keep measured/spontaneous/total respiratory-rate signals only. Semantic coverage review added CareVue spontaneous/total/generic respiratory-rate channels 614, 615, 653, 1884, 3603, 8113; high-threshold and respiratory-quotient labels remain excluded."
         }
       ],
       "sic": [
@@ -12046,56 +12231,116 @@
     "sources": {
       "miiv": [
         {
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "ids": [
+            224144,
+            224149,
+            224150,
+            224151,
+            224152,
+            224153,
+            224154,
+            224191,
+            225806,
+            225807,
+            225810,
+            225976,
+            225977,
+            226457,
+            226499,
+            228005,
+            228006,
+            229247,
+            229248,
+            230083,
+            230084,
+            230085,
+            230177,
+            227290
+          ],
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "2026-07-03 audit: CRRT mode is direct evidence of active RRT; semantic coverage review added active dialysis circuit pressures, blood/dialysate/replacement rates, ultrafiltrate/hemodialysis/PD outputs, and PD dwell time. Access site/type/history remain excluded."
+        },
+        {
           "table": "procedureevents",
           "sub_var": "itemid",
           "ids": [
+            225436,
             225441,
             225802,
             225803,
             225809,
+            225805,
             225955
           ],
-          "callback": "transform_fun(set_val(TRUE))"
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "2026-07-03 audit: active RRT procedures only; dialysis-catheter placement is excluded because it is access, not treatment."
         }
       ],
       "eicu": [
         {
           "table": "treatment",
           "sub_var": "treatmentstring",
-          "regex": "(CRRT|hemodialysis|dialysis)",
+          "regex": "^(?!.*(?:access|catheter|shunt)).*(CRRT|hemodialysis|dialysis|CVVH|ultrafiltration|renal replacement)",
           "class_name": "rgx_itm",
-          "callback": "transform_fun(set_val(TRUE))"
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "2026-07-03 audit: active renal replacement therapy treatments only; dialysis access, catheter insertion, and shunt procedures are excluded."
+        },
+        {
+          "table": "intakeoutput",
+          "sub_var": "cellpath",
+          "regex": "(Dialysis \\(ml\\)|Hemodialysis)",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "2026-07-03 audit: active dialysis intake/output paths only; central-line flush paths mentioning dialysis access are excluded."
+        },
+        {
+          "table": "intakeoutput",
+          "sub_var": "celllabel",
+          "regex": "^(CRRT(?!.*flush)|Hemofiltration)",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "2026-07-03 semantic coverage review: active CRRT UF/out and Hemofiltration labels only; CRRT flush and CRRT citrate-calcium infusion labels remain excluded."
         }
       ],
       "aumc": [
         {
           "table": "procedureorderitems",
           "sub_var": "item",
-          "regex": "(CRRT|Hemodialysis|Dialysis|CVVH)",
+          "regex": "(CVVH starten|CVVH stoppen|CVVH anti-coagulantia starten|CVVH-citraat Calciumpomp starten|hemofiltrat)",
           "class_name": "rgx_itm",
-          "callback": "transform_fun(set_val(TRUE))"
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "2026-07-03 audit: active AUMC RRT order events only; CVVH lab draws, urine collection, filter changes, reset orders, and generic CVVH orders are excluded."
         },
         {
           "table": "numericitems",
           "sub_var": "itemid",
           "ids": [
+            8805,
+            7666,
+            7667,
+            7668,
+            10736,
+            12444,
             6684,
             8806,
             8808,
             12091
           ],
-          "callback": "transform_fun(set_val(TRUE))"
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "2026-07-03 audit: synchronized with SOFA-2 AUMC RRT coverage; CVVH pressure/flow/fluid-loss channels indicate active renal replacement therapy."
         }
       ],
       "hirid": [
         {
-          "table": "observations",
-          "sub_var": "variableid",
+          "table": "pharma",
+          "sub_var": "pharmaid",
           "ids": [
             10002508
           ],
           "callback": "transform_fun(set_val(TRUE))",
-          "_comment": "10002508 = Haemofiltration (from hirid_variable_reference.csv). HiRID does not separately track CRRT/CVVHD/hemodialysis subtypes."
+          "_comment": "2026-07-03 full dictionary audit: 10002508 = Haemofiltration in HiRID Pharma reference. HiRID does not separately track CRRT/CVVHD/hemodialysis subtypes."
         }
       ],
       "mimic": [
@@ -12103,22 +12348,88 @@
           "table": "procedureevents_mv",
           "sub_var": "itemid",
           "ids": [
+            225436,
             225441,
             225802,
             225803,
-            225809
+            225809,
+            225805,
+            225955
           ],
           "callback": "transform_fun(set_val(TRUE))",
-          "_comment": "MV: 225441=Hemodialysis, 225802=Dialysis-CRRT, 225803=Dialysis-CVVHD, 225809=Dialysis-CVVHDF"
+          "_comment": "MV: 225436=CRRT Filter Change, 225441=Hemodialysis, 225802=Dialysis-CRRT, 225803=Dialysis-CVVHD, 225809=Dialysis-CVVHDF, 225805=Peritoneal Dialysis, 225955=Dialysis-SCUF"
         },
         {
           "table": "chartevents",
           "sub_var": "itemid",
           "ids": [
+            224144,
+            224149,
+            224150,
+            224151,
+            224152,
+            224153,
+            224154,
+            224191,
+            225806,
+            225807,
+            225810,
+            225976,
+            225977,
+            226457,
+            226499,
+            228005,
+            228006,
             227290
           ],
           "callback": "transform_fun(set_val(TRUE))",
-          "_comment": "MV: 227290=CRRT mode"
+          "_comment": "MV: 227290=CRRT mode; 2026-07-03 semantic coverage review added active dialysis monitoring/output chartevents and excluded access/history-only labels."
+        },
+        {
+          "table": "outputevents",
+          "sub_var": "itemid",
+          "ids": [
+            40386,
+            40425,
+            40426,
+            40507,
+            40613,
+            40624,
+            40690,
+            40745,
+            40881,
+            40910,
+            41016,
+            41250,
+            41374,
+            41417,
+            41500,
+            41527,
+            41635,
+            41750,
+            41829,
+            41842,
+            41897,
+            42388,
+            42464,
+            42524,
+            42536,
+            42928,
+            43016,
+            43052,
+            43115,
+            44193,
+            44199,
+            44216,
+            44567,
+            44901,
+            45828,
+            46394,
+            46464,
+            46741
+          ],
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "2026-07-03 semantic coverage review: MIMIC-III dialysis/hemodialysis/peritoneal dialysis output/removal/net labels are active RRT evidence; off/in/flush/medication/fluid labels remain excluded."
         }
       ],
       "sic": [
@@ -12134,6 +12445,95 @@
           ],
           "callback": "transform_fun(set_val(TRUE))",
           "_comment": "723=CRRT Bloodflow, 730=CRRT DialysateFlow, 731=CRRT SubstitutePrae, 732=CRRT SubstitutePost, 2022=CRRT Withdrawal"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "table": "procedureevents_mv",
+          "sub_var": "itemid",
+          "ids": [
+            225436,
+            225441,
+            225802,
+            225803,
+            225809,
+            225805,
+            225955
+          ],
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "MV: 225436=CRRT Filter Change, 225441=Hemodialysis, 225802=Dialysis-CRRT, 225803=Dialysis-CVVHD, 225809=Dialysis-CVVHDF, 225805=Peritoneal Dialysis, 225955=Dialysis-SCUF"
+        },
+        {
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "ids": [
+            224144,
+            224149,
+            224150,
+            224151,
+            224152,
+            224153,
+            224154,
+            224191,
+            225806,
+            225807,
+            225810,
+            225976,
+            225977,
+            226457,
+            226499,
+            228005,
+            228006,
+            227290
+          ],
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "MV: 227290=CRRT mode; 2026-07-03 semantic coverage review added active dialysis monitoring/output chartevents and excluded access/history-only labels."
+        },
+        {
+          "table": "outputevents",
+          "sub_var": "itemid",
+          "ids": [
+            40386,
+            40425,
+            40426,
+            40507,
+            40613,
+            40624,
+            40690,
+            40745,
+            40881,
+            40910,
+            41016,
+            41250,
+            41374,
+            41417,
+            41500,
+            41527,
+            41635,
+            41750,
+            41829,
+            41842,
+            41897,
+            42388,
+            42464,
+            42524,
+            42536,
+            42928,
+            43016,
+            43052,
+            43115,
+            44193,
+            44199,
+            44216,
+            44567,
+            44901,
+            45828,
+            46394,
+            46464,
+            46741
+          ],
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "2026-07-03 semantic coverage review: MIMIC-III dialysis/hemodialysis/peritoneal dialysis output/removal/net labels are active RRT evidence; off/in/flush/medication/fluid labels remain excluded."
         }
       ]
     }
@@ -12764,22 +13164,26 @@
         {
           "ids": [
             646,
+            6719,
             220277,
             226253
           ],
           "table": "chartevents",
-          "sub_var": "itemid"
+          "sub_var": "itemid",
+          "_comment": "2026-07-03 semantic coverage review: added MIMIC-III CareVue SpO2-L; arterial/lab/PA-line oxygen saturation remains in o2sat, not spo2."
         }
       ],
       "mimic_demo": [
         {
           "ids": [
             646,
+            6719,
             220277,
             226253
           ],
           "table": "chartevents",
-          "sub_var": "itemid"
+          "sub_var": "itemid",
+          "_comment": "2026-07-03 semantic coverage review: added MIMIC-III CareVue SpO2-L; arterial/lab/PA-line oxygen saturation remains in o2sat, not spo2."
         }
       ],
       "sic": [
@@ -12884,6 +13288,14 @@
           "ids": 50804,
           "table": "labevents",
           "sub_var": "itemid"
+        }
+      ],
+      "sic": [
+        {
+          "ids": 670,
+          "table": "laboratory",
+          "sub_var": "LaboratoryID",
+          "_comment": "2026-07-03 module coverage audit: SIC d_references 670 = CtCo2 (BGA), mmol/L. DataID 716 = etCO2 is intentionally excluded."
         }
       ]
     }
@@ -13062,12 +13474,23 @@
             12277,
             16243,
             8872,
+            12373,
             12358,
             12360
           ],
           "table": "numericitems",
           "sub_var": "itemid",
-          "_comment": "added 16243 Zephyros Vte (ml) per audit 2026-05-27; 2026-07-02 added spirometer and secondary inspiratory/expiratory tidal-volume channels."
+          "_comment": "added 16243 Zephyros Vte (ml) per audit 2026-05-27; 2026-07-02 added spirometer and secondary inspiratory/expiratory tidal-volume channels; 2026-07-03 added 12373 Vt (Bipap Vision), already recorded in ml."
+        },
+        {
+          "ids": [
+            8871,
+            9669
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid",
+          "callback": "convert_unit(binary_op(`*`, 1000), 'ml', 'l')",
+          "_comment": "2026-07-03 AUMC source audit: VTe and VTe(2) are recorded in liters; convert to ml before pooling with measured tidal volume."
         }
       ],
       "eicu": [
@@ -13075,14 +13498,17 @@
           "table": "respiratorycharting",
           "sub_var": "respchartvaluelabel",
           "val_var": "respchartvalue",
-          "ids": [
-            "Exhaled TV (machine)",
-            "Exhaled TV (patient)",
-            "Exhaled Vt",
-            "Tidal Volume Observed (VT)"
-          ]
-        }
-      ],
+              "ids": [
+                "Exhaled TV (machine)",
+                "Exhaled TV (patient)",
+                "Exhaled Vt",
+                "Tidal Volume Observed (VT)",
+                "Tidal Volume, Delivered",
+                "Vt Spontaneous (mL)"
+              ],
+              "_comment": "2026-07-03 semantic coverage review: added delivered/spontaneous observed tidal-volume labels; settings and RSBI-derived labels remain excluded."
+            }
+          ],
       "hirid": [
         {
           "ids": [
@@ -13095,30 +13521,60 @@
       ],
       "miiv": [
         {
-          "ids": [
-            224685,
-            224686,
-            224684
-          ],
+              "ids": [
+                224421,
+                224685,
+                224686
+              ],
           "table": "chartevents",
           "sub_var": "itemid",
-          "index_var": "charttime"
+          "index_var": "charttime",
+          "_comment": "2026-07-03 audit: 224684 is Tidal Volume (set), so it belongs only to tidal_vol_set."
         }
       ],
       "mimic": [
         {
           "ids": [
+            65,
             501,
             502,
+            654,
             681,
             682,
-            224684,
-            224685,
-            224686
+            684,
+                2094,
+                2311,
+                2400,
+                2402,
+                2408,
+                2420,
+            2534,
+            2566,
+            2998,
+            3003,
+            3004,
+            3045,
+            3050,
+            3083,
+            3086,
+            5593,
+                6289,
+                224421,
+                224685,
+                224686
           ],
           "table": "chartevents",
           "sub_var": "itemid",
-          "_comment": "2026-05-27 audit fix: removed [] (wrong concept); added [501, 502]"
+          "_comment": "2026-05-27 audit fix: removed [] (wrong concept); added [501, 502]. 2026-07-03 audit: removed 224684 because it is Tidal Volume (set); semantic coverage review added mL-scale CareVue measured/spontaneous tidal-volume labels after value-range check."
+        },
+        {
+          "ids": [
+            652
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "callback": "convert_unit(binary_op(`*`, 1000), 'ml', 'l')",
+          "_comment": "2026-07-03 semantic coverage review: 652=Spon. Vt (L) (Mech.), valueuom=L; convert to ml before pooling."
         }
       ],
       "sic": [
@@ -13129,6 +13585,51 @@
           ],
           "table": "data_float_h",
           "sub_var": "DataID"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": [
+            65,
+            501,
+            502,
+            654,
+            681,
+            682,
+            684,
+                2094,
+                2311,
+                2400,
+                2402,
+                2408,
+                2420,
+            2534,
+            2566,
+            2998,
+            3003,
+            3004,
+            3045,
+            3050,
+            3083,
+            3086,
+            5593,
+                6289,
+                224421,
+                224685,
+                224686
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "_comment": "2026-05-27 audit fix: removed [] (wrong concept); added [501, 502]. 2026-07-03 audit: removed 224684 because it is Tidal Volume (set); semantic coverage review added mL-scale CareVue measured/spontaneous tidal-volume labels after value-range check."
+        },
+        {
+          "ids": [
+            652
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "callback": "convert_unit(binary_op(`*`, 1000), 'ml', 'l')",
+          "_comment": "2026-07-03 semantic coverage review: 652=Spon. Vt (L) (Mech.), valueuom=L; convert to ml before pooling."
         }
       ]
     }
@@ -13147,13 +13648,11 @@
       "aumc": [
         {
           "ids": [
-            8851,
-            12291,
-            9646
+            12291
           ],
           "table": "numericitems",
           "sub_var": "itemid",
-          "_comment": "2026-07-02 added low-volume secondary tidal-volume set channel."
+          "_comment": "2026-07-04 dropped 8851 (median 0.57 mL, near-zero noise; dragged pooled median to ~2) and 9646 (1 row). 12291 'Teugvolume (Set)' is the real set-TV channel (317k rows, median 450 mL)."
         }
       ],
       "eicu": [
@@ -13207,6 +13706,16 @@
           "table": "data_float_h",
           "sub_var": "DataID",
           "_comment": "717=TV (insp), unit=ml"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": [
+            224684,
+            683
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid"
         }
       ]
     }
@@ -13945,6 +14454,13 @@
           "table": "intakeoutput",
           "sub_var": "celllabel",
           "class_name": "rgx_itm"
+        },
+        {
+          "regex": "(?i)^(?!.*stool).*(urine\\s*output|output.*urine|urine,\\s*void|suprapubic\\s+urine)",
+          "table": "intakeoutput",
+          "sub_var": "celllabel",
+          "class_name": "rgx_itm",
+          "_comment": "2026-07-03 semantic coverage review: capture eICU Foley/suprapubic/void urine output labels while excluding mixed urine/stool volume."
         }
       ],
       "eicu_demo": [
@@ -13961,6 +14477,13 @@
           "table": "intakeoutput",
           "sub_var": "celllabel",
           "class_name": "rgx_itm"
+        },
+        {
+          "regex": "(?i)^(?!.*stool).*(urine\\s*output|output.*urine|urine,\\s*void|suprapubic\\s+urine)",
+          "table": "intakeoutput",
+          "sub_var": "celllabel",
+          "class_name": "rgx_itm",
+          "_comment": "2026-07-03 semantic coverage review: capture eICU Foley/suprapubic/void urine output labels while excluding mixed urine/stool volume."
         }
       ],
       "hirid": [
@@ -13986,10 +14509,12 @@
             226566,
             226567,
             226584,
-            227510
+            226627,
+            226631
           ],
           "table": "outputevents",
-          "sub_var": "itemid"
+          "sub_var": "itemid",
+          "_comment": "2026-07-03 audit: removed 227510 TF Residual; added 226627 OR Urine and 226631 PACU Urine. GU irrigant-only/mixed candidates remain excluded unless explicitly modeled."
         }
       ],
       "mimic": [
@@ -14008,7 +14533,22 @@
             40428,
             40473,
             40715,
+            42068,
+            42111,
+            42119,
+            42366,
+            42676,
             43175,
+            43966,
+            44325,
+            44506,
+            44706,
+            44824,
+            44911,
+            45804,
+            45991,
+            46578,
+            46658,
             226557,
             226558,
             226559,
@@ -14020,10 +14560,12 @@
             226566,
             226567,
             226584,
-            227510
+            226627,
+            226631
           ],
           "table": "outputevents",
-          "sub_var": "itemid"
+          "sub_var": "itemid",
+          "_comment": "2026-07-03 audit: removed 227510 TF Residual; added 226627 OR Urine and 226631 PACU Urine; semantic coverage review added MIMIC-III ED/EW/angio/Foley urine output volume channels. Per-kg/hr rates, 24h summaries, specimens, and GU irrigant mixed output remain excluded."
         }
       ],
       "mimic_demo": [
@@ -14042,7 +14584,22 @@
             40428,
             40473,
             40715,
+            42068,
+            42111,
+            42119,
+            42366,
+            42676,
             43175,
+            43966,
+            44325,
+            44506,
+            44706,
+            44824,
+            44911,
+            45804,
+            45991,
+            46578,
+            46658,
             226557,
             226558,
             226559,
@@ -14054,10 +14611,12 @@
             226566,
             226567,
             226584,
-            227510
+            226627,
+            226631
           ],
           "table": "outputevents",
-          "sub_var": "itemid"
+          "sub_var": "itemid",
+          "_comment": "2026-07-03 audit: removed 227510 TF Residual; added 226627 OR Urine and 226631 PACU Urine; semantic coverage review added MIMIC-III ED/EW/angio/Foley urine output volume channels. Per-kg/hr rates, 24h summaries, specimens, and GU irrigant mixed output remain excluded."
         }
       ],
       "sic": [
@@ -14327,16 +14886,6 @@
           "table": "procedureevents",
           "sub_var": "itemid",
           "callback": "transform_fun(set_val(TRUE))"
-        },
-        {
-          "ids": [
-            467,
-            469,
-            226732
-          ],
-          "table": "chartevents",
-          "sub_var": "itemid",
-          "callback": "transform_fun(set_val(TRUE))"
         }
       ],
       "mimic": [
@@ -14353,12 +14902,12 @@
         {
           "ids": [
             467,
-            469,
-            226732
+            469
           ],
           "table": "chartevents",
           "sub_var": "itemid",
-          "callback": "transform_fun(set_val(TRUE))"
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "226732 O2 Delivery Device(s) is not a ventilation-end event; keep only legacy MIMIC-III vent-end itemids."
         }
       ],
       "mimic_demo": [
@@ -14375,12 +14924,12 @@
         {
           "ids": [
             467,
-            469,
-            226732
+            469
           ],
           "table": "chartevents",
           "sub_var": "itemid",
-          "callback": "transform_fun(set_val(TRUE))"
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "226732 O2 Delivery Device(s) is not a ventilation-end event; keep only legacy MIMIC-III vent-end itemids."
         }
       ]
     }
@@ -14416,7 +14965,6 @@
             12283,
             8850,
             8873,
-            12287,
             12322,
             12348,
             16241,
@@ -14424,7 +14972,7 @@
           ],
           "table": "numericitems",
           "sub_var": "itemid",
-          "_comment": "2026-07-02 added set/measured ventilator-frequency channels; spontaneous respiratory-rate channels remain excluded."
+          "_comment": "2026-07-02 added set/measured ventilator-frequency channels; spontaneous respiratory-rate channels remain excluded. 12287 SIMV Frequentie (Set) remains excluded because the AUMC source dictionary reports unit l/min, not /min."
         }
       ],
       "eicu": [
@@ -14451,24 +14999,23 @@
       "miiv": [
         {
           "ids": [
-            224688,
-            224689,
-            224690,
-            224422
+            224688
           ],
           "table": "chartevents",
           "sub_var": "itemid",
-          "index_var": "charttime"
+          "index_var": "charttime",
+          "_comment": "2026-07-03 audit: keep only Respiratory Rate (Set); spontaneous/total RR and Spont RR are not ventilator-rate settings."
         }
       ],
       "mimic": [
         {
           "ids": [
-            224422,
+            224688,
             619
           ],
           "table": "chartevents",
-          "sub_var": "itemid"
+          "sub_var": "itemid",
+          "_comment": "2026-07-03 audit: added 224688 Respiratory Rate (Set), removed 224422 Spont RR."
         }
       ],
       "sic": [
@@ -14476,6 +15023,17 @@
           "ids": 719,
           "table": "data_float_h",
           "sub_var": "DataID"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": [
+            224688,
+            619
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "_comment": "2026-07-03 audit: added 224688 Respiratory Rate (Set), removed 224422 Spont RR."
         }
       ]
     }
@@ -15185,6 +15743,15 @@
           "table": "numericitems",
           "sub_var": "itemid"
         }
+      ],
+      "hirid": [
+        {
+          "ids": 24000568,
+          "table": "observations",
+          "sub_var": "variableid",
+          "class_name": "hrd_itm",
+          "_comment": "2026-07-03 module coverage audit: HiRID reference 24000568 = Ammonia [Moles/volume] in Blood, umol/l."
+        }
       ]
     }
   },
@@ -15246,6 +15813,15 @@
           ],
           "table": "numericitems",
           "sub_var": "itemid"
+        }
+      ],
+      "hirid": [
+        {
+          "ids": 24000427,
+          "table": "observations",
+          "sub_var": "variableid",
+          "class_name": "hrd_itm",
+          "_comment": "2026-07-03 module coverage audit: HiRID reference 24000427 = Amylase in Serum or Plasma, U/l; 24000587 body-fluid/drain amylase excluded."
         }
       ]
     }
@@ -15339,6 +15915,15 @@
           ],
           "table": "numericitems",
           "sub_var": "itemid"
+        }
+      ],
+      "hirid": [
+        {
+          "ids": 24000678,
+          "table": "observations",
+          "sub_var": "variableid",
+          "class_name": "hrd_itm",
+          "_comment": "2026-07-03 module coverage audit: HiRID reference 24000678 = Ferritin [Mass/volume] in Blood, ug/l; numerically equivalent to ng/mL."
         }
       ]
     }
@@ -15462,6 +16047,15 @@
           ],
           "table": "numericitems",
           "sub_var": "itemid"
+        }
+      ],
+      "hirid": [
+        {
+          "ids": 24000555,
+          "table": "observations",
+          "sub_var": "variableid",
+          "class_name": "hrd_itm",
+          "_comment": "2026-07-03 module coverage audit: HiRID reference 24000555 = Lipase in Serum or Plasma, U/l."
         }
       ]
     }
