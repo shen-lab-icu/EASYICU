@@ -36,6 +36,7 @@ import logging
 from .base import BaseICULoader, get_default_data_path, detect_database_type
 from .resources import load_dictionary, load_data_sources as load_packaged_data_sources
 from .config import load_data_sources as load_user_data_sources
+from .concept.catalog import CONCEPT_GROUPS_INTERNAL
 
 logger = logging.getLogger(__name__)
 
@@ -344,9 +345,12 @@ def keep_cache(database=None, data_path=None, dict_path=None, use_sofa2=False, v
         yield loader
     finally:
         resolver._keep_cache_between_calls = False
-        with resolver._cache_lock:
-            resolver._raw_concept_cache.clear()
-            resolver._table_cache.clear()
+        if hasattr(resolver, 'drop_source_caches'):
+            resolver.drop_source_caches()
+        else:  # pragma: no cover - legacy resolver without cache accounting
+            with resolver._cache_lock:
+                resolver._raw_concept_cache.clear()
+                resolver._table_cache.clear()
 
 import numpy as np
 
@@ -750,6 +754,26 @@ def _get_auto_chunk_strategy(
     }
 
 
+# SOFA2 相关概念集合（需要加载 sofa2-dict）。load_concepts 的自动检测和
+# extract_database 的分组 worker 共用这一份定义，保证两边判定一致。
+_SOFA2_TRIGGER_CONCEPTS = frozenset({
+    'sofa2', 'sofa2_resp', 'sofa2_coag', 'sofa2_liver',
+    'sofa2_cardio', 'sofa2_cns', 'sofa2_renal',
+    'uo_6h', 'uo_12h', 'uo_24h', 'rrt_criteria', 'rrt',
+    'adv_resp', 'ecmo', 'ecmo_indication', 'sedated_gcs',
+    'mech_circ_support', 'other_vaso', 'delirium_tx',
+    'motor_response', 'delirium_positive',
+})
+
+
+def _concepts_need_sofa2(concepts) -> bool:
+    """True when any concept requires the sofa2-dict overlay."""
+    return any(
+        c in _SOFA2_TRIGGER_CONCEPTS or 'sofa2' in str(c).lower()
+        for c in concepts
+    )
+
+
 def load_concepts(
     concepts: Union[str, List[str]],
     patient_ids: Optional[Union[List, Dict]] = None,
@@ -882,14 +906,8 @@ def load_concepts(
     else:
         concepts_list = list(concepts)
 
-    # SOFA2 相关概念集合（需要加载 sofa2-dict）
-    sofa2_concepts = {'sofa2', 'sofa2_resp', 'sofa2_coag', 'sofa2_liver',
-                      'sofa2_cardio', 'sofa2_cns', 'sofa2_renal',
-                      'uo_6h', 'uo_12h', 'uo_24h', 'rrt_criteria', 'rrt',
-                      'adv_resp', 'ecmo', 'ecmo_indication', 'sedated_gcs',
-                      'mech_circ_support', 'other_vaso', 'delirium_tx',
-                      'motor_response', 'delirium_positive'}
-    if any(c in sofa2_concepts or 'sofa2' in c.lower() for c in concepts_list):
+    # SOFA2 相关概念集合（需要加载 sofa2-dict）— 共享定义见 _SOFA2_TRIGGER_CONCEPTS
+    if _concepts_need_sofa2(concepts_list):
         use_sofa2 = True
 
     # 2026-05-20: SPECIAL_CONCEPTS dispatch — these concepts are NOT in
@@ -3359,54 +3377,29 @@ def get_smart_parallel_config(
 # 全库提取 API — 按模块子进程隔离，16GB 安全
 # ============================================================================
 
-# 模块定义（与 webapp CONCEPT_GROUPS_INTERNAL 一致，19 个模块 167 个概念）
+# Module definitions are derived from the shared web/export catalog so the
+# public extract_database() API cannot drift from the 19-module full export.
 EXTRACT_MODULES: Dict[str, List[str]] = {
-    'vitals':        ['hr', 'map', 'sbp', 'dbp', 'temp', 'spo2', 'resp', 'cvp'],
-    'demographics':  ['age', 'bmi', 'height', 'sex', 'weight', 'adm'],
-    'outcome':       ['death', 'los_icu', 'los_hosp'],
-    'chemistry':     ['alb', 'alp', 'alt', 'ast', 'bicar', 'bili', 'bili_dir', 'bun',
-                      'ca', 'ck', 'ckmb', 'cl', 'crea', 'crp', 'glu', 'k', 'mg', 'na',
-                      'phos', 'tnt', 'tri'],
-    'hematology':    ['bnd', 'basos', 'eos', 'esr', 'fgn', 'hba1c', 'hct', 'hgb',
-                      'inr_pt', 'lymph', 'mch', 'mchc', 'mcv', 'neut', 'plt', 'pt',
-                      'ptt', 'rbc', 'rdw', 'wbc'],
-    'blood_gas':     ['be', 'cai', 'hbco', 'lact', 'methb', 'pco2', 'ph', 'po2', 'tco2'],
-    'medications':   ['abx', 'cort', 'dex', 'ins'],
-    'ventilator':    ['peep', 'tidal_vol', 'tidal_vol_set', 'pip', 'plateau_pres',
-                      'mean_airway_pres', 'minute_vol', 'vent_rate', 'etco2',
-                      'compliance', 'driving_pres', 'ps'],
-    'respiratory':   ['pafi', 'safi', 'fio2', 'supp_o2', 'vent_ind', 'vent_start',
-                      'vent_end', 'o2sat', 'sao2', 'mech_vent', 'ett_gcs', 'ecmo',
-                      'ecmo_indication', 'adv_resp'],
-    'vasopressors':  ['norepi_rate', 'norepi_dur', 'norepi_equiv', 'norepi60',
-                      'epi_rate', 'epi_dur', 'epi60', 'dopa_rate', 'dopa_dur', 'dopa60',
-                      'dobu_rate', 'dobu_dur', 'dobu60', 'adh_rate', 'phn_rate',
-                      'vaso_ind', 'other_vaso'],
-    'renal':         ['urine', 'urine24', 'uo_6h', 'uo_12h', 'uo_24h', 'rrt',
-                      'rrt_criteria'],
-    'neurological':  ['avpu', 'egcs', 'gcs', 'mgcs', 'rass', 'tgcs', 'vgcs',
-                      'sedated_gcs', 'motor_response', 'delirium_positive',
-                      'delirium_tx'],
-    'circulatory':   ['mech_circ_support'],
-    'other_scores':  ['qsofa', 'sirs', 'mews', 'news'],
-    'sofa1_score':   ['sofa', 'sofa_resp', 'sofa_coag', 'sofa_liver', 'sofa_cardio',
-                      'sofa_cns', 'sofa_renal'],
-    'sofa2_score':   ['sofa2', 'sofa2_resp', 'sofa2_coag', 'sofa2_liver',
-                      'sofa2_cardio', 'sofa2_cns', 'sofa2_renal'],
-    'sepsis_shared': ['susp_inf', 'infection_icd', 'samp'],
-    'sepsis3_sofa1': ['sep3_sofa1'],
-    'sepsis3_sofa2': ['sep3_sofa2'],
+    module: list(concepts)
+    for module, concepts in CONCEPT_GROUPS_INTERNAL.items()
 }
 
-# 快→慢排序，与 webapp MODULE_PRIORITY 一致
-EXTRACT_MODULE_ORDER: List[str] = [
+# Fast-to-slow preferred order. Unknown future modules are appended below.
+_PREFERRED_EXTRACT_MODULE_ORDER: List[str] = [
     'vitals', 'demographics', 'outcome',
-    'chemistry', 'hematology', 'blood_gas',
-    'medications', 'ventilator', 'respiratory',
-    'vasopressors', 'renal', 'neurological',
-    'other_scores', 'circulatory',
+    'blood_gas', 'chemistry', 'hematology',
+    'ventilator', 'respiratory', 'vasopressors',
+    'medications', 'neurological', 'renal',
+    'circulatory', 'other_scores', 'sepsis_shared',
     'sofa1_score', 'sofa2_score',
-    'sepsis3_sofa1', 'sepsis3_sofa2', 'sepsis_shared',
+    'sepsis3_sofa1', 'sepsis3_sofa2',
+]
+EXTRACT_MODULE_ORDER: List[str] = [
+    module for module in _PREFERRED_EXTRACT_MODULE_ORDER
+    if module in EXTRACT_MODULES
+] + [
+    module for module in EXTRACT_MODULES
+    if module not in _PREFERRED_EXTRACT_MODULE_ORDER
 ]
 
 # 特殊概念 — 需要专用加载函数而非 load_concepts
@@ -3445,31 +3438,43 @@ def _build_default_db_paths() -> Dict[str, str]:
     }
 
 
-def _extract_module_worker(
-    concepts: List[str],
-    database: str,
-    data_path: str,
-    patient_ids_filter: Optional[Dict] = None,
-    batch_size: Optional[int] = None,
-    output_dir: str = '',
-    module_name: str = '',
-):
-    """在子进程中加载一个模块的所有概念并写入 parquet。
+# 特殊模块（Sepsis-3）在分组临时目录下的输出子目录名
+_SPECIAL_OUTPUT_DIRNAME = '_special'
 
-    这是顶层函数（非闭包），可被 multiprocessing.Process 序列化。
-    子进程退出后 OS 完整回收所有内存（包括 pymalloc arena 碎片）。
+
+def _extract_worker_env_setup(data_path: str) -> None:
+    """提取子进程入口的共享环境准备。
+
+    本 worker 已是隔离子进程：模块退出后 OS 完整回收内存，模块间无碎片累积。
+    因此模块内部应一次性 in-process 加载，绝不要让 load_concepts 再启动“每批
+    子进程 fork”——每次 fork 都会重读共享源表(chartevents/labevents…)，是数倍
+    慢的根源。强制 in-process，让模块内单次扫表。
     """
-    import os, sys, json, time, traceback
+    import os, sys
     os.environ.setdefault('EASYICU_DATA_PATH', data_path)
-    # 本 worker 已是隔离子进程：模块退出后 OS 完整回收内存，模块间无碎片累积。
-    # 因此模块内部应一次性 in-process 加载，绝不要让 load_concepts 再启动“每批
-    # 子进程 fork”——每次 fork 都会重读共享源表(chartevents/labevents…)，是数倍
-    # 慢的根源。强制 in-process，让模块内单次扫表。
     os.environ.setdefault('EASYICU_FORCE_INPROCESS_BATCH', '1')
     _src_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _src_dir not in sys.path:
         sys.path.insert(0, _src_dir)
 
+
+def _run_module_extraction(
+    module_name: str,
+    concepts: List[str],
+    database: str,
+    data_path: str,
+    patient_ids_filter: Optional[Dict],
+    batch_size: Optional[int],
+    output_dir: str,
+    use_sofa2: bool = False,
+    loader=None,
+) -> None:
+    """加载一个模块的所有概念并写入 parquet + _manifest.json。
+
+    在 worker 子进程内运行；``loader`` 由分组 worker 传入，用于 OOM 降级
+    重试前先清掉共享缓存释放内存。
+    """
+    import os, json, time, traceback
     import pandas as pd
     from easyicu import load_concepts as _lc
 
@@ -3478,10 +3483,12 @@ def _extract_module_worker(
     errors = []
 
     # 构造 load_concepts 参数
+    # use_sofa2 显式传入：分组模式下保持全组 loader 配置一致，
+    # 避免 sofa2 自动检测切换字典时重建 loader、丢掉组内共享缓存。
     kwargs = dict(
         data_path=data_path, database=database,
         concepts=concepts, verbose=False, merge=False,
-        concept_workers=1,
+        concept_workers=1, use_sofa2=use_sofa2,
     )
     if patient_ids_filter:
         kwargs['patient_ids'] = patient_ids_filter
@@ -3494,6 +3501,12 @@ def _extract_module_worker(
         # 一次性加载内存不足(仅可能在极小内存机器上的最大队列发生)：
         # 降级为有界 in-process 分批。会每批重读源表(较慢)，但保证不 OOM。
         traceback.print_exc()
+        if loader is not None:
+            # 先释放组内共享缓存，给分批重试腾出内存
+            try:
+                loader.concept_resolver.clear_table_cache()
+            except Exception:
+                pass
         _n = 0
         try:
             _n = len(next(iter(patient_ids_filter.values()))) if patient_ids_filter else 0
@@ -3548,30 +3561,43 @@ def _extract_module_worker(
         json.dump(manifest, f)
 
 
-def _extract_special_worker(
-    special_modules: List[str],
+def _extract_module_worker(
+    concepts: List[str],
     database: str,
     data_path: str,
     patient_ids_filter: Optional[Dict] = None,
     batch_size: Optional[int] = None,
     output_dir: str = '',
+    module_name: str = '',
 ):
-    """在子进程中加载特殊概念（Sepsis-3 等）。
+    """（兼容包装）单模块子进程入口。
+
+    新的默认入口是 _extract_module_group_worker（组内共享源表扫描）；
+    保留此包装以兼容仍按单模块 spawn 的旧调用方。
+    """
+    _extract_worker_env_setup(data_path)
+    _run_module_extraction(
+        module_name, concepts, database, data_path,
+        patient_ids_filter, batch_size, output_dir,
+    )
+
+
+def _run_special_extraction(
+    special_modules: List[str],
+    database: str,
+    data_path: str,
+    patient_ids_filter: Optional[Dict],
+    batch_size: Optional[int],
+    output_dir: str,
+    use_sofa2: bool = False,
+) -> None:
+    """加载特殊概念（Sepsis-3 等）并写入 parquet + _manifest.json。
 
     sep3_sofa1/sep3_sofa2 不在 concept-dict 中，需要先加载 susp_inf + sofa/sofa2，
-    然后通过 _load_sep3_diagnosis 逻辑计算 Sepsis-3 诊断。
+    然后通过 _load_sep3_diagnosis 逻辑计算 Sepsis-3 诊断。分组模式下与
+    sofa1_score/sofa2_score 同进程运行，susp_inf/sofa/sofa2 直接命中组内缓存。
     """
-    import os, sys, json, time, traceback
-    os.environ.setdefault('EASYICU_DATA_PATH', data_path)
-    # 本 worker 已是隔离子进程：模块退出后 OS 完整回收内存，模块间无碎片累积。
-    # 因此模块内部应一次性 in-process 加载，绝不要让 load_concepts 再启动“每批
-    # 子进程 fork”——每次 fork 都会重读共享源表(chartevents/labevents…)，是数倍
-    # 慢的根源。强制 in-process，让模块内单次扫表。
-    os.environ.setdefault('EASYICU_FORCE_INPROCESS_BATCH', '1')
-    _src_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    if _src_dir not in sys.path:
-        sys.path.insert(0, _src_dir)
-
+    import os, json, time, traceback
     import pandas as pd
     from easyicu import load_concepts as _lc
 
@@ -3579,8 +3605,9 @@ def _extract_special_worker(
     saved = {}
     errors = []
 
-    # 构建公共加载参数
-    load_kw = dict(data_path=data_path, database=database, verbose=False, merge=True)
+    # 构建公共加载参数（use_sofa2 显式传入以保持组内 loader 配置一致）
+    load_kw = dict(data_path=data_path, database=database, verbose=False, merge=True,
+                   use_sofa2=use_sofa2)
     if patient_ids_filter:
         load_kw['patient_ids'] = patient_ids_filter
     if batch_size:
@@ -3675,6 +3702,135 @@ def _extract_special_worker(
         json.dump(manifest, f)
 
 
+def _extract_special_worker(
+    special_modules: List[str],
+    database: str,
+    data_path: str,
+    patient_ids_filter: Optional[Dict] = None,
+    batch_size: Optional[int] = None,
+    output_dir: str = '',
+):
+    """（兼容包装）特殊概念子进程入口 — 参见 _extract_module_group_worker。"""
+    _extract_worker_env_setup(data_path)
+    _run_special_extraction(
+        special_modules, database, data_path,
+        patient_ids_filter, batch_size, output_dir,
+    )
+
+
+def _extract_module_group_worker(
+    module_specs: List[tuple],
+    special_modules: List[str],
+    database: str,
+    data_path: str,
+    patient_ids_filter: Optional[Dict],
+    batch_size: Optional[int],
+    output_root: str,
+    use_sofa2: bool,
+):
+    """在一个子进程中顺序提取一组共享源表的模块。
+
+    keep_cache 让组内模块共享 raw/table 缓存（受 EASYICU_CACHE_BUDGET_MB
+    字节预算约束），chartevents/labevents 等重表每组只扫一次，而不是每
+    模块重扫一遍；子进程退出后 OS 仍完整回收内存。分组因此是“缓存复用”
+    与“内存隔离”之间的折中：组内复用，组间隔离。
+
+    module_specs: [(module_name, [concepts...]), ...]，每个模块写
+    ``output_root/<module_name>/``；特殊模块写 ``output_root/_special/``。
+    """
+    import os, traceback
+    _extract_worker_env_setup(data_path)
+    from easyicu.api import keep_cache as _keep_cache
+
+    with _keep_cache(database=database, data_path=data_path, use_sofa2=use_sofa2) as _loader:
+        for module_name, concepts in module_specs:
+            out_dir = os.path.join(output_root, module_name)
+            os.makedirs(out_dir, exist_ok=True)
+            try:
+                _run_module_extraction(
+                    module_name, concepts, database, data_path,
+                    patient_ids_filter, batch_size, out_dir,
+                    use_sofa2=use_sofa2, loader=_loader,
+                )
+            except Exception:
+                # _run_module_extraction 已内部捕获常规异常并写 manifest；
+                # 这里兜底保证一个模块的意外崩溃不拖垮组内后续模块。
+                traceback.print_exc()
+        if special_modules:
+            sp_dir = os.path.join(output_root, _SPECIAL_OUTPUT_DIRNAME)
+            os.makedirs(sp_dir, exist_ok=True)
+            try:
+                _run_special_extraction(
+                    special_modules, database, data_path,
+                    patient_ids_filter, batch_size, sp_dir,
+                    use_sofa2=use_sofa2,
+                )
+            except Exception:
+                traceback.print_exc()
+
+
+# 分组亲和表：同组模块共享同一批重源表（chartevents/labevents/inputevents
+# 家族），或互为依赖（SOFA 闭包）。分组只影响“哪些模块共用一个子进程 +
+# keep_cache”，不改变模块内容、输出布局或模块顺序语义。
+_EXTRACT_MODULE_GROUP_AFFINITY: List[List[str]] = [
+    # chartevents / nursecharting 家族
+    ['vitals', 'neurological', 'respiratory', 'ventilator'],
+    # 入科级小表（icustays/admissions/patients）
+    ['demographics', 'outcome'],
+    # labevents 家族
+    ['blood_gas', 'chemistry', 'hematology', 'renal'],
+    # inputevents / prescriptions 家族
+    ['vasopressors', 'medications', 'circulatory'],
+    # 评分闭包：SOFA 组件被 sofa1/sofa2 共享，sep3_* 复用 susp_inf+sofa/sofa2
+    ['other_scores', 'sepsis_shared', 'sofa1_score', 'sofa2_score'],
+]
+
+
+def _group_modules_for_extraction(
+    normal_modules: List[str],
+    special_modules: List[str],
+    group_modules: bool = True,
+) -> List[Dict[str, List[str]]]:
+    """把请求的模块划分为子进程组。
+
+    返回 [{'modules': [...], 'special': [...]}, ...]。group_modules=False
+    时退化为每模块一组（旧行为）。未出现在亲和表中的新模块各自成组。
+    特殊模块（Sepsis-3）挂到评分组上（若本次请求包含评分组），使
+    susp_inf/sofa/sofa2 命中组内缓存；否则单独成组。
+    """
+    if not group_modules:
+        groups: List[Dict[str, List[str]]] = [
+            {'modules': [m], 'special': []} for m in normal_modules
+        ]
+        if special_modules:
+            groups.append({'modules': [], 'special': list(special_modules)})
+        return groups
+
+    groups = []
+    assigned = set()
+    for affinity in _EXTRACT_MODULE_GROUP_AFFINITY:
+        members = [m for m in normal_modules if m in affinity]
+        if members:
+            groups.append({'modules': members, 'special': []})
+            assigned.update(members)
+    for m in normal_modules:
+        if m not in assigned:
+            groups.append({'modules': [m], 'special': []})
+
+    if special_modules:
+        target = next(
+            (g for g in groups
+             if any(m in ('sofa1_score', 'sofa2_score', 'sepsis_shared')
+                    for m in g['modules'])),
+            None,
+        )
+        if target is None:
+            groups.append({'modules': [], 'special': list(special_modules)})
+        else:
+            target['special'] = list(special_modules)
+    return groups
+
+
 def extract_database(
     database: str,
     data_path: Optional[Union[str, Path]] = None,
@@ -3683,6 +3839,7 @@ def extract_database(
     patient_ids: Optional[Union[List, Dict]] = None,
     max_patients: Optional[int] = None,
     batch_size: Optional[int] = None,
+    group_modules: bool = True,
     verbose: bool = True,
 ) -> Dict:
     """按 19 个模块分组、子进程隔离地提取整个数据库的全部特征。
@@ -3694,8 +3851,15 @@ def extract_database(
     工作原理与性能：
       * 概念按 19 个模块分组(EXTRACT_MODULE_ORDER)，每个模块一次性
         load_concepts(模块全部概念)，共享源表只扫一次。
-      * 每个模块在独立子进程中运行，模块退出后 OS 完整回收内存（含
-        pymalloc arena 碎片），主进程 RSS 几乎不增长。
+      * 共享同族源表的模块进一步合并为分组(_EXTRACT_MODULE_GROUP_AFFINITY)，
+        每组一个子进程、组内用 keep_cache 复用 raw/table 缓存：
+        chartevents/labevents 等重表每组只扫一次，而不是每模块重扫一遍；
+        SOFA 闭包只算一次并被 sofa1/sofa2/sep3_* 复用。缓存受
+        EASYICU_CACHE_BUDGET_MB 字节预算约束（默认物理内存的 25%），
+        8-16GB 机器安全。
+      * 每组在独立子进程中运行，组退出后 OS 完整回收内存（含 pymalloc
+        arena 碎片），主进程 RSS 几乎不增长。group_modules=False 或环境变量
+        EASYICU_EXTRACT_GROUPING=0 退回每模块一个子进程的旧行为。
       * 模块内默认 **不分批、一次性 in-process** 加载：实测单模块峰值 RSS
         恒定 ~2-3GB(与队列规模无关)，故 16GB 机器也能对任意规模数据库一次性
         全量提取。仅当一次性确实 OOM(极小内存机器的最大队列)时，worker 自动
@@ -3711,6 +3875,8 @@ def extract_database(
         max_patients: 限制患者数量（与 patient_ids 互斥）
         batch_size: 模块内患者分批大小。None(默认) = 不分批，一次性 in-process
             加载(推荐，最快)。仅在极小内存机器上想强制限制峰值内存时才显式传值。
+        group_modules: True(默认) = 共享源表的模块合并为分组子进程并复用
+            keep_cache 缓存；False = 每模块一个子进程（旧行为）。
         verbose: 是否打印进度
 
     Returns:
@@ -3811,101 +3977,78 @@ def extract_database(
 
     mp_ctx = mp.get_context('fork' if os.name != 'nt' else 'spawn')
 
-    # ---- 逐模块在子进程中加载 ----
-    for idx, mod_name in enumerate(normal_modules):
-        concepts = EXTRACT_MODULES.get(mod_name, [])
-        if not concepts:
-            continue
+    # ---- 模块分组：组内共享源表扫描（keep_cache），组间子进程隔离 ----
+    group_flag = group_modules
+    _env_grouping = os.environ.get('EASYICU_EXTRACT_GROUPING', '').strip().lower()
+    if _env_grouping in ('0', 'off', 'false', 'no'):
+        group_flag = False
 
-        mod_start = time.time()
-        tmp_dir = tempfile.mkdtemp(prefix=f'easyicu_{mod_name}_')
+    groups = _group_modules_for_extraction(normal_modules, special_modules, group_flag)
 
-        if verbose:
-            rss = get_rss_mb()
-            print(f"\n[{idx+1}/{len(normal_modules)+len(special_modules)}] "
-                  f"⏳ {mod_name} ({len(concepts)} concepts) ... RSS={rss:.0f}MB")
+    if verbose and group_flag:
+        print(f"   分组: {len(groups)} 组（组内共享源表扫描；"
+              f"EASYICU_EXTRACT_GROUPING=0 或 group_modules=False 关闭）")
 
-        proc = mp_ctx.Process(
-            target=_extract_module_worker,
-            args=(concepts, database, data_path, patient_ids_filter,
-                  batch_size, tmp_dir, mod_name),
-            daemon=True,
-        )
-        proc.start()
-        proc.join()
+    n_units_total = len(normal_modules) + len(special_modules)
+    units_done = 0
 
-        mod_elapsed = time.time() - mod_start
-        mod_result = {'concepts': {}, 'elapsed': round(mod_elapsed, 1), 'errors': []}
+    def _collect_module_result(tmp_mod_dir: str, mod_name: str) -> Dict:
+        """读回单个模块 worker 的 manifest + parquet 输出。"""
+        mod_result = {'concepts': {}, 'elapsed': 0.0, 'errors': []}
+        manifest_path = os.path.join(tmp_mod_dir, '_manifest.json')
+        if not os.path.exists(manifest_path):
+            mod_result['errors'] = [
+                f"{mod_name}: worker produced no manifest (process may have died)"
+            ]
+            return mod_result
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+        mod_result['errors'] = manifest.get('errors', [])
+        mod_result['elapsed'] = manifest.get('elapsed_sec', 0.0)
+        for c_name, info in manifest.get('saved', {}).items():
+            pq_path = info['path']
+            if os.path.exists(pq_path):
+                rows = info.get('rows', 0)
+                if output_dir is not None:
+                    # 流式写盘：move 文件到输出目录，不读回内存
+                    mod_out = os.path.join(output_dir, mod_name)
+                    os.makedirs(mod_out, exist_ok=True)
+                    dst = os.path.join(mod_out, f"{c_name}.parquet")
+                    shutil.move(pq_path, dst)
+                    mod_result['concepts'][c_name] = {'path': dst, 'rows': rows}
+                else:
+                    # 无输出目录：读回 DataFrame 到内存
+                    df = pd.read_parquet(pq_path)
+                    mod_result['concepts'][c_name] = df
+        return mod_result
+
+    def _count_rows(mod_result: Dict) -> int:
         n_rows = 0
+        for v in mod_result['concepts'].values():
+            if isinstance(v, dict):
+                n_rows += v.get('rows', 0)
+            elif isinstance(v, pd.DataFrame):
+                n_rows += len(v)
+        return n_rows
 
-        # 读回结果
-        manifest_path = os.path.join(tmp_dir, '_manifest.json')
+    def _collect_special_results(tmp_sp_dir: str, sp_modules: List[str]) -> None:
+        """读回特殊模块（Sepsis-3）worker 输出到 result['modules']。"""
+        nonlocal units_done
+        manifest = None
+        manifest_path = os.path.join(tmp_sp_dir, '_manifest.json')
         if os.path.exists(manifest_path):
             with open(manifest_path) as f:
                 manifest = json.load(f)
-            mod_result['errors'] = manifest.get('errors', [])
-
-            for c_name, info in manifest.get('saved', {}).items():
-                pq_path = info['path']
-                if os.path.exists(pq_path):
-                    rows = info.get('rows', 0)
-                    n_rows += rows
-                    if output_dir is not None:
-                        # 流式写盘：move 文件到输出目录，不读回内存
-                        mod_out = os.path.join(output_dir, mod_name)
-                        os.makedirs(mod_out, exist_ok=True)
-                        dst = os.path.join(mod_out, f"{c_name}.parquet")
-                        shutil.move(pq_path, dst)
-                        mod_result['concepts'][c_name] = {'path': dst, 'rows': rows}
-                    else:
-                        # 无输出目录：读回 DataFrame 到内存
-                        df = pd.read_parquet(pq_path)
-                        mod_result['concepts'][c_name] = df
-                        n_rows = n_rows - rows + len(df)  # 用实际行数
-
-        # 清理临时目录
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-
-        n_concepts = len(mod_result['concepts'])
-        result['modules'][mod_name] = mod_result
-
-        if verbose:
-            status = '✅' if not mod_result['errors'] else '⚠️'
-            print(f"   {status} {mod_name}: {n_concepts} concepts, "
-                  f"{n_rows:,} rows, {mod_elapsed:.1f}s"
-                  + (f" | errors: {mod_result['errors']}" if mod_result['errors'] else ''))
-
-    # ---- 特殊模块（Sepsis-3）在子进程中加载 ----
-    if special_modules:
-        sp_start = time.time()
-        tmp_dir = tempfile.mkdtemp(prefix='easyicu_special_')
-
-        if verbose:
-            n_done = len(normal_modules)
-            n_total = len(normal_modules) + len(special_modules)
-            print(f"\n[{n_done+1}/{n_total}] ⏳ special ({special_modules}) ...")
-
-        proc = mp_ctx.Process(
-            target=_extract_special_worker,
-            args=(special_modules, database, data_path, patient_ids_filter,
-                  batch_size, tmp_dir),
-            daemon=True,
-        )
-        proc.start()
-        proc.join()
-
-        sp_elapsed = time.time() - sp_start
-
-        manifest_path = os.path.join(tmp_dir, '_manifest.json')
-        if os.path.exists(manifest_path):
-            with open(manifest_path) as f:
-                manifest = json.load(f)
-
-            for mod_name in special_modules:
-                concepts = EXTRACT_MODULES.get(mod_name, [])
-                mod_result = {'concepts': {}, 'elapsed': round(sp_elapsed, 1),
+        sp_elapsed = (manifest or {}).get('elapsed_sec', 0.0)
+        for mod_name in sp_modules:
+            concepts = EXTRACT_MODULES.get(mod_name, [])
+            if manifest is None:
+                mod_result = {'concepts': {}, 'elapsed': 0.0, 'errors': [
+                    f"{mod_name}: worker produced no manifest (process may have died)"
+                ]}
+            else:
+                mod_result = {'concepts': {}, 'elapsed': sp_elapsed,
                               'errors': manifest.get('errors', [])}
-
                 for c_name in concepts:
                     info = manifest.get('saved', {}).get(c_name)
                     if info and os.path.exists(info['path']):
@@ -3919,21 +4062,86 @@ def extract_database(
                         else:
                             df = pd.read_parquet(info['path'])
                             mod_result['concepts'][c_name] = df
+            result['modules'][mod_name] = mod_result
+            units_done += 1
+            if verbose:
+                print(f"   {'✅' if not mod_result['errors'] else '⚠️'} "
+                      f"[{units_done}/{n_units_total}] {mod_name}: "
+                      f"{len(mod_result['concepts'])} concepts, "
+                      f"{_count_rows(mod_result):,} rows, {sp_elapsed:.1f}s")
 
-                result['modules'][mod_name] = mod_result
+    # ---- 逐组在子进程中加载 ----
+    from collections import deque
+    pending_groups = deque(groups)
+    while pending_groups:
+        group = pending_groups.popleft()
+        group_mods = [m for m in group['modules'] if EXTRACT_MODULES.get(m)]
+        group_special = list(group['special'])
+        if not group_mods and not group_special:
+            continue
 
-                if verbose:
-                    n_c = len(mod_result['concepts'])
-                    n_r = 0
-                    for v in mod_result['concepts'].values():
-                        if isinstance(v, dict):
-                            n_r += v.get('rows', 0)
-                        elif isinstance(v, pd.DataFrame):
-                            n_r += len(v)
-                    print(f"   {'✅' if not mod_result['errors'] else '⚠️'} "
-                          f"{mod_name}: {n_c} concepts, {n_r:,} rows, {sp_elapsed:.1f}s")
+        module_specs = [(m, EXTRACT_MODULES[m]) for m in group_mods]
+        group_use_sofa2 = (
+            any(_concepts_need_sofa2(c) for _, c in module_specs)
+            or any('sofa2' in m for m in group_special)
+        )
 
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+        tmp_root = tempfile.mkdtemp(prefix='easyicu_grp_')
+        if verbose:
+            rss = get_rss_mb()
+            label = ' + '.join(group_mods + group_special)
+            print(f"\n⏳ {label} ... RSS={rss:.0f}MB")
+
+        proc = mp_ctx.Process(
+            target=_extract_module_group_worker,
+            args=(module_specs, group_special, database, data_path,
+                  patient_ids_filter, batch_size, tmp_root, group_use_sofa2),
+            daemon=True,
+        )
+        proc.start()
+        proc.join()
+
+        # 组 worker 硬崩溃（如 OOM kill）：已完成模块正常读回；未完成的
+        # 模块拆成单模块组重试一次，避免一个组的失败拖垮整组输出。
+        crashed = proc.exitcode not in (0, None)
+        incomplete_mods = [
+            m for m in group_mods
+            if not os.path.exists(os.path.join(tmp_root, m, '_manifest.json'))
+        ]
+        special_incomplete = bool(group_special) and not os.path.exists(
+            os.path.join(tmp_root, _SPECIAL_OUTPUT_DIRNAME, '_manifest.json')
+        )
+        can_split = len(group_mods) + (1 if group_special else 0) > 1
+        if crashed and can_split and (incomplete_mods or special_incomplete):
+            if verbose:
+                retry_units = incomplete_mods + (group_special if special_incomplete else [])
+                print(f"   ⚠️ group worker exit={proc.exitcode}; "
+                      f"retrying individually: {retry_units}")
+            if special_incomplete:
+                pending_groups.appendleft({'modules': [], 'special': group_special})
+                group_special = []
+            for m in reversed(incomplete_mods):
+                pending_groups.appendleft({'modules': [m], 'special': []})
+            group_mods = [m for m in group_mods if m not in incomplete_mods]
+
+        for mod_name in group_mods:
+            mod_result = _collect_module_result(os.path.join(tmp_root, mod_name), mod_name)
+            result['modules'][mod_name] = mod_result
+            units_done += 1
+            if verbose:
+                status = '✅' if not mod_result['errors'] else '⚠️'
+                print(f"   {status} [{units_done}/{n_units_total}] {mod_name}: "
+                      f"{len(mod_result['concepts'])} concepts, "
+                      f"{_count_rows(mod_result):,} rows, {mod_result['elapsed']:.1f}s"
+                      + (f" | errors: {mod_result['errors']}" if mod_result['errors'] else ''))
+
+        if group_special:
+            _collect_special_results(
+                os.path.join(tmp_root, _SPECIAL_OUTPUT_DIRNAME), group_special
+            )
+
+        # 清理临时目录
+        shutil.rmtree(tmp_root, ignore_errors=True)
 
     total_elapsed = time.time() - t_start
     result['total_elapsed'] = round(total_elapsed, 1)

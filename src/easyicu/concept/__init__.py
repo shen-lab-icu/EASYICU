@@ -6,8 +6,10 @@ import copy
 import functools
 import json
 import logging
+import os
 import re
 import operator
+from collections import OrderedDict
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
@@ -378,6 +380,71 @@ from .schema import (  # noqa: F401
 from ..utils import compute_patient_ids_hash as _compute_patient_ids_hash
 
 
+# --------------------------------------------------------------------------
+# In-memory cache budget (PC safety)
+#
+# The resolver caches raw source tables and per-concept results between
+# loads (see keep_cache / _keep_cache_between_calls). On a 94K-patient
+# export a single cached table can be tens of GB; without a bound the
+# caches OOM 8-16GB consumer machines. All cache writes route through
+# ConceptResolver._bounded_cache_store, which evicts least-recently-used
+# entries once the byte budget is exceeded.
+# --------------------------------------------------------------------------
+_CACHE_BUDGET_ENV = "EASYICU_CACHE_BUDGET_MB"
+_CACHE_BUDGET_DEFAULT_FRACTION = 0.25
+_CACHE_BUDGET_FALLBACK_BYTES = 4 * 1024 ** 3
+
+
+def _resolve_cache_budget_bytes() -> Optional[int]:
+    """Byte budget for the resolver's in-memory caches.
+
+    ``EASYICU_CACHE_BUDGET_MB`` > 0 pins the budget; <= 0 disables the
+    bound entirely (legacy unbounded behaviour). Default: 25% of physical
+    RAM, or 4GB when psutil is unavailable.
+    """
+    raw = os.environ.get(_CACHE_BUDGET_ENV)
+    if raw is not None:
+        try:
+            value = float(raw)
+        except ValueError:
+            value = None
+        if value is not None:
+            if value <= 0:
+                return None
+            return int(value * 1024 * 1024)
+    try:
+        import psutil
+
+        return int(psutil.virtual_memory().total * _CACHE_BUDGET_DEFAULT_FRACTION)
+    except Exception:
+        return _CACHE_BUDGET_FALLBACK_BYTES
+
+
+def _estimate_cached_bytes(value: object) -> int:
+    """Approximate resident bytes of a cached table or DataFrame.
+
+    ``memory_usage(deep=True)`` walks every object cell (minutes on
+    100M-row frames), so object-dtype columns are extrapolated from a
+    1,024-row sample instead.
+    """
+    frame = getattr(value, "data", value)
+    if not isinstance(frame, pd.DataFrame):
+        return 1024
+    try:
+        total = int(frame.memory_usage(index=True, deep=False).sum())
+        n_rows = len(frame)
+        obj_cols = [c for c in frame.columns if frame[c].dtype == object]
+        if obj_cols and n_rows:
+            k = min(1024, n_rows)
+            sample = frame[obj_cols].head(k)
+            deep = int(sample.memory_usage(index=False, deep=True).sum())
+            shallow = int(sample.memory_usage(index=False, deep=False).sum())
+            total += int(max(0, deep - shallow) * (n_rows / k))
+        return max(total, 1)
+    except Exception:
+        return 1024
+
+
 class ConceptResolver:
     """Resolve concept definitions into concrete tabular data."""
 
@@ -409,6 +476,13 @@ class ConceptResolver:
         self._load_depth = 0
         # ⚡ PERF: 跨模块缓存复用模式 — 保留 raw/table 缓存在 top-level 调用间
         self._keep_cache_between_calls = False
+        # 💾 PC safety: byte budget + LRU accounting shared by the caches above.
+        # Keys are (role, cache_key) in insertion/recency order; oldest entries
+        # are evicted first once _cache_total_bytes exceeds the budget.
+        self._cache_budget_bytes = _resolve_cache_budget_bytes()
+        self._cache_entry_bytes: "OrderedDict[tuple, int]" = OrderedDict()
+        self._cache_total_bytes = 0
+        self._cache_evictions = 0
         self.cache_dir = cache_dir if cache_dir else None
         self.cache_schema_version = "1"
         self.dictionary_signature = self._compute_dictionary_signature()
@@ -446,6 +520,9 @@ class ConceptResolver:
                 self._concept_data_cache.clear()  # 🚀 清除概念数据缓存
                 self._raw_concept_cache.clear()   # 🆕 清除原始数据缓存
                 self._pre_agg_cache.clear()        # 🆕 清除预聚合缓存
+                self._drop_cache_accounting()
+            else:
+                self._drop_cache_accounting('table', 'concept')
             # 清除 rgx_itm DISTINCT 缓存
             if hasattr(self, '_rgx_distinct_cache'):
                 self._rgx_distinct_cache.clear()
@@ -456,6 +533,92 @@ class ConceptResolver:
     def clear(self) -> None:
         """Alias for clear_table_cache, used by CacheManager."""
         self.clear_table_cache(keep_concept_cache=False)
+
+    # ------------------------------------------------------------------
+    # Bounded-cache plumbing (see _resolve_cache_budget_bytes above).
+    # Every write to the four in-memory caches goes through
+    # _bounded_cache_store; reads call _cache_touch to keep LRU order.
+    # ------------------------------------------------------------------
+
+    def _cache_role_dict(self, role: str) -> dict:
+        return {
+            'table': self._table_cache,
+            'raw': self._raw_concept_cache,
+            'data': self._concept_data_cache,
+            'concept': self._concept_cache,
+        }[role]
+
+    def _cache_touch(self, role: str, key: object) -> None:
+        """Mark a cache entry as recently used (moves it to the LRU tail)."""
+        with self._cache_lock:
+            entry = (role, key)
+            if entry in self._cache_entry_bytes:
+                self._cache_entry_bytes.move_to_end(entry)
+
+    def _bounded_cache_store(
+        self,
+        role: str,
+        key: object,
+        value: object,
+        *,
+        charge_bytes: Optional[int] = None,
+    ) -> bool:
+        """Store into an in-memory cache, evicting LRU entries over budget.
+
+        Returns False (and does not cache) when the value alone exceeds the
+        whole budget — holding it is exactly the OOM the budget prevents;
+        readers then fall back to the pushdown-optimized disk path.
+        ``charge_bytes=0`` is used for alias keys that reference an object
+        already accounted for under another key.
+        """
+        with self._cache_lock:
+            size = _estimate_cached_bytes(value) if charge_bytes is None else int(charge_bytes)
+            budget = self._cache_budget_bytes
+            if budget is not None and size > budget:
+                self._evict_cache_entry(role, key)
+                return False
+            old = self._cache_entry_bytes.pop((role, key), None)
+            if old is not None:
+                self._cache_total_bytes -= old
+            self._cache_role_dict(role)[key] = value
+            self._cache_entry_bytes[(role, key)] = size
+            self._cache_total_bytes += size
+            if budget is not None:
+                while self._cache_total_bytes > budget and len(self._cache_entry_bytes) > 1:
+                    oldest = next(iter(self._cache_entry_bytes))
+                    if oldest == (role, key):
+                        break
+                    self._evict_cache_entry(*oldest)
+            return True
+
+    def _evict_cache_entry(self, role: str, key: object) -> None:
+        with self._cache_lock:
+            size = self._cache_entry_bytes.pop((role, key), None)
+            if size is not None:
+                self._cache_total_bytes -= size
+                self._cache_evictions += 1
+            self._cache_role_dict(role).pop(key, None)
+
+    def _drop_cache_accounting(self, *roles: str) -> None:
+        """Forget accounting for roles whose dicts were cleared wholesale."""
+        with self._cache_lock:
+            if not roles:
+                self._cache_entry_bytes.clear()
+                self._cache_total_bytes = 0
+                return
+            for entry in [e for e in self._cache_entry_bytes if e[0] in roles]:
+                self._cache_total_bytes -= self._cache_entry_bytes.pop(entry)
+
+    def drop_source_caches(self) -> None:
+        """Clear the raw source caches (table + raw concept) with accounting.
+
+        Used by api.keep_cache() on context exit; keeps the other caches
+        untouched to preserve its historical semantics.
+        """
+        with self._cache_lock:
+            self._table_cache.clear()
+            self._raw_concept_cache.clear()
+            self._drop_cache_accounting('table', 'raw')
 
     @staticmethod
     def _downcast_float64_to_float32(df: pd.DataFrame) -> pd.DataFrame:
@@ -473,6 +636,24 @@ class ConceptResolver:
             if col not in _skip and df[col].dtype == np.float64:
                 df[col] = df[col].astype(np.float32)
         return df
+
+    @staticmethod
+    def _ensure_requested_concept_columns(
+        df: pd.DataFrame,
+        concept_names: Iterable[str],
+    ) -> pd.DataFrame:
+        """Keep merged API schemas stable when a requested concept has no rows."""
+        if not isinstance(df, pd.DataFrame):
+            return df
+        if df.empty:
+            return df
+        missing = [name for name in concept_names if name not in df.columns]
+        if not missing:
+            return df
+        out = df.copy()
+        for name in missing:
+            out[name] = pd.NA
+        return out
 
     def get_raw_concept(
         self,
@@ -573,6 +754,7 @@ class ConceptResolver:
             seen.add(key)
             cached = self._raw_concept_cache.get(key)
             if cached is not None:
+                self._cache_touch('raw', key)
                 return cached
         return None
 
@@ -586,9 +768,17 @@ class ConceptResolver:
         store_legacy: bool = False,
     ) -> None:
         """Store raw cache entries without duplicating table objects."""
-        self._raw_concept_cache[self._raw_cache_key(concept_name, patient_ids_hash, aggregator)] = table
-        if store_legacy:
-            self._raw_concept_cache[(concept_name, patient_ids_hash)] = table
+        stored = self._bounded_cache_store(
+            'raw',
+            self._raw_cache_key(concept_name, patient_ids_hash, aggregator),
+            table,
+        )
+        if store_legacy and stored:
+            # Alias key to the same object — charge 0 bytes so the table is
+            # not double-counted against the cache budget.
+            self._bounded_cache_store(
+                'raw', (concept_name, patient_ids_hash), table, charge_bytes=0,
+            )
 
     def _get_inflight(self) -> set:
         """获取当前线程的inflight集合（线程安全）"""
@@ -1382,7 +1572,9 @@ class ConceptResolver:
             if wide_table_merged_df is not None and not r_compatible:
                 if verbose:
                     logger.info("🚀 使用宽表批量加载的合并结果，跳过合并步骤")
-                return self._downcast_float64_to_float32(wide_table_merged_df)
+                return self._downcast_float64_to_float32(
+                    self._ensure_requested_concept_columns(wide_table_merged_df, names)
+                )
 
             # 如果是r_compatible模式，使用增强的ricu风格合并
             if r_compatible:
@@ -1455,7 +1647,9 @@ class ConceptResolver:
                         if merged_partial is not None:
                             if verbose:
                                 logger.info("🚀 使用部分宽表批量结果并仅合并剩余概念")
-                            return self._downcast_float64_to_float32(merged_partial)
+                            return self._downcast_float64_to_float32(
+                                self._ensure_requested_concept_columns(merged_partial, names)
+                            )
                         # Partial merge failed (e.g. non-charttime time column) — fall through to full merge
                     elif _all_covered:
                         if verbose:
@@ -1465,10 +1659,18 @@ class ConceptResolver:
                             if _tc in wide_table_merged_df.columns:
                                 _sort_time = _tc
                                 break
-                        return self._downcast_float64_to_float32(wide_table_merged_df.reset_index(drop=True))
+                        return self._downcast_float64_to_float32(
+                            self._ensure_requested_concept_columns(
+                                wide_table_merged_df.reset_index(drop=True),
+                                names,
+                            )
+                        )
                 return self._to_r_format_merged_enhanced(tables, names, interval, data_source=data_source)
 
-            merged = self._merge_tables(tables)
+            merged = self._ensure_requested_concept_columns(
+                self._merge_tables(tables),
+                names,
+            )
             return merged
         finally:
             # 🔧 嵌套调用深度跟踪：减少深度计数器
@@ -1485,6 +1687,9 @@ class ConceptResolver:
                         # 磁盘缓存（_store_in_disk_cache）已负责跨调用复用
                         self._raw_concept_cache.clear()
                         self._table_cache.clear()
+                        self._drop_cache_accounting()
+                    else:
+                        self._drop_cache_accounting('concept', 'data')
                     # 清除当前线程的inflight集合
                     self._get_inflight().clear()
                 
@@ -1892,6 +2097,8 @@ class ConceptResolver:
             if not skip_cache_for_special_tables:
                 with self._cache_lock:
                     cached_table = self._table_cache.get(cache_key)
+                    if cached_table is not None:
+                        self._cache_touch('table', cache_key)
             if cached_table is not None:
                 if verbose or DEBUG_MODE:
                     if DEBUG_MODE: print(f"   ♻️  使用缓存的表: {source.table} (跳过 {len(patient_filter_in_filters.value) if patient_filter_in_filters else 0} 个患者的加载)")
@@ -2304,8 +2511,16 @@ class ConceptResolver:
                         
                         # ﻿ 构建 DuckDB 值转换表达式（用于内联回调）
                         if _is_percent_as_numeric:
-                            # percent_as_numeric: 去除 '%' 并转为数值
-                            _duckdb_value_transform = f"TRY_CAST(REPLACE(TRIM(CAST({value_col} AS VARCHAR)), '%', '') AS DOUBLE)"
+                            # percent_as_numeric: strip '%', cast to numeric,
+                            # and convert fractional encodings (0.21-1.00) to
+                            # percent scale (21-100).
+                            _percent_expr = (
+                                f"TRY_CAST(REPLACE(TRIM(CAST({value_col} AS VARCHAR)), '%', '') AS DOUBLE)"
+                            )
+                            _duckdb_value_transform = (
+                                f"CASE WHEN ({_percent_expr}) > 0 AND ({_percent_expr}) <= 1 "
+                                f"THEN ({_percent_expr}) * 100 ELSE ({_percent_expr}) END"
+                            )
                         elif _is_transform_binary_op:
                             # transform_fun(binary_op(`*`, N)): 简单算术内联到 DuckDB
                             _duckdb_value_transform = f'(TRY_CAST("{value_col}" AS DOUBLE) {_transform_binary_op_operator} {_transform_binary_op_value})'
@@ -2903,8 +3118,7 @@ class ConceptResolver:
                             filters=[patient_filter_in_filters],
                             verbose=False
                         )
-                        with self._cache_lock:
-                            self._table_cache[cache_key] = patient_only_table
+                        self._bounded_cache_store('table', cache_key, patient_only_table)
                         if verbose:
                             if DEBUG_MODE: print(f"   💾 缓存表 {source.table}: {len(patient_filter_in_filters.value)} 个患者")
                 except (KeyError, FileNotFoundError, ValueError) as e:
@@ -3735,6 +3949,22 @@ class ConceptResolver:
                 # 
                 # 为与 R ricu 完全一致，现在对所有数据库都只报告警告，不过滤
                 db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
+                if concept_name == 'fio2' and db_name == 'aumc':
+                    # AmsterdamUMCdb labels FiO2 percentage channels as
+                    # "Geen"/"None" in numericitems.unit. The values are
+                    # percent-scaled and bounded by the concept definition.
+                    allowed_units.update({'geen', 'none'})
+                if (
+                    concept_name == 'fio2'
+                    and db_name in {'mimic', 'mimic_demo'}
+                    and getattr(source, 'table', None) == 'chartevents'
+                ):
+                    # MIMIC-III CareVue FiO2 channels 189/190 are labelled
+                    # with VALUEUOM="torr" despite carrying fractional FiO2
+                    # values (0.21-1.00). Other CareVue FiO2 rows use decFrc.
+                    # Values are normalized by percent_as_numeric and bounded
+                    # by the concept definition.
+                    allowed_units.update({'torr', 'decfrc'})
                 
                 # 🔧 只报告警告，不过滤数据（与 R ricu 一致）
                 unique_units = frame[source_unit_column].unique()
@@ -6965,6 +7195,7 @@ class ConceptResolver:
                     # � 缓存中已存储独立副本（在路径D存入时copy），返回时无需再次copy
                     # 调用方如需修改，应自行copy（如_to_r_format已自己copy）
                     cached = self._concept_data_cache[concept_cache_key]
+                    self._cache_touch('data', concept_cache_key)
                     return cached
                 
                 # �🚀🚀 关键优化：如果原始数据已存在于 _raw_concept_cache，
@@ -7003,7 +7234,7 @@ class ConceptResolver:
                         result = raw_cached
                     
                     # 缓存处理后的结果
-                    self._concept_data_cache[concept_cache_key] = result
+                    self._bounded_cache_store('data', concept_cache_key, result)
                     return result
                 
                 # �🔧 FIX: 移除旧的简单缓存和概念缓存回退逻辑
@@ -7069,8 +7300,8 @@ class ConceptResolver:
             disk_hit = self._load_from_disk_cache(concept_name, data_source, cache_key)
             if disk_hit is not None:
                 with self._cache_lock:
-                    self._concept_cache[concept_name] = disk_hit
-                    self._concept_data_cache[concept_cache_key] = disk_hit
+                    self._bounded_cache_store('concept', concept_name, disk_hit)
+                    self._bounded_cache_store('data', concept_cache_key, disk_hit, charge_bytes=0)
                     self._get_inflight().discard(concept_name)
                 # Return a copy to prevent caller from corrupting cached data
                 if hasattr(disk_hit, 'copy'):
@@ -7222,8 +7453,9 @@ class ConceptResolver:
                 # 🔧 FIX: 缓存写入使用共享引用（不 copy）
                 # 缓存会在顶层调用结束后清除，不需要防护性 copy
                 # 读取时再 copy，节省内存
-                self._concept_data_cache[concept_cache_key] = result
-                
+                # (charge_bytes=0: 同一对象随后按全额记入 raw 缓存预算)
+                self._bounded_cache_store('data', concept_cache_key, result, charge_bytes=0)
+
                 # 🚀 同时存入 _raw_concept_cache，供回调函数使用
                 # 共享同一个引用，避免重复内存开销
                 # 🔧 FIX 2026-03-10: Include aggregator in key to prevent cross-aggregation pollution
@@ -7758,7 +7990,7 @@ class ConceptResolver:
                 concept_data[name] = df
         
         if not concept_data:
-            return pd.DataFrame()
+            return pd.DataFrame(columns=list(concept_names))
         
         # 检测ID列和时间列
         id_col = None
@@ -7809,6 +8041,7 @@ class ConceptResolver:
             time_col=time_col,
             interval_hours=interval_hours,
         )
+        result = self._ensure_requested_concept_columns(result, concept_names)
         
         # 确保概念列按请求的顺序排列
         final_cols = [id_col, time_col]
