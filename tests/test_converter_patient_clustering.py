@@ -182,6 +182,84 @@ def test_clustering_is_idempotent(tmp_path):
     assert _shard_is_sorted(shard_dir)
 
 
+def _make_bucket_layout(tmp_path, table="chartevents", n_buckets=3, seed=1):
+    """Write a synthetic itemid-hash bucket layout: <table>_bucket/bucket_id=N/
+    with rows for each stay assigned to a bucket by stay_id % n_buckets. Some
+    buckets get TWO parquet files to exercise the multi-file merge path."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    rng = np.random.default_rng(seed)
+    root = tmp_path / f"{table}_bucket"
+    for b in range(n_buckets):
+        d = root / f"bucket_id={b}"
+        d.mkdir(parents=True)
+        stays = np.arange(1, N_PATIENTS + 1)
+        stays = stays[stays % n_buckets == b]
+        parts = [stays] if b else np.array_split(stays, 2)  # bucket 0 -> 2 files
+        for fi, part in enumerate(parts):
+            rep = np.repeat(part, 8)
+            rng.shuffle(rep)                                 # unsorted within file
+            df = pd.DataFrame({
+                "subject_id": rep, "hadm_id": rep, "stay_id": rep,
+                "itemid": rng.choice(ITEMIDS, len(rep)),
+                "charttime": "2020-01-01 00:00:00",
+                "value": rng.random(len(rep)).astype("float32"),
+            })
+            pq.write_table(pa.Table.from_pandas(df, preserve_index=False),
+                           d / f"data_{fi}.parquet", compression="zstd")
+    return root
+
+
+def _bucket_rows(bucket_root):
+    con = duckdb.connect()
+    try:
+        return con.execute(
+            f"SELECT count(*) FROM read_parquet('{bucket_root}/**/*.parquet')"
+        ).fetchone()[0]
+    finally:
+        con.close()
+
+
+def test_clusters_bucket_layout(tmp_path):
+    root = _make_bucket_layout(tmp_path)
+    before_rows = _bucket_rows(root)
+    n_files_before = len(list(root.glob("**/*.parquet")))
+
+    conv = DataConverter.__new__(DataConverter)
+    conv.data_path = tmp_path
+    conv.database = "miiv"
+    conv.parquet_compression = "zstd"
+    conv.verbose = False
+    summary = conv.cluster_table_by_patient("chartevents", row_group_size=2_000)
+
+    # every bucket_id=N dir became one unit
+    assert summary["units_clustered"] == 3
+    assert _bucket_rows(root) == before_rows                 # no rows lost
+    # bucket 0 had 2 files -> merged to 1; total files decreased
+    assert len(list(root.glob("**/*.parquet"))) < n_files_before
+    # each bucket file is now globally sorted by (itemid, stay_id)
+    con = duckdb.connect()
+    try:
+        for f in root.glob("**/*.parquet"):
+            rows = con.execute(
+                f"SELECT itemid, stay_id FROM read_parquet('{f}')").fetchall()
+            assert rows == sorted(rows), f
+    finally:
+        con.close()
+
+
+def test_cluster_units_finds_both_layouts(tmp_path):
+    # a table present as BOTH a shard dir and a bucket dir -> both are units
+    _convert(tmp_path)                          # writes chartevents/ shards
+    _make_bucket_layout(tmp_path)               # writes chartevents_bucket/
+    conv = DataConverter(str(tmp_path), database="miiv", verbose=False)
+    units = conv._cluster_units("chartevents")
+    labels = [u["label"] for u in units]
+    assert any(l.startswith("chartevents/") for l in labels)          # shard unit
+    assert any("chartevents_bucket/bucket_id=" in l for l in labels)  # bucket unit
+
+
 def test_cluster_missing_table_raises(tmp_path):
     conv = DataConverter.__new__(DataConverter)
     # minimal init for the method under test
