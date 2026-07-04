@@ -2492,11 +2492,12 @@ class DataConverter:
     # Opt-in patient-clustering pass (scattered-cohort row-group pruning)
     # ------------------------------------------------------------------
     def _find_table_shards(self, table_name: str) -> List[Path]:
-        """Locate a converted table's parquet files.
+        """Locate a converted table's flat/shard parquet files.
 
         Returns the numbered shard files under ``<data_path>/<table>/`` if the
         table was sharded, else the single ``<data_path>/<table>.parquet``.
-        Empty list if neither exists.
+        Empty list if neither exists. Does NOT include the itemid-hash bucket
+        layout — see ``_find_bucket_dirs``.
         """
         shard_dir = self.data_path / table_name
         if shard_dir.is_dir():
@@ -2509,37 +2510,92 @@ class DataConverter:
         single = self.data_path / f"{table_name}.parquet"
         return [single] if single.exists() else []
 
+    def _find_bucket_dirs(self, table_name: str) -> List[Path]:
+        """Locate the itemid-hash bucket dirs for a table.
+
+        The bucket layout is ``<base>/<table>_bucket/bucket_id=N/*.parquet`` and
+        is what the DuckDB read path prefers (``_resolve_bucket_directory``).
+        Searches the same roots that resolver checks: ``<data_path>``,
+        ``<data_path>/icu``, ``<data_path>/hosp``.
+        """
+        dirs: List[Path] = []
+        for base in (self.data_path, self.data_path / "icu", self.data_path / "hosp"):
+            bucket_root = base / f"{table_name}_bucket"
+            if bucket_root.is_dir():
+                dirs.extend(
+                    sorted(
+                        (d for d in bucket_root.glob("bucket_id=*") if d.is_dir()),
+                        key=lambda p: p.name,
+                    )
+                )
+        return dirs
+
+    def _cluster_units(self, table_name: str) -> List[Dict[str, Any]]:
+        """Build the list of cluster units for a table.
+
+        A unit is a group of parquet files sorted and rewritten together:
+        - each flat/shard file is its own single-file unit;
+        - each ``bucket_id=N`` directory is one unit (all its ``*.parquet``
+          sorted together and merged into a single destination file), because
+          the read path globs the whole bucket dir.
+        """
+        units: List[Dict[str, Any]] = []
+        for shard in self._find_table_shards(table_name):
+            units.append({
+                "label": f"{table_name}/{shard.name}",
+                "sources": [shard],
+                "dest": shard,
+            })
+        for bucket in self._find_bucket_dirs(table_name):
+            parquets = sorted(
+                (p for p in bucket.glob("*.parquet")),
+                key=lambda p: p.name,
+            )
+            if parquets:
+                units.append({
+                    "label": f"{bucket.parent.name}/{bucket.name}",
+                    "sources": parquets,
+                    "dest": parquets[0],   # reuse an existing filename
+                })
+        return units
+
     def cluster_table_by_patient(
         self,
         table_name: str,
         row_group_size: Optional[int] = None,
         memory_limit: str = "2GB",
     ) -> Dict[str, Any]:
-        """Rewrite a converted table's shards clustered by patient id.
+        """Rewrite a converted table clustered by patient id.
 
-        Each shard is globally sorted by ``(partition_col, patient_id)`` and
-        rewritten with fine row groups, so parquet row-group zone-maps let
-        DuckDB prune a patient-cohort filter (``stay_id IN (...)``) — including
-        the *scattered* cohorts that the streaming per-chunk sort (perf Z2)
-        cannot prune. The partition column stays the leading sort key, so the
-        dominant itemid-filtered extraction workload keeps its pruning.
+        Handles BOTH on-disk layouts:
+        - flat/ricu shard files (``<table>/N.parquet`` or ``<table>.parquet``);
+        - itemid-hash buckets (``<table>_bucket/bucket_id=N/*.parquet`` — what
+          the DuckDB read path prefers).
 
-        This is **opt-in** and costs one extra read+write pass over the table.
-        The sort is out-of-core (DuckDB spills past ``memory_limit``), so it is
-        safe on a shard far larger than RAM. Idempotent: re-clustering an
-        already-clustered table just re-sorts it.
+        Each unit (a shard file, or a whole bucket dir) is globally sorted by
+        ``(partition_col, patient_id)`` and rewritten with fine row groups, so
+        parquet row-group zone-maps let DuckDB prune a patient-cohort filter
+        (``stay_id IN (...)``) — including the *scattered* cohorts the streaming
+        per-chunk sort (perf Z2) cannot prune. The partition column stays the
+        leading sort key, so the itemid-filtered extraction workload keeps its
+        pruning. A multi-file bucket is merged into one sorted file.
 
-        Returns a summary dict with per-shard row counts and row-group counts.
+        **Opt-in**; costs one extra read+write pass. The sort is out-of-core
+        (DuckDB spills past ``memory_limit``), so it is safe on a unit far larger
+        than RAM. Atomic per unit (write tmp -> verify row count -> replace);
+        idempotent.
+
+        Returns a summary dict with per-unit row counts and row-group counts.
         """
         import duckdb
         import shutil
 
         rg = int(row_group_size or DEFAULT_CLUSTER_ROW_GROUP_SIZE)
-        shards = self._find_table_shards(table_name)
-        if not shards:
+        units = self._cluster_units(table_name)
+        if not units:
             raise FileNotFoundError(
-                f"No converted parquet found for table '{table_name}' under "
-                f"{self.data_path} — convert it before clustering."
+                f"No converted parquet (shard or bucket layout) found for table "
+                f"'{table_name}' under {self.data_path} — convert it first."
             )
         partition_col = (self._get_partitioning_config(table_name) or {}).get("col")
 
@@ -2550,35 +2606,31 @@ class DataConverter:
         con.execute("SET preserve_insertion_order=false")
         con.execute(f"SET temp_directory={_sql_str(spill_dir)}")
 
-        per_shard = []
+        per_unit = []
         clustered = 0
         skipped = 0
         try:
-            for shard in shards:
-                cols = [
-                    row[0]
-                    for row in con.execute(
-                        f"DESCRIBE SELECT * FROM read_parquet({_sql_str(shard)})"
-                    ).fetchall()
-                ]
+            for unit in units:
+                sources: List[Path] = unit["sources"]
+                dest: Path = unit["dest"]
+                label = unit["label"]
+                src_sql = "read_parquet([" + ", ".join(
+                    _sql_str(s) for s in sources) + "])"
+
+                cols = [row[0] for row in con.execute(f"DESCRIBE SELECT * FROM {src_sql}").fetchall()]
                 pcol = _pick_secondary_sort_column(cols, partition_col)
                 if pcol is None:
                     skipped += 1
-                    per_shard.append({"shard": shard.name, "skipped": "no patient id column"})
+                    per_unit.append({"unit": label, "skipped": "no patient id column"})
                     continue
-                order_cols = [
-                    c for c in (partition_col, pcol) if c and c in cols
-                ]
+                order_cols = [c for c in (partition_col, pcol) if c and c in cols]
                 order = ", ".join(f'"{c}"' for c in order_cols)
-                before = con.execute(
-                    f"SELECT count(*) FROM read_parquet({_sql_str(shard)})"
-                ).fetchone()[0]
+                before = con.execute(f"SELECT count(*) FROM {src_sql}").fetchone()[0]
 
-                tmp = shard.with_name(shard.name + ".clustering.tmp")
+                tmp = dest.with_name(dest.name + ".clustering.tmp")
                 con.execute(
-                    f"COPY (SELECT * FROM read_parquet({_sql_str(shard)}) "
-                    f"ORDER BY {order}) TO {_sql_str(tmp)} "
-                    f"(FORMAT parquet, ROW_GROUP_SIZE {rg}, "
+                    f"COPY (SELECT * FROM {src_sql} ORDER BY {order}) "
+                    f"TO {_sql_str(tmp)} (FORMAT parquet, ROW_GROUP_SIZE {rg}, "
                     f"COMPRESSION {_sql_str(self.parquet_compression)})"
                 )
                 after = con.execute(
@@ -2587,23 +2639,30 @@ class DataConverter:
                 if after != before:
                     tmp.unlink(missing_ok=True)
                     raise RuntimeError(
-                        f"Clustering row-count mismatch for {shard.name}: "
-                        f"{before} -> {after}; original left untouched."
+                        f"Clustering row-count mismatch for {label}: "
+                        f"{before} -> {after}; originals left untouched."
                     )
                 n_rg = con.execute(
                     f"SELECT count(DISTINCT row_group_id) "
                     f"FROM parquet_metadata({_sql_str(tmp)})"
                 ).fetchone()[0]
-                os.replace(tmp, shard)  # atomic within the same directory
+                # Remove any extra source files in a multi-file bucket, then
+                # atomically move the sorted tmp into the destination name.
+                for src in sources:
+                    if src != dest:
+                        src.unlink(missing_ok=True)
+                os.replace(tmp, dest)
                 clustered += 1
-                per_shard.append({
-                    "shard": shard.name, "rows": int(before),
+                per_unit.append({
+                    "unit": label, "rows": int(before),
                     "row_groups": int(n_rg), "sort_by": order_cols,
+                    "merged_files": len(sources),
                 })
                 if self.verbose:
                     logger.info(
-                        f"  🧬 clustered {table_name}/{shard.name} by "
-                        f"{order_cols}: {before:,} rows, {n_rg} row groups"
+                        f"  🧬 clustered {label} by {order_cols}: "
+                        f"{before:,} rows, {n_rg} row groups"
+                        + (f" (merged {len(sources)} files)" if len(sources) > 1 else "")
                     )
         finally:
             con.close()
@@ -2611,10 +2670,14 @@ class DataConverter:
 
         return {
             "table": table_name,
+            "units_clustered": clustered,
+            "units_skipped": skipped,
+            "row_group_size": rg,
+            "per_unit": per_unit,
+            # Back-compat aliases (older callers/tests used the shard names):
             "shards_clustered": clustered,
             "shards_skipped": skipped,
-            "row_group_size": rg,
-            "per_shard": per_shard,
+            "per_shard": per_unit,
         }
 
     def cluster_tables_by_patient(
@@ -2627,13 +2690,14 @@ class DataConverter:
 
         ``table_names=None`` clusters every id-partitioned table configured for
         this database (the large wide tables that benefit most). Tables with no
-        converted parquet are skipped, not errored.
+        converted parquet (neither shard nor bucket layout) are skipped, not
+        errored.
         """
         if table_names is None:
             table_names = sorted(PARTITIONING_CONFIG.get(self.database, {}).keys())
         out = {}
         for name in table_names:
-            if not self._find_table_shards(name):
+            if not self._cluster_units(name):
                 if self.verbose:
                     logger.info(f"  ⏭️  cluster: no parquet for '{name}', skipping")
                 continue
