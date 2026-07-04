@@ -248,7 +248,7 @@
     // —— recommended core ——
     ['Demographics', '人口统计', 6, true, true],
     ['Vital signs', '生命体征', 11, true, true],
-    ['Lab — Chemistry', '实验室-生化', 35, true, true],
+    ['Lab — Chemistry', '实验室-生化', 37, true, true],
     ['SOFA-2 scores', 'SOFA-2 评分', 7, true, true],
     ['Sepsis-3 (SOFA-2)', 'Sepsis-3 (SOFA-2)', 1, true, true],
     ['Outcome', '结局', 10, true, true],
@@ -263,8 +263,8 @@
     ['Vasopressors', '血管活性药物', 17, true, false],
     ['Other medications', '其他药物', 49, true, false],
     ['Renal & urine output', '肾脏与尿量', 22, true, false],
-    ['Neurological', '神经系统', 11, true, false],
-    ['Circulatory', '循环系统', 7, true, false],
+    ['Neurological', '神经系统', 12, true, false],
+    ['Circulatory', '循环系统', 10, true, false],
     ['Other scores', '其他评分', 9, true, false],
   ];
   const CORE = MODS.filter(m => m[4]).map(m => m[0]);
