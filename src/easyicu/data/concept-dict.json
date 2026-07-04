@@ -6171,11 +6171,13 @@
       "hirid": [
         {
           "ids": [
+            107,
             1000373
           ],
           "table": "pharma",
           "sub_var": "pharmaid",
-          "callback": "transform_fun(set_val(TRUE))"
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "2026-07-04 recall audit: added 107 'Liquemin 5000 U/ml' (therapeutic UFH, 3.7M rows) — was missing; 1000373 'Heparin Bichsel 500 E' is an 11-row flush. Fraxiparine (nadroparin) is LMWH, not added here."
         }
       ],
       "miiv": [
@@ -13316,10 +13318,12 @@
           "ids": [
             8658,
             13952,
-            16110
+            16110,
+            13058
           ],
           "table": "numericitems",
-          "sub_var": "itemid"
+          "sub_var": "itemid",
+          "_comment": "2026-07-04 recall audit: added 13058 'Temp Rectaal' (core site, 387k rows); blood/bladder/esophagus already present. Peripheral sites (skin/axillary/groin) remain excluded."
         }
       ],
       "eicu": [
@@ -16288,5 +16292,725 @@
     ],
     "callback": "persistent_critical_illness",
     "class_name": "rec_cncpt"
+  },
+  "pap_sys": {
+    "unit": "mmHg",
+    "min": 0,
+    "max": 120,
+    "description": "pulmonary artery pressure, systolic",
+    "category": "cardiovascular",
+    "sources": {
+      "miiv": [
+        {
+          "ids": [
+            220059,
+            226852
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": [
+            220059,
+            492,
+            226852
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": [
+            220059,
+            492,
+            226852
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "eicu": [
+        {
+          "table": "vitalperiodic",
+          "val_var": "pasystolic",
+          "class_name": "col_itm",
+          "unit_val": "mmHg"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "table": "vitalperiodic",
+          "val_var": "pasystolic",
+          "class_name": "col_itm",
+          "unit_val": "mmHg"
+        }
+      ],
+      "sic": [
+        {
+          "ids": 2275,
+          "table": "data_float_h",
+          "sub_var": "DataID"
+        }
+      ],
+      "aumc": [
+        {
+          "ids": [
+            6644
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid"
+        }
+      ],
+      "hirid": [
+        {
+          "ids": 150,
+          "table": "observations",
+          "sub_var": "variableid",
+          "class_name": "hrd_itm"
+        }
+      ]
+    }
+  },
+  "pap_dia": {
+    "unit": "mmHg",
+    "min": 0,
+    "max": 80,
+    "description": "pulmonary artery pressure, diastolic",
+    "category": "cardiovascular",
+    "sources": {
+      "miiv": [
+        {
+          "ids": [
+            220060,
+            226853
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": [
+            220060,
+            8448,
+            226853
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": [
+            220060,
+            8448,
+            226853
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "eicu": [
+        {
+          "table": "vitalperiodic",
+          "val_var": "padiastolic",
+          "class_name": "col_itm",
+          "unit_val": "mmHg"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "table": "vitalperiodic",
+          "val_var": "padiastolic",
+          "class_name": "col_itm",
+          "unit_val": "mmHg"
+        }
+      ],
+      "sic": [
+        {
+          "ids": 2276,
+          "table": "data_float_h",
+          "sub_var": "DataID"
+        }
+      ],
+      "aumc": [
+        {
+          "ids": [
+            6646
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid"
+        }
+      ],
+      "hirid": [
+        {
+          "ids": 170,
+          "table": "observations",
+          "sub_var": "variableid",
+          "class_name": "hrd_itm"
+        }
+      ]
+    }
+  },
+  "pap_mean": {
+    "unit": "mmHg",
+    "min": 0,
+    "max": 100,
+    "description": "pulmonary artery pressure, mean",
+    "category": "cardiovascular",
+    "sources": {
+      "miiv": [
+        {
+          "ids": [
+            220061,
+            226857
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": [
+            220061,
+            491,
+            226857
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": [
+            220061,
+            491,
+            226857
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "eicu": [
+        {
+          "table": "vitalperiodic",
+          "val_var": "pamean",
+          "class_name": "col_itm",
+          "unit_val": "mmHg"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "table": "vitalperiodic",
+          "val_var": "pamean",
+          "class_name": "col_itm",
+          "unit_val": "mmHg"
+        }
+      ],
+      "sic": [
+        {
+          "ids": 2277,
+          "table": "data_float_h",
+          "sub_var": "DataID"
+        }
+      ],
+      "aumc": [
+        {
+          "ids": [
+            6645
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid"
+        }
+      ],
+      "hirid": [
+        {
+          "ids": 160,
+          "table": "observations",
+          "sub_var": "variableid",
+          "class_name": "hrd_itm"
+        }
+      ]
+    }
+  },
+  "co": {
+    "unit": [
+      "L/min",
+      "l/min"
+    ],
+    "min": 0,
+    "max": 25,
+    "description": "cardiac output (thermodilution / continuous / PiCCO)",
+    "category": "cardiovascular",
+    "sources": {
+      "miiv": [
+        {
+          "ids": [
+            220088,
+            224842,
+            228178,
+            227543,
+            228369
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": [
+            220088,
+            224842,
+            228178,
+            227543,
+            228369,
+            90
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": [
+            220088,
+            224842,
+            228178,
+            227543,
+            228369,
+            90
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "eicu": [
+        {
+          "table": "vitalaperiodic",
+          "val_var": "cardiacoutput",
+          "class_name": "col_itm",
+          "unit_val": "L/min"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "table": "vitalaperiodic",
+          "val_var": "cardiacoutput",
+          "class_name": "col_itm",
+          "unit_val": "L/min"
+        }
+      ],
+      "aumc": [
+        {
+          "ids": [
+            6656,
+            13151
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid"
+        }
+      ],
+      "hirid": [
+        {
+          "ids": 1000,
+          "table": "observations",
+          "sub_var": "variableid",
+          "class_name": "hrd_itm"
+        }
+      ]
+    }
+  },
+  "ggt": {
+    "unit": [
+      "IU/L",
+      "U/L",
+      "U/l"
+    ],
+    "min": 0,
+    "max": 5000,
+    "description": "gamma-glutamyl transferase (blood)",
+    "category": "chemistry",
+    "sources": {
+      "miiv": [
+        {
+          "ids": 50927,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": 50927,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": 50927,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "aumc": [
+        {
+          "ids": [
+            6831,
+            12071
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid"
+        }
+      ],
+      "hirid": [
+        {
+          "ids": 24000370,
+          "table": "observations",
+          "sub_var": "variableid",
+          "class_name": "hrd_itm"
+        }
+      ],
+      "sic": [
+        {
+          "ids": 614,
+          "table": "laboratory",
+          "sub_var": "LaboratoryID"
+        }
+      ]
+    }
+  },
+  "trig": {
+    "unit": [
+      "mg/dL",
+      "mmol/l"
+    ],
+    "min": 0,
+    "max": 5000,
+    "description": "triglycerides (blood); AUMC in mmol/L",
+    "category": "chemistry",
+    "sources": {
+      "miiv": [
+        {
+          "ids": 51000,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": 51000,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": 51000,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "aumc": [
+        {
+          "ids": [
+            9956
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid"
+        }
+      ],
+      "sic": [
+        {
+          "ids": 385,
+          "table": "laboratory",
+          "sub_var": "LaboratoryID"
+        }
+      ],
+      "eicu": [
+        {
+          "ids": "triglycerides",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "ids": "triglycerides",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ]
+    }
+  },
+  "tsh": {
+    "unit": [
+      "mIU/L",
+      "mU/L",
+      "uIU/mL"
+    ],
+    "min": 0,
+    "max": 100,
+    "description": "thyroid stimulating hormone (blood)",
+    "category": "chemistry",
+    "sources": {
+      "miiv": [
+        {
+          "ids": 50993,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": 50993,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": 50993,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "aumc": [
+        {
+          "ids": [
+            11925
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid"
+        }
+      ],
+      "sic": [
+        {
+          "ids": 479,
+          "table": "laboratory",
+          "sub_var": "LaboratoryID"
+        }
+      ],
+      "eicu": [
+        {
+          "ids": "TSH",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "ids": "TSH",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ]
+    }
+  },
+  "monos": {
+    "unit": [
+      "%"
+    ],
+    "min": 0,
+    "max": 100,
+    "description": "monocytes (percent of leukocytes)",
+    "category": "hematology",
+    "sources": {
+      "miiv": [
+        {
+          "ids": 51254,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": 51254,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": 51254,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "aumc": [
+        {
+          "ids": [
+            11850
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid"
+        }
+      ],
+      "sic": [
+        {
+          "ids": 227,
+          "table": "laboratory",
+          "sub_var": "LaboratoryID"
+        }
+      ],
+      "eicu": [
+        {
+          "ids": "-monos",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "ids": "-monos",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ]
+    }
+  },
+  "total_protein": {
+    "unit": [
+      "g/dL",
+      "g/L"
+    ],
+    "min": 0,
+    "max": 120,
+    "description": "total serum protein; MIMIC/eICU/SIC in g/dL, AUMC/HiRID in g/L",
+    "category": "chemistry",
+    "sources": {
+      "miiv": [
+        {
+          "ids": 50976,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": 50976,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": 50976,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "aumc": [
+        {
+          "ids": [
+            10051,
+            9939
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid"
+        }
+      ],
+      "sic": [
+        {
+          "ids": 294,
+          "table": "laboratory",
+          "sub_var": "LaboratoryID"
+        }
+      ],
+      "eicu": [
+        {
+          "ids": "total protein",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "ids": "total protein",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ]
+    }
+  },
+  "mpv": {
+    "unit": [
+      "fL",
+      "fl"
+    ],
+    "min": 0,
+    "max": 20,
+    "description": "mean platelet volume",
+    "category": "hematology",
+    "_comment": "2026-07-04 eICU-only: MIMIC-IV d_labitems 52142 'Mean Platelet Volume' has 0 rows and 51255 'MPV' is median-0 (unusable); no MPV in MIMIC-III/AUMC/SIC/HiRID.",
+    "sources": {
+      "eicu": [
+        {
+          "ids": "MPV",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "ids": "MPV",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ]
+    }
+  },
+  "ntprobnp": {
+    "unit": [
+      "pg/mL",
+      "ng/L",
+      "pmol/l"
+    ],
+    "min": 0,
+    "max": 100000,
+    "description": "N-terminal pro-B-type natriuretic peptide (NT-proBNP)",
+    "category": "chemistry",
+    "sources": {
+      "miiv": [
+        {
+          "ids": 50963,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": 50963,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": 50963,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "aumc": [
+        {
+          "ids": [
+            14249
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid"
+        }
+      ],
+      "hirid": [
+        {
+          "ids": 24000569,
+          "table": "observations",
+          "sub_var": "variableid",
+          "class_name": "hrd_itm"
+        }
+      ]
+    }
   }
 }
