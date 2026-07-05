@@ -1159,24 +1159,40 @@ def load_concepts(
                 # 估算内存需求
                 est_mem = estimate_memory_mb(concepts_list, loader.database, _total_patients_in_db)
                 avail_mem = get_available_memory_mb()
-                
-                # 仅低内存系统 + 估算超预算时才分批
-                if avail_mem < LOW_MEM_THRESHOLD_MB and est_mem > avail_mem:
+
+                # 🚀 稳定预算分批判定（16GB 可用性 + 确定性）：用**物理总内存**这个稳定值
+                # 判定是否分批，而不是波动的"当前可用"。否则 (a) 空闲机(avail 大)时宽模块
+                # 一次性→放不下→静默返回空概念(截断)，(b) 繁忙机(avail 小)时连窄模块也被
+                # 误判分批→过度分批变慢。只有估算峰值 > 0.6×总内存的模块才分批，并用同一
+                # 稳定预算反算 batch_size(大批少次)。实测 16GB 上只有 49-概念宽模块
+                # (medications/chemistry)在大队列分批，其余 17 个模块保持一次性(最快)。
+                # EASYICU_ONESHOT_BUDGET_MB 可覆盖每模块一次性内存上限(MB)。
+                try:
+                    _env_b = os.environ.get('EASYICU_ONESHOT_BUDGET_MB')
+                    if _env_b:
+                        _oneshot_budget_mb = float(_env_b)
+                    else:
+                        import psutil as _psb
+                        _oneshot_budget_mb = (_psb.virtual_memory().total / (1024 * 1024)) * 0.6
+                except Exception:
+                    _oneshot_budget_mb = 9830.0  # 16GB*0.6 回退
+                if est_mem > _oneshot_budget_mb:
                     _total_patients = _total_patients_in_db
                     effective_batch_size = auto_batch_size(
-                        concepts_list, loader.database, _total_patients, avail_mem
+                        concepts_list, loader.database, _total_patients,
+                        available_memory_mb=_oneshot_budget_mb / 0.6,
                     )
 
                     if verbose and effective_batch_size:
-                        print(f"⚠️  低内存模式 ({avail_mem:.0f}MB < 6GB), "
+                        print(f"⚠️  稳定预算分批 (估算 {est_mem:.0f}MB > 预算 {_oneshot_budget_mb:.0f}MB), "
                               f"全量加载 {_total_patients} patients 分批 (batch_size={effective_batch_size})")
 
-                    # 低内存：始终用子进程隔离；进程内路径优先走流式 patient batch
+                    # 分批时仍用子进程隔离；进程内路径优先走流式 patient batch
                     use_subprocess = True
                     use_streaming_patient_batches = effective_batch_size is not None
                 elif verbose:
                     print(f"🚀 全量加载 {_total_patients_in_db} patients, "
-                          f"可用内存 {avail_mem:.0f}MB, 不分批（最优速度）")
+                          f"估算 {est_mem:.0f}MB ≤ 预算 {_oneshot_budget_mb:.0f}MB, 不分批（最优速度）")
         except Exception as e:
             logger.debug(f"自动分批检测失败: {e}")
     
@@ -1216,13 +1232,26 @@ def load_concepts(
     ):
         avail_mem = get_available_memory_mb()
         est_mem = estimate_memory_mb(concepts_list, loader.database, _total_patients)
-        if avail_mem < LOW_MEM_THRESHOLD_MB and est_mem > avail_mem:
+        # 🚀 稳定预算判定（同上）：用物理总内存而非波动可用，确定性地只对真正放不下的
+        # 宽模块分批（medications/chemistry），窄模块保持一次性(快)；空闲机也不会因
+        # "avail 大"而漏判导致宽模块一次性→静默截断。EASYICU_ONESHOT_BUDGET_MB 可覆盖。
+        try:
+            _env_b = os.environ.get('EASYICU_ONESHOT_BUDGET_MB')
+            if _env_b:
+                _oneshot_budget_mb = float(_env_b)
+            else:
+                import psutil as _psb
+                _oneshot_budget_mb = (_psb.virtual_memory().total / (1024 * 1024)) * 0.6
+        except Exception:
+            _oneshot_budget_mb = 9830.0
+        if est_mem > _oneshot_budget_mb:
             effective_batch_size = auto_batch_size(
-                concepts_list, loader.database, _total_patients, avail_mem
+                concepts_list, loader.database, _total_patients,
+                available_memory_mb=_oneshot_budget_mb / 0.6,
             )
             if verbose and effective_batch_size:
-                print(f"⚠️  低内存模式 ({avail_mem:.0f}MB < 6GB): {_total_patients} patients, "
-                      f"估算 {est_mem:.0f}MB > 可用, batch_size={effective_batch_size}")
+                print(f"⚠️  稳定预算分批 (估算 {est_mem:.0f}MB > 预算 {_oneshot_budget_mb:.0f}MB): "
+                      f"{_total_patients} patients, batch_size={effective_batch_size}")
             use_subprocess = True
 
     if auto_chunk_strategy and verbose and effective_batch_size is None:
@@ -3492,6 +3521,48 @@ def _run_module_extraction(
     )
     if patient_ids_filter:
         kwargs['patient_ids'] = patient_ids_filter
+
+    # 🚀 内存兜底（16GB 机器可用性）：一次性(one-shot)加载对"宽模块×大队列"会
+    # 超内存并**静默返回空概念**——放不下的概念被下方 `len(df) > 0` 过滤悄悄丢弃，
+    # 既不报错也不触发 MemoryError 回退。实测 mimic `medications` 49 概念 × 61,532
+    # 患者：一次性只存了 6 个概念（估算峰值 11.5GB > 可用），而 3k 患者却能存 45 个
+    # ——"患者越多概念越少"正是静默截断。这里用 EasyICU 自带的 auto_batch_size
+    # 内存估算兜底：调用方要求一次性(batch_size 为 None 或覆盖全队列)且估算放不下时，
+    # 自动降级为有界分批(MIN_BATCH=10000，最多几批，re-scan 开销可控)。窄模块 /
+    # 小队列 / 大内存机器估算能放下 → auto_batch_size 返回 None → 保持一次性(最快)。
+    # 机器自适应：64GB 上预算大→几乎不分批；16GB 上只对真正放不下的宽模块分批。
+    _n_ids = 0
+    if patient_ids_filter:
+        try:
+            _n_ids = len(next(iter(patient_ids_filter.values())))
+        except Exception:
+            _n_ids = 0
+    if _n_ids and (not batch_size or batch_size >= _n_ids):
+        try:
+            from easyicu.runtime.memory_manager import auto_batch_size as _auto_bs
+            # 稳定预算：默认用**物理总内存**判定，而不是波动的"当前可用"——否则后台
+            # 程序临时吃内存会把本来能一次性的 vitals 等误判成分批(过度分批变慢)。
+            # auto_batch_size 内部 budget = avail*0.6，故传 total_ram 使每模块一次性
+            # 上限≈0.6*total(16GB→~9.8GB)，实测只有 49-概念宽模块(medications/chemistry)
+            # 在大队列时超过→确定性分批必得全量概念；其余 17 个模块保持一次性(最快)。
+            # EASYICU_ONESHOT_BUDGET_MB 可直接指定该上限(MB)。
+            _stable_avail_mb = None
+            _env_budget = os.environ.get('EASYICU_ONESHOT_BUDGET_MB')
+            if _env_budget:
+                _stable_avail_mb = float(_env_budget) / 0.6
+            else:
+                try:
+                    import psutil as _ps
+                    _stable_avail_mb = _ps.virtual_memory().total / (1024 * 1024)
+                except Exception:
+                    _stable_avail_mb = None
+            _safe_bs = _auto_bs(list(concepts), database, _n_ids,
+                                available_memory_mb=_stable_avail_mb)
+            if _safe_bs and _safe_bs < _n_ids:
+                batch_size = _safe_bs
+        except Exception:
+            pass
+
     if batch_size:
         kwargs['batch_size'] = batch_size
 
