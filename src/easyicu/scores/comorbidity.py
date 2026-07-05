@@ -526,8 +526,8 @@ _NO_ICD_DATABASES = {"hirid", "aumc"}
 
 
 def _build_datasource(database: str, data_path: object):
-    from .datasource import ICUDataSource
-    from .resources import load_data_sources
+    from easyicu.datasource import ICUDataSource  # was `.datasource` -> non-existent easyicu.scores.datasource
+    from easyicu.resources import load_data_sources  # was `.resources` -> non-existent easyicu.scores.resources
 
     config = load_data_sources().get(database)
     if config is None:
