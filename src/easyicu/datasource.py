@@ -201,6 +201,20 @@ def _get_duckdb_connection():
                 con.execute(f"SET memory_limit = '{_duck_gb:.1f}GB'")
             except Exception:
                 con.execute("SET memory_limit = '2GB'")
+        # 磁盘溢出目录：**纯 opt-in**，默认不动 DuckDB 原生行为（普通用户数据在
+        # 本地盘，默认 spill 就够用，无需额外设置）。只有当用户显式设了
+        # EASYICU_DUCKDB_TEMP_DIR（例如数据放在慢速外置/USB 盘、想把 spill 落到
+        # 内部 SSD）时才覆盖。EASYICU_DUCKDB_MAX_TEMP_SIZE 可选限制溢出上限。
+        _spill_dir = os.environ.get('EASYICU_DUCKDB_TEMP_DIR')
+        if _spill_dir:
+            try:
+                os.makedirs(_spill_dir, exist_ok=True)
+                con.execute(f"SET temp_directory = '{_spill_dir}'")
+                _max_temp = os.environ.get('EASYICU_DUCKDB_MAX_TEMP_SIZE')
+                if _max_temp:
+                    con.execute(f"SET max_temp_directory_size = '{_max_temp}'")
+            except Exception:
+                pass
         _duckdb_local.con = con
     return con
 
@@ -2478,7 +2492,16 @@ class ICUDataSource:
 
             # 批量读取，启用多线程（优化大规模提取）
             # 🚀 优化：为90000+患者提取增加线程池
-            thread_count = 32  # 最优配置：32线程
+            # 🚀 线程数自适应：32 线程在大内存多核服务器上最优，但在 16GB 笔记本上
+            # （提取时已有多个 concept-worker 线程并发，每个又开 32 个 Arrow 线程 →
+            # 上百线程严重过度订阅 + 每线程各自分配读缓冲抬高峰值内存）。默认取
+            # min(cpu, 8)，服务器可用 EASYICU_ARROW_THREADS 调回高值。
+            import os as _os
+            _env_at = _os.environ.get('EASYICU_ARROW_THREADS')
+            if _env_at:
+                thread_count = max(1, int(_env_at))
+            else:
+                thread_count = min((_os.cpu_count() or 4), 8)
             
             if columns:
                 table = dataset.to_table(
