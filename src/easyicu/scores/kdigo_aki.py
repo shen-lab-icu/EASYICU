@@ -702,8 +702,8 @@ def load_kdigo_aki(
         >>> aki_df = load_kdigo_aki('miiv', max_patients=100)
         >>> print(f"AKI prevalence: {aki_df['aki'].mean():.1%}")
     """
-    from .api import load_concepts
-    
+    from easyicu.api import load_concepts  # was `from .api` -> resolved to non-existent easyicu.scores.api
+
     _pre = preloaded_data or {}
     
     def _load_or_reuse(concept):
