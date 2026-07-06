@@ -1629,6 +1629,57 @@ def test_strata_axis_label_comes_from_score_column(ra):
     assert exposure_frame.attrs["score_is_numeric"] is False
 
 
+def test_strata_frame_matches_predictor_named_group_column(ra):
+    """An exposure/severity stratum is often named after the predictor
+    (``lactate_group``, ``sofa2_stratum``). The exact-name candidate list can
+    never enumerate these, so a general grouping-suffix fallback must still
+    resolve the score column instead of returning an empty frame."""
+    from easyicu.research_agent.figure_skill import _normalise_strata_frame
+
+    frame = _normalise_strata_frame(
+        pd.DataFrame(
+            {
+                "lactate_group": [
+                    "Unmeasured",
+                    "<2 mmol/L",
+                    "2 to <4 mmol/L",
+                    ">=4 mmol/L",
+                ],
+                "group_order": [1, 2, 3, 4],
+                "mortality_risk": [0.056, 0.085, 0.109, 0.349],
+            }
+        )
+    )
+    assert not frame.empty
+    assert frame["rate"].round(3).tolist() == [0.056, 0.085, 0.109, 0.349]
+    assert "Unmeasured" in frame["score"].tolist()
+
+
+def test_association_frame_uses_model_label_for_row_labels(ra):
+    """When the model table carries ``model_label`` (e.g. primary vs
+    complete-case comparator), the forest rows must read as those labels,
+    not as the raw odds-ratio floats."""
+    from easyicu.research_agent.figure_skill import _normalise_association_frame
+
+    frame = _normalise_association_frame(
+        pd.DataFrame(
+            {
+                "model_label": [
+                    "primary_imputed_analytic_cohort",
+                    "complete_case_comparator",
+                ],
+                "point_estimate": [1.0774, 1.0244],
+                "ci_low": [1.0220, 0.9640],
+                "ci_high": [1.1358, 1.0885],
+            }
+        )
+    )
+    assert frame["label"].tolist() == [
+        "Primary Imputed Analytic Cohort",
+        "Complete Case Comparator",
+    ]
+
+
 def test_publication_figure_skill_renders_from_robustness_panel_without_table(
     ra,
     tmp_path: Path,
@@ -1788,3 +1839,41 @@ def test_publication_figure_skill_promotes_prediction_validation_bundle(ra, tmp_
         assert evidence.get(f"publication_figure_{suffix}") is not None
         assert (run_dir / "publication_figures" / f"easyicu_publication_figure.{suffix}").exists()
     assert evidence.get("publication_figure_contract") is not None
+
+
+def test_make_figure_contract_backfills_blank_panel_titles_from_role():
+    """Regression (M3 clustering figure): panels with rich roles/claims but
+    ``title=""`` must not trip the ``figure_contract_quality`` gate — the blank
+    title is backfilled from the panel's own declared role (title-cased)."""
+    contract = make_figure_contract(
+        {
+            "figure_id": "clustering_visualization",
+            "core_claim": "Candidate sepsis subphenotypes differ in outcome.",
+            "source_data": ["clustering_assignments"],
+            "panels": [
+                {"panel_id": "A", "title": "", "role": "data_quality",
+                 "claim": "Feature availability differs", "evidence_ids": ["a"]},
+                {"panel_id": "B", "title": "", "role": "phenotype_structure",
+                 "claim": "PCA geometry", "evidence_ids": ["b"]},
+            ],
+        }
+    )
+    titles = {p.panel_id: p.title for p in contract.panels}
+    assert titles["A"] == "Data quality"
+    assert titles["B"] == "Phenotype structure"
+    assert all(p.title.strip() for p in contract.panels)
+
+
+def test_make_figure_contract_preserves_explicit_panel_title():
+    contract = make_figure_contract(
+        {
+            "figure_id": "f",
+            "core_claim": "cc",
+            "source_data": ["s"],
+            "panels": [
+                {"panel_id": "A", "title": "Held-out AUROC", "role": "validation",
+                 "claim": "x", "evidence_ids": ["e"]},
+            ],
+        }
+    )
+    assert contract.panels[0].title == "Held-out AUROC"

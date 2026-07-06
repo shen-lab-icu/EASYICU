@@ -16,7 +16,7 @@ import shutil
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 
@@ -30,6 +30,7 @@ from .publication_figures import (
     make_figure_contract,
     save_publication_figure,
 )
+from .figures import RenderedFigure, render_family_figure
 from .robustness_panel import RobustnessPanel, load_robustness_panel
 from .schema import AnalysisPlan, EvidenceRecord, ResearchContext, ValidationFinding
 from .study_design import infer_study_design_family
@@ -103,6 +104,34 @@ class PublicationFigureSkill:
                 generated=False,
                 skipped_reason="existing_curated_publication_figure_bundle",
             )
+        # Study-design-aware dispatch: survival / prediction / phenotyping /
+        # causal questions render their own family figure (KM curve, ROC +
+        # calibration, cluster heatmap, love plot) instead of being funnelled
+        # into the association forest. The renderer returns None when its
+        # source evidence is absent, so association/descriptive runs and any
+        # family whose analysis did not produce its tables fall straight
+        # through to the existing ladder below with no behaviour change.
+        family = infer_study_design_family(context)
+        family_figure = render_family_figure(
+            family,
+            context=context,
+            plan=plan,
+            evidence=evidence,
+            run_dir=run_dir,
+        )
+        if family_figure is not None:
+            try:
+                return self._finalise_family_figure(
+                    context=context,
+                    evidence=evidence,
+                    run_dir=run_dir,
+                    rendered=family_figure,
+                    prompt_pack_version=prompt_pack_version,
+                )
+            except Exception:
+                # A finalisation bug must not crash the figure stage; fall
+                # through to the existing association/promotion/skip ladder.
+                _close_leaked_figures()
         primary = _select_primary_association_record(
             evidence,
             run_dir=run_dir,
@@ -119,14 +148,14 @@ class PublicationFigureSkill:
         if primary is None:
             primary = _first_existing_record(
                 evidence,
-            [
-                "primary_association",
-                "primary_association_table",
-                "table_primary_association",
-                "adjusted_association",
-                "adjusted_association_death",
-                "association_table",
-            ],
+                [
+                    "primary_association",
+                    "primary_association_table",
+                    "table_primary_association",
+                    "adjusted_association",
+                    "adjusted_association_death",
+                    "association_table",
+                ],
             )
         promoted_bundle = _select_existing_step_publication_figure_bundle(evidence)
         if promoted_bundle is not None and (
@@ -203,7 +232,7 @@ class PublicationFigureSkill:
         if primary is not None:
             try:
                 frame = _read_table(run_dir / primary.relative_path)
-                strata = _first_existing_record(
+                strata = _first_normalisable_record(
                     evidence,
                     [
                         "stratified_mortality",
@@ -212,9 +241,18 @@ class PublicationFigureSkill:
                         "outcome_by_primary_exposure",
                         "outcome_by_group",
                         "outcome_by_sepsis3",
+                        # Association steps commonly export the absolute
+                        # outcome risk by exposure group as
+                        # absolute_risk_by_<exposure>.csv; the prefix token
+                        # matches any exposure spelling in the substring
+                        # pass. It is the same descriptive-result content
+                        # as an outcome-by-exposure table.
+                        "absolute_risk_by",
                     ],
+                    run_dir=run_dir,
+                    normalise=_normalise_strata_frame,
                 )
-                missingness = _first_existing_record(
+                missingness = _first_normalisable_record(
                     evidence,
                     [
                         "missingness",
@@ -223,6 +261,8 @@ class PublicationFigureSkill:
                         "measurement_missingness",
                         "cohort_missingness_audit",
                     ],
+                    run_dir=run_dir,
+                    normalise=_normalise_missingness_frame,
                 )
                 return self._render_primary_association(
                     context=context,
@@ -297,6 +337,154 @@ class PublicationFigureSkill:
             evidence=evidence,
             run_dir=run_dir,
             prompt_pack_version=prompt_pack_version,
+        )
+
+    def _finalise_family_figure(
+        self,
+        *,
+        context: ResearchContext,
+        evidence: EvidenceStore,
+        run_dir: Path,
+        rendered: RenderedFigure,
+        prompt_pack_version: Optional[str],
+    ) -> PublicationFigureSkillResult:
+        """Persist a family renderer's figure via the shared save/register path.
+
+        Renderers stay free of EvidenceStore mechanics; this method performs
+        the source-copy registration, contract build, journal-format export,
+        export/contract audit, and evidence registration in one place — the
+        same registration surface as ``_render_primary_association`` so the
+        readiness gates and manuscript binder see an identical figure record
+        regardless of which family produced it.
+        """
+
+        import matplotlib.pyplot as plt
+
+        out_dir = run_dir / "publication_figures"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        source_copy_ids: List[str] = []
+        for name, frame in rendered.source_frames.items():
+            try:
+                copy_path = out_dir / f"publication_figure_source_{name}.csv"
+                frame.to_csv(copy_path, index=False)
+            except Exception:
+                continue
+            record = evidence.register_file(
+                kind="table",
+                description=f"Source data copied for the {rendered.generation_mode}.",
+                source_path=copy_path,
+                evidence_id=f"publication_figure_source_{name}",
+                aliases=[
+                    "publication_figure_source_data",
+                    f"publication_figure_source_{name}",
+                ],
+                producer=self.name,
+                generation_mode="deterministic_figure_skill",
+                prompt_pack_version=prompt_pack_version,
+                on_sha_change="new_id",
+            )
+            source_copy_ids.append(record.evidence_id)
+
+        source_metadata = _source_fingerprint_metadata(
+            evidence,
+            rendered.source_evidence_ids,
+        )
+        contract = make_figure_contract(
+            figure_id=rendered.figure_id,
+            core_claim=rendered.core_claim,
+            panels=rendered.panels,
+            source_data=rendered.source_evidence_ids or source_copy_ids,
+            statistics_note=rendered.statistics_note,
+        )
+        paths = save_publication_figure(
+            rendered.fig,
+            out_dir / rendered.figure_id,
+            contract=contract,
+            dpi=300,
+        )
+        plt.close(rendered.fig)
+
+        audit_findings = list(audit_publication_exports(paths))
+        audit_findings.extend(
+            FigureContractQualityValidator().audit_contract_file(
+                paths["contract"],
+                manuscript_facing=True,
+            )
+        )
+        figure_ids: List[str] = []
+        contract_evidence_id: Optional[str] = None
+        for key, path in paths.items():
+            suffix = path.suffix.lower()
+            if key == "contract" or suffix.endswith(".json"):
+                record = evidence.register_file(
+                    kind="log",
+                    description="Publication figure contract generated from analysis evidence.",
+                    source_path=path,
+                    evidence_id="publication_figure_contract",
+                    aliases=["publication_figure_contract", "figure_contract"],
+                    producer=self.name,
+                    generation_mode="deterministic_figure_skill",
+                    prompt_pack_version=prompt_pack_version,
+                    metadata=source_metadata,
+                    on_sha_change="new_id",
+                )
+                contract_evidence_id = record.evidence_id
+                continue
+            record = evidence.register_file(
+                kind="figure",
+                description=(
+                    f"Publication figure export ({suffix.lstrip('.')}) "
+                    "generated from analysis evidence."
+                ),
+                source_path=path,
+                evidence_id=f"publication_figure_{suffix.lstrip('.')}",
+                aliases=[
+                    "publication_figure",
+                    f"publication_figure_{suffix.lstrip('.')}",
+                ],
+                producer=self.name,
+                generation_mode="deterministic_figure_skill",
+                prompt_pack_version=prompt_pack_version,
+                metadata={
+                    **source_metadata,
+                    "figure_contract": "publication_figure_contract",
+                    "figure_role": "publication_figure",
+                },
+                on_sha_change="new_id",
+            )
+            figure_ids.append(record.evidence_id)
+
+        summary = {
+            "stage": self.name,
+            "generated": True,
+            "generation_mode": rendered.generation_mode,
+            "figure_id": contract.figure_id,
+            "core_claim": contract.core_claim,
+            "source_evidence_ids": list(rendered.source_evidence_ids),
+            "source_copy_evidence_ids": source_copy_ids,
+            "figure_evidence_ids": figure_ids,
+            "contract_evidence_id": contract_evidence_id,
+            "audit_findings": [f.model_dump(mode="json") for f in audit_findings],
+        }
+        summary_record = evidence.register_json(
+            kind="log",
+            description="PublicationFigureSkill summary.",
+            payload=summary,
+            filename="publication_figure_skill_summary.json",
+            evidence_id="publication_figure_skill_summary",
+            aliases=["publication_figure_skill_summary"],
+            producer=self.name,
+            generation_mode="deterministic_figure_skill",
+            prompt_pack_version=prompt_pack_version,
+            on_sha_change="new_id",
+        )
+        return PublicationFigureSkillResult(
+            generated=True,
+            contract_evidence_id=contract_evidence_id,
+            figure_evidence_ids=figure_ids,
+            summary_evidence_id=summary_record.evidence_id,
+            findings=audit_findings,
         )
 
     def _render_primary_association(
@@ -477,13 +665,17 @@ class PublicationFigureSkill:
             left_pad = max(span * 0.12, 0.05)
             ax.set_xlim(left_anchor - left_pad, right_anchor + right_pad)
         text_x = right_anchor + right_pad * 0.12
-        ax.text(
-            text_x,
-            0.96,
+        # The annotation-column header lives in the title band as a
+        # right-anchored title. Earlier placements collided in the SVG QA:
+        # inside the axes at y=0.96 it overlapped the row-0 annotation
+        # (inverted y-axis puts row 0 on top), and free-floating above the
+        # axes at y=1.02 it overlapped long left titles on short axes.
+        # Left/right titles share one band with opposite anchors, so they
+        # stay apart for realistic title lengths.
+        ax.set_title(
             str(axis_meta["header"]),
-            transform=ax.get_xaxis_transform(),
-            ha="left",
-            va="top",
+            loc="right",
+            pad=4,
             fontsize=6.8,
             color=palette.get("baseline", "#272727"),
         )
@@ -962,10 +1154,12 @@ class PublicationFigureSkill:
             ax_n.errorbar(
                 median_n,
                 n_y,
-                xerr=np.vstack([
-                    np.maximum(0.0, median_n - min_n),
-                    np.maximum(0.0, max_n - median_n),
-                ]),
+                xerr=np.vstack(
+                    [
+                        np.maximum(0.0, median_n - min_n),
+                        np.maximum(0.0, max_n - median_n),
+                    ]
+                ),
                 fmt="o",
                 color=palette.get("blue", "#0F4D92"),
                 ecolor=palette.get("blue", "#0F4D92"),
@@ -1036,7 +1230,7 @@ class PublicationFigureSkill:
                         "Large denominator changes can indicate that a robustness "
                         "variant is testing both definition and selection effects."
                     ),
-                }
+                },
             ],
             source_data=[source_record.evidence_id],
             statistics_note=(
@@ -1813,7 +2007,9 @@ def _contract_primary_strategy_ready(
     return len(roles & role_pool) >= minimum
 
 
-def _step_publication_bundle_rank(bundle: Dict[str, Any]) -> Tuple[int, int, int, int, str]:
+def _step_publication_bundle_rank(
+    bundle: Dict[str, Any],
+) -> Tuple[int, int, int, int, str]:
     roles = _bundle_contract_roles(bundle)
     chart_types = _bundle_contract_chart_types(bundle)
     step_text = str(bundle.get("step_id") or "").lower()
@@ -1862,7 +2058,9 @@ def _read_contract_payload(
     record: EvidenceRecord,
 ) -> Dict[str, Any]:
     try:
-        payload = json.loads((evidence.root / record.relative_path).read_text(encoding="utf-8"))
+        payload = json.loads(
+            (evidence.root / record.relative_path).read_text(encoding="utf-8")
+        )
     except Exception:
         return {}
     return payload if isinstance(payload, dict) else {}
@@ -1943,9 +2141,8 @@ def _record_artifact_stem(record: EvidenceRecord) -> str:
 
 def _is_run_level_publication_figure(record: EvidenceRecord) -> bool:
     basename = _record_artifact_basename(record)
-    return (
-        record.producer == PublicationFigureSkill.name
-        and basename.startswith("easyicu_publication_figure.")
+    return record.producer == PublicationFigureSkill.name and basename.startswith(
+        "easyicu_publication_figure."
     )
 
 
@@ -2152,7 +2349,8 @@ def _has_curated_publication_figure_bundle(
             if preferred_step_bundle is not None and (
                 metadata.get("promoted_from_step_id")
                 != preferred_step_bundle.get("step_id")
-                or metadata.get("promoted_from_stem") != preferred_step_bundle.get("stem")
+                or metadata.get("promoted_from_stem")
+                != preferred_step_bundle.get("stem")
             ):
                 continue
             if preferred_source_ids and not preferred_source_ids <= set(
@@ -2226,6 +2424,53 @@ def _first_existing_record(
     return None
 
 
+def _first_normalisable_record(
+    evidence: EvidenceStore,
+    names: Sequence[str],
+    *,
+    run_dir: Path,
+    normalise: Callable[[pd.DataFrame], pd.DataFrame],
+) -> Optional[EvidenceRecord]:
+    """First matching table record whose normalized frame is non-empty.
+
+    ``_first_existing_record`` returns the first *name* match, but an
+    alias can resolve to a semantically different table whose columns the
+    panel normalizer rejects (e.g. ``missingness_summary`` binding to a
+    numeric-coercion audit with ``original_missing_*`` columns). Stopping
+    there silently drops the side panel even when a perfectly renderable
+    sibling table is registered, so this variant keeps scanning until a
+    candidate actually normalizes.
+    """
+
+    name_set = {str(name).lower() for name in names}
+    candidates: List[EvidenceRecord] = []
+    seen: set[str] = set()
+    for name in names:
+        record = evidence.get(name)
+        if (
+            record is not None
+            and record.kind == "table"
+            and record.evidence_id not in seen
+        ):
+            candidates.append(record)
+            seen.add(record.evidence_id)
+    for record in evidence.records():
+        if record.kind != "table" or record.evidence_id in seen:
+            continue
+        basename = Path(record.relative_path).stem.lower()
+        if any(token in basename for token in name_set):
+            candidates.append(record)
+            seen.add(record.evidence_id)
+    for record in candidates:
+        try:
+            frame = normalise(_read_table(run_dir / record.relative_path))
+        except Exception:
+            continue
+        if not frame.empty:
+            return record
+    return None
+
+
 def _select_primary_association_record(
     evidence: EvidenceStore,
     *,
@@ -2242,7 +2487,10 @@ def _select_primary_association_record(
             return
         seen.add(record.evidence_id)
         basename = Path(record.relative_path).stem.lower()
-        if not any(token in basename for token in name_set) and record.evidence_id.lower() not in name_set:
+        if (
+            not any(token in basename for token in name_set)
+            and record.evidence_id.lower() not in name_set
+        ):
             return
         score = float(order) * 0.001
         severity = str(getattr(record, "finding_severity", "") or "").lower()
@@ -2343,6 +2591,9 @@ def _normalise_association_frame(
             "primary_exposure",
             "reader_label",
             "label",
+            "model_label",
+            "model",
+            "specification",
             "contrast",
             "variable",
             "predictor",
@@ -2496,10 +2747,7 @@ def _association_axis_from_token(token: str) -> Dict[str, Any]:
             "null_value": 1.0,
             "ratio_scale": True,
         }
-    if (
-        normalized in {"rr", "riskratio", "relativerisk"}
-        or "riskratio" in normalized
-    ):
+    if normalized in {"rr", "riskratio", "relativerisk"} or "riskratio" in normalized:
         return {
             "xlabel": "Risk ratio",
             "header": "RR (95% CI)",
@@ -2575,6 +2823,7 @@ def _normalise_strata_frame(frame: pd.DataFrame) -> pd.DataFrame:
             "kdigo_stage",
             "exposure",
             "exposure_label",
+            "exposure_group",
             "group",
             "group_label",
             "status",
@@ -2600,8 +2849,34 @@ def _normalise_strata_frame(frame: pd.DataFrame) -> pd.DataFrame:
             "risk",
             "rate",
             "death_risk",
+            "mortality_risk",
         ],
     )
+    if score_col is None:
+        # Exposure/severity strata are often named after the predictor
+        # (``lactate_group``, ``sofa2_stratum``, ``lactate_quartile``),
+        # so an exact-name list can never enumerate them. Fall back to the
+        # first column whose name ends in a grouping suffix, preferring a
+        # sibling ``*_order`` column's source when present. General on
+        # purpose — do NOT add case-specific names like ``lactate_group``.
+        _GROUP_SUFFIXES = (
+            "_group",
+            "_stratum",
+            "_strata",
+            "_bin",
+            "_band",
+            "_category",
+            "_class",
+            "_quartile",
+            "_quintile",
+            "_decile",
+            "_tertile",
+            "_level",
+        )
+        for name, col in cols.items():
+            if name.endswith(_GROUP_SUFFIXES) and not name.endswith("_order"):
+                score_col = col
+                break
     n_col = _first_col(cols, ["n", "count", "n_total"])
     if score_col is None or rate_col is None:
         return pd.DataFrame(columns=["score", "rate"])
@@ -2688,9 +2963,17 @@ def _normalise_missingness_frame(frame: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=["variable", "missing_fraction"])
     cols = {str(c).lower(): c for c in frame.columns}
     variable_col = _first_col(cols, ["variable", "feature", "column", "name"])
-    frac_col = _first_col(cols, ["missing_fraction", "missing_rate", "fraction"])
-    pct_col = _first_col(cols, ["missing_percentage", "missing_percent", "percent"])
-    count_col = _first_col(cols, ["missing_count", "missing_n"])
+    # Accept both word orders for each metric: coder-generated audits write
+    # `frac_missing`/`n_missing` about as often as `missing_fraction`/
+    # `missing_n`, and rejecting one spelling silently drops the data-quality
+    # panel from the publication bundle.
+    frac_col = _first_col(
+        cols, ["missing_fraction", "missing_rate", "fraction", "frac_missing"]
+    )
+    pct_col = _first_col(
+        cols, ["missing_percentage", "missing_percent", "percent", "pct_missing"]
+    )
+    count_col = _first_col(cols, ["missing_count", "missing_n", "n_missing"])
     n_col = _first_col(cols, ["n", "n_total", "total"])
     if variable_col is None:
         return pd.DataFrame(columns=["variable", "missing_fraction"])
@@ -2726,9 +3009,11 @@ def _normalise_missingness_frame(frame: pd.DataFrame) -> pd.DataFrame:
         .reset_index()
     )
     grouped["variable"] = grouped.apply(
-        lambda row: row["measurement_family"]
-        if int(row["feature_count"]) > 1
-        else row["source_variable"],
+        lambda row: (
+            row["measurement_family"]
+            if int(row["feature_count"]) > 1
+            else row["source_variable"]
+        ),
         axis=1,
     )
     if (grouped["missing_fraction"] > 0).any():
@@ -2804,7 +3089,9 @@ def _draw_strata_panel(
         )
         ax.set_xlabel(score_label)
         ax.set_ylabel(f"{_prettify_label(outcome)} rate")
-        ymax = max(0.05, min(1.0, float(y_values.max()) * 1.25 if len(y_values) else 0.05))
+        ymax = max(
+            0.05, min(1.0, float(y_values.max()) * 1.25 if len(y_values) else 0.05)
+        )
         ax.set_ylim(0, ymax)
         ax.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=1.0, decimals=0))
         ax.grid(
@@ -2832,7 +3119,9 @@ def _draw_strata_panel(
         ax.set_yticks(y, frame["score"].astype(str).tolist())
         ax.invert_yaxis()
         ax.set_xlabel(f"{_prettify_label(outcome)} rate")
-        xmax = max(0.05, min(1.0, float(y_values.max()) * 1.35 if len(y_values) else 0.05))
+        xmax = max(
+            0.05, min(1.0, float(y_values.max()) * 1.35 if len(y_values) else 0.05)
+        )
         ax.set_xlim(0, xmax)
         ax.xaxis.set_major_formatter(mticker.PercentFormatter(xmax=1.0, decimals=0))
         ax.grid(
