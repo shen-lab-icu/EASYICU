@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -199,3 +200,83 @@ def test_cohort_definition_overlap_retains_sepsis3_negatives_when_measured_flag_
     assert primary["n_included"] == n
     assert semantics["measured_flag_positive_only"].iloc[0] == np.True_
     assert "sep3_sofa2_measured == 1" in semantics["action"].iloc[0]
+
+
+def test_cohort_definition_sensitivity_uses_declared_exposure_not_stray_sepsis_column(
+    tmp_path: Path,
+) -> None:
+    """A NON-sepsis question must re-fit on its DECLARED exposure.
+
+    Proves the skill is not bound to the Sepsis-3/mortality benchmark case: when
+    research_context.json declares a different primary exposure, the re-fit uses
+    that column even though a stray ``sep3_sofa2_max`` column is present in the
+    export (which the old skill would have silently used instead).
+    """
+    run_dir = tmp_path
+    (run_dir / "research_context.json").write_text(
+        json.dumps({"primary_exposure": "vent_24h_any", "target_outcome": "death"})
+    )
+    parent = run_dir / "steps" / "04_alternative_eligibility_definitions_and_overlap" / "outputs"
+    parent.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "definition_id": ["primary_adult", "alt_adult_no_los"],
+            "definition_label": ["Primary cohort", "Relax LOS"],
+            "definition_type": ["primary", "alternative"],
+            "criteria": [
+                "age>=18 AND los_icu>=1 day AND map/hr/resp/temp measured",
+                "age>=18 AND map/hr/resp/temp measured",
+            ],
+            "n_included": [150, 150],
+        }
+    ).to_csv(parent / "alternative_cohort_attrition.csv", index=False)
+
+    rng = np.random.default_rng(21)
+    n = 260
+    vent = rng.binomial(1, 0.4, n)
+    # ventilated patients die more; sepsis flag is UNcorrelated noise here
+    death = rng.binomial(1, 0.08 + 0.12 * vent)
+    cohort = pd.DataFrame(
+        {
+            "stay_id": np.arange(n) + 5000,
+            "age": rng.normal(64, 10, n),
+            "sex": np.where(np.arange(n) % 2 == 0, "Male", "Female"),
+            "los_icu": 2.0,
+            # DECLARED exposure:
+            "vent_24h_any": vent,
+            # stray column the old skill would have grabbed as "the exposure":
+            "sep3_sofa2_max": rng.binomial(1, 0.5, n),
+            "map_measured": 1,
+            "hr_measured": 1,
+            "resp_measured": 1,
+            "temp_measured": 1,
+            "death": death,
+        }
+    )
+    cohort_path = run_dir / "cohort_analysis.parquet"
+    cohort.to_parquet(cohort_path)
+
+    out_dir = run_dir / "steps" / "05_sensitivity_comparison_across_definitions" / "outputs"
+    out_dir.mkdir(parents=True)
+    script_path = tmp_path / "analysis.py"
+    script_path.write_text(cohort_definition_sensitivity_comparison_code(), encoding="utf-8")
+    env = os.environ.copy()
+    env.update({"COHORT_PARQUET": str(cohort_path), "STEP_OUT_DIR": str(out_dir)})
+    result = subprocess.run(
+        [sys.executable, str(script_path)],
+        cwd=tmp_path,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+    summary = json.loads((out_dir / "step_summary.json").read_text(encoding="utf-8"))
+    assert summary["primary_exposure"] == "vent_24h_any"
+    assert summary["target_outcome"] == "death"
+    # the exposure-semantics audit must reference the DECLARED exposure, not sep3
+    audit = pd.read_csv(out_dir / "noninformative_sensitivity_audit.csv")
+    exp_row = audit[audit["sensitivity_axis"] == "exposure_measurement_semantics"].iloc[0]
+    assert "vent_24h_any" in str(exp_row["evidence"])
+    assert "sep3_sofa2" not in str(exp_row["evidence"])

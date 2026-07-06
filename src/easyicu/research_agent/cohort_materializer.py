@@ -137,7 +137,13 @@ def _normalize_event_indicator_columns(wide: pd.DataFrame) -> List[str]:
             if suffix == "_mean":
                 wide[col] = pd.to_numeric(wide[col], errors="coerce").fillna(0.0)
             else:
-                wide[col] = (wide[col] == True).astype(int)  # noqa: E712
+                # ``== True`` on a pandas *nullable* boolean/Int column keeps
+                # <NA> in the result, which ``astype(int)`` rejects ("cannot
+                # convert NA to integer"). Absence is the negative level for a
+                # positive-only event indicator (docstring: "0 when absent"), so
+                # fill the NA before the cast. Harmless no-op on numpy dtypes,
+                # where NaN/None already compare False.
+                wide[col] = (wide[col] == True).fillna(False).astype(int)  # noqa: E712
             normalized.append(col)
     return normalized
 

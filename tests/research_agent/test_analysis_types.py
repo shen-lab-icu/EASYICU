@@ -37,6 +37,34 @@ def test_infer_analysis_type_quality_audit(ra):
     assert spec.key == "data_quality_audit"
 
 
+def test_bare_word_model_does_not_force_prediction(ra):
+    """The verb "model" must not stamp an association question as prediction.
+
+    Regression for the E2 lactate item: "you may model lactate continuously" is a
+    descriptive association, but a bare "model" strong-cue used to short-circuit
+    infer_analysis_type to prediction_model (before the effect-size scoring),
+    which then dragged the study-design family to prediction. Real prediction
+    cues (predict/auroc/calibration/...) still route correctly (see M2).
+    """
+    from easyicu.research_agent.study_design import infer_study_design_family
+
+    ctx = ra.ResearchContext(
+        research_question=(
+            "What is the descriptive association between first-24h peak lactate "
+            "and in-hospital mortality? You may model lactate continuously and "
+            "report an appropriate effect measure with uncertainty."
+        ),
+        cohort=ra.CohortDescriptor(
+            cohort_name="c", database="synthetic", n_patients=10, n_stays=10
+        ),
+        variables=[],
+        target_outcome="death",
+        primary_exposure="lact",
+    )
+    assert ra.infer_analysis_type(ctx).key != "prediction_model"
+    assert str(infer_study_design_family(ctx)) == "association"
+
+
 def test_new_idea_mining_families_are_concept_set_shapes() -> None:
     assert normalize_analysis_family("measurement bias") == "measurement_bias_audit"
     assert (

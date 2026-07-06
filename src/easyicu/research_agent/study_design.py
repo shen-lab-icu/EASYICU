@@ -31,6 +31,29 @@ from .study_design_playbook import (
 
 STUDY_DESIGN_BRIEF_SCHEMA_VERSION = "easyicu.study_design_brief/2"
 
+# The analysis-type scorer (``infer_analysis_type``) is richer than the keyword
+# cascade in ``infer_study_design_family`` and is the AUTHORITATIVE signal: it
+# stamps ``plan.analysis_type`` and therefore drives the plan contract. When it
+# confidently detects one of these strong, result-bearing families, the design
+# family must agree, otherwise the plan builds (say) a survival step while the
+# figure renderer and the methodological-rigor auditor -- both keyed on
+# ``infer_study_design_family`` -- route to "association" and never fire the
+# survival figure / method-match check. This map is deliberately UPGRADE-ONLY:
+# ``association_study`` / ``descriptive_epidemiology`` / the ``*_audit`` and
+# ``*_sensitivity`` keys are intentionally absent so the common
+# association/descriptive path still falls through to the keyword cascade below
+# and its behaviour is unchanged.
+_ANALYSIS_TYPE_TO_DESIGN_FAMILY: dict[str, StudyDesignFamily] = {
+    "survival": "time_to_event",
+    "prediction_model": "prediction",
+    "dynamic_prediction": "prediction",
+    "validation": "prediction",
+    "trajectory_clustering": "phenotyping",
+    "causal_inference": "causal_emulation",
+    "treatment_response": "causal_emulation",
+}
+
+
 class StudyDesignBrief(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -56,15 +79,33 @@ def infer_study_design_family(context: ResearchContext) -> StudyDesignFamily:
     preference = ""
     if context.user_preferences and context.user_preferences.inferred_analysis_family:
         preference = context.user_preferences.inferred_analysis_family.lower()
+    preferred_methods = ""
+    if context.user_preferences and context.user_preferences.preferred_methods:
+        preferred_methods = str(context.user_preferences.preferred_methods)
     text = " ".join(
         [
             preference,
             context.research_question or "",
             context.target_outcome or "",
             context.primary_exposure or "",
-            context.user_preferences.preferred_methods if context.user_preferences else "",
+            preferred_methods,
         ]
     ).lower()
+    # Defer to the authoritative analysis-type scorer for the strong,
+    # result-bearing families (see _ANALYSIS_TYPE_TO_DESIGN_FAMILY) so the design
+    # family stays consistent with the plan contract. Best-effort: any failure
+    # falls through to the keyword cascade -- this classifier must never raise
+    # into figure rendering or the rigor audit.
+    try:
+        from .analysis_types import infer_analysis_type
+
+        strong_family = _ANALYSIS_TYPE_TO_DESIGN_FAMILY.get(
+            infer_analysis_type(context).key
+        )
+    except Exception:
+        strong_family = None
+    if strong_family:
+        return strong_family
     if any(
         token in text
         for token in (

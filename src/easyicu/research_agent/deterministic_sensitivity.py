@@ -23,6 +23,20 @@ def cohort_definition_overlap_code() -> str:
         cohort_path = Path(os.environ["COHORT_PARQUET"])
         df = pd.read_parquet(cohort_path).copy()
 
+        # --- config-first: the study's declared exposure drives one eligibility
+        # axis (exposure derivability). Read it from research_context.json; the
+        # Sepsis-3 flag names below are only last-resort aliases so the skill is
+        # not bound to the sepsis benchmark case.
+        primary_exposure = ""
+        target_outcome = ""
+        try:
+            _run_dir = out_dir.parents[2]
+            _ctx = json.loads((_run_dir / "research_context.json").read_text("utf-8"))
+            primary_exposure = str(_ctx.get("primary_exposure") or "").strip()
+            target_outcome = str(_ctx.get("target_outcome") or "").strip()
+        except Exception:
+            pass
+
 
         def _numeric(col):
             if col not in df.columns:
@@ -45,31 +59,51 @@ def cohort_definition_overlap_code() -> str:
 
         required_for_overlap = ["stay_id", "age", "los_icu"]
         missing_required = [col for col in required_for_overlap if col not in df.columns]
-        if "sep3_sofa2_max" in df.columns:
-            sepsis3_derivable = _numeric("sep3_sofa2_max").notna()
-            sepsis3_source = "sep3_sofa2_max"
-        elif "sepsis3" in df.columns:
-            sepsis3_derivable = _numeric("sepsis3").isin([0, 1])
-            sepsis3_source = "sepsis3"
+
+        # Resolve the exposure column config-first (declared exposure wins; a
+        # Sepsis-3 flag is only a fallback). "Derivable" == the exposure is
+        # observable for that stay; the eligibility axis is the same shape for
+        # any exposure.
+        exposure_col = None
+        for _cand in (primary_exposure, "sep3_sofa2_max", "sepsis3"):
+            if _cand and _cand in df.columns:
+                exposure_col = _cand
+                break
+        exposure_label = primary_exposure or exposure_col or "exposure"
+        if exposure_col is None:
+            exposure_derivable = pd.Series(False, index=df.index)
+            exposure_source = None
+            missing_required.append("primary_exposure_column")
+        elif exposure_col == "sep3_sofa2_max":
+            exposure_derivable = _numeric("sep3_sofa2_max").notna()
+            exposure_source = "sep3_sofa2_max"
+        elif exposure_col == "sepsis3":
+            exposure_derivable = _numeric("sepsis3").isin([0, 1])
+            exposure_source = "sepsis3"
         else:
-            sepsis3_derivable = pd.Series(False, index=df.index)
-            sepsis3_source = None
-            missing_required.append("sep3_sofa2_max_or_sepsis3")
+            exposure_derivable = df[exposure_col].notna()
+            exposure_source = exposure_col
 
         measured_flag = (
             _numeric("sep3_sofa2_measured")
-            if "sep3_sofa2_measured" in df.columns
+            if exposure_col == "sep3_sofa2_max" and "sep3_sofa2_measured" in df.columns
             else pd.Series(np.nan, index=df.index, dtype="float64")
         )
-        sepsis3_binary = (
-            (_numeric("sep3_sofa2_max") >= 1)
-            .astype(float)
-            .where(_numeric("sep3_sofa2_max").notna())
-            if "sep3_sofa2_max" in df.columns
-            else _numeric("sepsis3").where(_numeric("sepsis3").isin([0, 1]))
-            if "sepsis3" in df.columns
-            else pd.Series(np.nan, index=df.index, dtype="float64")
-        )
+        if exposure_col == "sep3_sofa2_max":
+            exposure_binary = (
+                (_numeric("sep3_sofa2_max") >= 1)
+                .astype(float)
+                .where(_numeric("sep3_sofa2_max").notna())
+            )
+        elif exposure_col is not None:
+            _raw = _numeric(exposure_col)
+            _vals = set(_raw.dropna().unique().tolist())
+            if _vals <= {0.0, 1.0}:
+                exposure_binary = _raw.where(_raw.isin([0, 1]))
+            else:
+                exposure_binary = (_raw >= 1).astype(float).where(_raw.notna())
+        else:
+            exposure_binary = pd.Series(np.nan, index=df.index, dtype="float64")
         if missing_required:
             pd.DataFrame(
                 [
@@ -98,9 +132,9 @@ def cohort_definition_overlap_code() -> str:
             pd.DataFrame(
                 [
                     {
-                        "semantic_check": "sepsis3_derivability",
+                        "semantic_check": "exposure_derivability",
                         "status": "blocked",
-                        "evidence": "Required Sepsis-3 source column missing.",
+                        "evidence": f"Required exposure source column ({exposure_label}) missing.",
                     }
                 ]
             ).to_csv(out_dir / "cohort_definition_semantics_audit.csv", index=False)
@@ -139,53 +173,53 @@ def cohort_definition_overlap_code() -> str:
         # remain in the risk set.
         definitions = [
             {
-                "definition_id": "primary_adult_los1_all_vitals_sepsis3_derivable",
+                "definition_id": "primary_adult_los1_all_vitals_exposure_derivable",
                 "definition_label": "Primary cohort",
                 "definition_type": "primary",
                 "criteria": (
                     "age>=18 AND los_icu>=1 day AND map/hr/resp/temp measured "
-                    "AND Sepsis-3 exposure derivable"
+                    "AND exposure derivable"
                 ),
-                "mask": adult_mask & los_ge_1 & all_vitals & sepsis3_derivable,
+                "mask": adult_mask & los_ge_1 & all_vitals & exposure_derivable,
             },
             {
-                "definition_id": "alt_adult_no_los_all_vitals_sepsis3_derivable",
+                "definition_id": "alt_adult_no_los_all_vitals_exposure_derivable",
                 "definition_label": "Relax ICU length-of-stay threshold",
                 "definition_type": "alternative",
                 "criteria": (
-                    "age>=18 AND map/hr/resp/temp measured AND Sepsis-3 exposure derivable"
+                    "age>=18 AND map/hr/resp/temp measured AND exposure derivable"
                 ),
-                "mask": adult_mask & all_vitals & sepsis3_derivable,
+                "mask": adult_mask & all_vitals & exposure_derivable,
             },
             {
-                "definition_id": "alt_adult_los1_three_of_four_vitals_sepsis3_derivable",
+                "definition_id": "alt_adult_los1_three_of_four_vitals_exposure_derivable",
                 "definition_label": "Relax vital completeness to >=3 of 4",
                 "definition_type": "alternative",
                 "criteria": (
                     "age>=18 AND los_icu>=1 day AND at least 3 of map/hr/resp/temp "
-                    "measured AND Sepsis-3 exposure derivable"
+                    "measured AND exposure derivable"
                 ),
-                "mask": adult_mask & los_ge_1 & three_of_four & sepsis3_derivable,
+                "mask": adult_mask & los_ge_1 & three_of_four & exposure_derivable,
             },
             {
-                "definition_id": "alt_adult_los1_no_temp_requirement_sepsis3_derivable",
+                "definition_id": "alt_adult_los1_no_temp_requirement_exposure_derivable",
                 "definition_label": "Relax temperature requirement",
                 "definition_type": "alternative",
                 "criteria": (
                     "age>=18 AND los_icu>=1 day AND map/hr/resp measured "
-                    "AND Sepsis-3 exposure derivable"
+                    "AND exposure derivable"
                 ),
-                "mask": adult_mask & los_ge_1 & map_measured & hr_measured & resp_measured & sepsis3_derivable,
+                "mask": adult_mask & los_ge_1 & map_measured & hr_measured & resp_measured & exposure_derivable,
             },
             {
-                "definition_id": "alt_adult_los2_all_vitals_sepsis3_derivable",
+                "definition_id": "alt_adult_los2_all_vitals_exposure_derivable",
                 "definition_label": "Tighten ICU length-of-stay threshold",
                 "definition_type": "alternative",
                 "criteria": (
                     "age>=18 AND los_icu>=2 days AND map/hr/resp/temp measured "
-                    "AND Sepsis-3 exposure derivable"
+                    "AND exposure derivable"
                 ),
-                "mask": adult_mask & los_ge_2 & all_vitals & sepsis3_derivable,
+                "mask": adult_mask & los_ge_2 & all_vitals & exposure_derivable,
             },
         ]
 
@@ -282,20 +316,27 @@ def cohort_definition_overlap_code() -> str:
 
         semantics_rows = [
             {
-                "semantic_check": "sepsis3_derivability",
+                "semantic_check": "exposure_derivability",
                 "status": "passed",
-                "source_column": sepsis3_source,
-                "n_derivable": int(sepsis3_derivable.sum()),
-                "n_positive": int((sepsis3_binary == 1).sum()),
-                "n_negative": int((sepsis3_binary == 0).sum()),
+                "source_column": exposure_source,
+                "n_derivable": int(exposure_derivable.sum()),
+                "n_positive": int((exposure_binary == 1).sum()),
+                "n_negative": int((exposure_binary == 0).sum()),
                 "measured_flag_positive_only": bool(
                     measured_flag.notna().any()
-                    and int(measured_flag.eq(1).sum()) == int((sepsis3_binary == 1).sum())
-                    and int(measured_flag.eq(0).sum()) == int((sepsis3_binary == 0).sum())
+                    and int(measured_flag.eq(1).sum()) == int((exposure_binary == 1).sum())
+                    and int(measured_flag.eq(0).sum()) == int((exposure_binary == 0).sum())
                 ),
                 "action": (
-                    "Eligibility used source-value derivability, not "
-                    "sep3_sofa2_measured == 1, so binary negatives were retained."
+                    (
+                        "Eligibility used source-value derivability, not "
+                        "sep3_sofa2_measured == 1, so binary negatives were retained."
+                    )
+                    if exposure_col == "sep3_sofa2_max"
+                    else (
+                        f"Eligibility used source-value derivability of "
+                        f"`{exposure_label}`; binary negatives were retained."
+                    )
                 ),
             }
         ]
@@ -364,7 +405,7 @@ def cohort_definition_overlap_code() -> str:
                 ),
             },
             "notes": [
-                "Sepsis-3 binary negatives were retained when the source value was derivable.",
+                "Exposure binary negatives were retained when the source value was derivable.",
                 "Overlap is computed at the ICU-stay level using stay_id.",
             ],
         }
@@ -457,28 +498,57 @@ def cohort_definition_sensitivity_comparison_code() -> str:
 
         def _first_existing(candidates):
             for col in candidates:
-                if col in df.columns:
+                if col and col in df.columns:
                     return col
             return None
 
 
+        # --- config-first exposure / outcome / covariate resolution -----------
+        # The study's declared primary_exposure / target_outcome / covariates
+        # (from research_context.json, written by the pipeline from the study or
+        # benchmark config) always win. The Sepsis-3 / mortality names below are
+        # kept only as last-resort aliases so the skill still runs standalone.
+        # This keeps the sensitivity re-fit tied to the QUESTION being asked
+        # rather than to one benchmark case.
+        primary_exposure = ""
+        target_outcome = ""
+        req_covariates = []
+        try:
+            _ctx = json.loads((run_dir / "research_context.json").read_text("utf-8"))
+            primary_exposure = str(_ctx.get("primary_exposure") or "").strip()
+            target_outcome = str(_ctx.get("target_outcome") or "").strip()
+            _prefs = _ctx.get("user_preferences") or {}
+            if isinstance(_prefs, dict):
+                req_covariates = [
+                    str(c).strip()
+                    for c in (_prefs.get("covariates") or [])
+                    if str(c).strip()
+                ]
+        except Exception:
+            pass
+
         age_col = _first_existing(["age", "admission_age", "anchor_age"])
         los_col = _first_existing(["los_icu", "icu_los_days", "los_days"])
         stay_col = _first_existing(["stay_id", "icustay_id", "icu_stay_id"])
-        outcome_col = _first_existing(["death", "hospital_mortality", "mortality"])
-        # Only true Sepsis-3 flags are accepted as the exposure. A raw SOFA-2
-        # score column is deliberately NOT a fallback: sofa2>=1 is "any organ
-        # dysfunction", not Sepsis-3, and silently relabelling it would put a
-        # wrong exposure definition into the sensitivity evidence.
-        sofa_col = _first_existing(["sep3_sofa2_max", "sepsis3"])
-        if outcome_col is None or sofa_col is None:
+        outcome_col = _first_existing(
+            [target_outcome, "death", "hospital_mortality", "mortality"]
+        )
+        # Exposure: prefer the DECLARED primary exposure column. Only when the
+        # study declares none do we fall back to a Sepsis-3 flag; a raw SOFA-2
+        # total is still never silently relabelled as the exposure.
+        exposure_col = _first_existing(
+            [primary_exposure, "sep3_sofa2_max", "sepsis3"]
+        )
+        outcome_label = target_outcome or outcome_col or "outcome"
+        exposure_label = primary_exposure or exposure_col or "exposure"
+        if outcome_col is None or exposure_col is None:
             summary = {
                 "step_id": current_step_id,
                 "analysis_family": "cohort_definition_sensitivity",
                 "status": "blocked",
                 "blocking_reason": (
-                    "Required outcome or Sepsis-3 exposure flag column was absent "
-                    "(a raw SOFA-2 score is not accepted as a Sepsis-3 proxy)."
+                    "Required outcome or exposure column was absent for the "
+                    f"declared association ({exposure_label} -> {outcome_label})."
                 ),
                 "cohort_path": str(cohort_path),
             }
@@ -488,13 +558,19 @@ def cohort_definition_sensitivity_comparison_code() -> str:
             raise SystemExit(0)
 
         outcome = pd.to_numeric(df[outcome_col], errors="coerce")
-        sofa_raw = pd.to_numeric(df[sofa_col], errors="coerce")
-        if sofa_col == "sepsis3":
-            exposure = sofa_raw.where(sofa_raw.isin([0, 1]))
+        exposure_raw = pd.to_numeric(df[exposure_col], errors="coerce")
+        _exp_vals = set(exposure_raw.dropna().unique().tolist())
+        if exposure_col == "sep3_sofa2_max":
+            # SOFA-2 organ-dysfunction score -> Sepsis-3 positive at >=1.
+            exposure = (exposure_raw >= 1).astype(float).where(exposure_raw.notna())
+        elif _exp_vals <= {0.0, 1.0}:
+            # already a binary indicator (declared exposure or 'sepsis3' flag)
+            exposure = exposure_raw.where(exposure_raw.isin([0, 1]))
         else:
-            exposure = (sofa_raw >= 1).astype(float).where(sofa_raw.notna())
+            # generic continuous exposure -> binarise at >=1 (any)
+            exposure = (exposure_raw >= 1).astype(float).where(exposure_raw.notna())
         df["_det_outcome"] = outcome
-        df["_det_sepsis3"] = exposure
+        df["_det_exposure"] = exposure
 
 
         def _series_numeric(col):
@@ -518,7 +594,7 @@ def cohort_definition_sensitivity_comparison_code() -> str:
         valid_mask = (
             adult_mask.fillna(False)
             & df["_det_outcome"].isin([0, 1])
-            & df["_det_sepsis3"].isin([0, 1])
+            & df["_det_exposure"].isin([0, 1])
         )
         if stay_col is not None:
             valid_mask = valid_mask & df[stay_col].notna()
@@ -528,7 +604,7 @@ def cohort_definition_sensitivity_comparison_code() -> str:
         hr_measured = _measured("hr_measured")
         resp_measured = _measured("resp_measured")
         temp_measured = _measured("temp_measured")
-        sofa_derivable = sofa_raw.notna()
+        exposure_derivable = exposure_raw.notna()
         all_vitals = map_measured & hr_measured & resp_measured & temp_measured
         three_of_four = (
             map_measured.astype(int)
@@ -555,8 +631,8 @@ def cohort_definition_sensitivity_comparison_code() -> str:
             else:
                 mask = mask & all_vitals
 
-            if "no_sofa" not in token:
-                mask = mask & sofa_derivable
+            if "no_sofa" not in token and "no_exposure" not in token:
+                mask = mask & exposure_derivable
             return mask.fillna(False)
 
 
@@ -579,25 +655,38 @@ def cohort_definition_sensitivity_comparison_code() -> str:
 
         def _fit_adjusted_or(sub, label, *, exclude_features=None):
             exclude_features = set(exclude_features or [])
+            # Internal, exposure/outcome-agnostic model keys: the primary term
+            # is always ``_exposure`` and the response is ``_outcome``, whatever
+            # the study's declared exposure/outcome happen to be.
             model_df = pd.DataFrame(
                 {
-                    "death": sub["_det_outcome"].astype(float),
-                    "sepsis3": sub["_det_sepsis3"].astype(float),
+                    "_outcome": sub["_det_outcome"].astype(float),
+                    "_exposure": sub["_det_exposure"].astype(float),
                 },
                 index=sub.index,
             )
-            covariates = ["sepsis3"]
+            covariates = ["_exposure"]
             dropped = []
 
-            feature_specs = [
-                ("age", [age_col, "age"], 10.0),
-                ("hr_max", ["hr_max", "heart_rate_max"], 10.0),
-                ("resp_max", ["resp_max", "respiratory_rate_max"], 5.0),
-                ("temp_max", ["temp_max", "temperature_max"], 1.0),
-                ("lact_max", ["lact_max_mmol_l", "lact_max", "lactate_max"], 1.0),
-                ("bun_max", ["bun_max", "bun_max_mg_dl"], 10.0),
-                ("wbc_max", ["wbc_max", "wbc_max_10e9_l"], 10.0),
-            ]
+            if req_covariates:
+                # Study-declared adjustment set (per-unit; each covariate scaled
+                # by 1.0). Config wins over the clinical default below.
+                feature_specs = [(cov, [cov], 1.0) for cov in req_covariates]
+                add_clinical_companions = False
+            else:
+                # Case-neutral clinical default adjustment set (used only when no
+                # covariates were declared in research_context.json).
+                feature_specs = [
+                    ("age", [age_col, "age"], 10.0),
+                    ("hr_max", ["hr_max", "heart_rate_max"], 10.0),
+                    ("resp_max", ["resp_max", "respiratory_rate_max"], 5.0),
+                    ("temp_max", ["temp_max", "temperature_max"], 1.0),
+                    ("lact_max", ["lact_max_mmol_l", "lact_max", "lactate_max"], 1.0),
+                    ("bun_max", ["bun_max", "bun_max_mg_dl"], 10.0),
+                    ("wbc_max", ["wbc_max", "wbc_max_10e9_l"], 10.0),
+                ]
+                add_clinical_companions = True
+
             for feature_name, sources, scale in feature_specs:
                 if feature_name in exclude_features:
                     continue
@@ -611,36 +700,37 @@ def cohort_definition_sensitivity_comparison_code() -> str:
                 model_df[miss_col] = missing
                 covariates.extend([value_col, miss_col])
 
-            for measured_col in (
-                "hr_measured",
-                "resp_measured",
-                "temp_measured",
-                "lact_measured",
-                "bun_measured",
-                "wbc_measured",
-            ):
-                if measured_col.startswith("lact") and "lact_max" in exclude_features:
-                    continue
-                if measured_col in sub.columns:
-                    model_df[measured_col] = pd.to_numeric(
-                        sub[measured_col], errors="coerce"
-                    ).fillna(0).astype(float)
-                    covariates.append(measured_col)
+            if add_clinical_companions:
+                for measured_col in (
+                    "hr_measured",
+                    "resp_measured",
+                    "temp_measured",
+                    "lact_measured",
+                    "bun_measured",
+                    "wbc_measured",
+                ):
+                    if measured_col.startswith("lact") and "lact_max" in exclude_features:
+                        continue
+                    if measured_col in sub.columns:
+                        model_df[measured_col] = pd.to_numeric(
+                            sub[measured_col], errors="coerce"
+                        ).fillna(0).astype(float)
+                        covariates.append(measured_col)
 
-            if "sex" in sub.columns:
-                sex_dummies = pd.get_dummies(
-                    sub["sex"].astype(str), prefix="sex", drop_first=True, dtype=float
-                )
-                for col in sex_dummies.columns:
-                    model_df[col] = sex_dummies[col]
-                    covariates.append(col)
+                if "sex" in sub.columns:
+                    sex_dummies = pd.get_dummies(
+                        sub["sex"].astype(str), prefix="sex", drop_first=True, dtype=float
+                    )
+                    for col in sex_dummies.columns:
+                        model_df[col] = sex_dummies[col]
+                        covariates.append(col)
 
             model_df = model_df.replace([np.inf, -np.inf], np.nan).dropna()
             unique_covariates = []
             for col in covariates:
                 if col not in model_df.columns or col in unique_covariates:
                     continue
-                if col != "sepsis3" and model_df[col].nunique(dropna=True) <= 1:
+                if col != "_exposure" and model_df[col].nunique(dropna=True) <= 1:
                     dropped.append(col)
                     continue
                 unique_covariates.append(col)
@@ -653,7 +743,7 @@ def cohort_definition_sensitivity_comparison_code() -> str:
                 "se": None,
                 "p_value": None,
                 "modeled_analytic_n": int(len(model_df)),
-                "events": int(model_df["death"].sum()) if len(model_df) else 0,
+                "events": int(model_df["_outcome"].sum()) if len(model_df) else 0,
                 "converged": False,
                 "model_message": "",
                 "covariates": covariates,
@@ -661,20 +751,20 @@ def cohort_definition_sensitivity_comparison_code() -> str:
             }
             if (
                 len(model_df) < 50
-                or model_df["death"].nunique(dropna=True) < 2
-                or model_df["sepsis3"].nunique(dropna=True) < 2
+                or model_df["_outcome"].nunique(dropna=True) < 2
+                or model_df["_exposure"].nunique(dropna=True) < 2
             ):
                 result["model_message"] = "Insufficient outcome or exposure variation."
                 return result
 
             try:
                 x = sm.add_constant(model_df[covariates], has_constant="add")
-                y = model_df["death"].astype(float)
+                y = model_df["_outcome"].astype(float)
                 fit = sm.GLM(y, x, family=sm.families.Binomial()).fit(
                     cov_type="HC1", maxiter=100
                 )
-                beta = float(fit.params["sepsis3"])
-                se = float(fit.bse["sepsis3"])
+                beta = float(fit.params["_exposure"])
+                se = float(fit.bse["_exposure"])
                 ci_low = beta - 1.96 * se
                 ci_high = beta + 1.96 * se
                 result.update(
@@ -683,7 +773,7 @@ def cohort_definition_sensitivity_comparison_code() -> str:
                         "ci_low": math.exp(ci_low),
                         "ci_high": math.exp(ci_high),
                         "se": se,
-                        "p_value": float(fit.pvalues["sepsis3"]),
+                        "p_value": float(fit.pvalues["_exposure"]),
                         "converged": bool(getattr(fit, "converged", True)),
                         "model_message": "GLM Binomial with HC1 robust SE.",
                     }
@@ -697,7 +787,7 @@ def cohort_definition_sensitivity_comparison_code() -> str:
             rows = []
             total_n = int(len(sub))
             total_events = int(sub["_det_outcome"].sum()) if total_n else 0
-            sepsis_n = int((sub["_det_sepsis3"] == 1).sum()) if total_n else 0
+            exposed_n = int((sub["_det_exposure"] == 1).sum()) if total_n else 0
             rows.append(
                 {
                     "definition_id": definition_id,
@@ -706,34 +796,34 @@ def cohort_definition_sensitivity_comparison_code() -> str:
                     "n": total_n,
                     "events": total_events,
                     "event_rate": total_events / total_n if total_n else np.nan,
-                    "sepsis_prevalence": sepsis_n / total_n if total_n else np.nan,
+                    "exposure_prevalence": exposed_n / total_n if total_n else np.nan,
                 }
             )
             for level in [0.0, 1.0]:
-                ss = sub[sub["_det_sepsis3"] == level]
+                ss = sub[sub["_det_exposure"] == level]
                 n = int(len(ss))
                 events = int(ss["_det_outcome"].sum()) if n else 0
                 rows.append(
                     {
                         "definition_id": definition_id,
                         "definition_label": label,
-                        "stratum": f"sepsis3_{int(level)}",
+                        "stratum": f"exposure_{int(level)}",
                         "n": n,
                         "events": events,
                         "event_rate": events / n if n else np.nan,
-                        "sepsis_prevalence": np.nan,
+                        "exposure_prevalence": np.nan,
                     }
                 )
             return rows
 
 
         def _risk_difference_from_outcome_rows(all_rows):
-            sepsis0 = next(item for item in all_rows if item["stratum"] == "sepsis3_0")
-            sepsis1 = next(item for item in all_rows if item["stratum"] == "sepsis3_1")
-            n0 = int(sepsis0["n"])
-            n1 = int(sepsis1["n"])
-            p0 = sepsis0["event_rate"]
-            p1 = sepsis1["event_rate"]
+            unexposed = next(item for item in all_rows if item["stratum"] == "exposure_0")
+            exposed = next(item for item in all_rows if item["stratum"] == "exposure_1")
+            n0 = int(unexposed["n"])
+            n1 = int(exposed["n"])
+            p0 = unexposed["event_rate"]
+            p1 = exposed["event_rate"]
             if n0 <= 0 or n1 <= 0 or pd.isna(p0) or pd.isna(p1):
                 return None
             rd = float(p1 - p0)
@@ -885,8 +975,8 @@ def cohort_definition_sensitivity_comparison_code() -> str:
             all_rows = _outcome_summary(sub, definition_id, label)
             outcome_rows.extend(all_rows)
             all_summary = all_rows[0]
-            sepsis0 = next(item for item in all_rows if item["stratum"] == "sepsis3_0")
-            sepsis1 = next(item for item in all_rows if item["stratum"] == "sepsis3_1")
+            unexposed = next(item for item in all_rows if item["stratum"] == "exposure_0")
+            exposed = next(item for item in all_rows if item["stratum"] == "exposure_1")
             rd = _risk_difference_from_outcome_rows(all_rows)
             if rd is not None:
                 comparison_rows.append(
@@ -914,8 +1004,8 @@ def cohort_definition_sensitivity_comparison_code() -> str:
                             else None
                         ),
                         "model_message": (
-                            "Crude Sepsis-3 positive minus negative death risk; "
-                            "descriptive, not adjusted."
+                            f"Crude {exposure_label}-positive minus -negative "
+                            f"{outcome_label} risk; descriptive, not adjusted."
                         ),
                         "notes": "Descriptive risk difference from outcome table.",
                     }
@@ -933,12 +1023,12 @@ def cohort_definition_sensitivity_comparison_code() -> str:
                     ),
                     "events": all_summary["events"],
                     "event_rate": all_summary["event_rate"],
-                    "sepsis_prevalence": all_summary["sepsis_prevalence"],
-                    "death_risk_sepsis3_negative": sepsis0["event_rate"],
-                    "death_risk_sepsis3_positive": sepsis1["event_rate"],
+                    "exposure_prevalence": all_summary["exposure_prevalence"],
+                    "outcome_risk_unexposed": unexposed["event_rate"],
+                    "outcome_risk_exposed": exposed["event_rate"],
                     "crude_risk_difference": (
-                        sepsis1["event_rate"] - sepsis0["event_rate"]
-                        if pd.notna(sepsis1["event_rate"]) and pd.notna(sepsis0["event_rate"])
+                        exposed["event_rate"] - unexposed["event_rate"]
+                        if pd.notna(exposed["event_rate"]) and pd.notna(unexposed["event_rate"])
                         else np.nan
                     ),
                 }
@@ -963,32 +1053,34 @@ def cohort_definition_sensitivity_comparison_code() -> str:
         definition_summary = pd.DataFrame(summary_rows)
         outcome_by_definition = pd.DataFrame(outcome_rows)
         covariates = pd.DataFrame(covariate_rows)
-        audit = pd.DataFrame(
-            [
+        _outcome_coding_cols = [
+            col
+            for col in [
+                outcome_col,
+                "death",
+                "hospital_mortality",
+                "mortality",
+                "death_icu",
+                "death_hosp",
+            ]
+            if col and col in df.columns
+        ]
+        _audit_rows = [
+            {
+                "sensitivity_axis": "outcome_coding",
+                "status": "noninformative",
+                "evidence": (
+                    f"Only one binary {outcome_label} outcome column was available "
+                    "in the analysis export; no alternative outcome-coding "
+                    "specification could be fit without inventing a new endpoint."
+                ),
+                "columns_checked": "|".join(dict.fromkeys(_outcome_coding_cols)),
+            }
+        ]
+        if exposure_col in ("sep3_sofa2_max", "sepsis3"):
+            _audit_rows.append(
                 {
-                    "sensitivity_axis": "death_coding",
-                    "status": "noninformative",
-                    "evidence": (
-                        "Only one binary death outcome column was available in the "
-                        "analysis export; no alternative death-coding specification "
-                        "could be fit without inventing a new endpoint."
-                    ),
-                    "columns_checked": "|".join(
-                        [
-                            col
-                            for col in [
-                                "death",
-                                "hospital_mortality",
-                                "mortality",
-                                "death_icu",
-                                "death_hosp",
-                            ]
-                            if col in df.columns
-                        ]
-                    ),
-                },
-                {
-                    "sensitivity_axis": "sep3_measurement_semantics",
+                    "sensitivity_axis": "exposure_measurement_semantics",
                     "status": "audited",
                     "evidence": (
                         "Binary exposure negatives were derived from sep3_sofa2 "
@@ -1007,9 +1099,22 @@ def cohort_definition_sensitivity_comparison_code() -> str:
                             if col in df.columns
                         ]
                     ),
-                },
-            ]
-        )
+                }
+            )
+        else:
+            _audit_rows.append(
+                {
+                    "sensitivity_axis": "exposure_measurement_semantics",
+                    "status": "audited",
+                    "evidence": (
+                        f"Declared exposure `{exposure_label}` (column "
+                        f"`{exposure_col}`) was used directly; binary negatives "
+                        "were retained rather than dropped as unmeasured."
+                    ),
+                    "columns_checked": exposure_col,
+                }
+            )
+        audit = pd.DataFrame(_audit_rows)
 
         comparison.to_csv(out_dir / "sensitivity_comparison.csv", index=False)
         definition_summary.to_csv(
@@ -1048,9 +1153,12 @@ def cohort_definition_sensitivity_comparison_code() -> str:
             "analysis_family": "cohort_definition_sensitivity",
             "method": (
                 "Deterministic standard cohort-definition sensitivity comparison: "
-                "re-fit Sepsis-3 adjusted mortality association under registered "
-                "eligibility definitions with HC1 robust SE."
+                f"re-fit the adjusted {exposure_label} -> {outcome_label} "
+                "association under registered eligibility definitions with HC1 "
+                "robust SE."
             ),
+            "primary_exposure": exposure_label,
+            "target_outcome": outcome_label,
             "status": "ok" if not comparison.empty else "blocked",
             "cohort_path": str(cohort_path),
             "source_parent_outputs": str(parent_outputs),
