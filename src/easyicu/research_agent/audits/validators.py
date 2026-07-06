@@ -1198,6 +1198,12 @@ class FigureSourceDataValidator:
         "term",
         "exposure",
         "contrast",
+        # Causal effect-estimation steps key each estimated contrast by
+        # ``contrast_id`` (e.g. causal_effect.csv); the deterministic forest
+        # renderer preserves it verbatim in publication_figure_source_data.csv,
+        # so it is a valid per-row trace key. Without it a faithfully-derived
+        # causal figure was rejected as "no shared key" (H2 fix3).
+        "contrast_id",
     )
     _COMPOSITE_KEY_COLUMNS = (
         ("definition_a", "definition_b"),
@@ -1725,6 +1731,23 @@ class FigureContractQualityValidator:
         "causal_contrast",
         "distribution",
     }
+    # Supporting/context panel roles. A figure whose EVERY panel carries one of
+    # these roles is an audit/diagnostic/overview figure — legitimately allowed to
+    # be single-panel — and must NOT be gated by the manuscript-facing result-figure
+    # ">= 2 panels" rule. Decided on the structured panel ``role`` rather than free
+    # text, because a supporting figure's id or core_claim can contain a result-role
+    # word (e.g. "distribution", "effect") without being a primary result figure.
+    _SUPPORTING_ROLES = {
+        "audit",
+        "diagnostic",
+        "qa",
+        "qa_only",
+        "exploratory",
+        "overview",
+        "context",
+        "data_quality",
+        "missingness",
+    }
     _RAW_IDENTIFIER_RE = re.compile(r"\b[a-z][a-z0-9]+(?:_[a-z0-9]+){1,}\b")
 
     def audit(
@@ -1950,11 +1973,22 @@ class FigureContractQualityValidator:
         raw: Dict[str, Any],
         panels: Sequence[Any],
     ) -> bool:
-        role_text = " ".join(
-            str(panel.get("role") or "")
+        panel_roles = [
+            str(panel.get("role") or "").strip().lower()
             for panel in panels
             if isinstance(panel, dict)
-        ).lower()
+        ]
+        # An all-supporting-role figure (every panel is audit/diagnostic/overview/…)
+        # is not a manuscript-facing PRIMARY result figure. Exclude it here so the
+        # ">= 2 panels" rule does not fire on a legitimately single-panel audit or
+        # overview figure (e.g. probe_overview, reporting_followup_distribution) whose
+        # id/core_claim happens to contain a result-role substring.
+        labelled_roles = [role for role in panel_roles if role]
+        if labelled_roles and all(
+            role in cls._SUPPORTING_ROLES for role in labelled_roles
+        ):
+            return False
+        role_text = " ".join(panel_roles)
         text_blob = cls._contract_text(raw).lower()
         return any(role in role_text or role in text_blob for role in cls._RESULT_ROLES)
 
