@@ -676,7 +676,7 @@ CONCEPT_DB_COVERAGE = {
     'peep': 4, 'tidal_vol': 4, 'ins': 4,
     'mech_vent': 3, 'vent_ind': 3, 'ecmo': 2, 'rrt': 4,
     'furosemide': 6,
-    'propofol': 6, 'midazolam': 6, 'dexmedetomidine': 4,
+    'propofol': 6, 'midazolam': 6, 'dexmedetomidine': 5,
     'fentanyl': 6, 'morphine': 6, 'heparin': 6,
     'mannitol': 5, 'amiodarone': 6, 'milrinone': 5, 'rocuronium': 5,
     # Rate concepts (2026-05-13): HiRID pharma has no propofol reference;

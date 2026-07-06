@@ -160,6 +160,15 @@ class TestTransformFunPercentAsNumeric:
         )
         assert list(out["value"]) == [50.0, 25.0, 100.0]
 
+    def test_fractional_numeric_input_is_scaled_to_percent(self):
+        df = pd.DataFrame({"value": [0.21, 0.5, 1.0, 21.0]})
+        out = _apply_callback(
+            df,
+            _src("transform_fun(percent_as_numeric)"),
+            concept_name="value",
+        )
+        assert list(out["value"]) == [21.0, 50.0, 100.0, 21.0]
+
 
 class TestTransformFunSetVal:
     def test_set_val_true_replaces_column_with_true(self):

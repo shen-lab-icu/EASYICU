@@ -86,6 +86,11 @@ class TestPercentAsNumeric:
         result = percent_as_numeric(pd.Series(["10%", "25%", "100%"]))
         assert list(result) == [10.0, 25.0, 100.0]
 
+    def test_fractional_values_scale_to_percent(self):
+        assert percent_as_numeric(0.5) == 50.0
+        result = percent_as_numeric(pd.Series(["0.21", "0.5", "1.0", "21"]))
+        assert list(result) == [21.0, 50.0, 100.0, 21.0]
+
 
 class TestSilentAsNumeric:
     def test_series_non_numeric_becomes_nan(self):
