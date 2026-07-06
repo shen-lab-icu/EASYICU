@@ -1707,14 +1707,39 @@ else:
             method = str(step.method or "").lower()
             if method not in ("survival_analysis", "time_to_event", "cox", "cox_ph"):
                 return False
+            expected_blob = " ".join(
+                str(item or "") for item in (step.expected_outputs or [])
+            ).lower()
+            # A step that DECLARES primary Cox/KM outputs IS the primary survival
+            # step, never a cohort-definition-sensitivity re-fit — even when its
+            # thorough output set also includes innocuously-named tables
+            # (sensitivity_results, cohort_flow, survival_time_definition) or its
+            # intent narrates sensitivity analyses. Keying the exclusion on those
+            # words dropped fix3i's PRIMARY step to the LLM coder (swapped-column
+            # garbage). Declaring the primary estimand wins. This mirrors the
+            # sibling cohort-sensitivity predicate, which already declines when
+            # cox_summary/km_curve/hazard_ratio are declared.
+            if any(
+                token in expected_blob
+                for token in (
+                    "cox_summary",
+                    "cox_model",
+                    "hazard_ratio",
+                    "km_curve",
+                    "kaplan",
+                )
+            ):
+                return True
+            # Otherwise fall back to the identity heuristic: a genuine
+            # cohort-definition-sensitivity step (one that declares NO primary Cox
+            # output) is handled by a different deterministic runner.
             blob = " ".join(
                 [
                     str(step.step_id or ""),
                     str(step.intent or ""),
-                    *[str(item or "") for item in (step.expected_outputs or [])],
+                    expected_blob,
                 ]
             ).lower()
-            # A cohort-definition-sensitivity re-fit is handled elsewhere.
             if "sensitivity" in blob and any(
                 t in blob for t in ("cohort", "definition", "eligibility")
             ):
@@ -3023,7 +3048,17 @@ else:
                 str(item).startswith("figure:publication_figure")
                 for item in step.expected_outputs
             )
-        )
+        ) and not step_record.get("deterministic_standard_analysis")
+        # A step that ran a deterministic DATA-only runner (survival Cox / KM
+        # tables, cohort overlap, cohort sensitivity) produces CSV evidence, not
+        # an inline figure — the separate ``*_figure`` step renders it. The
+        # planner often narrates "the publication figure" in such a step's intent
+        # (describing that downstream figure step), which would otherwise mis-tag
+        # the analysis step as a publication-figure step and fail it for a missing
+        # inline figure — killing the primary Cox result and cascading to skip the
+        # real figure step (H1 fix4: 01_survival_analysis produced HR 1.83 then was
+        # marked failed). Genuine publication-figure steps carry no such marker and
+        # still fail closed when they emit no figure.
         figure_role = (
             "publication_figure"
             if publication_step
