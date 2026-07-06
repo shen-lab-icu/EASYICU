@@ -18,7 +18,6 @@ from .missing import apply_missing_strategy
 from .pipeline_primary_effect import _extract_primary_effect_payload_from_records
 from .robustness_panel import PRIMARY_SPEC_ID, RobustnessPanelRow, RobustnessSpec
 
-
 EstimatorKind = Literal["logistic", "linear", "cox", "glm_poisson"]
 
 
@@ -335,6 +334,29 @@ def fit_robustness_rows_from_records(
             + ", ".join(covariates)
         )
     primary_row = _primary_row_from_step_records(per_step_records)
+    primary_measure = _primary_effect_measure_from_records(per_step_records)
+    if (
+        primary_row is not None
+        and primary_measure == "HR"
+        and kind not in ("cox", "cox_ph")
+    ):
+        # The primary estimand is a hazard ratio (survival design), but the
+        # estimator adapter can only refit logistic/linear variants (OR/beta) — a
+        # DIFFERENT estimand on a DIFFERENT scale. Appending them would fabricate
+        # a misleading mixed-measure "robustness range" (HR 1.82 primary vs OR
+        # ~1.0 refit variants that look non-robust only because they measure a
+        # different quantity). Report the primary hazard ratio alone; survival
+        # robustness belongs to the deterministic Cox runner's own sensitivity
+        # outputs, not an OR refit. Case-neutral: fires only when the primary is
+        # an HR and no Cox variant estimator is available.
+        rows.append(primary_row)
+        if specs:
+            warnings.append(
+                "skipped logistic robustness variants for a hazard-ratio primary "
+                "estimand (odds-ratio refits are not valid Cox hazard-ratio "
+                "robustness variants); reporting the primary hazard ratio only"
+            )
+        return rows, warnings
     if primary_row is not None:
         rows.append(primary_row)
         if PRIMARY_SPEC_ID in declared_ids:
@@ -376,13 +398,25 @@ def fit_robustness_rows_from_records(
 
 
 def _primary_row_from_step_records(
-    per_step_records: Sequence[Dict[str, Any]]
+    per_step_records: Sequence[Dict[str, Any]],
 ) -> Optional[RobustnessPanelRow]:
     payload = _extract_primary_effect_payload_from_records(per_step_records)
     if not payload or payload.get("primary_or") is None:
         return None
     sample_size = payload.get("sample_size")
     n = int(sample_size) if isinstance(sample_size, int) else 0
+    # ``primary_or`` holds the primary effect ratio whatever its measure (OR for a
+    # logistic design, HR for a survival design). Record the measure in the notes
+    # so the panel/writer does not silently label a Cox hazard ratio as an odds
+    # ratio. Threading a real primary row here also STOPS the logistic-OR refit
+    # fallback from overriding a survival estimand (H1 fix3j: real HR 1.82 was
+    # buried under a refit near-null ~1.0 OR).
+    measure = str(payload.get("effect_measure") or "").strip()
+    notes = (
+        f"Primary analysis estimate ({measure}) from step_summary."
+        if measure
+        else "Primary analysis estimate from step_summary."
+    )
     return RobustnessPanelRow(
         spec_id=PRIMARY_SPEC_ID,
         axis="primary",
@@ -393,8 +427,16 @@ def _primary_row_from_step_records(
         se=None,
         evidence_id=str(payload.get("evidence_id") or ""),
         converged=True,
-        notes="Primary analysis estimate from step_summary.",
+        notes=notes,
     )
+
+
+def _primary_effect_measure_from_records(
+    per_step_records: Sequence[Dict[str, Any]],
+) -> Optional[str]:
+    """The measure ("HR" / "OR") of the selected primary effect, or ``None``."""
+    payload = _extract_primary_effect_payload_from_records(per_step_records)
+    return str((payload or {}).get("effect_measure") or "").strip() or None
 
 
 def _recover_primary_covariates(
@@ -426,7 +468,10 @@ def _recover_primary_covariates(
     )
     search_dirs: List[Path] = []
     if step_id:
-        for candidate in (base / "steps" / step_id / "outputs", base / "steps" / step_id):
+        for candidate in (
+            base / "steps" / step_id / "outputs",
+            base / "steps" / step_id,
+        ):
             if candidate.exists():
                 search_dirs.append(candidate)
     if not search_dirs and base.exists():
@@ -548,8 +593,7 @@ def _fit_one_row(
         present_covariates = [
             column
             for column in covariates
-            if column in cohort_df.columns
-            and column not in (exposure, outcome_column)
+            if column in cohort_df.columns and column not in (exposure, outcome_column)
         ]
         needed = [exposure, outcome_column, *present_covariates]
         missing_columns = [
@@ -597,7 +641,7 @@ def _fit_one_row(
 
 
 def _find_estimator_payload(
-    per_step_records: Sequence[Dict[str, Any]]
+    per_step_records: Sequence[Dict[str, Any]],
 ) -> Optional[Tuple[Dict[str, Any], Dict[str, Any]]]:
     for record in per_step_records:
         summary = record.get("step_summary")
