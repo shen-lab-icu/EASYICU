@@ -27,7 +27,6 @@ from .plan_utils import (
 from .scalar_utils import _first_present_scalar
 from .schema import PipelineResult
 
-
 __all__ = [
     "_extract_primary_effect_row",
     "_extract_primary_effect_payload_from_records",
@@ -51,6 +50,7 @@ def _extract_primary_effect_row(
         "primary_or": None,
         "primary_ci_low": None,
         "primary_ci_high": None,
+        "effect_measure": None,
         "status": "missing_primary_association",
     }
     best_payload: Optional[Dict[str, Any]] = None
@@ -108,6 +108,36 @@ def _extract_primary_effect_payload_from_records(
     return best_payload
 
 
+def _effect_measure_from_scale(scale: Any) -> Optional[str]:
+    """Map a declared effect-scale string to a compact measure label.
+
+    Propensity-weighted / causal steps write a scale-neutral point estimate under
+    ``adjusted_effect`` and declare the scale in a SEPARATE field
+    (``primary_effect_scale``/``effect_scale``), e.g. ``odds_ratio``. Returns None
+    when the scale is absent or unrecognised, so the caller never binds an
+    unlabelled estimate as if it were an OR.
+    """
+    text = str(scale or "").strip().lower()
+    if not text:
+        return None
+    if "odds" in text or text == "or":
+        return "OR"
+    if "hazard" in text or text == "hr":
+        return "HR"
+    if (
+        "risk_ratio" in text
+        or "relative_risk" in text
+        or "rate_ratio" in text
+        or text in ("rr", "risk ratio")
+    ):
+        return "RR"
+    if "risk_difference" in text or text in ("rd", "risk diff", "risk difference"):
+        return "RD"
+    if "mean_difference" in text or text in ("md", "mean diff", "mean difference"):
+        return "MD"
+    return None
+
+
 def _extract_primary_effect_payload_from_summary(
     summary: Dict[str, Any],
     *,
@@ -122,24 +152,74 @@ def _extract_primary_effect_payload_from_summary(
         or summary.get("predictor_variable")
         or summary.get("variable")
     )
-    direct_primary_or = _finite_float(
+    # The canonical payload field is ``primary_or`` for historical reasons, but it
+    # carries the primary effect RATIO whatever its measure: an odds ratio for a
+    # logistic/association design, a HAZARD ratio for a survival/time-to-event
+    # design. The deterministic Cox runner emits ``hazard_ratio`` (+ CIs); the
+    # OR-only key lists never matched it, so the survival estimand was dropped and
+    # a logistic OR refit downstream buried the real HR (H1 fix3j: HR 1.82 buried
+    # under a near-null ~1.0). Recognise both measures and record which one won so
+    # downstream labels the effect correctly instead of silently calling it "OR".
+    direct_or = _finite_float(
         _first_direct_scalar(
             summary,
             ("primary_or", "odds_ratio", "estimate", "adjusted_or"),
         )
     )
-    nested_primary_or = _finite_float((nested_primary or {}).get("primary_or"))
-    primary_or = nested_primary_or
-    if primary_or is None:
-        primary_or = (
-            direct_primary_or
-            if direct_primary_or is not None
-            else _primary_effect_from_summary(summary)
+    direct_hr = _finite_float(
+        _first_direct_scalar(
+            summary,
+            ("hazard_ratio", "primary_hr", "adjusted_hr"),
         )
+    )
+    # Scale-neutral point estimate: propensity-weighted causal steps write the
+    # estimate under ``adjusted_effect`` and declare the scale separately in
+    # ``primary_effect_scale``/``effect_scale``. Without this the real causal OR is
+    # dropped and a probe scalar wins (H2 fix3: OR 2.79 lost to a probe's 28.0).
+    direct_scaled = _finite_float(
+        _first_direct_scalar(summary, ("adjusted_effect", "primary_point_estimate"))
+    )
+    scaled_measure = _effect_measure_from_scale(
+        _first_direct_scalar(summary, ("primary_effect_scale", "effect_scale"))
+    )
+    if direct_or is not None:
+        direct_primary: Optional[float] = direct_or
+        effect_measure: Optional[str] = "OR"
+    elif direct_hr is not None:
+        direct_primary = direct_hr
+        effect_measure = "HR"
+    elif direct_scaled is not None and scaled_measure is not None:
+        direct_primary = direct_scaled
+        effect_measure = scaled_measure
+    else:
+        direct_primary = None
+        effect_measure = None
+    nested_primary_or = _finite_float((nested_primary or {}).get("primary_or"))
+    if nested_primary_or is not None:
+        primary_or = nested_primary_or
+        effect_measure = (
+            str((nested_primary or {}).get("effect_measure") or "").strip()
+            or effect_measure
+            or "OR"
+        )
+    elif direct_primary is not None:
+        primary_or = direct_primary
+    else:
+        primary_or = _primary_effect_from_summary(summary)
+    if primary_or is not None and effect_measure is None:
+        # Legacy flattened-key fallback (``*_or`` / ``*_estimate``) is OR-shaped.
+        effect_measure = "OR"
     ci_low = _finite_float(
         _first_direct_scalar(
             summary,
-            ("primary_ci_low", "primary_or_ci_low", "primary_association_ci_low"),
+            (
+                "primary_ci_low",
+                "primary_or_ci_low",
+                "primary_association_ci_low",
+                "hazard_ratio_ci_low",
+                "primary_hr_ci_low",
+                "adjusted_effect_ci_low",
+            ),
         )
     )
     if nested_primary is not None and nested_primary.get("primary_ci_low") is not None:
@@ -147,7 +227,14 @@ def _extract_primary_effect_payload_from_summary(
     ci_high = _finite_float(
         _first_direct_scalar(
             summary,
-            ("primary_ci_high", "primary_or_ci_high", "primary_association_ci_high"),
+            (
+                "primary_ci_high",
+                "primary_or_ci_high",
+                "primary_association_ci_high",
+                "hazard_ratio_ci_high",
+                "primary_hr_ci_high",
+                "adjusted_effect_ci_high",
+            ),
         )
     )
     if nested_primary is not None and nested_primary.get("primary_ci_high") is not None:
@@ -161,7 +248,16 @@ def _extract_primary_effect_payload_from_summary(
         ci_high = _finite_float(ci_pair[1])
     if primary_or is not None and (ci_low is None or ci_high is None):
         se = _finite_float(
-            _first_direct_scalar(summary, ("primary_or_se", "primary_se", "se"))
+            _first_direct_scalar(
+                summary,
+                (
+                    "primary_or_se",
+                    "primary_se",
+                    "se",
+                    "hazard_ratio_se",
+                    "adjusted_effect_se",
+                ),
+            )
         )
         if se is not None and primary_or > 0:
             ci_low = math.exp(math.log(primary_or) - 1.96 * se)
@@ -191,7 +287,7 @@ def _extract_primary_effect_payload_from_summary(
     )
     if primary_or is not None:
         score += 100
-    if direct_primary_or is not None:
+    if direct_primary is not None:
         score += 30
     if ci_low is not None and ci_high is not None:
         score += 25
@@ -204,6 +300,7 @@ def _extract_primary_effect_payload_from_summary(
         "primary_or": primary_or,
         "primary_ci_low": ci_low,
         "primary_ci_high": ci_high,
+        "effect_measure": effect_measure,
         "sample_size": int(sample_size) if sample_size is not None else None,
         "status": ("ok" if primary_or is not None else "summary_missing_primary_or"),
         "step_summary_path": str(path) if path is not None else None,
@@ -225,20 +322,37 @@ def _primary_result_payload(summary: Dict[str, Any]) -> Optional[Dict[str, Any]]
     raw = summary.get("primary_result")
     if not isinstance(raw, dict):
         return None
-    primary_or = _finite_float(
+    or_value = _finite_float(
         _first_direct_scalar(
             raw,
             ("primary_or", "adjusted_or", "odds_ratio", "point_estimate", "estimate"),
         )
     )
-    if primary_or is None:
+    hr_value = _finite_float(
+        _first_direct_scalar(raw, ("hazard_ratio", "primary_hr", "adjusted_hr"))
+    )
+    if or_value is not None:
+        primary_or = or_value
+        effect_measure = "OR"
+    elif hr_value is not None:
+        primary_or = hr_value
+        effect_measure = "HR"
+    else:
         return None
     return {
         "primary_or": primary_or,
+        "effect_measure": effect_measure,
         "primary_ci_low": _finite_float(
             _first_direct_scalar(
                 raw,
-                ("primary_ci_low", "primary_or_ci_low", "ci_low", "ci_lower", "lower"),
+                (
+                    "primary_ci_low",
+                    "primary_or_ci_low",
+                    "hazard_ratio_ci_low",
+                    "ci_low",
+                    "ci_lower",
+                    "lower",
+                ),
             )
         ),
         "primary_ci_high": _finite_float(
@@ -247,6 +361,7 @@ def _primary_result_payload(summary: Dict[str, Any]) -> Optional[Dict[str, Any]]
                 (
                     "primary_ci_high",
                     "primary_or_ci_high",
+                    "hazard_ratio_ci_high",
                     "ci_high",
                     "ci_upper",
                     "upper",
@@ -347,7 +462,16 @@ def _primary_effect_candidate_score(
     if (
         _first_present_scalar(
             summary,
-            ("primary_or", "odds_ratio", "estimate", "adjusted_or"),
+            (
+                "primary_or",
+                "odds_ratio",
+                "estimate",
+                "adjusted_or",
+                "hazard_ratio",
+                "primary_hr",
+                "adjusted_effect",
+                "primary_point_estimate",
+            ),
         )
         is not None
     ):
