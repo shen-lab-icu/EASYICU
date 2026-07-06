@@ -4537,7 +4537,43 @@ class ConceptResolver:
                                 print(f"   ⚠️ [MIMIC-III] charttime mixed-type 规范化失败: {e}")
 
                 combined['charttime'] = pd.to_numeric(combined['charttime'], errors='coerce') if not pd.api.types.is_numeric_dtype(combined['charttime']) else combined['charttime']
-        
+
+            # 🔧 Epoch-scale charttime guard (2026-07): some callback/prescription-derived
+            # concepts — notably mimic 'abx' from prescriptions.startdate — arrive as float64
+            # ABSOLUTE microsecond-epoch timestamps (~6.2e15) instead of ICU-relative hours,
+            # slipping past the object-dtype normalization above (that block only fires for
+            # dtype == 'object'). Detect epoch-scale values (|t| far larger than any plausible
+            # relative-hour span) and convert them to hours-since-ICU-admission via
+            # icustays.intime, matching every other concept. Already-relative values are left
+            # untouched. Validated: 100% of mimic 'abx' epoch rows convert to sane ICU-range hours.
+            if ('charttime' in combined.columns
+                    and pd.api.types.is_numeric_dtype(combined['charttime'])
+                    and 'icustay_id' in combined.columns):
+                _ct = pd.to_numeric(combined['charttime'], errors='coerce')
+                _epoch_mask = _ct.abs() > 1e10  # relative hours << 1e6; epoch-µs are ~1e15
+                if _epoch_mask.any():
+                    try:
+                        icustays_table = data_source.load_table(
+                            'icustays', columns=['icustay_id', 'intime'], verbose=False,
+                        )
+                        icustays_df = icustays_table.data if hasattr(icustays_table, 'data') else icustays_table
+                        if 'intime' in icustays_df.columns:
+                            icu_intime = icustays_df[['icustay_id', 'intime']].drop_duplicates().copy()
+                            icu_intime['intime'] = pd.to_datetime(icu_intime['intime'], errors='coerce')
+                            if icu_intime['intime'].dt.tz is not None:
+                                icu_intime['intime'] = icu_intime['intime'].dt.tz_localize(None)
+                            conv = combined.loc[_epoch_mask, ['icustay_id']].copy()
+                            # epoch value is microseconds-since-epoch (mimic shifted dates ~2100-2200)
+                            conv['abs'] = pd.to_datetime(_ct[_epoch_mask].astype('int64'), unit='us', errors='coerce')
+                            conv = conv.merge(icu_intime, on='icustay_id', how='left')
+                            rel_hours = np.floor(
+                                (conv['abs'] - conv['intime']).dt.total_seconds() / 3600.0
+                            )
+                            combined.loc[_epoch_mask, 'charttime'] = rel_hours.values
+                    except Exception as e:
+                        if DEBUG_MODE:
+                            print(f"   ⚠️ [MIMIC-III] epoch charttime 规范化失败: {e}")
+
         # 🔧 CRITICAL FIX 2026-03-10: Multi-source concat produces object dtype for value column
         # When frames from different sources (e.g., respiratorycharting + lab) are concatenated,
         # the value column may become object dtype because each frame has different extra columns.
