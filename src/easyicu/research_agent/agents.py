@@ -621,7 +621,9 @@ def _clip_json(value: Any, *, char_budget: int) -> str:
     if len(text) <= char_budget:
         return text
     head = text[: max(0, char_budget)]
-    return f"{head}…[truncated {len(text) - len(head)} chars for replanner context budget]"
+    return (
+        f"{head}…[truncated {len(text) - len(head)} chars for replanner context budget]"
+    )
 
 
 def _compact_findings(raw: Any) -> List[Dict[str, Any]]:
@@ -1486,7 +1488,7 @@ class AnalyzerAgent:
                     f"Evidence ids you may cite verbatim: {list(evidence_ids)}\n\n"
                     "Constraints:\n"
                     "- Cite at least one evidence_id for every numeric claim, "
-                    "in the form {{evidence:<id>}}.\n"
+                    "in the form {evidence:<id>}.\n"
                     "- Do not introduce numbers that are not in the summary.\n"
                     "- 4 sentences max. No clinical recommendations.\n\n"
                     "RESEARCH CONTEXT:\n" + _format_context(context)
@@ -1599,7 +1601,19 @@ class WriterAgent:
             evidence_digest=evidence_digest,
         )
 
-        title = self._call_section(
+        # The eight manuscript sections are independent: each _call_section is
+        # built only from `common`, and no section's text feeds another's prompt.
+        # They are the single largest LLM-latency contributor in a run (8
+        # sequential LLM calls). Issue them concurrently and reassemble in the
+        # fixed manuscript order below — output stays order-deterministic; only
+        # wall-clock changes (8 sequential calls -> ~1). _call_section mutates no
+        # shared state and self.llm.complete is safe under concurrent requests.
+        from concurrent.futures import ThreadPoolExecutor
+
+        _ex = ThreadPoolExecutor(max_workers=8)
+
+        _f_title = _ex.submit(
+            self._call_section,
             section_name="Title and Keywords",
             instruction=(
                 "Write:\n"
@@ -1611,7 +1625,8 @@ class WriterAgent:
             **common,
         )
 
-        abstract = self._call_section(
+        _f_abstract = _ex.submit(
+            self._call_section,
             section_name="Abstract",
             instruction=(
                 "Write `## Abstract` with four labelled paragraphs:\n"
@@ -1625,7 +1640,8 @@ class WriterAgent:
             **common,
         )
 
-        introduction = self._call_section(
+        _f_introduction = _ex.submit(
+            self._call_section,
             section_name="Introduction",
             instruction=(
                 "Write `## Introduction` with 4-5 paragraphs (900-1200 words total):\n"
@@ -1640,7 +1656,8 @@ class WriterAgent:
             **common,
         )
 
-        methods = self._call_section(
+        _f_methods = _ex.submit(
+            self._call_section,
             section_name="Methods",
             instruction=(
                 "Write `## Methods` with sub-sections:\n"
@@ -1665,7 +1682,8 @@ class WriterAgent:
             **common,
         )
 
-        results = self._call_section(
+        _f_results = _ex.submit(
+            self._call_section,
             section_name="Results",
             instruction=(
                 "Write `## Results` with sub-sections:\n"
@@ -1690,7 +1708,8 @@ class WriterAgent:
             **common,
         )
 
-        discussion = self._call_section(
+        _f_discussion = _ex.submit(
+            self._call_section,
             section_name="Discussion",
             instruction=(
                 "Write `## Discussion` with 5 paragraphs (900-1300 words total):\n"
@@ -1705,7 +1724,8 @@ class WriterAgent:
             **common,
         )
 
-        limitations = self._call_section(
+        _f_limitations = _ex.submit(
+            self._call_section,
             section_name="Limitations",
             instruction=(
                 "Write `## Limitations` — one paragraph, 150-250 words. Include at least:\n"
@@ -1723,7 +1743,8 @@ class WriterAgent:
             **common,
         )
 
-        conclusion = self._call_section(
+        _f_conclusion = _ex.submit(
+            self._call_section,
             section_name="Conclusion, Data availability, Funding, COI",
             instruction=(
                 "Write these sections exactly:\n"
@@ -1745,6 +1766,21 @@ class WriterAgent:
             max_tokens=512,
             **common,
         )
+
+        # Collect in fixed manuscript order. .result() re-raises any section's
+        # exception (fail-closed, as in the sequential version); the pool is
+        # always shut down.
+        try:
+            title = _f_title.result()
+            abstract = _f_abstract.result()
+            introduction = _f_introduction.result()
+            methods = _f_methods.result()
+            results = _f_results.result()
+            discussion = _f_discussion.result()
+            limitations = _f_limitations.result()
+            conclusion = _f_conclusion.result()
+        finally:
+            _ex.shutdown(wait=True)
 
         # Concatenate all sections.
         parts = [
@@ -1877,7 +1913,7 @@ def _first_json_block(text: str) -> Optional[str]:
 
 
 def _normalise_plan_payload(
-    data: Dict[str, Any]
+    data: Dict[str, Any],
 ) -> Tuple[Dict[str, Any], Dict[str, List[str]]]:
     """Drop hosted-model extras before validating the strict schema.
 
@@ -1952,7 +1988,7 @@ def _normalise_plan_payload(
 
 
 def _coerce_primary_estimate(
-    step_summary: Dict[str, Any]
+    step_summary: Dict[str, Any],
 ) -> Tuple[Optional[float], Optional[str], Optional[List[float]]]:
     candidates = [
         ("primary_or", "odds_ratio"),
@@ -1976,11 +2012,29 @@ def _coerce_primary_estimate(
     if isinstance(model_results, dict):
         for label, payload in model_results.items():
             if isinstance(payload, dict):
-                estimate = (
-                    payload.get("estimate") or payload.get("value") or payload.get("or")
+                # Explicit presence check, not a truthiness `or` chain: a
+                # legitimate zero-valued estimate (e.g. a log-odds of 0.0) is
+                # falsy and would fall through to the missing keys and yield
+                # None, dropping a real estimate from primary_estimate.
+                estimate = next(
+                    (
+                        payload[k]
+                        for k in ("estimate", "value", "or")
+                        if k in payload and payload[k] is not None
+                    ),
+                    None,
                 )
-                if isinstance(estimate, (int, float)):
-                    interval = payload.get("ci") or payload.get("interval")
+                if isinstance(estimate, (int, float)) and not isinstance(
+                    estimate, bool
+                ):
+                    interval = next(
+                        (
+                            payload[k]
+                            for k in ("ci", "interval")
+                            if k in payload and payload[k] is not None
+                        ),
+                        None,
+                    )
                     if isinstance(interval, list) and len(interval) == 2:
                         try:
                             return (

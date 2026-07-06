@@ -53,8 +53,13 @@ class LLMClient(Protocol):
 
     name: str
 
-    def complete(self, messages: Sequence[LLMMessage], *, max_tokens: int = 2048,
-                 temperature: float = 0.2) -> str: ...
+    def complete(
+        self,
+        messages: Sequence[LLMMessage],
+        *,
+        max_tokens: int = 2048,
+        temperature: float = 0.2,
+    ) -> str: ...
 
 
 def _strip_reasoning_blocks(text: str) -> str:
@@ -124,6 +129,7 @@ def _response_namespace_from_payload(payload: Dict[str, Any]) -> Any:
     usage = payload.get("usage")
     usage_ns = SimpleNamespace(**usage) if isinstance(usage, dict) else None
     return SimpleNamespace(choices=choices, usage=usage_ns)
+
 
 # ---------------------------------------------------------------------------
 # OpenAI client (optional — only imported on first use)
@@ -233,7 +239,9 @@ class OpenAIClient:
         if not self._local_noauth_mode:
             try:
                 from openai import OpenAI  # type: ignore
-            except Exception as exc:  # pragma: no cover - exercised only when SDK missing
+            except (
+                Exception
+            ) as exc:  # pragma: no cover - exercised only when SDK missing
                 raise ImportError(
                     "OpenAIClient requires the 'openai' package. Install with `pip install openai`."
                 ) from exc
@@ -264,9 +272,15 @@ class OpenAIClient:
                 for k, v in reasoning_body.items():
                     self._extra_body.setdefault(k, v)
 
-    def complete(self, messages: Sequence[LLMMessage], *, max_tokens: int = 2048,
-                 temperature: float = 0.2, seed: Optional[int] = None,
-                 top_p: Optional[float] = None) -> str:
+    def complete(
+        self,
+        messages: Sequence[LLMMessage],
+        *,
+        max_tokens: int = 2048,
+        temperature: float = 0.2,
+        seed: Optional[int] = None,
+        top_p: Optional[float] = None,
+    ) -> str:
         chat_messages = [{"role": m.role, "content": m.content} for m in messages]
         create_kwargs: Dict[str, Any] = {
             "model": self._model,
@@ -361,7 +375,13 @@ class OpenAIClient:
                 continue
             except Exception as exc:  # noqa: BLE001
                 msg = str(exc).lower()
-                if "503" in msg or "service unavailable" in msg or "overload" in msg or "429" in msg or "rate" in msg:
+                if (
+                    "503" in msg
+                    or "service unavailable" in msg
+                    or "overload" in msg
+                    or "429" in msg
+                    or "rate" in msg
+                ):
                     last_exc = exc
                     # Respect provider-supplied Retry-After (e.g. Venice's
                     # ~30 s for llama-3.3-70b:free). Fall back to a quadratic
@@ -384,7 +404,10 @@ class OpenAIClient:
                     continue
                 # Our own LLM_TRANSIENT_* envelope failures from _do_call
                 # (null choices / null message) are retryable too.
-                if "llm_transient_no_choices" in msg or "llm_transient_no_message" in msg:
+                if (
+                    "llm_transient_no_choices" in msg
+                    or "llm_transient_no_message" in msg
+                ):
                     last_exc = exc
                     _time.sleep(2.0 * (attempt + 1))
                     continue
@@ -401,7 +424,9 @@ class OpenAIClient:
             if usage is not None:
                 self.last_usage = {
                     "prompt_tokens": int(getattr(usage, "prompt_tokens", 0) or 0),
-                    "completion_tokens": int(getattr(usage, "completion_tokens", 0) or 0),
+                    "completion_tokens": int(
+                        getattr(usage, "completion_tokens", 0) or 0
+                    ),
                     "total_tokens": int(getattr(usage, "total_tokens", 0) or 0),
                 }
             else:
@@ -473,6 +498,7 @@ class OpenAIClient:
             try:
                 from datetime import datetime
                 from pathlib import Path
+
                 log_dir = Path(
                     os.environ.get("EASYICU_LLM_DEBUG_DIR")
                     or "./research_output/llm_debug"
@@ -497,6 +523,62 @@ class OpenAIClient:
                 pass
 
         return content
+
+    def complete_with_images(
+        self,
+        *,
+        prompt: str,
+        image_paths: Sequence[Path],
+        max_tokens: int = 1024,
+        temperature: float = 0.0,
+    ) -> str:
+        """Run a multimodal chat-completions request against image files.
+
+        Optional: normal agents use ``complete(...)``. ``VLMVisualQAAdapter``
+        checks for the method via the ``llm_supports_vision`` probe and falls
+        back to text-only review when a provider does not support image inputs.
+        Lives on OpenAIClient (not FallbackLLMClient) because it needs
+        ``self._client`` / ``self._model`` / ``self._timeout`` / ``self._extra_body``.
+        """
+        content: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]
+        for path in image_paths:
+            p = Path(path)
+            mime = mimetypes.guess_type(str(p))[0] or "application/octet-stream"
+            data = base64.b64encode(p.read_bytes()).decode("ascii")
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime};base64,{data}"},
+                }
+            )
+        create_kwargs: Dict[str, Any] = {
+            "model": self._model,
+            "messages": [{"role": "user", "content": content}],
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "timeout": self._timeout,
+        }
+        if self._extra_body:
+            create_kwargs["extra_body"] = self._extra_body
+        resp = self._client.chat.completions.create(**create_kwargs)  # type: ignore[arg-type]
+        try:
+            usage = getattr(resp, "usage", None)
+            if usage is not None:
+                self.last_usage = {
+                    "prompt_tokens": int(getattr(usage, "prompt_tokens", 0) or 0),
+                    "completion_tokens": int(
+                        getattr(usage, "completion_tokens", 0) or 0
+                    ),
+                    "total_tokens": int(getattr(usage, "total_tokens", 0) or 0),
+                }
+            else:
+                self.last_usage = None
+        except Exception:
+            self.last_usage = None
+        choice = resp.choices[0]
+        self.last_finish_reason = getattr(choice, "finish_reason", None)
+        msg = choice.message
+        return _strip_reasoning_blocks((getattr(msg, "content", None) or "").strip())
 
 
 def _model_looks_like_qwen3(model: str) -> bool:
@@ -596,10 +678,17 @@ class FallbackLLMClient:
         self._clients = [client for client in clients if client is not None]
         if not self._clients:
             raise ValueError("FallbackLLMClient requires at least one child client.")
-        self.name = name or "fallback(" + " -> ".join(
-            getattr(client, "_model", getattr(client, "name", type(client).__name__))
-            for client in self._clients
-        ) + ")"
+        self.name = (
+            name
+            or "fallback("
+            + " -> ".join(
+                getattr(
+                    client, "_model", getattr(client, "name", type(client).__name__)
+                )
+                for client in self._clients
+            )
+            + ")"
+        )
         self.last_usage = None
         self.last_finish_reason = None
         self.last_client_name = None
@@ -641,7 +730,9 @@ class FallbackLLMClient:
                     client, "_model", getattr(client, "name", type(client).__name__)
                 )
                 return out
-            except Exception as exc:  # pragma: no cover - exercised via tests with fake clients
+            except (
+                Exception
+            ) as exc:  # pragma: no cover - exercised via tests with fake clients
                 last_exc = exc
                 errors.append(
                     f"{getattr(client, '_model', getattr(client, 'name', type(client).__name__))}: {exc}"
@@ -663,48 +754,30 @@ class FallbackLLMClient:
         max_tokens: int = 1024,
         temperature: float = 0.0,
     ) -> str:
-        """Run a multimodal chat-completions request against image files.
+        """Delegate multimodal review to the first child client that supports it.
 
-        This method is intentionally optional: normal agents continue
-        to use ``complete(...)``. ``VLMVisualQAAdapter`` checks for the
-        method with ``hasattr`` and falls back to text-only review when
-        a provider does not support image inputs.
+        The real implementation lives on :class:`OpenAIClient` (where
+        ``_client`` / ``_model`` / ``_timeout`` exist). Previously this method
+        was defined here and referenced ``self._model`` — attributes
+        FallbackLLMClient never sets — so every image-QA call under a fallback
+        wrapper raised ``AttributeError`` (swallowed by the visual-QA adapter
+        into a spurious warning, and the actual review never ran). Delegate to
+        the first vision-capable child; if none exists, degrade to a text-only
+        completion so the caller still gets a usable response instead of a crash.
         """
-        content: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]
-        for path in image_paths:
-            p = Path(path)
-            mime = mimetypes.guess_type(str(p))[0] or "application/octet-stream"
-            data = base64.b64encode(p.read_bytes()).decode("ascii")
-            content.append({
-                "type": "image_url",
-                "image_url": {"url": f"data:{mime};base64,{data}"},
-            })
-        create_kwargs: Dict[str, Any] = {
-            "model": self._model,
-            "messages": [{"role": "user", "content": content}],
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "timeout": self._timeout,
-        }
-        if self._extra_body:
-            create_kwargs["extra_body"] = self._extra_body
-        resp = self._client.chat.completions.create(**create_kwargs)  # type: ignore[arg-type]
-        try:
-            usage = getattr(resp, "usage", None)
-            if usage is not None:
-                self.last_usage = {
-                    "prompt_tokens": int(getattr(usage, "prompt_tokens", 0) or 0),
-                    "completion_tokens": int(getattr(usage, "completion_tokens", 0) or 0),
-                    "total_tokens": int(getattr(usage, "total_tokens", 0) or 0),
-                }
-            else:
-                self.last_usage = None
-        except Exception:
-            self.last_usage = None
-        choice = resp.choices[0]
-        self.last_finish_reason = getattr(choice, "finish_reason", None)
-        msg = choice.message
-        return _strip_reasoning_blocks((getattr(msg, "content", None) or "").strip())
+        for client in self._clients:
+            if client is not self and hasattr(client, "complete_with_images"):
+                return client.complete_with_images(
+                    prompt=prompt,
+                    image_paths=image_paths,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                )
+        return self.complete(
+            [LLMMessage(role="user", content=prompt)],
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -795,9 +868,7 @@ class LLMRouter:
             )
         client = self._roles[role] or self._default
         if client is None:
-            raise KeyError(
-                f"LLMRouter has no client for role {role!r} and no default."
-            )
+            raise KeyError(f"LLMRouter has no client for role {role!r} and no default.")
         return client
 
     def iter_clients(self):
@@ -822,8 +893,14 @@ class LLMRouter:
     # Pass-through ``complete``
     # ------------------------------------------------------------------
 
-    def complete(self, messages: Sequence["LLMMessage"], *, max_tokens: int = 2048,
-                 temperature: float = 0.2, top_p: Optional[float] = None) -> str:
+    def complete(
+        self,
+        messages: Sequence["LLMMessage"],
+        *,
+        max_tokens: int = 2048,
+        temperature: float = 0.2,
+        top_p: Optional[float] = None,
+    ) -> str:
         """Route to the default client.
 
         This bridge exists so a router can be passed to legacy code
@@ -839,14 +916,18 @@ class LLMRouter:
         import inspect as _inspect
 
         try:
-            _accepts_top_p = "top_p" in _inspect.signature(self._default.complete).parameters
+            _accepts_top_p = (
+                "top_p" in _inspect.signature(self._default.complete).parameters
+            )
         except (TypeError, ValueError):
             _accepts_top_p = False
         if _accepts_top_p and top_p is not None:
             return self._default.complete(
                 messages, max_tokens=max_tokens, temperature=temperature, top_p=top_p
             )
-        return self._default.complete(messages, max_tokens=max_tokens, temperature=temperature)
+        return self._default.complete(
+            messages, max_tokens=max_tokens, temperature=temperature
+        )
 
 
 class CLIAgentLLMClient:
@@ -924,11 +1005,15 @@ class CLIAgentLLMClient:
             return argv
         # codex
         argv = [
-            self._command, "exec",
-            "--sandbox", "read-only",
+            self._command,
+            "exec",
+            "--sandbox",
+            "read-only",
             "--skip-git-repo-check",
-            "--color", "never",
-            "-C", cwd,
+            "--color",
+            "never",
+            "-C",
+            cwd,
         ]
         if model:
             argv += ["-m", model]
@@ -957,7 +1042,9 @@ class CLIAgentLLMClient:
             argv = self._build_argv(system, cwd)
             if self._backend == "codex":
                 # codex has no system flag; fold system into the prompt.
-                prompt = f"{system}\n\n{conversation}".strip() if system else conversation
+                prompt = (
+                    f"{system}\n\n{conversation}".strip() if system else conversation
+                )
             else:
                 prompt = conversation
             try:
@@ -996,11 +1083,11 @@ class LLMClientSelection:
     """
 
     client: Any
-    backend: str          # what was actually built ("codex" / "openai" / "mock" ...)
-    requested: str        # what the caller preferred
-    fell_back: bool       # True when backend != requested
-    reason: str           # human-readable explanation
-    ladder: List[str]     # the order that was tried
+    backend: str  # what was actually built ("codex" / "openai" / "mock" ...)
+    requested: str  # what the caller preferred
+    fell_back: bool  # True when backend != requested
+    reason: str  # human-readable explanation
+    ladder: List[str]  # the order that was tried
 
 
 # Backends served by a local coding-agent CLI vs. an OpenAI-compatible API.
@@ -1027,7 +1114,9 @@ def _api_key_present(api_key: Optional[str]) -> bool:
     )
 
 
-def _backend_available(backend: str, *, api_key: Optional[str], allow_mock: bool) -> bool:
+def _backend_available(
+    backend: str, *, api_key: Optional[str], allow_mock: bool
+) -> bool:
     if backend in _CLI_BACKENDS:
         return cli_backend_available(backend)
     if backend in _API_BACKENDS:
@@ -1125,7 +1214,9 @@ def build_llm_client(
         if not fell_back:
             reason = f"using requested backend {backend!r}"
         elif backend in _CLI_BACKENDS:
-            reason = f"requested {requested!r} unavailable; using CLI backend {backend!r}"
+            reason = (
+                f"requested {requested!r} unavailable; using CLI backend {backend!r}"
+            )
         elif backend == "mock":
             reason = (
                 f"requested {requested!r} unavailable and no API key configured; "

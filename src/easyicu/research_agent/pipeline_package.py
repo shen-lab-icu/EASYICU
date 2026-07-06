@@ -45,6 +45,7 @@ from .runtime_artifacts import (
     AuditLogger,
     build_execution_replay,
     build_workflow_graph,
+    capture_code_version,
     render_workflow_graph_mermaid,
     write_json_artifact,
 )
@@ -55,6 +56,12 @@ from .robustness_panel import PANEL_FILENAME, load_robustness_panel
 from .side_findings import collect_side_findings, write_side_findings
 
 logger = logging.getLogger(__name__)
+
+
+def _code_version_manifest_fields() -> Dict[str, Any]:
+    """Return the ``code_version`` manifest field (git + package identity)."""
+    return {"code_version": capture_code_version()}
+
 
 def _concept_dictionary_manifest_fields() -> Dict[str, Any]:
     """Return the concept dictionary identity for run manifests."""
@@ -334,10 +341,7 @@ def finalise_success(
             )
             # If raw and BH disagree meaningfully, emit a warning
             # so the Discussion section has to engage with it.
-            if (
-                summary["n_significant_raw"]
-                > summary["n_significant_bh"]
-            ):
+            if summary["n_significant_raw"] > summary["n_significant_bh"]:
                 findings.append(
                     ValidationFinding(
                         validator="multiple_testing",
@@ -638,9 +642,7 @@ def finalise_success(
                     )
                     # Escalate to warning if any interaction p < 0.05.
                     sig_cols = [
-                        col
-                        for col, p in result.interaction_pvalues.items()
-                        if p < 0.05
+                        col for col, p in result.interaction_pvalues.items() if p < 0.05
                     ]
                     if sig_cols:
                         findings.append(
@@ -662,17 +664,14 @@ def finalise_success(
                     validator="fairness_subgroups",
                     severity="warning",
                     message=(
-                        f"Subgroup analysis failed: "
-                        f"{type(exc).__name__}: {exc}"
+                        f"Subgroup analysis failed: " f"{type(exc).__name__}: {exc}"
                     ),
                 )
             )
 
     manifest_notes = notes
     if stop_after_analysis:
-        suffix = (
-            "paused_after_analysis: manuscript generation skipped by user option."
-        )
+        suffix = "paused_after_analysis: manuscript generation skipped by user option."
         manifest_notes = f"{notes}\n\n{suffix}" if notes else suffix
     literature_provenance = _literature_provenance_note(
         enable_literature=pipeline._enable_literature,
@@ -754,6 +753,7 @@ def finalise_success(
         submission_profile_version=pipeline._submission_profile_version,
         submission_profile_locked_at=pipeline._submission_profile_locked_at,
         **_concept_dictionary_manifest_fields(),
+        **_code_version_manifest_fields(),
         readiness=readiness,
         artifact_paths=artifact_paths,
         robustness_panel_path=(
@@ -836,9 +836,7 @@ def finalise_success(
             cohort_name=str(getattr(context.cohort, "cohort_name", "") or ""),
         )
     except Exception as exc:  # pragma: no cover — defence in depth
-        logger.warning(
-            "experience-bank write-back failed (non-fatal): %s", exc
-        )
+        logger.warning("experience-bank write-back failed (non-fatal): %s", exc)
     if cache_key is not None:
         pipeline._cache.record_hit(cache_key, result)
     emit_progress(
@@ -917,6 +915,7 @@ def finalise_aborted(
         submission_profile_version=pipeline._submission_profile_version,
         submission_profile_locked_at=pipeline._submission_profile_locked_at,
         **_concept_dictionary_manifest_fields(),
+        **_code_version_manifest_fields(),
         report_path=str(report_path.relative_to(run_dir)),
         readiness=readiness,
         artifact_paths=artifact_paths,
@@ -944,6 +943,7 @@ def finalise_aborted(
 # ---------------------------------------------------------------------------
 # T3.2 — cost summary renderer
 # ---------------------------------------------------------------------------
+
 
 def _render_cost_summary(meter: "CostMeter") -> str:
     """Render a markdown view of a :class:`CostMeter` for the run report.

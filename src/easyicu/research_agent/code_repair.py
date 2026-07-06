@@ -1084,6 +1084,75 @@ def _deterministic_runner_repair(
                         image = ax.imshow(data, aspect="auto")
                         plt.colorbar(image, ax=ax)
                         return ax
+                    def boxplot(self, data=None, x=None, y=None, hue=None, ax=None, **kwargs):
+                        import matplotlib.pyplot as plt
+                        ax = ax or plt.gca()
+                        if data is not None and x is not None and y is not None:
+                            groups = data.groupby(x, dropna=False)[y]
+                            labels = [str(v) for v in groups.groups.keys()]
+                            series = [g.dropna().values for _, g in groups]
+                            if series:
+                                ax.boxplot(series, labels=labels)
+                        elif data is not None and y is not None:
+                            ax.boxplot(data[y].dropna().values)
+                        return ax
+                    def violinplot(self, data=None, x=None, y=None, hue=None, ax=None, **kwargs):
+                        return self.boxplot(data=data, x=x, y=y, hue=hue, ax=ax, **kwargs)
+                    def boxenplot(self, data=None, x=None, y=None, hue=None, ax=None, **kwargs):
+                        return self.boxplot(data=data, x=x, y=y, hue=hue, ax=ax, **kwargs)
+                    def stripplot(self, data=None, x=None, y=None, hue=None, ax=None, **kwargs):
+                        return self.scatterplot(data=data, x=x, y=y, hue=hue, ax=ax, **kwargs)
+                    def swarmplot(self, data=None, x=None, y=None, hue=None, ax=None, **kwargs):
+                        return self.scatterplot(data=data, x=x, y=y, hue=hue, ax=ax, **kwargs)
+                    def pointplot(self, data=None, x=None, y=None, hue=None, ax=None, **kwargs):
+                        import matplotlib.pyplot as plt
+                        ax = ax or plt.gca()
+                        if data is not None and x is not None and y is not None:
+                            grouped = data.groupby(x, dropna=False)[y].mean()
+                            ax.plot([str(v) for v in grouped.index], grouped.values, marker="o")
+                        return ax
+                    def countplot(self, data=None, x=None, hue=None, ax=None, **kwargs):
+                        import matplotlib.pyplot as plt
+                        ax = ax or plt.gca()
+                        if data is not None and x is not None:
+                            counts = data[x].value_counts(dropna=False)
+                            ax.bar([str(v) for v in counts.index], counts.values)
+                        return ax
+                    def kdeplot(self, data=None, x=None, ax=None, **kwargs):
+                        import matplotlib.pyplot as plt
+                        ax = ax or plt.gca()
+                        values = data[x] if (data is not None and x is not None) else data
+                        if values is not None and hasattr(values, "dropna"):
+                            ax.hist(values.dropna(), bins=kwargs.get("bins", 30), density=True, histtype="step")
+                        return ax
+                    def regplot(self, data=None, x=None, y=None, ax=None, **kwargs):
+                        return self.scatterplot(data=data, x=x, y=y, ax=ax, **kwargs)
+                    def despine(self, *args, **kwargs):
+                        ax = kwargs.get("ax")
+                        if ax is not None:
+                            for side in ("top", "right"):
+                                if side in getattr(ax, "spines", {}):
+                                    ax.spines[side].set_visible(False)
+                        return None
+                    def set_context(self, *args, **kwargs):
+                        return None
+                    def set_palette(self, *args, **kwargs):
+                        return None
+                    def set(self, *args, **kwargs):
+                        return None
+                    def move_legend(self, *args, **kwargs):
+                        return None
+                    def __getattr__(self, name):
+                        # Any seaborn attribute this shim does not explicitly implement
+                        # degrades to a safe no-op instead of raising AttributeError,
+                        # so a single unsupported call never crashes an entire figure
+                        # render in the baseline-library sandbox. Dunder lookups still
+                        # raise so Python's internal protocols behave normally.
+                        if name.startswith("__") and name.endswith("__"):
+                            raise AttributeError(name)
+                        def _seaborn_noop(*args, **kwargs):
+                            return kwargs.get("ax")
+                        return _seaborn_noop
                 sns = _EasyICUSeabornFallback()
                 """
             ).strip()

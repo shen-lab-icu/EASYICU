@@ -347,8 +347,27 @@ def _ordinal_primary_association_fallback_code(
             df_fallback = pd.read_parquet(cohort_path)
             if predictor_col not in df_fallback.columns or outcome_col not in df_fallback.columns:
                 return
+            # Adjustment set is config-first: honour user_preferences.covariates
+            # from research_context.json when present, else a case-neutral
+            # demographic default. Nothing here is tied to one study question.
+            _req_covs = []
+            try:
+                _run_dir = os.path.dirname(
+                    os.path.dirname(os.path.dirname(os.path.abspath(out_dir)))
+                )
+                with open(
+                    os.path.join(_run_dir, "research_context.json"), encoding="utf-8"
+                ) as _ctx_fh:
+                    _prefs = (json.load(_ctx_fh).get("user_preferences") or {{}})
+                _req_covs = [
+                    str(c).strip()
+                    for c in (_prefs.get("covariates") or [])
+                    if str(c).strip()
+                ]
+            except Exception:
+                _req_covs = []
             covariates = [
-                col for col in ("age", "sex", "weight")
+                col for col in (_req_covs or ("age", "sex", "weight"))
                 if col in df_fallback.columns and col not in (predictor_col, outcome_col)
             ]
             required = [outcome_col, predictor_col] + covariates

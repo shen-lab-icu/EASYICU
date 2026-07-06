@@ -566,7 +566,18 @@ def _infer_outcome_semantics(
             "label": "time-to-event endpoint",
             "description": (
                 "Outcome component for a time-to-event analysis; keep the event "
-                "indicator, follow-up time, censoring rule and time zero explicit."
+                "indicator, follow-up time, censoring rule and time zero explicit. "
+                "When the universe provides the certified columns "
+                "`followup_time_hours` (ICU-anchored time to event-or-censoring, "
+                "in hours) and `event_observed` (1 = event, 0 = censored at "
+                "hospital discharge), use them directly as the survival time and "
+                "event indicator: the follow-up/censoring is certified at the "
+                "data-foundation layer (death_time for observed deaths, "
+                "los_hosp*24 hospital-discharge proxy for survivors, event times "
+                "capped at discharge, non-positive/artifact times excluded), so "
+                "exact post-landmark censoring IS available — do not decline "
+                "KM/Cox for lack of a certified censoring column when these "
+                "columns are present."
             ),
             "source_concept": "time_to_event_endpoint",
             "substitution_note": (

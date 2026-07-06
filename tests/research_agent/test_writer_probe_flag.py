@@ -24,8 +24,11 @@ def _patch_failed_execute(monkeypatch, ra) -> None:
         skill_obj,
         notes,
         emit_progress,
+        resume_from_step_id=None,
+        stop_after_step_id=None,
     ):
         del self, cohort_path, run_dir, skill_obj, notes, emit_progress
+        del resume_from_step_id, stop_after_step_id
         first_step = plan_result.plan.steps[0].step_id
         return _ExecutePhaseResult(
             plan=plan_result.plan,

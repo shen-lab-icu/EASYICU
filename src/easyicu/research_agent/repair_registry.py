@@ -271,6 +271,12 @@ _STRUCTURAL_REPAIRS = {
     # numbers are introduced; it is a representation/location change.
     "summary_salvage_stdout_json_v1",
     "summary_salvage_named_json_v1",
+    # Adds the missing ``elif var == "age"`` branch to a covariate-coding
+    # metadata table so the loop stops KeyError-ing on the one demographic
+    # covariate that has no measured-indicator entry. The model, rows, and
+    # fill strategy are untouched; the appended row only reports what the
+    # script already does, with values computed from the existing dataframe.
+    "age_covariate_no_measured_indicator_v1",
 }
 
 _CONTRACT_FILL_REPAIRS = {
@@ -286,9 +292,19 @@ _CONTRACT_FILL_REPAIRS = {
 }
 
 _METHOD_SUBSTITUTION_REPAIRS = {
+    # Drops overadjustment covariates the overadjustment_auditor objectively
+    # named (mediator/collider-style adjustors). Changing the adjustment set
+    # changes the estimand specification, so it must be disclosed even though
+    # the trigger is an auditor finding rather than a model failure.
+    "drop_overadjustment_covariates_v1",
     "formula_dummy_name_fallback_v1",
     "logit_regularized_fit_v1",
     "logreg_impute_v1",
+    # Reduces the design matrix to a full-rank column subset (preserving the
+    # primary predictor) and swaps sm.Logit for sm.GLM(Binomial) after a
+    # singular-matrix null result. Both the covariate set and the estimator
+    # change, so results require disclosure.
+    "rank_safe_statsmodels_design_v1",
     "ordinal_primary_association_fallback_v1",
     "outcome_incidence_descriptive_repair_v1",
     "prediction_discrimination_template_v1",

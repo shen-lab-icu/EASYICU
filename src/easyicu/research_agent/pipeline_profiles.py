@@ -97,8 +97,16 @@ NPJ_DM_2026_06 = SubmissionProfile(
     # Re-locked 2026-06-22: the 22 extended-feature concepts (severity scores,
     # extra labs, comorbidity/microbiology/outcome loaders, and the 10 Tier-1
     # derived indices) are now part of the frozen submission dictionary.
-    expected_concept_dict_sha="27abe6841ae3a3e6be14cb91635d8352e20d4343319128b8af50981354c0c611",
-    expected_sofa2_dict_sha="22c4de886b6cb98ccb9145ce9e310780cb1b9b3feaf7a0c3f8b283647e4777b5",
+    # Re-locked 2026-07-04. concept-dict.json SHA = the recall-audit pass
+    # (within-concept itemid/version recovery across all 6 DBs) plus the new
+    # hemodynamic/neuro/endocrine and lab concepts (icp, svo2, scvo2, pawp,
+    # cortisol, pct, bnp, uric_acid, the lipid panel, iron studies, ft4, t4,
+    # prealbumin, myoglobin, retic) — committed 7eb2f67..445e297. sofa2-dict.json
+    # SHA tracks the in-flight 2026-07-03 RRT/CRRT + ventilation mimic_demo
+    # coverage review currently in the working tree; commit that dict change and
+    # this re-lock together (do not commit one without the other).
+    expected_concept_dict_sha="4b9c55bf9ec5dc92c39d6c14b036f0b19d4da684d9808618833b83d6b53c9ed2",
+    expected_sofa2_dict_sha="b26e36b6ef5ea947027c8f7cd514fc5174545aa658187d6bdb8ec43f2a80b6aa",
 )
 
 DEFAULT_SUBMISSION_PROFILE_REF = NPJ_DM_2026_06.ref

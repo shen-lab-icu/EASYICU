@@ -196,6 +196,78 @@ def _selection_cost(llm: LLMClient) -> tuple:
     )
 
 
+def _augment_certified_followup_columns(parquet_path: Path) -> Optional[Dict[str, Any]]:
+    """Add a certified ICU-anchored survival follow-up column to the universe.
+
+    A flat per-stay export gives a whole-stay ``death`` flag, the event time
+    ``death_time`` (hours from ICU admission, emitted by the materializer) and
+    ``los_hosp`` (hospital length of stay, in DAYS). A time-to-event design needs
+    a single, unit-consistent, non-negative follow-up time plus an event
+    indicator. The per-run censoring-contract audit otherwise declines to certify
+    exact post-landmark censoring because ``los_hosp`` is a duration in days —
+    not an ICU-anchored discharge timestamp — and raw ``death_time`` carries
+    pre-admission artifacts (negative values). We certify it once here, at the
+    data-foundation layer, so a survival step can run KM/Cox instead of degrading
+    to a binary fallback:
+
+    - ``event_observed`` = ``death`` (1 = in-hospital death observed, 0 = censored).
+    - ``followup_time_hours`` = ICU-anchored time to event-or-censoring:
+      ``death_time`` for a valid (>0) death, else the hospital-discharge proxy
+      ``los_hosp * 24``; survivors are censored at ``los_hosp * 24``. An event
+      time is capped at the discharge proxy (a death cannot follow discharge) and
+      the value is left NaN when no positive follow-up is derivable.
+
+    Gated on the three source columns being present, so prediction/association
+    universes (which carry no ``death_time``) are untouched. Returns a small
+    provenance dict, or None when the columns are absent.
+    """
+    import pandas as pd  # local import: pandas is a project dependency
+
+    try:
+        df = pd.read_parquet(parquet_path)
+    except Exception:
+        # A missing/unreadable universe parquet must not crash acquisition; the
+        # follow-up column is a best-effort enrichment, not a hard requirement.
+        return None
+    if not {"death", "death_time", "los_hosp"}.issubset(df.columns):
+        return None
+    death = pd.to_numeric(df["death"], errors="coerce").fillna(0).astype(int)
+    death_time = pd.to_numeric(df["death_time"], errors="coerce")
+    los_hosp_hours = pd.to_numeric(df["los_hosp"], errors="coerce") * 24.0
+    is_event = death == 1
+    valid_event_time = is_event & (death_time > 0)
+    # death_time for a valid death; hospital-discharge proxy otherwise.
+    followup = death_time.where(valid_event_time, los_hosp_hours)
+    # an event cannot occur after hospital discharge -> cap at the proxy.
+    over = (
+        is_event
+        & followup.notna()
+        & los_hosp_hours.notna()
+        & (los_hosp_hours > 0)
+        & (followup > los_hosp_hours)
+    )
+    followup = followup.mask(over, los_hosp_hours)
+    # a usable follow-up must be strictly positive.
+    followup = followup.where(followup > 0)
+    df["event_observed"] = death
+    df["followup_time_hours"] = followup
+    df.to_parquet(parquet_path, index=False)
+    return {
+        "column": "followup_time_hours",
+        "event_indicator": "event_observed",
+        "anchor": "icu_admit",
+        "unit": "hours",
+        "rule": (
+            "death_time for valid (>0) deaths; los_hosp*24 hospital-discharge "
+            "proxy for survivors and time-corrupt deaths; event times capped at "
+            "los_hosp*24; NaN when non-positive"
+        ),
+        "n_event_observed": int(is_event.sum()),
+        "n_usable_followup": int(followup.notna().sum()),
+        "n_death_time_artifact_repaired": int((is_event & ~(death_time > 0)).sum()),
+    }
+
+
 def acquire_universe_for_question(
     *,
     export_dir: Union[str, Path],
@@ -205,7 +277,12 @@ def acquire_universe_for_question(
     stem: str = "universe",
     target_outcome: str = "death",
     outcome_concepts: Sequence[str] = ("death",),
-    static_concepts: Sequence[str] = ("age", "sex", "los_icu"),
+    # ``los_hosp`` (hospital length of stay) is the survivor follow-up end: with
+    # the outcome's event time (``death_time``, emitted by the materializer) it
+    # gives a complete time-to-event setup (event time for deaths, censoring time
+    # for survivors) so survival/immortal-time designs are executable instead of
+    # blocked by a timeless binary outcome. Kept alongside ``los_icu``.
+    static_concepts: Sequence[str] = ("age", "sex", "los_icu", "los_hosp"),
     cohort_window: tuple = (0.0, 24.0),
     database: str = "miiv",
     require_outcome: bool = True,
@@ -281,7 +358,17 @@ def acquire_universe_for_question(
         trajectory_concepts=[*feature_concepts, *outcome_concepts],
         trajectory_window=trajectory_window,
     )
+    # Certify an ICU-anchored survival follow-up column when the universe carries
+    # a time-to-event outcome (death + death_time + los_hosp). No-op otherwise.
+    followup_provenance = _augment_certified_followup_columns(Path(paths["parquet"]))
     note = ""
+    if followup_provenance is not None:
+        note = (
+            f"Certified survival follow-up added: {followup_provenance['column']} "
+            f"(+{followup_provenance['event_indicator']}), "
+            f"{followup_provenance['n_event_observed']} events, "
+            f"{followup_provenance['n_usable_followup']} usable. "
+        )
     if not coverage.sufficient:
         note = (
             "Some agent-requested concepts are not in the provided data; "

@@ -61,7 +61,10 @@ class ClinicalSkill:
 
     # ------------------------------------------------------------------
 
-    def question_for(self, *, database: str = "miiv") -> str:
+    def question_for(self, *, database: str) -> str:
+        # ``database`` is required (no default) so no specific source key leaks
+        # into a reusable skill's question text; the caller supplies it from the
+        # active ResearchContext.database.
         return self.research_question_template.format(database=database, **self.__dict__)
 
     def validate_against(self, df: pd.DataFrame) -> List[str]:
@@ -485,7 +488,8 @@ def build_dynamic_core_plan_steps(
                 AnalysisStep(
                     step_id="04_prediction_model_analysis",
                     intent=(
-                        "Develop and evaluate a deterministic ICU mortality prediction model with "
+                        "Develop and evaluate a deterministic ICU prediction model for "
+                        f"{target_outcome or 'the configured target outcome'} with "
                         "explicit train/test separation, leakage safeguards, discrimination, and calibration."
                         + (f" {combined_rationale}" if combined_rationale else "")
                     ),

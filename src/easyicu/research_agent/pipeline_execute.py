@@ -83,6 +83,7 @@ from .deterministic_sensitivity import (
     cohort_definition_overlap_code,
     cohort_definition_sensitivity_comparison_code,
 )
+from .deterministic_survival import survival_primary_analysis_code
 from .estimators import fit_robustness_rows_from_records
 from .llm import MockLLMClient
 from .pipeline import (
@@ -240,8 +241,7 @@ def _terminal_publication_repair_replan_skip_detail(
         if _publication_bundle_has_primary_result_roles(outputs_dir):
             return {
                 "remaining_step_ids": [
-                    str(getattr(step, "step_id", "") or "")
-                    for step in remaining_steps
+                    str(getattr(step, "step_id", "") or "") for step in remaining_steps
                 ],
                 "satisfied_by_step_id": step_id,
                 "satisfied_by_outputs_dir": str(outputs_dir),
@@ -277,15 +277,73 @@ def _demote_cosmetic_visual_findings(
     return demoted, blocking_errors
 
 
+def _max_finding_severity(
+    findings_for_step: Sequence[ValidationFinding],
+) -> Optional[str]:
+    """Return the strongest severity across findings (error > warning > info)."""
+    if any(f.severity == "error" for f in findings_for_step):
+        return "error"
+    if any(f.severity == "warning" for f in findings_for_step):
+        return "warning"
+    if any(f.severity == "info" for f in findings_for_step):
+        return "info"
+    return None
+
+
+def scope_findings_to_records(
+    evidence_ids: Sequence[str],
+    findings_for_step: Sequence[ValidationFinding],
+) -> Dict[str, tuple[Optional[str], List[str]]]:
+    """Map each step output record to the caveat that actually concerns it.
+
+    A finding that names specific records (``finding.evidence_ids``) taints
+    ONLY those records. A step-global finding — no evidence_ids, e.g. an
+    "immortal-time-bias risk" or "cohort is keyed at the stay level"
+    advisory — describes the ANALYSIS DESIGN, not any one artifact.
+    Blanket-tainting every output record with a step-global WARNING made the
+    primary result table uncitable and the manuscript unwinnable: one design
+    advisory flags ``table_one`` / ``adjusted_association``, and the
+    manifest-caveat gate then blocks any draft that cites them (which every
+    real Results section must). Those advisories still live in the manifest
+    findings list and reach the writer as limitations — they simply no longer
+    masquerade as per-artifact taint.
+
+    Step-global ERRORS keep the blanket behaviour (fail-closed: a step-level
+    error means the step's outputs are not to be trusted).
+
+    Returns ``{evidence_id: (severity_or_None, messages)}``.
+    """
+    targeted: Dict[str, List[ValidationFinding]] = {}
+    for finding in findings_for_step:
+        for eid in finding.evidence_ids or []:
+            targeted.setdefault(str(eid), []).append(finding)
+
+    global_error_findings = [
+        f for f in findings_for_step if f.severity == "error" and not f.evidence_ids
+    ]
+    global_error_messages = [f.message for f in global_error_findings]
+
+    scoped: Dict[str, tuple[Optional[str], List[str]]] = {}
+    for evidence_id in evidence_ids:
+        eid = str(evidence_id)
+        relevant = targeted.get(eid, [])
+        severity = _max_finding_severity(list(relevant) + global_error_findings)
+        messages = [
+            f.message for f in relevant if f.severity in {"warning", "error"}
+        ] + global_error_messages
+        scoped[eid] = (severity, messages)
+    return scoped
+
+
 def _reader_label_from_stem(stem: str) -> str:
     words = [
-        token
-        for token in stem.replace("-", "_").replace(".", "_").split("_")
-        if token
+        token for token in stem.replace("-", "_").replace(".", "_").split("_") if token
     ]
     if not words:
         return "Manuscript figure"
-    return " ".join(word.capitalize() if len(word) > 3 else word.upper() for word in words)
+    return " ".join(
+        word.capitalize() if len(word) > 3 else word.upper() for word in words
+    )
 
 
 def _infer_step_figure_panel_role(step: AnalysisStep, stem: str) -> str:
@@ -1007,7 +1065,9 @@ def run_execute_phase(
             )
             if not cap_findings:
                 dropped = [s.step_id for s in revised.steps[cap:]]
-                revised = revised.model_copy(update={"steps": list(revised.steps[:cap])})
+                revised = revised.model_copy(
+                    update={"steps": list(revised.steps[:cap])}
+                )
                 findings.append(
                     ValidationFinding(
                         validator="replanner",
@@ -1203,28 +1263,18 @@ def run_execute_phase(
             return "runner_repaired"
         return "llm"
 
-    def _finding_severity(
-        findings_for_step: Sequence[ValidationFinding],
-    ) -> Optional[str]:
-        if any(f.severity == "error" for f in findings_for_step):
-            return "error"
-        if any(f.severity == "warning" for f in findings_for_step):
-            return "warning"
-        if any(f.severity == "info" for f in findings_for_step):
-            return "info"
-        return None
-
     def _propagate_findings_to_evidence(
         evidence_ids: Sequence[str],
         findings_for_step: Sequence[ValidationFinding],
         *,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
-        severity = _finding_severity(findings_for_step)
-        messages = [
-            f.message for f in findings_for_step if f.severity in {"warning", "error"}
-        ]
+        # Delegates to the module-level ``scope_findings_to_records`` so the
+        # caveat-scoping rule (targeted taint + step-global-error fail-closed,
+        # step-global warnings stay advisory) is unit-testable in isolation.
+        scoped = scope_findings_to_records(evidence_ids, findings_for_step)
         for evidence_id in evidence_ids:
+            severity, messages = scoped[str(evidence_id)]
             evidence.update_record(
                 evidence_id,
                 finding_severity=severity,
@@ -1361,9 +1411,7 @@ def run_execute_phase(
             resumed_code_reuse_used = True
             prior_code, resumed_record = resumed_code
             step_record["generation_mode"] = "resumed_code_reuse"
-            step_record["resumed_code_evidence_id"] = resumed_record.get(
-                "evidence_id"
-            )
+            step_record["resumed_code_evidence_id"] = resumed_record.get("evidence_id")
             step_record["resumed_code_relative_path"] = resumed_record.get(
                 "relative_path"
             )
@@ -1494,36 +1542,16 @@ def run_execute_phase(
             return repaired_code
 
         def _publication_figure_preflight_supported() -> bool:
-            blob = " ".join(
-                [
-                    str(step.step_id or ""),
-                    str(step.intent or ""),
-                    str(step.method or ""),
-                    *[str(item or "") for item in (step.expected_outputs or [])],
-                ]
-            ).lower()
-            return _step_expects_figure(step) and any(
-                token in blob
-                for token in (
-                    "association",
-                    "odds",
-                    "effect",
-                    "forest",
-                    "prediction",
-                    "calibration",
-                    "discrimination",
-                    "sensitivity",
-                    "robustness",
-                    "cohort",
-                    "eligibility",
-                    "overlap",
-                    "attrition",
-                    "definition",
-                    "missingness",
-                    "measurement",
-                    "data_quality",
-                    "quality",
-                )
+            # Match on the step id with the router's own token groups so the
+            # preflight only claims figure steps the deterministic renderer
+            # can actually serve. Matching intent/method text here used to
+            # hijack steps whose prose merely mentioned "cohort"/"quality"
+            # (e.g. a baseline/absolute-risk figure step), replacing the LLM
+            # coder with a rescue that then emitted no figure exports.
+            from .pipeline import deterministic_figure_family_supported
+
+            return _step_expects_figure(step) and deterministic_figure_family_supported(
+                step.step_id
             )
 
         def _deterministic_publication_figure_code(
@@ -1576,6 +1604,46 @@ else:
         def _cohort_definition_sensitivity_preflight_supported() -> bool:
             if _step_expects_figure(step):
                 return False
+            # Guard: a PRIMARY result-bearing analysis (Cox/KM survival,
+            # prediction model, causal contrast, clustering) can legitimately
+            # mention "sensitivity" and a "definition" in its intent without being
+            # a cohort-definition-sensitivity comparison. The deterministic
+            # cohort-sensitivity code emits alternative_cohort_attrition /
+            # cohort_overlap outputs, never cox_summary / auroc / cluster tables,
+            # so it must NOT claim such a step -- doing so blocks the real
+            # estimator on a missing alternative-cohort input (H1 survival step
+            # was hijacked this way and never fit its Cox model).
+            method = str(step.method or "").lower()
+            if method in (
+                "survival_analysis",
+                "prediction_model",
+                "dynamic_prediction",
+                "causal_inference",
+                "treatment_response",
+                "clustering",
+                "validation",
+            ):
+                return False
+            expected_blob = " ".join(
+                str(item or "") for item in (step.expected_outputs or [])
+            ).lower()
+            if any(
+                token in expected_blob
+                for token in (
+                    "cox_summary",
+                    "km_curve",
+                    "hazard_ratio",
+                    "kaplan",
+                    "auroc",
+                    "roc_curve",
+                    "calibration_curve",
+                    "cluster_characteristics",
+                    "silhouette",
+                    "causal_effect",
+                    "covariate_balance",
+                )
+            ):
+                return False
             blob = " ".join(
                 [
                     str(step.step_id or ""),
@@ -1621,8 +1689,65 @@ else:
             return (
                 "cohort_definition_sensitivity" in blob
                 and any(token in blob for token in ("alternative", "eligibility"))
-                and any(token in blob for token in ("overlap", "attrition", "denominator"))
+                and any(
+                    token in blob for token in ("overlap", "attrition", "denominator")
+                )
             )
+
+        def _survival_primary_analysis_preflight_supported() -> bool:
+            """True for the PRIMARY time-to-event result step.
+
+            The deterministic Cox runner owns the survival estimand (exposure +
+            Cox + KM data) so this result path is reproducible instead of
+            varying run-to-run. It must NOT claim a figure step (the family
+            figure renderer handles those) nor a sensitivity/prep step.
+            """
+            if _step_expects_figure(step):
+                return False
+            method = str(step.method or "").lower()
+            if method not in ("survival_analysis", "time_to_event", "cox", "cox_ph"):
+                return False
+            blob = " ".join(
+                [
+                    str(step.step_id or ""),
+                    str(step.intent or ""),
+                    *[str(item or "") for item in (step.expected_outputs or [])],
+                ]
+            ).lower()
+            # A cohort-definition-sensitivity re-fit is handled elsewhere.
+            if "sensitivity" in blob and any(
+                t in blob for t in ("cohort", "definition", "eligibility")
+            ):
+                return False
+            return True
+
+        def _deterministic_survival_primary_analysis_code(
+            reason: str,
+            *,
+            preflight: bool = False,
+        ) -> Optional[str]:
+            nonlocal deterministic_fallback_used
+            if (
+                deterministic_fallback_used
+                or not pipeline._enable_deterministic_runner_repair
+                or (preflight and not _survival_primary_analysis_preflight_supported())
+            ):
+                return None
+            if not _survival_primary_analysis_preflight_supported():
+                return None
+            deterministic_fallback_used = True
+            step_record["deterministic_code_fallback"] = reason
+            step_record["deterministic_standard_analysis"] = "survival_primary_cox"
+            emit_progress(
+                "coder",
+                f"Using deterministic Cox survival runner for {step.step_id}.",
+                run_id=run_id,
+                step_id=step.step_id,
+                current_step=step_current,
+                total_steps=total_steps,
+                fallback_reason=reason,
+            )
+            return survival_primary_analysis_code()
 
         def _deterministic_cohort_definition_overlap_code(
             reason: str,
@@ -1640,9 +1765,7 @@ else:
                 return None
             deterministic_fallback_used = True
             step_record["deterministic_code_fallback"] = reason
-            step_record["deterministic_standard_analysis"] = (
-                "cohort_definition_overlap"
-            )
+            step_record["deterministic_standard_analysis"] = "cohort_definition_overlap"
             emit_progress(
                 "coder",
                 f"Using deterministic cohort-definition overlap script for {step.step_id}.",
@@ -1702,6 +1825,27 @@ else:
             code = resume_summary_repair_code
         elif preflight_resumed_code is not None:
             code = _use_resumed_code(preflight_resumed_code)
+        elif (
+            _preflight_survival_code := _deterministic_survival_primary_analysis_code(
+                "survival_primary_analysis_preflight", preflight=True
+            )
+        ) is not None:
+            # The PRIMARY time-to-event result runs deterministically (Cox +
+            # KM data, correct exposure, no figures) so the survival estimand
+            # does not vary run-to-run through the LLM coder.
+            code = _preflight_survival_code
+            with shared_lock:
+                findings.append(
+                    ValidationFinding(
+                        validator="coder",
+                        severity="info",
+                        message=(
+                            "Using deterministic Cox survival runner before "
+                            f"requesting new coder code for step {step.step_id}."
+                        ),
+                        detail={"step_id": step.step_id},
+                    )
+                )
         else:
             preflight_figure_code = _deterministic_publication_figure_code(
                 "publication_figure_parent_outputs_preflight",
@@ -2949,7 +3093,9 @@ else:
                         _record_repair(
                             repair_id=promoted,
                             step_id=step.step_id,
-                            trigger={"source": "publication_figure_prior_bundle_promotion"},
+                            trigger={
+                                "source": "publication_figure_prior_bundle_promotion"
+                            },
                             transformation="Promoted prior publication figure bundle into current outputs directory.",
                         )
 
@@ -3254,14 +3400,11 @@ else:
             for token in ("missingness", "measurement", "data_quality", "quality")
         )
         if (
-            (
-                association_publication_step
-                or sensitivity_publication_step
-                or cohort_publication_step
-                or missingness_publication_step
-            )
-            and figure_gate_errors
-        ):
+            association_publication_step
+            or sensitivity_publication_step
+            or cohort_publication_step
+            or missingness_publication_step
+        ) and figure_gate_errors:
             _clear_output_dir(run_result.out_dir)
             repaired = _render_publication_bundle_from_prior_outputs_for_step(
                 run_dir=run_dir,

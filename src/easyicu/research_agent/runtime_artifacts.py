@@ -14,6 +14,66 @@ from .architecture import SystemLayer
 from .schema import AnalysisPlan, ResearchContext, ValidationFinding
 
 
+def _git_field(args: List[str]) -> Optional[str]:
+    """Run a short read-only git command, returning stripped stdout or None.
+
+    Never raises: any failure (git missing, not a repo, timeout) yields
+    None so code-version capture degrades gracefully in shipped installs.
+    """
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["git", *args],
+            cwd=str(Path(__file__).resolve().parent),
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception:
+        return None
+    if out.returncode != 0:
+        return None
+    return (out.stdout or "").strip() or None
+
+
+def capture_code_version() -> Optional[Dict[str, Any]]:
+    """Capture the code identity (git sha/branch/dirty + package version).
+
+    Ties a run manifest back to the exact source that produced it, which the
+    reproducibility claim depends on. All fields are best-effort: a shipped
+    wheel with no git checkout still records ``package_version``; a git
+    checkout with no installed metadata still records the sha. Returns None
+    only when BOTH sources fail.
+    """
+    sha = _git_field(["rev-parse", "HEAD"])
+    branch = _git_field(["rev-parse", "--abbrev-ref", "HEAD"])
+    # --porcelain status: any output => working tree has uncommitted changes.
+    status = _git_field(["status", "--porcelain"])
+    dirty = None if status is None else bool(status)
+
+    package_version: Optional[str] = None
+    try:
+        import easyicu
+
+        package_version = getattr(easyicu, "__version__", None)
+        if package_version is None:
+            from importlib.metadata import version as _pkg_version
+
+            package_version = _pkg_version("easyicu")
+    except Exception:
+        package_version = None
+
+    if sha is None and package_version is None:
+        return None
+    return {
+        "git_sha": sha,
+        "git_branch": branch,
+        "git_dirty": dirty,
+        "package_version": package_version,
+    }
+
+
 class AuditEvent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -143,7 +203,11 @@ def build_workflow_graph(
             ),
             WorkflowNode(
                 node_id="manuscript" if not paused_after_analysis else "analysis_pause",
-                label="Scientific discovery / manuscript output" if not paused_after_analysis else "Pause after analysis",
+                label=(
+                    "Scientific discovery / manuscript output"
+                    if not paused_after_analysis
+                    else "Pause after analysis"
+                ),
                 layer=SystemLayer.SCIENTIFIC_DISCOVERY,
                 kind="write" if not paused_after_analysis else "pause",
                 status="paused" if paused_after_analysis else "ok",
@@ -169,7 +233,11 @@ def build_workflow_graph(
             WorkflowNode(
                 node_id=step_id,
                 label=step_id,
-                layer=SystemLayer.AGENT_ORCHESTRATION if step_id != "00_probe" else SystemLayer.ICU_DATA_FOUNDATION,
+                layer=(
+                    SystemLayer.AGENT_ORCHESTRATION
+                    if step_id != "00_probe"
+                    else SystemLayer.ICU_DATA_FOUNDATION
+                ),
                 kind="step",
                 status=str(rec.get("status") or "unknown"),
                 detail={
@@ -178,8 +246,12 @@ def build_workflow_graph(
                 },
             )
         )
-        graph.edges.append(WorkflowEdge(source="plan", target=step_id, relation="contains"))
-        graph.edges.append(WorkflowEdge(source=step_id, target="evidence", relation="registers"))
+        graph.edges.append(
+            WorkflowEdge(source="plan", target=step_id, relation="contains")
+        )
+        graph.edges.append(
+            WorkflowEdge(source=step_id, target="evidence", relation="registers")
+        )
     return graph
 
 
@@ -219,8 +291,16 @@ def build_execution_replay(
             ReplayStep(
                 step_id=str(rec.get("step_id") or ""),
                 status=str(rec.get("status") or "unknown"),
-                generation_mode=(str(rec.get("generation_mode")) if rec.get("generation_mode") is not None else None),
-                returncode=(int(rec["returncode"]) if rec.get("returncode") is not None else None),
+                generation_mode=(
+                    str(rec.get("generation_mode"))
+                    if rec.get("generation_mode") is not None
+                    else None
+                ),
+                returncode=(
+                    int(rec["returncode"])
+                    if rec.get("returncode") is not None
+                    else None
+                ),
                 evidence_ids=[str(x) for x in rec.get("evidence_ids", []) or []],
                 interpretation_evidence_id=(
                     str(rec.get("interpretation_evidence_id"))
@@ -247,8 +327,12 @@ def _sha256_of_file(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
 def write_json_artifact(path: str | Path, payload: BaseModel | Dict[str, Any]) -> Path:
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
-    data = payload.model_dump(mode="json") if isinstance(payload, BaseModel) else payload
-    out.write_text(json.dumps(data, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    data = (
+        payload.model_dump(mode="json") if isinstance(payload, BaseModel) else payload
+    )
+    out.write_text(
+        json.dumps(data, indent=2, ensure_ascii=False, default=str), encoding="utf-8"
+    )
     return out
 
 
