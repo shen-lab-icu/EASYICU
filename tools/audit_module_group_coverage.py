@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import sys
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -20,8 +21,6 @@ from typing import Iterable
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUT = REPO_ROOT / "output" / "data_processing" / "module_group_coverage_audit"
 DATABASES = ("aumc", "eicu", "eicu_demo", "hirid", "miiv", "mimic", "mimic_demo", "sic")
-
-import sys
 
 SRC_DIR = REPO_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
