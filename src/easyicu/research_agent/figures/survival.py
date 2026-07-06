@@ -58,9 +58,37 @@ _COX_TABLE_NAMES = [
 def _km_groups_from_table(
     frame: pd.DataFrame,
 ) -> Optional[List[Tuple[str, Dict[str, Any]]]]:
-    time_col = resolve_column(frame, ["time", "t", "duration", "followup_time", "day"])
+    # Canonical/explicit names are listed FIRST so the exact-match pass in
+    # resolve_column wins deterministically before any substring fallback. The
+    # deterministic Cox runner emits ``time``/``survival``; reconciled reporting
+    # tables use the descriptive ``time_hours_post_landmark`` / ``survival_probability``
+    # (H1 01d: a brittle downstream renderer failed to identify these). Keep both
+    # families recognised here so the robust renderer never misses a KM table.
+    time_col = resolve_column(
+        frame,
+        [
+            "time_hours_post_landmark",
+            "followup_time_hours",
+            "time_hours",
+            "followup_time",
+            "time",
+            "timeline",
+            "duration",
+            "day",
+            "t",
+        ],
+    )
     surv_col = resolve_column(
-        frame, ["survival", "surv", "km_estimate", "s_hat", "survival_probability"]
+        frame,
+        [
+            "survival_probability",
+            "survival_prob",
+            "survival",
+            "surv",
+            "km_estimate",
+            "km_survival",
+            "s_hat",
+        ],
     )
     if time_col is None or surv_col is None:
         return None
