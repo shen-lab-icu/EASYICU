@@ -2346,19 +2346,32 @@ def _candidate_hypothesis_key(
     candidate: ExecutableHypothesisCandidate,
 ) -> Tuple[str, str, str, str]:
     pair = candidate.feasibility_pair_key
-    predictor = (
-        pair[0]
-        if pair
-        else candidate.resolved_predictor_concept or candidate.predictor_label
-    )
-    outcome = (
-        pair[1]
-        if pair
-        else candidate.resolved_outcome_concept or candidate.outcome_label
-    )
+    if pair:
+        predictor = normalize_concept_name(pair[0])
+        outcome = normalize_concept_name(pair[1])
+    elif candidate.resolved_predictor_concept or candidate.predictor_label:
+        predictor = normalize_concept_name(
+            candidate.resolved_predictor_concept or candidate.predictor_label
+        )
+        outcome = normalize_concept_name(
+            candidate.resolved_outcome_concept or candidate.outcome_label
+        )
+    else:
+        # Concept-SET candidate (e.g. subphenotype clustering) has no
+        # predictor/outcome pair. Keying it on empty strings collapses every
+        # set idea of the same family into one key, so distinct variable sets
+        # (e.g. clustering on {lactate, creatinine} vs {pao2, fio2}) are
+        # silently deduped, the registry conflates them into one preregistered
+        # entry, and the multiple-testing denominator undercounts. Key on the
+        # sorted resolved concept set instead so distinct sets stay distinct.
+        concepts = candidate.resolved_analysis_concepts or []
+        predictor = "set:" + "|".join(
+            sorted(normalize_concept_name(c) for c in concepts if c)
+        )
+        outcome = ""
     return (
-        normalize_concept_name(predictor),
-        normalize_concept_name(outcome),
+        predictor,
+        outcome,
         normalize_concept_name(candidate.analysis_family),
         candidate.feature_derivation_status,
     )

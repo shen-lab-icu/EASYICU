@@ -13,6 +13,7 @@ It never fetches full text by itself and never stores full text in snapshots.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
@@ -21,7 +22,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .idea_mining_schema import SourceMaterial
 from .idea_scope import LiteratureScopeSpec, build_pubmed_query_from_scope
 from .literature import CitationRecord
-
 
 _GAP_ROUTE_TERMS = (
     '"future research" OR "future work" OR "future studies" OR '
@@ -326,10 +326,26 @@ def _coerce_citation(raw: Any) -> CitationRecord:
     if isinstance(raw, CitationRecord):
         return raw
     if isinstance(raw, Mapping):
+        title = str(raw.get("title") or raw.get("Title") or "Untitled")
+        year = str(raw.get("year") or raw.get("Year") or "")
+        raw_key = raw.get("key") or raw.get("pmid") or raw.get("id")
+        if raw_key is None or str(raw_key).strip() in {"", "None"}:
+            # A keyless record (a legitimate shape for a lightweight client)
+            # must NOT stringify to the literal "None": the funnel dedups by
+            # citation.key, so every keyless paper from every route would
+            # collapse into one and the rest are silently dropped. Synthesize a
+            # stable per-record key from its content instead.
+            venue = str(raw.get("venue") or raw.get("journal") or "")
+            digest = hashlib.sha256(
+                f"{title}|{year}|{venue}".encode("utf-8")
+            ).hexdigest()[:16]
+            key = f"synthetic:{digest}"
+        else:
+            key = str(raw_key)
         return CitationRecord(
-            key=str(raw.get("key") or raw.get("pmid") or raw.get("id")),
-            title=str(raw.get("title") or raw.get("Title") or "Untitled"),
-            year=str(raw.get("year") or raw.get("Year") or ""),
+            key=key,
+            title=title,
+            year=year,
             venue=raw.get("venue") or raw.get("journal"),
             relevance=raw.get("relevance") or raw.get("abstract"),
             doi=raw.get("doi"),

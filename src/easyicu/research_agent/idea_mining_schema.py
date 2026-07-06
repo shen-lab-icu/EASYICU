@@ -392,6 +392,15 @@ class PriorArtQueryRecord(BaseModel):
     hit_count: int = Field(ge=0)
     pmids: List[str] = Field(default_factory=list)
     top_hits: List[PriorArtSearchHit] = Field(default_factory=list)
+    search_ok: bool = Field(
+        default=True,
+        description=(
+            "Whether the prior-art search actually ran and returned a usable "
+            "response. False on a network/API failure or a None result that is "
+            "indistinguishable from a genuinely sparse field. A failed screen "
+            "must NOT be read as evidence of novelty."
+        ),
+    )
 
     @field_validator("query")
     @classmethod

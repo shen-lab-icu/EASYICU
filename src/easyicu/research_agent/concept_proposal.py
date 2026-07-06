@@ -203,11 +203,18 @@ def propose_concept_selection(
     system, user = build_selection_messages(concept_name, rows)
     payload = _extract_json(complete(system, user))
     offered = {int(r["itemid"]) for r in rows}
-    selected = [
-        int(i)
-        for i in (payload.get("selected_itemids") or [])
-        if str(i).lstrip("-").isdigit() and int(i) in offered
-    ]
+    selected: List[int] = []
+    for i in payload.get("selected_itemids") or []:
+        # Accept ints, int-strings, AND integer-valued floats/float-strings:
+        # JSON models sometimes emit an itemid as ``50954.0`` or ``"50954.0"``,
+        # which ``str(i).isdigit()`` rejected, silently dropping a legitimately
+        # selected item. The ``in offered`` check remains the correctness gate.
+        try:
+            itemid = int(float(i))
+        except (TypeError, ValueError):
+            continue
+        if itemid in offered:
+            selected.append(itemid)
     role = str(payload.get("role") or MEASUREMENT_ROLE).strip().lower()
     return ConceptProposalDraft(
         concept_name=concept_name,
