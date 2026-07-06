@@ -476,12 +476,23 @@ class ExtendedFeasibilityIndex:
         pop_l = population.lower()
         undercoded = any(p in pop_l for p in _UNDERCODED_PATTERNS)
         broad = bool(content & _BROAD_CATEGORY_TOKENS)
-        # confident: a coherent definition exists -- either >=2 specific content
-        # tokens all matched, or a single specific (non-broad) disease token.
+        # confident: a coherent definition exists -- the best-matching title
+        # actually shares >=2 content tokens (or the single specific token, for
+        # a one-token phrase). The old check used len(content) of the INPUT
+        # phrase, which never proved those tokens matched: a two-token phrase
+        # matching only its anchor was over-called confident, contradicting the
+        # comment's own "all matched" claim.
+        best_overlap = max(
+            (
+                len(content & toks)
+                for (toks, _c, _t, _n) in self._icd_index
+                if anchor in toks
+            ),
+            default=0,
+        )
+        required_overlap = 1 if len(content) <= 1 else 2
         confident = (
-            (not broad)
-            and (not undercoded)
-            and (len(content) >= 2 or len(matches) <= 40)
+            (not broad) and (not undercoded) and (best_overlap >= required_overlap)
         )
         reliability = (
             "unreliable_undercoded"

@@ -453,7 +453,9 @@ def discover_literature(body: Dict[str, Any]) -> Dict[str, Any]:
     if ids:
         try:
             articles = _pubmed_article_records(ids)
-            network_calls += 2
+            # _pubmed_article_records issues a single efetch request; the counter
+            # must reflect that (the privacy audit over-reported 2 calls).
+            network_calls += 1
         except Exception as exc:
             errors.append(str(exc)[:240])
             try:
@@ -729,7 +731,8 @@ def bounded_sample_feasibility(body: Dict[str, Any]) -> Dict[str, Any]:
     max_records = _sample_record_limit(body.get("max_records"))
     root = Path(str(desc.get("path") or source.get("path") or ""))
     entity_ids = export_index.get("entity_ids") or set()
-    denominator = max(len(entity_ids), 1)
+    resolved_denominator, denominator_resolved = _cohort_denominator(export_index, desc)
+    denominator = resolved_denominator if denominator_resolved else 1
 
     stats = [
         row
@@ -745,6 +748,10 @@ def bounded_sample_feasibility(body: Dict[str, Any]) -> Dict[str, Any]:
         )
         if row
     ]
+    if not denominator_resolved:
+        # Cohort denominator unknown: coverage cannot be computed, so it must not
+        # read as feasible. Blank coverage and block the verdict for review.
+        _mark_denominator_unresolved(stats)
     sampled = {row.get("concept_id") for row in stats}
     missing_required = [cid for cid in required if cid not in sampled]
     low = [
@@ -754,6 +761,8 @@ def bounded_sample_feasibility(body: Dict[str, Any]) -> Dict[str, Any]:
     ]
     status = "ready" if stats and not missing_required else "blocked"
     if status == "ready" and low:
+        status = "needs_review"
+    if not denominator_resolved and status == "ready":
         status = "needs_review"
 
     out = {
@@ -779,9 +788,11 @@ def bounded_sample_feasibility(body: Dict[str, Any]) -> Dict[str, Any]:
             "demo_like": bool(export_index.get("demo_like")),
         },
         "cohort": {
-            "entities": len(entity_ids)
-            if entity_ids
-            else (desc.get("summary") or {}).get("stays"),
+            "entities": (
+                len(entity_ids)
+                if entity_ids
+                else (desc.get("summary") or {}).get("stays")
+            ),
             "modules": (desc.get("summary") or {}).get("modules"),
             "total_records": (desc.get("summary") or {}).get("total_rows"),
         },
@@ -826,18 +837,18 @@ def create_handoff(body: Dict[str, Any]) -> Dict[str, Any]:
         raise IdeaMiningWebError({"error": "idea_not_found", "idea_id": idea_id})
     edits = str(body.get("plan_edits") or "").strip()
     plan_artifact = _load_plan(run_id)
-    plan = dict(
-        (plan_artifact or {}).get("plan")
-        or payload.get("handoff_plan")
-        or {}
-    )
+    plan = dict((plan_artifact or {}).get("plan") or payload.get("handoff_plan") or {})
     if edits:
         plan["human_plan_notes"] = edits[:1200]
         plan["selection_mode"] = "human_curated_with_text_edits"
         plan["plan_status"] = "replanned_requires_final_confirmation"
     elif plan_artifact:
-        plan["selection_mode"] = plan.get("selection_mode") or "planned_before_agent_handoff"
-        plan["plan_status"] = plan.get("plan_status") or "planned_requires_final_confirmation"
+        plan["selection_mode"] = (
+            plan.get("selection_mode") or "planned_before_agent_handoff"
+        )
+        plan["plan_status"] = (
+            plan.get("plan_status") or "planned_requires_final_confirmation"
+        )
     prior_art_check = _load_prior_art(run_id)
     pre_experiment = payload.get("pre_experiment") or {}
     plan["active_export_contract"] = plan.get(
@@ -896,11 +907,18 @@ def create_agent_project(body: Dict[str, Any]) -> Dict[str, Any]:
         handoff = create_handoff(body)
     if idea_id and str(handoff.get("idea_id") or "") != idea_id:
         handoff = create_handoff(body)
-    elif _handoff_needs_refresh(handoff, run_id):
+    elif _handoff_needs_refresh(handoff, run_id) or _handoff_plan_is_stale(
+        handoff, run_id, body
+    ):
         refresh_body = dict(body)
-        current_notes = (handoff.get("handoff_plan") or {}).get("human_plan_notes")
-        if current_notes and not refresh_body.get("plan_edits"):
-            refresh_body["plan_edits"] = current_notes
+        if not refresh_body.get("plan_edits"):
+            # Prefer the freshest human plan notes: the on-disk plan (the user's
+            # latest edit, which may never have been re-frozen) over the frozen
+            # handoff notes, so a re-plan is not silently dropped from the seed.
+            plan = _load_plan(run_id) or {}
+            refresh_body["plan_edits"] = plan.get("human_plan_notes") or (
+                handoff.get("handoff_plan") or {}
+            ).get("human_plan_notes")
         handoff = create_handoff(refresh_body)
     seed = _agent_project_seed(handoff)
     project_dir = _AGENT_PROJECTS_ROOT / str(seed["study_id"])
@@ -1279,8 +1297,7 @@ def _idea_from_source(
         if overall["tier"] == "executable"
         else (
             "hold"
-            if overall["tier"].startswith("T1")
-            or overall["tier"] == "demo_only"
+            if overall["tier"].startswith("T1") or overall["tier"] == "demo_only"
             else "db-cannot-do"
         )
     )
@@ -1335,11 +1352,14 @@ def _pre_experiment(
     ]
     if not concepts:
         concepts = list((export_index.get("concept_to_file") or {}).keys())[:6]
+    resolved_denominator, denominator_resolved = _cohort_denominator(export_index, desc)
     stats = _feature_stats(
         Path(str(desc.get("path") or source.get("path"))),
         concepts,
         export_index,
         entity_ids,
+        denominator=resolved_denominator if denominator_resolved else 1,
+        denominator_resolved=denominator_resolved,
     )
     required = [
         row.get("concept_id")
@@ -1355,6 +1375,10 @@ def _pre_experiment(
     )
     if demo_like and status in {"ready", "partial"}:
         status = "demo_only"
+    elif not denominator_resolved and status == "ready":
+        # Coverage is indeterminate without a cohort denominator: never emit a
+        # clean "ready" feasibility verdict against a fabricated denominator.
+        status = "partial"
     return {
         "status": status,
         "payload_scope": "aggregate_pre_experiment_no_row_payload",
@@ -1485,7 +1509,9 @@ def _analysis_plan_draft(
                 "only; do not copy another study path or claim novelty without "
                 "bounded prior-art review."
             ),
-            "reference_analysis_patterns": _reference_analysis_patterns(family, concepts),
+            "reference_analysis_patterns": _reference_analysis_patterns(
+                family, concepts
+            ),
             "clinical_icu_constraints": _clinical_icu_constraints(idea, concepts),
             "required_user_confirmations": _required_plan_confirmations(
                 pre_experiment, prior_art
@@ -1521,8 +1547,7 @@ def _agent_style_steps(
     treatment_strategy = bool(
         concept_ids & {"vaso_ind", "norepi_equiv", "norepi_rate", "norepi_dur"}
     ) and bool(
-        concept_ids
-        & {"total_input_ml", "fluid_balance", "fluid_balance_cumulative"}
+        concept_ids & {"total_input_ml", "fluid_balance", "fluid_balance_cumulative"}
     )
     steps: List[Dict[str, str]] = [
         {
@@ -1784,6 +1809,46 @@ def _export_index(
     }
 
 
+def _cohort_denominator(
+    export_index: Dict[str, Any], desc: Dict[str, Any]
+) -> Tuple[Optional[int], bool]:
+    """Resolve the cohort denominator, distinguishing 0/1 from *unknown*.
+
+    Returns ``(denominator, resolved)``. Prefer the resolved stay-id set; fall
+    back to the export summary's stay count (the value the UI already shows).
+    Returns ``(None, False)`` when neither is available so callers mark coverage
+    indeterminate instead of dividing by a fabricated ``1`` — which turned an
+    800-entity concept into ``coverage_pct = 80000`` and read as fully feasible.
+    """
+    entity_ids = export_index.get("entity_ids") or set()
+    if entity_ids:
+        return len(entity_ids), True
+    summary_stays = (desc.get("summary") or {}).get("stays")
+    try:
+        n = int(summary_stays)
+    except (TypeError, ValueError):
+        n = 0
+    if n > 0:
+        return n, True
+    return None, False
+
+
+def _mark_denominator_unresolved(stats: List[Dict[str, Any]]) -> None:
+    """Blank coverage on feature stats when the cohort denominator is unknown.
+
+    Coverage/event-rate percentages computed against a fabricated denominator
+    of 1 are meaningless and read as feasible; null them and flag the rows so
+    the UI shows an indeterminate denominator rather than a false-feasible signal.
+    """
+    for row in stats:
+        row["coverage_pct"] = None
+        row["missing_pct"] = None
+        row["low_coverage"] = None
+        if row.get("metric_kind") == "event_rate":
+            row["event_rate_pct"] = None
+        row["denominator_resolved"] = False
+
+
 def _export_is_demo_like(source: Dict[str, Any], desc: Dict[str, Any]) -> bool:
     text = " ".join(
         str(v or "")
@@ -1805,10 +1870,14 @@ def _feature_stats(
     concepts: Iterable[str],
     export_index: Dict[str, Any],
     entity_ids: set[str],
+    *,
+    denominator: Optional[int] = None,
+    denominator_resolved: bool = True,
 ) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     concept_to_file = export_index.get("concept_to_file") or {}
-    denominator = max(len(entity_ids), 1)
+    if denominator is None:
+        denominator = max(len(entity_ids), 1)
     for concept_id in concepts:
         item = concept_to_file.get(concept_id)
         if not item:
@@ -1896,6 +1965,8 @@ def _feature_stats(
         )
         if len(out) >= _MAX_FEATURE_STATS:
             break
+    if not denominator_resolved:
+        _mark_denominator_unresolved(out)
     return out
 
 
@@ -2026,7 +2097,9 @@ def _selected_feature_columns(columns: List[str], concept_id: str) -> List[str]:
     return selected
 
 
-def _read_bounded_feature_frame(path: Path, columns: List[str], max_records: int) -> Any:
+def _read_bounded_feature_frame(
+    path: Path, columns: List[str], max_records: int
+) -> Any:
     import pandas as pd
 
     suffix = path.suffix.lower()
@@ -2080,7 +2153,9 @@ def _bounded_sample_interpretation(
             f"{len(missing_required)} required concept(s) were not verified in the bounded sample."
         )
     if low_coverage:
-        labels = ", ".join(_concept_label(row.get("concept_id")) for row in low_coverage[:4])
+        labels = ", ".join(
+            _concept_label(row.get("concept_id")) for row in low_coverage[:4]
+        )
         notes.append(
             f"Low sample coverage remains for: {labels}. Confirm denominator and missingness before Agent execution."
         )
@@ -2414,6 +2489,30 @@ def _read_agent_projects() -> List[Dict[str, Any]]:
     return valid
 
 
+def _handoff_plan_is_stale(
+    handoff: Dict[str, Any], run_id: str, body: Dict[str, Any]
+) -> bool:
+    """True when the frozen handoff plan no longer reflects the latest edits.
+
+    ``_handoff_needs_refresh`` only checks prior-art drift, so a user who edits
+    the plan (or calls /api/ideas/plan) after clicking Handoff — without
+    re-clicking Handoff — would have their revision silently dropped: the
+    stale plan is seeded into Agent Projects. Detect that here so the handoff
+    is re-frozen from the newer plan.
+    """
+    frozen_notes = str(
+        (handoff.get("handoff_plan") or {}).get("human_plan_notes") or ""
+    ).strip()
+    body_edits = str(body.get("plan_edits") or "").strip()
+    if body_edits and body_edits != frozen_notes:
+        return True
+    plan = _load_plan(run_id) or {}
+    plan_notes = str(plan.get("human_plan_notes") or "").strip()
+    if plan_notes and plan_notes != frozen_notes:
+        return True
+    return False
+
+
 def _handoff_needs_refresh(handoff: Dict[str, Any], run_id: str) -> bool:
     prior_art_check = _load_prior_art(run_id)
     if prior_art_check and not handoff.get("prior_art_check"):
@@ -2442,9 +2541,9 @@ def _agent_project_seed(handoff: Dict[str, Any]) -> Dict[str, Any]:
     source = (handoff.get("source_evidence") or [{}])[0]
     pre = handoff.get("pre_experiment") or {}
     prior_art_check = handoff.get("prior_art_check")
-    active_export_contract = (
-        plan.get("active_export_contract") or _active_export_contract(pre)
-    )
+    active_export_contract = plan.get(
+        "active_export_contract"
+    ) or _active_export_contract(pre)
     prior_art_review = plan.get("prior_art_review") or _prior_art_review(
         prior_art_check
     )
@@ -2529,9 +2628,7 @@ def _active_export_contract(pre_experiment: Dict[str, Any]) -> Dict[str, Any]:
     cohort = pre_experiment.get("cohort") or {}
     stats = pre_experiment.get("feature_statistics") or []
     missing = [
-        str(cid)
-        for cid in pre_experiment.get("missing_required_concepts") or []
-        if cid
+        str(cid) for cid in pre_experiment.get("missing_required_concepts") or [] if cid
     ]
     return {
         "status": pre_experiment.get("status") or "blocked",
@@ -2568,8 +2665,7 @@ def _prior_art_review(prior_art_check: Optional[Dict[str, Any]]) -> Dict[str, An
         "direct_same_topic_hit_count": len(prior.get("direct_same_topic_hits") or []),
         "opportunity_frame": prior.get("opportunity_frame"),
         "next_use": prior.get("next_use"),
-        "reason": prior.get("reason")
-        or "Prior-art review has not been run.",
+        "reason": prior.get("reason") or "Prior-art review has not been run.",
     }
 
 
@@ -2580,9 +2676,7 @@ def _execution_gate(
 ) -> Dict[str, Any]:
     export_status = str(pre_experiment.get("status") or "blocked").lower()
     missing = [
-        str(cid)
-        for cid in pre_experiment.get("missing_required_concepts") or []
-        if cid
+        str(cid) for cid in pre_experiment.get("missing_required_concepts") or [] if cid
     ]
     prior = (prior_art_check or {}).get("prior_art") or {}
     blockers: List[str] = []
@@ -2668,7 +2762,9 @@ def _prior_art_queries(source: Dict[str, Any], title: str) -> List[str]:
     title = _clean(title or source.get("title") or "ICU idea", 180)
     source_title = _clean(source.get("title") or "", 180)
     source_quote = _clean(source.get("evidence_quote") or "", 220)
-    exploratory_terms = _clean(" ".join(re.findall(r"[A-Za-z][A-Za-z0-9\-]{3,}", source_quote))[:160], 180)
+    exploratory_terms = _clean(
+        " ".join(re.findall(r"[A-Za-z][A-Za-z0-9\-]{3,}", source_quote))[:160], 180
+    )
     queries = [
         f'("{title}") AND (ICU OR critical care)',
         f'("{title}") AND (MIMIC OR eICU OR "public database")',
@@ -3020,9 +3116,7 @@ def _pubmed_prior_art(queries: List[str]) -> Dict[str, Any]:
         )
     ]
     status = (
-        "searched"
-        if deduped
-        else ("search_failed" if errors else "searched_no_hits")
+        "searched" if deduped else ("search_failed" if errors else "searched_no_hits")
     )
     if deduped:
         interpretation = (
@@ -3030,13 +3124,9 @@ def _pubmed_prior_art(queries: List[str]) -> Dict[str, Any]:
             "which comparator, cohort, database, endpoint, and time window they used. This does not automatically kill the idea; it tells the planner how to refine the new ICU exploration."
         )
     elif errors:
-        interpretation = (
-            "The metadata search failed or was incomplete. Do not claim novelty; keep the idea as a planning draft until prior art can be reviewed."
-        )
+        interpretation = "The metadata search failed or was incomplete. Do not claim novelty; keep the idea as a planning draft until prior art can be reviewed."
     else:
-        interpretation = (
-            "No metadata hit was found with the bounded queries. This is only weak evidence of novelty; broaden queries or review manually before presenting the idea."
-        )
+        interpretation = "No metadata hit was found with the bounded queries. This is only weak evidence of novelty; broaden queries or review manually before presenting the idea."
     return {
         "status": status,
         "search_performed": True,
@@ -3354,7 +3444,13 @@ def _next_action(go: str, feasibility: Dict[str, Any]) -> str:
     if go == "hold":
         if feasibility.get("tier") == "demo_only":
             return "Select a real EasyICU export, rerun feasibility assessment, then generate the plan."
-    return "Re-run extraction with missing modules/features, then repeat the feasibility assessment."
+        # A held idea has the concept in the dictionary but needs more data:
+        # re-extraction can help. (Previously this return sat OUTSIDE the hold
+        # branch, so the db-cannot-do / T3 case below was dead code and T3 ideas
+        # were told to re-extract a concept that does not exist.)
+        return "Re-run extraction with missing modules/features, then repeat the feasibility assessment."
+    # go == "db-cannot-do" (T3): concept is absent from the EasyICU dictionary,
+    # so re-extraction can never produce it.
     return "Choose another database or revise the idea."
 
 

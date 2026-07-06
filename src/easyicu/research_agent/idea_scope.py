@@ -164,7 +164,10 @@ class LiteratureScopeSpec(BaseModel):
 
     @model_validator(mode="after")
     def _validate_scope(self) -> "LiteratureScopeSpec":
-        if self.journal_preset is not None and self.journal_preset not in JOURNAL_PRESETS:
+        if (
+            self.journal_preset is not None
+            and self.journal_preset not in JOURNAL_PRESETS
+        ):
             raise ValueError(
                 f"unknown journal_preset {self.journal_preset!r}; "
                 f"known: {sorted(JOURNAL_PRESETS)}"
@@ -179,10 +182,7 @@ class LiteratureScopeSpec(BaseModel):
                 "use either last_n_years or explicit start_year/end_year, not both"
             )
         if not (
-            self.journals
-            or self.journal_preset
-            or self.topic_terms
-            or self.extra_terms
+            self.journals or self.journal_preset or self.topic_terms or self.extra_terms
         ):
             raise ValueError(
                 "scope is too broad: set at least one of journals / journal_preset "
@@ -216,8 +216,15 @@ def resolve_year_range(
     ``reference_year`` for reproducible/frozen queries).
     """
     if scope.start_year is not None or scope.end_year is not None:
-        start = scope.start_year or scope.end_year
-        end = scope.end_year or scope.start_year
+        # A single-sided window is OPEN-ENDED, not a single year. Mirroring the
+        # present bound onto the missing side (the old behaviour) turned
+        # "from 2018 onwards" into 2018:2018 and silently dropped every paper
+        # after 2018. Match the webserver semantics (_discovery_queries): fill
+        # a missing upper bound with the reference/current year and a missing
+        # lower bound with a documented floor.
+        ref = reference_year or datetime.now(timezone.utc).year
+        start = scope.start_year if scope.start_year is not None else 1900
+        end = scope.end_year if scope.end_year is not None else ref
         return int(start), int(end)
     if scope.last_n_years is not None:
         ref = reference_year or datetime.now(timezone.utc).year

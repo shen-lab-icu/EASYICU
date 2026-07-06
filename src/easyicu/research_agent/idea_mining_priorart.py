@@ -317,6 +317,18 @@ def assess_prior_art_for_idea(
     )
     if direct_hits and not screened_direct_hits:
         novelty_label = "crowded_but_differentiable"
+    # If the broad recall screen did not actually run (network/API failure, or a
+    # None/empty response), a zero hit count is an artifact, not a gap. Never let
+    # a failed screen produce an apparent-novelty verdict: degrade to the
+    # conservative "crowded" label and mark the same-topic screen as not run so
+    # the go/no-go gate holds for human confirmation instead of recommending.
+    prior_art_screen_ran = bool(getattr(broad, "search_ok", True))
+    if not prior_art_screen_ran:
+        if novelty_label in {"apparently_gap", "sparse"}:
+            novelty_label = "crowded_but_differentiable"
+        same_topic_screen_status = (
+            "prior-art search unavailable, NOT screened; " + same_topic_screen_status
+        )
     judge_rationale: Optional[str] = None
     if novelty_judge is not None:
         novelty_label, judge_rationale = _apply_novelty_judge(
@@ -517,12 +529,32 @@ def _run_prior_art_query(
     max_results: int,
     idea: LiteratureIdeaCandidate,
 ) -> PriorArtQueryRecord:
-    raw = _call_prior_art_search(
-        search_client,
-        query,
-        max_results=max_results,
-        idea=idea,
-    )
+    try:
+        raw = _call_prior_art_search(
+            search_client,
+            query,
+            max_results=max_results,
+            idea=idea,
+        )
+    except IdeaMiningError:
+        # No usable client at all — re-raise; this is a wiring error, not a
+        # transient search failure.
+        raise
+    except Exception:
+        # The search client failed (network/API error). Record a screen that
+        # did NOT run so novelty degrades conservatively instead of reading an
+        # empty result as a gap.
+        return PriorArtQueryRecord(
+            query_type=query_type,
+            query=query,
+            hit_count=0,
+            pmids=[],
+            top_hits=[],
+            search_ok=False,
+        )
+    # A None response is the swallowed-error shape some clients return; treat it
+    # as a failed screen, not a genuine zero-hit result.
+    search_ok = raw is not None
     record = _coerce_prior_art_query_record(
         raw,
         query_type=query_type,
@@ -530,9 +562,10 @@ def _run_prior_art_query(
     )
     return record.model_copy(
         update={
+            "search_ok": search_ok,
             "top_hits": [
                 _classify_direct_same_topic_hit(hit, idea) for hit in record.top_hits
-            ]
+            ],
         }
     )
 

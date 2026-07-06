@@ -20,7 +20,6 @@ from typing import Any, Dict, Iterable, List, Literal, Mapping, Optional, Sequen
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-
 PUBLIC_DATABASES = ("mimic", "miiv", "eicu", "aumc", "hirid", "sic")
 
 _OUTCOME_BLIND_FORBIDDEN_FIELDS = (
@@ -246,7 +245,9 @@ def hypothesis_cross_database_feasibility(
     feasibility: Dict[str, str] = {}
     degraded_reason: Dict[str, str] = {}
     for db in dbs:
-        cells = [availability[concept][db] for concept in deps if concept in availability]
+        cells = [
+            availability[concept][db] for concept in deps if concept in availability
+        ]
         if not cells:
             feasibility[db] = "blocked"
             degraded_reason[db] = "No concept dependencies were available to assess."
@@ -335,7 +336,9 @@ def real_data_concept_feasibility(
         for concept, cell in cells.items()
         if _cell_is_structural_unavailable(cell)
     }
-    data_concepts = [concept for concept in requested if concept not in structural_concepts]
+    data_concepts = [
+        concept for concept in requested if concept not in structural_concepts
+    ]
 
     needs_data = bool(data_concepts)
     if not needs_data:
@@ -354,9 +357,7 @@ def real_data_concept_feasibility(
 
     frame = _read_prepared_frame(data_path)
     non_structural_blocked = [
-        concept
-        for concept in data_concepts
-        if cells[concept].status == "blocked"
+        concept for concept in data_concepts if cells[concept].status == "blocked"
     ]
     if non_structural_blocked:
         joint = _zero_joint_from_frame(
@@ -376,8 +377,7 @@ def real_data_concept_feasibility(
     out: Dict[str, RealDataConceptFeasibility] = {}
     structural_note = _structural_unavailable_note(structural_concepts)
     joint_denominator_concepts = [
-        normalize_concept_name(concept)
-        for concept in data_concepts
+        normalize_concept_name(concept) for concept in data_concepts
     ]
     for concept in requested:
         cell = cells[concept]
@@ -423,8 +423,7 @@ def real_data_concept_feasibility(
             availability_reason=cell.reason,
             source_missing_tables=list(cell.source_missing_tables),
             structural_unavailable_concepts=sorted(
-                normalize_concept_name(concept)
-                for concept in structural_concepts
+                normalize_concept_name(concept) for concept in structural_concepts
             ),
             joint_denominator_concepts=joint_denominator_concepts,
             note=note,
@@ -589,7 +588,10 @@ def _reason_for_cell(cell: Mapping[str, Any]) -> str:
         parts.append("missing=" + ",".join(map(str, missing[:6])))
     if degraded:
         parts.append("degraded=" + ",".join(map(str, degraded[:6])))
-    if reason and reason not in {"direct_source_available", "all_dependencies_available"}:
+    if reason and reason not in {
+        "direct_source_available",
+        "all_dependencies_available",
+    }:
         parts.append(reason)
     return " ".join(parts)
 
@@ -728,7 +730,11 @@ def _probe_single_concept_from_frame(
     )
     fraction_missing = _fraction_missing(n_present=n_present, denominator_n=denominator)
     value_contrast_fraction = (
-        _value_contrast_fraction(filtered, column)
+        _value_contrast_fraction(
+            filtered,
+            column,
+            event_default_false=_is_event_default_false(concept, event_default_false),
+        )
         if compute_contrast and column is not None
         else None
     )
@@ -744,8 +750,10 @@ def _probe_single_concept_from_frame(
     }
 
 
-def _value_contrast_fraction(frame: Any, column: Any) -> Optional[float]:
-    """Exposure-side answerability: ``1 - modal share`` over non-missing values.
+def _value_contrast_fraction(
+    frame: Any, column: Any, *, event_default_false: bool = False
+) -> Optional[float]:
+    """Exposure-side answerability: ``1 - modal share`` over the values.
 
     A near-zero value means the predictor is essentially constant in the cohort
     (e.g. an intervention present in ~0% or ~100% of units), so there is no
@@ -756,8 +764,18 @@ def _value_contrast_fraction(frame: Any, column: Any) -> Optional[float]:
     Computed over the prepared wide cohort table (≈one row per analytic unit).
     Callers gate this to predictor/exposure concepts only: a binary outcome's
     modal share equals its event rate, which the outcome-blind guard forbids.
+
+    For ``event_default_false`` concepts (mech_vent, rrt, ...), event-absent
+    units are encoded as NaN — real observed negatives, not missing data (see
+    ``_present_mask``). ``dropna()`` would strip them and report a balanced 30/70
+    binary exposure as single-valued (contrast 0.0 -> a false-infeasible verdict
+    at the human gate). Treat NaN as the absent class over the full denominator
+    instead; only measurement concepts drop missing rows.
     """
-    series = frame[column].dropna()
+    if event_default_false:
+        series = frame[column].fillna(0)
+    else:
+        series = frame[column].dropna()
     n = int(len(series))
     if n == 0:
         return None
@@ -778,10 +796,13 @@ def _probe_joint_from_frame(
     denominator = _denominator_n(filtered, unit)
     unique_concepts = _unique_concepts_preserving_requested_alias(concepts)
     resolved_columns = [
-        _resolve_concept_column(filtered, concept)
-        for concept in unique_concepts
+        _resolve_concept_column(filtered, concept) for concept in unique_concepts
     ]
-    if denominator == 0 or not resolved_columns or any(col is None for col in resolved_columns):
+    if (
+        denominator == 0
+        or not resolved_columns
+        or any(col is None for col in resolved_columns)
+    ):
         return {
             "n_joint_complete": 0,
             "joint_fraction_complete": 0.0,
@@ -855,12 +876,12 @@ def _blocked_real_data_feasibility(
         joint_fraction_complete=0.0,
         missingness_applicable=False,
         structural_unavailable=True,
-        availability_status=availability_cell.status if availability_cell else "blocked",
+        availability_status=(
+            availability_cell.status if availability_cell else "blocked"
+        ),
         availability_reason=availability_cell.reason if availability_cell else reason,
         source_missing_tables=(
-            list(availability_cell.source_missing_tables)
-            if availability_cell
-            else []
+            list(availability_cell.source_missing_tables) if availability_cell else []
         ),
         structural_unavailable_concepts=[normalize_concept_name(concept)],
         joint_denominator_concepts=[],
