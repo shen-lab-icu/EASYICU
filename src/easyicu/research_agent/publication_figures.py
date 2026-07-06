@@ -424,6 +424,21 @@ def _normalise_panels(
             else:
                 raw["evidence_ids"] = [str(source)]
         raw["role"] = _canonical_panel_role(raw.get("role"), idx, raw)
+        # Backfill a blank panel title from the panel's own declared role (or a
+        # short claim snippet). A coder that leaves ``title=""`` otherwise trips
+        # the ``figure_contract_quality`` gate ("panel(s) without titles") and
+        # fail-closes the whole run — observed on the M3 clustering figure whose
+        # A/B/C/D panels carried rich roles/claims but empty titles. The role is
+        # the coder's own declaration, so this is normalisation, not fabrication.
+        if not str(raw.get("title") or "").strip():
+            role_title = str(raw.get("role") or "").replace("_", " ").strip()
+            claim_snippet = str(raw.get("claim") or "").strip()
+            if role_title:
+                raw["title"] = role_title[:1].upper() + role_title[1:]
+            elif claim_snippet:
+                raw["title"] = claim_snippet[:60]
+            else:
+                raw["title"] = f"Panel {raw.get('panel_id') or idx + 1}"
         allowed = set(PanelSpec.model_fields)
         metadata = dict(raw.get("metadata") or {})
         for key in list(raw):
