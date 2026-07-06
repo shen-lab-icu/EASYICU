@@ -661,7 +661,14 @@ def infer_analysis_type(
     if _has_any("validation"):
         return _REGISTRY["validation"]
     if _has_any(
-        "prediction_model", extras=("model", "evaluation metric", "evaluation metrics")
+        # NOTE: do NOT add the bare word "model" here. As a strong pre-scoring
+        # cue it false-fires on association/descriptive questions that merely say
+        # "model X continuously" or "regression model" (e.g. the E2 lactate item
+        # was mis-stamped prediction_model by "you may model lactate
+        # continuously"). The real prediction cues (predict/auroc/calibration/
+        # brier/...) are already in prediction_model's trigger_terms.
+        "prediction_model",
+        extras=("evaluation metric", "evaluation metrics"),
     ):
         return _REGISTRY["prediction_model"]
     if _has_any("measurement_bias_audit"):

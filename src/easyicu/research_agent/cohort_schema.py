@@ -600,7 +600,50 @@ def _predicate_mask(data: Any, pred: ConceptPredicate) -> Any:
             "aliases)"
         )
     series = data[column]
-    return _apply_op(series, pred.op, pred.value)
+    mask = _apply_op(series, pred.op, pred.value)
+    return _refine_occurrence_mask_by_event_time(data, pred, mask)
+
+
+def _refine_occurrence_mask_by_event_time(data: Any, pred: ConceptPredicate, mask: Any) -> Any:
+    """Intersect an event-occurrence predicate with its event-time window.
+
+    ``build_cohort`` filters an already-materialised wide table and, by design,
+    does not re-window the summary columns. That is correct for a concept whose
+    column was summarised WITHIN the predicate window, but an OUTCOME concept is
+    materialised whole-stay (``death`` is 1 whenever the patient ever died)
+    alongside an event-time column (``death_time`` = hours from the anchor). A
+    bounded-window occurrence predicate on such a concept — e.g. the landmark
+    exclusion "died within the first 24h" that a survival design writes to avoid
+    immortal-time bias — must therefore consult the event time. Otherwise the
+    whole-stay flag drops EVERY event, not just the in-window ones (H1 survival
+    regression: all 9,466 deaths excluded -> 0 events -> "survival infeasible").
+
+    Scope is deliberately narrow: only a truthy ``==`` occurrence check over a
+    finite window on a concept that actually carries a ``<concept>_time`` sibling
+    column is refined. Magnitude filters (age>=18, los>=1) and concepts without
+    an event-time column are untouched, so association runs with no event-time
+    columns (e.g. E3) behave exactly as before.
+    """
+    tw = pred.time_window
+    if tw is None:
+        return mask
+    if pred.op != "==" or pred.value in (0, 0.0, False, None):
+        return mask
+    end = tw.end_offset_hours
+    if end is None or not math.isfinite(float(end)):
+        return mask
+    event_time_col = f"{pred.concept_id}_time"
+    if event_time_col not in data.columns:
+        return mask
+    event_time = data[event_time_col]
+    in_window = (event_time >= float(tw.start_offset_hours)) & (event_time <= float(end))
+    # NaN event time (no event) -> not in window; keep the row's occurrence flag
+    # from deciding membership only when the event genuinely falls in the window.
+    try:
+        in_window = in_window.fillna(False)
+    except Exception:
+        pass
+    return mask & in_window
 
 
 def _apply_op(series: Any, op: str, value: Any) -> Any:

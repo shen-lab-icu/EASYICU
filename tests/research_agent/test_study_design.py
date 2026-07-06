@@ -34,6 +34,32 @@ def test_study_design_brief_infers_distinct_question_families(ra):
         assert infer_study_design_family(_context(ra, question)) == expected
 
 
+def test_survival_question_phrased_as_association_routes_to_time_to_event(ra):
+    """H1 regression: a time-to-event question that uses the word "association".
+
+    The canonical H1 item asks to "estimate the ASSOCIATION between mechanical
+    ventilation and 28-day mortality" while respecting exposure timing and
+    censoring -- i.e. a survival study worded as an association. The keyword
+    cascade used to stop at "association" (the literal word), so the figure
+    renderer and the methodological-rigor auditor -- both keyed on this
+    function -- routed to the association family and never fired the survival
+    figure / method-match check, even though the plan contract (keyed on the
+    richer analysis-type scorer) correctly built a survival step. The design
+    family must now agree with the plan contract.
+    """
+    from easyicu.research_agent.study_design import infer_study_design_family
+
+    question = (
+        "Among adult ICU patients in MIMIC-IV, estimate the association between "
+        "first-24h mechanical ventilation status/duration and in-hospital "
+        "(28-day) mortality. Respect exposure timing, define time zero, and "
+        "handle censoring with a Cox proportional-hazards / Kaplan-Meier "
+        "time-to-event analysis."
+    )
+    ctx = _context(ra, question, outcome="death", exposure="vent")
+    assert infer_study_design_family(ctx) == "time_to_event"
+
+
 def test_study_design_brief_infers_chinese_canonical_question_families(ra):
     from easyicu.research_agent.study_design import infer_study_design_family
 

@@ -333,3 +333,107 @@ def test_normalize_event_indicator_decodes_na_as_zero():
     assert set(normalized) == {"sep3_max", "sep3_first", "sep3_mean"}
     # a real numeric score keeps its NA (measurement-missing preserved)
     assert wide["sofa_max"].isna().tolist() == [False, True, False]
+
+
+def test_normalize_event_indicator_handles_nullable_boolean_columns():
+    """Regression (H1 universe rebuild): a positive-only event indicator stored
+    as a pandas *nullable* boolean (True/<NA>) must normalise to a 0/1 column.
+
+    ``(col == True).astype(int)`` kept <NA> in the result and raised
+    "cannot convert NA to integer", which crashed the whole universe build.
+    Absence is the negative level ("0 when absent"), so <NA> -> 0.
+    """
+    wide = pd.DataFrame(
+        {
+            "death_max": pd.array([True, None, True], dtype="boolean"),
+            "death_first": pd.array([True, None, True], dtype="boolean"),
+            "death_mean": pd.array([1.0, None, 1.0], dtype="Float64"),
+            # a genuine numeric measure must be left untouched (not an indicator)
+            "sofa_max": [7, 3, None],
+        }
+    )
+
+    normalized = M._normalize_event_indicator_columns(wide)
+
+    assert "death_max" in normalized and "death_first" in normalized
+    assert wide["death_max"].tolist() == [1, 0, 1]
+    assert wide["death_first"].tolist() == [1, 0, 1]
+    # the _mean branch already coerced NA -> 0.0
+    assert wide["death_mean"].tolist() == [1.0, 0.0, 1.0]
+    # a numeric score is not a positive-only boolean -> not normalised/corrupted
+    assert "sofa_max" not in normalized
+
+
+def test_normalize_event_indicator_still_handles_object_true_none():
+    # The original working path: a positive-only indicator stored as object
+    # dtype (True / None). absence(None) -> 0, must be unchanged by the fix.
+    wide = pd.DataFrame(
+        {
+            "vent_max": pd.Series([True, None, True], dtype=object),
+            "vent_first": pd.Series([True, None, True], dtype=object),
+        }
+    )
+    normalized = M._normalize_event_indicator_columns(wide)
+    assert wide["vent_max"].tolist() == [1, 0, 1]
+    assert set(normalized) >= {"vent_max", "vent_first"}
+
+
+def test_windowed_death_exclusion_uses_event_time_not_wholestay_flag():
+    """Regression (H1 survival): a bounded-window occurrence exclusion on an
+    OUTCOME concept (``death``) that carries an event-time sibling
+    (``death_time``) must exclude only events INSIDE the window, using the event
+    time — not drop every event because the whole-stay flag is set. Previously
+    the landmark exclusion "died within 24h" removed all deaths -> 0 events."""
+    from easyicu.research_agent.cohort_schema import build_cohort, CohortDefinition
+
+    data = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4, 5],
+            "age": [65, 70, 55, 80, 60],
+            "death": [1, 1, 0, 1, 0],            # whole-stay flag
+            "death_time": [10.0, 87.0, None, 5.0, None],  # hours from admit
+        }
+    )
+    definition = CohortDefinition.from_dict(
+        {
+            "name": "landmark",
+            "inclusion": [
+                {"concept_id": "age",
+                 "time_window": {"anchor": "icu_admit", "start_offset_hours": 0.0, "end_offset_hours": 24.0},
+                 "aggregation": "first", "op": ">=", "value": 18},
+            ],
+            "exclusion": [
+                {"concept_id": "death",
+                 "time_window": {"anchor": "icu_admit", "start_offset_hours": 0.0, "end_offset_hours": 24.0},
+                 "aggregation": "any", "op": "==", "value": 1},
+            ],
+        }
+    )
+    coh = build_cohort(definition, data)
+    kept = set(coh["stay_id"])
+    # stays 1 (death@10h) and 4 (death@5h) died within the 24h landmark -> excluded.
+    # stay 2 died at 87h (a valid later event) -> KEPT; stays 3,5 survived -> KEPT.
+    assert kept == {2, 3, 5}
+    assert int(coh["death"].sum()) == 1  # the one late death (stay 2) survives
+
+
+def test_windowed_predicate_without_event_time_column_is_unchanged():
+    """A concept with no ``<concept>_time`` sibling keeps whole-stay semantics
+    (association runs like E3 have no death_time and must be unaffected)."""
+    from easyicu.research_agent.cohort_schema import build_cohort, CohortDefinition
+
+    data = pd.DataFrame({"stay_id": [1, 2, 3], "age": [65, 70, 55], "death": [1, 0, 1]})
+    definition = CohortDefinition.from_dict(
+        {
+            "name": "assoc",
+            "inclusion": [],
+            "exclusion": [
+                {"concept_id": "death",
+                 "time_window": {"anchor": "icu_admit", "start_offset_hours": 0.0, "end_offset_hours": 24.0},
+                 "aggregation": "any", "op": "==", "value": 1},
+            ],
+        }
+    )
+    coh = build_cohort(definition, data)
+    # no death_time column -> whole-stay exclusion, both deaths removed
+    assert set(coh["stay_id"]) == {2}
