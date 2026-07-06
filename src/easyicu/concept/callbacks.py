@@ -173,6 +173,14 @@ def _standardize_fio2_units(fio2_df: pd.DataFrame, fio2_col: str, database: str)
             result_df.loc[zero_mask, fio2_col] = float('nan')
             logger.debug(f"AUMC FiO2: 将{zero_mask.sum()}个0值设为NaN")
 
+    # 通用生理范围守卫 (2026-07): 对所有数据库统一处理 —— 先把残留的分数(0.15-1.0]
+    # 逐行转成百分比，再把 [21,100] 之外的值设为 NaN。修复 sic/hirid 无专属分支、
+    # 以及 aumc>100、负值、1.1e6 等垃圾值（此前 176-184 行仅 log warning 未清洗）。
+    _col = result_df[fio2_col]
+    result_df[fio2_col] = _col.mask((_col > 0.15) & (_col <= 1.0), _col * 100.0)
+    _col = result_df[fio2_col]
+    result_df.loc[(_col < 21) | (_col > 100), fio2_col] = float('nan')
+
     # 验证转换后的值在合理范围内（0-100）
     converted_values = result_df[fio2_col].dropna()
     if len(converted_values) > 0:
@@ -3962,8 +3970,17 @@ def _callback_pafi(
         if len(non_null) > 0 and (non_null.le(1.0).mean() > 0.5):
             fio2 = fio2 * 100.0
     
+    # Physiological guards (2026-07): make P/F (and S/F) robust to per-database
+    # FiO2 unit inconsistencies (AUMC/SIC/HiRID raw or mixed values) and PaO2
+    # outliers. Without these the ratio has a non-physiological tail (P/F>800).
+    #  1. row-wise convert any residual FiO2 fraction (0.15-1.0] to percent
+    #  2. drop FiO2 outside the physiological 21-100% window
+    #  3. drop non-physiological ratios (<0 or >800)
+    fio2 = fio2.mask((fio2 > 0.15) & (fio2 <= 1.0), fio2 * 100.0)
+    fio2 = fio2.where((fio2 >= 21) & (fio2 <= 100))
     # Calculate ratio: pafi/safi = 100 * po2/o2sat / fio2
-    data[output_col] = 100 * o2 / fio2
+    ratio = 100 * o2 / fio2
+    data[output_col] = ratio.where((ratio >= 0) & (ratio <= 800))
     
     # Keep only essential columns (like R's rm_cols)
     cols = id_columns + ([index_column] if index_column else []) + [output_col]
