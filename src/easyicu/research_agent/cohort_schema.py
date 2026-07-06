@@ -397,6 +397,56 @@ def write_locked_cohort_definition(
 ANALYSIS_COHORT_FILENAME = "cohort_analysis.parquet"
 
 
+def coerce_isfinite_safe_dtypes(frame: Any) -> Any:
+    """Downcast pandas nullable-extension and boolean-object columns to numpy
+    ``float64`` so downstream ``np.isfinite`` / ``to_numpy()`` in generated
+    analysis code never receives an object or extension array.
+
+    The universe builder emits per-concept aggregates as pandas *nullable*
+    extension dtypes (``Int64`` / ``Float64`` / ``boolean``), or as object
+    columns holding python bools, whenever the aggregate is mostly null.
+    Generated causal / prediction code does ``design_df[col].to_numpy()`` and
+    feeds the result to ``np.isfinite``; on a nullable or object array numpy
+    raises ``ufunc 'isfinite' not supported for the input types`` and the whole
+    primary estimate is silently lost (H2 vasopressor causal: the readmission
+    aggregates came through as ``boolean`` / ``Float64`` / ``Int64`` and crashed
+    the propensity balance table -> ``adjusted_effect=None``). Coercing these to
+    ``float64`` (NA -> NaN) at cohort-materialisation time leaves every column as
+    either a numpy numeric or a genuine string categorical -- the two shapes the
+    generated code already handles. True string/categorical object columns (e.g.
+    ``sex``, admission type) are left untouched for dummy-encoding.
+    """
+    import numpy as np
+    import pandas as pd
+
+    if not isinstance(frame, pd.DataFrame):
+        return frame
+
+    to_coerce = []
+    for col in frame.columns:
+        series = frame[col]
+        dtype = series.dtype
+        if pd.api.types.is_extension_array_dtype(dtype) and (
+            pd.api.types.is_numeric_dtype(dtype) or pd.api.types.is_bool_dtype(dtype)
+        ):
+            to_coerce.append(col)  # nullable Int64 / Float64 / boolean
+        elif pd.api.types.is_object_dtype(dtype):
+            non_null = series.dropna()
+            if (
+                len(non_null)
+                and non_null.map(lambda v: isinstance(v, (bool, np.bool_))).all()
+            ):
+                to_coerce.append(col)  # object column holding python bools
+
+    if not to_coerce:
+        return frame
+
+    out = frame.copy()
+    for col in to_coerce:
+        out[col] = pd.to_numeric(out[col], errors="coerce").astype("float64")
+    return out
+
+
 def materialize_locked_analysis_cohort(
     *,
     run_dir: Path,
@@ -437,6 +487,7 @@ def materialize_locked_analysis_cohort(
         result.update(status="error", error=f"{type(exc).__name__}: {exc}")
         return result
 
+    cohort = coerce_isfinite_safe_dtypes(cohort)
     out_path = Path(run_dir) / f"{stem}.parquet"
     cohort.to_parquet(out_path, index=False)
     provenance = {
