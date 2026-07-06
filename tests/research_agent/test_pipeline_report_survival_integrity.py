@@ -75,7 +75,10 @@ def test_deterministic_standard_analysis_marker_is_clean(tmp_path: Path):
     _summary(
         tmp_path,
         "01_survival_analysis",
-        {"deterministic_standard_analysis": "survival_primary_cox", "hazard_ratio": 1.4},
+        {
+            "deterministic_standard_analysis": "survival_primary_cox",
+            "hazard_ratio": 1.4,
+        },
     )
     assert (
         primary_survival_estimate_integrity_errors(

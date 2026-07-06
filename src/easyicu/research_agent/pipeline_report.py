@@ -79,7 +79,10 @@ def _figure_steps_satisfied_by_repair(run_dir: Path) -> set:
             continue
         if not isinstance(payload, dict):
             continue
-        if not payload.get("rendering_only") or str(payload.get("status") or "") != "ok":
+        if (
+            not payload.get("rendering_only")
+            or str(payload.get("status") or "") != "ok"
+        ):
             continue
         parent = str(payload.get("parent_step") or "").strip()
         if not parent:
