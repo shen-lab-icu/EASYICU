@@ -267,6 +267,32 @@
           "callback": "transform_fun(set_val(TRUE))",
           "_comment": "CV: 505=PEEP, 506=PEEP Set, 686=Total PEEP Level"
         }
+      ],
+      "mimic_demo": [
+        {
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "ids": [
+            223848,
+            223849,
+            220339,
+            224700,
+            225949
+          ],
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "MV: 223848=Ventilator Type, 223849=Ventilator Mode, 220339=PEEP set, 224700=Total PEEP Level, 225949=NIV Mask"
+        },
+        {
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "ids": [
+            505,
+            506,
+            686
+          ],
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "CV: 505=PEEP, 506=PEEP Set, 686=Total PEEP Level"
+        }
       ]
     }
   },
@@ -448,6 +474,24 @@
           ],
           "_comment": "454=Motor Response (CareVue)"
         }
+      ],
+      "mimic_demo": [
+        {
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "ids": [
+            223901
+          ],
+          "_comment": "223901=GCS - Motor Response (MetaVision)"
+        },
+        {
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "ids": [
+            454
+          ],
+          "_comment": "454=Motor Response (CareVue)"
+        }
       ]
     }
   },
@@ -510,6 +554,32 @@
         }
       ],
       "mimic": [
+        {
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "ids": [
+            228332
+          ],
+          "val_var": "value",
+          "regex": "^Positive$",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "228332=Delirium assessment: Positive (MetaVision)"
+        },
+        {
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "ids": [
+            228300
+          ],
+          "val_var": "value",
+          "regex": "^Yes|Positive|Acute",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "228300=CAM-ICU MS Change (MetaVision)"
+        }
+      ],
+      "mimic_demo": [
         {
           "table": "chartevents",
           "sub_var": "itemid",
@@ -694,6 +764,29 @@
           "callback": "transform_fun(set_val(TRUE))",
           "_comment": "1550=Vasopressin"
         }
+      ],
+      "mimic_demo": [
+        {
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "ids": [
+            221749,
+            222315,
+            221986
+          ],
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "MV: 221749=Phenylephrine, 222315=Vasopressin, 221986=Milrinone"
+        },
+        {
+          "table": "inputevents_cv",
+          "sub_var": "itemid",
+          "ids": [
+            30051,
+            30125
+          ],
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "CV: 30051=Vasopressin, 30125=Milrinone"
+        }
       ]
     }
   },
@@ -777,12 +870,23 @@
           "callback": "transform_fun(set_val(TRUE))",
           "_comment": "1527=Haloperidol"
         }
+      ],
+      "mimic_demo": [
+        {
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "ids": [
+            221824
+          ],
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "221824=Haloperidol (Haldol) (MetaVision)"
+        }
       ]
     }
   },
   "rrt": {
     "class_name": "lgl_cncpt",
-    "description": "Renal replacement therapy - validated: CRRT mode (2780 stays), Hemodialysis (2746), CRRT procedure (2274), Dialysis Catheter (4464)",
+    "description": "Renal replacement therapy - active RRT evidence only; dialysis access/catheter placement is excluded",
     "category": "renal",
     "sources": {
       "miiv": [
@@ -790,53 +894,84 @@
           "table": "chartevents",
           "sub_var": "itemid",
           "ids": [
-            227290,
-            225436
+            224144,
+            224149,
+            224150,
+            224151,
+            224152,
+            224153,
+            224154,
+            224191,
+            225806,
+            225807,
+            225810,
+            225976,
+            225977,
+            226457,
+            226499,
+            228005,
+            228006,
+            229247,
+            229248,
+            230083,
+            230084,
+            230085,
+            230177,
+            227290
           ],
           "callback": "transform_fun(set_val(TRUE))",
-          "_comment": "227290=CRRT mode (2780 stays, 203035 records), 225436=CRRT Filter Change (240 stays)"
+          "_comment": "227290=CRRT mode (2780 stays, 203035 records); 2026-07-03 semantic coverage review added active dialysis circuit pressures, blood/dialysate/replacement rates, ultrafiltrate/hemodialysis/PD outputs, and PD dwell time. Access site/type/history remain excluded."
         },
         {
           "table": "procedureevents",
           "sub_var": "itemid",
           "ids": [
+            225436,
             225441,
             225802,
             225803,
             225809,
             225805,
-            224270
+            225955
           ],
           "callback": "transform_fun(set_val(TRUE))",
-          "_comment": "225441=Hemodialysis (2746 stays), 225802=Dialysis-CRRT (2274), 225803=Dialysis-CVVHD, 225809=Dialysis-CVVHDF, 225805=Peritoneal Dialysis (180), 224270=Dialysis Catheter (4464)"
+          "_comment": "225436=CRRT Filter Change (240 stays), 225441=Hemodialysis (2746 stays), 225802=Dialysis-CRRT (2274), 225803=Dialysis-CVVHD, 225809=Dialysis-CVVHDF, 225805=Peritoneal Dialysis (180), 225955=Dialysis-SCUF. 224270 Dialysis Catheter is excluded because access placement alone is not active RRT."
         }
       ],
       "eicu": [
         {
           "table": "treatment",
           "sub_var": "treatmentstring",
-          "regex": "(CRRT|hemodialysis|dialysis|CVVH|ultrafiltration|renal replacement)",
+          "regex": "^(?!.*(?:access|catheter|shunt)).*(CRRT|hemodialysis|dialysis|CVVH|ultrafiltration|renal replacement)",
           "class_name": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))",
-          "_comment": "treatment table: 40191 records"
+          "_comment": "2026-07-03 audit: active renal replacement therapy treatments only; dialysis access, catheter insertion, and shunt procedures are excluded."
         },
         {
           "table": "intakeoutput",
           "sub_var": "cellpath",
-          "regex": "Dialysis",
+          "regex": "(Dialysis \\(ml\\)|Hemodialysis)",
           "class_name": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))",
-          "_comment": "intakeoutput dialysis records: In=8446, Out=28628"
+          "_comment": "2026-07-03 audit: active dialysis intake/output paths only; central-line flush paths mentioning dialysis access are excluded."
+        },
+        {
+          "table": "intakeoutput",
+          "sub_var": "celllabel",
+          "regex": "^(CRRT(?!.*flush)|Hemofiltration)",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "2026-07-03 semantic coverage review: active CRRT UF/out and Hemofiltration labels only; CRRT flush and CRRT citrate-calcium infusion labels remain excluded."
         }
       ],
       "aumc": [
         {
           "table": "procedureorderitems",
           "sub_var": "item",
-          "regex": "(CRRT|[Hh]emodialysis|[Dd]ialysis|CVVH|hemofiltrat)",
+          "regex": "(CVVH starten|CVVH stoppen|CVVH anti-coagulantia starten|CVVH-citraat Calciumpomp starten|hemofiltrat)",
           "class_name": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))",
-          "_comment": "CVVH-lab afnemen (12651), Resetten CVVH (7795), Filter CVVH wisselen (1376), etc."
+          "_comment": "2026-07-03 audit: active AUMC RRT order events only; CVVH lab draws, urine collection, filter changes, reset orders, and generic CVVH orders are excluded."
         },
         {
           "table": "numericitems",
@@ -862,22 +997,88 @@
           "table": "procedureevents_mv",
           "sub_var": "itemid",
           "ids": [
+            225436,
             225441,
             225802,
             225803,
-            225809
+            225809,
+            225805,
+            225955
           ],
           "callback": "transform_fun(set_val(TRUE))",
-          "_comment": "MV: 225441=Hemodialysis, 225802=Dialysis-CRRT, 225803=Dialysis-CVVHD, 225809=Dialysis-CVVHDF"
+          "_comment": "MV: 225436=CRRT Filter Change, 225441=Hemodialysis, 225802=Dialysis-CRRT, 225803=Dialysis-CVVHD, 225809=Dialysis-CVVHDF, 225805=Peritoneal Dialysis, 225955=Dialysis-SCUF"
         },
         {
           "table": "chartevents",
           "sub_var": "itemid",
           "ids": [
+            224144,
+            224149,
+            224150,
+            224151,
+            224152,
+            224153,
+            224154,
+            224191,
+            225806,
+            225807,
+            225810,
+            225976,
+            225977,
+            226457,
+            226499,
+            228005,
+            228006,
             227290
           ],
           "callback": "transform_fun(set_val(TRUE))",
-          "_comment": "MV: 227290=CRRT mode"
+          "_comment": "MV: 227290=CRRT mode; 2026-07-03 semantic coverage review added active dialysis monitoring/output chartevents and excluded access/history-only labels."
+        },
+        {
+          "table": "outputevents",
+          "sub_var": "itemid",
+          "ids": [
+            40386,
+            40425,
+            40426,
+            40507,
+            40613,
+            40624,
+            40690,
+            40745,
+            40881,
+            40910,
+            41016,
+            41250,
+            41374,
+            41417,
+            41500,
+            41527,
+            41635,
+            41750,
+            41829,
+            41842,
+            41897,
+            42388,
+            42464,
+            42524,
+            42536,
+            42928,
+            43016,
+            43052,
+            43115,
+            44193,
+            44199,
+            44216,
+            44567,
+            44901,
+            45828,
+            46394,
+            46464,
+            46741
+          ],
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "2026-07-03 semantic coverage review: MIMIC-III dialysis/hemodialysis/peritoneal dialysis output/removal/net labels are active RRT evidence; off/in/flush/medication/fluid labels remain excluded."
         }
       ],
       "sic": [
@@ -897,13 +1098,102 @@
       ],
       "hirid": [
         {
-          "table": "observations",
-          "sub_var": "variableid",
+          "table": "pharma",
+          "sub_var": "pharmaid",
           "ids": [
             10002508
           ],
           "callback": "transform_fun(set_val(TRUE))",
-          "_comment": "10002508 = Haemofiltration (from hirid_variable_reference.csv). HiRID does not separately track CRRT/CVVHD/hemodialysis subtypes."
+          "_comment": "2026-07-03 full dictionary audit: 10002508 = Haemofiltration in HiRID Pharma reference. HiRID does not separately track CRRT/CVVHD/hemodialysis subtypes."
+        }
+      ],
+      "mimic_demo": [
+        {
+          "table": "procedureevents_mv",
+          "sub_var": "itemid",
+          "ids": [
+            225436,
+            225441,
+            225802,
+            225803,
+            225809,
+            225805,
+            225955
+          ],
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "MV: 225436=CRRT Filter Change, 225441=Hemodialysis, 225802=Dialysis-CRRT, 225803=Dialysis-CVVHD, 225809=Dialysis-CVVHDF, 225805=Peritoneal Dialysis, 225955=Dialysis-SCUF"
+        },
+        {
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "ids": [
+            224144,
+            224149,
+            224150,
+            224151,
+            224152,
+            224153,
+            224154,
+            224191,
+            225806,
+            225807,
+            225810,
+            225976,
+            225977,
+            226457,
+            226499,
+            228005,
+            228006,
+            227290
+          ],
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "MV: 227290=CRRT mode; 2026-07-03 semantic coverage review added active dialysis monitoring/output chartevents and excluded access/history-only labels."
+        },
+        {
+          "table": "outputevents",
+          "sub_var": "itemid",
+          "ids": [
+            40386,
+            40425,
+            40426,
+            40507,
+            40613,
+            40624,
+            40690,
+            40745,
+            40881,
+            40910,
+            41016,
+            41250,
+            41374,
+            41417,
+            41500,
+            41527,
+            41635,
+            41750,
+            41829,
+            41842,
+            41897,
+            42388,
+            42464,
+            42524,
+            42536,
+            42928,
+            43016,
+            43052,
+            43115,
+            44193,
+            44199,
+            44216,
+            44567,
+            44901,
+            45828,
+            46394,
+            46464,
+            46741
+          ],
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "2026-07-03 semantic coverage review: MIMIC-III dialysis/hemodialysis/peritoneal dialysis output/removal/net labels are active RRT evidence; off/in/flush/medication/fluid labels remain excluded."
         }
       ]
     }

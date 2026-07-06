@@ -134,3 +134,42 @@ def test_corrupt_single_parquet_output_requires_reconversion(tmp_path: Path) -> 
     needs_conversion, reason = converter._is_conversion_needed(csv_path)
     assert needs_conversion
     assert reason == "parquet file corrupted"
+
+
+def test_hirid_readiness_accepts_source_named_general_table_parquet(
+    tmp_path: Path,
+) -> None:
+    csv_path = tmp_path / "general_table.csv"
+    csv_path.write_text("patientid,age\n1,70\n", encoding="utf-8")
+    pd.DataFrame({"patientid": [1], "age": [70]}).to_parquet(
+        tmp_path / "general_table.parquet",
+        index=False,
+    )
+
+    converter = DataConverter(tmp_path, database="hirid", verbose=False)
+
+    needs_conversion, reason = converter._is_conversion_needed(csv_path)
+    assert not needs_conversion
+    assert "parquet" in reason
+    assert converter.is_ready() == (True, [])
+
+
+def test_hirid_status_verification_uses_selected_parquet_candidate(
+    tmp_path: Path,
+) -> None:
+    csv_path = tmp_path / "general_table.csv"
+    csv_path.write_text("patientid,age\n1,70\n", encoding="utf-8")
+    pd.DataFrame({"patientid": [1], "age": [70]}).to_parquet(
+        tmp_path / "general_table.parquet",
+        index=False,
+    )
+
+    converter = DataConverter(tmp_path, database="hirid", verbose=False)
+    converter._status[csv_path.name] = {
+        "status": "completed",
+        "row_count": 1,
+    }
+
+    needs_conversion, reason = converter._is_conversion_needed(csv_path)
+    assert not needs_conversion
+    assert reason == "already converted and verified"

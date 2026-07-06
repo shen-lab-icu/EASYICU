@@ -20,7 +20,7 @@ with open(DICT_PATH) as f:
 MEDICATIONS = [
     ("propofol",         6, {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}),
     ("midazolam",        6, {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}),
-    ("dexmedetomidine",  4, {"miiv", "mimic", "eicu", "hirid"}),
+    ("dexmedetomidine",  5, {"miiv", "mimic", "eicu", "hirid", "sic"}),
     ("fentanyl",         6, {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}),
     ("morphine",         6, {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}),
     ("heparin",          6, {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}),

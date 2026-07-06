@@ -228,10 +228,15 @@ def _close_duckdb_connections():
             pass
         _duckdb_local.con = None
 
-# 🚀 AUMC numericitems 优化：只加载概念字典声明过的 itemids。
+# 🚀 大表预过滤：只加载概念字典声明过的 itemids/variableids。
 # 原始表很大，过滤后性能提升明显。白名单必须跟随 concept-dict.json /
-# sofa2-dict.json 自动变化，避免字典新增 itemid 后被底层大表预过滤丢掉。
+# sofa2-dict.json 自动变化，避免字典新增 id 后被底层大表预过滤丢掉。
 AUMC_NUMERICITEMS_EXTRA_ITEMIDS: set[int] = set()
+MIIV_CHARTEVENTS_EXTRA_ITEMIDS: set[int] = set()
+MIIV_LABEVENTS_EXTRA_ITEMIDS: set[int] = set()
+MIMIC_DEMO_CHARTEVENTS_EXTRA_ITEMIDS: set[int] = set()
+MIMIC_DEMO_LABEVENTS_EXTRA_ITEMIDS: set[int] = set()
+HIRID_OBSERVATIONS_EXTRA_VARIABLEIDS: set[int] = set()
 
 
 def _source_ids(source_def: Mapping[str, Any]) -> set[int]:
@@ -243,11 +248,11 @@ def _source_ids(source_def: Mapping[str, Any]) -> set[int]:
     return set()
 
 
-def _aumc_numericitems_itemids_from_dictionaries() -> set[int]:
+def _dictionary_source_ids(dataset: str, table: str, sub_var: str) -> set[int]:
     import json
     from importlib import resources
 
-    itemids: set[int] = set()
+    source_ids: set[int] = set()
     data_package = "easyicu.data"
     for filename in ("concept-dict.json", "sofa2-dict.json"):
         resource = resources.files(data_package).joinpath(filename)
@@ -260,53 +265,46 @@ def _aumc_numericitems_itemids_from_dictionaries() -> set[int]:
             sources = concept_def.get("sources")
             if not isinstance(sources, Mapping):
                 continue
-            aumc_sources = sources.get("aumc", [])
-            if not isinstance(aumc_sources, list):
+            dataset_sources = sources.get(dataset, [])
+            if not isinstance(dataset_sources, list):
                 continue
-            for source_def in aumc_sources:
+            for source_def in dataset_sources:
                 if not isinstance(source_def, Mapping):
                     continue
                 if (
-                    source_def.get("table") == "numericitems"
-                    and source_def.get("sub_var") == "itemid"
+                    source_def.get("table") == table
+                    and source_def.get("sub_var") == sub_var
                 ):
-                    itemids.update(_source_ids(source_def))
-    return itemids
+                    source_ids.update(_source_ids(source_def))
+    return source_ids
 
 
 AUMC_NUMERICITEMS_ITEMIDS = (
-    _aumc_numericitems_itemids_from_dictionaries()
+    _dictionary_source_ids("aumc", "numericitems", "itemid")
     | AUMC_NUMERICITEMS_EXTRA_ITEMIDS
 )
+MIIV_CHARTEVENTS_ITEMIDS = (
+    _dictionary_source_ids("miiv", "chartevents", "itemid")
+    | MIIV_CHARTEVENTS_EXTRA_ITEMIDS
+)
+MIIV_LABEVENTS_ITEMIDS = (
+    _dictionary_source_ids("miiv", "labevents", "itemid")
+    | MIIV_LABEVENTS_EXTRA_ITEMIDS
+)
+MIMIC_DEMO_CHARTEVENTS_ITEMIDS = (
+    _dictionary_source_ids("mimic_demo", "chartevents", "itemid")
+    | MIMIC_DEMO_CHARTEVENTS_EXTRA_ITEMIDS
+)
+MIMIC_DEMO_LABEVENTS_ITEMIDS = (
+    _dictionary_source_ids("mimic_demo", "labevents", "itemid")
+    | MIMIC_DEMO_LABEVENTS_EXTRA_ITEMIDS
+)
 
-# 🚀 MIIV chartevents 优化：只加载 SOFA 相关的 93 个 itemids
-# 原始表 11GB，过滤后大幅减少
-MIIV_CHARTEVENTS_ITEMIDS = {
-    467, 469, 220045, 220050, 220051, 220052, 220128, 220179, 220180, 220181, 
-    220210, 220227, 220277, 220339, 220739, 223761, 223762, 223835, 223848, 223849, 
-    223900, 223901, 224027, 224309, 224310, 224311, 224322, 224419, 224652, 224654, 
-    224660, 224684, 224685, 224686, 224687, 224688, 224689, 224690, 224695, 224696, 
-    224697, 224700, 224701, 224702, 224703, 224704, 224705, 224706, 224707, 224709, 
-    224738, 224746, 224747, 224750, 225312, 225436, 225949, 225979, 226253, 226512, 
-    226707, 226732, 226873, 227187, 227290, 227577, 227578, 227579, 227580, 227583, 
-    227980, 228096, 228151, 228154, 228156, 228158, 228193, 228198, 228300, 228332, 
-    228337, 228640, 228866, 229254, 229266, 229268, 229270, 229274, 229277, 229278, 
-    229280, 229314, 229326,
-}
-
-# 🚀 MIIV labevents 优化：只加载 SOFA 相关的 53 个 itemids
-# 原始表 8GB，过滤后大幅减少
-MIIV_LABEVENTS_ITEMIDS = {
-    50802, 50804, 50808, 50809, 50813, 50814, 50816, 50817, 50818, 50820, 50821, 
-    50822, 50852, 50861, 50862, 50863, 50878, 50882, 50883, 50885, 50889, 50893, 
-    50902, 50910, 50911, 50912, 50931, 50960, 50970, 50971, 50983, 51002, 51003, 
-    51006, 51144, 51146, 51200, 51214, 51221, 51222, 51237, 51244, 51248, 51249, 
-    51250, 51256, 51265, 51274, 51275, 51277, 51279, 51288, 51301,
-}
-
-# 🚀 eICU nursecharting 优化：只加载 SOFA 相关的字符串 IDs
-# 原始表 4.3GB，过滤后大幅减少
-# 注意：eICU nursecharting 使用 nursingchartcelltypevalname 列进行过滤
+# eICU nursecharting has multiple semantic columns in the dictionary
+# (nursingchartcelltypevalname, nursingchartcelltypevallabel, nursingchartvalue).
+# Keep this only as a concept-specific exact-filter helper; do not apply it as a
+# global table filter, because a single-column whitelist drops label/value regex
+# sources such as CVP, ECMO, sedation, and delirium.
 EICU_NURSECHARTING_IDS = {
     # GCS 相关
     'GCS Total', 'Eyes', 'Sedation Score', 'Motor', 'Verbal',
@@ -350,33 +348,10 @@ VALUE_TO_ITEMID_MAPPING = {
     },
 }
 
-# 🚀 HiRID observations 优化：只加载概念字典中定义的 198 个 variableids
-# 原始表 7.77 亿行（~72GB内存），过滤后大幅减少
-# 这些 variableids 来自 concept-dict.json 和 sofa2-dict.json 中 HiRID observations 源
-HIRID_OBSERVATIONS_VARIABLEIDS = {
-    15, 71, 100, 110, 112, 113, 120, 146, 151, 163, 176, 181, 186, 189, 200, 239, 
-    300, 310, 326, 331, 351, 400, 405, 410, 426, 610, 2010, 2200, 3845, 4000, 7100, 
-    8280, 8290, 1000022, 1000060, 1000234, 1000272, 1000273, 1000274, 1000284, 
-    1000299, 1000300, 1000302, 1000304, 1000305, 1000306, 1000315, 1000317, 1000318, 
-    1000320, 1000321, 1000322, 1000325, 1000335, 1000348, 1000352, 1000363, 1000365, 
-    1000383, 1000390, 1000407, 1000408, 1000424, 1000425, 1000426, 1000431, 1000432, 
-    1000433, 1000434, 1000435, 1000437, 1000462, 1000483, 1000486, 1000487, 1000488, 
-    1000507, 1000508, 1000518, 1000519, 1000544, 1000545, 1000549, 1000567, 1000601, 
-    1000648, 1000649, 1000650, 1000655, 1000656, 1000657, 1000658, 1000666, 1000670, 
-    1000671, 1000689, 1000690, 1000724, 1000746, 1000750, 1000760, 1000769, 1000770, 
-    1000781, 1000791, 1000797, 1000812, 1000825, 1000829, 1000830, 1000835, 1000837, 
-    1000838, 1000854, 1000855, 1000893, 1000894, 1000929, 1001005, 1001068, 1001075, 
-    1001079, 1001084, 1001086, 1001095, 1001096, 1001097, 1001098, 1001168, 1001169, 
-    1001170, 1001171, 1001173, 1001193, 1001198, 10000100, 10000200, 10000300, 
-    10000400, 10000450, 15001552, 15001565, 20000110, 20000200, 20000300, 20000400, 
-    20000500, 20000600, 20000700, 20000800, 20000900, 20001200, 20001300, 20002200, 
-    20002500, 20002600, 20002700, 20004100, 20004200, 20004300, 20004410, 20005100, 
-    20005110, 24000150, 24000160, 24000170, 24000210, 24000220, 24000230, 24000330, 
-    24000439, 24000480, 24000519, 24000520, 24000521, 24000522, 24000523, 24000524, 
-    24000526, 24000536, 24000548, 24000549, 24000550, 24000557, 24000560, 24000567, 
-    24000585, 24000605, 24000658, 24000668, 24000806, 24000833, 24000835, 24000836, 
-    24000866, 24000867, 30005110, 30010009,
-}
+HIRID_OBSERVATIONS_VARIABLEIDS = (
+    _dictionary_source_ids("hirid", "observations", "variableid")
+    | HIRID_OBSERVATIONS_EXTRA_VARIABLEIDS
+)
 
 # 🚀 性能优化：最小必要列集（自动应用）
 MINIMAL_COLUMNS = {
@@ -1707,15 +1682,16 @@ class ICUDataSource:
         elif db_name == 'aumc' and table_name == 'numericitems':
             # AUMC numericitems: 80GB → 约5GB
             itemid_filter_config = ('itemid', AUMC_NUMERICITEMS_ITEMIDS)
-        elif db_name in ('miiv', 'mimic_demo') and table_name == 'chartevents':
+        elif db_name == 'miiv' and table_name == 'chartevents':
             # MIIV chartevents: 11GB
             itemid_filter_config = ('itemid', MIIV_CHARTEVENTS_ITEMIDS)
-        elif db_name in ('miiv', 'mimic_demo') and table_name == 'labevents':
+        elif db_name == 'mimic_demo' and table_name == 'chartevents':
+            itemid_filter_config = ('itemid', MIMIC_DEMO_CHARTEVENTS_ITEMIDS)
+        elif db_name == 'miiv' and table_name == 'labevents':
             # MIIV labevents: 8GB
             itemid_filter_config = ('itemid', MIIV_LABEVENTS_ITEMIDS)
-        elif db_name == 'eicu' and table_name == 'nursecharting':
-            # eICU nursecharting: 4.3GB - 使用字符串列
-            itemid_filter_config = ('nursingchartcelltypevalname', EICU_NURSECHARTING_IDS)
+        elif db_name == 'mimic_demo' and table_name == 'labevents':
+            itemid_filter_config = ('itemid', MIMIC_DEMO_LABEVENTS_ITEMIDS)
         elif db_name == 'hirid' and table_name == 'observations':
             # 🚀 HiRID observations: 7.77亿行 (~72GB) → 大幅减少
             # 使用 variableid 过滤只加载概念字典中定义的变量

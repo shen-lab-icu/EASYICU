@@ -98,26 +98,210 @@ GLOBAL_EXCLUDES = [
 ]
 
 CONCEPT_EXCLUDES: dict[str, list[str]] = {
-    "hr": [r"fetal", r"target"],
-    "map": [r"airway", r"mean\s+air"],
-    "resp": [r"vent", r"set", r"mandatory"],
-    "spo2": [r"fio2", r"mixed\s+venous", r"venous"],
-    "o2sat": [r"fio2", r"mixed\s+venous", r"venous"],
-    "fio2": [r"flow", r"lpm", r"\bo2\s+sat"],
-    "peep": [r"peak", r"piek", r"pip", r"plateau", r"support", r"total|tot"],
+    "hr": [
+        r"fetal",
+        r"target",
+        r"\b(?:mgm|mg|mcg|gm|g|ml|cc|u|units?|meq)\s*/?\s*(?:kg|k)?\s*/?\s*hr\b",
+        r"\d+\s*(?:mgm|mg|gm|mcg).*hr",
+        r"\bhr\s*(?:limit|>|<)",
+        r"infusion",
+        r"replace\s+rate",
+        r"orthostat",
+        r"walking",
+        r"aerobic",
+        r"activity",
+        r"recovery",
+        r"lowest\s+heart\s+rate",
+        r"\brest\s+hr\b",
+        r"\brdos\b",
+        r"\bcfs\b",
+        r"\b24\s*hr\b",
+        r"\b72\s*hr\b",
+        r"change\s+q\s+\d+\s*hr",
+        r"urine.*hr",
+    ],
+    "map": [r"airway", r"mean\s+air", r"\bhfo\b", r"\btcpcv\b"],
+    "resp": [r"vent", r"set", r"mandatory", r"\bhigh\b", r"quotient"],
+    "spo2": [
+        r"fio2",
+        r"mixed\s+venous",
+        r"venous",
+        r"arterial",
+        r"\bpa\s+line\b",
+        r"\bpvr\b",
+        r"\bsvr\b",
+        r"blood\s+gas",
+        r"probe",
+        r"seizure",
+        r"\[pre\]",
+        r"\[post\]",
+        r"\bjv\b",
+        r"preductal",
+        r"postductal",
+        r"walking",
+        r"aerobic",
+        r"activity",
+        r"recovery",
+        r"\brest\s+o2",
+    ],
+    "o2sat": [
+        r"fio2",
+        r"mixed\s+venous",
+        r"venous",
+        r"\bpa\s+line\b",
+        r"\bpvr\b",
+        r"\bsvr\b",
+        r"probe",
+        r"seizure",
+        r"\[pre\]",
+        r"\[post\]",
+        r"\bjv\b",
+        r"preductal",
+        r"postductal",
+        r"walking",
+        r"aerobic",
+        r"activity",
+        r"recovery",
+        r"\brest\s+o2",
+    ],
+    "fio2": [r"challenge", r"\becmo\b", r"flow", r"lpm", r"\bo2\s+sat"],
+    "peep": [
+        r"peak",
+        r"piek",
+        r"pip",
+        r"plateau",
+        r"support",
+        r"total|tot",
+        r"\bhigh\b",
+        r"\blow\b",
+        r"sigh",
+        r"auto",
+        r"intrinsic",
+        r"blood\s+gas",
+    ],
     "pip": [r"peep", r"plateau", r"support"],
     "mean_airway_pres": [r"arterial", r"map\s+arterial", r"peep", r"peak", r"plateau"],
-    "minute_vol": [r"tidal", r"per\s+kg"],
-    "tidal_vol": [r"\bset\b", r"alarm", r"per\s+kg"],
+    "minute_vol": [
+        r"\bhi(gh)?\b",
+        r"\blow\b",
+        r"limit",
+        r"pacer",
+        r"pacemaker",
+        r"sens",
+        r"temporary",
+        r"tidal",
+        r"per\s+kg",
+        r"%",
+    ],
+    "tidal_vol": [
+        r"\bhi(gh)?\b",
+        r"\blow\b",
+        r"alarm",
+        r"\bset\b",
+        r"ratio",
+        r"vd/vt",
+        r"rsbi",
+        r"pulse\s+ox",
+        r"per\s+kg",
+    ],
     "vent_rate": [r"heart", r"pulse", r"spont", r"hfo", r"dose"],
     "ps": [r"population", r"score"],
     "crea": [r"urine", r"clearance", r"klar"],
-    "bili": [r"urine", r"direct", r"conjugated"],
-    "plt": [r"transfusion", r"pheresis", r"smear", r"clump", r"mean\s+platelet", r"aggregation"],
-    "wbc": [r"urine", r"csf", r"stool"],
-    "hgb": [r"urine", r"plasma\s+free"],
-    "ph": [r"urine", r"stool", r"gastric", r"phosph", r"phenyt", r"phone"],
+    "bili": [
+        r"urine",
+        r"direct",
+        r"conjugated",
+        r"ascites",
+        r"body\s+fluid",
+        r"pleural",
+        r"neonatal",
+        r"\bcsf\b",
+        r"joint\s+fluid",
+        r"stool",
+    ],
+    "plt": [
+        r"transfusion",
+        r"pheresis",
+        r"smear",
+        r"clump",
+        r"mean\s+platelet",
+        r"aggregation",
+        r"intake",
+        r"blood\s+products",
+        r"suspension",
+        r"large\s+platelets",
+    ],
+    "hgb": [
+        r"urine",
+        r"plasma\s+free",
+        r"carboxy",
+        r"methemoglobin|met-hb",
+        r"a1c",
+        r"absolute",
+        r"fetal",
+        r"hemoglobin\s+a2?",
+        r"hemoglobin\s+[cfs]\b",
+        r"reticulocyte",
+        r"glycated",
+        r"\bp50\b",
+        r"plasma\s+hemoglobin",
+        r"sulf",
+        r"other\s+body\s+fluid",
+        r"ascites",
+        r"pleur",
+        r"streef",
+        r"\bso2\b",
+    ],
+    "lact": [
+        r"lactated\s+ringer",
+        r"ringers\s+lactate",
+        r"dextrose.*lactate",
+        r"hetastarch.*lactate",
+        r"dehydrogenase|\bld\b",
+        r"ingredient",
+        r"inamrinone",
+        r"fluid",
+        r"ascites",
+        r"pleural",
+        r"\bcsf\b",
+        r"stool",
+    ],
+    "ph": [
+        r"urine",
+        r"stool",
+        r"gastric",
+        r"phosph",
+        r"phenyt",
+        r"phone",
+        r"pleural",
+        r"emesis",
+        r"\bgi\b",
+        r"stomach",
+        r"\bogt\b",
+        r"semen",
+        r"faeces",
+        r"dipstick",
+        r"\bsoft\b",
+        r"body\s+fluid",
+        r"\bfluid\b",
+    ],
+    "wbc": [
+        r"urine",
+        r"csf",
+        r"stool",
+        r"joint\s+fluid",
+        r"other\s+fluid",
+        r"pleural",
+        r"ascites",
+        r"alkaline\s+phosphatase",
+    ],
     "urine": [
+        r"cc/k/hr",
+        r"kg/hr",
+        r"per\s+kg",
+        r"\b24\s*hr\b",
+        r"irrigant",
+        r"specimen",
         r"urinezuur",
         r"creatinine",
         r"kreatinine",
@@ -127,8 +311,45 @@ CONCEPT_EXCLUDES: dict[str, list[str]] = {
         r"glucose",
         r"ph",
         r"screening",
+        r"specific\s+gravity",
     ],
-    "rrt": [r"catheter", r"lab\s+afnemen", r"filter\s+change|filter.*wissel"],
+    "rrt": [
+        r"access",
+        r"catheter",
+        r"shunt",
+        r"machine",
+        r"\btype\b",
+        r"site",
+        r"appear",
+        r"system\s+integrity",
+        r"not\s+removed",
+        r"lumen",
+        r"medication",
+        r"solution",
+        r"heparin",
+        r"\bkcl\b",
+        r"calcium",
+        r"ca\s+gluc",
+        r"crystalloid",
+        r"irrigation",
+        r"rescue\s+line",
+        r"fluid",
+        r"\boff\b",
+        r"\bin\b",
+        r"indwelling",
+        r"specimen",
+        r"\bebl\b",
+        r"lab\s+afnemen",
+        r"filter\s+change|filter.*wissel",
+        r"\breset|resetten",
+        r"\bflush\b",
+        r"\burine\b",
+        r"\bopdr\b",
+        r"calcium.*crrt|crrt.*calcium",
+        r"citrate",
+        r"last\s+dialysis",
+        r"dialysis\s+patient",
+    ],
 }
 
 DEFAULT_CONCEPTS = sorted(CONCEPT_PATTERNS)
@@ -265,14 +486,42 @@ def catalog_mimic_like(db_root: Path, db: str) -> list[CatalogItem]:
 
 
 def catalog_hirid(db_root: Path) -> list[CatalogItem]:
+    rows: list[CatalogItem] = []
+    seen: set[tuple[str, str]] = set()
+
+    reference = _read_parquet_if_exists(db_root / "hirid" / "hirid_variable_reference.parquet")
+    if not reference.empty:
+        for _, data in reference.iterrows():
+            item_id = data.get("ID")
+            if item_id is None or pd.isna(item_id):
+                continue
+            item_id = str(int(item_id)) if isinstance(item_id, float) and item_id.is_integer() else str(item_id)
+            source_table = str(data.get("Source Table", "Observation")).strip().lower()
+            table = "pharma" if source_table.startswith("pharma") else "observations"
+            key = (table, item_id)
+            seen.add(key)
+            rows.append(
+                CatalogItem(
+                    db="hirid",
+                    table=table,
+                    item_id=item_id,
+                    label=str(data.get("Variable Name", "")),
+                    unit="" if pd.isna(data.get("Unit", "")) else str(data.get("Unit", "")),
+                    category=str(data.get("Source Table", "")),
+                )
+            )
+
     path = db_root / "hirid" / "hirid_variable_reference_preprocessed.parquet"
     df = _read_parquet_if_exists(path)
     if df.empty:
-        return []
-    rows: list[CatalogItem] = []
+        return rows
     for _, data in df.iterrows():
         raw_ids = str(data.get("raw variable ids", ""))
         for raw_id in re.findall(r"\d+", raw_ids) or [str(data.get("Variable id", ""))]:
+            key = ("observations", str(raw_id))
+            if key in seen:
+                continue
+            seen.add(key)
             rows.append(
                 CatalogItem(
                     db="hirid",
@@ -281,6 +530,71 @@ def catalog_hirid(db_root: Path) -> list[CatalogItem]:
                     label=str(data.get("Name", "")),
                     unit="" if pd.isna(data.get("Unit", "")) else str(data.get("Unit", "")),
                     category="" if pd.isna(data.get("Type", "")) else str(data.get("Type", "")),
+                )
+            )
+    return rows
+
+
+def catalog_sic(db_root: Path) -> list[CatalogItem]:
+    path = db_root / "sic" / "d_references.parquet"
+    df = _read_parquet_if_exists(path)
+    if df.empty:
+        return []
+
+    table_source_vars = {
+        "data_float_h": "DataID",
+        "data_range": "DataID",
+        "laboratory": "LaboratoryID",
+        "medication": "DrugID",
+        "data_ref": "RefID",
+    }
+    table_membership: dict[str, set[str]] = {}
+    for table, source_var in table_source_vars.items():
+        frame = _read_parquet_if_exists(db_root / "sic" / table, columns=[source_var])
+        if frame.empty:
+            frame = _read_parquet_if_exists(db_root / "sic" / f"{table}.parquet", columns=[source_var])
+        if frame.empty:
+            frame = _read_parquet_if_exists(db_root / "sic" / table, columns=[source_var.lower()])
+        if frame.empty:
+            frame = _read_parquet_if_exists(db_root / "sic" / f"{table}.parquet", columns=[source_var.lower()])
+        if frame.empty:
+            table_membership[table] = set()
+            continue
+        column = source_var if source_var in frame.columns else source_var.lower()
+        table_membership[table] = {
+            str(int(value)) if isinstance(value, float) and value.is_integer() else str(value)
+            for value in frame[column].dropna().unique()
+        }
+
+    rows: list[CatalogItem] = []
+    for _, data in df.iterrows():
+        item_id = data.get("ReferenceGlobalID")
+        if item_id is None or pd.isna(item_id):
+            continue
+        item_id = str(int(item_id)) if isinstance(item_id, float) and item_id.is_integer() else str(item_id)
+        label = " | ".join(
+            item
+            for item in [
+                str(data.get("ReferenceName", "")),
+                str(data.get("ReferenceDescription", "")),
+                str(data.get("ReferenceValue", "")),
+            ]
+            if item and item.lower() != "nan"
+        )
+        unit = "" if pd.isna(data.get("ReferenceUnit", "")) else str(data.get("ReferenceUnit", ""))
+        for table, source_var in table_source_vars.items():
+            members = table_membership.get(table, set())
+            if not members or item_id not in members:
+                continue
+            rows.append(
+                CatalogItem(
+                    db="sic",
+                    table=table,
+                    item_id=item_id,
+                    label=label,
+                    unit=unit,
+                    category=source_var,
+                    extra="" if pd.isna(data.get("ReferenceType", "")) else str(data.get("ReferenceType", "")),
                 )
             )
     return rows
@@ -356,6 +670,8 @@ def build_catalog(db_root: Path, dbs: Iterable[str]) -> list[CatalogItem]:
             rows += catalog_hirid(db_root)
         elif db == "eicu":
             rows += catalog_eicu(db_root)
+        elif db == "sic":
+            rows += catalog_sic(db_root)
     return rows
 
 
@@ -370,13 +686,21 @@ def _is_candidate(item: CatalogItem, concept: str) -> bool:
     include = _compile(CONCEPT_PATTERNS[concept]).search(text)
     if not include:
         return False
+    if concept == "urine" and not re.search(
+        r"output|volume|hourly\s+urine|urine\s+catheter|foley|void|diures",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        return False
     excludes = GLOBAL_EXCLUDES + CONCEPT_EXCLUDES.get(concept, [])
     return _compile(excludes).search(text) is None
 
 
 def _source_vars_for_item(item: CatalogItem) -> list[str]:
     if item.db in {"mimic", "miiv", "aumc", "hirid"}:
-        return ["itemid", "variableid", "LaboratoryID", "DataID"]
+        return ["itemid", "variableid", "pharmaid", "LaboratoryID", "DataID"]
+    if item.db == "sic":
+        return [item.category] if item.category else ["DataID", "LaboratoryID", "DrugID", "RefID"]
     if item.db == "eicu":
         if item.table == "lab":
             return ["labname"]
@@ -522,7 +846,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--db-root", type=Path, default=DEFAULT_DB_ROOT)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--concepts", nargs="*", default=DEFAULT_CONCEPTS)
-    parser.add_argument("--dbs", nargs="*", default=["aumc", "mimic", "miiv", "hirid", "eicu"])
+    parser.add_argument("--dbs", nargs="*", default=["aumc", "mimic", "miiv", "hirid", "eicu", "sic"])
     parser.add_argument(
         "--allow-empty",
         action="store_true",
