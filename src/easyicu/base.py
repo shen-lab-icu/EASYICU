@@ -641,6 +641,19 @@ class BaseICULoader:
         if not results:
             return pd.DataFrame()
 
+        # 🔧 Memory-safe fast path (2026-07): for wide sparse modules (e.g.
+        # 'medications' with 45 concepts) the sequential left-fold below re-copies an
+        # ever-widening accumulator once per concept — O(N) copies of a mostly-NaN wide
+        # frame that spikes RAM and OOM-kills 16GB machines on the default merge=True
+        # export. When every concept frame shares the same id+time keys, is unique on
+        # them, and has no overlapping non-key columns (the common case), align them all
+        # on those keys and concat ONCE (single allocation, aligns all timestamps in one
+        # pass). Falls back to the exact original loop otherwise, so behavior is
+        # unchanged whenever the preconditions don't hold.
+        batched = self._merge_concepts_batched(results)
+        if batched is not None:
+            return batched
+
         merged_df = None
         id_cols = None
 
@@ -660,7 +673,71 @@ class BaseICULoader:
                 merge_keys = self._get_merge_keys(merged_df, df, id_cols)
                 merged_df = self._outer_merge_frames(merged_df, df, merge_keys, concept)
 
-        return merged_df if merged_df is not None else pd.DataFrame()
+        if merged_df is None:
+            return pd.DataFrame(columns=list(results.keys()))
+
+        missing_concepts = [
+            concept for concept in results.keys()
+            if concept not in merged_df.columns
+        ]
+        if missing_concepts:
+            merged_df = merged_df.copy()
+            for concept in missing_concepts:
+                merged_df[concept] = pd.NA
+        return merged_df
+
+    _MERGE_ID_COLS = (
+        'stay_id', 'subject_id', 'patientunitstayid', 'admissionid',
+        'patientid', 'icustay_id', 'CaseID',
+    )
+
+    def _merge_concepts_batched(self, results: Dict[str, pd.DataFrame]):
+        """Single-allocation outer align of all concept frames on shared id+time keys.
+
+        Returns the merged frame, or None to signal the caller should use the original
+        sequential merge (whenever any precondition below is not met). Preconditions:
+          * >=2 non-empty frames (otherwise the fold is already cheap),
+          * every frame exposes the SAME set of merge keys (shared id cols + shared time
+            cols), with at least one id key,
+          * every frame is unique on those keys (so an index align == an outer merge),
+          * no two frames share a non-key column name (no suffix/collision semantics).
+        """
+        frames = [(c, df) for c, df in results.items() if df is not None and not df.empty]
+        if len(frames) < 2:
+            return None
+
+        # merge keys = id cols present in EVERY frame + time-like cols present in every frame
+        common_cols = set(frames[0][1].columns)
+        for _, df in frames[1:]:
+            common_cols &= set(df.columns)
+        id_keys = [c for c in self._MERGE_ID_COLS if c in common_cols]
+        if not id_keys:
+            return None
+        time_keys = [c for c in frames[0][1].columns
+                     if c in common_cols and ('time' in c.lower() or c in {'date', 'day', 'offset', 'Offset'})]
+        merge_keys = id_keys + [c for c in time_keys if c not in id_keys]
+
+        # every frame must be unique on the keys and contribute non-overlapping value cols
+        seen_value_cols = set()
+        indexed = []
+        for concept, df in frames:
+            if any(k not in df.columns for k in merge_keys):
+                return None
+            if df.duplicated(subset=merge_keys).any():
+                return None
+            value_cols = [c for c in df.columns if c not in merge_keys]
+            if seen_value_cols.intersection(value_cols):
+                return None  # column-name collision -> needs suffix semantics; use fallback
+            seen_value_cols.update(value_cols)
+            indexed.append(df.set_index(merge_keys, drop=True))
+
+        merged = pd.concat(indexed, axis=1, join='outer', sort=False, copy=False)
+        merged = merged.reset_index()
+
+        for concept in results.keys():
+            if concept not in merged.columns:
+                merged[concept] = pd.NA
+        return merged
 
     @staticmethod
     def _get_merge_keys(left: pd.DataFrame, right: pd.DataFrame, id_cols: List[str]) -> List[str]:
