@@ -880,6 +880,102 @@ def primary_result_plausibility_errors(run_dir: Path) -> List[str]:
     return errors
 
 
+# --- primary survival estimand integrity -------------------------------------
+# The PRIMARY time-to-event estimate must come from the deterministic Cox runner
+# (reproducible, correct exposure, no positional column swaps). When an LLM coder
+# produces it instead, the estimate is unverified and can silently fabricate an
+# implausible Cox model, including positional column swaps where non-event values
+# are interpreted as events. This gate fails closed on that path regardless of
+# *why* the deterministic runner did not fire (disabled flag, unmet preflight,
+# already-consumed fallback). It is case-neutral: it only fires for plans that
+# declare a survival / time-to-event PRIMARY step, so association / prediction /
+# clustering questions are untouched.
+_SURVIVAL_PRIMARY_METHODS = ("survival_analysis", "time_to_event", "cox", "cox_ph")
+# Keys the deterministic Cox runner always writes into its step_summary; together
+# they fingerprint that step_summary as runner-produced (see deterministic_survival).
+_DETERMINISTIC_SURVIVAL_MARKERS = ("fit_engine", "adjustment_source")
+# Keys that show a step actually REPORTED a survival estimate, so an empty or
+# prep-only survival step is not misread as a fabricated result.
+_SURVIVAL_RESULT_KEYS = (
+    "hazard_ratio",
+    "primary_model",
+    "cox_terms",
+    "log_hazard_ratio",
+)
+
+
+def _is_survival_method_step(step: Any) -> bool:
+    """True for a survival / time-to-event analysis step (not a figure step).
+
+    Deliberately does NOT apply the execution predicate's ``sensitivity`` +
+    ``definition`` exclusion: that heuristic wrongly excludes a PRIMARY survival
+    step whose intent merely *mentions* sensitivity analyses, and excluding it
+    here would hide exactly the LLM-coded result this gate must
+    catch. A genuine cohort-definition-sensitivity step is filtered out later by
+    the result-key check (it never emits a primary Cox ``hazard_ratio`` /
+    ``primary_model``).
+    """
+    method = str(getattr(step, "method", "") or "").lower()
+    if method not in _SURVIVAL_PRIMARY_METHODS:
+        return False
+    step_id = str(getattr(step, "step_id", "") or "").lower()
+    return "figure" not in step_id
+
+
+def _survival_summary_is_deterministic(payload: Dict[str, Any]) -> bool:
+    return payload.get(
+        "deterministic_standard_analysis"
+    ) == "survival_primary_cox" or all(
+        key in payload for key in _DETERMINISTIC_SURVIVAL_MARKERS
+    )
+
+
+def primary_survival_estimate_integrity_errors(
+    plan: Optional[AnalysisPlan], run_dir: Optional[Path]
+) -> List[str]:
+    """Fail closed if a survival estimand did not come from the runner.
+
+    Returns ``[]`` for any question without a survival / time-to-event step and
+    for a survival design where the primary Cox estimate carries the
+    deterministic runner fingerprint. When a survival design produced a primary
+    Cox estimate (``hazard_ratio`` / ``primary_model``) but NO survival result
+    step carries the fingerprint, the estimand is an unverified LLM-coded result
+    and this returns a fail-closed analysis error.
+    """
+    if plan is None or run_dir is None:
+        return []
+    result_steps: List[str] = []
+    any_deterministic = False
+    for step in getattr(plan, "steps", None) or []:
+        if not _is_survival_method_step(step):
+            continue
+        step_id = str(getattr(step, "step_id", "") or "")
+        summary_path = run_dir / "steps" / step_id / "outputs" / "step_summary.json"
+        if not summary_path.exists():
+            # A missing summary is the execution gate's concern (missing/failed
+            # step); this gate only judges a step that DID produce a summary.
+            continue
+        try:
+            payload = json.loads(summary_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        if _survival_summary_is_deterministic(payload):
+            any_deterministic = True
+            continue
+        if any(key in payload for key in _SURVIVAL_RESULT_KEYS):
+            result_steps.append(step_id)
+    if result_steps and not any_deterministic:
+        joined = ", ".join(sorted(result_steps))
+        return [
+            "primary survival estimand was not produced by the deterministic Cox "
+            f"runner (steps {joined} reported a Cox estimate with no runner "
+            "fingerprint -- unverified LLM-coded survival result; fail closed)"
+        ]
+    return []
+
+
 def _partition_findings_by_supersession(
     findings: Sequence[ValidationFinding],
     *,
@@ -1071,8 +1167,16 @@ def _compute_readiness_gates(
     # though the value-level numeric auditor — which only checks
     # manuscript-number == table-number — would pass it.
     plausibility_errors = primary_result_plausibility_errors(run_dir)
+    # Integrity: a survival PRIMARY estimand must come from the deterministic Cox
+    # runner, never an LLM coder that may silently swap columns.
+    survival_integrity_errors = primary_survival_estimate_integrity_errors(
+        plan, run_dir
+    )
     analysis_errors = (
-        non_manuscript_errors + blocked_outcome_errors + plausibility_errors
+        non_manuscript_errors
+        + blocked_outcome_errors
+        + plausibility_errors
+        + survival_integrity_errors
     )
     analysis_validated = execution["execution_complete"] and not analysis_errors
     manuscript_ready = (
