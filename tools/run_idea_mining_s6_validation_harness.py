@@ -288,7 +288,6 @@ def build_fulltext_materials(
         if gap and gap.get("text"):
             body_text = str(gap["text"]).strip()
             text = f"{article['title']} {body_text}".strip()
-            source_kind = "pmc_gap_section" if gap.get("matched") else "pmc_body"
             locator = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmid_to_pmcid[pmid]}/"
             if gap.get("matched"):
                 n_fulltext_gap += 1
@@ -296,7 +295,6 @@ def build_fulltext_materials(
                 n_fulltext_body += 1
         else:
             text = f"{article['title']} {article['abstract']}".strip()
-            source_kind = "abstract"
             locator = article["url"]
             n_abstract += 1
         if len(text) < 120:
