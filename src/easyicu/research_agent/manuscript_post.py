@@ -36,7 +36,6 @@ from .side_findings import (
     side_finding_leaks,
 )
 
-
 _UNRESOLVED_EVIDENCE_PLACEHOLDER_RE = re.compile(
     r"\[evidence missing:\s*(?P<id>[^\]]+)\]"
 )
@@ -84,7 +83,9 @@ def _first_resolvable_name(
 
 def _context_target_outcome_is_binary_like(context: ResearchContext) -> bool:
     target = str(getattr(context, "target_outcome", "") or "")
-    variable = context.variable(target) if target and hasattr(context, "variable") else None
+    variable = (
+        context.variable(target) if target and hasattr(context, "variable") else None
+    )
     source_concept = str(getattr(variable, "source_concept", "") or "").lower()
     description = str(getattr(variable, "description", "") or "").lower()
     dtype = str(getattr(variable, "dtype", "") or "").lower()
@@ -103,7 +104,9 @@ def _context_target_outcome_is_binary_like(context: ResearchContext) -> bool:
     )
     if any(token in haystack for token in non_binary_tokens):
         return False
-    if "float" in dtype and not any(token in haystack for token in ("binary", "event", "readmission")):
+    if "float" in dtype and not any(
+        token in haystack for token in ("binary", "event", "readmission")
+    ):
         return False
     binary_tokens = (
         "binary",
@@ -140,7 +143,8 @@ def _repair_common_writer_placeholders(
     resolvable = set(evidence.resolvable_names())
     question = (context.research_question or "").lower()
     is_prediction = any(
-        token in question for token in ("prediction", "predict", "auroc", "brier", "calibration")
+        token in question
+        for token in ("prediction", "predict", "auroc", "brier", "calibration")
     )
     if not is_prediction:
         return text, repairs
@@ -215,7 +219,9 @@ _METHOD_CITATION_REPAIR_RULES: tuple[tuple[re.Pattern[str], tuple[str, ...]], ..
         ),
     ),
     (
-        re.compile(r"\b(sensitivity|robust(?:ness)?|alternative specification)\b", re.I),
+        re.compile(
+            r"\b(sensitivity|robust(?:ness)?|alternative specification)\b", re.I
+        ),
         (
             "05_sensitivity_comparison",
             "robustness_panel",
@@ -223,7 +229,9 @@ _METHOD_CITATION_REPAIR_RULES: tuple[tuple[re.Pattern[str], tuple[str, ...]], ..
         ),
     ),
     (
-        re.compile(r"\b(missingness|data quality|imput(?:e|ation)|measurement)\b", re.I),
+        re.compile(
+            r"\b(missingness|data quality|imput(?:e|ation)|measurement)\b", re.I
+        ),
         (
             "03_missingness_and_data_quality_audit",
             "missingness",
@@ -231,7 +239,9 @@ _METHOD_CITATION_REPAIR_RULES: tuple[tuple[re.Pattern[str], tuple[str, ...]], ..
         ),
     ),
     (
-        re.compile(r"\b(cohort|inclusion|exclusion|adult|stay-level|source table)\b", re.I),
+        re.compile(
+            r"\b(cohort|inclusion|exclusion|adult|stay-level|source table)\b", re.I
+        ),
         (
             "01_define_cohort_and_derive",
             "table_one",
@@ -247,11 +257,47 @@ def _sentence_has_evidence_placeholder(sentence: str) -> bool:
     return "{evidence:" in sentence or "{{evidence:" in sentence
 
 
+# Results-style conclusion markers. The methods-citation repair must not
+# touch sentences that *claim findings* (performance, consistency,
+# associations, effect conclusions) — those are the evidence filter's
+# jurisdiction. Appending a Methods citation to an unsupported conclusion
+# would launder it past the fail-closed result-sentence filter, and a
+# warning-severity binding then blocks the manuscript text gate anyway.
+_CONCLUSION_CLAIM_RE = re.compile(
+    r"\b(indicat(?:e|es|ed|ing)|suggest(?:s|ed|ing)?|"
+    r"demonstrat(?:e|es|ed|ing)|show(?:s|ed|ing)?|reveal(?:s|ed|ing)?|"
+    r"consistent|robustly|we\s+(?:found|observed)|"
+    r"was\s+associated|were\s+associated|performance\s+was|performed\s+well)\b",
+    re.I,
+)
+# A sentence that REPORTS a numeric result (an effect estimate, CI, percentage,
+# or p-value) must not be laundered past the fail-closed result-sentence filter
+# with a Methods-step citation. This is intentionally narrow: it keys on
+# reported *values* (a decimal, a percentage, a CI/p pattern), NOT on any bare
+# digit. The broader `_looks_result_like_sentence` fires on any "\d", so it
+# false-positives on numbered clinical concepts (Sepsis-3, SOFA-2, KDIGO stage
+# 3, sep3_sofa2) that saturate ICU Methods prose — those are ordinary Methods
+# sentences and must still receive their infrastructure citations.
+_REPORTS_NUMERIC_RESULT_RE = re.compile(
+    r"(\d+\.\d+"  # a decimal value (effect estimate, AUROC, median, ...)
+    r"|\d+(?:\.\d+)?\s*%"  # a percentage
+    r"|\bp\s*[<=>]\s*0?\.?\d"  # a p-value
+    r"|95\s*%\s*ci"  # an explicit 95% CI
+    r"|\bci\b\s*[:=]?\s*\d)",  # a CI reported with a value
+    re.I,
+)
+
+
 def _append_evidence_citation(sentence: str, evidence_id: str) -> str:
     citation = f" {{evidence:{evidence_id}}}"
     match = re.search(r"([.!?。！？])(\s*)$", sentence)
     if match:
-        return sentence[: match.start(1)].rstrip() + citation + match.group(1) + match.group(2)
+        return (
+            sentence[: match.start(1)].rstrip()
+            + citation
+            + match.group(1)
+            + match.group(2)
+        )
     return sentence.rstrip() + citation
 
 
@@ -303,6 +349,20 @@ def _repair_common_writer_citation_omissions(
             if not sentence.strip() or _sentence_has_evidence_placeholder(sentence):
                 fixed.append(sentence)
                 continue
+            if _CONCLUSION_CLAIM_RE.search(
+                sentence
+            ) or _REPORTS_NUMERIC_RESULT_RE.search(sentence):
+                # Leave uncited conclusions AND result-bearing claims (an effect
+                # estimate, a reported statistic, etc.) to the fail-closed
+                # result-sentence filter (enforce_evidence_bound_scaffold) instead
+                # of laundering them past it with a Methods-step citation. A
+                # result sentence with no conclusion verb — e.g. one that states
+                # an odds ratio value directly — must stay under the filter's
+                # jurisdiction, not be tagged to a Methods step. The numeric guard
+                # keys on reported values, so a Methods sentence that merely names
+                # a numbered concept (Sepsis-3, SOFA-2) is still repaired.
+                fixed.append(sentence)
+                continue
             evidence_id = _best_methods_citation(sentence, resolvable)
             if not evidence_id:
                 fixed.append(sentence)
@@ -316,7 +376,11 @@ def _repair_common_writer_citation_omissions(
             )
             fixed.append(repaired)
             changed = True
-        out_lines.append(" ".join(part.strip() for part in fixed if part.strip()) if changed else raw_line)
+        out_lines.append(
+            " ".join(part.strip() for part in fixed if part.strip())
+            if changed
+            else raw_line
+        )
     return "\n".join(out_lines), repairs
 
 
@@ -566,7 +630,7 @@ def _lookup_literal_for_numeric_match(
     use percent semantics whenever the next non-space character is "%".
     """
 
-    trailer = text[match_end:min(len(text), match_end + 8)]
+    trailer = text[match_end : min(len(text), match_end + 8)]
     return f"{value}%" if re.match(r"\s*%", trailer) else value
 
 
@@ -634,8 +698,8 @@ def _is_bibliographic_year_context(
     year = int(raw)
     if year < 1900 or year > 2099:
         return False
-    left = text[max(0, start - 80):start]
-    right = text[end:min(len(text), end + 80)]
+    left = text[max(0, start - 80) : start]
+    right = text[end : min(len(text), end + 80)]
     window = left + raw + right
     if re.search(r"\bet\s+al\.?,?\s*$", left, re.IGNORECASE):
         return True
@@ -705,13 +769,19 @@ def _contextual_source_score(context: str, claim: NumericClaim) -> int:
             score += 5
 
     if re.search(r"\bsepsis[-\s]?3\b", text):
-        if any(token in source for token in ("n_sepsis3", "sepsis3_positive", "sepsis3.events")):
+        if any(
+            token in source
+            for token in ("n_sepsis3", "sepsis3_positive", "sepsis3.events")
+        ):
             score += 5
         if "sepsis3_prevalence" in source or "prevalence.sepsis3" in source:
             score += 4
 
     if re.search(r"\b(?:death|mortality)\b", text):
-        if any(token in source for token in ("n_deaths", "death_positive", "death_n", "events")):
+        if any(
+            token in source
+            for token in ("n_deaths", "death_positive", "death_n", "events")
+        ):
             score += 5
         if "death_rate" in source or "death_prevalence" in source:
             score += 4
@@ -744,7 +814,10 @@ def _contextual_source_score(context: str, claim: NumericClaim) -> int:
             score += 2
 
     context_source_pairs = (
-        (r"\b(?:source\s+export|per-stay\s+export|source\s+cohort|source\s+population)\b", "cohort.n_stays"),
+        (
+            r"\b(?:source\s+export|per-stay\s+export|source\s+cohort|source\s+population)\b",
+            "cohort.n_stays",
+        ),
         (r"\b(?:stays|icu\s+stays|stay-level)\b", "cohort.n_stays"),
         (r"\bpatients\b", "cohort.n_patients"),
         (r"\blactate\b", "variable_groups.lact."),
@@ -775,7 +848,9 @@ def _same_numeric_fact(candidates: Sequence[tuple[NumericClaim, float]]) -> bool
     for claim, _ in candidates[1:]:
         if claim.step_id != first.step_id:
             return False
-        if abs(claim.canonical - first.canonical) > max(claim.tolerance, first.tolerance):
+        if abs(claim.canonical - first.canonical) > max(
+            claim.tolerance, first.tolerance
+        ):
             return False
     return True
 
@@ -819,7 +894,12 @@ def _source_field_tiebreak_score(context: str, claim: NumericClaim) -> int:
     if universe_context and re.search(r"(?:^|[._-])n_universe$", source):
         score += 4
     if "analysis cohort" in text or "analytic cohort" in text:
-        for token in ("n_analysis_cohort", "analysis_cohort_n", "included_n", "n_final_model"):
+        for token in (
+            "n_analysis_cohort",
+            "analysis_cohort_n",
+            "included_n",
+            "n_final_model",
+        ):
             if token in source:
                 score += 5
                 break
@@ -827,10 +907,16 @@ def _source_field_tiebreak_score(context: str, claim: NumericClaim) -> int:
         if re.search(r"(?:^|[._-])(?:n|count|included_n|n_total|n_universe)$", source):
             score += 2
     if re.search(r"\bsepsis[-\s]?3\b", text):
-        if any(token in source for token in ("n_sepsis3", "sepsis3_positive", "sepsis3.events")):
+        if any(
+            token in source
+            for token in ("n_sepsis3", "sepsis3_positive", "sepsis3.events")
+        ):
             score += 5
     if re.search(r"\b(?:death|mortality)\b", text):
-        if any(token in source for token in ("n_deaths", "death_positive", "death_n", "events")):
+        if any(
+            token in source
+            for token in ("n_deaths", "death_positive", "death_n", "events")
+        ):
             score += 5
     if "prevalence" in text and "prevalence" in source:
         score += 3
@@ -917,7 +1003,18 @@ def _select_numeric_claim(
                 item[0].source_field or "",
             ),
         )
-        return ranked[0][0], False
+        distinct_fields = {claim.source_field or "" for claim, _ in remaining}
+        # Collapse same-step/same-value candidates only when the pick is
+        # semantically defensible: either every candidate carries the same
+        # source field (true duplicate registrations) or the ranked winner
+        # has a positive field-token score tying it to the prose context.
+        # A zero-score tie between opaque, differently named fields must
+        # stay ambiguous — a lexicographic pick is not provenance.
+        if (
+            len(distinct_fields) == 1
+            or _source_field_tiebreak_score(context, ranked[0][0]) > 0
+        ):
+            return ranked[0][0], False
 
     return None, True
 
@@ -1021,8 +1118,7 @@ def bind_numeric_values(
             if mode is EvidenceEnforcementMode.SOFT:
                 if ambiguous:
                     candidate_ids = ",".join(
-                        _claim_identity(candidate)
-                        for candidate, _ in candidates
+                        _claim_identity(candidate) for candidate, _ in candidates
                     )
                     out_parts.append(
                         f" <!-- AMBIGUOUS:{value}:candidates=[{candidate_ids}] -->"
@@ -1088,14 +1184,19 @@ def enforce_writer_claim_language(
 
     detail: Dict[str, List[str]] = {}
     forbidden_terms = sorted(
-        {m.group(1).lower() for m in _FORBIDDEN_INTERPRETIVE_RE.finditer(manuscript or "")}
+        {
+            m.group(1).lower()
+            for m in _FORBIDDEN_INTERPRETIVE_RE.finditer(manuscript or "")
+        }
     )
     if forbidden_terms:
         detail["forbidden_terms"] = forbidden_terms
 
     leaks = side_finding_leaks(manuscript, side_findings or [])
     if leaks:
-        detail["side_finding_leak"] = [finding.title or finding.finding_id for finding in leaks]
+        detail["side_finding_leak"] = [
+            finding.title or finding.finding_id for finding in leaks
+        ]
 
     if enforcement_mode is EvidenceEnforcementMode.STRICT and detail:
         raise EvidenceEnforcementError(

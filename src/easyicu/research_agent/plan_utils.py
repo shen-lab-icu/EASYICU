@@ -286,11 +286,20 @@ def _article_display_roles(steps: Sequence[AnalysisStep]) -> set[str]:
                 " ".join(step.expected_outputs or []),
             ]
         ).lower()
-        if any(token in blob for token in ("cohort", "attrition", "eligibility", "denominator")):
+        if any(
+            token in blob
+            for token in ("cohort", "attrition", "eligibility", "denominator")
+        ):
             roles.add("cohort_accounting")
-        if any(token in blob for token in ("table one", "table_one", "baseline", "characteristic")):
+        if any(
+            token in blob
+            for token in ("table one", "table_one", "baseline", "characteristic")
+        ):
             roles.add("baseline_context")
-        if any(token in blob for token in ("missing", "measurement", "availability", "data quality")):
+        if any(
+            token in blob
+            for token in ("missing", "measurement", "availability", "data quality")
+        ):
             roles.add("data_quality")
         if any(
             token in blob
@@ -342,6 +351,74 @@ def _best_contract_step_for_outputs(steps: Sequence[AnalysisStep]) -> AnalysisSt
         if any(token in blob for token in preferred):
             return step
     return list(steps)[-1]
+
+
+# Families whose whole point is an estimand that is NOT a static association
+# (a Cox hazard ratio, an AUROC, a target-trial contrast, a cluster partition).
+# For these, a plan that produced only an association/descriptive primary step
+# is a design error, and the contract converts the primary-estimand step into
+# the canonical family step rather than silently accepting the wrong estimand.
+# ``robustness`` and ``bias_audit`` are intentionally absent: their estimand IS
+# an association/odds ratio, so a marker miss there means "leave it alone".
+_FORCE_CONVERT_FAMILIES = {
+    "survival",
+    "prediction_model",
+    "dynamic_prediction",
+    "causal_inference",
+    "treatment_response",
+    "validation",
+    "clustering",
+}
+
+
+def _primary_estimand_step_index(steps: Sequence[AnalysisStep]) -> Optional[int]:
+    """Index of the main modelling / primary-estimand step, or None.
+
+    This is the contract's conversion target when the planner produced no step
+    matching a strong family's own methods -- e.g. it answered a survival
+    question with a static association model. That association *model* step (not
+    the cohort, table-one, data-quality, or figure steps) is the one to convert
+    into the canonical family step. Figure and descriptive-only steps are
+    skipped; the earliest genuine primary-model step wins over later
+    sensitivity/robustness models.
+    """
+
+    best_score: Optional[int] = None
+    best_idx: Optional[int] = None
+    for idx, step in enumerate(steps or []):
+        sid = (step.step_id or "").lower()
+        method = (step.method or "").lower()
+        if sid.endswith("_figure") or "figure" in method:
+            continue
+        blob = " ".join(
+            [sid, step.intent or "", method, " ".join(step.expected_outputs or [])]
+        ).lower()
+        is_primary_model = any(
+            token in blob
+            for token in (
+                "primary",
+                "association",
+                "adjusted",
+                "effect estimate",
+                "odds ratio",
+                "hazard",
+                "model",
+                "estimate",
+            )
+        )
+        if not is_primary_model:
+            continue
+        score = 0
+        if "primary" in blob:
+            score += 3
+        if "model" in blob or "association" in blob or "effect" in blob:
+            score += 1
+        if any(t in blob for t in ("sensitivity", "robust", "diagnostic")):
+            score -= 3
+        if best_score is None or score > best_score:
+            best_score = score
+            best_idx = idx
+    return best_idx
 
 
 def _enforce_advanced_plan_contract(
@@ -463,7 +540,11 @@ def _enforce_advanced_plan_contract(
         canonical_method = "prediction_model"
         canonical_intent = (
             "Train and validate the mortality prediction model in one "
-            "self-contained executable step."
+            "self-contained executable step. Write a `model_performance` table "
+            "(metric,value rows incl. auroc and brier_score) plus a `roc_curve` "
+            "table (columns fpr,tpr) and a `calibration_curve` table (columns "
+            "predicted,observed[,n]) so the publication figure renders ROC and "
+            "calibration deterministically on the held-out split."
         )
         required_outputs = [
             "statistic:auroc",
@@ -471,6 +552,8 @@ def _enforce_advanced_plan_contract(
             "statistic:baseline_prevalence",
             "statistic:split_strategy",
             "table:model_performance",
+            "table:roc_curve",
+            "table:calibration_curve",
             "figure:discrimination_calibration",
         ]
     elif family == "clustering":
@@ -522,13 +605,21 @@ def _enforce_advanced_plan_contract(
             "estimate Kaplan-Meier curves by the primary stratum, fit a Cox "
             "proportional-hazards model, and write the hazard-ratio table plus "
             "the survival-curve figure. Respect censoring and do not collapse "
-            "time-to-event into a static binary outcome."
+            "time-to-event into a static binary outcome. Prefer the tested, "
+            "deterministic estimator `from easyicu.research_agent import "
+            "fit_cox_model` (Breslow-tie Cox PH: hazard ratios, 95% CIs, "
+            "p-values, concordance) over hand-written partial-likelihood code. "
+            "Also write a `cox_summary` table (columns term,hr,lower,upper) and "
+            "a `km_curve` table (columns group,time,survival,at_risk giving the "
+            "Kaplan-Meier step points per stratum) so the publication figure "
+            "renders the survival curve and hazard-ratio forest deterministically."
         )
         required_outputs = [
             "statistic:hazard_ratio",
             "statistic:n_events",
             "statistic:median_followup",
             "table:cox_summary",
+            "table:km_curve",
             "figure:survival_curves",
             "log:survival_time_definition",
         ]
@@ -589,12 +680,17 @@ def _enforce_advanced_plan_contract(
             "covariate balance / positivity before and after weighting, report "
             "the adjusted effect with its uncertainty, and write the "
             "covariate-balance (love) figure. Keep causal language conditional "
-            "on the stated assumptions; do not over-claim causality."
+            "on the stated assumptions; do not over-claim causality. Write a "
+            "`covariate_balance` table (columns covariate,smd_unweighted,"
+            "smd_weighted) and a `causal_effect` table (columns estimate,lower,"
+            "upper,scale) so the publication figure renders the love plot and "
+            "adjusted contrast deterministically."
         )
         required_outputs = [
             "statistic:adjusted_effect",
             "statistic:max_smd_after_weighting",
             "table:covariate_balance",
+            "table:causal_effect",
             "figure:covariate_balance",
             "log:identification_assumptions",
         ]
@@ -737,8 +833,21 @@ def _enforce_advanced_plan_contract(
     relevant_indexes = [
         idx for idx, step in enumerate(plan.steps) if _is_relevant(step)
     ]
+    converted_from_association = False
     if not relevant_indexes:
-        return plan, []
+        # The planner produced no step matching this family's own methods. For a
+        # strong result-bearing family that is a design error (e.g. a survival
+        # question answered with a static association model): convert the
+        # primary-estimand model step into the canonical family step rather than
+        # silently accepting the wrong estimand. For association/robustness/
+        # bias_audit families a marker miss legitimately means "leave alone".
+        if family in _FORCE_CONVERT_FAMILIES:
+            fallback_idx = _primary_estimand_step_index(plan.steps)
+            if fallback_idx is not None:
+                relevant_indexes = [fallback_idx]
+                converted_from_association = True
+        if not relevant_indexes:
+            return plan, []
 
     first_index = relevant_indexes[0]
     relevant_steps = [plan.steps[idx] for idx in relevant_indexes]
@@ -748,10 +857,16 @@ def _enforce_advanced_plan_contract(
             if item not in combined_inputs:
                 combined_inputs.append(item)
     combined_outputs = list(required_outputs)
-    for step in relevant_steps:
-        for item in step.expected_outputs or []:
-            if item not in combined_outputs:
-                combined_outputs.append(item)
+    if not converted_from_association:
+        # Normalising an existing family step: keep whatever extra outputs it
+        # already declared. When CONVERTING an association step, do NOT carry
+        # over its association outputs (e.g. adjusted_association_estimates) --
+        # they would tell the coder to also compute a static OR alongside the
+        # Cox/KM estimand, reintroducing the wrong-method result we are fixing.
+        for step in relevant_steps:
+            for item in step.expected_outputs or []:
+                if item not in combined_outputs:
+                    combined_outputs.append(item)
 
     article_roles = _article_display_roles(plan.steps)
     if family == "robustness" and len(plan.steps or []) > 2 and len(article_roles) >= 4:
@@ -834,20 +949,30 @@ def _enforce_advanced_plan_contract(
     revised = plan.model_copy(
         update={"steps": new_steps, "revision": max(1, plan.revision) + 1}
     )
-    finding = ValidationFinding(
-        validator="plan_contract",
-        severity="warning",
-        message=(
+    if converted_from_association:
+        message = (
+            f"Planner produced no {family}-appropriate estimator for a locked "
+            f"{family} design and defaulted to a static association model; the "
+            f"primary-estimand step was converted to the canonical {family} "
+            "analysis so the reported result matches the study design."
+        )
+    else:
+        message = (
             f"Planner output for {family} was normalized to a single "
             "self-contained advanced-analysis step with explicit v14 metric "
             "and artefact contracts."
-        ),
+        )
+    finding = ValidationFinding(
+        validator="plan_contract",
+        severity="warning",
+        message=message,
         detail={
             "family": family,
             "original_step_ids": [step.step_id for step in relevant_steps],
             "canonical_step_id": canonical_step_id,
             "canonical_insert_index": first_index,
             "required_outputs": required_outputs,
+            "converted_from_association": converted_from_association,
         },
     )
     return revised, [finding]
@@ -1295,9 +1420,7 @@ def _cap_plan_preserving_figure_steps(
     original_index = {step.step_id: idx for idx, step in enumerate(steps)}
     kept_ids = {step.step_id for step in steps[:cap]}
     protected_ids = {
-        str(step_id)
-        for step_id in (protected_step_ids or [])
-        if step_id in step_by_id
+        str(step_id) for step_id in (protected_step_ids or []) if step_id in step_by_id
     }
     kept_ids.update(protected_ids)
     original_kept_ids = set(kept_ids)
@@ -1324,11 +1447,7 @@ def _cap_plan_preserving_figure_steps(
             and not _step_produces_figure(step_by_id[step_id])
         ]
         if not candidates:
-            candidates = [
-                step_id
-                for step_id in kept_ids
-                if step_id not in protected
-            ]
+            candidates = [step_id for step_id in kept_ids if step_id not in protected]
         if not candidates:
             return False
         displaced_id = max(candidates, key=lambda sid: original_index.get(sid, -1))
@@ -1722,6 +1841,74 @@ def _prediction_calibration_from_completed_records(
         if value is None:
             value = _first_numeric_scalar_with_key_fragment(
                 step_summary, ("brier", "calibration_slope", "calibration_intercept")
+            )
+        if value is not None:
+            return source_step_id, value
+    return None
+
+
+_CLUSTER_SCALAR_KEYS = (
+    "silhouette_score",
+    "statistic:silhouette_score",
+    "silhouette",
+    "statistic:silhouette",
+    "n_clusters",
+    "statistic:n_clusters",
+    "cluster_count",
+    "statistic:cluster_count",
+)
+
+# Method labels that *prepare for* clustering (feature audit / freeze, cohort
+# definition, descriptive baselines) rather than *fit* clusters. A step whose
+# method is one of these must never be required to report a silhouette/cluster
+# count itself even when its intent or expected_outputs mention "clustering" —
+# the real clustering runs in a dedicated downstream step. (Regression: the M3
+# ``01_feature_audit_and_primary_set_freeze`` step self-declared "froze the
+# feature set but did not fit clusters" yet fail-closed the whole run.)
+_NON_CLUSTERING_PREP_METHODS = frozenset(
+    {
+        "data_quality_audit",
+        "descriptive",
+        "table_one",
+        "cohort_definition",
+        "descriptive_trend_test",
+        "missingness_audit",
+        "feature_audit",
+    }
+)
+
+
+def _clustering_metric_from_completed_records(
+    completed_step_records: Optional[Sequence[Dict[str, Any]]],
+    *,
+    current_step_id: str,
+) -> Optional[Tuple[str, float]]:
+    """Find an auditable cluster metric in a *sibling* completed step's summary.
+
+    Clustering analog of :func:`_prediction_auroc_from_completed_records`. A
+    feature-freeze / figure / rendering step often does not fit clusters itself
+    (it may emit null silhouette/cluster_count placeholders), but the genuine
+    clustering estimate is produced and bound (``statistic:silhouette_score``,
+    ``statistic:cluster_count``) by the dedicated clustering step. When that is
+    so, the clustering requirement is satisfied by the sibling step, not missing.
+    """
+    if not completed_step_records:
+        return None
+    for record in completed_step_records:
+        if not isinstance(record, dict):
+            continue
+        source_step_id = str(record.get("step_id") or "")
+        if not source_step_id or source_step_id == current_step_id:
+            continue
+        if record.get("status") != "ok":
+            continue
+        step_summary = record.get("step_summary")
+        if not isinstance(step_summary, dict):
+            continue
+        value = _first_present_scalar(step_summary, _CLUSTER_SCALAR_KEYS)
+        if value is None:
+            value = _first_numeric_scalar_with_key_fragment(
+                step_summary, ("silhouette", "cluster_count", "n_clusters")
             )
         if value is not None:
             return source_step_id, value
@@ -2407,6 +2594,7 @@ def _step_contract_findings(
     expected = " ".join(str(item).lower() for item in (step.expected_outputs or []))
     step_id = (step.step_id or "").lower()
     intent = (step.intent or "").lower()
+    method = (step.method or "").lower()
 
     # Figure-only follow-up steps (created by ``_split_table_and_figure_outputs_in_plan``)
     # inherit the parent's step_id with a ``_figure`` suffix, e.g.
@@ -2665,30 +2853,64 @@ def _step_contract_findings(
                 ),
             )
 
-    clustering_required = (not figure_only_step) and (
+    # A step is subject to the clustering contract only when it actually *fits*
+    # clusters. A step whose step_id or method names clustering qualifies; a step
+    # that merely *mentions* clustering in its intent/expected_outputs (e.g. a
+    # feature-audit / freeze step that prepares the feature set for a downstream
+    # clustering step) does NOT — unless its method is itself a clustering method.
+    clustering_step_signal = ("cluster" in step_id) or (
+        method not in _NON_CLUSTERING_PREP_METHODS
+        and (
+            "cluster" in method
+            or method in {"phenotyping", "latent_class", "gmm", "kmeans"}
+        )
+    )
+    clustering_mention = (
         any(token in expected for token in ("cluster", "silhouette"))
-        or "cluster" in step_id
         or "clustering" in intent
     )
+    clustering_required = (not figure_only_step) and (
+        clustering_step_signal
+        or (clustering_mention and method not in _NON_CLUSTERING_PREP_METHODS)
+    )
     if clustering_required:
-        cluster_value = _first_present_scalar(
-            step_summary,
-            (
-                "silhouette_score",
-                "statistic:silhouette_score",
-                "silhouette",
-                "statistic:silhouette",
-                "n_clusters",
-                "statistic:n_clusters",
-                "cluster_count",
-                "statistic:cluster_count",
-            ),
-        )
+        cluster_value = _first_present_scalar(step_summary, _CLUSTER_SCALAR_KEYS)
         if cluster_value is None:
             cluster_value = _first_numeric_scalar_with_key_fragment(
                 step_summary,
                 ("silhouette", "cluster_count", "n_clusters"),
             )
+        if cluster_value is None:
+            # The clustering estimate may have been produced and bound by a
+            # dedicated sibling clustering step that this (figure/rendering or
+            # feature-prep) step does not re-register under a recognised key;
+            # mirror the AUROC/calibration cross-step fallback so a key-naming
+            # mismatch between two steps does not fail the run when the metric
+            # is genuinely auditable elsewhere.
+            cluster_fallback = _clustering_metric_from_completed_records(
+                completed_step_records,
+                current_step_id=str(step.step_id or ""),
+            )
+            if cluster_fallback is not None:
+                source_step_id, _source_cluster = cluster_fallback
+                cluster_value = _source_cluster
+                findings.append(
+                    ValidationFinding(
+                        validator="step_contract",
+                        severity="warning",
+                        message=(
+                            f"Step {step.step_id} did not record its own "
+                            f"silhouette/cluster-count metric, but the requirement "
+                            f"was satisfied by successful step {source_step_id}."
+                        ),
+                        detail={
+                            "step_id": step.step_id,
+                            "fallback_step_id": source_step_id,
+                            "expected_outputs": list(step.expected_outputs or []),
+                            "summary_keys": sorted(step_summary.keys()),
+                        },
+                    )
+                )
         if cluster_value is None:
             _append_missing(
                 (

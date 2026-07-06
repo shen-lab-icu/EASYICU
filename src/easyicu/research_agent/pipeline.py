@@ -5013,6 +5013,39 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
     return "sensitivity_publication_bundle_from_parent_outputs_v1"
 
 
+# Token groups shared by the deterministic figure router below and the
+# execute-phase preflight (pipeline_execute._publication_figure_preflight_supported).
+# The preflight must never claim a figure step this router has no renderer
+# family for: a preflight match without a router family replaces the LLM
+# coder with a rescue script that then reports "no_parent_outputs" and
+# leaves the figure step without any exports (E1 run_20260703T115429 step
+# 03_baseline_table_and_absolute_risk_context_figure failure mode — the
+# step intent mentioned "cohort" so the broad preflight hijacked it).
+_DETERMINISTIC_FIGURE_TOKEN_GROUPS: tuple[tuple[str, ...], ...] = (
+    ("cohort", "eligibility", "overlap", "attrition", "definition"),
+    ("prediction", "calibration", "discrimination", "model_performance"),
+    ("sensitivity", "robustness", "specification"),
+    ("association", "odds", "effect", "forest"),
+    ("primary_result", "primary_results", "main_result", "main_results"),
+    ("missingness", "measurement", "data_quality", "quality"),
+    ("survival", "kaplan", "hazard_ratio", "time_to_event"),
+)
+
+
+def deterministic_figure_family_supported(step_id: str) -> bool:
+    """True when the deterministic figure router has a family for ``step_id``.
+
+    Matches on the step id only — the router's ``full_text`` fallbacks
+    receive an empty ``step_text`` from the rescue script, so the step id
+    is the effective routing key at rescue time.
+    """
+
+    text = str(step_id or "").lower()
+    return any(
+        token in text for group in _DETERMINISTIC_FIGURE_TOKEN_GROUPS for token in group
+    )
+
+
 def _render_publication_bundle_from_prior_outputs_for_step(
     *,
     run_dir: Path,
@@ -5024,17 +5057,21 @@ def _render_publication_bundle_from_prior_outputs_for_step(
 
     step_id_text = str(current_step_id).lower()
     full_text = f"{current_step_id} {step_text}".lower()
-    cohort_tokens = ("cohort", "eligibility", "overlap", "attrition", "definition")
-    prediction_tokens = ("prediction", "calibration", "discrimination", "model_performance")
-    sensitivity_tokens = ("sensitivity", "robustness", "specification")
-    association_tokens = ("association", "odds", "effect", "forest")
-    primary_result_tokens = (
-        "primary_result",
-        "primary_results",
-        "main_result",
-        "main_results",
+    (
+        cohort_tokens,
+        prediction_tokens,
+        sensitivity_tokens,
+        association_tokens,
+        primary_result_tokens,
+        missingness_tokens,
+        survival_tokens,
+    ) = _DETERMINISTIC_FIGURE_TOKEN_GROUPS
+
+    # The survival family renderer lives in figures/survival.py; import it here
+    # to keep this module's import graph unchanged.
+    from .figures.survival import (
+        render_survival_bundle_from_prior_outputs as _render_survival_bundle,
     )
-    missingness_tokens = ("missingness", "measurement", "data_quality", "quality")
 
     if any(token in step_id_text for token in sensitivity_tokens) and any(
         token in step_id_text for token in cohort_tokens
@@ -5047,6 +5084,8 @@ def _render_publication_bundle_from_prior_outputs_for_step(
         renderers = (_render_cohort_overlap_publication_bundle_from_prior_outputs,)
     elif any(token in step_id_text for token in prediction_tokens):
         renderers = (_render_prediction_publication_bundle_from_prior_outputs,)
+    elif any(token in step_id_text for token in survival_tokens):
+        renderers = (_render_survival_bundle,)
     elif any(token in step_id_text for token in sensitivity_tokens):
         renderers = (_render_sensitivity_publication_bundle_from_prior_outputs,)
     elif any(token in step_id_text for token in association_tokens) or any(
@@ -5055,6 +5094,8 @@ def _render_publication_bundle_from_prior_outputs_for_step(
         renderers = (_render_association_publication_bundle_from_prior_outputs,)
     elif any(token in full_text for token in prediction_tokens):
         renderers = (_render_prediction_publication_bundle_from_prior_outputs,)
+    elif any(token in full_text for token in survival_tokens):
+        renderers = (_render_survival_bundle,)
     elif any(token in full_text for token in sensitivity_tokens):
         renderers = (_render_sensitivity_publication_bundle_from_prior_outputs,)
     elif any(token in full_text for token in cohort_tokens):

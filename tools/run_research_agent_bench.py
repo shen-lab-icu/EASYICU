@@ -548,12 +548,74 @@ def _active_error_count(manifest: Dict[str, Any]) -> Optional[int]:
     return total
 
 
+def _gate_ladder(run_dir: Path, readiness: Dict[str, Any]) -> Optional[str]:
+    """Final gate-ladder status for the run (publication_ready > ... ).
+
+    Prefer run_status.json's own ``status`` string; fall back to the
+    manifest readiness booleans when the file is missing (older runs).
+    """
+    rs = run_dir / "run_status.json"
+    if rs.exists():
+        try:
+            status = json.loads(rs.read_text(encoding="utf-8")).get("status")
+            if isinstance(status, str) and status:
+                return status
+        except Exception:
+            pass
+    if not isinstance(readiness, dict) or not readiness:
+        return None
+    for key in ("publication_ready", "manuscript_ready", "analysis_validated"):
+        if readiness.get(key):
+            return (
+                key.replace("_validated", "_only")
+                if key == "analysis_validated"
+                else key
+            )
+    return "analysis_only" if readiness.get("execution_complete") else "incomplete"
+
+
+def _writer_attempts(run_dir: Path, readiness: Dict[str, Any]) -> Optional[int]:
+    """Writer drafting passes for the run (attempts-to-ready fragility proxy).
+
+    Prefer the manifest gate ``writer_attempt_count``; fall back to counting
+    ``"Drafting manuscript scaffold."`` events in audit_log.jsonl so runs
+    whose manifests predate the gate still report a value.
+    """
+    if (
+        isinstance(readiness, dict)
+        and readiness.get("writer_attempt_count") is not None
+    ):
+        try:
+            return int(readiness["writer_attempt_count"])
+        except (TypeError, ValueError):
+            pass
+    audit_path = run_dir / "audit_log.jsonl"
+    if not audit_path.exists():
+        return None
+    count = 0
+    try:
+        for line in audit_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except Exception:
+                continue
+            if str(event.get("event", "")).startswith("Drafting manuscript scaffold"):
+                count += 1
+    except Exception:
+        return None
+    return count
+
+
 def _score_arm(*, run_dir: Path, item, label: str) -> Dict[str, Any]:
     manifest = _load_manifest(run_dir)
     historical_error_count = sum(
         1 for f in manifest.get("findings", []) if f.get("severity") == "error"
     )
     active_error_count = _active_error_count(manifest)
+    readiness = manifest.get("readiness") or {}
     or_value = _primary_or(
         run_dir,
         expected_predictor=getattr(item, "primary_predictor", ""),
@@ -580,8 +642,22 @@ def _score_arm(*, run_dir: Path, item, label: str) -> Dict[str, Any]:
         "n_warnings": sum(
             1 for f in manifest.get("findings", []) if f.get("severity") == "warning"
         ),
-        "n_errors": historical_error_count if active_error_count is None else active_error_count,
+        "n_errors": (
+            historical_error_count if active_error_count is None else active_error_count
+        ),
         "n_historical_errors": historical_error_count,
+        # Gate-ladder outcome + active/superseded split (assessment fix:
+        # the gate story should be quantitative in the bench report, not
+        # only visible inside each run's run_status.json).
+        "gate_status": _gate_ladder(run_dir, readiness),
+        "manuscript_ready": bool(readiness.get("manuscript_ready")),
+        "publication_ready": bool(readiness.get("publication_ready")),
+        "writer_attempts": _writer_attempts(run_dir, readiness),
+        "superseded_error_count": (
+            int(readiness.get("superseded_error_count") or 0)
+            if isinstance(readiness, dict) and "superseded_error_count" in readiness
+            else None
+        ),
         "evidence_count": len(manifest.get("evidence", [])),
         "evidence_kinds": _kinds_complete(manifest),
         "evidence_missing_in_manuscript": _evidence_missing_count(run_dir),
@@ -978,6 +1054,15 @@ def _aggregate(scores: List[Dict[str, Any]]) -> Dict[str, Any]:
             "artifact_partial_hit": n_artifact_partial,
             "evidence_kinds_complete": n_kinds_complete,
             "evidence_missing_in_manuscripts": evidence_missing,
+            "manuscript_ready": sum(
+                1 for s in arm_scores if s[arm].get("manuscript_ready")
+            ),
+            "publication_ready": sum(
+                1 for s in arm_scores if s[arm].get("publication_ready")
+            ),
+            "superseded_errors_total": sum(
+                s[arm].get("superseded_error_count") or 0 for s in arm_scores
+            ),
         }
     return totals
 
@@ -1080,8 +1165,8 @@ def _render_markdown(
         label_name = _ARM_LABELS[arm].lower()
         lines.extend(
             [
-                f"| Item | Family | Difficulty | Evidence basis | Direction ({arm}) | OR ({arm}) | Predefined rule hits ({arm}) | Workflow hits ({arm}) | Artifact hits ({arm}) | `[evidence missing]` ({arm}) |",
-                "|---|---|---|---|:-:|---:|:-:|:-:|:-:|---:|",
+                f"| Item | Family | Difficulty | Evidence basis | Direction ({arm}) | OR ({arm}) | Gate status ({arm}) | Writer passes ({arm}) | Active errs ({arm}) | Superseded errs ({arm}) | Predefined rule hits ({arm}) | Workflow hits ({arm}) | Artifact hits ({arm}) | `[evidence missing]` ({arm}) |",
+                "|---|---|---|---|:-:|---:|---|---:|---:|---:|:-:|:-:|:-:|---:|",
             ]
         )
         for s in scores:
@@ -1093,6 +1178,10 @@ def _render_markdown(
                 f"| `{s.get('evidence_basis', 'internal_synthetic')}` "
                 f"| {_direction_marker(arm_score['direction_match'])} "
                 f"| {_fmt_or(arm_score['primary_or'])} "
+                f"| `{arm_score.get('gate_status') or '—'}` "
+                f"| {_fmt_missing(arm_score.get('writer_attempts'))} "
+                f"| {_fmt_missing(arm_score.get('n_errors'))} "
+                f"| {_fmt_missing(arm_score.get('superseded_error_count'))} "
                 f"| {_findings_marker(arm_score['icu_findings'])} "
                 f"| {_findings_marker(arm_score.get('workflow_hits', {}))} "
                 f"| {_findings_marker(arm_score.get('artifact_hits', {}))} "
@@ -1125,6 +1214,12 @@ def _render_markdown(
         (
             "Total `[evidence missing]` lines (lower is better)",
             "evidence_missing_in_manuscripts",
+        ),
+        ("Items reaching manuscript_ready", "manuscript_ready"),
+        ("Items reaching publication_ready", "publication_ready"),
+        (
+            "Total superseded (historically blocked, later resolved) errors",
+            "superseded_errors_total",
         ),
     ]
     for name, key in rows:
@@ -1763,6 +1858,18 @@ def main() -> int:
             "the execution gate fails. Do NOT use for archival benchmarks."
         ),
     )
+    parser.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help=(
+            "Run the EHRFlowBench batch N times into repeat_NN/ subdirs and "
+            "write stability_report.md aggregating the primary estimate, "
+            "gate outcome, writer passes and adjustment covariates across "
+            "repeats. Measures run-to-run design variation (reviewer "
+            "nondeterminism question). N=1 (default) is a normal single run."
+        ),
+    )
     args = parser.parse_args()
     case_registration = _register_case_patterns(args.case)
     submission_profile = (
@@ -1823,22 +1930,45 @@ def main() -> int:
         ehrflow_model = args.model if args.provider != "mock" else "mock"
         if args.models:
             ehrflow_model = args.models[0]
-        return _run_ehrflowbench_jsonl(
-            jsonl_path=Path(args.ehrflowbench_jsonl).resolve(),
-            out_root=Path(args.out_root).resolve(),
-            seed=args.seed,
-            arms=args.arms,
-            pipeline_options=pipeline_options,
-            provider=args.provider,
-            model=ehrflow_model,
-            request_timeout=float(args.request_timeout),
-            reuse_existing=bool(args.reuse_existing),
-            resume_run_id=explicit_resume_run_id,
-            resume_from_step_id=resume_from_step_id,
-            stop_after_step_id=stop_after_step_id,
-            force_writer_probe=bool(args.force_writer_probe),
-            allow_mock_aware=bool(args.allow_mock_aware),
-        )
+        n_repeat = max(1, int(args.repeat))
+        base_out_root = Path(args.out_root).resolve()
+        if n_repeat > 1 and explicit_resume_run_id:
+            raise SystemExit(
+                "--repeat cannot be combined with --resume-run-id: repeats "
+                "start fresh runs, resume continues one existing run."
+            )
+
+        def _run_ehrflow_into(target_out_root: Path) -> int:
+            return _run_ehrflowbench_jsonl(
+                jsonl_path=Path(args.ehrflowbench_jsonl).resolve(),
+                out_root=target_out_root,
+                seed=args.seed,
+                arms=args.arms,
+                pipeline_options=pipeline_options,
+                provider=args.provider,
+                model=ehrflow_model,
+                request_timeout=float(args.request_timeout),
+                reuse_existing=bool(args.reuse_existing),
+                resume_run_id=explicit_resume_run_id,
+                resume_from_step_id=resume_from_step_id,
+                stop_after_step_id=stop_after_step_id,
+                force_writer_probe=bool(args.force_writer_probe),
+                allow_mock_aware=bool(args.allow_mock_aware),
+            )
+
+        if n_repeat == 1:
+            return _run_ehrflow_into(base_out_root)
+
+        rc = 0
+        repeat_roots: List[Path] = []
+        for i in range(1, n_repeat + 1):
+            repeat_root = base_out_root / f"repeat_{i:02d}"
+            print(f"\n########## STABILITY REPEAT {i}/{n_repeat} ##########")
+            rc_i = _run_ehrflow_into(repeat_root)
+            repeat_roots.append(repeat_root)
+            rc = rc or rc_i
+        _write_stability_report(base_out_root, repeat_roots, arms=args.arms)
+        return rc
 
     all_items = list(
         RULE_BENCH_ITEMS if args.bench_kind == "rule" else ANALYSIS_BENCH_ITEMS
@@ -1953,6 +2083,174 @@ def _ehrflow_item_done(item_root: Path) -> bool:
         if gates.get("execution_complete"):
             return True
     return False
+
+
+def _stability_adjustment_covariates(workdir: Optional[str]) -> Optional[List[str]]:
+    """Best-effort adjustment covariate set from a run's model tables.
+
+    The reviewer-facing "design variation" story is partly which covariates
+    the agent chose (e.g. E1 adjusting for lactate vs not). Read the first
+    model/coefficient table that carries a term column and return its
+    non-intercept terms. Returns None when nothing parseable is found —
+    the estimate-level columns carry the report either way.
+    """
+    if not workdir:
+        return None
+    run_dir = Path(workdir)
+    if not run_dir.exists():
+        return None
+    import pandas as pd
+
+    patterns = [
+        "evidence/*model_coefficients*.csv",
+        "steps/*/outputs/model_coefficients.csv",
+        "evidence/*model_specification*.csv",
+        "steps/*/outputs/model_specification.csv",
+        "evidence/*adjusted_association*.csv",
+    ]
+    term_cols = {"term", "variable", "covariate", "feature", "parameter", "predictor"}
+    for pattern in patterns:
+        for path in sorted(run_dir.glob(pattern)):
+            try:
+                df = pd.read_csv(path)
+            except Exception:
+                continue
+            lower = {str(c).lower(): c for c in df.columns}
+            hit = next((lower[c] for c in term_cols if c in lower), None)
+            if hit is None:
+                continue
+            terms = [str(t).strip() for t in df[hit].tolist()]
+            terms = [
+                t
+                for t in terms
+                if t.lower() not in {"intercept", "const", "constant", ""}
+            ]
+            if terms:
+                return sorted(dict.fromkeys(terms))
+    return None
+
+
+def _write_stability_report(
+    base_out_root: Path,
+    repeat_roots: Sequence[Path],
+    *,
+    arms: Sequence[str],
+) -> None:
+    """Aggregate per-repeat estimates into a run-to-run stability report.
+
+    Answers the reviewer nondeterminism question quantitatively: for each
+    item, the primary estimate, gate outcome, writer passes and adjustment
+    covariates across N repeats, plus the OR spread (min/median/max).
+    """
+    import statistics
+
+    ran_arms = _normalize_arms(arms)
+    # item_key -> list of {repeat, arm, or, gate, attempts, covariates}
+    per_item: Dict[str, List[Dict[str, Any]]] = {}
+    for idx, root in enumerate(repeat_roots, start=1):
+        results_path = root / "ehrflowbench_results.json"
+        if not results_path.exists():
+            continue
+        try:
+            payload = json.loads(results_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for score in payload.get("scores", []):
+            key = score.get("item_key") or score.get("key")
+            if not key:
+                continue
+            for arm in ran_arms:
+                arm_score = score.get(arm)
+                if not isinstance(arm_score, dict):
+                    continue
+                per_item.setdefault(str(key), []).append(
+                    {
+                        "repeat": idx,
+                        "arm": arm,
+                        "or": arm_score.get("primary_or"),
+                        "gate": arm_score.get("gate_status"),
+                        "attempts": arm_score.get("writer_attempts"),
+                        "covariates": _stability_adjustment_covariates(
+                            arm_score.get("workdir")
+                        ),
+                    }
+                )
+
+    report: Dict[str, Any] = {
+        "n_repeats": len(repeat_roots),
+        "arms": ran_arms,
+        "items": {},
+    }
+    md = [
+        "# Bench stability report",
+        "",
+        f"Repeats: {len(repeat_roots)} · arms: {', '.join(ran_arms)}",
+        "",
+        "Run-to-run variation of the primary estimate, gate outcome and "
+        "adjustment covariates. A wide OR spread or shifting covariate set "
+        "means the result depends on design choices the agent made "
+        "autonomously, not only on the data.",
+        "",
+    ]
+    for key, rows in sorted(per_item.items()):
+        ors = [float(r["or"]) for r in rows if isinstance(r["or"], (int, float))]
+        or_min = min(ors) if ors else None
+        or_max = max(ors) if ors else None
+        or_med = statistics.median(ors) if ors else None
+        gates = [r["gate"] for r in rows if r["gate"]]
+        gate_dist: Dict[str, int] = {}
+        for g in gates:
+            gate_dist[g] = gate_dist.get(g, 0) + 1
+        # covariate-set stability: how many DISTINCT adjustment sets appeared
+        cov_sets = [tuple(r["covariates"]) for r in rows if r["covariates"]]
+        distinct_cov_sets = len(set(cov_sets))
+        report["items"][key] = {
+            "n_runs": len(rows),
+            "or_values": ors,
+            "or_min": or_min,
+            "or_median": or_med,
+            "or_max": or_max,
+            "or_spread": (or_max - or_min) if (ors and or_max is not None) else None,
+            "gate_distribution": gate_dist,
+            "distinct_covariate_sets": distinct_cov_sets,
+            "runs": rows,
+        }
+        or_range = f"{or_min:.3f}–{or_max:.3f} (median {or_med:.3f})" if ors else "—"
+        gate_summary = (
+            ", ".join(f"{g}×{n}" for g, n in sorted(gate_dist.items())) or "—"
+        )
+        md.extend(
+            [
+                f"## `{key}`",
+                "",
+                f"- Primary OR across {len(rows)} run(s): **{or_range}**",
+                f"- Gate outcomes: {gate_summary}",
+                f"- Distinct adjustment-covariate sets: {distinct_cov_sets}",
+                "",
+                "| Repeat | Arm | OR | Gate | Writer passes | # covariates |",
+                "|---:|---|---:|---|---:|---:|",
+            ]
+        )
+        for r in rows:
+            or_txt = (
+                f"{float(r['or']):.3f}" if isinstance(r["or"], (int, float)) else "—"
+            )
+            n_cov = len(r["covariates"]) if r["covariates"] else "—"
+            md.append(
+                f"| {r['repeat']} | {r['arm']} | {or_txt} | "
+                f"`{r['gate'] or '—'}` | {r['attempts'] if r['attempts'] is not None else '—'} "
+                f"| {n_cov} |"
+            )
+        md.append("")
+
+    base_out_root.mkdir(parents=True, exist_ok=True)
+    (base_out_root / "stability_report.json").write_text(
+        json.dumps(report, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
+    (base_out_root / "stability_report.md").write_text("\n".join(md), encoding="utf-8")
+    print(f"  -> {base_out_root / 'stability_report.md'}")
+    print(f"  -> {base_out_root / 'stability_report.json'}")
 
 
 def _run_ehrflowbench_jsonl(

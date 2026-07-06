@@ -30,8 +30,11 @@ from .cohort_schema import (
     CohortSchemaError,
     coerce_cohort_definition,
 )
-from .robustness_panel import RobustnessPlanError, RobustnessSpec, validate_robustness_specs
-
+from .robustness_panel import (
+    RobustnessPlanError,
+    RobustnessSpec,
+    validate_robustness_specs,
+)
 
 # ---------------------------------------------------------------------------
 # Variable / concept descriptors
@@ -47,17 +50,17 @@ class VariableRole(str, Enum):
     which.
     """
 
-    ID = "id"                        # patient/stay identifier
-    TIME = "time"                    # absolute or relative timestamp
-    DEMOGRAPHIC = "demographic"      # age, sex, weight at admission
-    VITAL = "vital"                  # vital sign, continuous
-    LAB = "lab"                      # laboratory measurement, continuous
-    INTERVENTION = "intervention"    # vaso, vent, rrt, fluid bolus...
+    ID = "id"  # patient/stay identifier
+    TIME = "time"  # absolute or relative timestamp
+    DEMOGRAPHIC = "demographic"  # age, sex, weight at admission
+    VITAL = "vital"  # vital sign, continuous
+    LAB = "lab"  # laboratory measurement, continuous
+    INTERVENTION = "intervention"  # vaso, vent, rrt, fluid bolus...
     ORDINAL_SCORE = "ordinal_score"  # SOFA component, GCS, KDIGO stage
     COMPOSITE_SCORE = "composite_score"  # total SOFA, APACHE
-    OUTCOME = "outcome"              # death, los_icu, readmission
-    INDEX = "index"                  # row-level time index
-    META = "meta"                    # source dataset, cohort tag
+    OUTCOME = "outcome"  # death, los_icu, readmission
+    INDEX = "index"  # row-level time index
+    META = "meta"  # source dataset, cohort tag
     OTHER = "other"
 
 
@@ -69,13 +72,13 @@ class AggregationRule(str, Enum):
     error — the ConceptUsageAuditor flags it.
     """
 
-    ANY = "any"                      # all common ops valid
-    MEAN_MEDIAN = "mean_or_median"   # continuous, well-defined mean
-    MEDIAN_ONLY = "median_only"      # heavily skewed continuous
-    MAX_LAST = "max_or_last"         # ordinal scores → take max or last
-    SUM = "sum"                      # counts / cumulative doses
-    FIRST_VALUE = "first_value"      # at-admission attributes
-    NONE = "none"                    # do not aggregate (event variables)
+    ANY = "any"  # all common ops valid
+    MEAN_MEDIAN = "mean_or_median"  # continuous, well-defined mean
+    MEDIAN_ONLY = "median_only"  # heavily skewed continuous
+    MAX_LAST = "max_or_last"  # ordinal scores → take max or last
+    SUM = "sum"  # counts / cumulative doses
+    FIRST_VALUE = "first_value"  # at-admission attributes
+    NONE = "none"  # do not aggregate (event variables)
 
 
 class TimeWindow(BaseModel):
@@ -84,7 +87,9 @@ class TimeWindow(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(..., description="Short, stable identifier, e.g. 'first_24h'.")
-    anchor: Literal["icu_admission", "hospital_admission", "event_onset"] = "icu_admission"
+    anchor: Literal["icu_admission", "hospital_admission", "event_onset"] = (
+        "icu_admission"
+    )
     start_hours: float = 0.0
     end_hours: float = 24.0
     rationale: Optional[str] = Field(
@@ -184,7 +189,9 @@ class ConceptDescriptor(BaseModel):
             "thresholded as if it ran 0-24."
         ),
     )
-    allowed_aggregations: List[AggregationRule] = Field(default_factory=lambda: [AggregationRule.ANY])
+    allowed_aggregations: List[AggregationRule] = Field(
+        default_factory=lambda: [AggregationRule.ANY]
+    )
     aggregation_default: Optional[AggregationRule] = None
     is_ordinal: bool = False
     ordinal_levels: Optional[List[int]] = None
@@ -288,6 +295,11 @@ class UserPreferences(BaseModel):
     data_constraints: Optional[str] = None
     must_have_outputs: Optional[str] = None
     covariates: List[str] = Field(default_factory=list)
+    # Optional landmark / immortal-time origin (hours) for time-to-event
+    # designs. Consumed by the deterministic survival runner; ``None`` means
+    # "use the skill's case-neutral default" (24h) rather than a study-specific
+    # constant baked into the skill.
+    landmark_hours: Optional[float] = None
     extra_notes: Optional[str] = None
 
 
@@ -414,8 +426,12 @@ class AnalysisStep(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     step_id: str
-    intent: str = Field(..., description="One-sentence description of what this step does.")
-    inputs: List[str] = Field(default_factory=list, description="Variable names or evidence ids consumed.")
+    intent: str = Field(
+        ..., description="One-sentence description of what this step does."
+    )
+    inputs: List[str] = Field(
+        default_factory=list, description="Variable names or evidence ids consumed."
+    )
     expected_outputs: List[str] = Field(
         default_factory=list,
         description="Logical outputs — table_name, figure_name, statistic_name.",
@@ -577,7 +593,9 @@ class VisualizationRequest(BaseModel):
     step: AnalysisStep
     analysis_family: str
     evidence_refs: List[EvidenceRef] = Field(default_factory=list)
-    required_formats: List[str] = Field(default_factory=lambda: ["png", "svg", "pdf", "tiff"])
+    required_formats: List[str] = Field(
+        default_factory=lambda: ["png", "svg", "pdf", "tiff"]
+    )
     must_have_outputs: Optional[str] = None
     notes: List[str] = Field(default_factory=list)
 
@@ -758,6 +776,16 @@ class AnalysisManifest(BaseModel):
             "sha256, requested seed, temperature, provider/model, and a "
             "PHI-safe environment snapshot. Populated when "
             "ResearchAgentPipeline(enable_reproducibility_envelope=True)."
+        ),
+    )
+    code_version: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Identity of the code that produced this run: git commit sha, "
+            "branch, dirty-worktree flag, and installed easyicu package "
+            "version. Lets a manifest be tied back to the exact source, "
+            "which the reproducibility claim depends on. None only when "
+            "capture failed entirely (e.g. no git and no package metadata)."
         ),
     )
     submission_profile_name: Optional[str] = Field(

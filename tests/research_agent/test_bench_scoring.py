@@ -9,9 +9,7 @@ from tools.run_research_agent_bench import _artifact_substring_hits, _primary_or
 def _write_summary(run_dir: Path, payload: dict) -> None:
     step_dir = run_dir / "steps" / "01_primary" / "outputs"
     step_dir.mkdir(parents=True)
-    (step_dir / "step_summary.json").write_text(
-        json.dumps(payload), encoding="utf-8"
-    )
+    (step_dir / "step_summary.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
 def _write_panel(run_dir: Path, value: float) -> None:
@@ -201,7 +199,9 @@ def test_five_dim_scorecard_is_additive_and_robust(tmp_path):
         json.dumps({"gates": gates}), encoding="utf-8"
     )
     (run_dir / "analysis_plan.json").write_text(
-        json.dumps({"steps": [{"intent": "table one + forest figure + completeness audit"}]}),
+        json.dumps(
+            {"steps": [{"intent": "table one + forest figure + completeness audit"}]}
+        ),
         encoding="utf-8",
     )
     (run_dir / "evidence_audit.json").write_text(
@@ -209,7 +209,13 @@ def test_five_dim_scorecard_is_additive_and_robust(tmp_path):
             {
                 "evidence_complete": True,
                 "missing_evidence_count": 0,
-                "kinds": {"table": 1, "figure": 1, "metric": 1, "cohort": 1, "model": 1},
+                "kinds": {
+                    "table": 1,
+                    "figure": 1,
+                    "metric": 1,
+                    "cohort": 1,
+                    "model": 1,
+                },
             }
         ),
         encoding="utf-8",
@@ -291,3 +297,99 @@ def test_score_arm_reports_active_errors_separately_from_historical_errors(tmp_p
 
     assert score["n_errors"] == 0
     assert score["n_historical_errors"] == 1
+
+
+def _write_run_status(run_dir: Path, status: str) -> None:
+    (run_dir / "run_status.json").write_text(
+        json.dumps({"status": status, "gates": {}}), encoding="utf-8"
+    )
+
+
+def _write_audit_log(run_dir: Path, writer_passes: int) -> None:
+    lines = []
+    for i in range(writer_passes):
+        lines.append(
+            json.dumps(
+                {
+                    "timestamp": f"2026-07-03T1{i}:00:00Z",
+                    "phase": "writer",
+                    "event": "Drafting manuscript scaffold.",
+                    "status": "running",
+                }
+            )
+        )
+    (run_dir / "audit_log.jsonl").write_text("\n".join(lines), encoding="utf-8")
+
+
+def test_gate_ladder_prefers_run_status_status(tmp_path: Path) -> None:
+    from tools.run_research_agent_bench import _gate_ladder
+
+    _write_run_status(tmp_path, "publication_ready")
+    assert _gate_ladder(tmp_path, {}) == "publication_ready"
+
+
+def test_gate_ladder_falls_back_to_readiness_booleans(tmp_path: Path) -> None:
+    from tools.run_research_agent_bench import _gate_ladder
+
+    # No run_status.json on disk -> derive from readiness booleans.
+    assert (
+        _gate_ladder(tmp_path, {"manuscript_ready": True, "publication_ready": False})
+        == "manuscript_ready"
+    )
+    assert (
+        _gate_ladder(tmp_path, {"execution_complete": True, "manuscript_ready": False})
+        == "analysis_only"
+    )
+
+
+def test_writer_attempts_counts_audit_log_drafts(tmp_path: Path) -> None:
+    from tools.run_research_agent_bench import _writer_attempts
+
+    _write_audit_log(tmp_path, writer_passes=4)
+    # Manifest gate takes precedence when present...
+    assert _writer_attempts(tmp_path, {"writer_attempt_count": 2}) == 2
+    # ...otherwise fall back to counting audit-log draft events.
+    assert _writer_attempts(tmp_path, {}) == 4
+
+
+def test_write_stability_report_aggregates_or_spread(tmp_path: Path) -> None:
+    from tools.run_research_agent_bench import _write_stability_report
+
+    def _mk_repeat(root: Path, or_value: float) -> Path:
+        root.mkdir()
+        (root / "ehrflowbench_results.json").write_text(
+            json.dumps(
+                {
+                    "scores": [
+                        {
+                            "item_key": "E_demo",
+                            "aware": {
+                                "primary_or": or_value,
+                                "gate_status": "publication_ready",
+                                "writer_attempts": 1,
+                                "workdir": str(root),
+                            },
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        return root
+
+    roots = [
+        _mk_repeat(tmp_path / "repeat_01", 1.10),
+        _mk_repeat(tmp_path / "repeat_02", 1.30),
+        _mk_repeat(tmp_path / "repeat_03", 1.20),
+    ]
+    _write_stability_report(tmp_path, roots, arms=["aware"])
+
+    report = json.loads((tmp_path / "stability_report.json").read_text())
+    item = report["items"]["E_demo"]
+    assert item["n_runs"] == 3
+    assert item["or_min"] == 1.10
+    assert item["or_max"] == 1.30
+    assert item["or_median"] == 1.20
+    assert abs(item["or_spread"] - 0.20) < 1e-9
+    assert item["gate_distribution"] == {"publication_ready": 3}
+    assert (tmp_path / "stability_report.md").exists()

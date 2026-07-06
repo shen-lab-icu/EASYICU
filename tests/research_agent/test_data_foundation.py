@@ -144,3 +144,77 @@ def test_acquire_captures_selection_token_usage_and_cost(monkeypatch):
                                    "total_tokens": 1200}
     # deepseek-chat priced at (0.27, 1.10)/1M -> 0.001*0.27 + 0.0002*1.10
     assert res.selection_cost_usd is not None and res.selection_cost_usd > 0
+
+
+def test_default_static_concepts_carry_survival_censoring():
+    """Survival-readiness contract: the universe must carry both LOS concepts.
+
+    Time-to-event designs (H1 ventilation survival, etc.) need an event time AND
+    a survivor follow-up end. The materializer emits ``death_time`` (event time)
+    from the outcome's timestamp; the survivor censoring time comes from
+    ``los_hosp`` (hospital length of stay). Both LOS concepts must stay in the
+    default static set, or a regenerated universe silently reverts to a timeless
+    binary outcome and blocks survival analysis again.
+    """
+    import inspect
+
+    default = inspect.signature(
+        acquire_universe_for_question
+    ).parameters["static_concepts"].default
+    assert "los_icu" in default
+    assert "los_hosp" in default
+
+
+def test_augment_certified_followup_columns_builds_clean_survival_time(tmp_path):
+    """The data-foundation layer certifies an ICU-anchored follow-up so a
+    survival step can run KM/Cox instead of declining on censoring. death_time
+    (hours) is the event time; survivors are censored at los_hosp*24; negative /
+    post-discharge / non-positive artifacts are repaired."""
+    import pandas as pd
+    from easyicu.research_agent.data_foundation import _augment_certified_followup_columns
+
+    p = tmp_path / "universe.parquet"
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4, 5],
+            "death": [1, 0, 1, 1, 0],
+            "death_time": [50.0, None, -23.0, 9000.0, None],  # hours; -23 & huge are artifacts
+            "los_hosp": [3.0, 5.0, 2.0, 4.0, 10.0],           # DAYS
+        }
+    ).to_parquet(p, index=False)
+
+    prov = _augment_certified_followup_columns(p)
+    out = pd.read_parquet(p)
+    ft = out["followup_time_hours"]
+
+    assert prov["n_event_observed"] == 3
+    assert out["event_observed"].tolist() == [1, 0, 1, 1, 0]
+    # stay 1: valid death at 50h -> 50
+    assert ft.iloc[0] == 50.0
+    # stay 2: survivor -> los_hosp*24 = 120
+    assert ft.iloc[1] == 120.0
+    # stay 3: negative death_time artifact -> hospital-discharge proxy 2*24 = 48
+    assert ft.iloc[2] == 48.0
+    # stay 4: death_time 9000 > los_hosp*24 (96) -> capped at 96 (no post-discharge death)
+    assert ft.iloc[3] == 96.0
+    # stay 5: survivor -> 240
+    assert ft.iloc[4] == 240.0
+    # every follow-up strictly positive
+    assert (ft > 0).all()
+
+
+def test_augment_certified_followup_is_noop_without_event_time():
+    """Prediction/association universes (no death_time) are untouched."""
+    import pandas as pd
+    import tempfile
+    from pathlib import Path
+    from easyicu.research_agent.data_foundation import _augment_certified_followup_columns
+
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "u.parquet"
+        pd.DataFrame({"stay_id": [1, 2], "death": [1, 0], "los_hosp": [3.0, 5.0]}).to_parquet(p, index=False)
+        prov = _augment_certified_followup_columns(p)
+        out = pd.read_parquet(p)
+    assert prov is None
+    assert "followup_time_hours" not in out.columns
+    assert "event_observed" not in out.columns

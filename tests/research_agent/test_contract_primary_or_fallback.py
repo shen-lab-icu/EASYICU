@@ -239,6 +239,127 @@ def test_prediction_auroc_missing_everywhere_still_errors(ra):
     assert _errors(findings)
 
 
+def _feature_freeze_prep_step(ra):
+    """The M3 ``01_feature_audit_and_primary_set_freeze`` shape: a
+    ``data_quality_audit`` step that freezes the feature set *for* downstream
+    clustering. Its intent and expected_outputs mention clustering, but it does
+    not fit clusters itself."""
+    return ra.AnalysisStep(
+        step_id="01_feature_audit_and_primary_set_freeze",
+        method="data_quality_audit",
+        intent=(
+            "Audit feature availability and freeze a primary clustering feature "
+            "set that avoids letting sparse variables dominate cluster geometry."
+        ),
+        expected_outputs=[
+            "table:feature_availability_and_missingness",
+            "table:feature_selection_for_primary_clustering",
+            "manifest:primary_clustering_feature_spec",
+        ],
+    )
+
+
+def test_feature_freeze_prep_step_not_subject_to_clustering_contract(ra):
+    """Regression (M3): a feature-freeze/audit step that merely *mentions*
+    clustering must not be forced to report a silhouette/cluster count. It
+    self-declared it "froze the feature set but did not fit clusters" yet its
+    null placeholder metrics fail-closed the entire run."""
+    from easyicu.research_agent.pipeline import _step_contract_findings
+
+    findings = _step_contract_findings(
+        step=_feature_freeze_prep_step(ra),
+        step_summary={
+            "statistic:silhouette_score": None,
+            "statistic:cluster_count": None,
+            "clustering_summary": {
+                "cluster_count": None,
+                "silhouette_score": None,
+                "no_ground_truth_note": (
+                    "This step froze the feature set but did not fit clusters."
+                ),
+            },
+            "primary_feature_freeze": {"n_features": 15},
+        },
+    )
+
+    assert _errors(findings) == []
+
+
+def _clustering_figure_step(ra, step_id: str = "02_primary_phenotype_clustering_figure"):
+    return ra.AnalysisStep(
+        step_id=step_id,
+        method="clustering",
+        intent="Render the primary phenotype clustering assignment panel.",
+        expected_outputs=[
+            "figure:cluster_scatter",
+            "statistic:silhouette_score",
+            "statistic:cluster_count",
+        ],
+    )
+
+
+def test_clustering_metric_satisfied_by_sibling_clustering_step(ra):
+    """A clustering figure/render step whose own summary lacks the metric under a
+    recognised key must not fail when the dedicated clustering step genuinely
+    produced and bound it (M3 cross-step analogue of the AUROC fallback)."""
+    from easyicu.research_agent.pipeline import _step_contract_findings
+
+    findings = _step_contract_findings(
+        step=_clustering_figure_step(ra),
+        step_summary={
+            "silhouette_score": None,
+            "cluster_count": None,
+            "registered_evidence_step": "02_primary_phenotype_clustering",
+        },
+        completed_step_records=[
+            {
+                "step_id": "02_primary_phenotype_clustering",
+                "status": "ok",
+                "step_summary": {
+                    "silhouette_score": 0.32642819634210984,
+                    "statistic:silhouette_score": 0.32642819634210984,
+                    "cluster_count": 2,
+                    "statistic:cluster_count": 2,
+                },
+            }
+        ],
+    )
+
+    assert _errors(findings) == []
+    assert any(
+        finding.severity == "warning"
+        and finding.detail.get("fallback_step_id") == "02_primary_phenotype_clustering"
+        and "cluster" in finding.message.lower()
+        for finding in findings
+    )
+
+
+def test_clustering_metric_missing_everywhere_still_errors(ra):
+    """The clustering fallback only credits a genuinely-bound sibling metric —
+    when no step produced a silhouette/cluster count, the requirement must still
+    fail (no silent pass)."""
+    from easyicu.research_agent.pipeline import _step_contract_findings
+
+    findings = _step_contract_findings(
+        step=ra.AnalysisStep(
+            step_id="02_primary_phenotype_clustering",
+            method="clustering",
+            intent="Fit the primary phenotype clustering.",
+            expected_outputs=["statistic:silhouette_score", "statistic:cluster_count"],
+        ),
+        step_summary={"silhouette_score": None, "cluster_count": None},
+        completed_step_records=[
+            {
+                "step_id": "01_feature_audit_and_primary_set_freeze",
+                "status": "ok",
+                "step_summary": {"primary_feature_freeze": {"n_features": 15}},
+            }
+        ],
+    )
+
+    assert _errors(findings)
+
+
 def test_rejects_nonfinite_primary_effect_values(ra):
     from easyicu.research_agent.pipeline import _step_contract_findings
 

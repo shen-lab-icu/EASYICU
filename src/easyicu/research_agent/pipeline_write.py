@@ -1016,6 +1016,51 @@ def run_write_phase(
                 )
             )
 
+    # Methodological-rigor gate: does the analysis METHOD match the locked
+    # study-design family? Catches a survival question answered with a static
+    # odds ratio, discrimination without calibration, clusters without
+    # stability, and a complete-case estimate under material missingness. The
+    # causal family is deliberately delegated to the causal audit above; this
+    # covers the families it does not. Advisory and best-effort: findings feed
+    # the readiness gate but a rigor-audit exception never crashes the write
+    # phase.
+    try:
+        from .methodological_rigor import (
+            MethodologicalRigorAuditor,
+            extract_method_signals,
+        )
+
+        rigor_findings = MethodologicalRigorAuditor().audit(
+            context=context, evidence=evidence
+        )
+        signals = extract_method_signals(context, evidence)
+        if evidence.get("methodological_rigor_report") is None:
+            evidence.register_json(
+                kind="statistic",
+                description=(
+                    "Methodological-rigor audit: does the analysis method match "
+                    "the locked study-design family?"
+                ),
+                payload={
+                    "family": signals.family,
+                    "signals": dict(signals.__dict__),
+                    "findings": [f.model_dump(mode="json") for f in rigor_findings],
+                },
+                filename="methodological_rigor_report.json",
+                evidence_id="methodological_rigor_report",
+                producer="pipeline",
+                generation_mode="system",
+            )
+        findings += rigor_findings
+    except Exception as exc:  # pragma: no cover - defensive
+        findings.append(
+            ValidationFinding(
+                validator="methodological_rigor",
+                severity="info",
+                message=f"Methodological-rigor audit skipped: {exc}",
+            )
+        )
+
     # O16 — Reporting-guideline checklist. Writes STROBE (always)
     # and TRIPOD+AI (when the analysis family looks like a
     # prediction / validation study). Findings are emitted at

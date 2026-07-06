@@ -698,26 +698,153 @@ def _mock_code_primary_association(
         primary_or_lo = float(np.exp(ci_lo[names.index(predictor_col)]))
         primary_or_hi = float(np.exp(ci_hi[names.index(predictor_col)]))
 
-        # Forest plot (skipped for the intercept; non-binary sex coding excluded).
+        # Two-panel manuscript figure (panel A: adjusted OR forest; panel B:
+        # absolute outcome risk by exposure group) plus a self-declared
+        # figure contract. The 2026-07 figure-contract gate requires
+        # result-bearing figures to expose >= 2 data-backed panels, so the
+        # mock models a compliant coder rather than relying on the runner's
+        # single-panel fallback contract.
         try:
             plot_rows = coef_df[coef_df["variable"] != "intercept"].reset_index(drop=True)
-            fig, ax = plt.subplots(figsize=(5, 0.6 + 0.5 * len(plot_rows)))
+
+            # ---- Panel B source data: absolute outcome risk by exposure ----
+            risk_df = sub[[predictor_col, outcome_col]].copy()
+            uniq_vals = pd.unique(risk_df[predictor_col].dropna())
+            if len(uniq_vals) <= 4:
+                risk_df["exposure_group"] = risk_df[predictor_col].astype(str)
+            else:
+                try:
+                    risk_df["exposure_group"] = pd.qcut(
+                        risk_df[predictor_col], q=4, duplicates="drop"
+                    ).astype(str)
+                except ValueError:
+                    median_v = float(risk_df[predictor_col].median())
+                    risk_df["exposure_group"] = np.where(
+                        risk_df[predictor_col] <= median_v,
+                        "at or below median",
+                        "above median",
+                    )
+            z95 = 1.959963984540054
+            risk_rows = []
+            for group_label, values in risk_df.groupby("exposure_group", observed=True)[outcome_col]:
+                events = int(values.astype(int).sum())
+                n_group = int(values.shape[0])
+                rate = events / n_group if n_group else float("nan")
+                if n_group:
+                    centre = (rate + z95 * z95 / (2 * n_group)) / (1 + z95 * z95 / n_group)
+                    half = (
+                        z95
+                        * np.sqrt(rate * (1 - rate) / n_group + z95 * z95 / (4 * n_group * n_group))
+                        / (1 + z95 * z95 / n_group)
+                    )
+                    lo_b, hi_b = max(0.0, centre - half), min(1.0, centre + half)
+                else:
+                    lo_b, hi_b = float("nan"), float("nan")
+                risk_rows.append({{
+                    "exposure_group": str(group_label),
+                    "n": n_group,
+                    "events": events,
+                    "event_rate": rate,
+                    "rate_ci_lower": lo_b,
+                    "rate_ci_upper": hi_b,
+                }})
+            risk_summary = pd.DataFrame(risk_rows)
+            risk_summary.to_csv(out_dir / "absolute_risk_by_exposure.csv", index=False)
+
+            fig, (ax_a, ax_b) = plt.subplots(
+                1, 2, figsize=(10, max(3.2, 0.6 + 0.5 * len(plot_rows)))
+            )
             ys = np.arange(len(plot_rows))
-            ax.errorbar(
+            ax_a.errorbar(
                 plot_rows["odds_ratio"], ys,
                 xerr=[plot_rows["odds_ratio"] - plot_rows["or_lower"],
                       plot_rows["or_upper"] - plot_rows["odds_ratio"]],
                 fmt="o", color="#1f77b4",
             )
-            ax.axvline(1.0, linestyle="--", color="grey", linewidth=0.8)
-            ax.set_yticks(ys)
-            ax.set_yticklabels(plot_rows["variable"])
-            ax.set_xlabel(f"Odds ratio for {{outcome_col}}")
-            ax.set_title(f"Adjusted association ({{backend}})")
+            ax_a.axvline(1.0, linestyle="--", color="grey", linewidth=0.8)
+            ax_a.set_yticks(ys)
+            ax_a.set_yticklabels(plot_rows["variable"])
+            ax_a.set_xlabel(f"Odds ratio for {{outcome_col}}")
+            ax_a.set_title(f"A. Adjusted association ({{backend}})")
+
+            xs_b = np.arange(len(risk_summary))
+            rates_b = risk_summary["event_rate"].to_numpy(dtype=float)
+            err_lo = rates_b - risk_summary["rate_ci_lower"].to_numpy(dtype=float)
+            err_hi = risk_summary["rate_ci_upper"].to_numpy(dtype=float) - rates_b
+            ax_b.errorbar(xs_b, rates_b, yerr=[err_lo, err_hi], fmt="o", color="#d62728")
+            ax_b.set_xticks(xs_b)
+            ax_b.set_xticklabels(risk_summary["exposure_group"], rotation=20, ha="right")
+            ax_b.set_ylabel(f"Observed {{outcome_col}} rate")
+            ax_b.set_title("B. Absolute outcome risk by exposure")
             fig.tight_layout()
             fig.savefig(out_dir / "primary_association_curve.png", dpi=160)
             plt.close(fig)
             _figure_saved = True
+
+            predictor_label = str(predictor_col).replace("_", " ")
+            outcome_label = str(outcome_col).replace("_", " ")
+            contract = {{
+                "figure_id": "primary_association_curve",
+                "title": "Adjusted association with absolute outcome risk context",
+                "core_claim": (
+                    f"The adjusted odds ratio for {{predictor_label}} was "
+                    f"{{primary_or:.2f}} (95% CI {{primary_or_lo:.2f}} to "
+                    f"{{primary_or_hi:.2f}}), shown next to the absolute "
+                    f"{{outcome_label}} risk by exposure group."
+                ),
+                "panels": [
+                    {{
+                        "panel_id": "A",
+                        "title": "Adjusted odds ratios with 95% confidence intervals",
+                        "role": "primary_estimand",
+                        "claim": (
+                            "This forest-style panel reports the adjusted odds "
+                            f"ratio for {{predictor_label}} alongside the "
+                            "covariate estimates from the same fitted model."
+                        ),
+                        "evidence_ids": [],
+                        "review_risk": (
+                            "Confirm the adjusted estimates against the "
+                            "coefficient table before citing them in text."
+                        ),
+                    }},
+                    {{
+                        "panel_id": "B",
+                        "title": "Absolute outcome risk by exposure group",
+                        "role": "descriptive_result",
+                        "claim": (
+                            f"This panel shows the observed {{outcome_label}} "
+                            "event rate with 95% score intervals across "
+                            "exposure groups, giving absolute-risk context "
+                            "for the adjusted estimate."
+                        ),
+                        "evidence_ids": [],
+                        "review_risk": (
+                            "Group boundaries come from observed quartiles; "
+                            "review them before clinical interpretation."
+                        ),
+                    }},
+                ],
+                "export_formats": ["png"],
+                "source_data": [
+                    "primary_association.csv",
+                    "absolute_risk_by_exposure.csv",
+                ],
+                "statistics_note": (
+                    "Logistic regression with normal-approximation intervals; "
+                    "absolute risks use score intervals on observed rates."
+                ),
+                "image_integrity_note": (
+                    "Both panels are drawn directly from the tabulated source "
+                    "data in this step; no values were invented or altered."
+                ),
+            }}
+            with open(
+                out_dir / "primary_association_curve.figure_contract.json",
+                "w",
+                encoding="utf-8",
+            ) as f:
+                json.dump(contract, f, indent=2, ensure_ascii=False)
         except Exception:
             # Plot is decorative; never fail the step over it.
             _figure_saved = False
@@ -739,6 +866,14 @@ def _mock_code_primary_association(
         if _figure_saved:
             summary["figure_files"] = ["primary_association_curve.png"]
             summary["figure_path"] = "primary_association_curve.png"
+            summary["figure_contract_files"] = [
+                "primary_association_curve.figure_contract.json"
+            ]
+            summary["source_data_files"] = [
+                "primary_association.csv",
+                "absolute_risk_by_exposure.csv",
+            ]
+            summary["absolute_risk_path"] = "absolute_risk_by_exposure.csv"
         with open(out_dir / "step_summary.json", "w", encoding="utf-8") as f:
             json.dump(summary, f, indent=2, ensure_ascii=False, default=str)
         print(json.dumps(summary, indent=2, ensure_ascii=False, default=str))

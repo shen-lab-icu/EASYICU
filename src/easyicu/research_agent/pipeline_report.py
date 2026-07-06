@@ -51,13 +51,54 @@ from .evidence import EvidenceStore
 from .figure_strategy import summarize_article_figure_strategy_coverage
 from .publication_figures import PUBLICATION_FIGURE_SKILL_POLICY_VERSION
 from .review_artifacts import build_review_artifact_payloads
+from .runtime_artifacts import capture_code_version
 from .schema import AnalysisPlan, ResearchContext, ValidationFinding
+
+
+def _figure_steps_satisfied_by_repair(run_dir: Path) -> set:
+    """Figure step_ids whose figure a successful rendering-only repair produced.
+
+    A ``*_figure`` step can fail (its own runner emitted no exports) yet still be
+    salvaged by a later ``*_figure_repair`` step that renders the figure into its
+    OWN outputs dir. That repair step is not a required plan step, so the gate
+    would otherwise still count the original figure step as ``execution_failed``.
+    We credit it: a rendering-only repair step (``status == ok`` with a real
+    rendered figure on disk) whose ``parent_step`` is ``P`` satisfies the figure
+    step ``P + "_figure"``. Matching is exact via ``parent_step`` — no fuzzy
+    token overlap — so an unrelated repair can never mask a genuine failure.
+    """
+
+    satisfied: set = set()
+    steps_dir = run_dir / "steps"
+    if not steps_dir.is_dir():
+        return satisfied
+    for summary in steps_dir.glob("*/outputs/step_summary.json"):
+        try:
+            payload = json.loads(summary.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        if not payload.get("rendering_only") or str(payload.get("status") or "") != "ok":
+            continue
+        parent = str(payload.get("parent_step") or "").strip()
+        if not parent:
+            continue
+        outputs_dir = summary.parent
+        has_rendered_figure = any(
+            any(outputs_dir.glob(f"*{ext}"))
+            for ext in (".png", ".svg", ".pdf", ".tiff")
+        )
+        if has_rendered_figure:
+            satisfied.add(parent + "_figure")
+    return satisfied
 
 
 def execution_gate_status(
     *,
     plan: Optional[AnalysisPlan],
     per_step_records: Sequence[Dict[str, Any]],
+    run_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
     if plan is None:
         return {
@@ -80,17 +121,33 @@ def execution_gate_status(
         for record in per_step_records
         if record.get("step_id")
     }
-    missing_steps = [step_id for step_id in required_step_ids if step_id not in status_by_step]
+    missing_steps = [
+        step_id for step_id in required_step_ids if step_id not in status_by_step
+    ]
+    # Credit ``*_figure`` steps whose figure a later rendering-only repair step
+    # actually produced: the figure exists on disk, so a hard fail-close here
+    # would be a false negative (the deliverable is present). Only figure steps
+    # matched EXACTLY by a repair's ``parent_step`` are credited; every other
+    # failure still blocks the gate. ``run_dir=None`` preserves legacy behaviour.
+    repaired_figures: set = (
+        _figure_steps_satisfied_by_repair(run_dir) if run_dir is not None else set()
+    )
+
+    def _step_ok(step_id: str) -> bool:
+        return status_by_step.get(step_id) == "ok" or (
+            step_id in repaired_figures and str(step_id).endswith("_figure")
+        )
+
     failed_steps = [
         {"step_id": step_id, "status": status_by_step.get(step_id)}
         for step_id in required_step_ids
-        if step_id in status_by_step and status_by_step.get(step_id) != "ok"
+        if step_id in status_by_step and not _step_ok(step_id)
     ]
     return {
         "execution_complete": not missing_steps and not failed_steps,
         "required_step_count": len(required_step_ids),
         "completed_step_count": sum(
-            1 for step_id in required_step_ids if status_by_step.get(step_id) == "ok"
+            1 for step_id in required_step_ids if _step_ok(step_id)
         ),
         "missing_steps": missing_steps,
         "failed_steps": failed_steps,
@@ -145,7 +202,9 @@ def _step_summary_blocks_outcome(payload: Dict[str, Any]) -> bool:
         return True
     if payload.get("exploratory_group_death_tabulation_authorized") is False:
         return True
-    if payload.get("primary_analysis_authorized") is False and _payload_mentions_outcome(payload):
+    if payload.get(
+        "primary_analysis_authorized"
+    ) is False and _payload_mentions_outcome(payload):
         return True
     if payload.get("analysis_executed") is False:
         dumped = json.dumps(payload, ensure_ascii=False).lower()
@@ -214,7 +273,9 @@ def _record_artifact_basename(record: Any) -> str:
     return Path(str(record.relative_path)).name.split("__", 1)[-1]
 
 
-def _source_fingerprints_match(evidence: EvidenceStore, metadata: Dict[str, Any]) -> bool:
+def _source_fingerprints_match(
+    evidence: EvidenceStore, metadata: Dict[str, Any]
+) -> bool:
     source_ids = metadata.get("source_evidence_ids")
     if isinstance(source_ids, str):
         ids = [source_ids]
@@ -243,10 +304,9 @@ def _publication_figure_policy_matches(metadata: Dict[str, Any]) -> bool:
 
 
 def _run_level_publication_skill_record(record: Any) -> bool:
-    return (
-        record.producer == "publication_figure_skill"
-        and _record_artifact_basename(record).startswith("easyicu_publication_figure.")
-    )
+    return record.producer == "publication_figure_skill" and _record_artifact_basename(
+        record
+    ).startswith("easyicu_publication_figure.")
 
 
 _PUBLICATION_FIGURE_VISUAL_ERROR_VALIDATORS = {
@@ -390,9 +450,7 @@ def _successful_step_ids(per_step_records: Sequence[Dict[str, Any]]) -> set:
     return {
         str(rec.get("step_id"))
         for rec in per_step_records
-        if isinstance(rec, dict)
-        and rec.get("status") == "ok"
-        and rec.get("step_id")
+        if isinstance(rec, dict) and rec.get("status") == "ok" and rec.get("step_id")
     }
 
 
@@ -444,6 +502,18 @@ _GATE_STATE_SUPERSESSION_PATTERNS = (
         "critic_agent",
         "criticagent marked manuscript",
         "manuscript_critique_passed",
+    ),
+    # A caveat-count finding cannot tell which writer pass it came
+    # from, so an earlier pass's "cites records with unresolved
+    # manifest caveats" error survives a later clean rewrite (e.g. a
+    # resume whose new draft cites only caveat-free records). Gate it
+    # on the CURRENT bound text: if the latest manuscript carries no
+    # `<!-- warning|error: see manifest -->` comments, the finding is
+    # stale; if the latest text still has caveats, it stays active.
+    (
+        "evidence_bound_writer",
+        "unresolved manifest caveats",
+        "manuscript_manifest_caveats_clean",
     ),
 )
 
@@ -628,6 +698,188 @@ def _is_publication_figure_audit_superseded(
     return _finding_references_publication_figure(finding)
 
 
+# ---------------------------------------------------------------------------
+# Primary-result plausibility gate ("table == reality").
+#
+# The value-level numeric auditor verifies manuscript-number == table-number,
+# but never table-number == reality. A generated primary table can be
+# internally consistent yet physically impossible — e.g. a positional column
+# swap that makes the Cox "event" column the sum of ages, yielding 4.6M events
+# for 73k stays and a 0h median follow-up. The manuscript then faithfully
+# transcribes the garbage and every value-level gate passes. This gate flags
+# ONLY values that cannot occur for ANY question (never a question-specific
+# direction, threshold, or magnitude), keeping shared gates case-neutral.
+# ---------------------------------------------------------------------------
+_PLAUSIBILITY_EVENT_KEYS = (
+    "events",
+    "n_events",
+    "n_events_model",
+    "num_events",
+    "event_count",
+)
+_PLAUSIBILITY_N_KEYS = (
+    "n",
+    "n_model",
+    "n_analysis",
+    "n_analytic",
+    "modeled_analytic_n",
+    "n_complete_case",
+    "n_complete_case_primary_model",
+    "n_primary_complete_case",
+    "n_stays",
+    "n_patients",
+    "n_obs",
+    "n_full",
+)
+_PLAUSIBILITY_RATIO_KEYS = ("hazard_ratio", "odds_ratio", "risk_ratio")
+_PLAUSIBILITY_RATE_KEYS = (
+    "event_rate",
+    "outcome_rate",
+    "death_rate",
+    "mortality_rate",
+)
+_PLAUSIBILITY_RESULT_MARKERS = (
+    "hazard_ratio",
+    "odds_ratio",
+    "risk_ratio",
+    "estimate",
+    "point_estimate",
+    "p_value",
+    "pvalue",
+    "log_hazard_ratio",
+)
+_PLAUSIBILITY_RESULT_CSVS = (
+    "cox_summary.csv",
+    "cox_model.csv",
+    "adjusted_cox_model.csv",
+    "hazard_ratio.csv",
+    "adjusted_association.csv",
+    "association_model_summary.csv",
+    "crude_vs_adjusted_association.csv",
+)
+
+
+def _plausibility_number(value: Any) -> Optional[float]:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        x = float(value)
+    elif isinstance(value, str):
+        try:
+            x = float(value.strip())
+        except (ValueError, AttributeError):
+            return None
+    else:
+        return None
+    # finite only (reject NaN / +-inf without importing math)
+    if x != x or x in (float("inf"), float("-inf")):
+        return None
+    return x
+
+
+def _plausibility_first(
+    mapping: Dict[str, Any], keys: Sequence[str]
+) -> Optional[float]:
+    for key in keys:
+        if key in mapping:
+            num = _plausibility_number(mapping[key])
+            if num is not None:
+                return num
+    return None
+
+
+def _plausibility_errors_for_row(where: str, row: Dict[str, Any]) -> List[str]:
+    errs: List[str] = []
+    # events <= n — guarded to model-result rows to avoid flagging unrelated
+    # count dicts that merely happen to carry both keys.
+    if any(marker in row for marker in _PLAUSIBILITY_RESULT_MARKERS):
+        events = _plausibility_first(row, _PLAUSIBILITY_EVENT_KEYS)
+        n = _plausibility_first(row, _PLAUSIBILITY_N_KEYS)
+        if events is not None and n is not None and n > 0 and events > n:
+            errs.append(
+                f"{where}: implausible primary result — {int(events)} events "
+                f"exceed {int(n)} analysis units; an event count cannot exceed "
+                "the sample (a corrupted/column-swapped result table)."
+            )
+    rate = _plausibility_first(row, _PLAUSIBILITY_RATE_KEYS)
+    if rate is not None and (rate < 0.0 or rate > 1.0):
+        errs.append(
+            f"{where}: implausible event rate {rate} (a proportion must be "
+            "within [0, 1])."
+        )
+    ratio = _plausibility_first(row, _PLAUSIBILITY_RATIO_KEYS)
+    if ratio is not None and ratio <= 0.0:
+        errs.append(
+            f"{where}: implausible ratio estimate {ratio} (a hazard/odds/risk "
+            "ratio must be > 0)."
+        )
+    lo = _plausibility_first(row, ("ci_low",))
+    hi = _plausibility_first(row, ("ci_high",))
+    if lo is not None and hi is not None and lo > hi:
+        errs.append(
+            f"{where}: inverted confidence interval (ci_low {lo} > ci_high {hi})."
+        )
+    return errs
+
+
+def _plausibility_walk(node: Any):
+    if isinstance(node, dict):
+        yield node
+        for value in node.values():
+            yield from _plausibility_walk(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _plausibility_walk(item)
+
+
+def primary_result_plausibility_errors(run_dir: Path) -> List[str]:
+    """Return case-neutral ``table == reality`` violations in primary artefacts.
+
+    Scans every step's ``step_summary.json`` (recursively) and the known
+    primary-result CSVs for values that are physically impossible for any
+    question. Returns an empty list for a healthy run; a non-empty list is a
+    fail-closed analysis error so the run cannot reach ``manuscript_ready``.
+    """
+
+    errors: List[str] = []
+    seen: set = set()
+    steps_dir = run_dir / "steps"
+    if not steps_dir.is_dir():
+        return errors
+
+    def _add(new_errors: List[str]) -> None:
+        for err in new_errors:
+            if err not in seen:
+                seen.add(err)
+                errors.append(err)
+
+    for summary in sorted(steps_dir.glob("*/outputs/step_summary.json")):
+        try:
+            payload = json.loads(summary.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        label = summary.parent.parent.name
+        for mapping in _plausibility_walk(payload):
+            _add(_plausibility_errors_for_row(label, mapping))
+
+    for outputs_dir in sorted(steps_dir.glob("*/outputs")):
+        for name in _PLAUSIBILITY_RESULT_CSVS:
+            path = outputs_dir / name
+            if not path.exists():
+                continue
+            try:
+                with path.open(newline="", encoding="utf-8") as handle:
+                    for row in csv.DictReader(handle):
+                        _add(
+                            _plausibility_errors_for_row(
+                                f"{outputs_dir.parent.name}/{name}", dict(row)
+                            )
+                        )
+            except Exception:
+                continue
+    return errors
+
+
 def _partition_findings_by_supersession(
     findings: Sequence[ValidationFinding],
     *,
@@ -707,7 +959,9 @@ def _compute_readiness_gates(
     writer_probe_mode: bool = False,
     writer_probe_failed_steps: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
-    execution = execution_gate_status(plan=plan, per_step_records=per_step_records)
+    execution = execution_gate_status(
+        plan=plan, per_step_records=per_step_records, run_dir=run_dir
+    )
     manuscript_text = ""
     if manuscript_path.exists():
         try:
@@ -742,6 +996,13 @@ def _compute_readiness_gates(
             and not stop_after_analysis
             and not writer_probe_mode
         ),
+        "manuscript_manifest_caveats_clean": bool(
+            manuscript_text
+            and "Manuscript scaffold not generated" not in manuscript_text[:300]
+            and not _MANIFEST_COMMENT_RE.search(manuscript_text)
+            and not stop_after_analysis
+            and not writer_probe_mode
+        ),
         "manuscript_critique_passed": False,
     }
     critique_path = run_dir / "manuscript_critique.json"
@@ -751,7 +1012,8 @@ def _compute_readiness_gates(
         except Exception:
             critique_payload = {}
         current_gate_state["manuscript_critique_passed"] = (
-            isinstance(critique_payload, dict) and critique_payload.get("status") == "pass"
+            isinstance(critique_payload, dict)
+            and critique_payload.get("status") == "pass"
         )
     latest_publication_audit = _latest_publication_figure_audit_status(run_dir)
     active_findings, superseded_findings = _partition_findings_by_supersession(
@@ -769,7 +1031,8 @@ def _compute_readiness_gates(
     evidence_errors = [
         f.message
         for f in active_findings
-        if f.severity == "error" and f.validator in {"evidence_bound_writer", "critic_agent"}
+        if f.severity == "error"
+        and f.validator in {"evidence_bound_writer", "critic_agent"}
     ]
     non_manuscript_errors = [
         f.message
@@ -799,9 +1062,18 @@ def _compute_readiness_gates(
         and manuscript_text_gate["manuscript_text_ready"]
         and not stop_after_analysis
     )
-    evidence_complete = manuscript_generated and missing_evidence_count == 0 and not evidence_errors
+    evidence_complete = (
+        manuscript_generated and missing_evidence_count == 0 and not evidence_errors
+    )
     numeric_verified = manuscript_generated and not numeric_errors
-    analysis_errors = non_manuscript_errors + blocked_outcome_errors
+    # `table == reality` gate: a physically-impossible primary result (e.g. a
+    # column-swapped Cox table with more events than patients) fails closed even
+    # though the value-level numeric auditor — which only checks
+    # manuscript-number == table-number — would pass it.
+    plausibility_errors = primary_result_plausibility_errors(run_dir)
+    analysis_errors = (
+        non_manuscript_errors + blocked_outcome_errors + plausibility_errors
+    )
     analysis_validated = execution["execution_complete"] and not analysis_errors
     manuscript_ready = (
         execution["execution_complete"]
@@ -862,7 +1134,9 @@ def _compute_readiness_gates(
         # _partition_findings_by_supersession). Reviewers can inspect
         # which findings the readiness gate ignored because the
         # underlying step ultimately succeeded.
-        "superseded_error_count": sum(1 for f in superseded_findings if f.severity == "error"),
+        "superseded_error_count": sum(
+            1 for f in superseded_findings if f.severity == "error"
+        ),
         "superseded_errors": [
             {"validator": f.validator, "message": f.message}
             for f in superseded_findings
@@ -873,6 +1147,34 @@ def _compute_readiness_gates(
         **article_contract,
         **figure_strategy,
     }
+
+
+def _count_writer_attempts(run_dir: Path) -> Optional[int]:
+    """Count writer drafting passes from the run's audit_log.jsonl.
+
+    Each writer pass emits a ``"Drafting manuscript scaffold."`` event; on
+    a resumed run these accumulate, so the count is a cheap fragility proxy
+    (attempts-to-ready). Returns None when the audit log is absent — older
+    runs, or a run that failed before the writer phase.
+    """
+    audit_path = run_dir / "audit_log.jsonl"
+    if not audit_path.exists():
+        return None
+    count = 0
+    try:
+        for line in audit_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except Exception:
+                continue
+            if str(event.get("event", "")).startswith("Drafting manuscript scaffold"):
+                count += 1
+    except Exception:
+        return None
+    return count
 
 
 def write_readiness_artifacts(
@@ -900,14 +1202,19 @@ def write_readiness_artifacts(
         writer_probe_mode=writer_probe_mode,
         writer_probe_failed_steps=writer_probe_failed_steps,
     )
+    # Attempts-to-ready: how many writer passes this run needed before the
+    # gates were satisfied. Derived from the always-on audit_log.jsonl event
+    # stream (no separate event artifact) so the gate story is quantitative
+    # — a run that took 4 writer passes is more fragile than one that took 1.
+    gates["writer_attempt_count"] = _count_writer_attempts(run_dir)
     status = (
         "publication_ready"
         if gates["publication_ready"]
-        else "manuscript_ready"
-        if gates["manuscript_ready"]
-        else "analysis_only"
-        if gates["execution_complete"]
-        else "diagnostic_only"
+        else (
+            "manuscript_ready"
+            if gates["manuscript_ready"]
+            else "analysis_only" if gates["execution_complete"] else "diagnostic_only"
+        )
     )
 
     artifact_paths: Dict[str, str] = {}
@@ -920,6 +1227,9 @@ def write_readiness_artifacts(
         "writer_probe_mode": bool(writer_probe_mode),
         "writer_probe_failed_steps": list(writer_probe_failed_steps or []),
         "research_question": context.research_question,
+        # Code identity for quick access without opening the full manifest;
+        # the authoritative copy lives in manifest.json's ``code_version``.
+        "code_version": capture_code_version(),
         "gates": gates,
         "canonical_outputs": {},
     }
@@ -940,9 +1250,11 @@ def write_readiness_artifacts(
         "kinds": kinds,
         "missing_evidence_count": gates["missing_evidence_count"],
         "evidence_complete": gates["evidence_complete"],
-        "manuscript_path": str(manuscript_path.relative_to(run_dir))
-        if manuscript_path.exists()
-        else None,
+        "manuscript_path": (
+            str(manuscript_path.relative_to(run_dir))
+            if manuscript_path.exists()
+            else None
+        ),
     }
     evidence_audit_path.write_text(
         json.dumps(evidence_audit_payload, indent=2, ensure_ascii=False, default=str),
@@ -1022,9 +1334,7 @@ def write_readiness_artifacts(
         json.dumps(display_suite_payload, indent=2, ensure_ascii=False, default=str),
         encoding="utf-8",
     )
-    artifact_paths["display_suite_audit"] = str(
-        display_suite_path.relative_to(run_dir)
-    )
+    artifact_paths["display_suite_audit"] = str(display_suite_path.relative_to(run_dir))
 
     article_contract_path = run_dir / "article_contract_audit.json"
     article_contract_payload = article_contract_audit_payload(gates)
@@ -1044,9 +1354,7 @@ def write_readiness_artifacts(
     figure_strategy_path = run_dir / "article_figure_strategy_audit.json"
     figure_strategy_payload = {
         "schema_version": gates["article_figure_strategy_audit_schema_version"],
-        "article_figure_strategy_complete": gates[
-            "article_figure_strategy_complete"
-        ],
+        "article_figure_strategy_complete": gates["article_figure_strategy_complete"],
         "analysis_family": gates["article_figure_strategy_family"],
         "archetype": gates["article_figure_strategy_archetype"],
         "hero_role": gates["article_figure_strategy_hero_role"],
@@ -1090,7 +1398,9 @@ def write_readiness_artifacts(
     )
 
     claim_ledger_path = run_dir / "claim_ledger.csv"
-    claim_rows = _extract_claim_ledger_rows(manuscript_path=manuscript_path, gates=gates)
+    claim_rows = _extract_claim_ledger_rows(
+        manuscript_path=manuscript_path, gates=gates
+    )
     with claim_ledger_path.open("w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(
             fh,
@@ -1138,9 +1448,7 @@ def write_readiness_artifacts(
         json.dumps(review_payload, indent=2, ensure_ascii=False, default=str),
         encoding="utf-8",
     )
-    artifact_paths["review_artifacts"] = str(
-        review_artifacts_path.relative_to(run_dir)
-    )
+    artifact_paths["review_artifacts"] = str(review_artifacts_path.relative_to(run_dir))
     figure_gallery_path = run_dir / "figure_gallery.json"
     figure_gallery_path.write_text(
         json.dumps(
@@ -1469,9 +1777,11 @@ def render_report(
         status = (
             "PUBLICATION READY"
             if readiness.get("publication_ready")
-            else "MANUSCRIPT READY"
-            if readiness.get("manuscript_ready")
-            else "DIAGNOSTIC ONLY"
+            else (
+                "MANUSCRIPT READY"
+                if readiness.get("manuscript_ready")
+                else "DIAGNOSTIC ONLY"
+            )
         )
         parts.append(f"## Status: {status}")
         parts.append("")
@@ -1485,8 +1795,12 @@ def render_report(
             "publication_ready={publication_ready}".format(**readiness)
         )
         parts.append("")
-        primary_contracts = readiness.get("display_primary_publication_contract_paths") or []
-        supporting_contracts = readiness.get("display_supporting_figure_contract_paths") or []
+        primary_contracts = (
+            readiness.get("display_primary_publication_contract_paths") or []
+        )
+        supporting_contracts = (
+            readiness.get("display_supporting_figure_contract_paths") or []
+        )
         if primary_contracts or supporting_contracts:
             parts.append("## Figure display tiers")
             parts.append("")
@@ -1538,17 +1852,13 @@ def render_report(
             f"{desc} | `{r.sha256[:10]}…` | `{r.relative_path}` |"
         )
     parts.append("")
-    parts.append(
-        textwrap.dedent(
-            """
+    parts.append(textwrap.dedent("""
         ---
         Generated by `easyicu.research_agent.ResearchAgentPipeline`. Every entry
         in the Evidence table is reproducible: rerun the script identified by
         `script_evidence_id` in the manifest, hash the output, and confirm it
         matches the `sha256` recorded here.
-    """
-        ).strip()
-    )
+    """).strip())
     return "\n".join(parts) + "\n"
 
 

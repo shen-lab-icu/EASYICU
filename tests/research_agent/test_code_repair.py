@@ -595,3 +595,79 @@ def test_concept_repair_is_idempotent():
     twice, names2 = deterministic_concept_audit_repair(once, ["fillna(0) on lactate"])
     assert names2 == []
     assert twice == once
+
+
+# ---------------------------------------------------------------------------
+# seaborn matplotlib fallback (baseline-library sandbox)
+# ---------------------------------------------------------------------------
+
+
+def _inject_seaborn_fallback_namespace():
+    """Fire the seaborn fallback repair and exec the injected shim.
+
+    Returns the ``sns`` object the generated analysis code would use inside the
+    baseline-library sandbox where ``import seaborn`` raises ModuleNotFoundError.
+    """
+    import matplotlib
+
+    matplotlib.use("Agg")
+    res = _deterministic_runner_repair(
+        code="import seaborn as sns\n",
+        run_log="ModuleNotFoundError: No module named 'seaborn'",
+        previous_repair=None,
+    )
+    assert res is not None, "seaborn fallback repair did not fire"
+    name, repaired = res
+    assert name == "seaborn_matplotlib_fallback_v1"
+    namespace: dict = {}
+    exec(repaired, namespace)  # noqa: S102 - trusted deterministic shim under test
+    return namespace["sns"]
+
+
+def test_seaborn_fallback_supports_despine():
+    # Regression: the E3 KDIGO figure step crashed with
+    # "'_EasyICUSeabornFallback' object has no attribute 'despine'", which
+    # fail-closed the whole run. despine must be a safe no-op on the shim.
+    import matplotlib.pyplot as plt
+
+    sns = _inject_seaborn_fallback_namespace()
+    _fig, ax = plt.subplots()
+    sns.set_style("whitegrid")
+    sns.despine(ax=ax)  # the exact crashing call
+    sns.despine()  # bare form used by many templates
+    plt.close(_fig)
+
+
+def test_seaborn_fallback_unknown_method_is_noop_not_crash():
+    # Durability: any seaborn method the shim does not implement must degrade to
+    # a no-op returning the passed ``ax`` rather than raising AttributeError and
+    # crashing the figure render (and therefore the entire run).
+    import matplotlib.pyplot as plt
+
+    sns = _inject_seaborn_fallback_namespace()
+    _fig, ax = plt.subplots()
+    assert sns.displot(x=[1, 2, 3]) is None  # unknown, no ax kwarg -> None
+    assert sns.catplot(ax=ax) is ax  # unknown, ax passed through
+    sns.set_context("paper")
+    sns.set_palette("deep")
+    sns.move_legend(ax, "upper right")
+    plt.close(_fig)
+
+
+def test_seaborn_fallback_common_statistical_plots_draw_without_error():
+    import matplotlib.pyplot as plt
+    import pandas as pd
+
+    sns = _inject_seaborn_fallback_namespace()
+    df = pd.DataFrame({"g": ["a", "a", "b", "b"], "v": [1.0, 2.0, 3.0, 4.0]})
+    _fig, ax = plt.subplots()
+    for call in (
+        lambda: sns.boxplot(data=df, x="g", y="v", ax=ax),
+        lambda: sns.violinplot(data=df, x="g", y="v", ax=ax),
+        lambda: sns.pointplot(data=df, x="g", y="v", ax=ax),
+        lambda: sns.countplot(data=df, x="g", ax=ax),
+        lambda: sns.kdeplot(data=df, x="v", ax=ax),
+        lambda: sns.stripplot(data=df, x="g", y="v", ax=ax),
+    ):
+        assert call() is ax
+    plt.close(_fig)

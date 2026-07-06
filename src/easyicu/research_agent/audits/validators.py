@@ -1189,6 +1189,11 @@ class FigureSourceDataValidator:
         "row_id",
         "concept",
         "label",
+        # Model-level result tables key rows by the fitted-model label
+        # (e.g. adjusted_association.csv from an association model step);
+        # the deterministic figure renderer preserves that column verbatim
+        # in publication_figure_source_data.csv, so it is a valid trace key.
+        "model_label",
         "variable",
         "term",
         "exposure",

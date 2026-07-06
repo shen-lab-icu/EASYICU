@@ -38,6 +38,7 @@ def test_module_is_importable():
 
 def test_run_execute_phase_is_exported():
     from easyicu.research_agent.pipeline_execute import run_execute_phase
+
     assert callable(run_execute_phase)
 
 
@@ -55,7 +56,8 @@ def test_run_execute_phase_signature_is_stable():
 
     # First positional is the pipeline collaborator; the rest are keyword-only.
     positional = [
-        name for name, p in params.items()
+        name
+        for name, p in params.items()
         if p.kind
         in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
     ]
@@ -74,8 +76,7 @@ def test_run_execute_phase_signature_is_stable():
         "emit_progress",
     }
     actual_keywords = {
-        name for name, p in params.items()
-        if p.kind == inspect.Parameter.KEYWORD_ONLY
+        name for name, p in params.items() if p.kind == inspect.Parameter.KEYWORD_ONLY
     }
     missing = required_keywords - actual_keywords
     assert not missing, (
@@ -264,3 +265,68 @@ def test_visual_qa_demotes_only_cosmetic_layout_errors(ra):
     assert demoted[1].severity == "error"
     assert demoted[2].severity == "error"
     assert [f.message for f in blocking] == [hard.message, vlm.message]
+
+
+def test_scope_findings_step_global_warning_does_not_taint_records():
+    """A step-global warning (no evidence_ids) is an analysis-design advisory
+    and must NOT taint the citability of the step's output records — otherwise
+    one 'immortal-time-bias risk' note makes the primary result table
+    uncitable and the manuscript unwinnable."""
+    from easyicu.research_agent.pipeline_execute import scope_findings_to_records
+    from easyicu.research_agent.schema import ValidationFinding
+
+    global_warning = ValidationFinding(
+        validator="clinical_constraint_validator",
+        severity="warning",
+        message="Treatment-effect analysis without an explicit time-zero.",
+    )
+    scoped = scope_findings_to_records(
+        ["table_one", "adjusted_association"], [global_warning]
+    )
+    assert scoped["table_one"] == (None, [])
+    assert scoped["adjusted_association"] == (None, [])
+
+
+def test_scope_findings_targeted_finding_taints_only_named_record():
+    """A finding that names specific records taints ONLY those records."""
+    from easyicu.research_agent.pipeline_execute import scope_findings_to_records
+    from easyicu.research_agent.schema import ValidationFinding
+
+    global_warning = ValidationFinding(
+        validator="clinical_constraint_validator",
+        severity="warning",
+        message="Design advisory.",
+    )
+    targeted = ValidationFinding(
+        validator="critic_agent",
+        severity="warning",
+        message="Critique of the interpretation log.",
+        evidence_ids=["log_critique_report_x"],
+    )
+    scoped = scope_findings_to_records(
+        ["table_one", "log_critique_report_x"], [global_warning, targeted]
+    )
+    assert scoped["table_one"] == (None, [])
+    severity, messages = scoped["log_critique_report_x"]
+    assert severity == "warning"
+    assert messages == ["Critique of the interpretation log."]
+
+
+def test_scope_findings_step_global_error_stays_fail_closed():
+    """A step-global ERROR keeps the blanket taint (fail-closed): a step-level
+    error means the step's outputs are not to be trusted."""
+    from easyicu.research_agent.pipeline_execute import scope_findings_to_records
+    from easyicu.research_agent.schema import ValidationFinding
+
+    global_error = ValidationFinding(
+        validator="execution",
+        severity="error",
+        message="Step analysis crashed before producing a result.",
+    )
+    scoped = scope_findings_to_records(
+        ["table_one", "adjusted_association"], [global_error]
+    )
+    for eid in ("table_one", "adjusted_association"):
+        severity, messages = scoped[eid]
+        assert severity == "error"
+        assert messages == ["Step analysis crashed before producing a result."]

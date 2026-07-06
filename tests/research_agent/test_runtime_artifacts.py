@@ -6,11 +6,13 @@ import pandas as pd
 
 
 def test_workflow_graph_and_replay_bundle_build(ra, tmp_path: Path):
-    df = pd.DataFrame({
-        "stay_id": [1, 2, 3],
-        "age": [60, 70, 80],
-        "death": [0, 1, 0],
-    })
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3],
+            "age": [60, 70, 80],
+            "death": [0, 1, 0],
+        }
+    )
     cohort_path = tmp_path / "cohort.parquet"
     df.to_parquet(cohort_path, index=False)
     ctx = ra.build_research_context(
@@ -22,14 +24,18 @@ def test_workflow_graph_and_replay_bundle_build(ra, tmp_path: Path):
     )
     plan = ra.schema.AnalysisPlan(
         research_question="Predict death",
-        steps=[ra.schema.AnalysisStep(step_id="01_table_one", intent="Describe cohort")],
+        steps=[
+            ra.schema.AnalysisStep(step_id="01_table_one", intent="Describe cohort")
+        ],
     )
-    records = [{
-        "step_id": "01_table_one",
-        "status": "ok",
-        "generation_mode": "llm",
-        "evidence_ids": ["table_one"],
-    }]
+    records = [
+        {
+            "step_id": "01_table_one",
+            "status": "ok",
+            "generation_mode": "llm",
+            "evidence_ids": ["table_one"],
+        }
+    ]
     graph = ra.build_workflow_graph(
         run_id="run_demo",
         context=ctx,
@@ -54,3 +60,41 @@ def test_workflow_graph_and_replay_bundle_build(ra, tmp_path: Path):
     )
     assert replay.run_id == "run_demo"
     assert replay.steps[0].step_id == "01_table_one"
+
+
+def test_capture_code_version_reports_git_and_package_identity(ra):
+    """The run manifest must be tie-able back to the code that produced it.
+
+    In this repo checkout git identity is available; assert the shape and
+    that it degrades to a dict (never raises). package_version comes from
+    the installed easyicu metadata."""
+    from easyicu.research_agent.runtime_artifacts import capture_code_version
+
+    cv = capture_code_version()
+    # In a git checkout with the package installed, capture returns a dict.
+    assert cv is not None
+    assert set(cv.keys()) == {
+        "git_sha",
+        "git_branch",
+        "git_dirty",
+        "package_version",
+    }
+    # git_dirty is a bool (or None if git was unavailable, but here it is a
+    # real checkout so it must be a concrete bool).
+    assert isinstance(cv["git_dirty"], bool)
+    # A sha, when present, is a 40-char hex string.
+    if cv["git_sha"] is not None:
+        assert len(cv["git_sha"]) == 40
+        int(cv["git_sha"], 16)  # parses as hex
+
+
+def test_code_version_manifest_field_wraps_capture(ra):
+    from easyicu.research_agent.pipeline_package import (
+        _code_version_manifest_fields,
+    )
+
+    fields = _code_version_manifest_fields()
+    assert "code_version" in fields
+    # Either a populated dict or None — but the key is always present so the
+    # manifest schema field is populated deterministically.
+    assert fields["code_version"] is None or isinstance(fields["code_version"], dict)
