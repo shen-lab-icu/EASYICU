@@ -619,12 +619,12 @@ def post_agent_run_provider_config(body: Dict[str, Any]) -> dict:
     except provider_adapter.ProviderAdapterError as exc:
         raise HTTPException(status_code=400, detail=exc.detail) from exc
 
-    settings = settings_store.update_settings(
-        {
-            "ai_enabled": bool(body.get("enable_ai", True)),
-            "agent_model_mode": "external",
-        }
-    )
+    # Fail closed: writing provider credentials must not silently flip the
+    # global AI opt-in — only an explicit enable_ai=true may enable it.
+    updates: Dict[str, Any] = {"ai_enabled": bool(body.get("enable_ai", False))}
+    if updates["ai_enabled"]:
+        updates["agent_model_mode"] = "external"
+    settings = settings_store.update_settings(updates)
     return {
         **meta,
         "settings": {**settings, "about": settings_store.about()},
@@ -685,9 +685,14 @@ def post_agent_run_signoff(body: Dict[str, Any]) -> dict:
 @app.post("/api/agent-runs/history")
 def post_agent_run_history(body: Dict[str, Any]) -> dict:
     """List local agent run directories by reading bounded artifacts only."""
+    # Idea-seeded projects store runs under <seed>/runs (see jobs_agent_run);
+    # derive the same root here so their history survives a reload.
+    seed_dir = str(
+        body.get("project_seed_dir") or body.get("project_seed_path") or ""
+    ).strip()
     return agent_runs.list_run_history(
         study_id=body.get("study_id"),
-        project_root=body.get("project_root"),
+        project_root=body.get("project_root") or _agent_seed_run_root(seed_dir),
         limit=int(body.get("limit") or 50),
     )
 

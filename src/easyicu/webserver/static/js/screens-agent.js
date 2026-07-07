@@ -14,7 +14,7 @@
   const R = window.AGENT_RENDER || {};
   const {
     DEMO_STUDIES, BLOCK_FAMILIES, BLOCK_LIBRARY, NATURE_PACK,
-    runStatusLabel, readableArtifactText, firstValue, fmtCount,
+    runStatusLabel, runStatusHint, readableArtifactText, firstValue, fmtCount,
     artifactKind, artifactTitle, artifactCategory, artifactSummary, artifactRank, defaultArtifactName,
     thumb, scrubDataUrls, figureGallery, artifactStructuredView,
   } = R;
@@ -565,7 +565,8 @@
     if (s.empty) return;
     if (!force && agHistory.studyId === s.id && (agHistory.loading || agHistory.data || agHistory.error)) return;
     agHistory = { studyId: s.id, loading: true, error: null, data: null };
-    window.EU_API.loadAgentRunHistory({ study_id: s.id, limit: 50 }).then(data => {
+    const seedDir = (s.ideaSeed && s.ideaSeed.project_dir) || undefined;
+    window.EU_API.loadAgentRunHistory({ study_id: s.id, limit: 50, project_seed_dir: seedDir }).then(data => {
       agHistory = { studyId: s.id, loading: false, error: null, data: data };
       window.EU_AGENT_RUN_HISTORY = data;
       repaintBody();
@@ -802,9 +803,10 @@
         ${!studies.length && !agIdeaProjects.loading ? `<div class="empty-mini ideas-empty-list" style="margin:10px;min-height:210px;">
           <div>${icon('folder', 22)}</div>
           <h3>${t('No local projects yet', '还没有本地项目')}</h3>
-          <p>${t('Real mode only lists Agent projects and completed runs written on this machine. Create one from Idea Mining, then refresh.', '真实模式只列出写在本机的 Agent 项目和已完成运行。从 Idea Mining 创建后再刷新。')}</p>
-          <div class="row gap-8 mt-12" style="justify-content:center;">
+          <p>${t('An Agent project is a local study folder — a question plus its runs, outputs, and an evidence-checked draft. Two ways to start one: turn a question into a plan in Idea Mining, or extract a cohort and hand it off from Data Extraction. Then it appears here.', 'Agent 项目就是一个本地研究文件夹 —— 一个问题加上它的运行、产出和经过证据核验的草稿。两种创建方式：在 Idea 挖掘里把问题变成计划，或先抽取队列再从数据抽取交接过来。之后它会出现在这里。')}</p>
+          <div class="row gap-8 mt-12" style="justify-content:center;flex-wrap:wrap;">
             <button class="btn primary sm" data-nav="ideas">${icon('target', 12)} ${t('Open Idea Mining', '打开 Idea Mining')}</button>
+            <button class="btn sm" data-nav="extraction">${icon('extract', 12)} ${t('Extract data', '抽取数据')}</button>
             <button class="btn sm" data-ag-refresh-projects>${icon('refresh', 12)} ${t('Refresh', '刷新')}</button>
           </div>
         </div>` : ''}
@@ -878,28 +880,38 @@
     if (s.empty) return [
       ['overview', t('Overview', '概览'), null],
     ];
+    // Tab order follows the actual workflow: lead with what the user consumes
+    // (Runs -> Outputs -> Draft), then optional/expert surfaces (Science, Workflow Blocks).
     if (mode === 'idea') return [
       ['overview', t('Overview', '概览'), null],
-      ['workflow', t('Workflow Blocks', '工作流块'), workflowBlocks(s).length],
-      ['science', t('Science', '科学工作台'), null],
       ['runs', t('Dry-runs', '试运行'), s.runs.length],
       ['notes', t('Notes', '笔记'), null],
+      ['science', t('Science', '科学工作台'), null],
+      ['workflow', t('Workflow Blocks', '工作流块'), workflowBlocks(s).length],
     ];
     return [
       ['overview', t('Overview', '概览'), null],
-      ['workflow', t('Workflow Blocks', '工作流块'), workflowBlocks(s).length],
-      ['science', t('Science', '科学工作台'), null],
       ['runs', t('Runs', '运行历史'), s.runs.length],
       ['outputs', t('Outputs', '产出'), outputCountForStudy()],
       ['draft', s.projectKind === 'canonical9' ? t('Review', '审阅') : t('Draft', '草稿'), null],
+      ['science', t('Science', '科学工作台'), null],
+      ['workflow', t('Workflow Blocks', '工作流块'), workflowBlocks(s).length],
     ];
   }
+  // Tabs that only fill in after a run exists — flagged so a first-time user
+  // isn't invited to click empty heroes one by one.
+  const AG_RUN_GATED_TABS = new Set(['runs', 'outputs', 'draft', 'science']);
   function tabsRow() {
     const s = study();
     const tabs = tabsFor(s.mode);
     if (!tabs.some(x => x[0] === agTab)) agTab = 'overview';
+    const noRun = !s.runs || s.runs.length === 0;
     return `<div class="ag-tabs" data-ag-tabs>
-      ${tabs.map(([id, lab, cnt]) => `<button class="ag-tab ${agTab === id ? 'on' : ''}" data-ag-tab="${id}">${lab}${cnt != null ? `<span class="cnt">${cnt}</span>` : ''}</button>`).join('')}
+      ${tabs.map(([id, lab, cnt]) => {
+        const gated = noRun && AG_RUN_GATED_TABS.has(id);
+        const title = gated ? ` title="${t('Available after a run', '运行后可用')}"` : '';
+        return `<button class="ag-tab ${agTab === id ? 'on' : ''}${gated ? ' gated' : ''}" data-ag-tab="${id}"${title}>${lab}${cnt != null ? `<span class="cnt">${cnt}</span>` : ''}${gated ? `<span class="ag-tab-lock">${icon('lock', 9)}</span>` : ''}</button>`;
+      }).join('')}
     </div>`;
   }
 
@@ -1111,8 +1123,8 @@
       return `
       <div class="nextbar accent">
         <div class="nb-ico">${icon('play', 16)}</div>
-        <div class="grow"><div class="nb-t">${t('Ready to run the plan', '准备运行计划')}</div><div class="nb-d">${t('Steps execute deterministically and stream into the run. You confirm before any model call.', '步骤确定性执行并流入运行记录。任何模型调用前都需你确认。')}</div></div>
-        <button class="btn primary" data-ag-runbtn>${icon('play', 13)} ${t('Run analysis', '运行分析')}</button>
+        <div class="grow"><div class="nb-t">${t('Ready to run the preflight', '准备运行预检')}</div><div class="nb-d">${t('This runs a deterministic, local evidence preflight (cohort, coverage, Table 1 — no external model call). A full agent analysis is a separate step in the provider panel below.', '这会运行确定性的本地证据预检（队列、覆盖率、Table 1 —— 不调用外部模型）。完整 agent 分析是下方 provider 面板中的单独步骤。')}</div></div>
+        <button class="btn primary" data-ag-runbtn>${icon('play', 13)} ${t('Run preflight', '运行预检')}</button>
       </div>`;
     }
     return `
@@ -1128,13 +1140,22 @@
     const src = activeExportSource();
     const sum = (src && src.summary) || {};
     const b = s.benchmark || null;
+    // Real mode must never show invented clinical numbers: if no benchmark and
+    // no attached export, fall to em-dashes + an "attach an export" hint rather
+    // than the seeded demo figures (which are only honest as a demo preview).
+    const noData = !b && !src;
     const stats = b
       ? [['Cohort', '队列', b.cohort_size == null ? '—' : Number(b.cohort_size).toLocaleString()], ['Evidence', '证据', b.evidence_count == null ? '—' : Number(b.evidence_count).toLocaleString()], ['Warnings', '警告', b.warnings == null ? '—' : String(b.warnings)], ['Status', '状态', runStatusLabel(b.tristate || b.readiness_status || 'analysis_only')]]
       : src
       ? [['Stays', '住院数', sum.stays == null ? '—' : Number(sum.stays).toLocaleString()], ['Modules', '模块', sum.modules == null ? '—' : String(sum.modules)], ['Rows', '行数', sum.total_rows == null ? '—' : Number(sum.total_rows).toLocaleString()], ['Evidence check', '证据核验', 'strict']]
+      : (noData && realMode())
+      ? (s.id === 'crossdb'
+        ? [['Databases', '数据库', '—'], ['Shared concepts', '共享概念', '—'], ['Mortality', '死亡率', '—'], ['Concordance', '一致性', '—']]
+        : [['Mean age', '平均年龄', '—'], ['Mortality', '死亡率', '—'], ['Sepsis-3', 'Sepsis-3', '—'], ['Mech vent', '机械通气', '—']])
       : s.id === 'crossdb'
       ? [['Databases', '数据库', '3'], ['Shared concepts', '共享概念', '6'], ['Mortality', '死亡率', '20.0%'], ['Concordance', '一致性', 'high']]
       : [['Mean age', '平均年龄', '54.8 y'], ['Mortality', '死亡率', '20.0%'], ['Sepsis-3', 'Sepsis-3', '45.3%'], ['Mech vent', '机械通气', '52.1%']];
+    const noDataHint = noData && realMode();
     const linked = src ? (src.label || src.database || 'local export') : t(s.source[0], s.source[1]);
     const linkedPath = src ? src.path : null;
     return `
@@ -1152,6 +1173,9 @@
             <div class="mono" style="font-size:13px;font-weight:500;color:var(--ink);margin-top:3px;">${v}</div>
           </div>`).join('')}
       </div>
+      ${noDataHint
+        ? `<div class="note info mt-12"><div class="ico">${icon('folder', 13)}</div><div class="body"><div class="t">${t('No export attached', '未关联导出')}</div><div class="d">${t('Attach a local EasyICU export to this project to populate real cohort figures.', '为此项目关联本地 EasyICU 导出后，这里会显示真实队列数据。')}</div></div></div>`
+        : (noData ? `<div class="note warn mt-12" style="padding:8px 11px;"><div class="ico">${icon('beaker', 13)}</div><div class="body"><div class="d" style="margin:0;">${t('Illustrative demo figures — not a computed result.', '示例演示数据 —— 非计算结果。')}</div></div></div>` : '')}
       <button class="btn sm block mt-16" data-nav="extraction">${icon('layers', 13)} ${t('Open in Data Extraction', '在数据抽取中打开')}</button>
     </div>`;
   }
@@ -1537,7 +1561,7 @@
       <div class="row" style="justify-content:space-between;align-items:baseline;margin-bottom:14px;">
         <div><div class="panel-title" style="font-size:15px;">${isImportedRun(live, s) ? t('Completed analysis outputs', '已完成分析产出') : t('Outputs', '产出物')}</div><div class="panel-sub">${t('Real local artifacts read from', '真实本地产物读取自')} <span class="mono">${esc(live.project_dir || '')}</span></div></div>
         <div class="row gap-8">
-          <span class="pill ${review && review.signoff_stale ? 'bad' : 'warn'}" style="height:22px;"><span class="dot"></span>${esc(review && review.signoff_stale ? t('stale sign-off', '签署失效') : runStatusLabel(live.gate && live.gate.status ? live.gate.status : 'analysis_only'))}</span>
+          <span class="pill ${review && review.signoff_stale ? 'bad' : 'warn'}" style="height:22px;" title="${esc(runStatusHint(review && review.signoff_stale ? 'signoff_stale' : (live.gate && live.gate.status ? live.gate.status : 'analysis_only')))}"><span class="dot"></span>${esc(review && review.signoff_stale ? t('stale sign-off', '签署失效') : runStatusLabel(live.gate && live.gate.status ? live.gate.status : 'analysis_only'))}</span>
           ${artifacts.length ? `<button class="btn sm" data-ag-bundle-download>${icon('download', 13)} ${t('Download bundle', '下载打包')}</button>` : ''}
         </div>
       </div>
@@ -1571,7 +1595,7 @@
           <div class="st-t">${t('No real output artifacts yet', '还没有真实产物')}</div>
           <div class="st-d">${isImportedRun(live, s) ? t('The imported review package is registered, but the local artifact scan did not return whitelisted files. Open Run history to inspect the source folder.', '已注册导入审阅包，但本地产物扫描没有返回白名单文件。请打开运行历史检查来源文件夹。') : t('This project has not produced Table 1, missingness, ROC, calibration, or evidence files yet. Run the analysis or open a reviewed local run; placeholders are not shown in Real mode.', '这个项目还没有生成 Table 1、缺失审计、ROC、校准或证据文件。请先运行分析,或打开已有本地运行；真实模式不会显示占位产物。')}</div>
           <div class="st-actions">
-            <button class="btn primary" data-ag-tab="overview">${icon('play', 14)} ${t('Run analysis', '运行分析')}</button>
+            <button class="btn primary" data-ag-tab="overview">${icon('play', 14)} ${t('Run preflight', '运行预检')}</button>
             <button class="btn" data-ag-tab="runs">${icon('history', 14)} ${t('Open Runs', '打开运行历史')}</button>
           </div>
         </div>` : '')}
@@ -1588,7 +1612,7 @@
         <div class="st-t">${t('No real output artifacts yet', '还没有真实产物')}</div>
         <div class="st-d">${t('Outputs are generated only by a local Agent run. This panel will list real JSON/CSV/PNG/HTML files from the run folder and let you open or download them. It will not show demo Table 1, missingness, ROC, or calibration placeholders.', '产物只来自本地 Agent 运行。这里会列出运行文件夹里的真实 JSON/CSV/PNG/HTML 文件,并允许打开或下载；不会显示演示 Table 1、缺失审计、ROC 或校准占位卡片。')}</div>
         <div class="st-actions">
-          <button class="btn primary" data-ag-tab="overview">${icon('play', 14)} ${t('Run analysis', '运行分析')}</button>
+          <button class="btn primary" data-ag-tab="overview">${icon('play', 14)} ${t('Run preflight', '运行预检')}</button>
           <button class="btn" data-ag-tab="runs">${icon('history', 14)} ${t('Open Runs', '打开运行历史')}</button>
         </div>
       </div>`;
@@ -1660,7 +1684,7 @@
             <div class="grow"><div class="nb-t">${imported ? t('Read-only package loaded', '只读审阅包已加载') : (signed ? t('Human review artifact written', '人工审阅产物已写入') : (readiness.signable ? t('Ready for local human sign-off', '可进行本地人工签署') : t('Blocked before sign-off', '签署前已阻断')))}</div><div class="nb-d">${imported ? t('Use Outputs for figures, scorecard, workflow graph, and evidence ledger.', '请在“产出”页查看图件、记分卡、工作流图谱和证据账本。') : t('Reportable remains false and draft_unlocked remains false in this stage.', '当前阶段 reportable 仍为 false,draft_unlocked 仍为 false。')}</div></div>
           </div>` : `
           <div class="nextbar mt-16 gate" style="background:var(--surface-2);">
-            <span class="pill warn"><span class="dot"></span>${esc(runStatusLabel(gate.status || 'analysis_only'))}</span>
+            <span class="pill warn" title="${esc(runStatusHint(gate.status || 'analysis_only'))}"><span class="dot"></span>${esc(runStatusLabel(gate.status || 'analysis_only'))}</span>
             <div class="grow"><div class="nb-t">${imported ? t('Review package remains non-reportable', '审阅包保持不可报告') : t('Manuscript claims remain locked', '论文论断保持锁定')}</div><div class="nb-d">${imported ? t('This imported package is for evidence-chain review; it does not create a new manuscript draft.', '导入包用于审阅证据链；不会创建新的论文草稿。') : t('A full agent run must pass its own evidence verification before any draft can unlock.', '只有完整 agent run 通过自己的证据核验后,草稿才可解锁。')}</div></div>
           </div>`}
           ${readiness && failures.length ? `<div class="note warn mt-16"><div class="ico">${icon('alert', 16)}</div><div class="body"><span class="t">${t('Automated check failures', '自动核验失败项')}</span><span class="d">${esc(failures.join(', '))}</span></div></div>` : ''}
@@ -1706,6 +1730,18 @@
         </div>
       </div>`;
     }
+    if (realMode()) {
+      return `
+      <div class="state-hero empty-state">
+        <div class="glyph">${icon('shield', 28)}</div>
+        <div class="st-t">${t('No reviewable evidence yet', '还没有可审阅的证据')}</div>
+        <div class="st-d">${t('Draft review works on a real local run: run the analysis (or open a reviewed run), then confirm its evidence checks here. Demo placeholder checks are not shown in Real mode.', '草稿审阅基于真实本地运行：请先运行分析（或打开已审阅的运行），再在这里确认其证据检查。真实模式不会显示演示占位校验。')}</div>
+        <div class="st-actions">
+          <button class="btn primary" data-ag-tab="overview">${icon('play', 14)} ${t('Run preflight', '运行预检')}</button>
+          <button class="btn" data-ag-tab="runs">${icon('history', 14)} ${t('Open Runs', '打开运行历史')}</button>
+        </div>
+      </div>`;
+    }
     const checks = [
       [t('Cohort denominators resolved', '队列分母已确定'), true, '01 · ' + t('Cohort summary', '队列摘要'), t('n and outcome rates computed from the frozen cohort frame.', 'n 与结局率由冻结的队列帧计算得出。')],
       [t('Per-concept coverage ≥ threshold', '各概念覆盖率 ≥ 阈值'), true, '03 · ' + t('Missingness', '缺失审计'), t('Per-concept coverage table — every module clears the threshold.', '各概念覆盖率表 —— 每个模块均达阈值。')],
@@ -1718,9 +1754,9 @@
     <div class="split-320" style="grid-template-columns:1fr 300px;">
       <div class="col gap-16">
         <div class="card pad">
-          <div class="eyebrow">${t('Evidence check', '证据核验')}</div>
-          <div class="panel-title" style="margin-top:4px;">${s.signed ? t('Manuscript draft unlocked', '论文草稿已解锁') : t('Manuscript draft is locked until checks pass', '在校验通过前论文草稿保持锁定')}</div>
-          <div class="panel-sub">${t('Every claim traces to a logged artifact — tap a check to see its evidence.', '每个论断都可追溯到已记录的产物 —— 点一项校验即可查看其证据。')}</div>
+          <div class="eyebrow">${t('Evidence check', '证据核验')} · ${t('demo preview', '演示预览')}</div>
+          <div class="panel-title" style="margin-top:4px;">${s.signed ? t('Manuscript draft unlocked (demo)', '论文草稿已解锁（演示）') : t('Manuscript draft is locked until checks pass', '在校验通过前论文草稿保持锁定')}</div>
+          <div class="panel-sub">${t('Illustrative demo of evidence verification. In Real mode, sign-off records a human review but never auto-unlocks a reportable manuscript — claims stay locked by STRICT evidence.', '这是证据核验环节的演示。真实模式下，签署只记录人工审阅，绝不会自动解锁可报告的稿件 —— 结论始终受 STRICT 证据约束。')}</div>
           <div class="checks2 mt-16">
             ${checks.map(([ti, ok, art, ev], i) => {
               const isReview = !ok && i === checks.length - 1;
@@ -1755,26 +1791,26 @@
             <span class="pill ${passed === checks.length ? 'ok' : 'warn'}"><span class="dot"></span>${passed} / ${checks.length} ${t('checks', '校验')}</span>
             <div class="grow"><div class="nb-t">${s.signed ? t('Draft ready', '草稿就绪') : t('One reviewer sign-off outstanding', '还差一位审阅者签署')}</div><div class="nb-d">${s.signed ? t('Methods + results drafted from logged evidence.', '方法 + 结果基于已记录证据撰写。') : t('The draft button unlocks once a reviewer confirms the findings.', '审阅者确认结论后,撰稿按钮即解锁。')}</div></div>
             ${s.signed
-              ? `<button class="btn primary">${icon('wand', 13)} ${t('Open manuscript', '打开论文')}</button>`
-              : `<button class="btn" data-ag-decline>${t('Decline', '退回')}</button><button class="btn primary" data-ag-signoff>${icon('check', 13)} ${t('Sign off & draft', '签署并撰稿')}</button>`}
+              ? `<button class="btn primary" aria-disabled="true" title="${t('Demo preview — no manuscript file in demo mode', '演示预览 —— 演示模式没有稿件文件')}">${icon('wand', 13)} ${t('Open manuscript (demo)', '打开论文（演示）')}</button>`
+              : `<button class="btn primary" data-ag-signoff aria-disabled="true">${icon('check', 13)} ${t('Sign off & draft', '签署并撰稿')}</button>`}
           </div>
         </div>
         ${s.signed ? `
         <div class="card pad">
           <div class="eyebrow">${t('Draft versions', '草稿版本')}</div>
           <div class="mt-12">
-            <div class="draftver"><span class="dv-badge">v0.2</span><div class="grow"><div style="font-weight:600;font-size:12.75px;">${t('Methods + Results + Limitations', '方法 + 结果 + 局限')}</div><div style="font-size:11px;color:var(--ink-4);">${t('signed off · today 14:40', '已签署 · 今天 14:40')}</div></div><button class="btn sm">${icon('eye', 13)} ${t('Open', '打开')}</button></div>
-            <div class="draftver"><span class="dv-badge">v0.1</span><div class="grow"><div style="font-weight:600;font-size:12.75px;">${t('Methods + Results', '方法 + 结果')}</div><div style="font-size:11px;color:var(--ink-4);">${t('auto-draft · today 14:38', '自动草稿 · 今天 14:38')}</div></div><button class="btn sm ghost">${icon('history', 13)} ${t('Diff', '对比')}</button></div>
+            <div class="draftver"><span class="dv-badge">v0.2</span><div class="grow"><div style="font-weight:600;font-size:12.75px;">${t('Methods + Results + Limitations', '方法 + 结果 + 局限')}</div><div style="font-size:11px;color:var(--ink-4);">${t('example version · demo', '示例版本 · 演示')}</div></div><button class="btn sm" aria-disabled="true" title="${t('Demo preview', '演示预览')}">${icon('eye', 13)} ${t('Open', '打开')}</button></div>
+            <div class="draftver"><span class="dv-badge">v0.1</span><div class="grow"><div style="font-weight:600;font-size:12.75px;">${t('Methods + Results', '方法 + 结果')}</div><div style="font-size:11px;color:var(--ink-4);">${t('example version · demo', '示例版本 · 演示')}</div></div><button class="btn sm ghost" aria-disabled="true" title="${t('Demo preview', '演示预览')}">${icon('history', 13)} ${t('Diff', '对比')}</button></div>
           </div>
         </div>` : ''}
       </div>
       <div class="card pad" style="align-self:start;">
-        <div class="eyebrow">${t('Output bundle', '产出打包')}</div>
+        <div class="eyebrow">${t('Output bundle', '产出打包')} · ${t('demo', '演示')}</div>
         <div class="col gap-8 mt-12">
-          ${[['6 ' + t('figures', '张图'), 'png + svg', 'viz'], ['3 ' + t('tables', '个表'), 'csv + tex', 'list'], [t('Evidence ledger', '证据账本'), 'json manifest', 'shield'], [t('Repro code', '复现代码'), 'py + notebook', 'file']].map(([ti, d, ic]) => `
+          ${[[t('figures', '图'), 'png + svg', 'viz'], [t('tables', '表'), 'csv + tex', 'list'], [t('Evidence ledger', '证据账本'), 'json manifest', 'shield'], [t('Repro code', '复现代码'), 'py + notebook', 'file']].map(([ti, d, ic]) => `
             <div class="ledger-row"><span class="ledger-ico">${icon(ic, 14)}</span><div><div style="font-weight:600;font-size:12.5px;">${ti}</div><div style="font-size:11px;color:var(--ink-4);">${d}</div></div></div>`).join('')}
         </div>
-        <button class="btn sm block mt-16">${icon('download', 13)} ${t('Export bundle', '导出打包')}</button>
+        <button class="btn sm block mt-16" aria-disabled="true" title="${t('Demo preview — run a real analysis to export a bundle', '演示预览 —— 运行真实分析后才能导出打包')}">${icon('download', 13)} ${t('Export bundle', '导出打包')}</button>
       </div>
     </div>`;
   }
@@ -2034,6 +2070,10 @@
       const src = activeExportSource();
       if (!src) return;
       startRealRun(src, { runType: 'full', provider: agProvider.provider, externalOptIn: true });
+      // "for this run only": consume the consent so the next full run must be
+      // re-authorized instead of silently reusing stale approval.
+      agProvider = Object.assign({}, agProvider, { consent: false });
+      repaintBody();
     }));
     host.querySelectorAll('[data-ag-history-refresh]').forEach(b => b.addEventListener('click', () => requestRunHistory(true)));
     host.querySelectorAll('[data-ag-refresh-projects]').forEach(b => b.addEventListener('click', () => requestIdeaAgentProjects(true)));
@@ -2139,11 +2179,13 @@
     }));
     const rtodos = [...host.querySelectorAll('[data-ag-rtodo]')];
     if (rtodos.length) {
-      const gated = host.querySelector('.ev-detail [data-ag-signoff]');
+      // Gate every sign-off trigger in the demo draft panel (detail + bottom
+      // bar) on the confirmation checkboxes, not just the inline one.
+      const gatedButtons = [...host.querySelectorAll('[data-ag-signoff]')];
       const hint = host.querySelector('.rtodo-hint');
       const sync = () => {
         const all = rtodos.every(c => c.checked);
-        if (gated) gated.setAttribute('aria-disabled', all ? 'false' : 'true');
+        gatedButtons.forEach(b => b.setAttribute('aria-disabled', all ? 'false' : 'true'));
         if (hint) hint.style.display = all ? 'none' : '';
       };
       rtodos.forEach(c => c.addEventListener('change', sync));
@@ -2180,7 +2222,10 @@
       </div>`;
     },
     render() {
+      if (window.EU_GUIDED_HANDOFF && window.EU_GUIDED_HANDOFF.take) window.EU_GUIDED_HANDOFF.take('agent');
+      const guidedNote = window.EU_GUIDED_HANDOFF && window.EU_GUIDED_HANDOFF.noteHtml ? window.EU_GUIDED_HANDOFF.noteHtml('agent') : '';
       return `
+      ${guidedNote}
       <div class="page-head" style="margin-bottom:16px;">
         <div class="row" style="justify-content:space-between;align-items:flex-start;gap:16px;">
           <div>

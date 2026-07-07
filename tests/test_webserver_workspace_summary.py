@@ -1019,6 +1019,78 @@ def test_guided_project_memory_persists_bounded_setup_slots(
     assert missing.json()["error"] == "guided_project_session_required"
 
 
+def test_guided_study_design_slots_flow_into_handoff_prefill(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Copilot completeness: outcome / time-window / comparator / export destination
+    collected conversationally must round-trip and reach the module handoff prefill."""
+    monkeypatch.setattr(guided_sessions, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(
+        guided_sessions, "_CONFIG_PATH", tmp_path / "cfg" / "guided.json"
+    )
+    monkeypatch.setattr(guided_sessions, "_PROJECTS_ROOT", tmp_path / "projects")
+    client = TestClient(app)
+
+    created = client.post(
+        "/api/guided/drafts",
+        json={
+            "title": "Design slot study",
+            "folder_slug": "design-slot-study",
+            "data_mode": "real",
+        },
+    )
+    draft = created.json()["draft"]
+    opened = client.post(
+        "/api/guided/project/open", json={"project_dir": draft["project_dir"]}
+    )
+    session = opened.json()["session"]
+
+    update = client.post(
+        "/api/guided/action",
+        json={
+            "session_id": session["id"],
+            "action": "update_slots",
+            "goal": "data_extraction",
+            "context": {"route": "guided", "data_mode": "real"},
+            "slots": {
+                "active_flow": "data_extraction",
+                "study_design": {
+                    "outcome": "mortality_28d",
+                    "outcome_label": "28-day mortality",
+                    "window": "First 48 hours",
+                    "comparator": "exposure",
+                    "comparator_label": "Split by exposure group",
+                    "collected": True,
+                },
+                "extraction": {
+                    "export_dir": str(tmp_path / "exports" / "run1"),
+                    "modules": ["demographics", "vitals"],
+                    "format": "parquet",
+                },
+            },
+        },
+    )
+    assert update.status_code == 200
+    slots = update.json()["session"]["slots"]
+    assert slots["study_design"]["outcome_label"] == "28-day mortality"
+    assert slots["extraction"]["export_dir"] == str(tmp_path / "exports" / "run1")
+
+    handoff = client.post(
+        "/api/guided/message",
+        json={
+            "session_id": session["id"],
+            "message": "run the agent analysis now",
+            "context": {"route": "guided", "data_mode": "real"},
+        },
+    )
+    assert handoff.status_code == 200
+    prefill = handoff.json()["handoff"]["prefill"]
+    assert prefill["outcome_hint"] == "28-day mortality"
+    assert prefill["time_window_hint"] == "First 48 hours"
+    assert prefill["comparator_hint"] == "Split by exposure group"
+    assert prefill["export_destination_hint"] == str(tmp_path / "exports" / "run1")
+
+
 def test_guided_project_open_accepts_existing_local_folder_without_draft(
     tmp_path: Path, monkeypatch
 ) -> None:

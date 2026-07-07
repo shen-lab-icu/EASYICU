@@ -1205,8 +1205,12 @@
     resetCohortFeatureSelection();
     crossDensityModule = 'all';
     crossDensityFeature = null;
+    // An explicitly configured raw ICU root wins over the registered-export
+    // fallback — otherwise the setup UI's root/database/sampling choices are
+    // silently discarded whenever >=2 exports happen to be registered.
+    const requestedRawRoot = opts && opts.rawRoot ? String(opts.rawRoot).trim() : '';
     const paths = defaultCrossdbPaths();
-    if (paths.length >= 2 && window.EU_API && (window.EU_API.loadCrossdbReviewSummary || window.EU_API.loadCrossdbSummary)) {
+    if (!requestedRawRoot && paths.length >= 2 && window.EU_API && (window.EU_API.loadCrossdbReviewSummary || window.EU_API.loadCrossdbSummary)) {
       const loader = window.EU_API.loadCrossdbReviewSummary
         ? window.EU_API.loadCrossdbReviewSummary({ paths: paths })
         : window.EU_API.loadCrossdbSummary(paths);
@@ -1223,7 +1227,6 @@
       });
       return;
     }
-    const requestedRawRoot = opts && opts.rawRoot ? String(opts.rawRoot).trim() : '';
     const rawRootInput = document.querySelector('[data-crossdb-root]');
     const rawRoot = requestedRawRoot || (rawRootInput && rawRootInput.value ? rawRootInput.value.trim() : '');
     const rawDatabases = selectedCrossDbKeys();
@@ -2425,8 +2428,10 @@
     },
     rail: () => vizRail('patient'),
     render() {
+      if (window.EU_GUIDED_HANDOFF && window.EU_GUIDED_HANDOFF.take) window.EU_GUIDED_HANDOFF.take('patient');
+      const guidedNote = window.EU_GUIDED_HANDOFF && window.EU_GUIDED_HANDOFF.noteHtml ? window.EU_GUIDED_HANDOFF.noteHtml('patient') : '';
       if (patientView === 'loading') {
-        return `<div class="card pad">${skeletonWorkspace()}</div>`;
+        return `${guidedNote}<div class="card pad">${skeletonWorkspace()}</div>`;
       }
       if (patientView === 'loaded') {
         const drill = patientDrilldown();
@@ -2470,6 +2475,7 @@
           <button class="btn sm" data-viz-reset>${icon('sliders', 13)} ${t('Edit setup', '编辑设置')}</button>
           <button class="btn sm" data-patient-export>${icon('download', 13)} ${t('Export', '导出')}</button>
         </div>
+        ${guidedNote}
         ${demoLoadedNote}
         <div class="mt-16">${patientTabs()}</div>
         <div id="ptbody">${patientTabBody()}</div>
@@ -2477,11 +2483,12 @@
           <div class="nb-ico">${icon('arrow', 16)}</div>
           <div class="grow"><div class="nb-t">${t('Reviewed the data — what\u2019s next?', '\u6570\u636e\u5df2\u5ba1\u9605 \u2014\u2014 \u4e0b\u4e00\u6b65\uff1f')}</div><div class="nb-d">${t('Compare groups in Cohort Statistics, or assemble an auditable analysis and review-ready draft in Agent Projects.', '\u5728\u300c\u961f\u5217\u7edf\u8ba1\u300d\u505a\u7ec4\u95f4\u5bf9\u6bd4\uff0c\u6216\u5728\u300c\u7814\u7a76\u9879\u76ee\u300d\u7ec4\u88c5\u53ef\u5ba1\u8ba1\u5206\u6790\u4e0e\u5f85\u6838\u9a8c\u8349\u7a3f\u3002')}</div></div>
           <button class="btn" data-nav="cohort">${icon('cohort', 13)} ${t('Cohort Statistics', '\u961f\u5217\u7edf\u8ba1')}</button>
-          <button class="btn primary" data-nav="agent">${icon('agent', 13)} ${t('Analyze in Agent', '\u8fdb\u5165\u7814\u7a76\u9879\u76ee')}</button>
+          <button class="btn primary" data-nav="agent">${icon('agent', 13)} ${t('Analyze in Agent Projects','\u8fdb\u5165\u7814\u7a76\u9879\u76ee')}</button>
         </div>`;
       }
       /* idle */
       return `
+      ${guidedNote}
       <div class="card pad">
         <div class="panel-head">
           <div>
@@ -2757,7 +2764,7 @@
       'Exploratory · unadjusted': '探索性 · 未调整',
       'Time-to-event': '事件时间',
       'Log-rank': 'Log-rank',
-      'df 1 · exploratory only': 'df 1 · 仅探索',
+      'df 1 · exploratory only · point estimates, no CI': 'df 1 · 仅探索 · 点估计，无置信区间',
       'not enough events': '事件数不足',
       'Not manuscript-ready by itself': '不能单独用于稿件结论',
       'Number at risk': '风险人数',
@@ -3146,7 +3153,7 @@
           <div class="surv-logrank">
             <span>${cohortText('Log-rank')}</span>
             <strong>${logrank.status === 'ready' ? `χ² ${fmtNum(logrank.chi_square, 2)} · p = ${esc(pValueLabel)}` : cohortText('unavailable')}</strong>
-            <small>${logrank.status === 'ready' ? cohortText('df 1 · exploratory only') : esc(cohortReason(logrank.reason || 'not enough events'))}</small>
+            <small>${logrank.status === 'ready' ? cohortText('df 1 · exploratory only · point estimates, no CI') : esc(cohortReason(logrank.reason || 'not enough events'))}</small>
           </div>
         </div>
         ${cohortSurvivalChart(curve)}
@@ -3785,7 +3792,7 @@
     return window.EU_LANG === 'zh' ? (row.unit_zh || row.unit || '') : (row.unit || row.unit_zh || '');
   }
 
-  function cohortProfileValue(item) {
+  function cohortProfileItemValue(item) {
     const row = item || {};
     if (row.kind === 'numeric') {
       if (row.value == null) return '—';
@@ -3835,7 +3842,7 @@
     return `
       <div class="cprof-item ${status}">
         <div class="cprof-k">${esc(cohortProfileLabel(row))}</div>
-        <div class="cprof-v">${cohortProfileValue(row)}</div>
+        <div class="cprof-v">${cohortProfileItemValue(row)}</div>
         ${bar}
         <div class="cprof-d">${esc(cohortProfileDetail(row))}</div>
       </div>`;
@@ -4065,13 +4072,16 @@
       <p style="font-size:11px;color:var(--ink-4);margin-top:8px;">${t('Real local export summary. Formal analyses still require the evidence-bound agent path.', '真实本地导出摘要。正式分析仍需走 evidence-bound agent 路径。')}</p>`;
     }
     const demoProfile = demoCohortClinicalProfile();
+    // [label, bar% (0-100), displayed value, hint]. Bar length and the shown
+    // value are decoupled so a raw SOFA score is scaled to its own max (0-24)
+    // instead of sharing the prevalence-% axis at an arbitrary length.
     const domains = [
-      [t('Severity', '严重程度'), 6, t('median SOFA-2', 'SOFA-2 中位数')],
-      [t('Sepsis', 'Sepsis'), 60, t('incidence', '发生率')],
-      [t('Ventilation', '机械通气'), 50, t('exposure', '暴露率')],
-      [t('Vasopressors', '血管活性药'), 40, t('exposure', '暴露率')],
-      [t('AKI', 'AKI'), 30, t('phenotype', '表型')],
-      [t('Mortality', '死亡'), 20, t('event rate', '事件率')],
+      [t('Severity', '严重程度'), 6 / 24 * 100, '6 / 24 SOFA-2', t('median severity', '严重程度中位数')],
+      [t('Sepsis', 'Sepsis'), 60, '60%', t('incidence', '发生率')],
+      [t('Ventilation', '机械通气'), 50, '50%', t('exposure', '暴露率')],
+      [t('Vasopressors', '血管活性药'), 40, '40%', t('exposure', '暴露率')],
+      [t('AKI', 'AKI'), 30, '30%', t('phenotype', '表型')],
+      [t('Mortality', '死亡'), 20, '20%', t('event rate', '事件率')],
     ];
     return `
       <div class="sec-stack"><div class="lbl">Cohort profile</div><h2>${t('Demo clinical cohort profile', '演示临床队列画像')}</h2></div>
@@ -4090,9 +4100,9 @@
       <div class="card pad mt-16">
         <div class="eyebrow" style="margin-bottom:8px;">${t('At-a-glance phenotype balance', '一屏临床表型概览')}</div>
         <div class="cprof-spark-grid">
-          ${domains.map(([label, value, hint]) => `<div class="cprof-spark">
-            <div class="cprof-spark-head"><span>${esc(label)}</span><b class="mono">${typeof value === 'number' && value <= 100 && value !== 6 ? fmtPct(value) : fmtNum(value, 1)}</b></div>
-            <div class="cprof-bar"><span style="width:${Math.max(4, Math.min(100, value === 6 ? 50 : value)).toFixed(1)}%"></span></div>
+          ${domains.map(([label, barPct, display, hint]) => `<div class="cprof-spark">
+            <div class="cprof-spark-head"><span>${esc(label)}</span><b class="mono">${esc(display)}</b></div>
+            <div class="cprof-bar"><span style="width:${Math.max(4, Math.min(100, barPct)).toFixed(1)}%"></span></div>
             <div class="cprof-d">${esc(hint)}</div>
           </div>`).join('')}
         </div>
@@ -4346,9 +4356,9 @@
       <div class="sec-stack"><div class="lbl">${cohortText('Table one')}</div><h2>${cohortText('Baseline characteristics comparison')}</h2></div>
       <div class="table-wrap table-scroll">
         <table class="eu-table">
-          <thead><tr><th>${cohortText('Characteristic')}</th><th class="num">${cohortText('Overall')} (n=10)</th><th class="num">${cohortText('Survived')} (n=8)</th><th class="num">${cohortText('Deceased')} (n=2)</th><th class="num">${cohortText('p-value')}</th></tr></thead>
+          <thead><tr><th>${cohortText('Characteristic')}</th><th class="num">${cohortText('Overall')} (n=10)</th><th class="num">${esc(cohortText(comp.groups[0][0]))} (n=${esc(comp.groups[0][1])})</th><th class="num">${esc(cohortText(comp.groups[1][0]))} (n=${esc(comp.groups[1][1])})</th></tr></thead>
           <tbody>
-            ${comp.table.map(r => `<tr><td class="key">${esc(cohortText(r[0]))}</td>${r.slice(1).map(c => `<td class="num">${esc(c)}</td>`).join('')}</tr>`).join('')}
+            ${comp.table.map(r => `<tr><td class="key">${esc(cohortText(r[0]))}</td>${r.slice(1, -1).map(c => `<td class="num">${esc(c)}</td>`).join('')}</tr>`).join('')}
           </tbody>
         </table>
       </div>
@@ -4595,7 +4605,13 @@
       </div>
 
       ${cohortTabs()}
-      <div id="cohbody">${cohortPanelBody()}</div>`;
+      <div id="cohbody">${cohortPanelBody()}</div>
+      <div class="nextbar accent mt-16">
+        <div class="nb-ico">${icon('arrow', 16)}</div>
+        <div class="grow"><div class="nb-t">${t('Compared the groups — what’s next?', '对比完组间差异 —— 下一步？')}</div><div class="nb-d">${t('Assemble an auditable analysis and a review-ready draft in Agent Projects, or benchmark the cohort across databases.', '在「研究项目」组装可审计分析与待核验草稿，或跨数据库对比队列。')}</div></div>
+        <button class="btn" data-nav="crossdb">${icon('benchmark', 13)} ${t('Cross-DB Benchmark', '跨库基准')}</button>
+        <button class="btn primary" data-nav="agent">${icon('agent', 13)} ${t('Analyze in Agent Projects','进入研究项目')}</button>
+      </div>`;
     },
   };
 
@@ -5006,7 +5022,12 @@
         <div class="ico">${icon('lock', 16)}</div>
         <div class="body"><span class="t">${crossTerm('Fail-closed scope')}</span> <span class="d" style="display:inline;">— ${blockedIds} ${t('remain blocked', '保持拦截')}。${t('Raw rows returned', '是否返回原始行')}=${privacy.raw_rows_returned === true ? 'true' : 'false'}；${t('inference', '推断')}=${esc(crossStatusLabel(provenance.inference || 'blocked_until_numeric_evidence_gate'))}。</span></div>
       </div>
-      </details>`;
+      </details>
+      <div class="nextbar accent mt-16">
+        <div class="nb-ico">${icon('arrow', 16)}</div>
+        <div class="grow"><div class="nb-t">${t('Benchmarked the databases — what’s next?', '完成跨库对比 —— 下一步？')}</div><div class="nb-d">${t('Take a single database into an auditable analysis and review-ready draft in Agent Projects.', '在「研究项目」中把某个数据库带入可审计分析与待核验草稿。')}</div></div>
+        <button class="btn primary" data-nav="agent">${icon('agent', 13)} ${t('Analyze in Agent Projects','进入研究项目')}</button>
+      </div>`;
   }
 
   function crossDbRecordCards(sources, labels) {
@@ -5029,8 +5050,8 @@
 
   function crossRealFeatureDensityByModule(modules, labels) {
     return crossFeatureDensityPanel(
-      t('Multi-database feature density grid', '多数据库特征密度网格'),
-      t('Old Cross-DB layout: one subplot per feature, grouped by module; each subplot overlays the selected database density curves. No patient rows are returned.', '旧版 Cross-DB 布局：每个特征一个小图，按模块分组；每个小图叠加所选数据库的密度曲线。不会返回患者行级数据。'),
+      t('Multi-database feature value-distribution grid', '多数据库特征取值分布网格'),
+      t('Old Cross-DB layout: one subplot per feature, grouped by module; each subplot overlays the selected databases’ value-distribution (KDE) curves — not record counts. No patient rows are returned.', '旧版 Cross-DB 布局：每个特征一个小图，按模块分组；每个小图叠加所选数据库的取值分布（KDE）曲线 —— 不是记录数。不会返回患者行级数据。'),
       modules,
       labels,
     );
@@ -5096,7 +5117,6 @@
 
   function crossFeatureDensityModule(module, labels) {
     const features = module.features || [];
-    const maxDensity = Math.max(1, ...features.flatMap(row => (row.values || []).map(v => Number(v.density_per_100_entities)).filter(Number.isFinite)));
     const moduleLabel = catalogModuleLabel(module.module);
     return `
       <section class="xdb-density-module" data-density-module="${esc(module.module)}">
@@ -5105,7 +5125,7 @@
           <span class="pill dashed">${esc(module.module)}</span>
         </div>
         <div class="xdb-density-features" style="--xdb-grid-cols:${Math.min(4, Math.max(1, Math.ceil(Math.sqrt(features.length || 1))))}">
-          ${features.map(row => crossFeatureDensityFeature(module, row, labels, maxDensity)).join('')}
+          ${features.map(row => crossFeatureDensityFeature(module, row, labels)).join('')}
         </div>
       </section>`;
   }
@@ -5124,7 +5144,7 @@
     return null;
   }
 
-  function crossFeatureDensityFeature(module, row, labels, maxDensity) {
+  function crossFeatureDensityFeature(module, row, labels) {
     const meta = catalogFeatureMeta(row.feature);
     const curve = crossFeatureCurve(row, labels);
     const key = crossFeatureKey(module, row);
@@ -5185,7 +5205,9 @@
       return `<path class="xdb-density-area" d="${area}" fill="${item.color}"></path><path class="xdb-density-line" d="${line}" stroke="${item.color}"></path>`;
     }).join('');
     const totalN = series.reduce((acc, item) => acc + Number(item.value.non_null || item.value.n || 0), 0);
-    const stats = `<span>${fmtInt(series.length)} ${crossTerm('database curves')}</span><span>x ${fmtDensity(minX)}-${fmtDensity(maxX)}</span><span>n=${fmtInt(totalN)}</span>`;
+    // y is relative density on one shared scale across databases (comparable
+    // peak heights); label it so the axis is not read as an absolute count.
+    const stats = `<span>${fmtInt(series.length)} ${crossTerm('database curves')}</span><span>${t('x:', 'x:')} ${fmtDensity(minX)}-${fmtDensity(maxX)}</span><span>${t('y: relative density', 'y: 相对密度')}</span><span>n=${fmtInt(totalN)}</span>`;
     return `
       <div class="xdb-density-plot">
         <svg class="xdb-density-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">

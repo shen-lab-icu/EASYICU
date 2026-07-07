@@ -191,6 +191,17 @@
   function fieldValue(key) {
     return draft && draft[key] != null ? String(draft[key]) : '';
   }
+  function takeGuidedHandoff() {
+    const handoff = window.EU_GUIDED_HANDOFF && window.EU_GUIDED_HANDOFF.take
+      ? window.EU_GUIDED_HANDOFF.take('ideas') : null;
+    if (!handoff || !handoff.prefill) return;
+    const hint = String(handoff.prefill.question_hint || '').trim();
+    if (hint && !fieldValue('topic')) draft = Object.assign({}, draft || {}, { topic: hint });
+  }
+  function guidedPrefillNote() {
+    return window.EU_GUIDED_HANDOFF && window.EU_GUIDED_HANDOFF.noteHtml
+      ? window.EU_GUIDED_HANDOFF.noteHtml('ideas') : '';
+  }
   function collectPayload(root) {
     const opt = root.querySelector('#ideaNetworkOptIn');
     draft = {
@@ -972,15 +983,23 @@
     const hiddenStats = stats.slice(4);
     const isEventMetric = (s) => s && s.metric_kind === 'event_rate';
     const isSchemaMetric = (s) => s && (s.metric_kind === 'schema_presence' || s.status === 'metadata_only' || s.coverage_basis === 'manifest_file_inventory');
-    const riskCount = stats.filter(s => !isEventMetric(s) && !isSchemaMetric(s) && (s.low_coverage || pct(s.coverage_pct) < 50)).length;
+    // Backend ships coverage_pct=null + denominator_resolved=false when the
+    // cohort denominator could not be resolved — that is indeterminate, NOT
+    // 0% coverage, so it must not paint a red risk row or inflate riskCount.
+    const isIndeterminate = (s) => s && !isEventMetric(s) && !isSchemaMetric(s)
+      && (s.denominator_resolved === false || s.coverage_pct == null);
+    const riskCount = stats.filter(s => !isEventMetric(s) && !isSchemaMetric(s) && !isIndeterminate(s) && (s.low_coverage || pct(s.coverage_pct) < 50)).length;
     const featureRow = (s) => {
       const n = s.numeric_summary || {};
       const eventMetric = isEventMetric(s);
       const schemaMetric = isSchemaMetric(s);
-      const metricPct = schemaMetric ? 100 : (eventMetric ? pct(s.event_rate_pct) : pct(s.coverage_pct));
-      const tone = schemaMetric ? 'warn' : (eventMetric ? 'event' : coverageTone(metricPct));
+      const indeterminate = isIndeterminate(s);
+      const metricPct = schemaMetric ? 100 : (eventMetric ? pct(s.event_rate_pct) : (indeterminate ? 0 : pct(s.coverage_pct)));
+      const tone = schemaMetric ? 'warn' : (indeterminate ? 'warn' : (eventMetric ? 'event' : coverageTone(metricPct)));
       const summary = schemaMetric
         ? t('Schema present; run a bounded sample check before interpreting coverage.', '结构存在；解释覆盖率前先运行有界样本检查。')
+        : indeterminate
+        ? t('Denominator unresolved — coverage is indeterminate, not 0%. Run a bounded sample check to measure it.', '分母未确定 —— 覆盖率不确定，而非 0%。请运行有界样本检查来测量。')
         : eventMetric
         ? t('binary/event indicator; non-events are not missing', '二分类/事件指标；阴性患者不是缺失')
         : (n.available ? `median ${fmt(n.median)} · min ${fmt(n.min)} · max ${fmt(n.max)}` : t('categorical, non-numeric, or empty', '分类、非数值或为空'));
@@ -990,7 +1009,7 @@
         ? `<span>${t('Events', '事件')} ${fmt(s.event_entities ?? s.records)}</span><span>${t('Non-events', '非事件')} ${fmt(s.non_event_entities)}</span>`
         : `<span>${t('Records', '记录')} ${fmt(s.records)}</span><span>${t('Missing', '缺失')} ${pctLabel(s.missing_pct)}</span>`;
       const headLabel = schemaMetric ? t('Schema', '结构') : (eventMetric ? t('Event rate', '事件率') : t('Coverage', '覆盖'));
-      const headValue = schemaMetric ? t('present', '存在') : pctLabel(eventMetric ? s.event_rate_pct : s.coverage_pct);
+      const headValue = schemaMetric ? t('present', '存在') : (indeterminate ? t('indeterminate', '不确定') : pctLabel(eventMetric ? s.event_rate_pct : s.coverage_pct));
       return `<div class="ideas-feature-row ${tone}">
         <div class="ideas-feature-name">
           <b>${esc(s.label)}</b>
@@ -1207,7 +1226,7 @@
             </div>
           </div>
           <div class="row gap-8">
-            <button class="btn sm" data-nav="agent">${icon('agent', 13)} ${t('Open Research Projects', '打开研究项目')}</button>
+            <button class="btn sm" data-nav="agent">${icon('agent', 13)} ${t('Open Agent Projects', '打开研究项目')}</button>
             <button class="btn sm" data-idea-new>${icon('plus', 13)} ${t('New idea', '新想法')}</button>
           </div>
         </div>
@@ -1438,7 +1457,7 @@
     wide: true,
     crumbs: ['Home', 'Idea Mining'],
     get status() { return `<span class="pill ok"><span class="dot"></span> ${t('Local-first', '本地优先')}</span>`; },
-    get actionHtml() { return `<button class="btn sm" data-nav="agent">${icon('agent', 13)} ${t('Research Projects', '研究项目')}</button>`; },
+    get actionHtml() { return `<button class="btn sm" data-nav="agent">${icon('agent', 13)} ${t('Agent Projects', '研究项目')}</button>`; },
     rail() {
       const last = result && (result.idea_ledger || [])[0];
       return `
@@ -1461,7 +1480,9 @@
       </div>`;
     },
     render() {
+      takeGuidedHandoff();
       return `
+        ${guidedPrefillNote()}
         <div class="page-head" style="margin-bottom:16px;">
           <div class="row" style="justify-content:space-between;align-items:flex-start;gap:16px;">
             <div>

@@ -222,12 +222,36 @@
       gate_reportable: t('verification passed', '核验通过'),
       reportable: t('verification passed', '核验通过'),
       analysis_only: t('analysis-only', '仅分析'),
+      signed_analysis_only: t('signed · analysis-only', '已签署 · 仅分析'),
       diagnostic_only: t('diagnostic only', '诊断性'),
       awaiting_human_signoff: t('awaiting review', '待审阅'),
+      signoff_stale: t('sign-off stale', '签署已失效'),
       blocked: t('blocked', '已阻断'),
+      cancelled: t('cancelled', '已取消'),
+      preflight: t('preflight', '预检'),
+      ready: t('ready', '就绪'),
       imported: t('imported package', '已导入包'),
     };
     return labels[key] || status || t('analysis-only', '仅分析');
+  }
+  // Plain-language explanation of a run status, for pill tooltips so a newcomer
+  // can learn the vocabulary without a separate legend.
+  function runStatusHint(status) {
+    const key = String(status || '').toLowerCase();
+    const hints = {
+      gate_reportable: t('All evidence checks passed — findings may be reported.', '所有证据检查已通过 —— 结论可报告。'),
+      reportable: t('All evidence checks passed — findings may be reported.', '所有证据检查已通过 —— 结论可报告。'),
+      analysis_only: t('The run finished but claims stay locked until STRICT evidence + human sign-off pass.', '运行已完成，但在 STRICT 证据与人工签署通过前结论保持锁定。'),
+      signed_analysis_only: t('A human signed off, but evidence verification still keeps claims non-reportable.', '已有人工签署，但证据核验仍使结论不可报告。'),
+      diagnostic_only: t('Run produced diagnostics only — not enough to support a reportable claim.', '运行仅产出诊断信息 —— 不足以支撑可报告结论。'),
+      awaiting_human_signoff: t('Evidence checks passed; a human reviewer still needs to sign off.', '证据检查已通过；仍需人工审阅者签署。'),
+      signoff_stale: t('Artifacts changed after sign-off, so the sign-off no longer matches the files.', '签署后产物已变更，签署与文件不再一致。'),
+      blocked: t('Evidence verification blocked this run; see the failing checks.', '证据核验已阻断本次运行；见未通过的检查。'),
+      cancelled: t('The run was cancelled before it finished.', '运行在完成前被取消。'),
+      preflight: t('A deterministic, local evidence preflight — no external model call.', '确定性的本地证据预检 —— 不调用外部模型。'),
+      imported: t('A read-only completed analysis imported from a prior run.', '从既往运行导入的只读完成分析。'),
+    };
+    return hints[key] || '';
   }
   function readableArtifactText(value) {
     return String(value || '')
@@ -565,7 +589,7 @@
 
   window.AGENT_RENDER = {
     DEMO_STUDIES, BLOCK_FAMILIES, BLOCK_LIBRARY, NATURE_PACK,
-    runStatusLabel, readableArtifactText, firstValue, fmtCount,
+    runStatusLabel, runStatusHint, readableArtifactText, firstValue, fmtCount,
     artifactKind, artifactTitle, artifactCategory, artifactSummary, artifactRank, defaultArtifactName,
     thumb, scrubDataUrls, figureGallery, artifactScalar, artifactKeyLabel,
     artifactSummaryRows, artifactTable, objectArrayRows, firstObjectArray, stepRowsFrom, artifactStructuredView,

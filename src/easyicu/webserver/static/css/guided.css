@@ -2228,3 +2228,147 @@
 .gd-card .state-hero .glyph{ width: 44px; height: 44px; margin-bottom: 12px; }
 .gd-card .state-hero .st-t{ font-size: 14px; }
 .gd-card .state-hero .st-d{ font-size: 11.75px; }
+
+/* ============================================================
+   Progressive extraction + study-design stepper
+   (renderer: js/screens-guided-extract.js). One decision per step,
+   with a clickable step rail, a running recap, and per-field hints.
+   ============================================================ */
+.gdx-steps{
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin: 2px 0 4px;
+}
+.gdx-step{
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-4);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.gdx-step .gdx-step-n{
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--hair);
+  font-size: 10px;
+  font-weight: 600;
+}
+.gdx-step.on{
+  background: var(--surface);
+  border-color: var(--hair);
+  color: var(--ink);
+  box-shadow: var(--sh-1);
+}
+.gdx-step.on .gdx-step-n{ background: var(--accent); border-color: transparent; color: #fff; }
+.gdx-step.done{ color: var(--ink-3); }
+.gdx-step.done .gdx-step-n{ background: var(--ok-soft); border-color: oklch(88% 0.05 150); color: var(--ink); }
+.gdx-step.ahead{ opacity: 0.6; }
+.gdx-step-sep{ width: 6px; height: 1px; background: var(--hair); flex: 0 0 auto; }
+.gdx-recap{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.gdx-recap span{
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--hair);
+  color: var(--ink-3);
+  font-size: 10.5px;
+}
+.gdx-body{ display: flex; flex-direction: column; gap: 12px; }
+.gdx-steplead{
+  color: var(--ink-2);
+  font-size: 12.25px;
+  line-height: 1.5;
+}
+.gdx-field{ display: flex; flex-direction: column; gap: 6px; }
+.gdx-hint{ color: var(--ink-4); font-size: 10.75px; line-height: 1.45; }
+.gdx-seg.wrap{ flex-wrap: wrap; height: auto; padding: 3px; gap: 3px; }
+.gdx-seg.wrap button{ min-height: 28px; }
+.gdx-custom,
+input[data-gx-exportdir]{
+  width: 100%;
+  min-height: 30px;
+  padding: 6px 9px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-2);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+}
+.gdx-more{
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px dashed var(--hair);
+  border-radius: var(--r-2);
+  background: transparent;
+  color: var(--ink-3);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.gdx-more:hover{ color: var(--ink); border-color: var(--ink-5); }
+.gdx-tools.end{ justify-content: flex-end; }
+.gdx-summary{
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-2);
+  overflow: hidden;
+  background: var(--surface-2);
+}
+.gdx-sumrow{
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 10px;
+  padding: 7px 11px;
+  align-items: baseline;
+}
+.gdx-sumrow + .gdx-sumrow{ border-top: 1px solid var(--hair); }
+.gdx-sumrow span{ color: var(--ink-4); font-size: 11px; }
+.gdx-sumrow strong{ color: var(--ink); font-size: 12px; font-weight: 600; word-break: break-word; }
+.gdx-muted{ color: var(--ink-4); font-weight: 400; font-style: normal; }
+.gdx-note.warn{
+  border-color: color-mix(in srgb, var(--warn, #b45309) 35%, var(--hair));
+  background: color-mix(in srgb, var(--warn, #b45309) 8%, var(--surface));
+  color: var(--ink-2);
+}
+/* Idea-mining data-context: read as the clear next action when a candidate lands */
+.gdi-pre.needs-action{
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--hair));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.gdi-next-cue{
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border-radius: var(--r-2);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  color: var(--ink);
+  font-size: 11.5px;
+  font-weight: 600;
+}

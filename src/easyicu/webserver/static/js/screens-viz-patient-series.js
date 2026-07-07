@@ -268,10 +268,11 @@
               <polyline points="${points}" fill="none" stroke="${row.color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
               <circle cx="${x(row.values.length - 1).toFixed(1)}" cy="${y(last).toFixed(1)}" r="4" fill="${row.color}" />`;
           }).join('')}
-          <text x="${left}" y="${height - 10}" class="axis">${hEsc(helpers, timeLabels ? timeLabels[0] : '0h')}</text>
-          <text x="${width - right - 42}" y="${height - 10}" class="axis">${hEsc(helpers, timeLabels ? timeLabels[1] : hT(helpers, 'last point', '末点'))}</text>
+          <text x="${left}" y="${height - 10}" class="axis">${hEsc(helpers, hT(helpers, 'obs 1', '第1点'))}</text>
+          <text x="${width - right - 42}" y="${height - 10}" class="axis">${hEsc(helpers, hT(helpers, 'obs N', '第N点'))}</text>
         </svg>
-      </div>`;
+      </div>
+      <p class="pt-multi-note" style="font-size:10.5px;color:var(--ink-4);margin-top:4px;">${hEsc(helpers, hT(helpers, 'Aligned by observation index, not wall-clock time — compares shape/sequence across entities, not synchronized timing.', '按观测次序对齐，非真实时间 —— 用于比较各实体的形态/次序，而非同步的时间点。'))}</p>`;
   }
 
   function renderAggregateFallback(rows, helpers) {

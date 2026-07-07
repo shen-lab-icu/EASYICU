@@ -623,6 +623,32 @@ def test_provider_config_route_writes_private_env_without_returning_secret(
     assert "http://127.0.0.1:8787/v1" not in str(payload)
 
 
+def test_provider_config_route_fails_closed_when_enable_ai_omitted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env_path = tmp_path / "provider.env"
+    settings_path = tmp_path / "settings.json"
+    monkeypatch.setattr(provider_adapter, "_DEFAULT_PROVIDER_ENV_FILE", env_path)
+    monkeypatch.setattr(settings_store, "_CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(settings_store, "_CONFIG_PATH", settings_path)
+
+    response = TestClient(app).post(
+        "/api/agent-runs/provider-config",
+        json={
+            "provider": "openai",
+            "api_key": "sk-test-fail-closed",
+            "base_url": "http://127.0.0.1:8787/v1",
+            "model": "gpt5.4",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["settings"]["ai_enabled"] is False
+    assert payload["settings"]["agent_model_mode"] != "external"
+
+
 def test_blocked_prior_art_recheck_does_not_clobber_successful_review(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
