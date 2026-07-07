@@ -45,6 +45,52 @@ _PERFORMANCE_NAMES = [
 ]
 
 
+_SPLIT_NAMES = [
+    "split",
+    "dataset",
+    "set",
+    "partition",
+    "fold",
+    "subset",
+    "data_split",
+]
+_HELDOUT_TOKENS = (
+    "test",
+    "held",
+    "holdout",
+    "validation",
+    "valid",
+    "external",
+    "oos",
+    "out_of_sample",
+)
+_TRAIN_TOKENS = ("train", "training", "fit", "in_sample", "apparent", "development")
+
+
+def _is_roc_auc_key(key: str) -> bool:
+    """True for a ROC-AUC metric key, False for PR-AUC / average-precision.
+
+    Panel C hard-labels its y-axis 'AUROC', so a substring ``"auc" in k`` would
+    pull a precision-recall AUC (``pr_auc`` / ``auc_pr`` / ``auprc``) into the
+    ROC panel and misrepresent it as discrimination.
+    """
+    k = str(key).strip().lower()
+    if any(
+        t in k
+        for t in ("pr_auc", "auc_pr", "auprc", "average_precision", "precision_recall")
+    ):
+        return False
+    return "auroc" in k or "roc_auc" in k or "auc_roc" in k or k == "auc"
+
+
+def _out_of_unit_range(series) -> bool:
+    """True when a series is not risks/fractions in [0,1] (a count table)."""
+    vals = series.dropna()
+    if vals.empty:
+        return True
+    return float(vals.max()) > 1.5 or float(vals.min()) < -0.01
+
+
 def _load_calibration(evidence: EvidenceStore, run_dir: Path):
     record, frame = load_table(
         evidence,
@@ -63,7 +109,16 @@ def _load_calibration(evidence: EvidenceStore, run_dir: Path):
     obs_col = resolve_column(
         frame, ["observed", "obs", "actual", "event_rate", "fraction_positive"]
     )
-    return record, numeric_series(frame, pred_col), numeric_series(frame, obs_col)
+    pred_s = numeric_series(frame, pred_col)
+    obs_s = numeric_series(frame, obs_col)
+    # A calibration curve is predicted-vs-observed RISK, both in [0,1]. A
+    # Hosmer-Lemeshow expected/observed COUNT table (values >> 1, matched via the
+    # "expected"/"observed" candidates) would render off-axis on the [0,1]
+    # calibration panel yet pass the role gate as a meaningless hero. Reject it
+    # (fail closed -> no prediction figure) rather than ship a wrong curve.
+    if _out_of_unit_range(pred_s) or _out_of_unit_range(obs_s):
+        return None, None, None
+    return record, pred_s, obs_s
 
 
 def _load_roc(evidence: EvidenceStore, run_dir: Path):
@@ -102,12 +157,33 @@ def _performance_metrics(frame: Optional[pd.DataFrame]) -> Dict[str, float]:
     value_col = resolve_column(frame, ["value", "estimate", "score"])
     out: Dict[str, float] = {}
     if metric_col and value_col:
+        # When a split/dataset column exists, prefer the held-out (test /
+        # validation / external) row for each metric. Keying purely on the metric
+        # name is last-write-wins, so a training-split AUROC row could overwrite
+        # the held-out one and ship an optimistic training number labeled as
+        # held-out discrimination.
+        split_col = resolve_column(frame, _SPLIT_NAMES)
+        chosen: Dict[str, tuple] = {}  # metric -> (priority, value)
         for _, row in frame.iterrows():
             try:
-                out[str(row[metric_col]).strip().lower()] = float(row[value_col])
+                metric = str(row[metric_col]).strip().lower()
+                val = float(row[value_col])
             except (TypeError, ValueError):
                 continue
-        return out
+            if split_col is not None:
+                split = str(row[split_col]).strip().lower()
+                if any(t in split for t in _HELDOUT_TOKENS):
+                    prio = 2
+                elif any(t in split for t in _TRAIN_TOKENS):
+                    prio = 0
+                else:
+                    prio = 1
+            else:
+                prio = 1
+            prev = chosen.get(metric)
+            if prev is None or prio >= prev[0]:
+                chosen[metric] = (prio, val)
+        return {m: v for m, (_p, v) in chosen.items()}
     # Wide form: one row, columns are metric names.
     for col in frame.columns:
         try:
@@ -213,7 +289,7 @@ def render_prediction_figure(
     # C -- validation / metric summary
     labels: List[str] = []
     values: List[float] = []
-    split_metrics = {k: v for k, v in metrics.items() if "auroc" in k or "auc" in k}
+    split_metrics = {k: v for k, v in metrics.items() if _is_roc_auc_key(k)}
     if len(split_metrics) >= 2:
         for k, v in split_metrics.items():
             labels.append(
