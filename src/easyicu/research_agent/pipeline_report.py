@@ -1142,8 +1142,22 @@ def _compute_readiness_gates(
             "manuscript_numeric_auditor",
             "evidence_bound_writer",
             "critic_agent",
+            # Run-level replan-budget latch: collected separately (from the
+            # full findings list, not active_findings) so a step-id-shaped
+            # replan trigger can never let supersession drop it.
+            "replan_budget",
         }
     ]
+    # Fail-closed: a run that exhausted its replan budget without converging
+    # is demoted to diagnostic_only. Scan the *full* findings list (not
+    # active_findings) so this run-level latch survives step supersession.
+    replan_budget_errors = [
+        f.message
+        for f in findings
+        if getattr(f, "validator", "") == "replan_budget"
+        and bool((getattr(f, "detail", None) or {}).get("replan_budget_exhausted"))
+    ]
+    replan_budget_exhausted = bool(replan_budget_errors)
     blocked_outcome_steps = _blocked_outcome_step_ids(run_dir)
     blocked_outcome_leaks = (
         _blocked_outcome_manuscript_leaks(manuscript_text)
@@ -1180,6 +1194,7 @@ def _compute_readiness_gates(
         + blocked_outcome_errors
         + plausibility_errors
         + survival_integrity_errors
+        + replan_budget_errors
     )
     analysis_validated = execution["execution_complete"] and not analysis_errors
     manuscript_ready = (
@@ -1217,6 +1232,7 @@ def _compute_readiness_gates(
         "numeric_verified": numeric_verified,
         "analysis_validated": analysis_validated,
         "manuscript_ready": manuscript_ready,
+        "replan_budget_exhausted": replan_budget_exhausted,
         "publication_ready": manuscript_ready
         and publication["publication_figure_bundle_ready"]
         and display_suite["display_suite_complete"]
@@ -1315,12 +1331,22 @@ def write_readiness_artifacts(
     # — a run that took 4 writer passes is more fragile than one that took 1.
     gates["writer_attempt_count"] = _count_writer_attempts(run_dir)
     status = (
-        "publication_ready"
-        if gates["publication_ready"]
+        # Fail-closed floor: a run that exhausted its replan budget without
+        # converging is diagnostic_only regardless of what limped through.
+        "diagnostic_only"
+        if gates.get("replan_budget_exhausted")
         else (
-            "manuscript_ready"
-            if gates["manuscript_ready"]
-            else "analysis_only" if gates["execution_complete"] else "diagnostic_only"
+            "publication_ready"
+            if gates["publication_ready"]
+            else (
+                "manuscript_ready"
+                if gates["manuscript_ready"]
+                else (
+                    "analysis_only"
+                    if gates["execution_complete"]
+                    else "diagnostic_only"
+                )
+            )
         )
     )
 

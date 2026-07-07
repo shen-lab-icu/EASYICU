@@ -47,6 +47,7 @@ from easyicu.research_agent.pipeline_report import (
 from easyicu.research_agent.schema import (
     AnalysisPlan,
     AnalysisStep,
+    ResearchContext,
     ValidationFinding,
 )
 
@@ -64,6 +65,20 @@ def _plan_with_steps(step_ids: List[str]) -> AnalysisPlan:
 
 def _evidence(tmp_path: Path) -> EvidenceStore:
     return EvidenceStore(root=tmp_path)
+
+
+def _context() -> ResearchContext:
+    """Minimal context; ``_compute_readiness_gates`` requires it as a kwarg."""
+    return ResearchContext(
+        research_question="dummy",
+        cohort={
+            "cohort_name": "c",
+            "database": "miiv",
+            "n_patients": 10,
+            "n_stays": 10,
+        },
+        variables=[],
+    )
 
 
 def _ok_record(step_id: str) -> Dict[str, Any]:
@@ -197,6 +212,7 @@ def test_gate_treats_superseded_step_finding_as_no_error(tmp_path: Path) -> None
     ]
     plan = _plan_with_steps(["01_prep", "02_model", "03_complete_case_robustness"])
     gates = _compute_readiness_gates(
+        context=_context(),
         plan=plan,
         per_step_records=per_step_records,
         findings=findings,
@@ -233,6 +249,7 @@ def test_gate_keeps_real_failure_when_step_did_not_succeed(tmp_path: Path) -> No
     ]
     plan = _plan_with_steps(["01_prep", "04_primary_model"])
     gates = _compute_readiness_gates(
+        context=_context(),
         plan=plan,
         per_step_records=per_step_records,
         findings=findings,

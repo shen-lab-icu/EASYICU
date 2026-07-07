@@ -850,6 +850,11 @@ def compute_tristate(
     not execute stays ``diagnostic_only`` regardless. ``None`` (validity not
     scored for this task kind) leaves the gate-based verdict unchanged.
     """
+    # Fail-closed floor: a run that exhausted its replan budget without
+    # converging is a runaway loop, not a reportable result — it floors to
+    # ``diagnostic_only`` regardless of whatever limped through the gates.
+    if bool(gates.get("replan_budget_exhausted")):
+        return "diagnostic_only"
     if bool(gates.get("manuscript_ready")):
         base: Tristate = "gate_reportable"
     elif bool(gates.get("execution_complete")):

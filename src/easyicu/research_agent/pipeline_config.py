@@ -152,10 +152,21 @@ class PipelineConfig:
     #     once it returns this many revisions in a row whose substantive
     #     step DAG (step_id + method + expected_outputs) is unchanged.
     #   * ``max_replans`` — hard backstop on the total number of
-    #     *substantive* revisions in a run.
+    #     *substantive* revisions in a run. When the run reaches this cap
+    #     without the plan converging it fails closed to ``diagnostic_only``
+    #     (a runaway replan loop must not launder a manuscript). Default 6
+    #     preserves legitimate repair headroom — a real run rarely needs
+    #     more than a handful of substantive revisions — while killing the
+    #     pathological churn (the E3 20260706 run replanned 9× over ~50 min
+    #     and still failed). ``stabilization_mode`` tightens this to 3 so a
+    #     fast primary-only iteration fails closed sooner.
     # 0 disables either guard (legacy behaviour).
     max_consecutive_noop_replans: int = 2
-    max_replans: int = 0
+    max_replans: int = 6
+    # Stabilization / primary-only iteration mode. When True the effective
+    # replan budget is tightened to 3 (fail closed faster while debugging a
+    # case), leaving full runs on the default budget of 6.
+    stabilization_mode: bool = False
     # Hard cap on numeric-claim leaves registered per single step.
     # Prevents one step that dumps a full interaction matrix into
     # step_summary.json from creating hundreds of footnotes when its
