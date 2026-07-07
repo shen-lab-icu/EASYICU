@@ -44,6 +44,58 @@ _EFFECT_NAMES = [
 ]
 
 
+# Effect-scale classification. The deterministic causal runner writes the
+# CANONICAL full name ``scale="odds_ratio"`` (deterministic_causal.py:363), not
+# the abbreviation ``or``, so a naive ``scale in ("or","hr","rr")`` test
+# misclassifies the primary effect as a DIFFERENCE measure -> null reference at 0
+# (should be 1), linear axis (should be log), mislabeled panel. Map both spellings.
+_RATIO_SCALES = {
+    "or": "OR",
+    "odds_ratio": "OR",
+    "oddsratio": "OR",
+    "hr": "HR",
+    "hazard_ratio": "HR",
+    "hazardratio": "HR",
+    "rr": "RR",
+    "risk_ratio": "RR",
+    "riskratio": "RR",
+    "relative_risk": "RR",
+    "rate_ratio": "RaR",
+    "irr": "IRR",
+    "incidence_rate_ratio": "IRR",
+    "prevalence_ratio": "PR",
+}
+_DIFF_SCALES = {
+    "rd": "RD",
+    "risk_difference": "RD",
+    "ate": "ATE",
+    "att": "ATT",
+    "md": "MD",
+    "mean_difference": "MD",
+    "difference": "difference",
+    "coef": "coef",
+    "beta": "coef",
+    "effect": "Adjusted effect",
+}
+
+
+def _effect_scale_info(scale: str) -> Tuple[bool, str]:
+    """Return ``(is_ratio, short_label)`` for an effect-scale string.
+
+    Recognises canonical full names (``odds_ratio``) and abbreviations (``or``).
+    Anything unknown that ends in / contains ``ratio`` is treated as a ratio; all
+    other unknowns default to a difference measure with a neutral label.
+    """
+    key = str(scale).strip().lower().replace(" ", "_").replace("-", "_")
+    if key in _RATIO_SCALES:
+        return True, _RATIO_SCALES[key]
+    if key in _DIFF_SCALES:
+        return False, _DIFF_SCALES[key]
+    if key.endswith("ratio") or "ratio" in key:
+        return True, str(scale).upper()
+    return False, "Adjusted effect"
+
+
 def _load_effect(
     evidence: EvidenceStore, run_dir: Path
 ) -> Optional[Tuple[Optional[EvidenceRecord], float, float, float, str]]:
@@ -66,11 +118,14 @@ def _load_effect(
     )
     if est_col is None:
         return None
+    # The deterministic runner writes ci_low / ci_high (deterministic_causal.py:359);
+    # the old candidate lists (lower/ci_lower/...) did not match, so the CI silently
+    # collapsed to the point estimate. ci_low/ci_high are listed first (exact match).
     lo_col = resolve_column(
-        frame, ["lower", "ci_lower", "lower_95", "conf_lower", "lcl"]
+        frame, ["ci_low", "lower", "ci_lower", "lower_95", "conf_lower", "lcl"]
     )
     hi_col = resolve_column(
-        frame, ["upper", "ci_upper", "upper_95", "conf_upper", "ucl"]
+        frame, ["ci_high", "upper", "ci_upper", "upper_95", "conf_upper", "ucl"]
     )
     scale_col = resolve_column(frame, ["scale", "measure", "estimand"])
     try:
@@ -233,7 +288,7 @@ def render_causal_figure(
     add_panel_label(ax_love, "B", x=-0.28)
 
     # C -- effect contrast
-    ratio_scale = scale.lower() in ("or", "hr", "rr")
+    ratio_scale, scale_label = _effect_scale_info(scale)
     null_value = 1.0 if ratio_scale else 0.0
     ax_eff.errorbar(
         est,
@@ -247,13 +302,11 @@ def render_causal_figure(
         markersize=5.0,
     )
     ax_eff.axvline(null_value, color=neutral, linestyle="--", linewidth=0.8)
-    ax_eff.set_yticks(
-        [0], [scale.upper() if ratio_scale else "Adjusted effect"], fontsize=6.4
-    )
+    ax_eff.set_yticks([0], [scale_label], fontsize=6.4)
     ax_eff.set_ylim(-0.6, 0.6)
     if ratio_scale and lo > 0:
         ax_eff.set_xscale("log")
-    ax_eff.set_xlabel(f"{scale.upper() if ratio_scale else 'Effect'} (95% CI)")
+    ax_eff.set_xlabel(f"{scale_label} (95% CI)")
     ax_eff.set_title("Adjusted contrast", loc="left", pad=4)
     ax_eff.text(
         est,
