@@ -171,9 +171,15 @@ def _parse_cox(frame: pd.DataFrame) -> Optional[pd.DataFrame]:
     )
     hr_col = resolve_column(frame, ["hr", "hazard_ratio", "exp(coef)", "exp_coef"])
     coef_col = resolve_column(frame, ["coef", "log_hr", "estimate", "beta"])
+    # ci_low / ci_high are what the deterministic Cox runner writes
+    # (deterministic_survival.py:266-267); they must be listed first (exact match)
+    # or the old candidates (ci_lower/lower/...) miss them and the HR forest
+    # silently renders with no confidence interval.
     lo_col = resolve_column(
         frame,
         [
+            "ci_low",
+            "hr_ci_low",
             "hr_lower",
             "ci_lower",
             "lower",
@@ -186,6 +192,8 @@ def _parse_cox(frame: pd.DataFrame) -> Optional[pd.DataFrame]:
     hi_col = resolve_column(
         frame,
         [
+            "ci_high",
+            "hr_ci_high",
             "hr_upper",
             "ci_upper",
             "upper",
@@ -446,7 +454,30 @@ def render_survival_figure(
     evidence: EvidenceStore,
     run_dir: Path,
 ) -> Optional[RenderedFigure]:
-    cox_record, cox_frame = load_table(evidence, run_dir, _COX_TABLE_NAMES)
+    # The deterministic Cox runner writes THREE tables whose stems all match
+    # _COX_TABLE_NAMES: cox_summary.csv (metadata only: model_name/estimator/n/
+    # events/converged/primary_term), cox_model.csv and hazard_ratio.csv (the
+    # actual HR + ci_low/ci_high). cox_summary is listed first, so a plain
+    # load_table returns the metadata table and _parse_cox yields None -> the HR
+    # forest never renders. require_columns forces a table that actually carries a
+    # hazard-ratio / coefficient column, skipping the metadata table.
+    cox_record, cox_frame = load_table(
+        evidence,
+        run_dir,
+        _COX_TABLE_NAMES,
+        require_columns=[
+            [
+                "hazard_ratio",
+                "hr",
+                "exp(coef)",
+                "exp_coef",
+                "coef",
+                "log_hr",
+                "estimate",
+                "beta",
+            ]
+        ],
+    )
     cox = _parse_cox(cox_frame) if cox_frame is not None else None
 
     km_record, km_table = load_table(evidence, run_dir, _KM_TABLE_NAMES)
