@@ -5033,7 +5033,25 @@ _DETERMINISTIC_FIGURE_TOKEN_GROUPS: tuple[tuple[str, ...], ...] = (
     ("cohort", "eligibility", "overlap", "attrition", "definition"),
     ("prediction", "calibration", "discrimination", "model_performance"),
     ("sensitivity", "robustness", "specification"),
-    ("association", "odds", "effect", "forest"),
+    # Association group also owns the ORDINAL dose-response figure: it is an
+    # association-family forest (adjusted OR per graded-exposure stage) rendered
+    # by the same association bundle renderer, which reads dose_response.csv and
+    # emits correct, stage-keyed source data. Without these tokens an LLM that
+    # names its figure step "..._stage_gradient_..." / "..._dose_response_..."
+    # (instead of "...association...") falls through the deterministic renderer
+    # and hand-codes a figure whose CI/count columns get corrupted (E3: ci_low
+    # filled with the cohort count), which the figure-trace gate then rejects.
+    (
+        "association",
+        "odds",
+        "effect",
+        "forest",
+        "gradient",
+        "dose_response",
+        "dose-response",
+        "ordinal",
+        "trend",
+    ),
     ("primary_result", "primary_results", "main_result", "main_results"),
     ("missingness", "measurement", "data_quality", "quality"),
     ("survival", "kaplan", "hazard_ratio", "time_to_event"),

@@ -23,6 +23,7 @@ from easyicu.research_agent.pipeline import (
     _render_publication_bundle_from_prior_outputs_for_step as routed_rescue,
     _render_association_publication_bundle_from_prior_outputs as rescue,
     _render_sensitivity_publication_bundle_from_prior_outputs as sensitivity_rescue,
+    deterministic_figure_family_supported,
 )
 from easyicu.research_agent.schema import AnalysisStep
 
@@ -381,6 +382,70 @@ def test_rescue_returns_none_without_or_ci_table(tmp_path: Path):
     out = tmp_path / "steps" / "03_fig" / "outputs"
     out.mkdir(parents=True, exist_ok=True)
     assert rescue(run_dir=tmp_path, current_step_id="03_fig", out_dir=out) is None
+
+
+# --- ordinal dose-response figure steps must reach the deterministic renderer ---
+# E3 regression: when the LLM names its primary figure step "..._stage_gradient_
+# analysis_figure" / "..._dose_response_figure" (instead of "...association...")
+# the deterministic figure family/router did not recognise it, so the step fell
+# through to LLM code that produced a corrupted source_data table (ci_low filled
+# with the cohort count) which the figure-trace gate then rejected. The ordinal
+# dose-response family is an association forest and must route to the association
+# bundle renderer, which reads dose_response.csv and emits stage-keyed source data.
+
+
+@pytest.mark.parametrize(
+    "step_id",
+    [
+        "04_primary_stage_gradient_analysis_figure",
+        "04_primary_dose_response_figure",
+        "04_ordinal_trend_analysis_figure",
+    ],
+)
+def test_ordinal_figure_step_is_family_supported(step_id: str):
+    assert deterministic_figure_family_supported(step_id) is True
+
+
+def test_ordinal_stage_gradient_figure_routes_to_association_renderer(tmp_path: Path):
+    parent = (
+        tmp_path / "steps" / "04_primary_stage_gradient_analysis" / "outputs"
+    )
+    parent.mkdir(parents=True, exist_ok=True)
+    # the deterministic ordinal runner's canonical dose_response.csv shape
+    pd.DataFrame(
+        {
+            "stage": [0, 1, 2, 3],
+            "n": [37433, 14061, 5200, 2100],
+            "n_events": [2143, 1380, 780, 500],
+            "event_rate": [0.0572, 0.0981, 0.150, 0.238],
+            "is_reference": [True, False, False, False],
+            "odds_ratio": [1.0, 1.5871617453700098, 2.51, 4.02],
+            "or_ci_low": [1.0, 1.4771205, 2.30, 3.60],
+            "or_ci_high": [1.0, 1.7054007, 2.74, 4.49],
+            "or_p_value": [None, 2.08e-36, 1e-40, 1e-50],
+        }
+    ).to_csv(parent / "dose_response.csv", index=False)
+
+    out = (
+        tmp_path / "steps" / "04_primary_stage_gradient_analysis_figure" / "outputs"
+    )
+    rid = routed_rescue(
+        run_dir=tmp_path,
+        current_step_id="04_primary_stage_gradient_analysis_figure",
+        out_dir=out,
+        step_text="Render the adjusted odds-ratio gradient per KDIGO stage.",
+    )
+    # routed to a real deterministic renderer (NOT None -> not LLM-coded fallback)
+    assert rid is not None, "ordinal figure fell through to LLM code"
+    assert (out / "publication_figure.png").exists()
+    # and the emitted source data traces to dose_response.csv on the `stage` key
+    src = pd.read_csv(out / "publication_figure_source_data.csv")
+    res = FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=src,
+        source_path=out / "publication_figure_source_data.csv",
+        upstream_path=parent / "dose_response.csv",
+    )
+    assert res.get("ok") is True, res
 
 
 def test_cohort_overlap_rescue_writes_traceable_multipanel_bundle(tmp_path: Path):
