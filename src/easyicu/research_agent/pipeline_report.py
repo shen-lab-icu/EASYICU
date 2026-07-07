@@ -1046,7 +1046,7 @@ def _partition_findings_by_supersession(
 
 
 _PRIMARY_DETERMINISTIC_RUNNERS = frozenset(
-    {"causal_primary_iptw", "survival_primary_cox"}
+    {"causal_primary_iptw", "survival_primary_cox", "ordinal_dose_response"}
 )
 
 

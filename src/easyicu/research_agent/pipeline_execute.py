@@ -84,6 +84,7 @@ from .deterministic_sensitivity import (
     cohort_definition_sensitivity_comparison_code,
 )
 from .deterministic_causal import causal_primary_analysis_code
+from .deterministic_ordinal import ordinal_dose_response_analysis_code
 from .deterministic_survival import survival_primary_analysis_code
 from .estimators import fit_robustness_rows_from_records
 from .llm import MockLLMClient
@@ -556,7 +557,11 @@ def build_self_block_replan_directive(
     )
 
 
-_PRIMARY_DETERMINISTIC_RUNNERS = {"causal_primary_iptw", "survival_primary_cox"}
+_PRIMARY_DETERMINISTIC_RUNNERS = {
+    "causal_primary_iptw",
+    "survival_primary_cox",
+    "ordinal_dose_response",
+}
 
 
 def _primary_runner_core_estimate_present(
@@ -576,7 +581,9 @@ def _primary_runner_core_estimate_present(
         return False
     if str(step_summary.get("status") or "").lower() != "ok":
         return False
-    if kind == "causal_primary_iptw":
+    if kind in ("causal_primary_iptw", "ordinal_dose_response"):
+        # Both emit the scale-neutral ``adjusted_effect`` as their core estimate
+        # (causal: marginal OR; ordinal: trend OR per +1 stage).
         return step_summary.get("adjusted_effect") is not None
     # survival_primary_cox
     if step_summary.get("hazard_ratio") is not None:
@@ -1951,6 +1958,108 @@ else:
             )
             return causal_primary_analysis_code()
 
+        def _ordinal_dose_response_preflight_supported() -> bool:
+            """True for the PRIMARY dose-response result step (a graded ORDINAL
+            exposure vs a binary outcome).
+
+            The deterministic ordinal runner owns the trend estimand (adjusted
+            odds ratio per +1 stage + the per-stage forest), so a dose-response
+            headline does not vary run-to-run through the LLM coder. It must NOT
+            claim a figure step, a cohort-definition-sensitivity step, nor a
+            plain (non-graded) association step. The trigger stays case-neutral:
+            general dose-response vocabulary, never a specific score name.
+            """
+            if _step_expects_figure(step):
+                return False
+            method = str(step.method or "").lower()
+            expected_blob = " ".join(
+                str(item or "") for item in (step.expected_outputs or [])
+            ).lower()
+            blob = " ".join(
+                [
+                    str(step.step_id or ""),
+                    str(step.intent or ""),
+                    str(getattr(context, "research_question", "") or ""),
+                    expected_blob,
+                ]
+            ).lower()
+            # a cohort-definition-sensitivity step is owned by another runner
+            if "sensitivity" in blob and any(
+                t in blob for t in ("cohort", "definition", "eligibility")
+            ):
+                return False
+            # an explicit dose-response method or declared dose-response/per-stage
+            # outputs are unambiguous primary-step signals.
+            if method in (
+                "dose_response",
+                "dose_response_analysis",
+                "ordinal_regression",
+                "ordinal_logistic_regression",
+                "trend_analysis",
+            ):
+                return True
+            if any(
+                tok in expected_blob
+                for tok in ("dose_response", "per_stage", "per-stage", "trend_or")
+            ):
+                return True
+            # otherwise require BOTH a dose-response narrative signal AND a
+            # primary-estimation method, so a plain association step that merely
+            # mentions a "trend" is not hijacked.
+            dose_signal = any(
+                tok in blob
+                for tok in (
+                    "dose-response",
+                    "dose response",
+                    "dose–response",
+                    "per-stage",
+                    "per stage",
+                    "graded exposure",
+                    "severity gradient",
+                    "stage gradient",
+                )
+            )
+            if not dose_signal:
+                return False
+            return method in (
+                "association",
+                "regression",
+                "logistic_regression",
+                "glm",
+                "modeling",
+                "model",
+                "estimation",
+                "ordinal",
+            )
+
+        def _deterministic_ordinal_dose_response_code(
+            reason: str,
+            *,
+            preflight: bool = False,
+        ) -> Optional[str]:
+            nonlocal deterministic_fallback_used
+            if (
+                deterministic_fallback_used
+                or not pipeline._enable_deterministic_runner_repair
+                or (preflight and not _ordinal_dose_response_preflight_supported())
+            ):
+                return None
+            if not _ordinal_dose_response_preflight_supported():
+                return None
+            deterministic_fallback_used = True
+            step_record["deterministic_code_fallback"] = reason
+            step_record["deterministic_standard_analysis"] = "ordinal_dose_response"
+            emit_progress(
+                "coder",
+                f"Using deterministic ordinal dose-response runner for {step.step_id}.",
+                run_id=run_id,
+                step_id=step.step_id,
+                current_step=step_current,
+                total_steps=total_steps,
+                fallback_reason=reason,
+            )
+            return ordinal_dose_response_analysis_code()
+
         def _deterministic_cohort_definition_overlap_code(
             reason: str,
             *,
@@ -2065,6 +2174,28 @@ else:
                         message=(
                             "Using deterministic IPTW causal runner before "
                             f"requesting new coder code for step {step.step_id}."
+                        ),
+                        detail={"step_id": step.step_id},
+                    )
+                )
+        elif (
+            _preflight_ordinal_code := _deterministic_ordinal_dose_response_code(
+                "ordinal_dose_response_preflight", preflight=True
+            )
+        ) is not None:
+            # The PRIMARY dose-response result runs deterministically (adjusted
+            # trend OR per +1 stage + per-stage forest, no figures) so the
+            # graded-exposure estimand does not vary run-to-run through the LLM
+            # coder.
+            code = _preflight_ordinal_code
+            with shared_lock:
+                findings.append(
+                    ValidationFinding(
+                        validator="coder",
+                        severity="info",
+                        message=(
+                            "Using deterministic ordinal dose-response runner "
+                            f"before requesting new coder code for step {step.step_id}."
                         ),
                         detail={"step_id": step.step_id},
                     )
