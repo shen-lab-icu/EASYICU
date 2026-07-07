@@ -4350,13 +4350,53 @@ def _render_association_publication_bundle_from_prior_outputs(
 
     table_path, frame, (or_col, lo_col, hi_col) = parent
     lower_to_orig = {str(c).lower(): c for c in frame.columns}
-    var_col = next(
-        (
-            str(lower_to_orig[key])
-            for key in ("term", "variable", "exposure", "predictor", "feature", "covariate")
-            if key in lower_to_orig
-        ),
-        str(frame.columns[0]),
+
+    def _n_distinct(col: str) -> int:
+        try:
+            return int(frame[col].astype(str).nunique(dropna=True))
+        except Exception:
+            return 0
+
+    # Pick the column that LABELS / keys each forest row. Prefer a known
+    # variable/exposure-descriptor column, but only if it actually VARIES across
+    # rows: an association table for a single graded exposure keeps the exposure
+    # name constant (e.g. exposure_variable='sofa2_liver_cat' on every row) and
+    # distinguishes rows by an ordinal level/band column. Keying on the constant
+    # column collapses every forest row to one label AND drops the per-row trace
+    # key (M1 regressed this way: all rows labelled "Adjusted", no shared key with
+    # the upstream odds-ratio table). So skip constant candidates and fall back to
+    # the first varying column rather than blindly to columns[0].
+    _LABEL_CANDIDATES = (
+        "term",
+        "variable",
+        "exposure",
+        "predictor",
+        "feature",
+        "covariate",
+        "exposure_variable",
+        "level",
+        "band",
+        "category",
+        "stage",
+        "group",
+        "bin",
+        "quantile",
+        "tertile",
+        "quartile",
+        "decile",
+    )
+    _present = [
+        str(lower_to_orig[key]) for key in _LABEL_CANDIDATES if key in lower_to_orig
+    ]
+    var_col = (
+        # a named candidate that VARIES across rows (avoids the collapse) ...
+        next((c for c in _present if _n_distinct(c) > 1), None)
+        # ... else the first named candidate (single-row / genuinely all-constant
+        # forests have no collapse risk; keep the original semantic label) ...
+        or next(iter(_present), None)
+        # ... else the first varying column, else the first column.
+        or next((str(c) for c in frame.columns if _n_distinct(str(c)) > 1), None)
+        or str(frame.columns[0])
     )
     # Drop the intercept term; it is not an interpretable effect estimate.
     plot_df = frame[

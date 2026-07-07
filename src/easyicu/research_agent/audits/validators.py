@@ -1212,6 +1212,15 @@ class FigureSourceDataValidator:
         # "no shared key" (E3). The subset + numeric-equality checks below still
         # run, so this only lets a genuinely-traceable figure be verified.
         "stage",
+        # A graded-categorical association forest keys each row by the ordinal
+        # ``level`` / ``band`` / ``category`` of a single exposure (the exposure
+        # NAME is constant across rows; the level is what varies). The association
+        # bundle renderer now labels/keys rows by the varying column and carries
+        # it into publication_figure_source_data.csv (M1: odds_ratio per
+        # sofa2_liver_cat level). Same subset + numeric-equality guards apply.
+        "level",
+        "band",
+        "category",
     )
     _COMPOSITE_KEY_COLUMNS = (
         ("definition_a", "definition_b"),
