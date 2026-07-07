@@ -140,7 +140,10 @@ def render_phenotype_figure(
     from ..publication_figures import add_panel_label, apply_publication_style
 
     palette = apply_publication_style()
-    fig = plt.figure(figsize=(183 / 25.4, 82 / 25.4), constrained_layout=False)
+    # Height 82 -> 96mm and wider inter-panel gaps give the 40-degree rotated
+    # x-tick labels room; without this the multi-panel labels overlapped and
+    # tripped the visual_qa text-overlap check (M3 subphenotype).
+    fig = plt.figure(figsize=(183 / 25.4, 96 / 25.4), constrained_layout=False)
     grid = fig.add_gridspec(
         1,
         3,
@@ -148,14 +151,14 @@ def render_phenotype_figure(
         left=0.14,
         right=0.975,
         top=0.9,
-        bottom=0.28,
-        wspace=0.5,
+        bottom=0.34,
+        wspace=0.62,
     )
     ax_heat = fig.add_subplot(grid[0, 0])
     ax_par = fig.add_subplot(grid[0, 1])
     ax_stab = fig.add_subplot(grid[0, 2])
 
-    short_features = [str(f)[:14] for f in features]
+    short_features = [str(f)[:12] for f in features]
 
     # A -- z-scored profile heatmap
     data = z.to_numpy()
@@ -165,7 +168,7 @@ def render_phenotype_figure(
         range(len(cluster_labels)), [f"C{lbl}" for lbl in cluster_labels], fontsize=6.2
     )
     ax_heat.set_xticks(
-        range(len(features)), short_features, rotation=40, ha="right", fontsize=5.6
+        range(len(features)), short_features, rotation=40, ha="right", fontsize=5.2
     )
     ax_heat.set_title("Cluster profiles (z)", loc="left", pad=4)
     cbar = fig.colorbar(im, ax=ax_heat, fraction=0.046, pad=0.03)
@@ -194,7 +197,7 @@ def render_phenotype_figure(
     ax_par.axhline(
         0.0, color=palette.get("neutral", "#8F8F8F"), linestyle="--", linewidth=0.7
     )
-    ax_par.set_xticks(xs, short_features, rotation=40, ha="right", fontsize=5.6)
+    ax_par.set_xticks(xs, short_features, rotation=40, ha="right", fontsize=5.2)
     ax_par.set_ylabel("Standardised value")
     ax_par.set_title("Cluster centroid profiles", loc="left", pad=4)
     ax_par.legend(loc="upper right", fontsize=5.4, ncol=1)
