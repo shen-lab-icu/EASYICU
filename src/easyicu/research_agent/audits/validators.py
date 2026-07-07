@@ -1204,6 +1204,14 @@ class FigureSourceDataValidator:
         # so it is a valid per-row trace key. Without it a faithfully-derived
         # causal figure was rejected as "no shared key" (H2 fix3).
         "contrast_id",
+        # Ordinal dose-response steps key each graded-exposure level by
+        # ``stage`` (e.g. dose_response.csv rows stage=0..K); the figure renderer
+        # carries it verbatim into publication_figure_source_data.csv, so it is a
+        # valid per-row trace key. Without it a faithfully-derived ordinal forest
+        # (odds_ratio per stage identical to the upstream table) was rejected as
+        # "no shared key" (E3). The subset + numeric-equality checks below still
+        # run, so this only lets a genuinely-traceable figure be verified.
+        "stage",
     )
     _COMPOSITE_KEY_COLUMNS = (
         ("definition_a", "definition_b"),
