@@ -345,3 +345,61 @@ def test_primary_estimate_bound_true_for_deterministic_ordinal():
         }
     ]
     assert _deterministic_primary_estimate_bound(recs) is True
+
+
+# ---------------------------------------------------------------------------
+# 5. No-deterministic-primary families (2026-07-07, M3 subphenotype)
+#
+# Phenotyping / descriptive / prediction are LLM-coded-primary BY DESIGN, so they
+# can never bind a deterministic primary. A converged, fully-validated run in
+# such a family must not be demoted purely for hitting the cap -- but the waiver
+# must NOT rescue a run that actually failed to validate, nor help a
+# deterministic-primary family (which would mask a routing bug).
+# ---------------------------------------------------------------------------
+
+
+def test_cap_advisory_for_converged_no_primary_family():
+    # Exact M3 phenotyping shape: no deterministic primary expected, everything
+    # else clean, cap hit -> advisory, NOT a demotion.
+    assert (
+        _replan_budget_demotes(
+            hit=True,
+            execution_complete=True,
+            has_failed_steps=False,
+            has_base_errors=False,
+            evidence_complete=True,
+            numeric_verified=True,
+            primary_estimate_bound=False,  # phenotyping never binds one
+            no_deterministic_primary_expected=True,
+        )
+        is False
+    )
+
+
+def test_cap_still_demotes_no_primary_family_with_base_errors():
+    # The waiver only covers the missing primary -- a real error still demotes.
+    assert _replan_budget_demotes(
+        hit=True,
+        execution_complete=True,
+        has_failed_steps=False,
+        has_base_errors=True,
+        evidence_complete=True,
+        numeric_verified=True,
+        primary_estimate_bound=False,
+        no_deterministic_primary_expected=True,
+    )
+
+
+def test_no_primary_waiver_does_not_help_a_deterministic_family():
+    # A deterministic-primary family (flag False) with no bound primary still
+    # demotes -- this is the guard that keeps an E3-style routing miss visible.
+    assert _replan_budget_demotes(
+        hit=True,
+        execution_complete=True,
+        has_failed_steps=False,
+        has_base_errors=False,
+        evidence_complete=True,
+        numeric_verified=True,
+        primary_estimate_bound=False,
+        no_deterministic_primary_expected=False,
+    )
