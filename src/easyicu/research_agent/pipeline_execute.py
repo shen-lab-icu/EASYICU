@@ -556,6 +556,78 @@ def build_self_block_replan_directive(
     )
 
 
+_PRIMARY_DETERMINISTIC_RUNNERS = {"causal_primary_iptw", "survival_primary_cox"}
+
+
+def _primary_runner_core_estimate_present(
+    kind: Optional[str], step_summary: Mapping[str, Any]
+) -> bool:
+    """True when a PRIMARY deterministic runner emitted its core estimate.
+
+    The runner's own ``status`` is the authority: it writes ``ok`` only when the
+    estimate computed and ``blocked`` on genuinely non-viable data. When ``ok``
+    and the effect key is present, the runner has satisfied the scientific
+    contract for the step -- any extra planner-requested output tables it does
+    not emit are advisory, not a reason to discard a trustworthy estimate.
+    """
+    if kind not in _PRIMARY_DETERMINISTIC_RUNNERS:
+        return False
+    if not isinstance(step_summary, Mapping):
+        return False
+    if str(step_summary.get("status") or "").lower() != "ok":
+        return False
+    if kind == "causal_primary_iptw":
+        return step_summary.get("adjusted_effect") is not None
+    # survival_primary_cox
+    if step_summary.get("hazard_ratio") is not None:
+        return True
+    primary_model = step_summary.get("primary_model")
+    return (
+        isinstance(primary_model, Mapping)
+        and primary_model.get("hazard_ratio") is not None
+    )
+
+
+def _demote_step_contract_for_primary_runner(
+    step_record: Mapping[str, Any],
+    step_summary: Mapping[str, Any],
+    findings: Sequence[ValidationFinding],
+) -> List[ValidationFinding]:
+    """A deterministic PRIMARY runner owns its step's contract.
+
+    When such a runner produced its core estimate, demote ``step_contract``
+    missing-output ERRORS to advisory warnings. Otherwise a planner that
+    over-specifies a step's ``expected_outputs`` (e.g. 17 documentation tables a
+    causal step does not need) fail-closes the step and triggers a repair that
+    replaces the trustworthy deterministic estimate with fragile LLM code -- the
+    exact failure that left the H2 causal run with ``adjusted_effect=None`` even
+    though the IPTW runner had produced OR 3.04. Integrity findings from other
+    validators (exposure / overadjustment / leakage / figure) are left untouched
+    -- they still block.
+    """
+    kind = step_record.get("deterministic_standard_analysis")
+    if not _primary_runner_core_estimate_present(kind, step_summary):
+        return list(findings)
+    demoted: List[ValidationFinding] = []
+    for finding in findings:
+        if (
+            getattr(finding, "validator", "") == "step_contract"
+            and finding.severity == "error"
+        ):
+            finding = finding.model_copy(
+                update={
+                    "severity": "warning",
+                    "message": (
+                        finding.message
+                        + f" [advisory: step satisfied by deterministic {kind} "
+                        "runner; extra planner-requested outputs are non-blocking]"
+                    ),
+                }
+            )
+        demoted.append(finding)
+    return demoted
+
+
 def run_execute_phase(
     pipeline: "ResearchAgentPipeline",
     *,
@@ -2763,6 +2835,13 @@ else:
                     context=context,
                     out_dir=run_result.out_dir,
                 )
+                # A deterministic PRIMARY runner owns its step's contract: if it
+                # produced the core estimate, planner-requested extra outputs it
+                # does not emit are advisory, never a reason to repair-away the
+                # trustworthy estimate.
+                early_contract_findings = _demote_step_contract_for_primary_runner(
+                    step_record, visual_step_summary, early_contract_findings
+                )
                 early_contract_errors = [
                     f for f in early_contract_findings if f.severity == "error"
                 ]
@@ -3531,6 +3610,13 @@ else:
                 run_dir=run_dir,
                 step_summary=step_summary,
             )
+        )
+        # A deterministic PRIMARY runner owns its step's contract (see the early
+        # check above): demote step_contract missing-output errors to advisory so
+        # planner output-bloat cannot fail-close a step whose core estimate the
+        # runner already produced. Figure/exposure/leakage validators still block.
+        contract_findings = _demote_step_contract_for_primary_runner(
+            step_record, step_summary, contract_findings
         )
         figure_source_findings = figure_source_validator.audit(
             step=step,
