@@ -319,6 +319,25 @@ _PUBLICATION_FIGURE_VISUAL_ERROR_VALIDATORS = {
 }
 
 
+def _is_cosmetic_visual_error(finding: ValidationFinding) -> bool:
+    """A deterministic SVG text-overlap spacing warning is cosmetic, not a
+    manuscript blocker.
+
+    Mirrors ``pipeline_execute._is_cosmetic_visual_finding`` at the readiness
+    layer: the step-level demotion runs during execution, but this exact finding
+    is re-generated when the FINAL manuscript SVG is audited, after that pass, so
+    it leaks into ``analysis_errors`` / the figure-bundle gate and blocks a run
+    whose analysis and evidence are sound (the M3 subphenotype block). A minor
+    multi-panel label/annotation overlap is demoted; genuine visual_qa errors
+    (blank/absent figure, wrong content) still block because they do not carry
+    the deterministic "overlapping text elements … spacing" signature.
+    """
+    if finding.severity != "error" or finding.validator != "visual_qa":
+        return False
+    message = (finding.message or "").lower()
+    return "overlapping text elements" in message and "spacing" in message
+
+
 def _publication_figure_bundle_ready(
     *,
     evidence: EvidenceStore,
@@ -333,6 +352,7 @@ def _publication_figure_bundle_ready(
         for finding in (findings or [])
         if finding.severity == "error"
         and finding.validator in _PUBLICATION_FIGURE_VISUAL_ERROR_VALIDATORS
+        and not _is_cosmetic_visual_error(finding)
     ]
     for record in evidence.records():
         metadata = record.metadata or {}
@@ -1088,6 +1108,7 @@ def _replan_budget_demotes(
     evidence_complete: bool,
     numeric_verified: bool,
     primary_estimate_bound: bool,
+    no_deterministic_primary_expected: bool = False,
 ) -> bool:
     """Outcome-aware replan-budget rule (2026-07-07).
 
@@ -1098,16 +1119,28 @@ def _replan_budget_demotes(
     cap is advisory there, not a runaway to fail closed. A cap hit on an
     unresolved run (failed steps, missing headline binding, or other hard
     errors) still fails closed. Pure so both branches are unit-testable.
+
+    ``no_deterministic_primary_expected`` (2026-07-07, M3 subphenotype): some
+    study-design families are LLM-coded-primary BY DESIGN (phenotyping /
+    descriptive / prediction) and can never bind a deterministic primary. For
+    them, a converged + fully-validated run must not be demoted purely for the
+    cap hit, so the bound-primary requirement is waived. It is set ONLY for
+    families the capability registry marks as unambiguously LLM-coded, so it
+    cannot mask a routing bug (e.g. a dose-response step that should have hit the
+    deterministic ordinal runner but did not).
     """
     if not hit:
         return False
+    has_publishable_primary = (
+        primary_estimate_bound or no_deterministic_primary_expected
+    )
     converged_clean = (
         execution_complete
         and not has_failed_steps
         and not has_base_errors
         and evidence_complete
         and numeric_verified
-        and primary_estimate_bound
+        and has_publishable_primary
     )
     return not converged_clean
 
@@ -1204,6 +1237,7 @@ def _compute_readiness_gates(
         f.message
         for f in active_findings
         if f.severity == "error"
+        and not _is_cosmetic_visual_error(f)
         and f.validator
         not in {
             "manuscript_numeric_auditor",
@@ -1270,6 +1304,20 @@ def _compute_readiness_gates(
         + plausibility_errors
         + survival_integrity_errors
     )
+    # A study-design family that is LLM-coded-primary by design (phenotyping /
+    # descriptive / prediction) can never bind a deterministic primary, so the
+    # bound-primary requirement of the cap rule is waived for it. Fail-safe to
+    # the strict rule (False) if the family cannot be inferred.
+    try:
+        from .capability_registry import families_without_deterministic_primary
+        from .study_design import infer_study_design_family
+
+        _no_det_primary_expected = (
+            infer_study_design_family(context)
+            in families_without_deterministic_primary()
+        )
+    except Exception:
+        _no_det_primary_expected = False
     replan_budget_exhausted = _replan_budget_demotes(
         hit=replan_budget_hit,
         execution_complete=bool(execution["execution_complete"]),
@@ -1278,6 +1326,7 @@ def _compute_readiness_gates(
         evidence_complete=bool(evidence_complete),
         numeric_verified=bool(numeric_verified),
         primary_estimate_bound=_deterministic_primary_estimate_bound(per_step_records),
+        no_deterministic_primary_expected=_no_det_primary_expected,
     )
     analysis_errors = base_analysis_errors + (
         replan_budget_errors if replan_budget_exhausted else []

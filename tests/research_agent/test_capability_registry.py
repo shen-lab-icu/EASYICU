@@ -121,6 +121,19 @@ def test_partition_helpers_are_consistent():
     assert len(det) + len(llm) == len(cr.CAPABILITY_REGISTRY)
 
 
+def test_families_without_deterministic_primary_excludes_ambiguous_association():
+    fams = cr.families_without_deterministic_primary()
+    # unambiguously LLM-coded families are included (drive the cap-rule waiver)
+    assert {"phenotyping", "descriptive", "prediction"} <= fams
+    # association is ambiguous (has a deterministic dose-response record) and
+    # must be EXCLUDED, so requiring a bound primary there still catches an
+    # E3-style dose-response routing miss instead of masking it.
+    assert "association" not in fams
+    # deterministic-primary families are never included
+    assert "causal_emulation" not in fams
+    assert "time_to_event" not in fams
+
+
 # --- renderer ---------------------------------------------------------------
 
 

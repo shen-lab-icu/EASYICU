@@ -41,6 +41,7 @@ __all__ = [
     "get_capability",
     "deterministic_primary_families",
     "llm_coded_primary_families",
+    "families_without_deterministic_primary",
     "render_capability_matrix_markdown",
 ]
 
@@ -334,6 +335,30 @@ def llm_coded_primary_families() -> Tuple[str, ...]:
     """Labels of families whose PRIMARY estimand is currently LLM-coded."""
     return tuple(
         c.label for c in CAPABILITY_REGISTRY if c.primary_analysis == "llm_coded"
+    )
+
+
+def families_without_deterministic_primary() -> frozenset:
+    """StudyDesignFamily values where EVERY capability record is LLM-coded.
+
+    These families have no deterministic primary estimand *by design*, so a
+    bound deterministic primary can never be required of them. The outcome-aware
+    replan rule uses this to avoid demoting a converged phenotyping / descriptive
+    / prediction run to diagnostic_only purely for hitting the replan cap.
+
+    ``association`` is intentionally EXCLUDED: it has BOTH an LLM-coded (general)
+    and a deterministic (dose-response / ordinal) record, so requiring a bound
+    primary there still catches a dose-response routing miss (an E3-style bug)
+    rather than masking it. Only families that are unambiguously LLM-coded across
+    all their records are returned.
+    """
+    by_family: dict = {}
+    for c in CAPABILITY_REGISTRY:
+        by_family.setdefault(c.family, []).append(c.primary_analysis)
+    return frozenset(
+        fam
+        for fam, kinds in by_family.items()
+        if kinds and all(k == "llm_coded" for k in kinds)
     )
 
 
