@@ -477,13 +477,28 @@ def cohort_definition_sensitivity_comparison_code() -> str:
 
         parent_outputs = _find_parent_outputs()
         if parent_outputs is None:
+            # Degrade cleanly, do NOT hard-block. A cohort-definition
+            # sensitivity comparison needs an upstream step that registered
+            # alternative eligibility definitions (alternative_cohort_attrition.csv).
+            # When none exists there is nothing to compare, so this step is
+            # not-applicable -- a diagnostic_only skip, not a failure. Emitting a
+            # hard "blocked" with "no upstream file was available" phrasing
+            # provoked the replanner into spawning repair step after repair step
+            # (each re-matching this same runner and re-blocking) -- a runaway
+            # loop that burned ~50 min on the H2 causal run without converging
+            # (steps 03b..03g). A clean skip removes that provocation; the run
+            # honestly lands at analysis_only/diagnostic_only instead of looping.
             summary = {
                 "step_id": current_step_id,
                 "analysis_family": "cohort_definition_sensitivity",
-                "status": "blocked",
-                "blocking_reason": (
-                    "No upstream alternative_cohort_attrition.csv was available "
-                    "for a cohort-definition sensitivity comparison."
+                "status": "skipped",
+                "diagnostic_only": True,
+                "not_applicable": True,
+                "skip_reason": (
+                    "No alternative cohort definition was registered upstream "
+                    "(no alternative_cohort_attrition.csv), so a cohort-definition "
+                    "sensitivity comparison is not applicable. Skipped cleanly "
+                    "rather than blocking."
                 ),
                 "outputs": [],
             }

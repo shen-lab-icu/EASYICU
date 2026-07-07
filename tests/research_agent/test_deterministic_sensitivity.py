@@ -108,7 +108,9 @@ def test_cohort_definition_sensitivity_template_executes_from_parent_outputs(
     cohort_path = run_dir / "cohort_analysis.parquet"
     cohort.to_parquet(cohort_path)
 
-    out_dir = run_dir / "steps" / "05_sensitivity_comparison_across_definitions" / "outputs"
+    out_dir = (
+        run_dir / "steps" / "05_sensitivity_comparison_across_definitions" / "outputs"
+    )
     out_dir.mkdir(parents=True)
     script_path = tmp_path / "analysis.py"
     script_path.write_text(
@@ -216,7 +218,12 @@ def test_cohort_definition_sensitivity_uses_declared_exposure_not_stray_sepsis_c
     (run_dir / "research_context.json").write_text(
         json.dumps({"primary_exposure": "vent_24h_any", "target_outcome": "death"})
     )
-    parent = run_dir / "steps" / "04_alternative_eligibility_definitions_and_overlap" / "outputs"
+    parent = (
+        run_dir
+        / "steps"
+        / "04_alternative_eligibility_definitions_and_overlap"
+        / "outputs"
+    )
     parent.mkdir(parents=True)
     pd.DataFrame(
         {
@@ -256,10 +263,14 @@ def test_cohort_definition_sensitivity_uses_declared_exposure_not_stray_sepsis_c
     cohort_path = run_dir / "cohort_analysis.parquet"
     cohort.to_parquet(cohort_path)
 
-    out_dir = run_dir / "steps" / "05_sensitivity_comparison_across_definitions" / "outputs"
+    out_dir = (
+        run_dir / "steps" / "05_sensitivity_comparison_across_definitions" / "outputs"
+    )
     out_dir.mkdir(parents=True)
     script_path = tmp_path / "analysis.py"
-    script_path.write_text(cohort_definition_sensitivity_comparison_code(), encoding="utf-8")
+    script_path.write_text(
+        cohort_definition_sensitivity_comparison_code(), encoding="utf-8"
+    )
     env = os.environ.copy()
     env.update({"COHORT_PARQUET": str(cohort_path), "STEP_OUT_DIR": str(out_dir)})
     result = subprocess.run(
@@ -277,6 +288,62 @@ def test_cohort_definition_sensitivity_uses_declared_exposure_not_stray_sepsis_c
     assert summary["target_outcome"] == "death"
     # the exposure-semantics audit must reference the DECLARED exposure, not sep3
     audit = pd.read_csv(out_dir / "noninformative_sensitivity_audit.csv")
-    exp_row = audit[audit["sensitivity_axis"] == "exposure_measurement_semantics"].iloc[0]
+    exp_row = audit[audit["sensitivity_axis"] == "exposure_measurement_semantics"].iloc[
+        0
+    ]
     assert "vent_24h_any" in str(exp_row["evidence"])
     assert "sep3_sofa2" not in str(exp_row["evidence"])
+
+
+def test_absent_alternative_attrition_degrades_to_clean_skip_not_block(tmp_path: Path):
+    """No upstream alternative_cohort_attrition.csv -> clean skip, not a block.
+
+    Regression for the H2 causal run (2026-07-06): outcome/denominator audit
+    steps were routed to this runner; with no alternative cohort definition
+    registered upstream, the runner used to emit a hard ``status="blocked"``
+    with "no upstream file was available" phrasing. The LLM replanner read that
+    as "produce the missing file" and spawned repair step after repair step
+    (03b..03g), each re-matching this runner and re-blocking -- a runaway loop
+    that burned ~50 min without converging. The runner now degrades cleanly to a
+    diagnostic_only skip so nothing provokes the repair cascade; the
+    ``max_replans`` budget is the deterministic backstop for any residual loop.
+    """
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    # A cohort exists, but NO step anywhere produced alternative_cohort_attrition.csv.
+    cohort = pd.DataFrame(
+        {
+            "stay_id": range(40),
+            "death": np.tile([0, 1], 20),
+            "age": np.linspace(40, 80, 40),
+        }
+    )
+    cohort_path = run_dir / "cohort_analysis.parquet"
+    cohort.to_parquet(cohort_path)
+
+    out_dir = run_dir / "steps" / "03b_outcome_binding_and_followup_audit" / "outputs"
+    out_dir.mkdir(parents=True)
+    script_path = tmp_path / "analysis.py"
+    script_path.write_text(
+        cohort_definition_sensitivity_comparison_code(), encoding="utf-8"
+    )
+    env = os.environ.copy()
+    env.update({"COHORT_PARQUET": str(cohort_path), "STEP_OUT_DIR": str(out_dir)})
+    result = subprocess.run(
+        [sys.executable, str(script_path)],
+        cwd=tmp_path,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+    summary = json.loads((out_dir / "step_summary.json").read_text(encoding="utf-8"))
+    # Clean skip, not a block: nothing for the replanner to "repair".
+    assert summary["status"] == "skipped", summary
+    assert summary.get("diagnostic_only") is True
+    assert summary.get("not_applicable") is True
+    # The old hard-block signal must be gone.
+    assert "blocking_reason" not in summary
+    assert "skip_reason" in summary
