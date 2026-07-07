@@ -174,3 +174,97 @@ def test_routing_precedence_primary_ordinal_beats_cohort_sensitivity():
         _E3_SENSITIVITY_OUTPUTS,
     )
     assert sens_is_cohort
+
+
+# --- hybrid "<head>_with_<rider>" method routing (E3 4th blocker) -------------
+# A stochastic E3 run merged the primary ordinal result with the sensitivity
+# comparison into ONE step whose method was "association_with_cohort_sensitivity"
+# and whose outputs included "table:sensitivity_comparison_grid". Two predicate
+# gaps mis-routed it to the cohort-sensitivity runner (which blocked): (1) the
+# output token "sensitivity_comparison" substring-matched the grid output and
+# over-claimed it; (2) the ordinal matcher required exact method membership, so
+# the "association" head was not recognised. The fix parses the method HEAD (the
+# part before "_with_"): a primary head keeps its primary runner; a
+# definition-sensitivity head keeps the cohort-sensitivity runner.
+
+# the real merged step's declared outputs (verbatim shape)
+_E3_MERGED_OUTPUTS = [
+    "table:absolute_outcome_risk_by_stage",
+    "table:adjusted_death_trend_model",
+    "table:sensitivity_comparison_grid",
+    "statistic:primary_or",
+    "table:robustness_summary",
+]
+
+
+def test_hybrid_association_with_cohort_sensitivity_is_not_a_definition_step():
+    # head = "association" (a primary head) -> NOT a cohort-definition comparison
+    assert not _is_cohort_definition_sensitivity_step(
+        "association_with_cohort_sensitivity",
+        "05_stage_outcomes_and_sensitivity_comparison",
+        "Estimate the per-stage dose-response gradient and compare across "
+        "pre-specified sensitivity specifications.",
+        _E3_MERGED_OUTPUTS,
+    )
+
+
+def test_hybrid_association_with_cohort_sensitivity_matches_ordinal():
+    # head = "association" (in the ordinal primary set) + a dose-response signal
+    # present -> the ordinal runner owns the primary part
+    blob, expected_blob = _blob(
+        "05_stage_outcomes_and_sensitivity_comparison",
+        "Estimate the per-stage dose-response gradient (ordinal trend) for "
+        "mortality and compare across sensitivity specifications.",
+        _E3_MERGED_OUTPUTS,
+    )
+    assert _ordinal_dose_response_step_matches(
+        "association_with_cohort_sensitivity", blob, expected_blob
+    )
+
+
+def test_definition_sensitivity_head_still_claims_cohort_sensitivity():
+    # head = "cohort_definition_sensitivity" (a definition-sensitivity head) ->
+    # a hybrid whose PRIMARY intent IS the definition comparison stays with the
+    # cohort-sensitivity runner
+    assert _is_cohort_definition_sensitivity_step(
+        "cohort_definition_sensitivity_with_binomial_glm",
+        "05_definition_sensitivity",
+        "Re-run across alternative eligibility definitions with a binomial GLM.",
+        ["table:sensitivity_grid"],
+    )
+
+
+def test_definition_sensitivity_head_does_not_match_ordinal():
+    # even with a dose-response signal, a definition-sensitivity head is not the
+    # primary ordinal estimand
+    blob, expected_blob = _blob(
+        "05_definition_sensitivity",
+        "Re-run the per-stage dose-response summaries across alternative "
+        "eligibility definitions.",
+        ["table:sensitivity_grid"],
+    )
+    assert not _ordinal_dose_response_step_matches(
+        "cohort_definition_sensitivity_with_binomial_glm", blob, expected_blob
+    )
+
+
+def test_sensitivity_comparison_grid_output_no_longer_over_claims():
+    # the merged step's "table:sensitivity_comparison_grid" output alone must not
+    # make a primary step read as a definition comparison
+    assert not _is_cohort_definition_sensitivity_step(
+        "association",
+        "05_stage_outcomes_and_sensitivity_comparison",
+        "Primary per-stage gradient with a sensitivity comparison grid.",
+        ["table:sensitivity_comparison_grid", "statistic:primary_or"],
+    )
+
+
+def test_sensitivity_grid_output_still_signals_definition_comparison():
+    # the retained, more specific "sensitivity_grid" token still catches a genuine
+    # definition-comparison step that lacks the method/id signal
+    assert _is_cohort_definition_sensitivity_step(
+        "robustness_analysis",
+        "06_robustness",
+        "Compare results across specifications.",
+        ["table:sensitivity_grid", "table:overlap_and_movement_across_cohorts"],
+    )

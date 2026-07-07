@@ -647,7 +647,11 @@ _COHORT_DEF_SENSITIVITY_OUTPUT_TOKENS = (
     "cohort_overlap",
     "overlap_and_movement_across_cohorts",
     "sensitivity_grid",
-    "sensitivity_comparison",
+    # NB: NOT "sensitivity_comparison" -- it substring-matches a primary step's
+    # "sensitivity_comparison_grid" output and over-claimed E3's merged
+    # association_with_cohort_sensitivity step. Each kept token uniquely signals
+    # an across-DEFINITION comparison; "sensitivity_grid" is not a substring of
+    # "sensitivity_comparison_grid".
     "definition_sensitivity",
     "sensitivity_definition_summary",
     "outcome_by_definition",
@@ -687,6 +691,14 @@ def _is_cohort_definition_sensitivity_step(
     m = str(method or "").lower()
     if m in _COHORT_DEF_SENSITIVITY_METHODS:
         return True
+    # A hybrid "<head>_with_<rider>" method belongs to its HEAD. A definition-
+    # sensitivity head (e.g. cohort_definition_sensitivity_with_binomial_glm) is
+    # a genuine definition comparison; a PRIMARY head with a sensitivity rider
+    # (association_with_cohort_sensitivity) is NOT -- its trailing
+    # "cohort_sensitivity" is a robustness rider, so it must not be claimed here.
+    # Match only the head, never the tail.
+    if m.split("_with_", 1)[0] in _COHORT_DEF_SENSITIVITY_METHODS:
+        return True
     sid = str(step_id or "").lower()
     if any(tok in sid for tok in _COHORT_DEF_SENSITIVITY_ID_TOKENS):
         return True
@@ -713,7 +725,14 @@ def _ordinal_dose_response_step_matches(
     ``blob`` = step_id + intent + research_question + expected_outputs;
     ``expected_blob`` = expected_outputs only.
     """
-    if method in _ORDINAL_EXPLICIT_METHODS:
+    # A hybrid "<head>_with_<rider>" method is owned by its primary HEAD, so a
+    # merged "association_with_cohort_sensitivity" step is claimed by the ordinal
+    # runner (head "association") when the dose-response narrative signal is
+    # present -- rather than being blocked wholesale by the cohort-sensitivity
+    # runner. The dose-signal requirement below still guards a plain non-graded
+    # association step from being hijacked.
+    head = method.split("_with_", 1)[0]
+    if method in _ORDINAL_EXPLICIT_METHODS or head in _ORDINAL_EXPLICIT_METHODS:
         return True
     if any(tok in expected_blob for tok in _ORDINAL_OUTPUT_TOKENS):
         return True
@@ -722,7 +741,7 @@ def _ordinal_dose_response_step_matches(
     # "trend" is not hijacked.
     if not any(tok in blob for tok in _ORDINAL_DOSE_SIGNAL_TOKENS):
         return False
-    return method in _ORDINAL_PRIMARY_METHODS
+    return method in _ORDINAL_PRIMARY_METHODS or head in _ORDINAL_PRIMARY_METHODS
 
 
 def _primary_runner_core_estimate_present(
