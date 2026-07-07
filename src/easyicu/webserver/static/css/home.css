@@ -82,6 +82,9 @@
 .col-entry:hover .ce-go{ opacity: 1; transform: translateX(2px); }
 .col-classic .col-foot{ margin-top: auto; padding-top: 12px; }
 .col-dataline{ display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--ink-4); }
+.home-datamode{ display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.home-datamode .hdm-lab{ font-size: 11px; font-weight: 600; color: var(--ink-3); }
+.home-data-seg{ flex: none; }
 @media (max-width: 860px){ .home-split{ grid-template-columns: 1fr; } }
 @media (max-width: 720px){ .home-split{ grid-template-columns: 1fr; } }
 
@@ -147,3 +150,10 @@
   .aux-card{ flex-direction: column; align-items: stretch; }
   .entry-body{ padding: 28px 16px 48px; }
 }
+
+/* Journey-strip nodes are navigable buttons (owner: home entry, [35]).
+   Reset button chrome so they still read as the numbered step nodes, add a hover. */
+button.ej-node{ border: 0; background: transparent; font: inherit; padding: 4px 6px; cursor: pointer; border-radius: 10px; transition: background .12s ease; }
+button.ej-node:hover{ background: var(--surface-2); }
+button.ej-node:hover .ej-lab{ text-decoration: underline; }
+button.ej-node:focus-visible{ outline: 2px solid var(--accent); outline-offset: 2px; }

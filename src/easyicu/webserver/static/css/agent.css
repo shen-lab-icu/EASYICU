@@ -1028,3 +1028,11 @@
     white-space:normal;
   }
 }
+
+/* Run-gated tabs (owner: agent screen). Runs/Outputs/Draft/Science only fill in
+   after a run exists, so dim them + show a small lock until then, instead of
+   inviting a first-time user to click empty heroes one by one. */
+.ag-tab.gated{ color: var(--ink-4); opacity: 0.72; }
+.ag-tab.gated:hover{ color: var(--ink-3); }
+.ag-tab.gated .ag-tab-lock{ display: inline-flex; align-items: center; margin-left: 1px; color: var(--ink-4); opacity: 0.75; }
+.ag-tab.on.gated{ opacity: 1; }

@@ -223,9 +223,9 @@
       <section class="pt-missingness-workbench mt-16" data-patient-overview-missingness>
         <div class="pt-missingness-head">
           <div>
-            <div class="eyebrow">${hEsc(helpers, hT(helpers, 'Missingness audit', '缺失率审计'))}</div>
+            <div class="eyebrow">${hEsc(helpers, hT(helpers, 'Missingness audit · cohort context', '缺失率审计 · 队列背景'))}</div>
             <h2>${hEsc(helpers, hT(helpers, 'Missingness and coverage', '缺失率与覆盖率'))}</h2>
-            <p>${hEsc(helpers, hT(helpers, 'Coverage is calculated at entity level for true data-availability modules. Event or exposure modules are labelled separately and are not treated as missingness.', '真正的数据可用性模块按实体层面计算覆盖率；事件或暴露模块单独标注，不当作缺失率。'))}</p>
+            <p>${hEsc(helpers, hT(helpers, 'This is a cohort-level data-availability audit (coverage across all selected entities), not the currently selected patient. Coverage is at entity level for true availability modules; event or exposure modules are labelled separately and not treated as missingness.', '这是队列层面的数据可用性审计（覆盖率跨所有已选实体），不是当前所选患者。真正的可用性模块按实体计算覆盖率；事件或暴露模块单独标注，不当作缺失率。'))}</p>
           </div>
           <span class="pill ok">${hEsc(helpers, denomText)}</span>
         </div>

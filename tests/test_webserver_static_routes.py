@@ -165,11 +165,11 @@ def test_native_assistant_labels_disambiguate_page_guide_guided_copilot_and_agen
     assert "Open Copilot" not in help_js
 
     assert "css/dock.css?v=20260625-stage99" in index_html
-    assert "js/app.js?v=20260629-ux-readability" in index_html
-    assert "js/copilot-dock.js?v=20260702-agent-fab-clear" in index_html
-    assert "js/screens-extraction.js?v=20260630-gate-first-ia" in index_html
-    assert "js/screens-agent.js?v=20260703-agent-render-split" in index_html
-    assert "js/screens-help.js?v=20260626-tutorial-i18n" in index_html
+    assert "js/app.js?v=20260707-residuals" in index_html
+    assert "js/copilot-dock.js?v=20260707-residuals" in index_html
+    assert "js/screens-extraction.js?v=20260707-residuals" in index_html
+    assert "js/screens-agent.js?v=20260707-copilot" in index_html
+    assert "js/screens-help.js?v=20260707-residuals" in index_html
 
 
 def test_agent_science_workbench_has_dedicated_owner_files_and_wiring() -> None:
@@ -308,8 +308,8 @@ def test_native_tutorial_screen_uses_active_language_without_mixed_copy() -> Non
     assert ">No tokens, no setup, no patient data. The demo generates" not in help_js
     assert "How a study moves through EasyICU</h2>" not in help_js
 
-    assert "js/app.js?v=20260629-ux-readability" in index_html
-    assert "js/screens-help.js?v=20260626-tutorial-i18n" in index_html
+    assert "js/app.js?v=20260707-residuals" in index_html
+    assert "js/screens-help.js?v=20260707-residuals" in index_html
 
 
 def test_native_guided_and_page_guide_messages_are_bilingual() -> None:
@@ -333,8 +333,8 @@ def test_native_guided_and_page_guide_messages_are_bilingual() -> None:
     assert (
         "js/screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan" in index_html
     )
-    assert "js/screens-guided.js?v=20260630-guided-step-summary" in index_html
-    assert "js/copilot-dock.js?v=20260702-agent-fab-clear" in index_html
+    assert "js/screens-guided.js?v=20260707-residuals" in index_html
+    assert "js/copilot-dock.js?v=20260707-residuals" in index_html
 
 
 def test_native_page_guide_uses_backend_page_guide_contract() -> None:
@@ -376,7 +376,7 @@ def test_native_page_guide_uses_backend_page_guide_contract() -> None:
     assert "runCopilotAction" not in dock_js
     assert "Page guide backend unavailable, using local fallback" in dock_js
     assert "js/api.js?v=20260702-zotero-simple" in index_html
-    assert "js/copilot-dock.js?v=20260702-agent-fab-clear" in index_html
+    assert "js/copilot-dock.js?v=20260707-residuals" in index_html
 
 
 def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questions() -> (
@@ -523,7 +523,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     guided_plan_css = _static_css("guided-idea-plan.css")
     redesign_css = _static_css("redesign.css")
 
-    assert "css/guided.css?v=20260630-guided-step-summary" in index_html
+    assert "css/guided.css?v=20260707-copilot" in index_html
     assert "css/guided-idea-plan.css?v=20260627-ideas-feasibility-plan" in index_html
     assert "js/api.js?v=20260702-zotero-simple" in index_html
     assert (
@@ -537,6 +537,46 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert projects_pos < guided_pos
     assert provider_pos < guided_pos
     assert provider_pos < idea_plan_pos < guided_pos
+
+    # Progressive extraction + study-design stepper owner file (screens-guided-extract.js)
+    extract_js = _static_js("screens-guided-extract.js")
+    assert "js/screens-guided-extract.js?v=20260707-copilot" in index_html
+    extract_pos = index_html.find("screens-guided-extract.js")
+    assert extract_pos != -1 and extract_pos < guided_pos
+    assert "window.EU_GUIDED_EXTRACT = {" in extract_js
+    # study-design vocabulary is owned by the stepper module, not the shell
+    assert "Primary outcome / endpoint" in extract_js
+    assert "Observation window" in extract_js
+    assert "Comparison" in extract_js
+    assert "Export destination" in extract_js
+    assert "resolveOutcome" in extract_js and "windowHours" in extract_js
+    # main file owns state + wiring and delegates rendering to the sibling
+    assert "window.EU_GUIDED_EXTRACT.render" in guided_js
+    assert "function goGuidedExtractStep" in guided_js
+    assert "function commitGuidedDesign" in guided_js
+    assert "function resetGuidedDesignState" in guided_js
+    assert "guidedDesignWindowHours()" in guided_js
+    assert "out_dir:" in guided_js  # export destination reaches the extraction job
+    assert "study_design" in guided_js  # study design persisted to project memory
+    # step + design controls are wired
+    for marker in (
+        "data-gx-step-next",
+        "data-gx-goto-step",
+        "data-gx-outcome",
+        "data-gx-window",
+        "data-gx-comparator",
+        "data-gx-exportdir",
+    ):
+        assert marker in guided_js, marker
+    # stepper CSS lives in the guided owner file, not a catch-all
+    for cls in (".gdx-steps", ".gdx-step", ".gdx-recap", ".gdx-summary", ".gdi-next-cue"):
+        assert cls in guided_css, cls
+    redesign_css_body = _static_css("redesign.css")
+    assert ".gdx-steps" not in redesign_css_body
+    # free-text disambiguation + honest real-mode fallback (no demo-shortcut coaching)
+    assert "function reflectGuidedFrontdoor" in guided_js
+    assert "run the whole demo" in guided_js  # still present, but demo-gated
+
     assert "window.EU_GUIDED_PROJECTS = {" in projects_js
     assert "window.EU_GUIDED_IDEA_PLAN = {" in guided_plan_js
     assert "window.EU_GUIDED_IDEA_PLAN.render" in guided_js
@@ -565,7 +605,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert ".gdi-plan-details" in guided_plan_css
     assert ".gdi-feature-row.one" in guided_plan_css
     assert ".gdi-plan-details" not in redesign_css
-    assert "js/screens-guided.js?v=20260630-guided-step-summary" in index_html
+    assert "js/screens-guided.js?v=20260707-residuals" in index_html
 
 
 def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
@@ -580,8 +620,8 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     redesign_css = _static_css("redesign.css")
     index_html = _static_html("index.html")
 
-    assert "js/screens-agent.js?v=20260703-agent-render-split" in index_html
-    assert "css/agent.css?v=20260702-agent-compact-header" in index_html
+    assert "js/screens-agent.js?v=20260707-copilot" in index_html
+    assert "css/agent.css?v=20260707-copilot" in index_html
     assert "css/agent-layout.css?v=20260702-agent-focus-layout" in index_html
     assert "css/agent-header.css?v=20260702-agent-compact-header" in index_html
     assert "css/agent-review.css?v=20260702-agent-review-compact" in index_html
@@ -718,8 +758,8 @@ def test_native_agent_research_blocks_are_project_owned() -> None:
     assert ".ag-wf-cell" in agent_css
     assert ".ag-lib-card" in agent_css
     assert ".ag-block-contract" in agent_css
-    assert "css/agent.css?v=20260702-agent-compact-header" in index_html
-    assert "js/screens-agent.js?v=20260703-agent-render-split" in index_html
+    assert "css/agent.css?v=20260707-copilot" in index_html
+    assert "js/screens-agent.js?v=20260707-copilot" in index_html
 
     assert "ag-block-grid" not in app_js
     assert "Research Blocks" not in app_js
@@ -764,7 +804,7 @@ def test_native_agent_render_layer_is_split_into_owner_file() -> None:
     main_pos = index_html.find("screens-agent.js?")
     assert render_pos != -1 and main_pos != -1
     assert render_pos < main_pos, "screens-agent-render.js must load before screens-agent.js"
-    assert "js/screens-agent-render.js?v=20260703-agent-render-split" in index_html
+    assert "js/screens-agent-render.js?v=20260707-ux" in index_html
 
 
 def test_native_agent_overview_renders_object_idea_plan_steps() -> None:
@@ -1291,11 +1331,14 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     assert "Discovery & Plan" in app_js
     assert "ideas-entry" in app_js
     assert "paper, PDF, or topic → feasible plan" in app_js
-    assert "Run a Research Project" in app_js
+    assert "Agent Projects" in app_js
     assert "Data & Review" in app_js
     assert "Data Workspace" in app_js
-    assert "const workspaceIndex = CLASSIC.findIndex(c => c.id === route);" in app_js
-    assert "workspaceIndex + 1} / ${CLASSIC.length}" in app_js
+    # The misleading "N / 4" progress counter on the Data Workspace group was
+    # removed: patient/cohort/crossdb are parallel review lenses, not sequential
+    # steps, so a running counter framed them as ordered progress.
+    assert "workspaceIndex + 1} / ${CLASSIC.length}" not in app_js
+    assert 'class="wsg-prog"' not in app_js
     assert "function render(opts = {})" in app_js
     assert "const resetScroll = !!opts.resetScroll;" in app_js
     assert "window.__euRender = function (opts) { render(opts || {}); };" in app_js
@@ -1314,11 +1357,11 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     assert "css/ideas.css?v=20260630-gate-first-ideas" in index_html
     assert "css/shell.css?v=20260626-owner" in index_html
     assert "js/icons.js?v=20260625-stage84" in index_html
-    assert "js/app.js?v=20260629-ux-readability" in index_html
+    assert "js/app.js?v=20260707-residuals" in index_html
     assert "css/ideas-review.css?v=20260702-idea-review-handoff" in index_html
     assert "css/ideas-connectors.css?v=20260702-zotero-simple" in index_html
     assert "js/screens-ideas-zotero.js?v=20260702-zotero-origin" in index_html
-    assert "js/screens-ideas.js?v=20260702-zotero-origin" in index_html
+    assert "js/screens-ideas.js?v=20260707-residuals" in index_html
     assert "discoverIdeas" in api_js
     assert "/api/ideas/discover" in ideas_js
     assert "Discover papers" in ideas_js
@@ -1810,7 +1853,7 @@ def test_native_crossdb_restores_distribution_visuals() -> None:
     assert "/api/jobs/crossdb-raw-distribution" in api_js
     assert "scanCrossdbRawRoot" in api_js
     assert "/api/crossdb-review/raw-root-scan" in api_js
-    assert "Multi-database feature density grid" in viz_js
+    assert "Multi-database feature value-distribution grid" in viz_js
     assert "crossRealFeatureDensityByModule" in viz_js
     assert "crossFeatureDensityPanel" in viz_js
     assert "loadDemoCrossdb" in viz_js
@@ -1885,7 +1928,7 @@ def test_native_crossdb_restores_distribution_visuals() -> None:
     assert "加载真实密度对比" in viz_js
     assert "正在从本地数据库加载真实特征密度" in viz_js
     assert "选择要对比的数据库" in viz_js
-    assert "多数据库特征密度网格" in viz_js
+    assert "多数据库特征取值分布网格" in viz_js
     assert "兼容性核验" in viz_js
     assert "opts.rawRoot" in viz_js
     assert "easyicu_crossdb_data_root" not in viz_js
@@ -1897,7 +1940,7 @@ def test_native_crossdb_restores_distribution_visuals() -> None:
     assert "--xdb-grid-cols" in viz_js
     assert "xdb-density-svg" in viz_js
     assert "xdb-density-line" in viz_js
-    assert "js/screens-viz.js?v=20260630-" in index_html
+    assert "js/screens-viz.js?v=20260707-residuals" in index_html
     assert "css/crossdb.css?v=20260627-fig3-audit-collapse" in index_html
     # Legacy Figure-3 Cross-DB layout restored: curated canonical-concept density grid
     # (one subplot per concept) instead of dumping all ~247 catalog features, plus
@@ -1961,7 +2004,7 @@ def test_native_cohort_snapshot_renders_real_clinical_profile() -> None:
     assert ".cprof-grid" in cohort_css
     assert ".cxh" not in cohort_css
     # Cache-bust bumped so the restored charts ship to existing clients.
-    assert "js/screens-viz.js?v=20260630-" in index_html
+    assert "js/screens-viz.js?v=20260707-residuals" in index_html
 
 
 def test_native_cohort_groups_render_comparison_bar_chart() -> None:
@@ -2332,8 +2375,8 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "api.js?v=20260702-zotero-simple" in index_html
     assert "screens-guided-projects.js?v=20260626-guided-projects-split" in index_html
     assert "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan" in index_html
-    assert "screens-guided.js?v=20260630-guided-step-summary" in index_html
-    assert "guided.css?v=20260630-guided-step-summary" in index_html
+    assert "screens-guided.js?v=20260707-residuals" in index_html
+    assert "guided.css?v=20260707-copilot" in index_html
     assert '<span class="gd-name">Guided Copilot</span>' in guided_js
     assert "Guided Copilot · local first · nothing leaves your machine" in guided_js
     assert "[t('Review Data', '审阅已有数据'), '@guidedGoal:review_data']" in guided_js
@@ -2488,9 +2531,9 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert "css/patient.css?v=20260630-patient-overview-missingness2" in index_html
     assert "css/patient-series.css?v=20260630-patient-old-series2" in index_html
     assert "js/screens-viz-demo.js?v=20260630-patient-demo-audit" in index_html
-    assert "js/screens-viz-patient-series.js?v=20260630-patient-demo-audit" in index_html
-    assert "js/screens-viz-patient-overview.js?v=20260630-patient-quality-split" in index_html
-    assert "js/screens-viz.js?v=20260630-patient-demo-audit" in index_html
+    assert "js/screens-viz-patient-series.js?v=20260707-ux" in index_html
+    assert "js/screens-viz-patient-overview.js?v=20260707-ux" in index_html
+    assert "js/screens-viz.js?v=20260707-residuals" in index_html
     assert "browser review', '浏览器审阅" in viz_js
     assert "function buildDemoPatientDrilldown" in viz_js
     assert "function demoTablePreviewRowContext" in viz_js
@@ -2656,7 +2699,7 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
     index_html = _static_html("index.html")
 
     assert "css/cohort.css?v=20260627-" in index_html
-    assert "js/screens-viz.js?v=20260630-" in index_html
+    assert "js/screens-viz.js?v=20260707-residuals" in index_html
     assert "let cohortView = 'idle';" in viz_js
     assert "let cohortFeatureScope = 'recommended';" in viz_js
     assert 'data-cohort-config-required="true"' in viz_js
@@ -2822,7 +2865,7 @@ def test_native_home_landing_styles_are_owned_by_home_css() -> None:
     assert ".way-card" in home_css
     assert ".mode-card" in home_css
     assert ".col-entry" in home_css
-    assert "css/home.css?v=20260626-home-owner" in index_html
+    assert "css/home.css?v=20260707-copilot" in index_html
 
     # screens.css is no longer a landing-page catch-all
     assert ".home-wrap" not in screens_css
@@ -2873,3 +2916,75 @@ def test_native_viz_demo_layer_is_split_into_owner_file() -> None:
     main_pos = index_html.find("screens-viz.js?")
     assert demo_pos != -1 and main_pos != -1
     assert demo_pos < main_pos, "screens-viz-demo.js must load before screens-viz.js"
+
+
+def test_dock_bridge_forwards_data_mode_to_guided() -> None:
+    """Regression: a Real-mode floating-dock handoff must NOT drop the user into
+    the seeded-demo (welcome/BRANCH) pipeline. The dock must forward dataMode so
+    Guided Copilot's real-mode guard routes to the real project frontdoor."""
+    dock_js = _static_js("copilot-dock.js")
+    # openGuided() must include dataMode in the bridge object
+    assert "route: routeOf(), lastUser: lastUser ? lastUser.html : null, dataMode: window.EU_DATA" in dock_js
+    guided_js = _static_js("screens-guided.js")
+    # the real-mode guard that consumes it must still be present
+    assert "if (b.dataMode) dataMode = b.dataMode;" in guided_js
+    assert "if (dataMode === 'real') {" in guided_js
+    assert "go('frontdoor');" in guided_js
+
+
+def test_guided_handoff_banner_surfaces_full_study_design() -> None:
+    """Regression: the Copilot->module handoff banner must surface the collected
+    study design (outcome / window / comparator / export destination), not just the
+    question, so a handed-off study is visible on the target page instead of dropped."""
+    app_js = _static_js("app.js")
+    assert "p.outcome_hint" in app_js
+    assert "p.time_window_hint" in app_js
+    assert "p.comparator_hint" in app_js
+    assert "p.export_destination_hint" in app_js
+    # labelled, and long export paths are shortened
+    assert "shortPath" in app_js
+
+
+def test_home_data_toggle_routes_through_setdatamode() -> None:
+    """Regression: the home Demo/Real toggle must go through the canonical
+    setDataMode (workspace invalidation + confirm-on-switch guard), not a bare
+    EU_DATA write that leaves stale workspaces bound to the wrong source."""
+    ext_js = _static_js("screens-extraction.js")
+    assert "function setHomeData(m) {" in ext_js
+    assert "if (window.setDataMode) { window.setDataMode(m); return; }" in ext_js
+
+
+def test_guided_terminal_path_hands_off_design_to_agent() -> None:
+    """Regression: after the guided mock preflight, the forward action must carry
+    the study design into Agent Projects (not a bare nav) and honestly frame the
+    preflight as a local, non-reportable check."""
+    guided_js = _static_js("screens-guided.js")
+    assert "function guidedAgentHandoffPrefill()" in guided_js
+    assert "function openGuidedAgentHandoff()" in guided_js
+    assert "data-ga-open-agent" in guided_js
+    assert "Continue in Agent Projects" in guided_js
+    assert "local, no-cost preflight" in guided_js
+
+
+def test_agent_destination_nav_buttons_use_one_name() -> None:
+    """Regression: navigation buttons to #agent must all use the destination name
+    'Agent Projects' / '研究项目', not the old drift (Research Projects / Analyze in
+    Agent / Hand off to Research Agent / Open Research Agent). The engine name
+    'Research Agent' / '研究代理' is reserved for settings/provider prose."""
+    viz_js = _static_js("screens-viz.js")
+    ideas_js = _static_js("screens-ideas.js")
+    help_js = _static_js("screens-help.js")
+    ext_js = _static_js("screens-extraction.js")
+    # unified destination label on the nav buttons
+    assert "Analyze in Agent Projects" in viz_js
+    assert "Open Agent Projects" in ideas_js
+    assert "Open Agent Projects" in help_js
+    assert "Hand off to Agent Projects" in ext_js
+    # the old drift names are gone from those nav buttons
+    assert "Analyze in Agent'" not in viz_js
+    assert "Open Research Projects" not in ideas_js
+    assert "Open Research Agent" not in help_js
+    assert "Hand off to Research Agent" not in ext_js
+    assert "交给研究代理" not in ext_js
+    # the engine-name distinction is deliberately preserved in settings (test-locked
+    # elsewhere: '研究代理' in settings_js), so do not assert its removal globally.

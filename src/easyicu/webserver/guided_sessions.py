@@ -400,6 +400,11 @@ def _project_dir_for_session(session_id: str) -> Path:
 def _prefill_for(goal: str, session: Dict[str, Any]) -> Dict[str, Any]:
     context = session.get("context") if isinstance(session.get("context"), dict) else {}
     slots = session.get("slots") if isinstance(session.get("slots"), dict) else {}
+    design = slots.get("study_design") if isinstance(slots.get("study_design"), dict) else {}
+    study_params = (
+        slots.get("study_params") if isinstance(slots.get("study_params"), dict) else {}
+    )
+    extraction = slots.get("extraction") if isinstance(slots.get("extraction"), dict) else {}
     return {
         "source": "guided_copilot",
         "goal": goal,
@@ -408,6 +413,23 @@ def _prefill_for(goal: str, session: Dict[str, Any]) -> Dict[str, Any]:
         "question_hint": slots.get("question_hint") or "",
         "cohort_hint": slots.get("cohort_hint") or "",
         "module_hint": slots.get("module_hint") or "",
+        # Study-design slots collected conversationally (Copilot completeness rule):
+        # outcome / observation window / comparator / export destination.
+        "outcome_hint": design.get("outcome_label")
+        or study_params.get("outcome")
+        or slots.get("outcome_hint")
+        or "",
+        "time_window_hint": study_params.get("window")
+        or design.get("window")
+        or slots.get("time_window_hint")
+        or "",
+        "comparator_hint": design.get("comparator_label")
+        or study_params.get("exposure")
+        or slots.get("comparator_hint")
+        or "",
+        "export_destination_hint": extraction.get("export_dir")
+        or slots.get("export_destination_hint")
+        or "",
         "route_source": context.get("route") or "guided",
     }
 

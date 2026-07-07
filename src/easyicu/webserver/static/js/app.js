@@ -31,36 +31,69 @@
   }
   let route = resolveRoute(rawRouteFromHash(), { rewrite: true }).id;
 
-  /* The classic workspace pipeline. Copilot is a SEPARATE, parallel system that
-     can complete the same flow conversationally — it is not a step in here. */
-  const PHASES = [
-    { n: 1, id: 'extraction', label: ['Extract the data', '抽取数据'], sub: ['cohort → analysis-ready', '队列 → 可分析数据'], ico: 'extract' },
-    {
-      n: 2, id: 'patient', label: ['Review & explore', '审阅与探索'], sub: ['patient · cohort · cross-DB', '患者 · 队列 · 跨库'], ico: 'viz',
-      children: [
-        { id: 'patient', label: ['Patient Review', '患者审阅'], ico: 'patient' },
-        { id: 'cohort', label: ['Cohort Statistics', '队列统计'], ico: 'cohort' },
-        { id: 'crossdb', label: ['Cross-DB Benchmark', '跨库基准'], ico: 'benchmark' },
-      ],
+  /* Guided Copilot -> module handoff payload. The guided screen set()s the
+     backend handoff object before navigating; the target screen take()s it
+     once (applying prefill in its own owner file) and note() keeps the
+     "handed off from Copilot" banner alive for the visit until dismissed. */
+  let guidedHandoff = null;
+  let guidedHandoffNote = null;
+  window.EU_GUIDED_HANDOFF = {
+    set(h) { guidedHandoff = (h && typeof h === 'object') ? h : null; },
+    take(routeId) {
+      if (!guidedHandoff) return null;
+      const target = String(guidedHandoff.target_route || '');
+      if (routeId && target && target !== routeId) return null;
+      const h = guidedHandoff;
+      guidedHandoff = null;
+      guidedHandoffNote = { route: routeId || target || '', handoff: h };
+      return h;
     },
-    { n: 3, id: 'agent', label: ['Analyze & draft', '分析与撰稿'], sub: ['runs → review-ready manuscript', '运行 → 待核验草稿'], ico: 'agent' },
-  ];
-  const VIZ_IDS = ['patient', 'cohort', 'crossdb'];
-  /* User-facing data workspace: task-oriented labels, no migration-era "classic"
-     terminology in the navigation. */
+    note(routeId) {
+      return guidedHandoffNote && guidedHandoffNote.route === routeId ? guidedHandoffNote.handoff : null;
+    },
+    noteHtml(routeId) {
+      const h = this.note(routeId);
+      if (!h) return '';
+      const esc = (v) => String(v == null ? '' : v).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+      const p = h.prefill || {};
+      const T = window.t || ((en) => en);
+      const shortPath = (v) => { const s = String(v || ''); return s.length > 34 ? '…' + s.slice(-33) : s; };
+      const lbl = (en, zh, v) => v ? `${T(en, zh)} ${esc(v)}` : '';
+      // Surface the full study design the user configured in Copilot — not just the
+      // question — so the collected outcome / window / comparator / export destination
+      // are visible on the target page instead of being silently dropped on handoff.
+      const bits = [
+        p.question_hint ? esc(p.question_hint) : '',
+        lbl('Cohort', '队列', p.cohort_hint),
+        lbl('Outcome', '结局', p.outcome_hint),
+        lbl('Window', '时窗', p.time_window_hint),
+        lbl('Compare', '对比', p.comparator_hint),
+        lbl('Modules', '模块', p.module_hint),
+        lbl('Save to', '保存到', p.export_destination_hint ? shortPath(p.export_destination_hint) : ''),
+      ].filter(Boolean).join(' · ');
+      const ic = window.icon ? window.icon('spark', 14) : '';
+      return `<div class="note info" style="margin-bottom:14px;"><div class="ico">${ic}</div><div class="body"><span class="t">${T('Handed off from Guided Copilot.', '来自 Guided Copilot 的交接。')}</span> <span class="d" style="display:inline;">${bits || T('Continue the study you configured in Copilot.', '继续你在 Copilot 里配置的研究。')}</span></div><button class="btn sm ghost" data-guided-prefill-dismiss type="button" style="margin-left:auto;align-self:center;">${T('Dismiss', '关闭')}</button></div>`;
+    },
+    dismiss() { guidedHandoffNote = null; },
+  };
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-guided-prefill-dismiss]');
+    if (!b) return;
+    window.EU_GUIDED_HANDOFF.dismiss();
+    if (window.__euRender) window.__euRender();
+  });
+
+  /* User-facing data workspace. Labels match each screen's own page title and
+     breadcrumb so a destination has ONE name across the sidebar, header, and
+     home entries (no sidebar-vs-title drift). Copilot is a separate, parallel
+     system that completes the same flow conversationally. */
   const CLASSIC = [
-    { id: 'extraction', label: ['Extract Data', '抽取数据'], sub: ['choose cohort + modules', '选择队列 + 模块'], ico: 'extract' },
-    { id: 'patient', label: ['Patient Drilldown', '患者明细'], sub: ['tables · trends · patients', '表格 · 趋势 · 患者'], ico: 'patient' },
-    { id: 'cohort', label: ['Cohort Review', '队列审阅'], sub: ['groups + coverage', '分组 + 覆盖率'], ico: 'cohort' },
-    { id: 'crossdb', label: ['Cross-DB Compare', '跨库对比'], sub: ['multi-database checks', '多数据库检查'], ico: 'benchmark' },
+    { id: 'extraction', label: ['Data Extraction', '数据抽取'], sub: ['choose cohort + modules', '选择队列 + 模块'], ico: 'extract' },
+    { id: 'patient', label: ['Patient Review', '患者审阅'], sub: ['tables · trends · patients', '表格 · 趋势 · 患者'], ico: 'patient' },
+    { id: 'cohort', label: ['Cohort Statistics', '队列统计'], sub: ['groups + coverage', '分组 + 覆盖率'], ico: 'cohort' },
+    { id: 'crossdb', label: ['Cross-DB Benchmark', '跨库基准'], sub: ['multi-database checks', '多数据库检查'], ico: 'benchmark' },
   ];
   let classicOpen = true;
-  function phaseOf(r) {
-    if (r === 'extraction') return 1;
-    if (VIZ_IDS.includes(r)) return 2;
-    if (r === 'agent') return 3;
-    return 0;
-  }
 
   const MOBILE_NAV = [
     { id: 'guided', label: ['Guide', '引导'], ico: 'spark' },
@@ -92,12 +125,10 @@
 
   function sidebar() {
     const scr = screenOf(route);
-    const workspaceIndex = CLASSIC.findIndex(c => c.id === route);
     const classicActive = CLASSIC.some(c => c.id === route);
     const wsOpen = classicOpen || classicActive;
 
     const rail = scr.rail ? scr.rail() : '';
-    const progLabel = workspaceIndex >= 0 ? `${workspaceIndex + 1} / ${CLASSIC.length}` : `· / ${CLASSIC.length}`;
 
     return `
     <aside class="sidebar">
@@ -119,7 +150,7 @@
       </button>
       <button class="cp-entry agent-entry ${route === 'agent' ? 'on' : ''}" data-nav="agent">
         <span class="cp-ico">${icon('agent', 16)}</span>
-        <span class="cp-body"><span class="cp-t">${t('Run a Research Project', '运行研究项目')}</span><span class="cp-d">${t('confirmed plan → evidence-checked draft', '确认计划 → 证据核验草稿')}</span></span>
+        <span class="cp-body"><span class="cp-t">${t('Agent Projects', '研究项目')}</span><span class="cp-d">${t('confirmed plan → evidence-checked draft', '确认计划 → 证据核验草稿')}</span></span>
         <span class="cp-go">${icon('arrow', 14)}</span>
       </button>
       <div class="sec-label nav-sec">${t('Data & Review', '数据与审阅')}</div>
@@ -127,7 +158,6 @@
         <button class="wsgroup-head ${wsOpen ? 'open' : ''} ${classicActive ? 'active' : ''}" data-ws-toggle>
           <span class="wsg-ico">${icon('grid', 15)}</span>
           <span class="wsg-t">${t('Data Workspace', '数据工作台')}</span>
-          <span class="wsg-prog">${progLabel}</span>
           <span class="wsg-chev">${icon(wsOpen ? 'chevdown' : 'chevron', 13)}</span>
         </button>
         ${wsOpen ? `

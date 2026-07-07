@@ -13,6 +13,16 @@
 (function () {
   const S = (window.SCREENS = window.SCREENS || {});
 
+  /* JobManager (jobs.py) emits the SSE 'end' event with error as a plain
+     string (error=str(exc)), not an object — read it as a string so the real
+     failure reason is shown instead of a bare "failed". */
+  function guidedJobEndError(m) {
+    if (!m) return '';
+    if (typeof m.error === 'string' && m.error.trim()) return m.error.trim();
+    if (m.error && typeof m.error === 'object') return m.error.message || m.error.code || '';
+    return m.status && m.status !== 'failed' ? m.status : '';
+  }
+
   /* ============== study panel model ============== */
   const STUDY = [
     ['question', 'Research question', 'spark', '研究问题'],
@@ -131,12 +141,13 @@
 
   /* ============== runtime state ============== */
   let branch, depth, dataMode, mods, cohortPhase, extractPhase, runPhase, draftPhase;
-  let thread, chips, busy, expandedStep, whyOpen, autop, patientN, clarified, outputsReady, diffExpanded, liveAgentRun, workspaceSnapshot, workspaceSnapshotPath, guidedExtract, guidedReview, guidedAgent, guidedIdea, guidedIdeaProvider, guidedLiteratureBrowser;
+  let thread, chips, busy, expandedStep, whyOpen, autop, patientN, clarified, outputsReady, diffExpanded, liveAgentRun, workspaceSnapshot, workspaceSnapshotPath, guidedExtract, guidedDesign, guidedReview, guidedAgent, guidedIdea, guidedIdeaProvider, guidedLiteratureBrowser;
   let guidedDrafts = { loading: false, error: null, data: null };
   let guidedCopilot = { loading: false, error: null, session: null, last: null };
   let selectedGuidedRun = null;
   let selectedGuidedDraft = null;
   let pendingGuidedGoal = null;
+  let guidedFrontdoorSeedText = null;
   let guidedFolderMenuOpen = false;
   let guidedFolderDialogMode = null;
   let guidedFolderSeedTitle = 'New local study';
@@ -184,8 +195,9 @@
   function reset() {
     branch = 'predict'; depth = 'full'; dataMode = 'demo'; mods = DEFAULT_MODS.slice();
     cohortPhase = 'normal'; extractPhase = 'run'; runPhase = 'run'; draftPhase = 'gate';
-    thread = []; chips = []; busy = false; expandedStep = 'question'; whyOpen = {}; autop = false; patientN = 10; clarified = null; outputsReady = false; diffExpanded = false; liveAgentRun = null; workspaceSnapshot = null; workspaceSnapshotPath = null; guidedExtract = null; guidedReview = null; guidedAgent = null; guidedIdea = null; guidedLiteratureBrowser = null;
+    thread = []; chips = []; busy = false; expandedStep = 'question'; whyOpen = {}; autop = false; patientN = 10; clarified = null; outputsReady = false; diffExpanded = false; liveAgentRun = null; workspaceSnapshot = null; workspaceSnapshotPath = null; guidedExtract = null; guidedDesign = null; guidedReview = null; guidedAgent = null; guidedIdea = null; guidedLiteratureBrowser = null;
     pendingGuidedGoal = null;
+    guidedFrontdoorSeedText = null;
     guidedFolderMenuOpen = false;
     guidedFolderDialogMode = null;
     guidedFolderSeedTitle = 'New local study';
@@ -714,7 +726,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     detect() {
       const src = activeExportSource();
       const path = src && src.path ? src.path : 'No export selected yet';
-      const tasks = ['Read folder tree', 'Match known layout', 'Verify concept map', 'Index tables'];
+      const tasks = ['Read folder tree', 'Match known layout', 'Read export manifest', 'Index tables'];
       return `
       <div class="gd-card" style="max-width:600px;margin-left:39px;">
         <div class="gc-head"><div class="gc-ico">${icon('db', 15)}</div><div class="grow"><div class="gc-t">Detecting schema</div><div class="gc-sub mono">${esc(path)}</div></div></div>
@@ -728,7 +740,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       const src = activeExportSource();
       return `
       <div class="gd-card" style="max-width:600px;margin-left:39px;">
-        <div class="gc-head"><div class="gc-ico" style="background:var(--ok-soft);color:var(--ok);border-color:oklch(88% 0.05 150);">${icon('check', 14, 3)}</div><div class="grow"><div class="gc-t">Detected ${esc(activeExportLabel())}</div><div class="gc-sub">local · verified</div></div></div>
+        <div class="gc-head"><div class="gc-ico" style="background:var(--ok-soft);color:var(--ok);border-color:oklch(88% 0.05 150);">${icon('check', 14, 3)}</div><div class="grow"><div class="gc-t">Detected ${esc(activeExportLabel())}</div><div class="gc-sub">local · read from manifest</div></div></div>
         <div class="gc-body">
           <div class="col gap-6" style="font-size:12px;">
             <div class="setup-row"><span class="k">Export</span><span class="vv">${esc(src && src.path ? src.path : 'local path')}</span></div>
@@ -745,8 +757,8 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       const finish = () => {
         thread = thread.filter(t => !(t.once === 'detect'));   // drop the transient scan card
         pushBot(
-          `Recognized <strong>${esc(activeExportLabel())}</strong> — concept map verified. Files stay on your machine.`,
-          `已识别 <strong>${esc(activeExportLabel())}</strong>，概念映射已验证。文件仍留在你的机器上。`,
+          `Recognized <strong>${esc(activeExportLabel())}</strong> — read its module manifest. Files stay on your machine.`,
+          `已识别 <strong>${esc(activeExportLabel())}</strong>，已读取其模块清单。文件仍留在你的机器上。`,
         );
         go('detected');
       };
@@ -1023,9 +1035,19 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       const tasks = analysisTasks();
       if (runPhase === 'done') {
         const live = liveAgentRun && liveAgentRun.result;
-        return cardShell('analysis', 'agent', 'Research Agent · run', live ? `preflight complete · ${(live.artifacts || []).length} artifacts` : 'complete · 6 artifacts', `
+        // For a live run, drive the pill + progress bar from the real evidence
+        // gate — never hard-pin 100%/green when the gate came back blocked.
+        const gate = (live && live.gate) || null;
+        const gchecks = gate && Array.isArray(gate.checks) ? gate.checks : [];
+        const gpassed = gchecks.filter(c => c.passed).length;
+        const gateBlocked = !!gate && (gate.status === 'blocked' || (gchecks.length > 0 && gpassed < gchecks.length));
+        const barPct = live ? (gchecks.length ? Math.round((gpassed / gchecks.length) * 100) : 100) : 100;
+        const pillCls = gateBlocked ? 'warn' : 'ok';
+        const pillTxt = live ? (gateBlocked ? `Verification: ${gpassed}/${gchecks.length} checks` : 'Preflight complete') : 'Complete';
+        const subTxt = live ? `preflight ${gateBlocked ? 'blocked' : 'passed'} · ${(live.artifacts || []).length} artifacts` : 'complete · 6 artifacts';
+        return cardShell('analysis', 'agent', 'Research Agent · run', subTxt, `
           <div class="gd-prog">${tasks.map(([t, d]) => `<div class="gd-task done"><span class="tk">${icon('check', 10, 3)}</span><span class="grow">${t}</span><span class="tdur">${d}</span></div>`).join('')}</div>
-          <div class="run-strip mt-12" style="padding:8px 10px;"><span class="pill ok"><span class="dot"></span>${live ? 'Preflight complete' : 'Complete'}</span><div class="grow runbar"><div class="runbar-fill" style="width:100%"></div></div></div>`, '');
+          <div class="run-strip mt-12" style="padding:8px 10px;"><span class="pill ${pillCls}"><span class="dot"></span>${pillTxt}</span><div class="grow runbar"><div class="runbar-fill" style="width:${barPct}%"></div></div></div>`, '');
       }
       return cardShell('analysis', 'agent', 'Research Agent · run', dataMode !== 'demo' ? 'registry-backed · local preflight' : 'demo pipeline · no tokens', `
         <div class="gd-prog" id="gdRunProg">${tasks.map(([t]) => `<div class="gd-task queued"><span class="tk">${icon('clock', 9)}</span><span class="tt-cmd">py</span><span class="grow">${t}</span><span class="tdur"></span></div>`).join('')}</div>
@@ -1127,7 +1149,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       age_min: preset === 'adult_first' ? 18 : 0,
       age_max: 100,
       min_icu_los_hours: 0,
-      observation_window_hours: GUIDED_EXTRACT_WINDOW_HOURS,
+      observation_window_hours: guidedDesignWindowHours(),
       exclude_readmissions: preset === 'adult_first',
       icd_enabled: false,
       icd_include: [],
@@ -1136,13 +1158,16 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   }
   function resetGuidedExtractionState() {
     guidedExtract = {
+      step: 'source',
       path: '',
       scan: null,
       scanError: null,
       scanning: false,
       cohort: 'adult_first',
-      modules: GUIDED_EXTRACT_MODULES.map(m => m[0]),
+      modules: GUIDED_CORE_MODULES.slice(),
+      modulesExpanded: false,
       format: 'parquet',
+      exportDir: '',
       merge: false,
       maxPatients: 500,
       running: false,
@@ -1152,6 +1177,33 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       error: null,
       registered: false,
     };
+    if (!guidedDesign) resetGuidedDesignState();
+  }
+  function resetGuidedDesignState() {
+    guidedDesign = { outcome: '', outcomeCustom: '', window: 'whole_stay', comparator: 'none', comparatorCustom: '', collected: false };
+  }
+  function guidedDesignOutcome() {
+    return window.EU_GUIDED_EXTRACT ? window.EU_GUIDED_EXTRACT.resolveOutcome(guidedDesign, t) : '';
+  }
+  function guidedDesignComparator() {
+    return window.EU_GUIDED_EXTRACT ? window.EU_GUIDED_EXTRACT.resolveComparator(guidedDesign, t) : '';
+  }
+  function guidedDesignWindowHours() {
+    return window.EU_GUIDED_EXTRACT ? window.EU_GUIDED_EXTRACT.windowHours(guidedDesign) : GUIDED_EXTRACT_WINDOW_HOURS;
+  }
+  /* mirror the collected study design into the rail + agent objective, once */
+  function commitGuidedDesign() {
+    if (!guidedDesign) return;
+    const outcome = guidedDesignOutcome();
+    const comparator = guidedDesignComparator();
+    const windowLabel = window.EU_GUIDED_EXTRACT ? window.EU_GUIDED_EXTRACT.windowLabel(guidedDesign, t) : '';
+    guidedDesign.collected = !!(outcome || comparator);
+    // studyParams is the shared study frame the rail + agent default read.
+    if (outcome) studyParams.outcome = outcome;
+    if (comparator && guidedDesign.comparator !== 'none') studyParams.exposure = comparator;
+    if (windowLabel) studyParams.window = windowLabel;
+    const railBits = [outcome || '', windowLabel].filter(Boolean).join(' · ');
+    if (railBits) setVal({ question: railBits });
   }
   function sourceReadyForGuidedExtraction() {
     const scan = guidedExtract && guidedExtract.scan;
@@ -1180,8 +1232,49 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       ? t('Ready to run locally. Nothing is uploaded.', '可以在本机运行。不会上传数据。')
       : t('Paste or choose a local ICU data folder, then analyze it before running.', '先粘贴或选择本机 ICU 数据文件夹，然后识别目录再运行。');
   }
+  function guidedExtractStepOrder() {
+    return (window.EU_GUIDED_EXTRACT && window.EU_GUIDED_EXTRACT.STEP_ORDER) || ['source', 'cohort', 'design', 'modules', 'export', 'review'];
+  }
+  function goGuidedExtractStep(step) {
+    if (!guidedExtract) return;
+    const order = guidedExtractStepOrder();
+    if (order.indexOf(step) < 0) return;
+    // leaving the design step commits the collected study frame into the rail + agent
+    if (guidedExtract.step === 'design' && step !== 'design') commitGuidedDesign();
+    guidedExtract.step = step;
+    renderThread();
+    renderAside();
+    scheduleGuidedSlotSave('guided_extraction_step_' + step);
+  }
+  function stepGuidedExtract(dir) {
+    if (!guidedExtract) return;
+    const order = guidedExtractStepOrder();
+    const idx = order.indexOf(guidedExtract.step || 'source');
+    const next = order[idx + dir];
+    if (next) goGuidedExtractStep(next);
+  }
   function renderGuidedExtractionCard() {
     if (!guidedExtract) resetGuidedExtractionState();
+    if (!guidedDesign) resetGuidedDesignState();
+    if (window.EU_GUIDED_EXTRACT) {
+      const progressPct = guidedExtract.progress && guidedExtract.progress.total
+        ? Math.max(0, Math.min(100, Math.round((Number(guidedExtract.progress.current || 0) / Number(guidedExtract.progress.total || 1)) * 100)))
+        : (guidedExtract.result ? 100 : 0);
+      return window.EU_GUIDED_EXTRACT.render({
+        t, icon, esc, attr, fmtInt, compactPath,
+        ex: guidedExtract,
+        design: guidedDesign,
+        ready: sourceReadyForGuidedExtraction(),
+        statusText: guidedExtractionStatusText(),
+        selectedConcepts: guidedSelectedConceptCount(),
+        moduleConceptCount: guidedModuleConceptCount,
+        cohortPresets: GUIDED_COHORT_PRESETS,
+        modules: GUIDED_EXTRACT_MODULES,
+        coreModules: GUIDED_CORE_MODULES,
+        progressPct,
+      });
+    }
+    // Fallback (sibling not loaded): minimal legacy render.
     const ready = sourceReadyForGuidedExtraction();
     const selected = guidedExtract.modules.length;
     const concepts = guidedSelectedConceptCount();
@@ -1387,6 +1480,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       format: guidedExtract.format,
       merge: guidedExtract.merge,
       max_patients: guidedExtract.maxPatients,
+      out_dir: (guidedExtract.exportDir || '').trim() || undefined,
       cohort: guidedExtractionCohortContract(),
     }).then(r => {
       guidedExtract.jobId = r.job_id;
@@ -1415,7 +1509,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
             setVal({ extract: 'done', data: 'Guided export' });
             markThrough('review', 'active');
           } else {
-            guidedExtract.error = (m.error && (m.error.message || m.error.code)) || m.status || 'Extraction failed.';
+            guidedExtract.error = guidedJobEndError(m) || 'Extraction failed.';
           }
           renderThread();
           scheduleGuidedSlotSave('finish_extraction_job');
@@ -1644,10 +1738,22 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
 
   /* ============== inline Agent preflight ============== */
   function resetGuidedAgentState() {
+    // Derive the objective from the study design the user actually collected in the
+    // conversation — never a hard-coded exposure/outcome framing. If they never set
+    // one, keep an honest generic sentence they can edit, not a fictional example.
+    const collected = guidedDesign && guidedDesign.collected;
+    const outcome = collected ? guidedDesignOutcome() : '';
+    const comparator = collected ? guidedDesignComparator() : '';
+    let question;
+    if (outcome) {
+      question = (comparator && guidedDesign.comparator !== 'none')
+        ? `Evaluate ${outcome} in the active ICU cohort, comparing ${comparator}.`
+        : `Evaluate ${outcome} in the active ICU cohort.`;
+    } else {
+      question = 'Evaluate the active ICU cohort with an evidence-bound local preflight.';
+    }
     guidedAgent = {
-      question: (studyParams && studyParams.exposure)
-        ? `Evaluate whether ${studyParams.exposure} is associated with ${studyParams.outcome || 'mortality'} in the active ICU cohort.`
-        : 'Evaluate the active ICU cohort with an evidence-bound local preflight.',
+      question,
       running: false,
       jobId: null,
       progress: null,
@@ -1685,6 +1791,35 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     const src = activeExportSource();
     return src ? t('Ready to run against the active export. No external provider is used.', '可以基于 active export 运行。不会使用外部 provider。') : t('No active export. Prepare/register data first.', '没有 active export。请先准备或注册数据。');
   }
+  // Carry the study the user configured in Copilot into Agent Projects so the
+  // full, reportable run does not start from an empty form. Mirrors the backend
+  // _prefill_for shape so app.js's handoff banner surfaces the same design.
+  function guidedAgentHandoffPrefill() {
+    const collected = !!(guidedDesign && guidedDesign.collected);
+    const windowLabel = window.EU_GUIDED_EXTRACT ? window.EU_GUIDED_EXTRACT.windowLabel(guidedDesign, t) : '';
+    const src = activeExportSource();
+    const mods = guidedExtract && Array.isArray(guidedExtract.modules) ? guidedExtract.modules : [];
+    return {
+      source: 'guided_copilot',
+      goal: 'run_agent',
+      question_hint: (guidedAgent && guidedAgent.question) || '',
+      cohort_hint: (guidedExtract && guidedExtract.cohort) || '',
+      module_hint: mods.length ? `${mods.length} ${t('modules', '模块')}` : '',
+      outcome_hint: collected ? guidedDesignOutcome() : '',
+      time_window_hint: collected ? windowLabel : '',
+      comparator_hint: (collected && guidedDesign.comparator !== 'none') ? guidedDesignComparator() : '',
+      export_destination_hint: (guidedExtract && guidedExtract.exportDir) || (src && src.path) || '',
+    };
+  }
+  function openGuidedAgentHandoff() {
+    if (window.EU_GUIDED_HANDOFF && window.EU_GUIDED_HANDOFF.set) {
+      window.EU_GUIDED_HANDOFF.set({
+        type: 'module_handoff', status: 'ready', goal: 'run_agent',
+        target_route: 'agent', prefill: guidedAgentHandoffPrefill(), requires_user_confirm: true,
+      });
+    }
+    location.hash = '#agent';
+  }
   function renderGuidedAgentCard() {
     if (!guidedAgent) resetGuidedAgentState();
     const src = activeExportSource();
@@ -1718,11 +1853,12 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           ${guidedMetricCard(t('Reportable', '可报告'), result.reportable ? 'true' : 'false', t('Draft remains locked until sign-off.', '签署前草稿保持锁定。'))}
           ${guidedMetricCard(t('Evidence check', '证据核验'), gate.status || 'analysis_only', gate.reason || '')}
           ${guidedMetricCard(t('Artifacts', 'Artifacts'), fmtInt(artCount), result.project_dir ? compactPath(result.project_dir) : '')}
-        </div>` : ''}
+        </div>
+        <div class="note info" style="margin-top:10px;padding:9px 11px;"><div class="ico">${icon('shield', 13)}</div><div class="body"><div class="d" style="font-size:10.5px;margin:0;">${t('This was a local, no-cost preflight (mock provider — no external model call): it checks coverage and the evidence contract, but is not a reportable run. To run a full, reportable analysis, continue in Agent Projects — your question and study design carry over. Enabling an external model there is opt-in and never automatic.', '这是一次本地零成本预检（mock provider —— 不调用外部模型）：它检查覆盖率与证据合约，但不是可报告运行。若要运行完整、可报告的分析，请到 Agent Projects 继续 —— 你的问题与研究设计会一并带过去。是否在那里启用外部模型由你显式开启，绝不自动进行。')}</div></div></div>` : ''}
         <div class="gdx-actions">
-          <button type="button" class="btn primary" data-ga-run ${!src || guidedAgent.running ? 'disabled' : ''}>${icon('play', 13)} ${t('Start local preflight', '启动本地预检')}</button>
+          <button type="button" class="btn ${guidedAgent.result ? '' : 'primary'}" data-ga-run ${!src || guidedAgent.running ? 'disabled' : ''}>${icon('play', 13)} ${guidedAgent.result ? t('Re-run preflight', '重跑预检') : t('Start local preflight', '启动本地预检')}</button>
           <button type="button" class="btn" data-guided-goal="data_extraction">${t('Prepare/register data', '准备/注册数据')}</button>
-          ${guidedAgent.result && guidedAgent.result.project_dir ? `<button type="button" class="btn" data-open="agent">${t('Open Agent Projects', '打开 Agent Projects')}</button>` : ''}
+          ${guidedAgent.result ? `<button type="button" class="btn primary" data-ga-open-agent>${icon('arrow', 13)} ${t('Continue in Agent Projects', '到 Agent Projects 继续')}</button>` : ''}
         </div>
       </div>`;
   }
@@ -1774,7 +1910,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
             setVal({ analysis: 'preflight complete', draft: 'locked' });
             markThrough('draft', 'locked');
           } else {
-            guidedAgent.error = (m.error && (m.error.message || m.error.code)) || m.status || 'Agent preflight failed.';
+            guidedAgent.error = guidedJobEndError(m) || 'Agent preflight failed.';
           }
           renderThread();
           renderAside();
@@ -2292,8 +2428,10 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     const confirmed = !!guidedIdea.dataContextConfirmed;
     const mapped = idea && Array.isArray(idea.mapped_concepts) ? idea.mapped_concepts.length : 0;
     const pre = result.pre_experiment || {};
+    const needsAction = !confirmed;
     return `
-      <div class="gdi-pre ${confirmed ? 'ok' : ''}">
+      <div class="gdi-pre ${confirmed ? 'ok' : ''} ${needsAction ? 'needs-action' : ''}">
+        ${needsAction ? `<div class="gdi-next-cue">${icon('arrow', 12)} ${ready ? t('Next step — confirm the data context to unlock feasibility & Agent handoff', '下一步 —— 确认数据上下文，解锁可行性与 Agent 交接') : t('Next step — prepare or choose a local export, then confirm the data context', '下一步 —— 先准备或选择本地导出，再确认数据上下文')}</div>` : ''}
         <div class="gdi-ledger-title">
           <div><span class="gdx-label">${t('Step 3 · Data context', '第 3 步 · 数据上下文')}</span><strong>${confirmed ? t('Confirmed active export for feasibility review', '已确认使用当前导出做可行性审阅') : t('Not confirmed yet', '尚未确认')}</strong></div>
           <span class="pill ${confirmed ? 'ok' : ready ? 'warn' : 'bad'}">${confirmed ? t('confirmed', '已确认') : ready ? t('needs user confirmation', '需要用户确认') : t('needs data', '需要数据')}</span>
@@ -3223,6 +3361,16 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         exposure: studyParams && studyParams.exposure,
         scope: studyParams && studyParams.scope,
       },
+      study_design: guidedDesign ? {
+        outcome: guidedDesign.outcome || '',
+        outcome_custom: guidedDesign.outcomeCustom || '',
+        window: guidedDesign.window || 'whole_stay',
+        comparator: guidedDesign.comparator || 'none',
+        comparator_custom: guidedDesign.comparatorCustom || '',
+        collected: !!guidedDesign.collected,
+        outcome_label: guidedDesignOutcome(),
+        comparator_label: guidedDesignComparator(),
+      } : null,
       active_export: src ? {
         label: src.label || src.database || 'active export',
         database: src.database || null,
@@ -3232,9 +3380,11 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       } : null,
       extraction: guidedExtract ? {
         path: guidedExtract.path || '',
+        step: guidedExtract.step || 'source',
         cohort: guidedExtract.cohort || 'adult_first',
         modules: guidedExtract.modules || [],
         format: guidedExtract.format || 'parquet',
+        export_dir: guidedExtract.exportDir || '',
         merge: !!guidedExtract.merge,
         max_patients: guidedExtract.maxPatients == null ? null : Number(guidedExtract.maxPatients),
         scan: boundedScan(guidedExtract.scan),
@@ -3314,13 +3464,24 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     if (slots.study_params && typeof slots.study_params === 'object') {
       studyParams = Object.assign({}, studyParams || {}, slots.study_params);
     }
+    if (slots.study_design && typeof slots.study_design === 'object') {
+      resetGuidedDesignState();
+      guidedDesign.outcome = slots.study_design.outcome || '';
+      guidedDesign.outcomeCustom = slots.study_design.outcome_custom || '';
+      guidedDesign.window = slots.study_design.window || 'whole_stay';
+      guidedDesign.comparator = slots.study_design.comparator || 'none';
+      guidedDesign.comparatorCustom = slots.study_design.comparator_custom || '';
+      guidedDesign.collected = !!slots.study_design.collected;
+    }
     const active = slots.active_flow || session && session.goal;
     if (slots.extraction && typeof slots.extraction === 'object') {
       resetGuidedExtractionState();
+      guidedExtract.step = slots.extraction.step || 'source';
       guidedExtract.path = slots.extraction.path || '';
       guidedExtract.cohort = slots.extraction.cohort || guidedExtract.cohort;
       guidedExtract.modules = Array.isArray(slots.extraction.modules) ? slots.extraction.modules.slice() : guidedExtract.modules;
       guidedExtract.format = slots.extraction.format || guidedExtract.format;
+      guidedExtract.exportDir = slots.extraction.export_dir || '';
       guidedExtract.merge = !!slots.extraction.merge;
       guidedExtract.maxPatients = slots.extraction.max_patients == null ? null : Number(slots.extraction.max_patients);
       guidedExtract.scan = slots.extraction.scan || null;
@@ -3674,9 +3835,12 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       </div>`;
   }
   function chooseGuidedGoal(goal, label) {
+    const seed = guidedFrontdoorSeedText;
     if (requireGuidedProjectMemory(goal, label)) return;
+    guidedFrontdoorSeedText = null;
     if (goal === 'idea_mining') {
       startGuidedIdeaFlow(label || guidedGoalMeta(goal).label_en);
+      if (seed && guidedIdea) { guidedIdea.topic = seed; renderThread(); }
       return;
     }
     if (goal === 'data_extraction') {
@@ -3723,7 +3887,9 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         context: guidedBackendContext(),
       }).then(result => {
         const handoff = (result.result && result.result.handoff) || result.handoff || {};
-        try { window.__euGuidedHandoff = handoff.prefill || null; } catch (e) {}
+        try {
+          if (window.EU_GUIDED_HANDOFF) window.EU_GUIDED_HANDOFF.set(handoff);
+        } catch (e) {}
         pushUser(label || 'Open module');
         location.hash = '#' + (target || handoff.target_route || 'entry');
       }).catch(err => {
@@ -4477,6 +4643,13 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         if (b && Date.now() - b.ts < 60000) {
           bridged = true; window.__cpBridge = null;
           if (b.dataMode) dataMode = b.dataMode;
+          // Real mode must land in the real project-memory flow (frontdoor), never
+          // the seeded-demo pipeline (welcome/BRANCH) — that pipeline is an
+          // illustrative demo and only appropriate when the user is in Demo mode.
+          if (dataMode === 'real') {
+            go('frontdoor');
+            if (b.lastUser) setTimeout(() => { handleText(stripTags(b.lastUser)); }, 300);
+          } else {
           go('welcome');
           setTimeout(() => {
             if (b.branchHint && BRANCH[b.branchHint]) {
@@ -4488,7 +4661,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
               handleText(stripTags(b.lastUser));
             } else {
               const routeLabel = b.route && b.route !== 'entry'
-                ? (({extraction:'Data Extraction',patient:'Patient Review',cohort:'Cohort Statistics',crossdb:'Cross-DB Benchmark',agent:'Research Agent'}[b.route]) || 'the workspace')
+                ? (({extraction:'Data Extraction',patient:'Patient Review',cohort:'Cohort Statistics',crossdb:'Cross-DB Benchmark',agent:'Agent Projects'}[b.route]) || 'the workspace')
                 : '';
               pushBot(
                 `Continuing from the dock${routeLabel ? ` — you were on <strong>${routeLabel}</strong>` : ''}. Want to turn that into a full study?`,
@@ -4497,6 +4670,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
               renderThread();
             }
           }, 700);
+          }
         }
       } catch (e) {}
       if (!bridged) go('frontdoor');
@@ -4618,6 +4792,39 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           scheduleGuidedSlotSave('set_extraction_max_patients');
           return;
         }
+        const gxGoto = e.target.closest('[data-gx-goto-step]');
+        if (gxGoto && guidedExtract) {
+          goGuidedExtractStep(gxGoto.dataset.gxGotoStep);
+          return;
+        }
+        if (e.target.closest('[data-gx-step-next]')) { stepGuidedExtract(1); return; }
+        if (e.target.closest('[data-gx-step-back]')) { stepGuidedExtract(-1); return; }
+        if (e.target.closest('[data-gx-modules-expand]') && guidedExtract) {
+          guidedExtract.modulesExpanded = !guidedExtract.modulesExpanded;
+          renderThread();
+          return;
+        }
+        const gxOutcome = e.target.closest('[data-gx-outcome]');
+        if (gxOutcome && guidedDesign) {
+          guidedDesign.outcome = gxOutcome.dataset.gxOutcome || '';
+          renderThread();
+          scheduleGuidedSlotSave('set_study_outcome');
+          return;
+        }
+        const gxWindow = e.target.closest('[data-gx-window]');
+        if (gxWindow && guidedDesign) {
+          guidedDesign.window = gxWindow.dataset.gxWindow || 'whole_stay';
+          renderThread();
+          scheduleGuidedSlotSave('set_study_window');
+          return;
+        }
+        const gxComparator = e.target.closest('[data-gx-comparator]');
+        if (gxComparator && guidedDesign) {
+          guidedDesign.comparator = gxComparator.dataset.gxComparator || 'none';
+          renderThread();
+          scheduleGuidedSlotSave('set_study_comparator');
+          return;
+        }
         if (e.target.closest('[data-gx-analyze]')) {
           scanGuidedExtractionPath();
           return;
@@ -4641,6 +4848,10 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         }
         if (e.target.closest('[data-ga-run]')) {
           runGuidedAgentPreflight();
+          return;
+        }
+        if (e.target.closest('[data-ga-open-agent]')) {
+          openGuidedAgentHandoff();
           return;
         }
         if (e.target.closest('[data-gi-api-continue]')) {
@@ -5015,6 +5226,24 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           scheduleGuidedSlotSave('edit_extraction_path');
           return;
         }
+        const gxExportDir = e.target.closest('[data-gx-exportdir]');
+        if (gxExportDir && guidedExtract) {
+          guidedExtract.exportDir = gxExportDir.value;
+          scheduleGuidedSlotSave('edit_export_destination');
+          return;
+        }
+        const gxOutcomeCustom = e.target.closest('[data-gx-outcome-custom]');
+        if (gxOutcomeCustom && guidedDesign) {
+          guidedDesign.outcomeCustom = gxOutcomeCustom.value;
+          scheduleGuidedSlotSave('edit_study_outcome_custom');
+          return;
+        }
+        const gxComparatorCustom = e.target.closest('[data-gx-comparator-custom]');
+        if (gxComparatorCustom && guidedDesign) {
+          guidedDesign.comparatorCustom = gxComparatorCustom.value;
+          scheduleGuidedSlotSave('edit_study_comparator_custom');
+          return;
+        }
         const gaQuestion = e.target.closest('[data-ga-question]');
         if (gaQuestion && guidedAgent) {
           guidedAgent.question = gaQuestion.value;
@@ -5135,7 +5364,10 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       return;
     }
     if (currentId === 'frontdoor') {
-      if (sendGuidedShortcut(v)) return;
+      // Unmatched free text at the front door: reflect it back and offer the four
+      // real goals as a disambiguation, instead of a flat "pick a goal card" bounce.
+      reflectGuidedFrontdoor(v);
+      return;
     }
     if (autop && /\b(stop|pause|halt|cancel)\b/i.test(v)) { autop = false; pushUser(v); pushBot(`Autopilot paused — tap a suggestion to continue manually.`, `自动流程已暂停。你可以点一个建议继续手动推进。`); renderThread(); return; }
     const fn = parseIntent(v);
@@ -5143,11 +5375,34 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     // fallback: advance the primary path of the current state, echoing the text
     const map = { frame: 'toData', toData: null, toCohort: 'toConcepts', toConcepts: 'toExtract', toReview: 'toRun', toFindings: null };
     const next = map[currentId];
-    if (next) { go(next, v); }
-    else { pushUser(v); pushBot(
-      `I’ll treat that as “<em>${esc(v)}</em>”. In this guided demo I move step by step — tap a suggestion to continue, or say <strong>“why?”</strong>, <strong>“go back”</strong>, <strong>“use 30 patients”</strong>, or <strong>“run the whole demo”</strong>.`,
-      `我会把它理解为“<em>${esc(v)}</em>”。在引导模式里我会一步一步推进；你可以点建议继续，或说 <strong>“为什么”</strong>、<strong>“返回”</strong>、<strong>“用 30 个患者”</strong>、<strong>“跑完整演示”</strong>。`,
-    ); renderThread(); }
+    if (next) { go(next, v); return; }
+    pushUser(v);
+    if (dataMode === 'demo') {
+      // Demo pipeline: the shortcut coaching only makes sense inside the seeded demo.
+      pushBot(
+        `I’ll treat that as “<em>${esc(v)}</em>”. In this guided demo I move step by step — tap a suggestion to continue, or say <strong>“why?”</strong>, <strong>“go back”</strong>, <strong>“use 30 patients”</strong>, or <strong>“run the whole demo”</strong>.`,
+        `我会把它理解为“<em>${esc(v)}</em>”。在引导模式里我会一步一步推进；你可以点建议继续，或说 <strong>“为什么”</strong>、<strong>“返回”</strong>、<strong>“用 30 个患者”</strong>、<strong>“跑完整演示”</strong>。`,
+      );
+    } else {
+      // Real, folder-bound flow: no demo shortcuts — just point back to this step's controls.
+      pushBot(
+        `Noted: “<em>${esc(v)}</em>”. Use the controls in the current card to adjust this step, or say <strong>“go back”</strong> to change an earlier decision.`,
+        `已记录：“<em>${esc(v)}</em>”。可用当前卡片里的控件调整这一步，或说 <strong>“返回”</strong> 修改前面的决定。`,
+      );
+    }
+    renderThread();
+  }
+  function reflectGuidedFrontdoor(v) {
+    pushUser(v);
+    guidedFrontdoorSeedText = v;
+    thread.push({ bot: true, html: bi(
+      `It sounds like you want to study “<em>${esc(v)}</em>”. I can take that four ways — pick the one that fits and I’ll carry your wording into it.`,
+      `听起来你想研究“<em>${esc(v)}</em>”。我可以从四个方向推进 —— 选一个最合适的，我会把你的描述带进去。`,
+    ) });
+    thread.push({ bot: true, html: renderGuidedGoalCards() });
+    chips = [];
+    renderThread();
+    renderChips();
   }
 
   function stripText(s) { return s.replace(/\s+/g, ' ').trim(); }

@@ -8,7 +8,15 @@
 
   /* ---------------- ENTRY / home ---------------- */
   function homeDataMode() { return window.EU_DATA || 'demo'; }
-  function setHomeData(m) { window.EU_DATA = m; try { localStorage.setItem('easyicu_home_data', m); } catch (e) {} }
+  // Route through the canonical setDataMode so a Demo<->Real flip invalidates the
+  // downstream viz/cohort/patient/extraction workspaces, marks them stale, and —
+  // when the user already has work — shows the confirm-before-switch guard. The
+  // old direct EU_DATA write skipped all of that and left stale workspaces bound
+  // to the wrong data source.
+  function setHomeData(m) {
+    if (window.setDataMode) { window.setDataMode(m); return; }
+    window.EU_DATA = m; try { localStorage.setItem('easyicu_home_data', m); } catch (e) {}
+  }
 
   function launchCopilot(text, branchHint) {
     try {
@@ -56,13 +64,13 @@
             <div class="ej-cap">${t('The research journey · 4 steps', '研究旅程 · 四步')}</div>
             <div class="ej-track">
               ${[
-                ['1', t('Frame', '框定'), t('the question', '研究问题')],
-                ['2', t('Extract', '抽取'), t('the data', '数据')],
-                ['3', t('Review', '审阅'), t('& explore', '与探索')],
-                ['4', t('Analyze', '分析'), t('& draft', '与撰稿')],
+                ['1', t('Frame', '框定'), t('the question', '研究问题'), 'guided'],
+                ['2', t('Extract', '抽取'), t('the data', '数据'), 'extraction'],
+                ['3', t('Review', '审阅'), t('& explore', '与探索'), 'patient'],
+                ['4', t('Analyze', '分析'), t('& draft', '与撰稿'), 'agent'],
               ].map((n, i) => `
                 ${i > 0 ? '<div class="ej-conn"></div>' : ''}
-                <div class="ej-node"><div class="ej-num">${n[0]}</div><div><div class="ej-lab">${n[1]}</div><div class="ej-sub">${n[2]}</div></div></div>`).join('')}
+                <button type="button" class="ej-node" data-nav="${n[3]}" title="${t('Go to this step', '前往这一步')}"><div class="ej-num">${n[0]}</div><div><div class="ej-lab">${n[1]}</div><div class="ej-sub">${n[2]}</div></div></button>`).join('')}
             </div>
             <div class="ej-foot">${t('Two ways through it:', '两种走法:')} <b>${t('① Guided study', '① 研究引导')}</b> ${t('or', '或')} <b>${t('② drive the panels yourself', '② 自己操作面板')}</b></div>
           </div>
@@ -103,7 +111,14 @@
                     </button>`).join('')}
                 </div>
                 <div class="col-foot">
-                  <div class="col-dataline">${icon('shield', 12)} ${dm === 'demo' ? t('Demo data · reproducible', '演示数据 · 可复现') : t('Real data · local-only', '真实数据 · 仅本地')}</div>
+                  <div class="home-datamode">
+                    <span class="hdm-lab">${t('Data', '数据')}</span>
+                    <div class="seg home-data-seg" id="homeData" role="group" aria-label="${t('Data mode', '数据模式')}">
+                      <button class="${dm === 'demo' ? 'on' : ''}" data-hd="demo">${t('Demo', '演示')}</button>
+                      <button class="${dm === 'real' ? 'on' : ''}" data-hd="real">${t('Real', '真实')}</button>
+                    </div>
+                    <span class="col-dataline">${icon('shield', 12)} ${dm === 'demo' ? t('Demo data · reproducible', '演示数据 · 可复现') : t('Real data · local-only', '真实数据 · 仅本地')}</span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -120,10 +135,11 @@
       const dataEl = root.querySelector('#homeData');
       if (dataEl) dataEl.addEventListener('click', (e) => {
         const b = e.target.closest('[data-hd]'); if (!b) return;
+        // Do NOT optimistically flip the segment here: setDataMode may open a
+        // confirm-before-switch modal (when work exists) and only applies + re-renders
+        // on confirm. Let that re-render reflect the true mode so a cancelled switch
+        // does not leave the toggle showing a mode the app never entered.
         setHomeData(b.dataset.hd);
-        dataEl.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
-        const dl = root.querySelector('.col-dataline');
-        if (dl) dl.innerHTML = `${icon('shield', 12)} ${b.dataset.hd === 'demo' ? t('Demo data · reproducible', '演示数据 · 可复现') : t('Real data · local-only', '真实数据 · 仅本地')}`;
       });
       const input = root.querySelector('#homeInput');
       const send = root.querySelector('#homeSend');
@@ -449,13 +465,16 @@
     const runMode = mode === 'recommended' ? 'recommended' : 'custom';
     const modules = runModuleKeys(runMode);
     if (!modules.length) return;
+    const real = dataMode() === 'real';
     const outDir = currentExportDir();
-    if (!outDir) {
+    // A real extraction writes files, so it needs a destination; the demo path
+    // is a pure in-browser mock (below) and must not be blocked on one.
+    if (real && !outDir) {
       exAdvExport = true;
+      exCustomOpen = true;
       repaint();
       return;
     }
-    const real = dataMode() === 'real';
     const support = runMode === 'recommended' ? { ok: true, reason: 'recommended' } : cohortExportSupport();
     if (real && !support.ok) {
       teardownExportES();
@@ -546,7 +565,7 @@
   const CONV_STEPS = [
     ['Scan source tables', '扫描源数据表'],
     ['Convert to Parquet', '转换为 Parquet'],
-    ['Verify concept mapping', '校验概念映射'],
+    ['Write shard layout', '写入分片布局'],
     ['Index & freeze', '建立索引并冻结'],
   ];
   function connectState() {
@@ -580,7 +599,7 @@
           </div>
           <div class="ex-connect-actions">
             <button class="ex-linkbtn" data-ex-manual>${icon('sliders', 13)} ${t('Advanced: choose manually', '高级:手动选择')} <span class="chev">${icon('chevdown', 13)}</span></button>
-            <button class="ex-linkbtn" data-ex-sample>${icon('play', 13)} ${t('Explore a sample study', '体验示例研究')}</button>
+            <button class="ex-linkbtn" data-ex-sample title="${t('Switches to Demo mode', '切换到演示模式')}">${icon('play', 13)} ${t('Explore a sample study (switches to Demo)', '体验示例研究（切换到演示模式）')}</button>
           </div>
           <div class="adv-body mt-12" ${exManualSourceOpen ? '' : 'hidden'} data-ex-manual-body>
             <div class="pf-hint" style="font-size:11px;color:var(--ink-4);margin-bottom:10px;">${t('Use this only if automatic detection is wrong:', '仅在自动识别不正确时使用:')}</div>
@@ -744,13 +763,19 @@
     const pct = tot ? Math.round((cur / tot) * 100) : (done ? 100 : 0);
     const c = (convResult && convResult.converted != null) ? convResult
             : (p.counts || { converted: 0, failed: 0, skipped: 0 });
+    // A job that finishes with per-file failures still ends status='done'
+    // (jobs.py). Treat that as a partial/degraded outcome, not a clean pass.
+    const partial = done && Number(c.failed || 0) > 0;
     const headIco = err ? `<div class="cfg-ico" style="color:var(--bad,#c0392b);">${icon('alert', 17)}</div>`
+                  : partial ? `<div class="cfg-ico" style="color:var(--warn,#a66a00);">${icon('alert', 17)}</div>`
                   : done ? `<div class="cfg-ico" style="color:var(--ok);">${icon('check', 17, 2.6)}</div>`
                   : `<div class="cfg-ico"><span class="spin sm" style="width:17px;height:17px;"></span></div>`;
     const headTitle = err ? t('Conversion failed', '转换失败')
+                    : partial ? t('Conversion finished with errors', '转换完成但有错误')
                     : done ? (convResult.nothing_to_do ? t('Already converted', '已转换') : t('Conversion complete', '转换完成'))
                     : t('Converting raw files…', '正在转换原始文件…');
     const pill = err ? `<span class="pill" style="height:20px;background:color-mix(in srgb,var(--bad,#c0392b) 14%,transparent);color:var(--bad,#c0392b);"><span class="dot" style="background:var(--bad,#c0392b);"></span>${t('failed', '失败')}</span>`
+               : partial ? `<span class="pill warn" style="height:20px;"><span class="dot"></span>${c.failed} ${t('failed', '失败')}</span>`
                : done ? `<span class="pill ok" style="height:20px;"><span class="dot"></span>${t('done', '完成')}</span>`
                : `<span class="pill warn" style="height:20px;"><span class="dot"></span>${t('running', '进行中')}</span>`;
     let body;
@@ -774,11 +799,14 @@
             ? t('All source tables were already converted — nothing to do.', '所有源表此前已转换 —— 无需重复处理。')
             : `${t('Converted', '已转换')} <b>${c.converted}</b> ${t('tables', '张表')}${c.skipped ? ` · ${c.skipped} ${t('cached', '缓存')}` : ''}${c.failed ? ` · ${c.failed} ${t('failed', '失败')}` : ''}.`)
         : `${tot ? `[${cur}/${tot}] ` : ''}${p.file ? `<span class="mono">${p.file}</span>` : t('preparing…', '准备中…')}${p.rows != null ? ` · ${Number(p.rows).toLocaleString()} ${t('rows', '行')}` : ''}`;
+      const partialNote = partial
+        ? `<div class="note warn mt-12" style="padding:10px 12px;"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="t" style="font-size:12px;">${c.failed} ${t('source table(s) failed to convert', '张源表转换失败')}</div><div class="d" style="font-size:11px;margin:0;">${t('You can continue, but modules that depend on the failed tables will be incomplete. Re-run conversion to retry the failed files (converted tables are skipped).', '可以继续，但依赖失败表的模块会不完整。重新运行转换会重试失败文件（已转换的表会跳过）。')}</div></div></div>`
+        : '';
       body = `
         ${bar}
         <div style="font-size:12px;color:var(--ink-3);min-height:18px;">${line}</div>
         ${done
-          ? `<div class="row gap-8 mt-16"><button class="btn primary" data-ex-convdone>${icon('arrow', 14)} ${t('Continue to extraction', '继续抽取')}</button></div>`
+          ? `${partialNote}<div class="row gap-8 mt-16"><button class="btn primary" data-ex-convdone>${icon('arrow', 14)} ${t('Continue to extraction', '继续抽取')}</button>${partial ? `<button class="btn ghost" data-ex-startconv>${icon('refresh', 13)} ${t('Re-run conversion', '重新转换')}</button>` : ''}</div>`
           : `<div class="note info mt-16" style="padding:10px 12px;"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="d" style="font-size:11px;margin:0;">${t('Runs entirely on your machine. Already-converted tables are skipped, so a re-run is fast.', '全程在本机运行。已转换的表会跳过,再次运行很快。')}</div></div></div>`}`;
     }
     return `
@@ -1023,7 +1051,8 @@
 
   /* ---- the express recommended card ---- */
   function expressCard() {
-    const exportReady = !!currentExportDir();
+    // Demo runs a local mock and needs no destination — only real extraction does.
+    const exportReady = dataMode() === 'demo' || !!currentExportDir();
     return `
     <div class="express">
       <div class="express-grid">
@@ -1043,6 +1072,7 @@
         </div>
         <div class="express-cta">
           <button class="btn primary lg" data-ex-run="recommended" ${exportReady ? '' : 'disabled'}>${icon('play', 16)} ${t('Run recommended extraction', '运行推荐抽取')}</button>
+          ${exportReady ? '' : `<button class="btn sm ex-express-setdest" data-ex-express-setdest style="margin-top:8px;">${icon('folder', 13)} ${t('Choose export folder', '选择导出目录')}</button>`}
           <div class="note-line" style="${exportReady ? '' : 'color:var(--warn,#a66a00);'}">${icon(exportReady ? 'shield' : 'alert', 12)} ${exportReady ? (dataMode() === 'demo' ? t('reproducible · no tokens', '可复现 · 不消耗 token') : t('local-only · nothing uploaded', '仅本地 · 不上传')) : exportDestinationRequiredMessage()}</div>
         </div>
       </div>
@@ -1175,6 +1205,23 @@
     else if (key === 'los_min') el.textContent = fmtHours(exMinLosHours);
     else if (key === 'window') el.textContent = fmtObservationWindow(exWindowHours);
   }
+  function fmtSampleCap() {
+    return exMaxPatients > 0
+      ? t('≤ ', '≤ ') + exMaxPatients.toLocaleString() + t(' stays (sample cap)', ' 次住院（采样上限）')
+      : t('full cohort (no cap)', '完整队列（不限）');
+  }
+  function cohortCountPill() {
+    // Demo mode ships a fixed 10-stay seeded cohort; Real mode computes the
+    // matched count server-side, so surface the sample cap instead of a fake
+    // "10 stays matched" literal.
+    return dataMode() === 'real' ? escHtml(fmtSampleCap()) : t('10 demo stays', '10 条演示住院');
+  }
+  function sampleCapCtl() {
+    const opts = [[200, '200'], [500, '500'], [2000, '2,000'], [0, t('All', '全部')]];
+    return `<div class="row gap-6" data-ex-cap>
+      ${opts.map(([v, lbl]) => `<button type="button" class="chip ${exMaxPatients === v ? 'solid on' : ''}" data-cap="${v}">${escHtml(lbl)}</button>`).join('')}
+    </div>`;
+  }
   function cohortChips() {
     const preset = cohortPresetMeta();
     const chips = [
@@ -1197,7 +1244,7 @@
       <div class="cfg-head">
         <div class="cfg-ico">${icon('cohort', 17)}</div>
         <div class="grow"><div class="cfg-h">${t('Cohort', '队列')}</div><div class="cfg-sub">${t('who is included', '纳入哪些患者')}</div></div>
-        <span class="pill"><span class="dot" style="background:var(--ok);"></span>${t('10 stays matched', '匹配 10 次住院')}</span>
+        <span class="pill"><span class="dot" style="background:var(--ok);"></span>${cohortCountPill()}</span>
       </div>
       <div class="cfg-body">
         <div class="cfg-chips">
@@ -1218,6 +1265,7 @@
             ${advRow(t('Age range at admission', '入院年龄范围'), ageRangeCtl())}
             ${advRow(t('Minimum ICU LOS', '最短 ICU 时长'), rangeCtl('los_min', exMinLosHours, 0, 168, 1, fmtHours(exMinLosHours)))}
             ${advRow(t('Observation window', '观察窗口'), rangeCtl('window', exWindowHours, 1, MAX_OBSERVATION_WINDOW_HOURS, 1, fmtObservationWindow(exWindowHours)))}
+            ${dataMode() === 'real' ? advRow(t('Cohort sample cap', '队列采样上限'), sampleCapCtl()) : ''}
             ${advRow(t('Exclude readmissions', '排除再入院'), switchEl(exExcludeReadmissions, 'readmissions'))}
           </div>
           <div style="border-top:1px solid var(--hair);margin-top:14px;padding-top:14px;">
@@ -1489,7 +1537,7 @@
       <div class="sumcard">
         <div class="eyebrow">${t('You will extract', '即将抽取')}</div>
         <div class="sum-row"><span class="k">${t('Source', '数据源')}</span><span class="v">${dataMode() === 'demo' ? t('Demo', '演示') : t('Real', '真实')}</span></div>
-        <div class="sum-row"><span class="k">${t('Cohort', '队列')}</span><span class="v">10 ${t('stays', '住院')}</span></div>
+        <div class="sum-row"><span class="k">${t('Cohort', '队列')}</span><span class="v">${dataMode() === 'real' ? escHtml(fmtSampleCap()) : '10 ' + t('demo stays', '演示住院')}</span></div>
         <div class="sum-row"><span class="k">${t('Modules', '模块')}</span><span class="v" id="exSumMods">${selMods().length}</span></div>
         <div class="sum-row"><span class="k">${t('Concepts', '概念')}</span><span class="v" id="exSumConc">${conceptN()}</span></div>
         <div class="sum-row"><span class="k">${t('Format', '格式')}</span><span class="v">${exFormat.toUpperCase()}</span></div>
@@ -1542,7 +1590,7 @@
         <div class="st-d">${(r ? r.file_count : files.length)} ${t('concept files', '个概念文件')}${totalRows != null ? ` · ${Number(totalRows).toLocaleString()} ${t('rows total', '行(合计)')}` : ''} + <span class="mono">_manifest.json</span> ${t('written to', '已写入')} <span class="mono">${outDir}</span>. ${t('Everything stayed on your machine.', '全部留在你的机器上。')}</div>
         <div class="st-actions">
           <button class="btn primary" data-nav="patient">${icon('patient', 14)} ${t('Open in Patient Review', '打开患者审阅')}</button>
-          <button class="btn" data-nav="agent">${icon('agent', 14)} ${t('Hand off to Research Agent', '交给研究代理')}</button>
+          <button class="btn" data-nav="agent">${icon('agent', 14)} ${t('Hand off to Agent Projects', '交给研究项目')}</button>
           <button class="btn ghost" data-ex-reset>${icon('refresh', 14)} ${t('Extract again', '重新抽取')}</button>
         </div>
       </div>
@@ -1579,6 +1627,8 @@
     },
     render() {
       if (window.__euExtractFocusICD) { exAdvCohort = true; exCustomOpen = true; exCohortPreset = 'icd'; }
+      if (window.EU_GUIDED_HANDOFF && window.EU_GUIDED_HANDOFF.take) window.EU_GUIDED_HANDOFF.take('extraction');
+      const guidedNote = window.EU_GUIDED_HANDOFF && window.EU_GUIDED_HANDOFF.noteHtml ? window.EU_GUIDED_HANDOFF.noteHtml('extraction') : '';
       let body;
       const real = dataMode() === 'real';
       if (exView === 'running') body = runningState();
@@ -1615,6 +1665,7 @@
         <p class="lead">${t('Turn ICU records into analysis-ready tables. Start with the recommended extraction, or customize every detail.', '把 ICU 记录变成可分析的数据表。可以直接用推荐配置,也可以自定义每个细节。')}</p>
         <div style="font-size:11.5px;color:var(--ink-4);margin-top:9px;">${t('Key terms', '关键术语')}: ${window.gloss('SOFA')} · ${window.gloss('Sepsis-3')} · ${window.gloss('cohort', t('cohort', '队列'))} · ${window.gloss('concept', t('concept', '概念'))} · <a class="dict-link" data-nav="dictionary" style="color:var(--accent-ink);cursor:pointer;">${t('Browse data dictionary', '浏览数据字典')} →</a></div>
       </div>
+      ${guidedNote}
       ${body}`;
     },
     afterRender(root) {
@@ -1668,6 +1719,10 @@
       const sampleBtn = root.querySelector('[data-ex-sample]'); if (sampleBtn) sampleBtn.addEventListener('click', () => { if (window.setDataMode) window.setDataMode('demo'); });
       // run
       root.querySelectorAll('[data-ex-run]').forEach(b => b.addEventListener('click', () => runExtract(b.dataset.exRun || 'custom')));
+      root.querySelectorAll('[data-ex-express-setdest]').forEach(b => b.addEventListener('click', () => {
+        exCustomOpen = true; exAdvExport = true; repaint();
+        setTimeout(() => { const el = document.querySelector('.ex-export-destination'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 60);
+      }));
       root.querySelectorAll('[data-ex-cancel]').forEach(b => b.addEventListener('click', cancelExportJob));
       root.querySelectorAll('[data-ex-reset]').forEach(b => b.addEventListener('click', () => { teardownExportES(); exView = 'home'; exportProg = null; exportResult = null; exportErr = null; exportJobId = null; exportCancelRequested = false; exportRunModules = null; repaint(); }));
       // custom disclosure
@@ -1708,6 +1763,12 @@
         window.EU_STALE = true;
         repaint();
       }));
+      const capCtl = root.querySelector('[data-ex-cap]'); if (capCtl) capCtl.addEventListener('click', e => {
+        const b = e.target.closest('[data-cap]'); if (!b) return;
+        exMaxPatients = Math.max(0, Number(b.dataset.cap || 0));
+        window.EU_STALE = true;
+        repaint();
+      });
       root.querySelectorAll('[data-ex-switch="definitions"]').forEach(s => s.addEventListener('click', () => {
         exIncludeDefinitions = !exIncludeDefinitions;
         repaint();

@@ -302,7 +302,11 @@
     // hand off the page context so Guided Copilot continues, not restarts
     try {
       const lastUser = [...thread].reverse().find(t => t.user);
-      window.__cpBridge = { ts: Date.now(), route: routeOf(), lastUser: lastUser ? lastUser.html : null };
+      // Forward the current data mode so Guided Copilot's real-mode guard fires:
+      // a Real-mode user must land in the real project frontdoor, never the
+      // seeded-demo (welcome/BRANCH) pipeline. Omitting this let dataMode default
+      // to 'demo' and dropped Real-mode dock users into the fabricated flow.
+      window.__cpBridge = { ts: Date.now(), route: routeOf(), lastUser: lastUser ? lastUser.html : null, dataMode: window.EU_DATA || 'demo' };
     } catch (e) {}
     close(); location.hash = '#guided';
   }
