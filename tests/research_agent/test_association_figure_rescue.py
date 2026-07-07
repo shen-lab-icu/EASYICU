@@ -406,6 +406,47 @@ def test_ordinal_figure_step_is_family_supported(step_id: str):
     assert deterministic_figure_family_supported(step_id) is True
 
 
+def test_graded_exposure_forest_keys_by_varying_level_not_constant_model(
+    tmp_path: Path,
+):
+    # M1 regression: a single graded exposure keeps exposure_variable/model
+    # CONSTANT across rows and varies by ordinal `level`. The renderer must label
+    # and key rows by the varying `level`, not collapse every row to the constant
+    # column (which drops the per-row trace key -> "no shared key").
+    parent = tmp_path / "steps" / "04_primary_association_model" / "outputs"
+    parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "model": ["adjusted"] * 5,
+            "exposure_variable": ["sofa2_liver_cat"] * 5,
+            "level": [0, 1, 2, 3, 4],
+            "odds_ratio": [1.0, 1.2122, 1.3638, 1.6002, 3.9035],
+            "ci_low": [1.0, 1.1075, 1.1985, 1.3627, 3.3520],
+            "ci_high": [1.0, 1.3269, 1.5520, 1.8791, 4.5458],
+        }
+    ).to_csv(parent / "primary_adjusted_odds_ratios.csv", index=False)
+
+    out = tmp_path / "steps" / "04_primary_association_model_figure" / "outputs"
+    rid = routed_rescue(
+        run_dir=tmp_path,
+        current_step_id="04_primary_association_model_figure",
+        out_dir=out,
+        step_text="Adjusted odds ratio per SOFA-2 liver category level.",
+    )
+    assert rid is not None
+    src = pd.read_csv(out / "publication_figure_source_data.csv")
+    # keyed by the varying level, 5 distinct rows (not collapsed to one label)
+    assert "level" in src.columns
+    assert src["level"].nunique() == 5
+    res = FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=src,
+        source_path=out / "publication_figure_source_data.csv",
+        upstream_path=parent / "primary_adjusted_odds_ratios.csv",
+    )
+    assert res.get("ok") is True, res
+    assert res.get("key_column") == "level", res
+
+
 def test_ordinal_stage_gradient_figure_routes_to_association_renderer(tmp_path: Path):
     parent = (
         tmp_path / "steps" / "04_primary_stage_gradient_analysis" / "outputs"
