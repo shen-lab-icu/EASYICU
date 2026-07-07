@@ -592,6 +592,9 @@ def run_execute_phase(
         "noop_streak": 0,
         "total": 0,
         "disabled": False,
+        # Latches True when the substantive-revision count reaches
+        # ``max_replans``; drives the fail-closed diagnostic_only demotion.
+        "budget_exhausted": False,
         "cohort_contract_emitted": False,
         "cohort_materialized": False,
         # Directed replans fired when a model/estimation step self-blocks on a
@@ -1127,15 +1130,31 @@ def run_execute_phase(
         cap_total = pipeline._max_replans
         if cap_total and _replan_state["total"] >= cap_total:
             _replan_state["disabled"] = True
+            _replan_state["budget_exhausted"] = True
+            # Fail closed: reaching the replan budget without the plan
+            # converging is a runaway loop, not a clean run. The run is
+            # demoted to diagnostic_only so a non-converging replan cascade
+            # cannot launder a manuscript. The trigger is kept in ``detail``
+            # (never the message) so a step-id-shaped reason cannot make the
+            # readiness supersession rule drop this run-level latch.
             findings.append(
                 ValidationFinding(
-                    validator="replanner",
-                    severity="info",
+                    validator="replan_budget",
+                    severity="error",
                     message=(
-                        "Replanning disabled after reaching the budget of "
-                        f"{cap_total} substantive revisions."
+                        "Replan budget exhausted: "
+                        f"{_replan_state['total']} substantive plan revisions "
+                        f"reached the cap of {cap_total} without the plan "
+                        "converging. Run demoted to diagnostic_only "
+                        "(fail-closed) rather than emitting a manuscript from a "
+                        "non-converging replan loop."
                     ),
-                    detail={"reason": reason},
+                    detail={
+                        "replan_budget_exhausted": True,
+                        "cap": cap_total,
+                        "substantive_revisions": _replan_state["total"],
+                        "reason": reason,
+                    },
                 )
             )
         return revised

@@ -491,7 +491,8 @@ class ResearchAgentPipeline:
         enable_replanning: bool = True,
         max_total_steps: int = 12,
         max_consecutive_noop_replans: int = 2,
-        max_replans: int = 0,
+        max_replans: int = 6,
+        stabilization_mode: bool = False,
         max_numeric_claims_per_step: int = 100,
         writer_digest_widened: bool = False,
         writer_digest_secondary_cap_per_step: int = 20,
@@ -689,6 +690,13 @@ class ResearchAgentPipeline:
             else 0
         )
         self._max_replans = int(max_replans) if max_replans and max_replans > 0 else 0
+        # Stabilization / primary-only iterations tighten the replan budget so a
+        # non-converging run fails closed fast (~3 revisions) instead of burning
+        # the full-run budget of 6. A caller that already set a smaller positive
+        # cap keeps it; a disabled cap (0) is re-armed to 3 under stabilization.
+        self._stabilization_mode = bool(stabilization_mode)
+        if self._stabilization_mode:
+            self._max_replans = min(self._max_replans, 3) if self._max_replans else 3
         self._max_numeric_claims_per_step = (
             int(max_numeric_claims_per_step)
             if max_numeric_claims_per_step and max_numeric_claims_per_step > 0

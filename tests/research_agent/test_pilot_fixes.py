@@ -181,13 +181,19 @@ def test_plan_signature_detects_substantive_change():
 
 
 def test_pipeline_replan_guards_defaults(ra, tmp_path: Path):
-    """No-op early-stop is on by default; the hard budget is off (legacy)."""
+    """No-op early-stop stays on; the hard budget defaults to 6 (2026-07-06).
+
+    The legacy default of 0 (budget off) let a non-converging run churn the
+    replanner indefinitely — an E3 canonical run replanned 9× over ~50 min and
+    still failed. The balanced default gives 6 substantive revisions of repair
+    headroom, then fails closed to diagnostic_only.
+    """
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path / "wd",
         llm=ra.MockLLMClient(),
     )
     assert pipeline._max_consecutive_noop_replans == 2
-    assert pipeline._max_replans == 0
+    assert pipeline._max_replans == 6
 
 
 def test_pipeline_replan_guards_can_be_disabled(ra, tmp_path: Path):
