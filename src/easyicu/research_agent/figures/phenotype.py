@@ -16,7 +16,7 @@ at least two clusters and two features cannot be found.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -44,6 +44,28 @@ _METRIC_NAMES = [
     "cluster_validation",
 ]
 _SIZE_CANDIDATES = ["n", "size", "count", "n_stays", "cluster_size", "n_patients"]
+# For pivoting a LONG/tidy centroid table (cluster x variable rows) to wide.
+_VARIABLE_COL_CANDIDATES = [
+    "variable",
+    "feature",
+    "concept",
+    "measure",
+    "item",
+    "parameter",
+    "covariate",
+]
+_CENTROID_VALUE_CANDIDATES = [
+    "mean",
+    "centroid",
+    "median",
+    "mean_value",
+    "value",
+    "avg",
+    "average",
+    "zscore",
+    "z_score",
+    "std_mean",
+]
 _NON_FEATURE_TOKENS = (
     "cluster",
     "silhouette",
@@ -101,6 +123,114 @@ def _silhouette_value(evidence: EvidenceStore, run_dir: Path) -> Optional[float]
         return None
 
 
+_SIZE_STRICT_NAMES = (
+    "n",
+    "size",
+    "count",
+    "n_stays",
+    "cluster_size",
+    "n_patients",
+    "n_total",
+)
+_SIZE_SUBSTR_TOKENS = (
+    "n_total",
+    "n_stays",
+    "n_patients",
+    "cluster_size",
+    "count",
+    "size",
+)
+_STAT_COL_TOKENS = (
+    "median",
+    "mean",
+    "sd",
+    "std",
+    "q25",
+    "q75",
+    "iqr",
+    "pct",
+    "percent",
+    "missing",
+    "min",
+    "max",
+    "range",
+    "var",
+)
+
+
+def _resolve_long_size_column(frame: pd.DataFrame, exclude: set) -> Optional[str]:
+    """Size column for a long profile table, robust to the ``"n"`` substring trap.
+
+    ``resolve_column(_SIZE_CANDIDATES)`` matches the bare ``"n"`` candidate
+    against ``media(n)`` / ``mea(n)`` in a tidy stat table, so size recovery must
+    prefer an EXACT size name and, failing that, a size-like substring that is not
+    a summary-stat column.
+    """
+    lowered = {col: str(col).strip().lower() for col in frame.columns}
+    for cand in _SIZE_STRICT_NAMES:
+        for col, low in lowered.items():
+            if col not in exclude and low == cand:
+                return col
+    for col, low in lowered.items():
+        if col in exclude or any(tok in low for tok in _STAT_COL_TOKENS):
+            continue
+        if any(tok in low for tok in _SIZE_SUBSTR_TOKENS):
+            return col
+    return None
+
+
+def _to_wide_cluster_profiles(
+    frame: pd.DataFrame, cluster_col: str
+) -> Tuple[pd.DataFrame, Optional[pd.Series]]:
+    """Pivot a LONG/tidy centroid table into a WIDE cluster x variable matrix.
+
+    Clustering code commonly emits the long form -- one row per
+    ``(cluster, variable)`` with a ``mean`` / ``median`` value column -- rather
+    than a wide cluster x feature matrix. The wide heatmap needs one row per
+    cluster and one column per clinical variable. Without this pivot the profile
+    frame has many rows per cluster and the downstream ``groupby(cluster).mean()``
+    collapses every clinical variable into the aggregate stat columns (median /
+    mean / sd / missing_pct), producing a heatmap of summary statistics instead
+    of a phenotype profile (M3 subphenotype: cluster_profiles.csv shipped 17
+    variables x 2 clusters, so the heatmap plotted cluster x [median, mean, sd,
+    ...] -- scientifically meaningless).
+
+    Returns ``(frame, None)`` unchanged when the table is already wide (one row
+    per cluster) or is not a recognisable ``(cluster, variable, value)`` long
+    shape, so wide inputs never regress. The second element is a per-cluster size
+    series recovered from the long table's size column before the pivot drops it,
+    or ``None``.
+    """
+    if not frame[cluster_col].duplicated().any():
+        return frame, None
+    var_col = resolve_column(frame, _VARIABLE_COL_CANDIDATES)
+    value_col = resolve_column(frame, _CENTROID_VALUE_CANDIDATES)
+    if var_col is None or value_col is None or var_col in (cluster_col, value_col):
+        return frame, None
+    size_series: Optional[pd.Series] = None
+    size_col = _resolve_long_size_column(frame, {cluster_col, var_col, value_col})
+    if size_col is not None:
+        try:
+            size_series = (
+                pd.to_numeric(frame[size_col], errors="coerce")
+                .groupby(frame[cluster_col].astype(str))
+                .max()
+            )
+        except Exception:
+            size_series = None
+    try:
+        wide = frame.pivot_table(
+            index=cluster_col, columns=var_col, values=value_col, aggfunc="mean"
+        ).reset_index()
+    except Exception:
+        return frame, None
+    wide.columns = [str(c) for c in wide.columns]
+    # Need the cluster column + at least two feature columns, and >= 2 clusters.
+    if wide.shape[1] < 3 or wide[cluster_col].nunique() < 2:
+        return frame, None
+    return wide, size_series
+
+
 def render_phenotype_figure(
     *,
     context: ResearchContext,
@@ -116,7 +246,13 @@ def render_phenotype_figure(
     )
     if cluster_col is None:
         return None
-    size_col = resolve_column(frame, _SIZE_CANDIDATES)
+    # A long/tidy centroid table (cluster x variable rows) becomes a wide
+    # cluster x variable matrix so the heatmap plots the clinical variables, not
+    # the summary-stat columns a groupby-mean would otherwise collapse them into.
+    frame, size_series = _to_wide_cluster_profiles(frame, cluster_col)
+    size_col = (
+        None if size_series is not None else resolve_column(frame, _SIZE_CANDIDATES)
+    )
     features = _feature_columns(frame, cluster_col, size_col)
     if len(features) < 2 or frame[cluster_col].nunique() < 2:
         return None
@@ -204,7 +340,11 @@ def render_phenotype_figure(
     add_panel_label(ax_par, "B", x=-0.18)
 
     # C -- cluster sizes + silhouette annotation (stability)
-    if size_col is not None:
+    if size_series is not None:
+        sizes = np.array(
+            [float(size_series.get(str(lbl), 0.0)) for lbl in cluster_labels]
+        )
+    elif size_col is not None:
         sizes = (
             pd.to_numeric(profiles[size_col], errors="coerce").fillna(0.0).to_numpy()
         )
