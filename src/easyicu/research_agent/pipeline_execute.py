@@ -618,6 +618,86 @@ _ORDINAL_OUTPUT_TOKENS = (
     "ordinal_trend",
 )
 
+# --- Cohort-definition-sensitivity routing (precise, not blunt keyword) -------
+# A cohort-definition-sensitivity step VARIES the cohort/eligibility definition
+# and compares the result across alternative definitions. The authoritative
+# signal is the planner's own ``method`` key; the historical blunt test --
+# ``"sensitivity" in blob and ("cohort"|"definition" in blob)`` -- false-positives
+# on a PRIMARY estimand step that merely mentions a pre-specified within-cohort
+# sensitivity sub-analysis. E3's ordinal dose-response primary step said
+# "reconciled primary COHORT denominator" and "survivor-only LOS SENSITIVITY",
+# so the blunt test both (a) vetoed the ordinal runner and (b) let the
+# cohort-sensitivity runner claim the step, which then skipped for lack of an
+# alternative-cohort input and deadlocked the run. Require the alternative-
+# definition signal instead. Stays case-neutral: no score/variable literals.
+_COHORT_DEF_SENSITIVITY_METHODS = frozenset(
+    {
+        "cohort_definition_sensitivity",
+        "cohort_sensitivity",
+        "definition_sensitivity",
+    }
+)
+_COHORT_DEF_SENSITIVITY_ID_TOKENS = (
+    "cohort_definition_sensitivity",
+    "cohort-definition-sensitivity",
+    "definition_sensitivity",
+)
+_COHORT_DEF_SENSITIVITY_OUTPUT_TOKENS = (
+    "alternative_cohort_attrition",
+    "cohort_overlap",
+    "overlap_and_movement_across_cohorts",
+    "sensitivity_grid",
+    "sensitivity_comparison",
+    "definition_sensitivity",
+    "sensitivity_definition_summary",
+    "outcome_by_definition",
+    "adjustment_denominator_sensitivity",
+)
+_COHORT_DEF_SENSITIVITY_PHRASES = (
+    "cohort definition sensitivity",
+    "cohort-definition sensitivity",
+    "alternative cohort definition",
+    "alternative cohort definitions",
+    "alternative eligibility",
+    "alternative inclusion",
+    "alternative exclusion",
+    "vary the cohort definition",
+    "varying the cohort definition",
+)
+
+
+def _is_cohort_definition_sensitivity_step(
+    method: str,
+    step_id: str,
+    intent: str,
+    expected_outputs: Sequence[str],
+) -> bool:
+    """Pure routing test: is this an ACTUAL cohort-definition-sensitivity step?
+
+    True only when the step varies the cohort/eligibility DEFINITION and compares
+    across alternatives -- signalled by the planner ``method`` key, the step_id,
+    alternative-cohort output tables, or an explicit alternative-definition
+    phrase. A primary estimand step that merely mentions a within-cohort
+    "sensitivity" sub-analysis (on a single, already-defined cohort) returns
+    False, so it keeps its own primary runner rather than being hijacked here.
+
+    Extracted from the two preflight closures so the discriminator is shared and
+    unit-testable without a full bench.
+    """
+    m = str(method or "").lower()
+    if m in _COHORT_DEF_SENSITIVITY_METHODS:
+        return True
+    sid = str(step_id or "").lower()
+    if any(tok in sid for tok in _COHORT_DEF_SENSITIVITY_ID_TOKENS):
+        return True
+    expected_blob = " ".join(
+        str(item or "") for item in (expected_outputs or [])
+    ).lower()
+    if any(tok in expected_blob for tok in _COHORT_DEF_SENSITIVITY_OUTPUT_TOKENS):
+        return True
+    blob = " ".join([sid, str(intent or "").lower(), expected_blob])
+    return any(phrase in blob for phrase in _COHORT_DEF_SENSITIVITY_PHRASES)
+
 
 def _ordinal_dose_response_step_matches(
     method: str, blob: str, expected_blob: str
@@ -1903,25 +1983,16 @@ else:
                 )
             ):
                 return False
-            blob = " ".join(
-                [
-                    str(step.step_id or ""),
-                    str(step.intent or ""),
-                    str(step.method or ""),
-                    *[str(item or "") for item in (step.expected_outputs or [])],
-                ]
-            ).lower()
-            sensitivity_tokens = ("sensitivity", "robustness")
-            definition_tokens = (
-                "cohort",
-                "eligibility",
-                "definition",
-                "definitions",
-                "inclusion",
-                "exclusion",
-            )
-            return any(token in blob for token in sensitivity_tokens) and any(
-                token in blob for token in definition_tokens
+            # Only claim a step that ACTUALLY varies the cohort/eligibility
+            # definition (method/id/output-table/phrase signal). The former blunt
+            # "sensitivity"+"cohort" co-occurrence hijacked primary estimand steps
+            # (ordinal/association/descriptive) whose intent merely mentions a
+            # within-cohort sensitivity sub-analysis on the primary cohort.
+            return _is_cohort_definition_sensitivity_step(
+                str(step.method or ""),
+                str(step.step_id or ""),
+                str(step.intent or ""),
+                step.expected_outputs or [],
             )
 
         def _cohort_definition_overlap_preflight_supported() -> bool:
@@ -2143,9 +2214,14 @@ else:
                     expected_blob,
                 ]
             ).lower()
-            # a cohort-definition-sensitivity step is owned by another runner
-            if "sensitivity" in blob and any(
-                t in blob for t in ("cohort", "definition", "eligibility")
+            # a cohort-definition-sensitivity step is owned by another runner;
+            # use the precise discriminator, NOT a blunt "sensitivity"+"cohort"
+            # co-occurrence. The blunt test vetoed this very (primary ordinal)
+            # step because its intent mentions the "reconciled primary cohort
+            # denominator" and a pre-specified within-cohort LOS "sensitivity"
+            # sub-analysis -- neither of which makes it a definition comparison.
+            if _is_cohort_definition_sensitivity_step(
+                method, step.step_id, step.intent, step.expected_outputs
             ):
                 return False
             return _ordinal_dose_response_step_matches(method, blob, expected_blob)
