@@ -135,6 +135,15 @@ def test_markdown_matrix_renders_every_family_and_the_ladder():
     assert "never silently filled" in md
 
 
+def test_known_unsupported_boundary_is_recorded_and_rendered():
+    # An explicit "not supported" boundary (competing-risks CIF) must be
+    # first-class in the registry, not only a benchmark probe.
+    assert cr.KNOWN_UNSUPPORTED_ESTIMANDS
+    md = cr.render_capability_matrix_markdown()
+    assert "Known unsupported estimands" in md
+    assert "Competing-risks" in md
+
+
 def test_get_capability_disambiguates_association():
     dose = cr.get_capability("association", dose_response=True)
     general = cr.get_capability("association", dose_response=False)
