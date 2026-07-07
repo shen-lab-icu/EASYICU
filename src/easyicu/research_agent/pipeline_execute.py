@@ -83,6 +83,7 @@ from .deterministic_sensitivity import (
     cohort_definition_overlap_code,
     cohort_definition_sensitivity_comparison_code,
 )
+from .deterministic_causal import causal_primary_analysis_code
 from .deterministic_survival import survival_primary_analysis_code
 from .estimators import fit_robustness_rows_from_records
 from .llm import MockLLMClient
@@ -1774,6 +1775,91 @@ else:
             )
             return survival_primary_analysis_code()
 
+        def _causal_primary_analysis_preflight_supported() -> bool:
+            """True for the PRIMARY causal-inference result step.
+
+            The deterministic IPTW runner owns the causal estimand (propensity +
+            stabilised weights + weighted marginal odds ratio + balance data) so
+            this result path is reproducible instead of varying run-to-run
+            through the LLM coder. It must NOT claim a figure step (the family
+            figure renderer handles those) nor a cohort-definition-sensitivity
+            step.
+            """
+            if _step_expects_figure(step):
+                return False
+            method = str(step.method or "").lower()
+            if method not in (
+                "causal_inference",
+                "causal_emulation",
+                "iptw",
+                "ipw",
+                "psm",
+                "propensity",
+                "propensity_score",
+                "target_trial",
+                "target_trial_emulation",
+            ):
+                return False
+            expected_blob = " ".join(
+                str(item or "") for item in (step.expected_outputs or [])
+            ).lower()
+            # A step that DECLARES the primary causal-effect / balance / propensity
+            # outputs IS the primary causal step, even when its output set also
+            # includes innocuously-named tables or its intent narrates sensitivity.
+            if any(
+                token in expected_blob
+                for token in (
+                    "causal_effect",
+                    "balance_pre_post",
+                    "covariate_balance",
+                    "propensity",
+                    "adjusted_effect",
+                    "max_smd",
+                    "primary_causal",
+                )
+            ):
+                return True
+            blob = " ".join(
+                [
+                    str(step.step_id or ""),
+                    str(step.intent or ""),
+                    expected_blob,
+                ]
+            ).lower()
+            if "sensitivity" in blob and any(
+                t in blob for t in ("cohort", "definition", "eligibility")
+            ):
+                return False
+            return True
+
+        def _deterministic_causal_primary_analysis_code(
+            reason: str,
+            *,
+            preflight: bool = False,
+        ) -> Optional[str]:
+            nonlocal deterministic_fallback_used
+            if (
+                deterministic_fallback_used
+                or not pipeline._enable_deterministic_runner_repair
+                or (preflight and not _causal_primary_analysis_preflight_supported())
+            ):
+                return None
+            if not _causal_primary_analysis_preflight_supported():
+                return None
+            deterministic_fallback_used = True
+            step_record["deterministic_code_fallback"] = reason
+            step_record["deterministic_standard_analysis"] = "causal_primary_iptw"
+            emit_progress(
+                "coder",
+                f"Using deterministic IPTW causal runner for {step.step_id}.",
+                run_id=run_id,
+                step_id=step.step_id,
+                current_step=step_current,
+                total_steps=total_steps,
+                fallback_reason=reason,
+            )
+            return causal_primary_analysis_code()
+
         def _deterministic_cohort_definition_overlap_code(
             reason: str,
             *,
@@ -1866,6 +1952,27 @@ else:
                         severity="info",
                         message=(
                             "Using deterministic Cox survival runner before "
+                            f"requesting new coder code for step {step.step_id}."
+                        ),
+                        detail={"step_id": step.step_id},
+                    )
+                )
+        elif (
+            _preflight_causal_code := _deterministic_causal_primary_analysis_code(
+                "causal_primary_analysis_preflight", preflight=True
+            )
+        ) is not None:
+            # The PRIMARY causal-inference result runs deterministically (IPTW
+            # propensity + weighted marginal OR + balance data, no figures) so the
+            # causal estimand does not vary run-to-run through the LLM coder.
+            code = _preflight_causal_code
+            with shared_lock:
+                findings.append(
+                    ValidationFinding(
+                        validator="coder",
+                        severity="info",
+                        message=(
+                            "Using deterministic IPTW causal runner before "
                             f"requesting new coder code for step {step.step_id}."
                         ),
                         detail={"step_id": step.step_id},
