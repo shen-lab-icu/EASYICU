@@ -1859,7 +1859,12 @@ class FigureContractQualityValidator:
             )
 
         result_like = self._is_result_like_contract(raw, panels_list)
-        if result_like and len(panels_list) < 2:
+        if (
+            result_like
+            and len(panels_list) < 2
+            and not self._is_supporting_figure_step(step)
+            and not self._contract_looks_supporting_figure(raw, figure_id)
+        ):
             findings.append(
                 ValidationFinding(
                     validator=self.name,
@@ -1991,6 +1996,84 @@ class FigureContractQualityValidator:
         role_text = " ".join(panel_roles)
         text_blob = cls._contract_text(raw).lower()
         return any(role in role_text or role in text_blob for role in cls._RESULT_ROLES)
+
+    # Phrases that identify a SUPPORTING audit/QC/diagnostic figure STEP (as
+    # opposed to the primary result figure). Phrase-level and specific so a
+    # primary result step is never matched. Case-neutral.
+    _SUPPORTING_STEP_TOKENS = (
+        "audit panel",
+        "audit_panel",
+        "data-quality panel",
+        "data quality panel",
+        "data completeness panel",
+        "diagnostic panel",
+        "qa panel",
+        "quality-control panel",
+        "quality control panel",
+        "measurement-process audit",
+        "measurement process audit",
+    )
+
+    @classmethod
+    def _is_supporting_figure_step(cls, step: Optional[AnalysisStep]) -> bool:
+        """True when the step is a SUPPORTING audit/QC figure, not the primary
+        result figure.
+
+        Such a supplementary figure must not be held to the primary-result
+        ">= 2 data-backed panels" rule: its very existence as a SEPARATE figure
+        means the audit context is not collapsed into the primary result figure
+        (which the rule exists to prevent). Without this, an LLM coder that tags
+        a lone audit panel with a result role ("robustness"/"stability") makes a
+        supplementary figure hard-fail the whole run — the M3 subphenotype block.
+        The deterministic audit renderer additionally emits >= 2 supporting-role
+        panels, so this is the belt to that renderer's suspenders.
+        """
+        if step is None:
+            return False
+        blob = " ".join(
+            str(x or "")
+            for x in (
+                getattr(step, "step_id", ""),
+                getattr(step, "intent", ""),
+            )
+        ).lower()
+        return any(token in blob for token in cls._SUPPORTING_STEP_TOKENS)
+
+    # figure_id tokens that identify a supporting audit/QC figure even when the
+    # step is not threaded to the validator (the real figure_skill call sites
+    # currently pass no step, only the contract).
+    _SUPPORTING_ID_TOKENS = (
+        "audit",
+        "_qa",
+        "qa_",
+        "diagnostic",
+        "quality_control",
+        "quality-control",
+        "qc_",
+        "missingness",
+        "data_quality",
+        "data-quality",
+        "overview",
+    )
+
+    @classmethod
+    def _contract_looks_supporting_figure(
+        cls, raw: Dict[str, Any], figure_id: str
+    ) -> bool:
+        """True when the CONTRACT itself identifies a supporting audit/QC figure.
+
+        The real figure_skill call sites do not thread the step, so detect a
+        supplementary figure from the contract's figure_id / text (e.g.
+        figure_id='audit_panel', or a panel titled 'Audit Panel'). The
+        primary-result >= 2-panel guard stays intact: a primary figure_id
+        (primary_forest, phenotype_structure, causal_effect, ...) contains none
+        of these tokens.
+        """
+        fid = str(figure_id or "").lower()
+        if any(tok in fid for tok in cls._SUPPORTING_ID_TOKENS):
+            return True
+        text = cls._contract_text(raw).lower()
+        return any(tok in text for tok in cls._SUPPORTING_STEP_TOKENS)
 
     @staticmethod
     def _contract_text(raw: Dict[str, Any]) -> str:

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from easyicu.research_agent.audits.validators import FigureContractQualityValidator
 
@@ -101,6 +102,105 @@ def test_audit_contract_file_still_flags_single_result_panel(tmp_path: Path):
         tmp_path,
         "primary_forest",
         [{"panel_id": "A", "role": "forest_odds_ratio", "title": "Primary OR"}],
+    )
+    findings = FigureContractQualityValidator().audit_contract_file(
+        path, manuscript_facing=True
+    )
+    assert any(_PANEL_MSG in f.message for f in findings), [f.message for f in findings]
+
+
+# ---- step-aware exemption for a supporting audit STEP (M3 subphenotype) -----
+#
+# The M3 block: the LLM tagged a lone audit panel with role="robustness" (a
+# RESULT role), so the role-based exemption above did not fire and a
+# SUPPLEMENTARY audit figure hard-failed the whole run. A supporting/audit STEP
+# is exempt from the primary-result ">= 2 panels" rule regardless of the role
+# label; a primary result step is NOT.
+
+_AUDIT_STEP = SimpleNamespace(
+    step_id="03_audit_panel",
+    intent=(
+        "Render an audit panel that summarises the analysis's robustness: cohort "
+        "attrition, data completeness / missingness, measurement-process handling."
+    ),
+    method="visualization",
+)
+_PRIMARY_STEP = SimpleNamespace(
+    step_id="01_phenotype_structure",
+    intent="Render the phenotype structure figure showing cluster centroid profiles.",
+    method="visualization",
+)
+
+
+def test_is_supporting_figure_step_true_for_audit_panel():
+    assert FigureContractQualityValidator._is_supporting_figure_step(_AUDIT_STEP)
+
+
+def test_is_supporting_figure_step_false_for_primary_result_step():
+    assert not FigureContractQualityValidator._is_supporting_figure_step(_PRIMARY_STEP)
+    assert not FigureContractQualityValidator._is_supporting_figure_step(None)
+
+
+def test_audit_step_single_robustness_panel_is_exempt(tmp_path: Path):
+    # Exact M3 shape: one panel, role="robustness" (a result role), on an audit
+    # STEP -> must NOT be flagged, so a supplementary figure cannot nuke the run.
+    path = _write_contract(
+        tmp_path,
+        "audit_panel",
+        [{"panel_id": "A", "role": "robustness", "title": "Audit Panel"}],
+        core_claim="Displays the step result using registered source data.",
+    )
+    findings = FigureContractQualityValidator().audit_contract_file(
+        path, step=_AUDIT_STEP, manuscript_facing=True
+    )
+    assert not any(_PANEL_MSG in f.message for f in findings), [
+        f.message for f in findings
+    ]
+
+
+def test_primary_step_single_robustness_panel_is_still_flagged(tmp_path: Path):
+    # The same lone-robustness contract on a PRIMARY step keeps failing: the
+    # step-aware exemption must not weaken the primary-figure guard.
+    path = _write_contract(
+        tmp_path,
+        "primary_result",
+        [{"panel_id": "A", "role": "robustness", "title": "Primary"}],
+        core_claim="Primary robustness result.",
+    )
+    findings = FigureContractQualityValidator().audit_contract_file(
+        path, step=_PRIMARY_STEP, manuscript_facing=True
+    )
+    assert any(_PANEL_MSG in f.message for f in findings), [f.message for f in findings]
+
+
+# ---- contract-based exemption (the real call sites pass NO step) -----------
+
+
+def test_audit_contract_exempt_via_figure_id_without_step(tmp_path: Path):
+    # Exact M3 production path: figure_id='audit_panel', a lone role='robustness'
+    # panel, and NO step threaded. Detection must work from the contract alone.
+    path = _write_contract(
+        tmp_path,
+        "audit_panel",
+        [{"panel_id": "A", "role": "robustness", "title": "Audit Panel"}],
+        core_claim="Displays the step result using registered source data.",
+    )
+    findings = FigureContractQualityValidator().audit_contract_file(
+        path, manuscript_facing=True
+    )
+    assert not any(_PANEL_MSG in f.message for f in findings), [
+        f.message for f in findings
+    ]
+
+
+def test_primary_forest_still_flagged_without_step(tmp_path: Path):
+    # A primary figure_id with a lone robustness panel and NO step is still
+    # flagged: the contract-based exemption must not weaken the guard.
+    path = _write_contract(
+        tmp_path,
+        "primary_forest",
+        [{"panel_id": "A", "role": "robustness", "title": "Primary"}],
+        core_claim="Primary adjusted effect result.",
     )
     findings = FigureContractQualityValidator().audit_contract_file(
         path, manuscript_facing=True
