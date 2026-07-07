@@ -2550,6 +2550,40 @@ def _read_table(path: Path) -> pd.DataFrame:
     raise ValueError(f"unsupported table format for figure skill: {path.name}")
 
 
+def _primary_match_rank(label: Any, primary_token: str) -> Tuple[int, int]:
+    """Rank a forest row by how well its label matches the primary exposure.
+
+    Lower is better. Exact token match wins; then a substring match preferring the
+    smallest length gap (so the main-effect term beats an interaction / derived
+    term like ``exposure_x_age``); then no match. Used to put the true primary
+    exposure at row 0 instead of whatever coefficient happened to be first in a
+    long per-coefficient table (false-pass audit #15/#16).
+    """
+    lab = _match_token(label)
+    if not lab or not primary_token:
+        return (3, 0)
+    if lab == primary_token:
+        return (0, 0)
+    if primary_token in lab or lab in primary_token:
+        return (1, abs(len(lab) - len(primary_token)))
+    return (2, 0)
+
+
+def _order_primary_first(result: pd.DataFrame, primary_token: str) -> pd.DataFrame:
+    """Stable-sort so the best primary-exposure match is row 0.
+
+    Rows that do not match the exposure keep their original relative order, so a
+    table with no exposure match is returned unchanged (row 0 as before).
+    """
+    if result.empty or not primary_token:
+        return result
+    ranks = [_primary_match_rank(lab, primary_token) for lab in result["label"]]
+    order = sorted(range(len(result)), key=lambda i: ranks[i])
+    if order == list(range(len(result))):
+        return result
+    return result.iloc[order].reset_index(drop=True)
+
+
 def _normalise_association_frame(
     frame: pd.DataFrame,
     *,
@@ -2693,7 +2727,12 @@ def _normalise_association_frame(
     out = out.replace([float("inf"), float("-inf")], pd.NA).dropna(subset=["estimate"])
     out["lower"] = out["lower"].fillna(out["estimate"])
     out["upper"] = out["upper"].fillna(out["estimate"])
-    result = out[["label", "estimate", "lower", "upper"]]
+    result = out[["label", "estimate", "lower", "upper"]].reset_index(drop=True)
+    # Put the true primary-exposure coefficient at row 0 so the downstream forest
+    # (which marks row 0 as the blue "primary" estimand named in the core claim)
+    # highlights the exposure, not whatever coefficient a long per-coefficient
+    # table happened to list first (false-pass audit #15/#16).
+    result = _order_primary_first(result, primary_token)
     result.attrs.update(
         _association_axis_from_token(_effect_measure_token(frame, cols, estimate_col))
     )
