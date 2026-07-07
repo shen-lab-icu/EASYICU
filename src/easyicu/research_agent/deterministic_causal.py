@@ -393,6 +393,47 @@ def causal_primary_analysis_code() -> str:
             "n_unexposed": int((Z == 0).sum()),
         }]).to_csv(out_dir / "exposure_derivation.csv", index=False)
 
+        # --- target-trial protocol spec (drives the design schematic figure) --
+        # A target-trial-emulation design figure step renders a protocol
+        # schematic by scanning upstream artefacts for the standard sections
+        # (eligibility / time zero / strategies / assignment / follow-up /
+        # outcome / estimand / assumptions). The plain effect + balance tables
+        # read as "estimand" and "exposure" but expose NO "time zero" text, so
+        # the schematic was skipping its minimum contract. The deterministic
+        # runner OWNS this protocol spec: it emits one row per section with a
+        # canonical ``section`` label (each classifies to its own box) so the
+        # schematic always has its required fields instead of failing the step.
+        protocol_rows = [
+            {"section": "Eligibility / cohort",
+             "detail": f"Adults (age >= 18) with an observed {outcome}; "
+                       f"analysis cohort n = {n_analysis}."},
+            {"section": "Time zero",
+             "detail": "Cohort entry at ICU admission; baseline covariates "
+                       "measured at or before time zero (first-24h window)."},
+            {"section": "Treatment strategies",
+             "detail": f"{exposure_name} = 1 (any occurrence) vs "
+                       f"{exposure_name} = 0 (none) over the baseline window."},
+            {"section": "Assignment rule",
+             "detail": "Observational (not randomized); exposure measured at "
+                       "baseline and balanced by stabilised IPT weighting."},
+            {"section": "Follow-up",
+             "detail": f"From time zero to the {outcome} event or "
+                       "discharge/censoring."},
+            {"section": "Outcome",
+             "detail": f"{outcome} (binary in-hospital endpoint)."},
+            {"section": "Estimand / analysis",
+             "detail": "Stabilised-IPTW marginal odds ratio (exposed vs "
+                       "unexposed); propensity trimmed to [0.02, 0.98]."},
+            {"section": "Assumptions / caveats",
+             "detail": "Positivity (overlap enforced by trimming); conditional "
+                       "exchangeability given the adjustment set ("
+                       + (", ".join(conf_terms) or "covariates")
+                       + "); consistency; no interference."},
+        ]
+        pd.DataFrame(protocol_rows).to_csv(
+            out_dir / "target_trial_protocol.csv", index=False
+        )
+
         summary = {
             "step": current_step_id,
             "status": "ok",
@@ -426,6 +467,7 @@ def causal_primary_analysis_code() -> str:
                 + (", ".join(conf_terms) or "none"),
                 "Robust sandwich CI for the weighted odds ratio.",
             ],
+            "target_trial_protocol": protocol_rows,
             "output_files": {
                 "causal_effect": "causal_effect.csv",
                 "balance_pre_post_weighting": "balance_pre_post_weighting.csv",
@@ -433,6 +475,7 @@ def causal_primary_analysis_code() -> str:
                 "weight_distribution": "weight_distribution.csv",
                 "cohort_flow": "cohort_flow.csv",
                 "exposure_derivation": "exposure_derivation.csv",
+                "target_trial_protocol": "target_trial_protocol.csv",
             },
         }
         (out_dir / "step_summary.json").write_text(

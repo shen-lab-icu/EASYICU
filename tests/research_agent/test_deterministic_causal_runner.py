@@ -117,3 +117,58 @@ def test_blocks_when_declared_exposure_absent(tmp_path: Path):
     summary = _exec_runner(tmp_path / "run", cohort, ctx)
     assert summary["status"] == "blocked"
     assert "Missing required causal columns" in summary["blocking_reason"]
+
+
+# --- target-trial protocol spec for the design schematic (H2 fix6) ---------
+#
+# A target-trial-emulation design figure step renders a protocol schematic by
+# scanning upstream artefacts for standard sections and SKIPS (failing the
+# execution gate, blocking the manuscript) unless it finds a minimum contract:
+# ``["eligibility", "time_zero", "exposure_strategy", "outcome"]``. The plain
+# effect/balance tables expose no "time zero" text (H2 fix9 skipped on exactly
+# this), so the runner must emit a protocol spec whose section labels each
+# classify to the right box.
+
+
+def _classify_section(text: str):
+    """Mirror the schematic renderer's classify_text minimum contract."""
+    t = str(text).lower()
+    if any(k in t for k in ("eligib", "include", "exclude", "adult", "cohort")):
+        return "eligibility"
+    if any(k in t for k in ("time zero", "baseline", "t0", "icu admission")):
+        return "time_zero"
+    if any(k in t for k in ("strateg", "exposure", "treatment", "comparator")):
+        return "exposure_strategy"
+    if any(k in t for k in ("assignment", "observational", "not randomized")):
+        return "assignment"
+    if any(k in t for k in ("follow up", "follow-up", "censor", "discharge")):
+        return "follow_up"
+    if any(k in t for k in ("outcome", "death", "mortality")):
+        return "outcome"
+    return None
+
+
+def test_emits_target_trial_protocol_with_minimum_schematic_sections(tmp_path: Path):
+    ctx = {"primary_exposure": "vasopressor", "target_outcome": "death"}
+    summary = _exec_runner(tmp_path / "run", _confounded_cohort(), ctx)
+    assert summary["status"] == "ok"
+    # spec present in the summary and written as a table
+    rows = summary["target_trial_protocol"]
+    assert isinstance(rows, list) and len(rows) == 8
+    csv_path = (
+        tmp_path
+        / "run"
+        / "steps"
+        / "01_causal_effect_estimation"
+        / "outputs"
+        / "target_trial_protocol.csv"
+    )
+    df = pd.read_csv(csv_path)
+    assert list(df.columns) == ["section", "detail"]
+    # every minimum-required schematic section is covered by a section label,
+    # each classifying to its OWN box (the label alone is unambiguous)
+    covered = {_classify_section(r["section"]) for r in rows}
+    for required in ("eligibility", "time_zero", "exposure_strategy", "outcome"):
+        assert required in covered, f"{required} not covered by {covered}"
+    # the section that historically went missing must now be present
+    assert any(_classify_section(r["section"]) == "time_zero" for r in rows)
