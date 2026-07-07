@@ -113,6 +113,36 @@ def test_extractor_recognizes_scale_neutral_adjusted_effect_over_probe():
     assert payload["effect_measure"] == "OR"
 
 
+def test_extractor_recognizes_adjusted_effect_scale_from_iptw_runner():
+    """Reproduces H2 fix8: the deterministic IPTW runner declares the scale under
+    ``adjusted_effect_scale`` (not ``primary_effect_scale``). The extractor's
+    scale lookup omitted that key, so a correct causal OR (3.04) was silently
+    dropped and the headline bound nothing even though execution completed."""
+    records = [
+        {
+            "step_id": "04_causal_effect_estimation",
+            "step_summary_evidence_id": "causal_stat",
+            "deterministic_standard_analysis": "causal_primary_iptw",
+            "step_summary": {
+                "status": "ok",
+                "primary_exposure": "vasopressor",
+                "adjusted_effect": 3.0359,
+                "adjusted_effect_scale": "odds_ratio",
+                "adjusted_effect_ci_low": 2.8737,
+                "adjusted_effect_ci_high": 3.2072,
+                "max_smd_after_weighting": 0.0467,
+            },
+        },
+    ]
+    payload = _extract_primary_effect_payload_from_records(records)
+    assert payload is not None
+    assert payload["step_id"] == "04_causal_effect_estimation"
+    assert round(payload["primary_or"], 2) == 3.04
+    assert round(payload["primary_ci_low"], 2) == 2.87
+    assert round(payload["primary_ci_high"], 2) == 3.21
+    assert payload["effect_measure"] == "OR"
+
+
 def test_extractor_keeps_odds_ratio_backward_compatible():
     records = [
         {

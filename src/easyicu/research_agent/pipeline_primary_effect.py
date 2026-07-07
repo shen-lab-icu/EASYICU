@@ -180,7 +180,13 @@ def _extract_primary_effect_payload_from_summary(
         _first_direct_scalar(summary, ("adjusted_effect", "primary_point_estimate"))
     )
     scaled_measure = _effect_measure_from_scale(
-        _first_direct_scalar(summary, ("primary_effect_scale", "effect_scale"))
+        _first_direct_scalar(
+            summary,
+            # ``adjusted_effect_scale`` is what the deterministic IPTW causal
+            # runner emits alongside ``adjusted_effect``; without it the causal
+            # OR (e.g. H2 OR 3.04) is dropped and the headline binds nothing.
+            ("primary_effect_scale", "effect_scale", "adjusted_effect_scale"),
+        )
     )
     if direct_or is not None:
         direct_primary: Optional[float] = direct_or
