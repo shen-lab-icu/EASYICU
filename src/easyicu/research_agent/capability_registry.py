@@ -36,6 +36,7 @@ __all__ = [
     "AuxiliaryRunner",
     "CAPABILITY_REGISTRY",
     "AUXILIARY_DETERMINISTIC_RUNNERS",
+    "KNOWN_UNSUPPORTED_ESTIMANDS",
     "FAIL_CLOSED_LADDER",
     "get_capability",
     "deterministic_primary_families",
@@ -235,6 +236,24 @@ AUXILIARY_DETERMINISTIC_RUNNERS: Tuple[AuxiliaryRunner, ...] = (
 
 
 # ---------------------------------------------------------------------------
+# Explicit boundaries: estimands the framework deliberately does NOT support.
+# Recording them here (not just as a benchmark probe) keeps the capability
+# surface honest — a reviewer sees the edges, and these must FAIL CLOSED rather
+# than be approximated by a nearby estimand.
+# ---------------------------------------------------------------------------
+
+KNOWN_UNSUPPORTED_ESTIMANDS: Tuple[Tuple[str, str], ...] = (
+    (
+        "Competing-risks cumulative incidence (Fine-Gray / CIF)",
+        "No deterministic runner. A cause-naive Cox HR is NOT a CIF, so a "
+        "competing-risks question (e.g. RRT with death as a competing risk) must "
+        "fail closed to diagnostic_only — not be answered with a Cox HR. Exercised "
+        "by meta-benchmark probe MG12.",
+    ),
+)
+
+
+# ---------------------------------------------------------------------------
 # The fail-closed / gap-report ladder: what happens when no valid runner or
 # data contract exists. This is the answer to "what is the gap-report behavior?"
 # ---------------------------------------------------------------------------
@@ -359,6 +378,16 @@ def render_capability_matrix_markdown() -> str:
     ]
     for a in AUXILIARY_DETERMINISTIC_RUNNERS:
         lines.append(f"| `{a.name}` | {a.purpose} | {a.fail_closed} |")
+    lines += [
+        "",
+        "## Known unsupported estimands (explicit boundaries)",
+        "",
+        "Deliberately out of scope — these must **fail closed**, not be "
+        "approximated by a nearby estimand:",
+        "",
+    ]
+    for name, why in KNOWN_UNSUPPORTED_ESTIMANDS:
+        lines.append(f"- **{name}** — {why}")
     lines += [
         "",
         "## Fail-closed / gap-report ladder",

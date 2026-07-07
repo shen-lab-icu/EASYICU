@@ -21,6 +21,12 @@ _Generated from `easyicu.research_agent.capability_registry`. Do not edit by han
 | `cohort_definition_overlap` | Overlap / concordance of alternative cohort definitions. | Blocks with a reason when no alternative definition is registered. |
 | `cohort_definition_sensitivity` | Re-fit the primary estimand under alternative cohort definitions. | Degrades to a CLEAN skip (status=skipped, not_applicable) when no alternative_cohort_attrition.csv exists upstream — it does NOT block (this removed the H2 'produce the missing file' replan loop). |
 
+## Known unsupported estimands (explicit boundaries)
+
+Deliberately out of scope — these must **fail closed**, not be approximated by a nearby estimand:
+
+- **Competing-risks cumulative incidence (Fine-Gray / CIF)** — No deterministic runner. A cause-naive Cox HR is NOT a CIF, so a competing-risks question (e.g. RRT with death as a competing risk) must fail closed to diagnostic_only — not be answered with a Cox HR. Exercised by meta-benchmark probe MG12.
+
 ## Fail-closed / gap-report ladder
 
 What happens when no valid runner or data contract exists — the pipeline fails **closed** with a surfaced reason, never open:
