@@ -326,3 +326,22 @@ def test_primary_estimate_bound_false_when_runner_blocked():
         }
     ]
     assert _deterministic_primary_estimate_bound(recs) is False
+
+
+def test_primary_estimate_bound_true_for_deterministic_ordinal():
+    # E3 dose-response: the ordinal runner's trend OR is a bound deterministic
+    # primary estimate, so a churny-but-converged E3 run is treated the same as
+    # H2 (cap advisory, not a demotion).
+    recs = [
+        {
+            "step_id": "02_dose_response",
+            "deterministic_standard_analysis": "ordinal_dose_response",
+            "step_summary": {
+                "status": "ok",
+                "primary_predictor": "kdigo",
+                "adjusted_effect": 1.62,
+                "adjusted_effect_scale": "odds_ratio",
+            },
+        }
+    ]
+    assert _deterministic_primary_estimate_bound(recs) is True
