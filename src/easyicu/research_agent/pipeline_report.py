@@ -1045,6 +1045,73 @@ def _partition_findings_by_supersession(
     return active, superseded
 
 
+_PRIMARY_DETERMINISTIC_RUNNERS = frozenset(
+    {"causal_primary_iptw", "survival_primary_cox"}
+)
+
+
+def _deterministic_primary_estimate_bound(per_step_records: Any) -> bool:
+    """True when a deterministic PRIMARY runner produced a bound primary estimate.
+
+    Drives the outcome-aware replan-budget rule: a cap hit is treated as advisory
+    (not a fail-closed demotion) only when the trustworthy deterministic estimand
+    is actually bound to a value, so a churny-but-converged H1/H2 run keeps its
+    manuscript while a genuinely unresolved run (no bound headline) still fails
+    closed. Requiring the estimate to come from a deterministic runner is the
+    conservative choice: an LLM-coded primary that hit the cap stays demoted.
+    """
+    from .pipeline_primary_effect import (
+        _extract_primary_effect_payload_from_records,
+    )
+
+    payload = _extract_primary_effect_payload_from_records(per_step_records or [])
+    if not payload or payload.get("primary_or") is None:
+        return False
+    step_id = str(payload.get("step_id") or "")
+    for record in per_step_records or []:
+        if not isinstance(record, dict):
+            continue
+        if str(record.get("step_id") or "") == step_id:
+            return (
+                record.get("deterministic_standard_analysis")
+                in _PRIMARY_DETERMINISTIC_RUNNERS
+            )
+    return False
+
+
+def _replan_budget_demotes(
+    *,
+    hit: bool,
+    execution_complete: bool,
+    has_failed_steps: bool,
+    has_base_errors: bool,
+    evidence_complete: bool,
+    numeric_verified: bool,
+    primary_estimate_bound: bool,
+) -> bool:
+    """Outcome-aware replan-budget rule (2026-07-07).
+
+    Reaching the replan cap demotes the run to ``diagnostic_only`` ONLY if it did
+    not otherwise converge. A run that reached ``execution_complete`` with zero
+    failed steps, a clean + numeric-verified manuscript, a bound deterministic
+    primary estimate, and no other hard errors is churny-but-successful -- the
+    cap is advisory there, not a runaway to fail closed. A cap hit on an
+    unresolved run (failed steps, missing headline binding, or other hard
+    errors) still fails closed. Pure so both branches are unit-testable.
+    """
+    if not hit:
+        return False
+    converged_clean = (
+        execution_complete
+        and not has_failed_steps
+        and not has_base_errors
+        and evidence_complete
+        and numeric_verified
+        and primary_estimate_bound
+    )
+    return not converged_clean
+
+
 def _compute_readiness_gates(
     *,
     context: ResearchContext,
@@ -1148,16 +1215,17 @@ def _compute_readiness_gates(
             "replan_budget",
         }
     ]
-    # Fail-closed: a run that exhausted its replan budget without converging
-    # is demoted to diagnostic_only. Scan the *full* findings list (not
-    # active_findings) so this run-level latch survives step supersession.
+    # A run that exhausted its replan budget MAY be demoted to diagnostic_only --
+    # but the rule is outcome-aware (see the convergence check below). Scan the
+    # *full* findings list (not active_findings) so this run-level latch survives
+    # step supersession.
     replan_budget_errors = [
         f.message
         for f in findings
         if getattr(f, "validator", "") == "replan_budget"
         and bool((getattr(f, "detail", None) or {}).get("replan_budget_exhausted"))
     ]
-    replan_budget_exhausted = bool(replan_budget_errors)
+    replan_budget_hit = bool(replan_budget_errors)
     blocked_outcome_steps = _blocked_outcome_step_ids(run_dir)
     blocked_outcome_leaks = (
         _blocked_outcome_manuscript_leaks(manuscript_text)
@@ -1189,12 +1257,30 @@ def _compute_readiness_gates(
     survival_integrity_errors = primary_survival_estimate_integrity_errors(
         plan, run_dir
     )
-    analysis_errors = (
+    # Outcome-aware replan-budget rule (2026-07-07): reaching the cap demotes the
+    # run to diagnostic_only ONLY if it did not otherwise converge. A run that
+    # reached execution_complete with zero failed steps, a clean + numeric-
+    # verified manuscript, a bound deterministic primary estimate, and no other
+    # hard errors is churny-but-successful -- the cap is advisory there, not a
+    # runaway to fail closed. A cap hit on an unresolved run (failed steps,
+    # missing headline binding, or other hard errors) still fails closed.
+    base_analysis_errors = (
         non_manuscript_errors
         + blocked_outcome_errors
         + plausibility_errors
         + survival_integrity_errors
-        + replan_budget_errors
+    )
+    replan_budget_exhausted = _replan_budget_demotes(
+        hit=replan_budget_hit,
+        execution_complete=bool(execution["execution_complete"]),
+        has_failed_steps=bool(execution["failed_steps"]),
+        has_base_errors=bool(base_analysis_errors),
+        evidence_complete=bool(evidence_complete),
+        numeric_verified=bool(numeric_verified),
+        primary_estimate_bound=_deterministic_primary_estimate_bound(per_step_records),
+    )
+    analysis_errors = base_analysis_errors + (
+        replan_budget_errors if replan_budget_exhausted else []
     )
     analysis_validated = execution["execution_complete"] and not analysis_errors
     manuscript_ready = (
@@ -1233,6 +1319,8 @@ def _compute_readiness_gates(
         "analysis_validated": analysis_validated,
         "manuscript_ready": manuscript_ready,
         "replan_budget_exhausted": replan_budget_exhausted,
+        "replan_budget_hit": replan_budget_hit,
+        "replan_budget_advisory": replan_budget_hit and not replan_budget_exhausted,
         "publication_ready": manuscript_ready
         and publication["publication_figure_bundle_ready"]
         and display_suite["display_suite_complete"]

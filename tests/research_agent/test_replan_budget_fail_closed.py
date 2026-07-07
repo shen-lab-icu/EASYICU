@@ -187,3 +187,142 @@ def test_scratch_dir_isolated():
     # Guard: the module-level tempdir helper never writes into the repo tree.
     d = Path(tempfile.mkdtemp())
     assert d.exists() and "site-packages" not in str(d)
+
+
+# ---------------------------------------------------------------------------
+# 4. Outcome-aware replan-budget rule (2026-07-07)
+#
+# Reaching the cap demotes to diagnostic_only ONLY if the run did not otherwise
+# converge. H2 fix8 reached execution_complete + a bound deterministic OR 3.04 +
+# 0 failed steps + clean manuscript, yet the planner churned 6 revisions -- that
+# is churny-but-successful, so the cap is advisory, not a demotion.
+# ---------------------------------------------------------------------------
+
+from easyicu.research_agent.pipeline_report import (  # noqa: E402
+    _deterministic_primary_estimate_bound,
+    _replan_budget_demotes,
+)
+
+
+def test_replan_cap_is_advisory_for_a_converged_clean_run():
+    # This is the exact H2 fix8 gate state: everything clean except the cap hit.
+    assert (
+        _replan_budget_demotes(
+            hit=True,
+            execution_complete=True,
+            has_failed_steps=False,
+            has_base_errors=False,
+            evidence_complete=True,
+            numeric_verified=True,
+            primary_estimate_bound=True,
+        )
+        is False
+    )
+
+
+def test_replan_cap_demotes_when_execution_incomplete():
+    assert _replan_budget_demotes(
+        hit=True,
+        execution_complete=False,
+        has_failed_steps=False,
+        has_base_errors=False,
+        evidence_complete=True,
+        numeric_verified=True,
+        primary_estimate_bound=True,
+    )
+
+
+def test_replan_cap_demotes_when_a_step_failed():
+    assert _replan_budget_demotes(
+        hit=True,
+        execution_complete=True,
+        has_failed_steps=True,
+        has_base_errors=False,
+        evidence_complete=True,
+        numeric_verified=True,
+        primary_estimate_bound=True,
+    )
+
+
+def test_replan_cap_demotes_when_primary_estimate_unbound():
+    # No bound deterministic headline -> unresolved -> fail closed.
+    assert _replan_budget_demotes(
+        hit=True,
+        execution_complete=True,
+        has_failed_steps=False,
+        has_base_errors=False,
+        evidence_complete=True,
+        numeric_verified=True,
+        primary_estimate_bound=False,
+    )
+
+
+def test_replan_cap_demotes_when_other_hard_errors_present():
+    assert _replan_budget_demotes(
+        hit=True,
+        execution_complete=True,
+        has_failed_steps=False,
+        has_base_errors=True,
+        evidence_complete=True,
+        numeric_verified=True,
+        primary_estimate_bound=True,
+    )
+
+
+def test_no_cap_hit_never_demotes():
+    assert (
+        _replan_budget_demotes(
+            hit=False,
+            execution_complete=False,
+            has_failed_steps=True,
+            has_base_errors=True,
+            evidence_complete=False,
+            numeric_verified=False,
+            primary_estimate_bound=False,
+        )
+        is False
+    )
+
+
+def test_primary_estimate_bound_true_for_deterministic_iptw():
+    recs = [
+        {
+            "step_id": "04_causal_effect_estimation",
+            "deterministic_standard_analysis": "causal_primary_iptw",
+            "step_summary": {
+                "status": "ok",
+                "primary_predictor": "vasopressor",
+                "adjusted_effect": 3.04,
+                "adjusted_effect_scale": "odds_ratio",
+            },
+        }
+    ]
+    assert _deterministic_primary_estimate_bound(recs) is True
+
+
+def test_primary_estimate_bound_false_for_llm_coded_estimate():
+    # Bound estimate but NOT from a deterministic runner -> conservative False,
+    # so an LLM-coded primary that hit the cap still fails closed.
+    recs = [
+        {
+            "step_id": "04_causal_effect_estimation",
+            "step_summary": {
+                "status": "ok",
+                "primary_predictor": "vasopressor",
+                "adjusted_effect": 3.04,
+                "adjusted_effect_scale": "odds_ratio",
+            },
+        }
+    ]
+    assert _deterministic_primary_estimate_bound(recs) is False
+
+
+def test_primary_estimate_bound_false_when_runner_blocked():
+    recs = [
+        {
+            "step_id": "04_causal_effect_estimation",
+            "deterministic_standard_analysis": "causal_primary_iptw",
+            "step_summary": {"status": "blocked", "adjusted_effect": None},
+        }
+    ]
+    assert _deterministic_primary_estimate_bound(recs) is False
