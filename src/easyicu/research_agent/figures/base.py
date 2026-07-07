@@ -13,6 +13,7 @@ It owns:
 
 from __future__ import annotations
 
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -139,15 +140,33 @@ def load_table(
     return None, None
 
 
+def _appears_as_token(key: str, column_lower: str) -> bool:
+    """True when ``key`` occurs in ``column_lower`` as a whole token.
+
+    A token boundary is the start/end of the string or any non-alphanumeric
+    character (``_``, space, parens, ``%`` ...). This keeps ``lactate`` matching
+    ``mean_lactate`` and ``n`` matching ``n_total`` while stopping the substring
+    traps the false-pass audit found: ``n`` no longer matches ``media(n)`` and
+    ``surv`` no longer matches ``survival_time`` (which had collided the time and
+    survival-probability axes onto one column).
+    """
+    return (
+        re.search(r"(?<![a-z0-9])" + re.escape(key) + r"(?![a-z0-9])", column_lower)
+        is not None
+    )
+
+
 def resolve_column(
     frame: pd.DataFrame,
     candidates: Sequence[str],
 ) -> Optional[str]:
     """Return the actual column name matching any candidate.
 
-    Matching is: exact (case-insensitive) first, then substring. The first
-    candidate that resolves wins, so callers should order candidates by
-    preference.
+    Matching is: exact (case-insensitive) first, then whole-TOKEN containment
+    (not raw substring -- see :func:`_appears_as_token`). The first candidate that
+    resolves wins, so callers should order candidates by preference and include
+    the full form of any short abbreviation (e.g. list ``survival_prob`` as well
+    as ``surv``) since a bare prefix no longer partial-matches a longer token.
     """
 
     lookup = {str(c).strip().lower(): c for c in frame.columns}
@@ -160,7 +179,7 @@ def resolve_column(
         if not key:
             continue
         for lower, original in lookup.items():
-            if key in lower:
+            if _appears_as_token(key, lower):
                 return original
     return None
 
