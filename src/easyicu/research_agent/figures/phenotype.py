@@ -105,20 +105,33 @@ def _silhouette_value(evidence: EvidenceStore, run_dir: Path) -> Optional[float]
     _, frame = load_table(evidence, run_dir, _METRIC_NAMES)
     if frame is None:
         return None
-    col = resolve_column(frame, ["silhouette", "silhouette_score", "mean_silhouette"])
+    col = resolve_column(
+        frame,
+        ["mean_silhouette", "overall_silhouette", "silhouette_score", "silhouette"],
+    )
     if col is None:
         metric_col = resolve_column(frame, ["metric", "name"])
         value_col = resolve_column(frame, ["value", "score"])
         if metric_col and value_col:
+            vals: List[float] = []
             for _, row in frame.iterrows():
                 if "silhouette" in str(row[metric_col]).lower():
                     try:
-                        return float(row[value_col])
+                        vals.append(float(row[value_col]))
                     except (TypeError, ValueError):
-                        return None
+                        continue
+            if vals:
+                return sum(vals) / len(vals)
         return None
     try:
-        return float(pd.to_numeric(frame[col], errors="coerce").dropna().iloc[0])
+        series = pd.to_numeric(frame[col], errors="coerce").dropna()
+        if series.empty:
+            return None
+        # A per-cluster metrics table has one silhouette row per cluster; the
+        # panel annotation reports the OVERALL silhouette, so average the rows
+        # rather than take the first cluster's value (which would misstate
+        # overall cluster quality).
+        return float(series.mean()) if len(series) > 1 else float(series.iloc[0])
     except (IndexError, ValueError):
         return None
 
