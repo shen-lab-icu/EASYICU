@@ -716,6 +716,85 @@ def _demote_step_contract_for_primary_runner(
     return demoted
 
 
+def _is_too_few_panels_figure_finding(finding: ValidationFinding) -> bool:
+    """True for the ``figure_contract_quality`` "result figure has <2 panels"
+    ERROR specifically.
+
+    Keyed off ``detail['panel_count']`` (which only that finding sets) rather
+    than the message text, so it stays robust if the wording changes. Blank-
+    title / weak-claim / fallback-term figure errors are deliberately NOT
+    matched -- only the panel-count shape rule is demoted below.
+    """
+    if getattr(finding, "validator", "") != "figure_contract_quality":
+        return False
+    if getattr(finding, "severity", "") != "error":
+        return False
+    detail = getattr(finding, "detail", None) or {}
+    panel_count = detail.get("panel_count") if isinstance(detail, Mapping) else None
+    return isinstance(panel_count, int) and panel_count < 2
+
+
+def _family_has_deterministic_figure_renderer(context: Any) -> bool:
+    """True when this study-design family builds its PRIMARY publication figure
+    deterministically in the write phase (``render_family_figure``).
+
+    Lazy import keeps ``pipeline_execute`` free of a ``figures`` /
+    ``study_design`` import-order dependency and fail-safes to False (strict) if
+    the family cannot be inferred.
+    """
+    try:
+        from .figures import FAMILY_RENDERERS
+        from .study_design import infer_study_design_family
+
+        return str(infer_study_design_family(context)) in FAMILY_RENDERERS
+    except Exception:
+        return False
+
+
+def _demote_result_figure_shape_for_family_renderer(
+    context: Any,
+    findings: Sequence[ValidationFinding],
+) -> List[ValidationFinding]:
+    """Demote a step-level "result figure has <2 panels" ERROR to a warning when
+    the study-design family assembles its primary figure deterministically.
+
+    Deadlock this breaks (2026-07-07, M3 subphenotype): phenotyping (and any
+    family in ``FAMILY_RENDERERS``) has a deterministic multi-panel publication
+    figure renderer, but it only runs in the WRITE phase -- which is gated behind
+    ``execution_complete``. When the LLM's step-level figure is single-panel, the
+    ``figure_contract_quality`` panel-count ERROR marks the step ``contract_
+    failed`` -> ``execution_complete`` stays False -> the write phase is skipped
+    -> the deterministic renderer (the very thing that would produce the >=2-panel
+    primary) never runs. The step-level figure is NOT the manuscript's primary
+    for these families, so its panel count is advisory here. The write-phase
+    display-suite gate remains fully fail-closed: if the deterministic renderer
+    cannot build a >=2-panel primary from the registered tables, the run still
+    fails with "no primary publication result-bearing figure contract". Pure so
+    both branches are unit-testable.
+    """
+    if not any(_is_too_few_panels_figure_finding(f) for f in findings):
+        return list(findings)
+    if not _family_has_deterministic_figure_renderer(context):
+        return list(findings)
+    demoted: List[ValidationFinding] = []
+    for finding in findings:
+        if _is_too_few_panels_figure_finding(finding):
+            finding = finding.model_copy(
+                update={
+                    "severity": "warning",
+                    "message": (
+                        finding.message
+                        + " [advisory: this study-design family builds its "
+                        "manuscript-facing primary figure deterministically in "
+                        "the write phase; the display-suite gate remains the "
+                        "fail-closed backstop for panel count and role diversity]"
+                    ),
+                }
+            )
+        demoted.append(finding)
+    return demoted
+
+
 def run_execute_phase(
     pipeline: "ResearchAgentPipeline",
     *,
@@ -3787,6 +3866,16 @@ else:
         # runner already produced. Figure/exposure/leakage validators still block.
         contract_findings = _demote_step_contract_for_primary_runner(
             step_record, step_summary, contract_findings
+        )
+        # A study-design family whose PRIMARY publication figure is assembled
+        # deterministically in the write phase (phenotyping / prediction /
+        # time_to_event / causal_emulation) must not fail-close a step merely
+        # because its LLM-declared step figure is single-panel: that keeps
+        # execution_complete False and skips the very renderer that builds the
+        # multi-panel primary. The display-suite gate stays the fail-closed
+        # backstop. See _demote_result_figure_shape_for_family_renderer.
+        contract_findings = _demote_result_figure_shape_for_family_renderer(
+            context, contract_findings
         )
         figure_source_findings = figure_source_validator.audit(
             step=step,
