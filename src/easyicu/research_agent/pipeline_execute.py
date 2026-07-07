@@ -563,6 +563,87 @@ _PRIMARY_DETERMINISTIC_RUNNERS = {
     "ordinal_dose_response",
 }
 
+# Method names the planner uses for a PRIMARY estimation step (not a
+# prep/audit/figure step). A dose-response is routed to the ordinal runner only
+# when a dose-response signal is ALSO present, so listing broad association
+# methods here does not hijack a plain association step.
+_ORDINAL_PRIMARY_METHODS = frozenset(
+    {
+        "dose_response",
+        "dose_response_analysis",
+        "ordinal_regression",
+        "ordinal_logistic_regression",
+        "trend_analysis",
+        "association",
+        "association_analysis",
+        "stratified_analysis",
+        "subgroup_analysis",
+        "regression",
+        "logistic_regression",
+        "glm",
+        "modeling",
+        "model",
+        "estimation",
+        "ordinal",
+    }
+)
+# Methods that are UNAMBIGUOUSLY a dose-response primary on their own.
+_ORDINAL_EXPLICIT_METHODS = frozenset(
+    {
+        "dose_response",
+        "dose_response_analysis",
+        "ordinal_regression",
+        "ordinal_logistic_regression",
+        "trend_analysis",
+    }
+)
+# General dose-response / graded-exposure vocabulary (case-neutral: never a
+# specific score name). Present in the question, intent, or declared outputs.
+_ORDINAL_DOSE_SIGNAL_TOKENS = (
+    "dose-response",
+    "dose response",
+    "dose–response",
+    "per-stage",
+    "per stage",
+    "graded exposure",
+    "severity gradient",
+    "stage gradient",
+    "ordinal trend",
+)
+_ORDINAL_OUTPUT_TOKENS = (
+    "dose_response",
+    "per_stage",
+    "per-stage",
+    "trend_or",
+    "ordinal_trend",
+)
+
+
+def _ordinal_dose_response_step_matches(
+    method: str, blob: str, expected_blob: str
+) -> bool:
+    """Pure routing test: is this the PRIMARY dose-response estimation step?
+
+    Extracted from the preflight closure so it is unit-testable without a full
+    bench (E3's first bench routed its primary step to the LLM coder because the
+    method ``association_analysis`` was not recognised here). The caller supplies
+    lowercased strings and has already excluded figure / cohort-definition-
+    sensitivity steps.
+
+    ``blob`` = step_id + intent + research_question + expected_outputs;
+    ``expected_blob`` = expected_outputs only.
+    """
+    if method in _ORDINAL_EXPLICIT_METHODS:
+        return True
+    if any(tok in expected_blob for tok in _ORDINAL_OUTPUT_TOKENS):
+        return True
+    # otherwise require BOTH a dose-response narrative signal AND a primary-
+    # estimation method, so a plain association step that merely mentions a
+    # "trend" is not hijacked.
+    if not any(tok in blob for tok in _ORDINAL_DOSE_SIGNAL_TOKENS):
+        return False
+    return method in _ORDINAL_PRIMARY_METHODS
+
 
 def _primary_runner_core_estimate_present(
     kind: Optional[str], step_summary: Mapping[str, Any]
@@ -1988,49 +2069,7 @@ else:
                 t in blob for t in ("cohort", "definition", "eligibility")
             ):
                 return False
-            # an explicit dose-response method or declared dose-response/per-stage
-            # outputs are unambiguous primary-step signals.
-            if method in (
-                "dose_response",
-                "dose_response_analysis",
-                "ordinal_regression",
-                "ordinal_logistic_regression",
-                "trend_analysis",
-            ):
-                return True
-            if any(
-                tok in expected_blob
-                for tok in ("dose_response", "per_stage", "per-stage", "trend_or")
-            ):
-                return True
-            # otherwise require BOTH a dose-response narrative signal AND a
-            # primary-estimation method, so a plain association step that merely
-            # mentions a "trend" is not hijacked.
-            dose_signal = any(
-                tok in blob
-                for tok in (
-                    "dose-response",
-                    "dose response",
-                    "dose–response",
-                    "per-stage",
-                    "per stage",
-                    "graded exposure",
-                    "severity gradient",
-                    "stage gradient",
-                )
-            )
-            if not dose_signal:
-                return False
-            return method in (
-                "association",
-                "regression",
-                "logistic_regression",
-                "glm",
-                "modeling",
-                "model",
-                "estimation",
-                "ordinal",
-            )
+            return _ordinal_dose_response_step_matches(method, blob, expected_blob)
 
         def _deterministic_ordinal_dose_response_code(
             reason: str,
