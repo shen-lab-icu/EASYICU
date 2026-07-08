@@ -1398,6 +1398,128 @@ def _preserve_figure_steps_after_replan(
     return preserved, findings
 
 
+# Method-name families that mark a step as a RESULT-BEARING PRIMARY model — one
+# that produces the adjusted effect estimate the article contract's
+# ``primary_estimand`` role requires. Matched by SUBSTRING on the step
+# ``method`` (the LLM names methods freely, so an exact allowlist is brittle),
+# with an exclusion set so descriptive / audit / robustness / cohort steps —
+# which routinely carry "primary"/"association"/"adjusted" in their *id* — cannot
+# masquerade as the estimand. This is exactly why the token-based role detector
+# (_plan_contract_roles) and _primary_estimand_step_index BOTH fail to notice the
+# drop: in M1 both ``04_exposure_derivation_and_absolute_risk``
+# (descriptive_association_context) and ``04b_primary_cohort_reconciliation_audit``
+# (data_quality_audit) satisfy those token checks. The METHOD is the discriminator.
+_PRIMARY_ESTIMATOR_METHOD_PATTERNS = (
+    "regression",  # logistic_regression / linear_regression / poisson_regression / cox_regression
+    "logistic",
+    "cox",  # cox / coxph / cox_ph
+    "proportional_hazards",
+    "hazard",
+    "glm",
+    "gee",
+    "mixed_effects",
+    "iptw",  # causal_primary_iptw
+    "propensity",
+    "dose_response",  # ordinal_dose_response
+    "ordinal_logistic",
+    "survival_primary",
+    "causal_primary",
+    "xgboost",
+    "gradient_boost",
+    "random_forest",
+    "elastic_net",
+    "lasso",
+    "ridge",
+)
+_NON_ESTIMAND_METHOD_PATTERNS = (
+    "descriptive",
+    "audit",
+    "quality",
+    "cohort",
+    "table_one",
+    "table one",
+    "baseline",
+    "attrition",
+    "sensitivity",  # robustness family, not the primary estimand
+    "robustness",
+    "context",
+    "reconciliation",
+    "probe",
+    "figure",
+)
+
+
+def _step_is_primary_estimand_model(step: AnalysisStep) -> bool:
+    """True when ``step`` is a result-bearing PRIMARY model (the estimand).
+
+    Keyed on the step ``method`` family, not its id/intent tokens: a
+    data-quality / descriptive / robustness step routinely carries
+    "primary"/"association"/"adjusted" in its id without being the estimand,
+    which is why the token-based checks cannot see the estimand being dropped.
+    """
+
+    method = (step.method or "").lower()
+    if not method:
+        return False
+    sid = (step.step_id or "").lower()
+    if sid.endswith("_figure") or "figure" in method:
+        return False
+    if any(bad in method for bad in _NON_ESTIMAND_METHOD_PATTERNS):
+        return False
+    return any(good in method for good in _PRIMARY_ESTIMATOR_METHOD_PATTERNS)
+
+
+def _preserve_primary_estimand_step_after_replan(
+    *,
+    current: AnalysisPlan,
+    revised: AnalysisPlan,
+) -> Tuple[AnalysisPlan, List[ValidationFinding]]:
+    """Re-add a result-bearing PRIMARY model step the replanner silently dropped.
+
+    The replanner is an LLM call and can drop the adjusted-model step that
+    produces the primary estimand while inserting an audit/reconciliation step,
+    even when its own rationale claims it is keeping the primary model. In M1,
+    revision 7 removed ``05_primary_adjusted_association`` (logistic_regression)
+    and added ``04b_primary_cohort_reconciliation_audit`` (data_quality_audit);
+    the run then produced NO adjusted OR and replan-exhausted to
+    ``diagnostic_only``. The article contract still requires a primary estimand,
+    so the primary model step is load-bearing: if ``current`` has one and
+    ``revised`` has NO result-bearing model step at all, re-attach the dropped
+    step(s).
+
+    Mirrors ``_preserve_figure_steps_after_replan``. Fires ONLY when the revised
+    plan has lost EVERY primary model step — a legitimately renamed or replaced
+    model still satisfies ``_step_is_primary_estimand_model`` and is left alone,
+    so this cannot duplicate a model the replanner kept under a new name.
+    """
+
+    if any(_step_is_primary_estimand_model(step) for step in revised.steps):
+        return revised, []
+    dropped = [step for step in current.steps if _step_is_primary_estimand_model(step)]
+    if not dropped:
+        return revised, []
+    revised_ids = {step.step_id for step in revised.steps}
+    reattach = [step for step in dropped if step.step_id not in revised_ids]
+    if not reattach:
+        return revised, []
+    new_steps = list(revised.steps) + list(reattach)
+    preserved = revised.model_copy(update={"steps": new_steps})
+    findings = [
+        ValidationFinding(
+            validator="replanner",
+            severity="warning",
+            message=(
+                "Replanner dropped the primary result-bearing model step(s) "
+                f"({', '.join(s.step_id for s in reattach)}); the revised plan had "
+                "no model producing the primary estimand, so they were re-attached "
+                "to preserve the article contract."
+            ),
+            detail={"preserved_step_ids": [s.step_id for s in reattach]},
+        )
+    ]
+    return preserved, findings
+
+
 def _cap_plan_preserving_figure_steps(
     *,
     plan: AnalysisPlan,
