@@ -615,7 +615,7 @@
     const rows = data && Array.isArray(data.native_renderers) ? data.native_renderers : [];
     return `
       <div class="ag-sci-section">
-        <div><div class="eyebrow">${bi('ICU-native renderers', 'ICU 原生渲染器')}</div><div class="panel-sub">${bi('These replace molecular biology renderers with ICU objects: concepts, cohorts, time lanes, and claim graphs.', '用 ICU 对象替代分子生物学渲染器：概念、队列、时间线和论断图谱。')}</div></div>
+        <div><div class="eyebrow">${bi('ICU-native views', 'ICU 原生视图')}</div><div class="panel-sub">${bi('Views built for ICU objects — concepts, cohorts, time lanes, and claim graphs — instead of generic charts.', '为 ICU 对象打造的视图 —— 概念、队列、时间线、论断图谱 —— 而非通用图表。')}</div></div>
         <div class="ag-sci-card-grid">
           ${rows.map(row => `
             <div class="ag-sci-renderer">
@@ -639,9 +639,9 @@
       <div class="card pad">
         <div class="row" style="justify-content:space-between;align-items:baseline;margin-bottom:12px;">
           <div>
-            <div class="eyebrow">${bi('Science Workbench', '科学工作台')}</div>
-            <div class="panel-title" style="font-size:15px;margin-top:4px;">${bi('Auditable artifact loop for ICU discovery', '面向 ICU discovery 的可审计产物闭环')}</div>
-            <div class="panel-sub">${bi('Start with the overview, then open a module when you need detail.', '先看总览，需要细节时再打开对应模块。')}</div>
+            <div class="eyebrow">${bi('Science Workbench · advanced view', '科学工作台 · 进阶视图')}</div>
+            <div class="panel-title" style="font-size:15px;margin-top:4px;">${bi('The same run, opened at the evidence level', '同一次运行 · 展开到证据层')}</div>
+            <div class="panel-sub">${bi('This is not a separate tool: it re-opens the run for this study (the one in Runs / Outputs) at the artifact + evidence level, so you can audit what each claim rests on. Optional — Overview and Draft cover most reviews.', '这不是独立工具：它把本研究在“运行/产出”里的同一次运行，展开到产物 + 证据层，方便你核查每条结论的依据。可选 —— 多数审阅看“概览”和“草稿”就够了。')}</div>
           </div>
           <button class="btn sm" data-ag-sci-refresh>${icon('history', 12)} ${bi('Refresh', '刷新')}</button>
         </div>

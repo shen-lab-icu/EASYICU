@@ -184,7 +184,7 @@ def test_agent_science_workbench_has_dedicated_owner_files_and_wiring() -> None:
 
     assert "css/agent-science.css?v=20260702-science-workbench-v11" in index_html
     assert "css/agent-science-detail.css?v=20260702-science-workbench-v7" in index_html
-    assert "js/screens-agent-science.js?v=20260702-science-workbench-v8" in index_html
+    assert "js/screens-agent-science.js?v=20260707-usability" in index_html
     assert "/api/agent-runs/science-workbench" in api_js
     assert "loadAgentScienceWorkbench" in api_js
     assert "/api/capabilities" in api_js
@@ -333,7 +333,7 @@ def test_native_guided_and_page_guide_messages_are_bilingual() -> None:
     assert (
         "js/screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan" in index_html
     )
-    assert "js/screens-guided.js?v=20260707-residuals2" in index_html
+    assert "js/screens-guided.js?v=20260707-usability" in index_html
     assert "js/copilot-dock.js?v=20260707-residuals" in index_html
 
 
@@ -605,7 +605,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert ".gdi-plan-details" in guided_plan_css
     assert ".gdi-feature-row.one" in guided_plan_css
     assert ".gdi-plan-details" not in redesign_css
-    assert "js/screens-guided.js?v=20260707-residuals2" in index_html
+    assert "js/screens-guided.js?v=20260707-usability" in index_html
 
 
 def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
@@ -2209,7 +2209,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "openGuidedProjectMemory(row, localDraftEl, 'draft')" in guided_js
     assert "Memory is scoped to" in guided_js
     assert "Idea Mining and Agent Projects still own their own artifacts" in guided_js
-    assert "Start by binding a local study folder" in guided_js
+    assert "Pick a goal to start" in guided_js
     assert "Project memory bound" in guided_js
     assert "pendingGuidedGoal" in guided_js
     assert "requireGuidedProjectMemory(goal, label)" in guided_js
@@ -2228,7 +2228,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "data-guided-goal" in guided_js
     assert "data-guided-handoff" in guided_js
     assert (
-        "If no folder is bound yet, I will ask you to create or open one first"
+        "If no folder is bound yet, I set up a starter folder in one click"
         in guided_js
     )
     assert "Find a Study Idea" in guided_js
@@ -2378,7 +2378,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "api.js?v=20260702-zotero-simple" in index_html
     assert "screens-guided-projects.js?v=20260626-guided-projects-split" in index_html
     assert "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan" in index_html
-    assert "screens-guided.js?v=20260707-residuals2" in index_html
+    assert "screens-guided.js?v=20260707-usability" in index_html
     assert "guided.css?v=20260707-copilot" in index_html
     assert '<span class="gd-name">Guided Copilot</span>' in guided_js
     assert "Guided Copilot · local first · nothing leaves your machine" in guided_js
@@ -3045,3 +3045,45 @@ def test_seeded_demo_pipeline_is_named_guided_copilot_and_labeled() -> None:
     assert "研究 Copilot" not in guided_js
     assert "scripted demo walkthrough" in guided_js
     assert "你好，我是 <strong>Guided Copilot</strong>" in guided_js
+
+def test_guided_frontdoor_offers_one_click_starter_folder() -> None:
+    """First-run usability: a new user must be able to start a chosen goal without
+    the folder-path dialog. The frontdoor offers a one-click '@folderquick' starter
+    that creates a metadata-only folder and resumes the pending goal."""
+    guided_js = _static_js("screens-guided.js")
+    # one-click token + handler + helper all present
+    assert "@folderquick" in guided_js
+    assert "function quickCreateGuidedStarterFolder(" in guided_js
+    # the require-folder gate leads with the one-click option (not only the dialog)
+    assert "Create a starter folder & continue" in guided_js
+    # quick-create resumes the goal the user already picked
+    assert "continueGoal" in guided_js
+    # the frontdoor banner is reassuring, not a hard prerequisite wall
+    assert "Start by binding a local study folder" not in guided_js
+    assert "Pick a goal to start" in guided_js
+
+
+def test_science_workbench_framed_as_part_of_study() -> None:
+    """[12] The Science Workbench must read as an advanced view OF the current study
+    (tied to Runs/Outputs), not a bolted-on second app with disconnected vocabulary."""
+    science_js = _static_js("screens-agent-science.js")
+    assert "This is not a separate tool" in science_js
+    assert "the same run" in science_js.lower()
+    # implementation-heritage jargon must not leak to clinical users
+    assert "molecular biology renderers" not in science_js
+
+
+def test_seeded_autopilot_pipeline_is_demo_contained() -> None:
+    """The seeded 'Product B' autopilot/welcome pipeline stays unreachable in Real
+    mode: autopilot self-forces demo, the dock bridge routes Real -> real frontdoor,
+    and frontdoor free-text returns before the seeded parseIntent/autopilot router."""
+    guided_js = _static_js("screens-guided.js")
+    # autopilot self-forces the demo data mode
+    assert "autop = true; branch = branch || 'predict'; dataMode = 'demo';" in guided_js
+    # the dock bridge gates Real mode to the real frontdoor, never seeded welcome
+    assert "if (dataMode === 'real') {" in guided_js
+    # frontdoor free-text is fully handled (returns) before parseIntent is reached
+    frontdoor_guard = guided_js.find("if (currentId === 'frontdoor') {")
+    parse_call = guided_js.find("const fn = parseIntent(v);")
+    assert frontdoor_guard != -1 and parse_call != -1
+    assert frontdoor_guard < parse_call
