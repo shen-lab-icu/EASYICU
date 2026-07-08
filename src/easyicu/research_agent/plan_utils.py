@@ -2287,10 +2287,35 @@ _COVARIATE_INTENT_SUBSTRINGS = ("covariate", "covar", "confound", "adjust", "pre
 _COVARIATE_INTENT_EXACT = frozenset(
     {"x_cols", "design_cols", "regressors", "rhs", "rhs_cols"}
 )
+# Exclusion/negation markers. A list named for what is deliberately kept OUT of
+# the model (``renal_source_not_adjusted``, ``excluded_covariates``,
+# ``dropped_for_overadjustment``, the columns of the ``unadjusted`` model) is the
+# inverse of the adjustment set. Reading it as the adjustment set inverts its
+# meaning and manufactures a phantom overadjustment/leakage finding — the exact
+# false positive that failed a fully-correct KDIGO missingness audit (its
+# ``RENAL_SOURCE_NOT_ADJUSTED`` renal-component list, named precisely to document
+# the exclusion, substring-matched ``adjust``). These markers are unambiguous:
+# each *means* "not in the model", so suppressing them cannot hide a genuine
+# adjustment set (which is never named this way) — no false-negative risk. Only
+# clear negations are listed; transformation words ("drop"/"remove"/"omit") are
+# excluded because ``covariates_after_dropping_missing`` can name the final set.
+_COVARIATE_EXCLUSION_MARKERS = (
+    "not_adjust",
+    "notadjust",
+    "non_adjust",
+    "nonadjust",
+    "unadjust",
+    "overadjust",
+    "exclud",
+    "not_covariat",
+    "not_confound",
+)
 
 
 def _name_intends_covariates(name: str) -> bool:
     low = name.lower()
+    if any(marker in low for marker in _COVARIATE_EXCLUSION_MARKERS):
+        return False
     if low in _COVARIATE_INTENT_EXACT:
         return True
     return any(sub in low for sub in _COVARIATE_INTENT_SUBSTRINGS)
