@@ -150,6 +150,11 @@
   background:linear-gradient(180deg, var(--surface) 0%, var(--surface-2) 100%);
 }
 .xdb-density-axis-line{ stroke:var(--hair-2); stroke-width:1; vector-effect:non-scaling-stroke; }
+/* x-axis tick marks + value/unit labels so cross-DB curves can be read at value. */
+.xdb-density-tick{ stroke:var(--hair-2); stroke-width:1; vector-effect:non-scaling-stroke; }
+.xdb-density-xaxis{ display:flex; justify-content:space-between; margin-top:2px; font-size:9.5px; color:var(--ink-4); font-variant-numeric:tabular-nums; }
+.xdb-density-xaxis span:nth-child(2){ text-align:center; }
+.xdb-density-xaxis span:last-child{ text-align:right; }
 .xdb-density-area{ opacity:.22; }
 .xdb-density-line{
   fill:none;

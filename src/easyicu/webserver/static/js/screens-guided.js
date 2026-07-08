@@ -4354,8 +4354,8 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       delay: 340,
       bot: [
         bi(
-          `Hi — I’m the EasyICU <strong>Research Copilot</strong>. I’ll drive the workspace by chat, and you can stop at any point.`,
-          `你好，我是 EasyICU <strong>研究 Copilot</strong>。我会用对话驱动工作区，你可以随时停下。`,
+          `Hi — I’m <strong>Guided Copilot</strong>, running a <strong>scripted demo walkthrough</strong>. Every number and artifact here is a seeded example, not a real result — switch to <strong>Real</strong> data any time to run your own study.`,
+          `你好，我是 <strong>Guided Copilot</strong>，当前是<strong>脚本化演示流程</strong>。这里的每个数字和产物都是示例种子数据，不是真实结果 —— 随时可切换到<strong>真实</strong>数据来运行你自己的研究。`,
         ),
         bi(
           `First, <strong>how far do you want to go today?</strong> This just sets where I stop — you can always extend later.`,

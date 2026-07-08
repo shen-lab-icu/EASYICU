@@ -1036,3 +1036,9 @@
 .ag-tab.gated:hover{ color: var(--ink-3); }
 .ag-tab.gated .ag-tab-lock{ display: inline-flex; align-items: center; margin-left: 1px; color: var(--ink-4); opacity: 0.75; }
 .ag-tab.on.gated{ opacity: 1; }
+
+/* Agent Projects empty-state precondition strip: teaches the Extract -> Review ->
+   Run path a first-time user must complete before a project produces anything. */
+.ag-empty-steps{ display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 10px; margin: 4px 0 16px; font-size: 12px; color: var(--ink-3); }
+.ag-empty-steps > span{ display: inline-flex; align-items: center; gap: 5px; }
+.ag-empty-steps .sep{ color: var(--ink-4); opacity: 0.6; }

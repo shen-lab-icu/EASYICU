@@ -165,10 +165,10 @@ def test_native_assistant_labels_disambiguate_page_guide_guided_copilot_and_agen
     assert "Open Copilot" not in help_js
 
     assert "css/dock.css?v=20260625-stage99" in index_html
-    assert "js/app.js?v=20260707-residuals" in index_html
+    assert "js/app.js?v=20260707-residuals2" in index_html
     assert "js/copilot-dock.js?v=20260707-residuals" in index_html
-    assert "js/screens-extraction.js?v=20260707-residuals" in index_html
-    assert "js/screens-agent.js?v=20260707-copilot" in index_html
+    assert "js/screens-extraction.js?v=20260707-residuals2" in index_html
+    assert "js/screens-agent.js?v=20260707-residuals2" in index_html
     assert "js/screens-help.js?v=20260707-residuals" in index_html
 
 
@@ -308,7 +308,7 @@ def test_native_tutorial_screen_uses_active_language_without_mixed_copy() -> Non
     assert ">No tokens, no setup, no patient data. The demo generates" not in help_js
     assert "How a study moves through EasyICU</h2>" not in help_js
 
-    assert "js/app.js?v=20260707-residuals" in index_html
+    assert "js/app.js?v=20260707-residuals2" in index_html
     assert "js/screens-help.js?v=20260707-residuals" in index_html
 
 
@@ -320,8 +320,8 @@ def test_native_guided_and_page_guide_messages_are_bilingual() -> None:
     assert "function bi(en, zh)" in guided_js
     assert "function htmlOf(value)" in guided_js
     assert "htmlOf(t.html)" in guided_js
-    assert "你好，我是 EasyICU <strong>研究 Copilot</strong>" in guided_js
-    assert "你可以随时停下" in guided_js
+    assert "你好，我是 <strong>Guided Copilot</strong>" in guided_js
+    assert "脚本化演示流程" in guided_js
     assert "正在打开 Guided Copilot" in dock_js
     assert "页面指南会解释当前页面" in dock_js
     assert "页面指南只支持固定快捷操作" in dock_js
@@ -333,7 +333,7 @@ def test_native_guided_and_page_guide_messages_are_bilingual() -> None:
     assert (
         "js/screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan" in index_html
     )
-    assert "js/screens-guided.js?v=20260707-residuals" in index_html
+    assert "js/screens-guided.js?v=20260707-residuals2" in index_html
     assert "js/copilot-dock.js?v=20260707-residuals" in index_html
 
 
@@ -605,7 +605,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert ".gdi-plan-details" in guided_plan_css
     assert ".gdi-feature-row.one" in guided_plan_css
     assert ".gdi-plan-details" not in redesign_css
-    assert "js/screens-guided.js?v=20260707-residuals" in index_html
+    assert "js/screens-guided.js?v=20260707-residuals2" in index_html
 
 
 def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
@@ -620,8 +620,8 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     redesign_css = _static_css("redesign.css")
     index_html = _static_html("index.html")
 
-    assert "js/screens-agent.js?v=20260707-copilot" in index_html
-    assert "css/agent.css?v=20260707-copilot" in index_html
+    assert "js/screens-agent.js?v=20260707-residuals2" in index_html
+    assert "css/agent.css?v=20260707-residuals2" in index_html
     assert "css/agent-layout.css?v=20260702-agent-focus-layout" in index_html
     assert "css/agent-header.css?v=20260702-agent-compact-header" in index_html
     assert "css/agent-review.css?v=20260702-agent-review-compact" in index_html
@@ -758,8 +758,8 @@ def test_native_agent_research_blocks_are_project_owned() -> None:
     assert ".ag-wf-cell" in agent_css
     assert ".ag-lib-card" in agent_css
     assert ".ag-block-contract" in agent_css
-    assert "css/agent.css?v=20260707-copilot" in index_html
-    assert "js/screens-agent.js?v=20260707-copilot" in index_html
+    assert "css/agent.css?v=20260707-residuals2" in index_html
+    assert "js/screens-agent.js?v=20260707-residuals2" in index_html
 
     assert "ag-block-grid" not in app_js
     assert "Research Blocks" not in app_js
@@ -804,7 +804,7 @@ def test_native_agent_render_layer_is_split_into_owner_file() -> None:
     main_pos = index_html.find("screens-agent.js?")
     assert render_pos != -1 and main_pos != -1
     assert render_pos < main_pos, "screens-agent-render.js must load before screens-agent.js"
-    assert "js/screens-agent-render.js?v=20260707-ux" in index_html
+    assert "js/screens-agent-render.js?v=20260707-residuals2" in index_html
 
 
 def test_native_agent_overview_renders_object_idea_plan_steps() -> None:
@@ -1357,7 +1357,7 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     assert "css/ideas.css?v=20260630-gate-first-ideas" in index_html
     assert "css/shell.css?v=20260626-owner" in index_html
     assert "js/icons.js?v=20260625-stage84" in index_html
-    assert "js/app.js?v=20260707-residuals" in index_html
+    assert "js/app.js?v=20260707-residuals2" in index_html
     assert "css/ideas-review.css?v=20260702-idea-review-handoff" in index_html
     assert "css/ideas-connectors.css?v=20260702-zotero-simple" in index_html
     assert "js/screens-ideas-zotero.js?v=20260702-zotero-origin" in index_html
@@ -1557,7 +1557,10 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     assert "const DEMO_STUDIES" in _static_js("screens-agent-render.js")
     assert "const base = realMode() ? [] : DEMO_STUDIES" in agent_js
     assert "No local projects yet" in agent_js
-    assert "Agent Projects no longer shows fabricated studies in Real mode" in agent_js
+    # Real mode must not fabricate example studies; the empty-state teaches the
+    # Extract->Review->Run path (positive framing) while preserving that truthfulness.
+    assert "it never shows fabricated example studies" in agent_js
+    assert "Turn a question into a review-ready draft" in agent_js
     assert "No active registered export is selected" in agent_js
     assert "data-ag-mode" not in agent_js
     assert "Idea exploration" not in agent_js
@@ -1940,8 +1943,8 @@ def test_native_crossdb_restores_distribution_visuals() -> None:
     assert "--xdb-grid-cols" in viz_js
     assert "xdb-density-svg" in viz_js
     assert "xdb-density-line" in viz_js
-    assert "js/screens-viz.js?v=20260707-residuals" in index_html
-    assert "css/crossdb.css?v=20260627-fig3-audit-collapse" in index_html
+    assert "js/screens-viz.js?v=20260707-residuals2" in index_html
+    assert "css/crossdb.css?v=20260707-residuals2" in index_html
     # Legacy Figure-3 Cross-DB layout restored: curated canonical-concept density grid
     # (one subplot per concept) instead of dumping all ~247 catalog features, plus
     # the per-database record-count cards from paper_figures._render_paper_crossdb_panel.
@@ -2004,7 +2007,7 @@ def test_native_cohort_snapshot_renders_real_clinical_profile() -> None:
     assert ".cprof-grid" in cohort_css
     assert ".cxh" not in cohort_css
     # Cache-bust bumped so the restored charts ship to existing clients.
-    assert "js/screens-viz.js?v=20260707-residuals" in index_html
+    assert "js/screens-viz.js?v=20260707-residuals2" in index_html
 
 
 def test_native_cohort_groups_render_comparison_bar_chart() -> None:
@@ -2375,7 +2378,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "api.js?v=20260702-zotero-simple" in index_html
     assert "screens-guided-projects.js?v=20260626-guided-projects-split" in index_html
     assert "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan" in index_html
-    assert "screens-guided.js?v=20260707-residuals" in index_html
+    assert "screens-guided.js?v=20260707-residuals2" in index_html
     assert "guided.css?v=20260707-copilot" in index_html
     assert '<span class="gd-name">Guided Copilot</span>' in guided_js
     assert "Guided Copilot · local first · nothing leaves your machine" in guided_js
@@ -2533,7 +2536,7 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert "js/screens-viz-demo.js?v=20260630-patient-demo-audit" in index_html
     assert "js/screens-viz-patient-series.js?v=20260707-ux" in index_html
     assert "js/screens-viz-patient-overview.js?v=20260707-ux" in index_html
-    assert "js/screens-viz.js?v=20260707-residuals" in index_html
+    assert "js/screens-viz.js?v=20260707-residuals2" in index_html
     assert "browser review', '浏览器审阅" in viz_js
     assert "function buildDemoPatientDrilldown" in viz_js
     assert "function demoTablePreviewRowContext" in viz_js
@@ -2698,8 +2701,8 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
     redesign_css = _static_css("redesign.css")
     index_html = _static_html("index.html")
 
-    assert "css/cohort.css?v=20260627-" in index_html
-    assert "js/screens-viz.js?v=20260707-residuals" in index_html
+    assert "css/cohort.css?v=20260707-residuals2" in index_html
+    assert "js/screens-viz.js?v=20260707-residuals2" in index_html
     assert "let cohortView = 'idle';" in viz_js
     assert "let cohortFeatureScope = 'recommended';" in viz_js
     assert 'data-cohort-config-required="true"' in viz_js
@@ -2988,3 +2991,57 @@ def test_agent_destination_nav_buttons_use_one_name() -> None:
     assert "交给研究代理" not in ext_js
     # the engine-name distinction is deliberately preserved in settings (test-locked
     # elsewhere: '研究代理' in settings_js), so do not assert its removal globally.
+
+
+def test_agent_run_status_labels_cover_success_statuses() -> None:
+    """[11] The two most common completed-run statuses must be humanized, and the
+    Runs history tab must route status through runStatusLabel (no raw snake_case)."""
+    render_js = _static_js("screens-agent-render.js")
+    agent_js = _static_js("screens-agent.js")
+    assert "publication_ready: t('publication-ready'" in render_js
+    assert "manuscript_ready: t('manuscript-ready'" in render_js
+    # Runs history tab humanizes the status token + the tampered tag (no raw snake_case)
+    assert "runStatusLabel(status)" in agent_js
+    assert "changed since sign-off" in agent_js
+
+
+def test_crossdb_density_plot_has_x_axis_ticks() -> None:
+    """[3] The cross-DB density detail plot must expose x-axis ticks + value/unit
+    labels so a reader can tell where distributions diverge, and state the per-DB
+    area normalization."""
+    viz_js = _static_js("screens-viz.js")
+    crossdb_css = _static_css("crossdb.css")
+    assert "xdb-density-tick" in viz_js
+    assert "xdb-density-xaxis" in viz_js
+    assert "area-normalized per DB" in viz_js
+    assert ".xdb-density-xaxis" in crossdb_css
+
+
+def test_km_panel_surfaces_effect_size() -> None:
+    """[6] The KM panel must surface an effect contrast (end-of-follow-up survival +
+    absolute risk difference), not just a lone log-rank p-value."""
+    viz_js = _static_js("screens-viz.js")
+    cohort_css = _static_css("cohort.css")
+    assert "function cohortSurvivalEffect(curve)" in viz_js
+    assert "absolute risk difference" in viz_js
+    assert ".surv-effect" in cohort_css
+
+
+def test_review_breadcrumb_parent_matches_sidebar_group() -> None:
+    """[25]/[33] The review-screen breadcrumb parent must be 'Data Workspace' (the
+    sidebar group name), not the orphan 'Data Visualization'."""
+    viz_js = _static_js("screens-viz.js")
+    app_js = _static_js("app.js")
+    assert "'Home', 'Data Workspace'" in viz_js
+    assert "'Data Visualization'" not in viz_js  # gone as a crumb parent
+    assert "'Data Workspace': 'patient'" in app_js  # crumb-nav key updated to match
+
+
+def test_seeded_demo_pipeline_is_named_guided_copilot_and_labeled() -> None:
+    """[23] The seeded demo pipeline must identify as 'Guided Copilot' (one name)
+    and flag itself as a scripted demo, not the divergent 'Research Copilot'."""
+    guided_js = _static_js("screens-guided.js")
+    assert "Research Copilot" not in guided_js
+    assert "研究 Copilot" not in guided_js
+    assert "scripted demo walkthrough" in guided_js
+    assert "你好，我是 <strong>Guided Copilot</strong>" in guided_js

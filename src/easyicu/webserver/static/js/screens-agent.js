@@ -1243,11 +1243,19 @@
       return `
       <div class="state-hero empty-state" style="min-height:360px;">
         <div class="glyph">${icon('folder', 28)}</div>
-        <div class="st-t">${t('No local Agent project selected', '尚未选择本地 Agent 项目')}</div>
-        <div class="st-d">${t('Agent Projects no longer shows fabricated studies in Real mode. Create a research project from Idea Mining, or switch to Demo to inspect examples.', '真实模式下 Agent Projects 不再显示编造研究。请从 Idea Mining 创建研究项目，或切到 Demo 查看示例。')}</div>
+        <div class="st-t">${t('Turn a question into a review-ready draft', '把研究问题变成待审阅草稿')}</div>
+        <div class="st-d">${t('An Agent project takes a confirmed question and your extracted cohort and runs an auditable, local analysis — every claim stays locked until evidence checks pass and you sign off. Real mode lists only your own local projects; it never shows fabricated example studies.', 'Agent 项目会把一个已确认的问题与你抽取的队列，运行成一份可审计的本地分析 —— 每条结论在证据检查通过并经你签署前都保持锁定。真实模式只列出你自己的本地项目；绝不显示编造的示例研究。')}</div>
+        <div class="ag-empty-steps">
+          <span>${icon('extract', 12)} ${t('1 · Extract data', '1 · 抽取数据')}</span>
+          <span class="sep">${icon('arrow', 11)}</span>
+          <span>${icon('eye', 12)} ${t('2 · Review', '2 · 审阅')}</span>
+          <span class="sep">${icon('arrow', 11)}</span>
+          <span>${icon('agent', 12)} ${t('3 · Run analysis', '3 · 运行分析')}</span>
+        </div>
         <div class="st-actions">
           <button class="btn primary" data-nav="ideas">${icon('target', 14)} ${t('Create from Idea Mining', '从 Idea Mining 创建')}</button>
-          <button class="btn" data-ag-refresh-projects>${icon('refresh', 13)} ${t('Refresh local projects', '刷新本地项目')}</button>
+          <button class="btn" data-ag-see-demo>${icon('flask', 13)} ${t('See a completed example (Demo)', '查看完整示例（演示）')}</button>
+          <button class="btn" data-ag-refresh-projects>${icon('refresh', 13)} ${t('Refresh', '刷新')}</button>
         </div>
       </div>`;
     }
@@ -1445,9 +1453,9 @@
             return `
             <div class="runrow">
               <div class="rn-node">${ok ? `<span style="color:var(--ok);">${icon('check', 14, 2.8)}</span>` : `<span style="color:var(--bad);">${icon('lock', 12, 2)}</span>`}</div>
-              <div><div class="run-name mono">${esc(r.run_label || r.run_id || ('run ' + (ri + 1)))}${stale ? ` <span class="jp-stale">${icon('alert', 9)} ${t('tampered', '已篡改')}</span>` : ''}</div><div class="run-scope">${esc(status)} · ${Number(r.artifact_count || 0)} ${t('artifacts', '产物')}</div></div>
+              <div><div class="run-name mono">${esc(r.run_label || r.run_id || ('run ' + (ri + 1)))}${stale ? ` <span class="jp-stale" title="${esc(runStatusHint('signoff_stale'))}">${icon('alert', 9)} ${t('changed since sign-off', '签署后已改动')}</span>` : ''}</div><div class="run-scope">${esc(runStatusLabel(status))} · ${Number(r.artifact_count || 0)} ${t('artifacts', '产物')}</div></div>
               <div class="row gap-10" style="flex:none;">
-                <span class="pill ${stale ? 'bad' : (r.signed ? 'ok' : 'warn')}" style="height:20px;"><span class="dot"></span>${esc(stale ? 'signoff_stale' : status)}</span>
+                <span class="pill ${stale ? 'bad' : (r.signed ? 'ok' : 'warn')}" style="height:20px;" title="${esc(runStatusHint(stale ? 'signoff_stale' : status))}"><span class="dot"></span>${esc(stale ? runStatusLabel('signoff_stale') : runStatusLabel(status))}</span>
                 <span class="mono" style="font-size:11px;color:var(--ink-4);width:54px;text-align:right;">${esc(r.run_type || '')}</span>
               </div>
               <div class="mono" style="font-size:11px;color:var(--ink-4);text-align:right;white-space:nowrap;">${esc((r.updated_at || '').slice(0, 19).replace('T', ' '))}</div>
@@ -2077,6 +2085,7 @@
     }));
     host.querySelectorAll('[data-ag-history-refresh]').forEach(b => b.addEventListener('click', () => requestRunHistory(true)));
     host.querySelectorAll('[data-ag-refresh-projects]').forEach(b => b.addEventListener('click', () => requestIdeaAgentProjects(true)));
+    host.querySelectorAll('[data-ag-see-demo]').forEach(b => b.addEventListener('click', () => { if (window.setDataMode) window.setDataMode('demo'); }));
     host.querySelectorAll('[data-ag-open-seed-run]').forEach(b => b.addEventListener('click', () => {
       const projectDir = b.dataset.agOpenSeedRun || '';
       if (!projectDir || !window.EU_API || !window.EU_API.loadAgentRunReview) return;

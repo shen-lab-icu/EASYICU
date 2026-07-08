@@ -221,6 +221,10 @@
     const labels = {
       gate_reportable: t('verification passed', '核验通过'),
       reportable: t('verification passed', '核验通过'),
+      // Backend readiness_status success outcomes (pipeline_report.py) — the two
+      // most common results of a completed real run; must not leak as raw snake_case.
+      publication_ready: t('publication-ready', '可发表'),
+      manuscript_ready: t('manuscript-ready', '手稿就绪'),
       analysis_only: t('analysis-only', '仅分析'),
       signed_analysis_only: t('signed · analysis-only', '已签署 · 仅分析'),
       diagnostic_only: t('diagnostic only', '诊断性'),
@@ -241,6 +245,8 @@
     const hints = {
       gate_reportable: t('All evidence checks passed — findings may be reported.', '所有证据检查已通过 —— 结论可报告。'),
       reportable: t('All evidence checks passed — findings may be reported.', '所有证据检查已通过 —— 结论可报告。'),
+      publication_ready: t('All evidence checks passed and the manuscript is publication-ready.', '所有证据检查通过，手稿达到可发表状态。'),
+      manuscript_ready: t('Evidence checks passed and a manuscript draft was written.', '证据检查通过，已写出手稿草稿。'),
       analysis_only: t('The run finished but claims stay locked until STRICT evidence + human sign-off pass.', '运行已完成，但在 STRICT 证据与人工签署通过前结论保持锁定。'),
       signed_analysis_only: t('A human signed off, but evidence verification still keeps claims non-reportable.', '已有人工签署，但证据核验仍使结论不可报告。'),
       diagnostic_only: t('Run produced diagnostics only — not enough to support a reportable claim.', '运行仅产出诊断信息 —— 不足以支撑可报告结论。'),
