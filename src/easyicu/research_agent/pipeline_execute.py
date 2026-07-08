@@ -711,6 +711,27 @@ def _is_cohort_definition_sensitivity_step(
     return any(phrase in blob for phrase in _COHORT_DEF_SENSITIVITY_PHRASES)
 
 
+def _method_has_ordinal_primary_token(method: str) -> bool:
+    """True if ``method`` IS, or is a compound built from, a primary-estimation
+    method token (e.g. ``multivariable_association`` -> ``association``,
+    ``adjusted_logistic_regression`` -> ``regression``).
+
+    Word-boundary token match (split on ``_`` / ``-``), NOT substring, so
+    ``remodeling`` never matches ``model``. This is only ever reached AFTER the
+    dose-response-signal gate in :func:`_ordinal_dose_response_step_matches`, so a
+    plain association method still routes here only when a dose signal is also
+    present — the anti-hijack guard is preserved. Motivated by E3's real primary
+    step, whose planner ``method`` was ``multivariable_association`` (a genuine
+    ordinal-trend estimation for a "dose-response gradient / ordered exposure"
+    question) that the exact-match allowlist missed, starving the deterministic
+    ordinal runner and leaving the run with no traceable primary figure.
+    """
+    if method in _ORDINAL_PRIMARY_METHODS:
+        return True
+    tokens = method.replace("-", "_").split("_")
+    return any(tok in _ORDINAL_PRIMARY_METHODS for tok in tokens)
+
+
 def _ordinal_dose_response_step_matches(
     method: str, blob: str, expected_blob: str
 ) -> bool:
@@ -741,7 +762,12 @@ def _ordinal_dose_response_step_matches(
     # "trend" is not hijacked.
     if not any(tok in blob for tok in _ORDINAL_DOSE_SIGNAL_TOKENS):
         return False
-    return method in _ORDINAL_PRIMARY_METHODS or head in _ORDINAL_PRIMARY_METHODS
+    # Tokenise only the HEAD (owner) of a ``<head>_with_<rider>`` method, never
+    # the rider: a ``cohort_definition_sensitivity_with_binomial_glm`` step is a
+    # definition comparison whose ``glm`` rider must NOT pull it into the ordinal
+    # runner (the head "cohort_definition_sensitivity" has no ordinal token). For
+    # a non-hybrid method, ``head`` == ``method``.
+    return _method_has_ordinal_primary_token(head)
 
 
 def _primary_runner_core_estimate_present(
