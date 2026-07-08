@@ -12,6 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from easyicu.research_agent.plan_utils import (
+    _name_intends_covariates,
     _primary_exposure_overadjustment_findings,
     read_adjustment_covariates,
     read_model_covariate_names,
@@ -256,6 +257,76 @@ def test_all_model_vars_list_does_not_leak_outcome(tmp_path: Path):
     # names are recovered.
     _write_code(tmp_path, "model_vars = ['sepsis3', 'age', 'death']\n")
     assert read_adjustment_covariates(tmp_path) == []
+
+
+# ---------------------------------------------------------------------------
+# Negation-named exclusion lists must NOT be read as the adjustment set.
+# Regression for the real E3 KDIGO missingness-audit false positive: that step
+# fits no model but enumerates the renal KDIGO-component fields in a constant
+# named RENAL_SOURCE_NOT_ADJUSTED (documenting the *exclusion*). The auditor
+# substring-matched "adjust" inside "not_adjusted", read the excluded renal
+# fields as the adjustment set, and failed a fully-correct audit — driving the
+# replan loop to exhaustion. A name that *means* "not in the model" never
+# intends the adjustment set.
+# ---------------------------------------------------------------------------
+
+
+def test_name_intends_covariates_rejects_negation():
+    # Genuine adjustment-set names still intend covariates ...
+    assert _name_intends_covariates("covariates")
+    assert _name_intends_covariates("PRIMARY_ADJUSTMENT_SET")
+    assert _name_intends_covariates("confounders")
+    assert _name_intends_covariates("x_cols")
+    # ... but exclusion/negation-named lists never do.
+    assert not _name_intends_covariates("RENAL_SOURCE_NOT_ADJUSTED")
+    assert not _name_intends_covariates("excluded_covariates")
+    assert not _name_intends_covariates("covariates_excluded_for_overadjustment")
+    assert not _name_intends_covariates("non_adjustment_fields")
+    assert not _name_intends_covariates("unadjusted_model_columns")
+
+
+def test_exclusion_named_list_not_read_as_adjustment_set(tmp_path: Path):
+    # A step that declares BOTH a genuine adjustment set and an exclusion list of
+    # exposure constituents (named to document the exclusion) must recover only
+    # the genuine set — never the excluded constituents.
+    _write_code(
+        tmp_path,
+        "PRIMARY_ADJUSTMENT_SET = ['age', 'sex', 'adm']\n"
+        "RENAL_SOURCE_NOT_ADJUSTED = ['crea_first', 'urine24_first', 'sofa_max']\n",
+    )
+    assert read_adjustment_covariates(tmp_path) == ["age", "sex", "adm"]
+
+
+def test_exclusion_named_constituent_does_not_false_positive(tmp_path: Path):
+    # End-to-end mirror of the real bug with the well-supported sepsis3/sofa_max
+    # constituent pair: sofa_max sits ONLY in an exclusion-named list, so the
+    # overadjustment auditor must stay silent (before the fix it read sofa_max as
+    # adjusted-for and raised a phantom error that fail-closed the run).
+    _write_code(
+        tmp_path,
+        "covariates = ['age', 'sex']\n"
+        "sofa_excluded_to_avoid_overadjustment = ['sofa_max']\n",
+    )
+    assert read_adjustment_covariates(tmp_path) == ["age", "sex"]
+    assert (
+        _primary_exposure_overadjustment_findings(
+            step=_step(), context=_ctx("sepsis3"), out_dir=tmp_path
+        )
+        == []
+    )
+
+
+def test_genuine_constituent_still_fires_after_negation_guard(tmp_path: Path):
+    # The fix is surgical: a constituent sitting in a genuine (non-negated)
+    # adjustment list must STILL raise the overadjustment error — the negation
+    # guard only spares exclusion-named lists, it never blinds the auditor.
+    _write_code(tmp_path, "covariates_final = ['age', 'sofa_max']\n")
+    findings = _primary_exposure_overadjustment_findings(
+        step=_step(), context=_ctx("sepsis3"), out_dir=tmp_path
+    )
+    assert len(findings) == 1
+    assert findings[0].severity == "error"
+    assert findings[0].detail["offending_covariates"] == ["sofa_max"]
 
 
 # ---------------------------------------------------------------------------
