@@ -3564,11 +3564,13 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       return true;
     }
     thread.push({ bot: true, html: bi(
-      `First choose or create a <strong>local study folder</strong>. Each folder owns a separate Guided conversation and memory, like a Codex/Claude project context.`,
-      `请先选择或创建一个<strong>本地研究文件夹</strong>。每个文件夹都有独立的 Guided 对话和记忆，类似 Codex/Claude 的项目上下文。`,
+      `One quick setup step: this goal saves into a <strong>local study folder</strong> (its own conversation + memory). I can create a starter folder for you in one click, or you can pick a custom path.`,
+      `只差一步快速设置：这个目标会保存到一个<strong>本地研究文件夹</strong>（独立的对话 + 记忆）。我可以一键为你创建入门文件夹，你也可以选择自定义路径。`,
     ) });
-    showGuidedDraftSetup(label || 'New local study');
-    chips = [['Open/create study folder', '@foldernew']];
+    chips = [
+      [t('Create a starter folder & continue', '一键创建入门文件夹并继续'), '@folderquick'],
+      [t('Pick a custom folder', '选择自定义文件夹'), '@foldernew'],
+    ];
     renderThread();
     renderChips();
     return true;
@@ -3779,16 +3781,16 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       <div class="gd-frontdoor" data-guided-frontdoor>
         <div class="gdf-memory ${hasGuidedProjectMemory() ? 'ready' : ''}">
           <span>${icon(hasGuidedProjectMemory() ? 'check' : 'folder', 13)}</span>
-          <div><strong>${hasGuidedProjectMemory() ? t('Project memory bound', '已绑定项目记忆') : t('Start by binding a local study folder', '先绑定本地研究文件夹')}</strong>
+          <div><strong>${hasGuidedProjectMemory() ? t('Project memory bound', '已绑定项目记忆') : t('Pick a goal to start — your local folder is set up for you', '选一个目标就能开始 —— 本地文件夹我来建')}</strong>
           <small>${hasGuidedProjectMemory()
             ? esc(compactPath((guidedCopilot.session && guidedCopilot.session.project_dir) || (selectedGuidedDraft && selectedGuidedDraft.project_dir) || ''))
-            : t('Required setup stays inside Guided Copilot; every folder has its own conversation, settings, and handoff memory.', '必需配置都在 Guided Copilot 内完成；每个文件夹都有自己的对话、设置和交接记忆。')}</small></div>
-          ${hasGuidedProjectMemory() ? '' : `<button class="btn sm" type="button" data-go="@foldernew">${t('New / open folder', '新建/打开文件夹')}</button>`}
+            : t('Each study saves into its own local folder (conversation + memory). No path setup up front — I create one in one click, or you can choose a custom folder.', '每个研究都保存到独立的本地文件夹（对话 + 记忆）。无需预先设置路径 —— 我可以一键创建，你也可以选择自定义文件夹。')}</small></div>
+          ${hasGuidedProjectMemory() ? '' : `<button class="btn sm" type="button" data-go="@folderquick">${t('Create a starter folder', '创建入门文件夹')}</button>`}
         </div>
         <div class="gdf-head">
           <span class="gdf-kicker">${t('Choose a goal', '选择目标')}</span>
           <strong>${t('What should this local study folder do next?', '这个本地研究文件夹下一步要做什么？')}</strong>
-          <span>${t('Pick a goal. If no folder is bound yet, I will ask you to create or open one first, then continue the selected workflow inside this conversation.', '选择目标。如果还没有绑定文件夹，我会先让你创建或打开一个文件夹，然后在本对话内继续刚才选择的流程。')}</span>
+          <span>${t('Pick a goal. If no folder is bound yet, I set up a starter folder in one click and continue the selected workflow inside this conversation.', '选择目标。如果还没有绑定文件夹，我会一键创建入门文件夹，然后在本对话内继续刚才选择的流程。')}</span>
         </div>
         <div class="gdf-grid">
           ${cards.map(([goal, ico, title, body]) => `
@@ -4234,7 +4236,8 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       });
     });
   }
-  function createLocalGuidedDraft(label, folderSlug, parentDir) {
+  function createLocalGuidedDraft(label, folderSlug, parentDir, opts) {
+    const options = opts || {};
     const text = label || 'New local study';
     const parent = String(parentDir || '').trim();
     pushUser(parent ? `Create local study folder: ${text} in ${parent}` : `Create local study folder: ${text}`);
@@ -4271,7 +4274,18 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       const title = selectedGuidedDraft && selectedGuidedDraft.title ? selectedGuidedDraft.title : text;
       const path = selectedGuidedDraft && selectedGuidedDraft.project_dir ? compactPath(selectedGuidedDraft.project_dir) : '~/easyicu/projects';
       closeGuidedFolderDialog();
-      startFreshGuidedProjectThread(title, path);
+      // One-click starter path: keep the goal the user already picked and resume
+      // it in the fresh folder, instead of resetting them back to goal cards.
+      if (options.continueGoal && pendingGuidedGoal) {
+        pushBot(
+          `Created <strong>${esc(title)}</strong> at <span class="mono">${esc(path)}</span> — metadata-only, no run yet. Continuing where you left off.`,
+          `已创建 <strong>${esc(title)}</strong> 到 <span class="mono">${esc(path)}</span> —— 仅元数据、暂无运行。这就接着刚才的步骤继续。`,
+        );
+        renderThread();
+        continuePendingGuidedGoal();
+      } else {
+        startFreshGuidedProjectThread(title, path);
+      }
     }).catch(err => {
       pushBot(
         `Could not save the guided draft: <span class="mono">${esc(err.message || String(err))}</span>`,
@@ -4279,6 +4293,19 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       );
       renderThread();
     });
+  }
+  function quickCreateGuidedStarterFolder() {
+    // First-run friction reducer: create a metadata-only folder at the default
+    // location in one click (no path dialog, no typing) and resume the goal the
+    // user just picked. Still explicit (a button/chip), still local-only.
+    // Name the folder after the chosen goal (not the button text) so it reads
+    // sensibly on disk; fall back to a neutral title when no goal is pending yet.
+    const pend = pendingGuidedGoal;
+    const meta = pend ? guidedGoalMeta(pend.goal) : null;
+    const seed = meta
+      ? t(meta.label_en || 'New study', meta.label_zh || meta.label_en || 'New study')
+      : t('My first study', '我的第一个研究');
+    createLocalGuidedDraft(seed, slugifyDraftFolder(seed), '~/easyicu/projects', { continueGoal: !!pend });
   }
   function openGuidedRunReview(row, label) {
     if (!row || !row.project_dir || !window.EU_API || !window.EU_API.loadAgentRunReview) {
@@ -4740,6 +4767,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           if (tok === '@openAgent') { pushUser(label); location.hash = '#agent'; return; }
           if (tok === '@reviewLocalRun') { openGuidedRunReview(selectedGuidedRun, label); return; }
           if (tok === '@activeExport') { pushUser(label); dataMode = 'real'; go('realConfirm', label); return; }
+          if (tok === '@folderquick') { quickCreateGuidedStarterFolder(); return; }
           if (tok === '@foldernew') { pushUser(label || 'New / open study folder'); showGuidedDraftSetup('Guided study draft'); return; }
           if (tok === '@hintN') { handleText('use 30 patients'); return; }
           go(tok, goEl.classList.contains('suggest-chip') ? label : null);
