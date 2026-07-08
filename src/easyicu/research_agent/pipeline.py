@@ -5106,6 +5106,84 @@ _DETERMINISTIC_FIGURE_TOKEN_GROUPS: tuple[tuple[str, ...], ...] = (
 )
 
 
+# A ``*_figure`` step renders its parent analysis step's outputs. The parent's
+# deterministic runner records a CONTROLLED ``analysis_family`` in its
+# step_summary.json (e.g. the ordinal dose-response runner writes
+# ``analysis_family='association'``). Routing the figure by that PROVEN family is
+# the structural signal to use when the (stochastically named) figure step id
+# carries no family token — e.g. ``05_primary_stage_outcome_analysis_figure`` has
+# no association token, yet its parent produced a canonical association forest.
+# This is a small CLOSED enum (the families the runners emit) mapped to renderers,
+# NOT a fragile substring match against a free-form step id / intent prose. Only
+# RESULT families are mapped; ``descriptive``/baseline figures are intentionally
+# absent so they keep their existing (LLM-coder) path rather than being claimed by
+# a renderer that would emit an empty figure.
+_UPSTREAM_FAMILY_TO_RENDERER_KEY: dict[str, str] = {
+    "association": "association",
+    "dose_response": "association",
+    "prediction": "prediction",
+    "prediction_model": "prediction",
+    "survival": "survival",
+    "survival_analysis": "survival",
+    "cohort_definition": "cohort",
+    "cohort_definition_sensitivity": "sensitivity",
+    "sensitivity_analysis": "sensitivity",
+    "missingness": "missingness",
+    "measurement": "missingness",
+    "data_quality": "missingness",
+}
+
+
+def _resolve_upstream_analysis_family(
+    run_dir: Path, current_step_id: str
+) -> Optional[str]:
+    """Return the ``analysis_family`` recorded by a figure step's parent step."""
+
+    parent = str(current_step_id or "").removesuffix("_figure")
+    if not parent or parent == str(current_step_id):
+        return None
+    summ = Path(run_dir) / "steps" / parent / "outputs" / "step_summary.json"
+    try:
+        fam = json.loads(summ.read_text("utf-8")).get("analysis_family")
+    except Exception:
+        return None
+    return str(fam).strip().lower() if fam else None
+
+
+def _renderer_for_upstream_family(family: Optional[str]):
+    """Map a parent ``analysis_family`` to its deterministic figure renderer."""
+
+    key = _UPSTREAM_FAMILY_TO_RENDERER_KEY.get(str(family or "").strip().lower())
+    if key is None:
+        return None
+    if key == "survival":
+        from .figures.survival import (
+            render_survival_bundle_from_prior_outputs as _render_survival_bundle,
+        )
+
+        return _render_survival_bundle
+    return {
+        "association": _render_association_publication_bundle_from_prior_outputs,
+        "prediction": _render_prediction_publication_bundle_from_prior_outputs,
+        "sensitivity": _render_sensitivity_publication_bundle_from_prior_outputs,
+        "cohort": _render_cohort_overlap_publication_bundle_from_prior_outputs,
+        "missingness": _render_missingness_publication_bundle_from_prior_outputs,
+    }.get(key)
+
+
+def deterministic_figure_family_supported_for_upstream(
+    run_dir: Path, step_id: str
+) -> bool:
+    """True when the figure step's PARENT family has a deterministic renderer."""
+
+    return (
+        _renderer_for_upstream_family(
+            _resolve_upstream_analysis_family(run_dir, step_id)
+        )
+        is not None
+    )
+
+
 def deterministic_figure_family_supported(step_id: str) -> bool:
     """True when the deterministic figure router has a family for ``step_id``.
 
@@ -5183,7 +5261,18 @@ def _render_publication_bundle_from_prior_outputs_for_step(
     elif any(token in full_text for token in missingness_tokens):
         renderers = (_render_missingness_publication_bundle_from_prior_outputs,)
     else:
-        return None
+        # Structural fallback: no family token in the (stochastically named) step
+        # id/text — route by the parent analysis step's PROVEN analysis_family
+        # (recorded in its step_summary.json). Fixes primary result figures whose
+        # planner-chosen id carries no family token, e.g.
+        # ``05_primary_stage_outcome_analysis_figure`` whose parent produced a
+        # canonical association forest (dose_response.csv).
+        upstream_renderer = _renderer_for_upstream_family(
+            _resolve_upstream_analysis_family(run_dir, current_step_id)
+        )
+        if upstream_renderer is None:
+            return None
+        renderers = (upstream_renderer,)
 
     for renderer in renderers:
         repair_id = renderer(

@@ -23,7 +23,9 @@ from easyicu.research_agent.pipeline import (
     _render_publication_bundle_from_prior_outputs_for_step as routed_rescue,
     _render_association_publication_bundle_from_prior_outputs as rescue,
     _render_sensitivity_publication_bundle_from_prior_outputs as sensitivity_rescue,
+    _resolve_upstream_analysis_family,
     deterministic_figure_family_supported,
+    deterministic_figure_family_supported_for_upstream,
 )
 from easyicu.research_agent.schema import AnalysisStep
 
@@ -130,6 +132,71 @@ def test_survival_by_stage_figure_still_routes_to_survival(tmp_path: Path):
     assert (
         deterministic_figure_family_supported("05_survival_by_disease_stage_figure")
         is True
+    )
+
+
+def _write_parent_summary(run_dir: Path, parent_id: str, family: str) -> None:
+    out = run_dir / "steps" / parent_id / "outputs"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "step_summary.json").write_text(
+        json.dumps({"step": parent_id, "status": "ok", "analysis_family": family}),
+        encoding="utf-8",
+    )
+
+
+def test_upstream_family_routes_token_free_primary_figure(tmp_path: Path):
+    # E3 (2026-07-08) real-run regression: the planner named the primary forest
+    # figure ``05_primary_stage_outcome_analysis_figure`` — it matches NO family
+    # token (no association/ordinal/ordered/trend/gradient), so id-token routing
+    # returned None and the forest fell to the LLM coder, which failed. But its
+    # PARENT analysis step recorded analysis_family='association' and produced a
+    # canonical dose_response.csv. Routing by the parent's PROVEN family must
+    # claim the step and render the forest deterministically.
+    step_id = "05_primary_stage_outcome_analysis_figure"
+    parent_id = "05_primary_stage_outcome_analysis"
+
+    # The id itself carries no family token -> the token gate is False ...
+    assert deterministic_figure_family_supported(step_id) is False
+
+    _write_parent_summary(tmp_path, parent_id, "association")
+    parent = tmp_path / "steps" / parent_id / "outputs"
+    pd.DataFrame(
+        {
+            "stage": [0, 1, 2, 3],
+            "n": [37433, 14061, 19593, 3621],
+            "n_events": [2143, 1380, 2672, 1188],
+            "event_rate": [0.0572, 0.0981, 0.1364, 0.3281],
+            "is_reference": [True, False, False, False],
+            "odds_ratio": [1.0, 1.587, 2.119, 5.766],
+            "or_ci_low": [1.0, 1.477, 1.993, 5.289],
+            "or_ci_high": [1.0, 1.705, 2.253, 6.287],
+        }
+    ).to_csv(parent / "dose_response.csv", index=False)
+
+    # ... but the parent-family fallback recognises + routes it.
+    assert _resolve_upstream_analysis_family(tmp_path, step_id) == "association"
+    assert deterministic_figure_family_supported_for_upstream(tmp_path, step_id) is True
+
+    out = tmp_path / "steps" / step_id / "outputs"
+    rid = routed_rescue(run_dir=tmp_path, current_step_id=step_id, out_dir=out)
+    assert rid is not None  # association forest renderer claimed + drew it
+
+
+def test_upstream_family_fallback_ignores_descriptive_parent(tmp_path: Path):
+    # Anti-regression: baseline/descriptive figures must NOT be claimed by the
+    # deterministic renderer via the parent-family fallback (they have no result
+    # renderer and would emit an empty figure). Only RESULT families are mapped,
+    # so a 'descriptive' parent leaves the figure on its existing (LLM) path.
+    step_id = "03_baseline_context_figure"
+    _write_parent_summary(tmp_path, "03_baseline_context", "descriptive")
+    assert _resolve_upstream_analysis_family(tmp_path, step_id) == "descriptive"
+    assert (
+        deterministic_figure_family_supported_for_upstream(tmp_path, step_id) is False
+    )
+    # No parent summary at all -> also False (no crash).
+    assert (
+        deterministic_figure_family_supported_for_upstream(tmp_path, "99_x_figure")
+        is False
     )
 
 
