@@ -65,6 +65,54 @@ def test_bare_word_model_does_not_force_prediction(ra):
     assert str(infer_study_design_family(ctx)) == "association"
 
 
+def test_disclaimed_causal_does_not_hijack_trajectory_clustering(ra):
+    """A latent-class trajectory-clustering question that disclaims causality must
+    route to trajectory_clustering, not causal_inference.
+
+    Regression for H3: the RQ says "cluster LONGITUDINAL trajectories ... into
+    latent classes" and, as a methods caveat, "do NOT interpret a trajectory
+    class as a causal group". The bare "causal" strong-cue fired
+    causal_inference before trajectory_clustering, imposing an unsatisfiable
+    causal contract. Strong clustering framing now gates the causal family.
+    """
+
+    def _ctx(text):
+        return ra.ResearchContext(
+            research_question=text,
+            cohort=ra.CohortDescriptor(
+                cohort_name="c", database="synthetic", n_patients=10, n_stays=10
+            ),
+            variables=[],
+            target_outcome="death",
+        )
+
+    h3 = (
+        "Among adult ICU patients, cluster LONGITUDINAL organ-dysfunction "
+        "trajectories (first-72h SOFA-2 binned into 6-hour windows) into latent "
+        "classes, and relate the classes to in-hospital mortality DESCRIPTIVELY; "
+        "do NOT interpret a trajectory class as a causal group."
+    )
+    assert ra.infer_analysis_type(_ctx(h3)).key == "trajectory_clustering"
+
+    # H2 mirror: also disclaims causality ("do NOT state a causal conclusion")
+    # but has NO clustering framing -> must STILL route to causal_inference.
+    h2 = (
+        "Estimate the association of early (first-24h) vasopressor exposure with "
+        "in-hospital mortality, making confounding by indication explicit; report "
+        "covariate balance and positivity for any weighted estimate, and do NOT "
+        "state a causal conclusion the design cannot support."
+    )
+    assert ra.infer_analysis_type(_ctx(h2)).key == "causal_inference"
+
+    # A genuine causal task that merely uses cluster-robust SEs must not be
+    # dragged to clustering by the bare word "cluster".
+    crobust = (
+        "Estimate the causal effect of vasopressor exposure on mortality via "
+        "IPTW with cluster-robust standard errors."
+    )
+    assert ra.infer_analysis_type(_ctx(crobust)).key == "causal_inference"
+
+
 def test_new_idea_mining_families_are_concept_set_shapes() -> None:
     assert normalize_analysis_family("measurement bias") == "measurement_bias_audit"
     assert (
