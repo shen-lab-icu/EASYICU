@@ -5090,6 +5090,14 @@ _DETERMINISTIC_FIGURE_TOKEN_GROUPS: tuple[tuple[str, ...], ...] = (
         "dose_response",
         "dose-response",
         "ordinal",
+        # "ordered" catches the ordinal-regression vocabulary the planner used for
+        # E3's primary figure step (``04_primary_ordered_stage_analysis_figure``):
+        # the deterministic ordinal runner emitted a perfect dose_response.csv, but
+        # this step id matched no token group (``ordered`` != ``ordinal``), so the
+        # forest fell to the LLM coder and crashed. Kept ordinal-specific (no bare
+        # ``stage``/``graded``, which overlap survival step names) so it never
+        # steals a survival/prediction figure step from its own renderer.
+        "ordered",
         "trend",
     ),
     ("primary_result", "primary_results", "main_result", "main_results"),

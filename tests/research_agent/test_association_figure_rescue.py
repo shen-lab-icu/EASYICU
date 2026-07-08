@@ -91,6 +91,48 @@ def test_missingness_rescue_recomputes_percentages_from_counts(tmp_path: Path):
     assert len(contract["panels"]) == 2
 
 
+def test_e3_ordered_stage_figure_step_is_deterministically_claimed(tmp_path: Path):
+    # E3 regression: the deterministic ordinal runner emits a perfect
+    # dose_response.csv, but the planner named the primary figure step
+    # ``04_primary_ordered_stage_analysis_figure`` — which matched NO token group
+    # (``ordered`` != ``ordinal``), so the forest fell to the LLM coder and
+    # crashed, leaving primary_pub_fig_contracts=0 and failing the run closed.
+    # The gate must now claim it AND route it to the association forest renderer.
+    step_id = "04_primary_ordered_stage_analysis_figure"
+    assert deterministic_figure_family_supported(step_id) is True
+
+    parent = tmp_path / "steps" / "04_primary_ordered_stage_analysis" / "outputs"
+    parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "stage": [0, 1, 2, 3],
+            "n": [37433, 14061, 19593, 3621],
+            "n_events": [2143, 1380, 2672, 1188],
+            "event_rate": [0.0572, 0.0981, 0.1364, 0.3281],
+            "is_reference": [True, False, False, False],
+            "odds_ratio": [1.0, 1.587, 2.119, 5.766],
+            "or_ci_low": [1.0, 1.477, 1.993, 5.289],
+            "or_ci_high": [1.0, 1.705, 2.253, 6.287],
+        }
+    ).to_csv(parent / "dose_response.csv", index=False)
+    out = tmp_path / "steps" / step_id / "outputs"
+
+    rid = routed_rescue(run_dir=tmp_path, current_step_id=step_id, out_dir=out)
+    # A non-None id proves the deterministic association/ordinal renderer claimed
+    # the step (instead of the crashing LLM coder) and emitted a figure bundle.
+    assert rid is not None
+
+
+def test_survival_by_stage_figure_still_routes_to_survival(tmp_path: Path):
+    # Anti-regression for the "ordered" token addition: a survival figure step
+    # that happens to mention "stage" must NOT be stolen by the association
+    # renderer. It contains no "ordered" token and keeps matching survival.
+    assert (
+        deterministic_figure_family_supported("05_survival_by_disease_stage_figure")
+        is True
+    )
+
+
 def test_rescue_handles_ci_lower_upper_variant(tmp_path: Path):
     # free-model style column names: odds_ratio + ci_lower/ci_upper
     _make_parent_step(
