@@ -101,7 +101,7 @@
                 <div class="col-entries">
                   ${[
                     ['extraction', 'extract', t('Data Extraction', '数据抽取'), t('One click to analysis-ready tables', '一键得到可分析的数据表')],
-                    ['patient', 'viz', t('Data Visualization', '数据可视化'), t('Patient review · cohort stats · cross-DB', '患者审阅 · 队列统计 · 跨库')],
+                    ['patient', 'viz', t('Data Workspace', '数据工作台'), t('Patient review · cohort stats · cross-DB', '患者审阅 · 队列统计 · 跨库')],
                     ['agent', 'agent', t('Agent Projects', '研究项目'), t('Auditable runs → review-ready manuscript', '可审计运行 → 待核验草稿')],
                   ].map(([nav, ic, ti, d]) => `
                     <button class="col-entry" data-nav="${nav}">

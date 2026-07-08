@@ -107,7 +107,7 @@
     Home: ['Home', '首页'],
     'Get Started': ['Get Started', '快速上手'],
     'Idea Mining': ['Idea Mining', '想法挖掘'],
-    'Data Visualization': ['Data Visualization', '数据可视化'],
+    'Data Workspace': ['Data Workspace', '数据工作台'],
     'Patient Review': ['Patient Review', '患者明细'],
     'Cohort Statistics': ['Cohort Statistics', '队列统计'],
     'Cross-DB Benchmark': ['Cross-DB Benchmark', '跨库对比'],
@@ -189,7 +189,7 @@
 
   // middle breadcrumbs that map to a real destination become live links again
   const CRUMB_NAV = {
-    'Data Visualization': 'patient', '数据可视化': 'patient',
+    'Data Workspace': 'patient', '数据工作台': 'patient',
   };
   function topbar() {
     const scr = screenOf(route);

@@ -2420,7 +2420,7 @@
 
   S.patient = {
     section: 'viz', nav: 'viz', sub: 'patient',
-    crumbs: ['Home', 'Data Visualization', 'Patient Review'],
+    crumbs: ['Home', 'Data Workspace','Patient Review'],
     get actionHtml() {
       return patientView === 'loaded'
         ? `<button class="btn" data-viz-reset>${icon('sliders', 13)} ${t('Edit setup', '编辑设置')}</button><button class="btn primary" data-gen>${icon('refresh', 13)} ${t('Re-run', '重新运行')}</button>`
@@ -3157,6 +3157,7 @@
           </div>
         </div>
         ${cohortSurvivalChart(curve)}
+        ${cohortSurvivalEffect(curve)}
         ${cohortRiskTable(curve)}
       </div>
       <div class="note warn mt-12"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t">${cohortText('Not manuscript-ready by itself')}</div><div class="d">${t('KM/log-rank is computed from bounded cohort aggregates and marked exploratory. Any claim still needs the evidence-bound Agent check and human review.', 'KM/log-rank 由有界队列聚合计算，标记为探索性。任何稿件声明仍需要证据绑定 Agent 检查和人工审阅。')}</div></div></div>
@@ -3298,6 +3299,29 @@
       </div>`;
   }
 
+  // Coarse, always-available effect summary so the panel does not surface a lone
+  // p-value: end-of-follow-up survival per group + absolute risk difference
+  // (unadjusted, no CI). Complements the log-rank rather than replacing it.
+  function cohortSurvivalEffect(curve) {
+    const groups = (curve.groups || []).filter(g => Array.isArray(g.points) && g.points.length);
+    if (groups.length < 2) return '';
+    const finals = groups.map(g => {
+      const last = g.points[g.points.length - 1];
+      const surv = Number(last && last.survival);
+      return { label: g.label, time: Number(last && last.time), surv, risk: 100 - surv };
+    }).filter(f => Number.isFinite(f.surv));
+    if (finals.length < 2) return '';
+    const tMax = Math.max(...finals.map(f => f.time).filter(Number.isFinite));
+    const survBits = finals.map(f => `${esc(cohortText(f.label))} ${fmtNum(f.surv, 1)}%`).join(' vs ');
+    const risks = finals.map(f => f.risk);
+    const ard = Math.max(...risks) - Math.min(...risks);
+    const tLabel = Number.isFinite(tMax) ? `${fmtNum(tMax, 0)}${t('d survival', ' 天生存')}` : t('end-of-follow-up survival', '随访末生存');
+    return `<div class="surv-effect">
+      <span class="surv-effect-lab">${t('Effect (absolute · unadjusted)', '效应量（绝对 · 未校正）')}</span>
+      <span>${tLabel}: ${survBits}</span>
+      <span>${t('absolute risk difference', '绝对风险差')} <strong>${fmtNum(ard, 1)} ${t('pp', '个百分点')}</strong></span>
+    </div>`;
+  }
   function cohortRiskTable(curve) {
     const risk = curve.number_at_risk || {};
     const times = risk.times || [];
@@ -3376,6 +3400,7 @@
           </div>
         </div>
         ${cohortSurvivalChart(curve)}
+        ${cohortSurvivalEffect(curve)}
         ${cohortRiskTable(curve)}
       </div>`;
   }
@@ -4367,7 +4392,7 @@
 
   S.cohort = {
     section: 'viz', nav: 'viz', sub: 'cohort',
-    crumbs: ['Home', 'Data Visualization', 'Cohort Statistics'],
+    crumbs: ['Home', 'Data Workspace','Cohort Statistics'],
     get actionHtml() {
       if (cohortLoaded()) {
         return `<button class="btn" data-viz-reset>${icon('sliders', 13)} ${t('Edit setup', '编辑设置')}</button><button class="btn primary" data-cohort-run>${icon('refresh', 13)} ${t('Re-run', '重新运行')}</button>`;
@@ -5205,15 +5230,27 @@
       return `<path class="xdb-density-area" d="${area}" fill="${item.color}"></path><path class="xdb-density-line" d="${line}" stroke="${item.color}"></path>`;
     }).join('');
     const totalN = series.reduce((acc, item) => acc + Number(item.value.non_null || item.value.n || 0), 0);
-    // y is relative density on one shared scale across databases (comparable
-    // peak heights); label it so the axis is not read as an absolute count.
-    const stats = `<span>${fmtInt(series.length)} ${crossTerm('database curves')}</span><span>${t('x:', 'x:')} ${fmtDensity(minX)}-${fmtDensity(maxX)}</span><span>${t('y: relative density', 'y: 相对密度')}</span><span>n=${fmtInt(totalN)}</span>`;
+    // x-axis ticks so a reader can tell AT WHAT VALUES the curves diverge (the
+    // point of the cross-DB view). Tick marks live in the stretched SVG; the
+    // value labels + unit live in an HTML row below it so text is not distorted
+    // by preserveAspectRatio="none".
+    const unit = (catalogFeatureMeta(row.feature).unit) || '';
+    const midX = (minX + maxX) / 2;
+    const tickXs = [minX, midX, maxX];
+    const tickMarks = tickXs.map(tx => `<line class="xdb-density-tick" x1="${xScale(tx).toFixed(1)}" x2="${xScale(tx).toFixed(1)}" y1="${(h - padBottom - 3).toFixed(1)}" y2="${(h - padBottom).toFixed(1)}"></line>`).join('');
+    const xaxis = `<div class="xdb-density-xaxis"><span>${fmtDensity(minX)}</span><span>${fmtDensity(midX)}</span><span>${fmtDensity(maxX)}${unit ? ' ' + esc(unit) : ''}</span></div>`;
+    // y is relative density on one shared scale; each DB curve is area-normalized
+    // independently, so peak height also reflects range width — state that so the
+    // axis is not read as an absolute count or pure concentration.
+    const stats = `<span>${fmtInt(series.length)} ${crossTerm('database curves')}</span><span>${t('y: relative density (area-normalized per DB)', 'y: 相对密度（各库按面积归一）')}</span><span>n=${fmtInt(totalN)}</span>`;
     return `
       <div class="xdb-density-plot">
         <svg class="xdb-density-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">
           <line class="xdb-density-axis-line" x1="${padX}" x2="${w - padX}" y1="${h - padBottom}" y2="${h - padBottom}"></line>
+          ${tickMarks}
           ${paths}
         </svg>
+        ${xaxis}
         <div class="xdb-density-stats">${stats}</div>
       </div>`;
   }
@@ -5338,7 +5375,7 @@
 
   S.crossdb = {
     section: 'viz', nav: 'viz', sub: 'crossdb', wide: true,
-    crumbs: ['Home', 'Data Visualization', 'Cross-DB Benchmark'],
+    crumbs: ['Home', 'Data Workspace','Cross-DB Benchmark'],
     get actionHtml() {
       return crossView === 'loaded' || (window.EU_DATA === 'real' && window.EU_CROSSDB_WORKSPACE)
         ? `<button class="btn" data-viz-reset>${icon('sliders', 13)} ${crossTerm('Change selection')}</button><button class="btn" data-crossdb-export>${icon('download', 13)} ${crossTerm('Export JSON')}</button><button class="btn primary" data-run>${icon('refresh', 13)} ${crossTerm('Re-run')}</button>`
