@@ -3561,6 +3561,18 @@ def _enforce_concept_bounds(df, concept_name):
     mn, mx = bnd
     v = _pd.to_numeric(df[concept_name], errors='coerce')
     numeric = v.notna()
+    # UNIT-SAFETY GUARD: if a concept has BOTH bounds and its central value (median)
+    # falls outside [min,max], the values are almost certainly in the wrong unit for
+    # this database (e.g. temperature still in Fahrenheit, median ~98 vs bounds
+    # [32,42]). Bound-dropping would then delete valid-but-mis-united data, so SKIP
+    # enforcement and leave the concept untouched (surfaced upstream as a WARN). A
+    # correctly-united physiological concept always has its median well within bounds,
+    # so this never suppresses legitimate outlier removal. Requires enough data to
+    # make the median meaningful.
+    if mn is not None and mx is not None and int(numeric.sum()) >= 100:
+        med = float(v[numeric].median())
+        if med < mn or med > mx:
+            return df, -1  # sentinel: enforcement SKIPPED (unit-suspect), nothing dropped
     in_range = _pd.Series(True, index=df.index)
     if mn is not None:
         in_range &= (v >= mn)
@@ -3701,6 +3713,11 @@ def _run_module_extraction(
                 _n_oob = 0
                 if isinstance(df, pd.DataFrame):
                     df, _n_oob = _enforce_concept_bounds(df, c)
+                if _n_oob == -1:
+                    # unit-safety guard tripped: bounds NOT enforced for this concept
+                    # (median out of range → wrong unit for this DB). Surface loudly.
+                    errors.append(f"{c}: BOUNDS SKIPPED (unit-suspect: median outside declared range)")
+                    _n_oob = 0
                 if isinstance(df, pd.DataFrame) and len(df) > 0:
                     path = os.path.join(output_dir, f"{c}.parquet")
                     df.to_parquet(path, index=False, engine='pyarrow')
