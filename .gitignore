@@ -152,6 +152,7 @@ pilot_runs/
 !baselines/REGISTRY.md
 !docs/architecture_glossary.md
 !docs/capability_matrix.md
+!docs/analysis_method_suite.md
 !benchmarks/meta_generalization/README.md
 # Internal audit dumps — kept locally, not part of the public docs tree.
 # The public docs/ tree is markdown-only; keep audit JSON/TXT dumps out.
