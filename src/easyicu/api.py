@@ -3487,6 +3487,94 @@ def _extract_worker_env_setup(data_path: str) -> None:
         sys.path.insert(0, _src_dir)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Concept-bounds enforcement (physiological plausibility clamp)
+# ─────────────────────────────────────────────────────────────────────────────
+# R ricu applies `clamp_var` (out-of-range raw value → NA) BEFORE hourly
+# aggregation, then `filter_bounds` after. EasyICU's DuckDB aggregation path
+# (`load_bucketed_table_aggregated` / `_multi_aggregated` / `_wide_aggregated` in
+# datasource.py) deliberately SKIPS the raw min/max WHERE-filter whenever a
+# `value_transform` or an inline unit-convert is present (the raw column may be a
+# different unit or VARCHAR — see datasource.py L3040-3049, 3108-3110), and the
+# "post-agg filter_bounds handled in concept.py" step those comments defer to was
+# never implemented (there is no concept.py and no filter_bounds anywhere in the
+# package). `_filter_concept_data` (load_concepts.py:1142) enforces min/max but is
+# only reached by the deprecated interactive loader, NOT the batch-export path.
+# Net effect: declared concept `min`/`max` in concept-dict.json are NOT enforced
+# for numeric concepts in `extract_database`, so gross source errors survive into
+# the export (observed in mimiciv: hr 1e7, map 9e6, sbp 1e6, resp 7e6, spo2 9.9e6,
+# peep 8.77e6, glu 1.28e6, wbc 1e6, lact 1.28e6). This is the single
+# post-aggregation enforcement point for the LONG per-concept (`merge=False`)
+# export: for each extracted concept it drops rows whose (post-conversion,
+# target-unit) value lies outside the concept's declared [min, max]. NaN/missing
+# and categorical (text-only) values are preserved. Idempotent — a no-op on data
+# that is already within bounds.
+_CONCEPT_BOUNDS_CACHE = None
+
+
+def _load_concept_bounds_map():
+    """Return ``{concept_name: (min, max)}`` from the active concept dictionary.
+
+    Only concepts with at least one finite declared bound are included. Bounds are
+    in the concept's declared (target) unit, matching the post-conversion value the
+    aggregation path produces. Cached after first load.
+    """
+    global _CONCEPT_BOUNDS_CACHE
+    if _CONCEPT_BOUNDS_CACHE is not None:
+        return _CONCEPT_BOUNDS_CACHE
+    import os as _os
+    import json as _json
+    bounds = {}
+    dict_path = _os.path.join(
+        _os.path.dirname(_os.path.abspath(__file__)), 'data', 'concept-dict.json'
+    )
+    try:
+        with open(dict_path) as _f:
+            _d = _json.load(_f)
+        for _name, _entry in _d.items():
+            if not isinstance(_entry, dict):
+                continue
+            _mn = _entry.get('min')
+            _mx = _entry.get('max')
+            _mn = float(_mn) if _mn is not None else None
+            _mx = float(_mx) if _mx is not None else None
+            if _mn is not None or _mx is not None:
+                bounds[_name] = (_mn, _mx)
+    except Exception:
+        bounds = {}
+    _CONCEPT_BOUNDS_CACHE = bounds
+    return bounds
+
+
+def _enforce_concept_bounds(df, concept_name):
+    """Drop rows whose numeric value for ``concept_name`` is outside its declared
+    [min, max]. The per-concept extraction DataFrame holds the value in a column
+    named after the concept. NaN/missing and non-numeric (categorical) values are
+    preserved. Returns ``(df, n_dropped)``.
+    """
+    import pandas as _pd
+    if not isinstance(df, _pd.DataFrame) or concept_name not in df.columns:
+        return df, 0
+    bnd = _load_concept_bounds_map().get(concept_name)
+    if bnd is None:
+        return df, 0
+    mn, mx = bnd
+    v = _pd.to_numeric(df[concept_name], errors='coerce')
+    numeric = v.notna()
+    in_range = _pd.Series(True, index=df.index)
+    if mn is not None:
+        in_range &= (v >= mn)
+    if mx is not None:
+        in_range &= (v <= mx)
+    # keep non-numeric/missing rows (NaN is "missing", not "out of range") and
+    # numeric rows that are within [min, max]; drop only genuine out-of-range values.
+    keep = (~numeric) | in_range
+    n_drop = int((~keep).sum())
+    if n_drop == 0:
+        return df, 0
+    return df.loc[keep].reset_index(drop=True), n_drop
+
+
 def _run_module_extraction(
     module_name: str,
     concepts: List[str],
@@ -3607,13 +3695,23 @@ def _run_module_extraction(
                     df = df.data
                 elif hasattr(df, 'to_pandas'):
                     df = df.to_pandas()
+                # 🔧 Post-aggregation concept-bounds enforcement (the missing
+                # ricu-style filter_bounds): drop physiologically-impossible values
+                # that survive the DuckDB aggregation path. See _enforce_concept_bounds.
+                _n_oob = 0
+                if isinstance(df, pd.DataFrame):
+                    df, _n_oob = _enforce_concept_bounds(df, c)
                 if isinstance(df, pd.DataFrame) and len(df) > 0:
                     path = os.path.join(output_dir, f"{c}.parquet")
                     df.to_parquet(path, index=False, engine='pyarrow')
-                    saved[c] = {'path': path, 'rows': len(df)}
+                    saved[c] = {'path': path, 'rows': len(df), 'bounds_dropped': _n_oob}
             except Exception as e:
                 errors.append(f"{c}: {e}")
     elif isinstance(result, pd.DataFrame) and len(result) > 0:
+        # NOTE: merge=True (wide) path — not used by the per-concept export.
+        # Row-drop bounds enforcement is unsafe on a wide frame (one row spans many
+        # concepts); a wide clamp would need per-cell NaN. The export uses merge=False
+        # (dict branch above), which IS bounds-enforced. Left unchanged intentionally.
         for c in concepts:
             if c in result.columns:
                 path = os.path.join(output_dir, f"{c}.parquet")
