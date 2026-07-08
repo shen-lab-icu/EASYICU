@@ -881,12 +881,14 @@
       ['overview', t('Overview', '概览'), null],
     ];
     // Tab order follows the actual workflow: lead with what the user consumes
-    // (Runs -> Outputs -> Draft), then optional/expert surfaces (Science, Workflow Blocks).
+    // (Runs -> Outputs -> Draft), then the same run's deeper Evidence view and the
+    // Workflow Blocks. The Evidence tab (id 'science') is the provenance deep-dive
+    // of THIS study's run, not a separate app — see screens-agent-science.js.
     if (mode === 'idea') return [
       ['overview', t('Overview', '概览'), null],
       ['runs', t('Dry-runs', '试运行'), s.runs.length],
       ['notes', t('Notes', '笔记'), null],
-      ['science', t('Science', '科学工作台'), null],
+      ['science', t('Evidence', '证据'), null],
       ['workflow', t('Workflow Blocks', '工作流块'), workflowBlocks(s).length],
     ];
     return [
@@ -894,7 +896,7 @@
       ['runs', t('Runs', '运行历史'), s.runs.length],
       ['outputs', t('Outputs', '产出'), outputCountForStudy()],
       ['draft', s.projectKind === 'canonical9' ? t('Review', '审阅') : t('Draft', '草稿'), null],
-      ['science', t('Science', '科学工作台'), null],
+      ['science', t('Evidence', '证据'), null],
       ['workflow', t('Workflow Blocks', '工作流块'), workflowBlocks(s).length],
     ];
   }
@@ -1570,6 +1572,7 @@
         <div><div class="panel-title" style="font-size:15px;">${isImportedRun(live, s) ? t('Completed analysis outputs', '已完成分析产出') : t('Outputs', '产出物')}</div><div class="panel-sub">${t('Real local artifacts read from', '真实本地产物读取自')} <span class="mono">${esc(live.project_dir || '')}</span></div></div>
         <div class="row gap-8">
           <span class="pill ${review && review.signoff_stale ? 'bad' : 'warn'}" style="height:22px;" title="${esc(runStatusHint(review && review.signoff_stale ? 'signoff_stale' : (live.gate && live.gate.status ? live.gate.status : 'analysis_only')))}"><span class="dot"></span>${esc(review && review.signoff_stale ? t('stale sign-off', '签署失效') : runStatusLabel(live.gate && live.gate.status ? live.gate.status : 'analysis_only'))}</span>
+          <button class="btn sm" data-ag-tab="science" title="${t('Open the same run at the evidence + provenance level', '在证据与溯源层打开同一次运行')}">${icon('shield', 13)} ${t('Evidence & provenance', '证据与溯源')}</button>
           ${artifacts.length ? `<button class="btn sm" data-ag-bundle-download>${icon('download', 13)} ${t('Download bundle', '下载打包')}</button>` : ''}
         </div>
       </div>
@@ -1830,7 +1833,7 @@
       const live = reviewableRunForStudy();
       return window.EU_AGENT_SCIENCE
         ? window.EU_AGENT_SCIENCE.render({ live: live, study: s, repaint: repaintBody })
-        : `<div class="card pad"><div class="panel-title">${t('Science Workbench unavailable', '科学工作台不可用')}</div></div>`;
+        : `<div class="card pad"><div class="panel-title">${t('Evidence view unavailable', '证据视图不可用')}</div></div>`;
     }
     if (agTab === 'runs') return tabRuns();
     if (agTab === 'outputs') return tabOutputs();
