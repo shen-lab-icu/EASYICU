@@ -4663,6 +4663,11 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       renderAside();
       renderSessions();
       loadGuidedDrafts();
+      // The global topbar Demo/Real toggle is the source of truth on entry:
+      // sync UP only (demo → real), so a Real-mode user never sees the aside
+      // claim "Demo · local". The conversation may still opt into demo
+      // explicitly (@usedemo), which stays untouched.
+      if (window.EU_DATA === 'real' && dataMode !== 'real') dataMode = 'real';
       // continue from the dock if we just expanded it
       let bridged = false;
       try {

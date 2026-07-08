@@ -833,15 +833,16 @@
     return `
       <div class="src-registry" data-src-mode="${multi ? 'multi' : 'single'}">
         <div class="src-head">
-          <div><div class="eyebrow">${title}</div><div class="src-sub">${multi ? t('Choose at least two exports for Cross-DB preview.', '请选择至少两个导出用于跨库预览。') : t('This active export is shared by Patient, Cohort, Agent, and Copilot.', '这个 active 导出会被患者明细、队列统计、Agent 和 Copilot 共用。')}</div></div>
+          <div><div class="eyebrow">${title}</div><div class="src-sub">${multi ? t('Choose at least two exports for Cross-DB preview.', '请选择至少两个导出用于跨库预览。') : t('This active export is shared by Patient, Cohort, Agent, and Copilot.', '这个 active 导出会被患者审阅、队列统计、Agent 和 Copilot 共用。')}</div></div>
           <button class="btn sm ghost" data-src-refresh>${icon('refresh', 12)} ${t('Refresh', '刷新')}</button>
         </div>
         <div class="src-list">
-          ${sources.length ? sources.map(s => {
-            const on = multi ? selected.has(s.path) : s.path === active;
-            const attr = multi ? `data-src-cross="${esc(s.path)}"` : `data-src-active="${esc(s.path)}"`;
-            const label = s.label || s.database || t('local', '本地');
-            return `
+          ${sources.length ? (() => {
+            const rowHtml = (s) => {
+              const on = multi ? selected.has(s.path) : s.path === active;
+              const attr = multi ? `data-src-cross="${esc(s.path)}"` : `data-src-active="${esc(s.path)}"`;
+              const label = s.label || s.database || t('local', '本地');
+              return `
               <div class="src-row ${on ? 'on' : ''}" ${attr}>
                 <span class="src-ico">${icon(multi && on ? 'check' : 'folder', 14, multi && on ? 2.6 : undefined)}</span>
                 <span class="src-body"><span class="src-name">${esc(label)}</span><span class="src-meta">${esc(sourceLine(s))}</span><span class="src-path mono">${esc(s.path)}</span></span>
@@ -851,7 +852,20 @@
                   <button class="btn icon sm ghost" data-src-action data-src-remove="${esc(s.path)}" title="${esc(t('Remove registration only; files stay on disk', '仅移除注册记录；磁盘文件保留'))}">${icon('close', 12)}</button>
                 </span>
               </div>`;
-          }).join('') : `<div class="empty compact"><div class="glyph">${icon('folder', 20)}</div><div class="t">${empty}</div></div>`}
+            };
+            /* Registered exports pile up fast and near-identical rows drown the
+               chosen one — keep the selected/active + first few visible, fold the
+               rest behind an explicit "older exports" toggle. */
+            const FOLD_AFTER = 5;
+            const head = sources.slice(0, FOLD_AFTER).map(rowHtml).join('');
+            const rest = sources.slice(FOLD_AFTER);
+            const folded = rest.length ? `
+              <details class="src-fold">
+                <summary>${t('Show', '显示其余')} ${fmtInt(rest.length)} ${t('older registered exports', '个较早注册的导出')}</summary>
+                ${rest.map(rowHtml).join('')}
+              </details>` : '';
+            return head + folded;
+          })() : `<div class="empty compact"><div class="glyph">${icon('folder', 20)}</div><div class="t">${empty}</div></div>`}
         </div>
         <div class="path-field editable src-add">
           <span class="pf-ico">${icon('folder', 14)}</span>
@@ -2422,9 +2436,12 @@
     section: 'viz', nav: 'viz', sub: 'patient',
     crumbs: ['Home', 'Data Workspace','Patient Review'],
     get actionHtml() {
+      // Topbar actions only exist once a workspace is loaded — before that the
+      // page body owns the single primary action, and a context-free "Render"
+      // button up here just reads as noise.
       return patientView === 'loaded'
         ? `<button class="btn" data-viz-reset>${icon('sliders', 13)} ${t('Edit setup', '编辑设置')}</button><button class="btn primary" data-gen>${icon('refresh', 13)} ${t('Re-run', '重新运行')}</button>`
-        : `<button class="btn primary" data-gen ${patientView === 'loading' ? 'aria-disabled="true"' : ''}>${icon('play', 13)} ${t('Render', '渲染')}</button>`;
+        : '';
     },
     rail: () => vizRail('patient'),
     render() {
@@ -2438,7 +2455,7 @@
         const ws = window.EU_VIZ_WORKSPACE;
         const s = drill ? drill.summary : (ws && ws.summary);
         const readyTitle = drill
-          ? (drill.demo ? t('Catalog-shaped demo review workspace ready', '目录形演示审阅工作区已就绪') : t('Local export patient drilldown ready', '本地导出患者明细已就绪'))
+          ? (drill.demo ? t('Catalog-shaped demo review workspace ready', '目录形演示审阅工作区已就绪') : t('Local export patient drilldown ready', '本地导出患者审阅已就绪'))
           : (ws ? t('Local export workspace ready', '本地导出工作区已就绪') : t('Demo review workspace ready', '演示审阅工作区已就绪'));
         const reviewStats = drill && s && s.review_scope === 'browser_bounded_entity_sample'
           ? ` · ${t('browser review', '浏览器审阅')} ${fmtInt(s.review_entities)}/${fmtInt(s.entities)} ${t('entities', '个实体')}`
@@ -2492,7 +2509,7 @@
       <div class="card pad">
         <div class="panel-head">
           <div>
-            <div class="eyebrow">${t('Quick visualization', '快速可视化')}</div>
+            <div class="eyebrow">${t('Patient Review', '患者审阅')}</div>
             <div class="panel-title" style="margin-top:4px;font-size:17px;">${t('Load a review workspace', '加载审阅工作区')}</div>
             <div class="panel-sub">${window.EU_DATA === 'real' ? t('Load a local EasyICU export folder. Nothing is uploaded.', '加载本地 EasyICU 导出文件夹，不上传任何数据。') : t('Start with exported EasyICU tables or generate a catalog-shaped demo; review tabs appear immediately after loading.', '从已导出的 EasyICU 数据表开始，或生成目录形演示；加载后审阅标签页立即出现。')}</div>
           </div>
@@ -2516,18 +2533,8 @@
           ${sourceRegistryBlock('single')}
           <p style="font-size:11.5px;color:var(--ink-4);margin:14px 0 0;">${t('Use Data Extraction first to create or refresh this folder. The last successful export is remembered locally.', '请先用数据抽取创建或刷新该文件夹。上次成功的导出会被本地记住。')}</p>
           <button class="btn primary block lg mt-16" data-gen>${icon('folder', 14)} ${t('Load local export', '加载本地导出')}</button>` : `
-          <div class="cols-2 mt-16" style="gap:28px;">
-            <div>
-              <div class="row" style="justify-content:space-between;"><label style="font-size:12.5px;font-weight:500;color:var(--ink-2);">${t('Number of patients', '患者数量')}</label><span class="mono" style="font-size:12px;">48</span></div>
-              <div class="slider"><div class="track"><div class="fill" style="width:100%"></div><div class="knob" style="left:100%"></div></div><div class="ends"><span>10</span><span>48</span></div></div>
-            </div>
-            <div>
-              <div class="row" style="justify-content:space-between;"><label style="font-size:12.5px;font-weight:500;color:var(--ink-2);">${t('Data duration (hours)', '数据时长（小时）')}</label><span class="mono" style="font-size:12px;">48</span></div>
-              <div class="slider"><div class="track"><div class="fill" style="width:100%"></div><div class="knob" style="left:100%"></div></div><div class="ends"><span>24</span><span>48</span></div></div>
-            </div>
-          </div>
-          <p style="font-size:11.5px;color:var(--ink-4);margin:14px 0 0;">${t('Demo profile: all EasyICU catalog modules and concepts, with seeded ICU-like values for preview only.', '演示配置：全部 EasyICU 目录模块与概念，配以种子化的类 ICU 数值，仅供预览。')}</p>
-          <button class="btn primary block lg mt-16" data-gen>${icon('play', 14)} ${t('Generate and load demo workspace', '生成并加载演示工作区')}</button>`}
+          <p style="font-size:11.5px;color:var(--ink-4);margin:14px 0 0;">${t('Demo profile is fixed: 48 patients · 48 hours · all EasyICU catalog modules, with seeded ICU-like values for preview only. Nothing to configure.', '演示配置固定：48 名患者 · 48 小时 · 全部 EasyICU 目录模块，种子化的类 ICU 数值仅供预览，无需任何配置。')}</p>
+          <button class="btn primary block lg mt-16" data-gen>${icon('play', 14)} ${t('Load the demo workspace', '一键加载演示工作区')}</button>`}
         </div>
       </div>
 
@@ -3296,6 +3303,7 @@
         <div class="km-legend">
           ${groups.map((g, i) => `<span><i style="background:${colors[i % colors.length]};"></i>${esc(cohortText(g.label))} · n ${fmtInt(g.n)} · ${cohortText('events')} ${fmtInt(g.events)}</span>`).join('')}
         </div>
+        <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Each step down is one event (e.g. a death); a gap between curves means the groups differ. Unadjusted — for an adjusted effect, run this cohort in Agent Projects.', '曲线每下降一格代表一次事件（如一例死亡）；两条曲线分开表示组间有差异。未做校正 —— 想要校正后的效应，请把该队列带入「研究项目」运行分析。')}</span></div>
       </div>`;
   }
 
@@ -3713,7 +3721,8 @@
         <span><i class="same"></i>${cohortText('Same severity band')}</span>
         <span><i class="up"></i>${cohortText('SOFA-2 higher band')}</span>
         <span><i class="down"></i>${cohortText('SOFA-2 lower band')}</span>
-      </div>`;
+      </div>
+      <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Cells on the diagonal are patients scored the same by SOFA-1 and SOFA-2; off-diagonal cells are patients the two definitions disagree on — large off-diagonal cells are where switching score versions would change your cohort.', '对角线上的格子是 SOFA-1 与 SOFA-2 评分一致的患者；对角线以外是两套定义不一致的患者 —— 偏离对角线的大格子意味着换用评分版本会改变你的队列。')}</span></div>`;
   }
 
   function cohortSofaBody(review, opts = {}) {
@@ -4154,6 +4163,7 @@
             </div>
           </div>`;
         }).join('')}
+        <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Bars compare group summaries (medians / percentages) side by side — descriptive only, no statistical test. To test whether a difference is real, run this cohort in Agent Projects.', '条形图并排对比各组的汇总值（中位数 / 百分比）—— 仅为描述性对比，未做统计检验。想检验差异是否真实，请把该队列带入「研究项目」运行分析。')}</span></div>
       </div>`;
   }
 
@@ -4265,6 +4275,7 @@
           </tbody>
         </table>
       </div>
+      <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Each row is a baseline characteristic; columns summarize it per group. Rows that differ noticeably flag confounding to adjust for when you run the formal analysis in Agent Projects.', '每行是一个基线特征，各列是分组内的汇总值。差异明显的行提示存在混杂 —— 在「研究项目」跑正式分析时需要校正它们。')}</span></div>
       <p style="font-size:11px;color:var(--ink-4);margin-top:8px;">${t('Real local export summary. P-values and manuscript claims are intentionally withheld from this UI preview.', '真实本地导出摘要。此 UI 预览不会直接给出 p 值或稿件声明。')}</p>`;
     }
     const comparisons = {
@@ -4387,6 +4398,7 @@
           </tbody>
         </table>
       </div>
+      <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Each row is a baseline characteristic; columns summarize it per group. Rows that differ noticeably flag confounding to adjust for when you run the formal analysis in Agent Projects.', '每行是一个基线特征，各列是分组内的汇总值。差异明显的行提示存在混杂 —— 在「研究项目」跑正式分析时需要校正它们。')}</span></div>
       <p style="font-size:11px;color:var(--ink-4);margin-top:8px;">${t('Demo / seeded example values for UI preview — not a real run output.', '演示 / 示例数据，仅用于界面预览 —— 非真实运行结果。')}</p>`;
   }
 
@@ -4394,12 +4406,12 @@
     section: 'viz', nav: 'viz', sub: 'cohort',
     crumbs: ['Home', 'Data Workspace','Cohort Statistics'],
     get actionHtml() {
+      // Topbar actions only exist once the review is loaded — the setup card in
+      // the body owns the single primary action before that.
       if (cohortLoaded()) {
         return `<button class="btn" data-viz-reset>${icon('sliders', 13)} ${t('Edit setup', '编辑设置')}</button><button class="btn primary" data-cohort-run>${icon('refresh', 13)} ${t('Re-run', '重新运行')}</button>`;
       }
-      const label = window.EU_DATA === 'real' ? t('Load export', '加载导出') : t('Run demo review', '运行演示审阅');
-      const realMissingExport = window.EU_DATA === 'real' && !registryActivePath();
-      return `<button class="btn primary" data-cohort-run ${cohortView === 'loading' || realMissingExport ? 'aria-disabled="true"' : ''}>${icon('play', 13)} ${label}</button>`;
+      return '';
     },
     rail: () => vizRail('cohort'),
     afterRender(root) {
@@ -4526,17 +4538,21 @@
     },
     render() {
       if (window.__euCohortPanel) { cohortPanel = window.__euCohortPanel; window.__euCohortPanel = null; }
+      // Consume a Guided Copilot handoff so a study configured in conversation
+      // does not silently vanish when Copilot lands the user here.
+      if (window.EU_GUIDED_HANDOFF && window.EU_GUIDED_HANDOFF.take) window.EU_GUIDED_HANDOFF.take('cohort');
+      const guidedNote = window.EU_GUIDED_HANDOFF && window.EU_GUIDED_HANDOFF.noteHtml ? window.EU_GUIDED_HANDOFF.noteHtml('cohort') : '';
       const ws = window.EU_VIZ_WORKSPACE;
       let review = cohortReview();
       if (reloadStaleRealCohortIfNeeded(review)) review = null;
       const loaded = cohortLoaded();
-      const head = `
+      const head = `${guidedNote}
       <div class="row gap-8" style="font-family:var(--font-mono);font-size:10.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--ink-4);margin-bottom:6px;white-space:nowrap;flex-wrap:wrap;row-gap:2px;">
         <span>${cohortText('Workspace')}</span> ${icon('chevron', 11)} <span>${ws ? cohortText('Local export') : (loaded ? cohortText('Demo cohort') : cohortText('Not configured'))}</span> ${icon('chevron', 11)} <span style="color:var(--ink-2);">${cohortText('Cohort statistics')}</span>
       </div>
       <div class="page-head" style="margin-bottom:16px;">
-        <h1 style="margin-top:0;">${loaded ? (ws ? t('Local export cohort', '本地导出队列') : t('Sepsis vs Non-sepsis', 'Sepsis 与非 Sepsis 对照')) : t('Cohort Statistics', '队列统计')}</h1>
-        <p class="lead">${loaded ? (ws ? t('Real exported module tables · local-only summary', '真实导出模块表 · 仅本地汇总') : t('Group contrast · coverage audit · cohort profile · SOFA reclassification', '组间对照 · 覆盖审计 · 队列画像 · SOFA 重分层')) : t('Choose a demo cohort review or load a registered local export before viewing group contrasts, coverage, survival curves, and SOFA reclassification.', '先运行演示队列审阅或加载已注册的本地导出，然后再查看组间对照、覆盖率、生存曲线和 SOFA 重分层。')}</p>
+        <h1 style="margin-top:0;">${t('Cohort Statistics', '队列统计')}</h1>
+        <p class="lead">${loaded ? (ws ? t('Local export cohort · real exported module tables · local-only summary', '本地导出队列 · 真实导出模块表 · 仅本地汇总') : t('Demo contrast: Sepsis vs Non-sepsis · group contrast · coverage audit · SOFA reclassification', '演示对照：Sepsis 与非 Sepsis · 组间对照 · 覆盖审计 · SOFA 重分层')) : t('Choose a demo cohort review or load a registered local export before viewing group contrasts, coverage, survival curves, and SOFA reclassification.', '先运行演示队列审阅或加载已注册的本地导出，然后再查看组间对照、覆盖率、生存曲线和 SOFA 重分层。')}</p>
         <div style="font-size:11.5px;color:var(--ink-4);margin-top:9px;">${t('Key terms', '关键术语')}: ${window.gloss('cohort', t('cohort', '队列'))} · ${window.gloss('denominator', t('denominator', '分母'))} · ${window.gloss('SOFA')} · ${window.gloss('Sepsis-3')}</div>
       </div>`;
       if (cohortView !== 'loading' && !loaded) {
@@ -4572,7 +4588,7 @@
         }
         return head + `<div class="card pad" style="max-width:720px;">
           <div class="panel-title" style="font-size:17px;">${t('Load a local export first', '请先加载本地导出')}</div>
-          <div class="panel-sub mt-4">${t('Cohort Statistics uses the same export snapshot as Patient Review.', '队列统计使用与患者明细相同的导出快照。')}</div>
+          <div class="panel-sub mt-4">${t('Cohort Statistics uses the same export snapshot as Patient Review.', '队列统计使用与患者审阅相同的导出快照。')}</div>
           ${!registryActivePath() ? `<div class="note info mt-12"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t">${t('No active export selected', '尚未选择 active 导出')}</div><div class="d">${cohortMissingExportMessage()}</div></div></div>` : ''}
           ${vizErr ? `<div class="note warn mt-12"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="d mono" style="font-size:11px;margin:0;">${esc(vizErr)}</div></div></div>` : ''}
           ${sourceRegistryBlock('single')}
@@ -4655,8 +4671,8 @@
       'Local export': '本地导出',
       'Demo cohort': '演示队列',
       'Not configured': '未配置',
-      'Cross-DB benchmark': '跨库对比',
-      'Cross-DB benchmark ready': '跨库对比已就绪',
+      'Cross-DB benchmark': '跨库基准',
+      'Cross-DB benchmark ready': '跨库基准已就绪',
       'Raw ICU data root': '原始 ICU 数据根目录',
       'Real raw database mode': '真实原始数据库模式',
       'Databases': '数据库',
@@ -5050,7 +5066,8 @@
       </details>
       <div class="nextbar accent mt-16">
         <div class="nb-ico">${icon('arrow', 16)}</div>
-        <div class="grow"><div class="nb-t">${t('Benchmarked the databases — what’s next?', '完成跨库对比 —— 下一步？')}</div><div class="nb-d">${t('Take a single database into an auditable analysis and review-ready draft in Agent Projects.', '在「研究项目」中把某个数据库带入可审计分析与待核验草稿。')}</div></div>
+        <div class="grow"><div class="nb-t">${t('Benchmarked the databases — what’s next?', '完成跨库基准 —— 下一步？')}</div><div class="nb-d">${t('Take a single database into an auditable analysis and review-ready draft in Agent Projects — or go back and adjust the cohort.', '在「研究项目」中把某个数据库带入可审计分析与待核验草稿，或回到前面调整队列。')}</div></div>
+        <button class="btn" data-nav="cohort">${icon('cohort', 13)} ${t('Back to Cohort Statistics', '返回队列统计')}</button>
         <button class="btn primary" data-nav="agent">${icon('agent', 13)} ${t('Analyze in Agent Projects','进入研究项目')}</button>
       </div>`;
   }
@@ -5070,7 +5087,8 @@
         </div>`;
     }).join('');
     if (!cards) return '';
-    return `<div class="xdb-rec-cards mt-16">${cards}</div>`;
+    return `<div class="xdb-rec-cards mt-16">${cards}</div>
+      <div class="viz-cap"><b>${t('What this shows', '这组数字是什么')}</b><span>${t('Per-database record volume included in this benchmark run — a size reference for the density plots below, not an outcome result.', '本次基准运行中各数据库纳入的记录规模 —— 只是下方分布图的样本量参照，不是结局结果。')}</span></div>`;
   }
 
   function crossRealFeatureDensityByModule(modules, labels) {
@@ -5124,6 +5142,7 @@
           </div>
           <div class="xdb-density-legend">${labelRow}</div>
         </div>
+        <div class="viz-cap"><b>${t('How to read', '怎么读')}</b><span>${t('Each mini-plot is one clinical concept; each colored curve is one database. Curves that overlap = the concept is measured consistently across databases; a shifted or missing curve = a unit or definition mismatch worth checking in the Data Dictionary before pooling.', '每个小图是一个临床概念，每条彩色曲线是一个数据库。曲线重叠 = 概念在各库间口径一致；曲线错位或缺失 = 单位或定义不一致，合并分析前应先到「数据字典」核对。')}</span></div>
         ${scopeToggle}
         ${scope === 'all' ? `
         <div class="xdb-density-selectrow">
@@ -5377,33 +5396,39 @@
     section: 'viz', nav: 'viz', sub: 'crossdb', wide: true,
     crumbs: ['Home', 'Data Workspace','Cross-DB Benchmark'],
     get actionHtml() {
+      // Topbar actions only exist once a benchmark is loaded — the gate strip in
+      // the body owns the Run action before that.
       return crossView === 'loaded' || (window.EU_DATA === 'real' && window.EU_CROSSDB_WORKSPACE)
         ? `<button class="btn" data-viz-reset>${icon('sliders', 13)} ${crossTerm('Change selection')}</button><button class="btn" data-crossdb-export>${icon('download', 13)} ${crossTerm('Export JSON')}</button><button class="btn primary" data-run>${icon('refresh', 13)} ${crossTerm('Re-run')}</button>`
-        : `<button class="btn primary" data-run ${crossView === 'loading' ? 'aria-disabled="true"' : ''}>${icon('play', 13)} ${crossTerm('Run')}</button>`;
+        : '';
     },
     rail: () => vizRail('crossdb'),
     render() {
+      // Consume a Guided Copilot handoff so a study configured in conversation
+      // does not silently vanish when Copilot lands the user here.
+      if (window.EU_GUIDED_HANDOFF && window.EU_GUIDED_HANDOFF.take) window.EU_GUIDED_HANDOFF.take('crossdb');
+      const guidedNote = window.EU_GUIDED_HANDOFF && window.EU_GUIDED_HANDOFF.noteHtml ? window.EU_GUIDED_HANDOFF.noteHtml('crossdb') : '';
       if (crossView === 'loading') {
-        return crossHeader() + crossLoadingState();
+        return guidedNote + crossHeader() + crossLoadingState();
       }
       if (window.EU_DATA === 'real') {
         const xdb = window.EU_CROSSDB_WORKSPACE;
         if (xdb) {
-          return crossHeader() + crossRealLoaded(xdb);
+          return guidedNote + crossHeader() + crossRealLoaded(xdb);
         }
-        return crossHeader() + rawCrossdbSetup();
+        return guidedNote + crossHeader() + rawCrossdbSetup();
       }
       if (crossView === 'loaded') {
         const xdb = window.EU_CROSSDB_WORKSPACE;
-        if (xdb) return crossHeader() + crossRealLoaded(xdb);
-        return crossHeader() + `<div class="note warn">
+        if (xdb) return guidedNote + crossHeader() + crossRealLoaded(xdb);
+        return guidedNote + crossHeader() + `<div class="note warn">
           <div class="ico">${icon('alert', 14)}</div>
           <div class="body"><span class="t">${crossTerm('Demo benchmark was not loaded')}</span> <span class="d" style="display:inline;">— ${t('Run the benchmark again so the backend can build the seeded distribution payload.', '请重新运行对比，让后端生成种子分布载荷。')}</span></div>
         </div>`;
       }
       /* idle — select databases */
       const sel = CROSS_DBS.filter(d => d[1]).length;
-      return crossHeader() + `
+      return guidedNote + crossHeader() + `
         <div class="note info">
           <div class="ico">${icon('benchmark', 16)}</div>
           <div class="body"><span class="t">${crossTerm('Select databases to compare')}</span> <span class="d" style="display:inline;">— ${t('Pick two or more standardized ICU sources, then run the benchmark. Each uses an independent seeded feature frame in Demo Mode.', '选择两个或更多标准化 ICU 来源后运行对比。演示模式下，每个数据库使用独立的种子特征帧。')}</span></div>

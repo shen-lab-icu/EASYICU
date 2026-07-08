@@ -180,7 +180,12 @@
       ${catChips()}
 
       <div class="dict-resultline">${t(rows.length + ' concept' + (rows.length === 1 ? '' : 's'), rows.length + ' 个概念')}${dictCat !== 'all' ? ` · ${groupNameOf(dictCat)}` : ''}${dictSearch ? ` · "${dictSearch}"` : ''}</div>
-      ${tableHtml(rows)}`;
+      ${tableHtml(rows)}
+      <div class="nextbar mt-16">
+        <div class="nb-ico">${icon('arrow', 16)}</div>
+        <div class="grow"><div class="nb-t">${t('Found the concepts you need?', '找到需要的概念了？')}</div><div class="nb-d">${t('These concepts become columns of your dataset — select their modules in Data Extraction.', '这些概念会成为你数据表的列 —— 到「数据抽取」勾选它们所属的模块。')}</div></div>
+        <button class="btn primary" data-nav="extraction">${icon('extract', 13)} ${t('Open Data Extraction', '打开数据抽取')}</button>
+      </div>`;
     },
     afterRender(root) {
       const input = root.querySelector('#dictSearchInput');
