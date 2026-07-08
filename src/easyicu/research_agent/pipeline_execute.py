@@ -106,6 +106,7 @@ from .plan_utils import (
     _parent_step_id_for_figure_step,
     _plan_expects_analysis_cohort,
     _preserve_figure_steps_after_replan,
+    _preserve_primary_estimand_step_after_replan,
     _primary_exposure_contract_findings,
     _primary_exposure_measurement_filter_findings,
     _primary_exposure_overadjustment_findings,
@@ -1390,6 +1391,18 @@ def run_execute_phase(
                 )
             )
             return current_plan
+        # Guard against the replanner silently dropping the primary
+        # result-bearing MODEL step (the estimand) while inserting an
+        # audit/reconciliation step — M1 revision 7 dropped
+        # 05_primary_adjusted_association and the run then produced no adjusted
+        # OR at all. Run this BEFORE figure preservation so the re-attached
+        # model step precedes any re-attached figure step.
+        revised, estimand_findings = _preserve_primary_estimand_step_after_replan(
+            current=current_plan,
+            revised=revised,
+        )
+        if estimand_findings:
+            findings.extend(estimand_findings)
         # Guard against the replanner silently dropping figure-producing
         # steps; task contracts (e.g. EasyICU experiment runner) still
         # require those artefacts regardless of the LLM's revised framing.
