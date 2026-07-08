@@ -1333,9 +1333,29 @@ class FigureSourceDataValidator:
                     step_id=step.step_id,
                 )
             )
+            # A faithful figure is often built from a table produced by a step
+            # OTHER than the _figure-suffix sibling (E2: the association forest's
+            # per-level ORs live in 00_probe/lactate_group_odds_ratios.csv and the
+            # intensity profile in 03_.../lactate_measurement_intensity_profile.csv).
+            # _upstream_step_ids only resolves the sibling step, so without also
+            # resolving the figure's self-declared ``source_table`` filenames across
+            # the whole run, the true parent is never a comparison candidate and a
+            # genuinely-traceable figure is rejected (compared instead against an
+            # unrelated sibling-step table). The subset + numeric-equality checks
+            # still run against the resolved parent, so a fabricated figure (whose
+            # values do not match the table it names) still fails — no weakening.
+            declared_tables = self._resolve_declared_source_tables_across_run(
+                run_dir=run_dir,
+                source_df=source_df,
+                current_out_dir=out_dir,
+            )
+            candidate_tables = list(upstream_tables)
+            for path in declared_tables:
+                if path not in candidate_tables:
+                    candidate_tables.append(path)
             ordered_upstream_tables = self._prioritize_declared_source_tables(
                 source_df=source_df,
-                upstream_tables=upstream_tables,
+                upstream_tables=candidate_tables,
             )
             comparisons = [
                 self._compare_source_to_upstream(
@@ -1526,6 +1546,55 @@ class FigureSourceDataValidator:
             upstream_tables,
             key=lambda path: (path.name not in declared, str(path)),
         )
+
+    @classmethod
+    def _resolve_declared_source_tables_across_run(
+        cls,
+        *,
+        run_dir: Path,
+        source_df: pd.DataFrame,
+        current_out_dir: Path,
+    ) -> List[Path]:
+        """Locate the figure's self-declared ``source_table`` parents anywhere.
+
+        The ``source_table`` column names the upstream table each figure row was
+        derived from. That table may live in ANY prior step's ``outputs/`` (a
+        probe/audit table, not just the ``_figure``-suffix sibling), so resolve
+        the declared filenames across ``run_dir/steps/*/outputs`` rather than
+        only the steps ``_upstream_step_ids`` found. The figure's own output dir
+        is excluded so a figure can never be declared traceable to itself.
+
+        Returns the matched parent paths (first-seen order); ``[]`` when the
+        column is absent or nothing matches. This only ADDS comparison
+        candidates; the caller still runs the subset + value-equality checks, so
+        a figure whose values do not match the table it names still fails.
+        """
+
+        if "source_table" not in source_df.columns:
+            return []
+        declared_names = {
+            Path(str(item)).name
+            for item in source_df["source_table"].dropna().astype(str)
+            if str(item).strip()
+        }
+        if not declared_names:
+            return []
+        steps_dir = Path(run_dir) / "steps"
+        if not steps_dir.exists():
+            return []
+        current_resolved = current_out_dir.resolve()
+        resolved: List[Path] = []
+        seen: Set[Path] = set()
+        for path in sorted(steps_dir.glob("*/outputs/*.csv")):
+            if path.name not in declared_names or not path.is_file():
+                continue
+            if path.parent.resolve() == current_resolved:
+                continue
+            rp = path.resolve()
+            if rp not in seen:
+                seen.add(rp)
+                resolved.append(path)
+        return resolved
 
     @classmethod
     def _compare_source_to_upstream(

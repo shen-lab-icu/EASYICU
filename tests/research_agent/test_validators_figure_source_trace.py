@@ -152,3 +152,82 @@ def test_stage_figure_with_phantom_stage_still_flagged(tmp_path: Path):
     )
     assert res.get("ok") is False
     assert res.get("reason") == "source_rows_not_in_upstream", res
+
+
+# --- cross-step declared source_table resolution --------------------------------
+# Root cause (2026-07-08, E2): the primary association forest figure step
+# (06_primary_association_model_figure) is built from a table produced by a
+# DIFFERENT step (the per-level ORs live in 00_probe/lactate_group_odds_ratios.csv,
+# not in the _figure-suffix sibling 06_primary_association_model). _upstream_step_ids
+# only resolves the sibling step, so the true parent was never a comparison
+# candidate and the (byte-identical) figure was rejected as "no shared key" against
+# an unrelated sibling table — driving the run to replan exhaustion. The validator
+# now also resolves the figure's self-declared ``source_table`` filenames across the
+# whole run. This ADDS candidates only; the value-equality checks still guard
+# fabrication.
+
+
+def _write_cross_step_run(tmp_path: Path):
+    """A run where the figure's declared parent lives in a non-sibling step."""
+    steps = tmp_path / "steps"
+    probe_out = steps / "00_probe" / "outputs"
+    probe_out.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "level": ["<2", ">=4"],
+            "odds_ratio": [0.7610485449307591, 4.377726177511688],
+            "ci_low": [0.7130845733975404, 4.105143972875267],
+            "ci_high": [0.8122387011986698, 4.668407883353277],
+        }
+    ).to_csv(probe_out / "lactate_group_odds_ratios.csv", index=False)
+    # The _figure-suffix sibling exists but holds only an UNRELATED table.
+    sib_out = steps / "06_primary_association_model" / "outputs"
+    sib_out.mkdir(parents=True)
+    pd.DataFrame({"stage": ["measured", "unmeasured"], "n": [94458, 6034]}).to_csv(
+        sib_out / "complete_case_attrition.csv", index=False
+    )
+    fig_out = steps / "06_primary_association_model_figure" / "outputs"
+    fig_out.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "level": ["<2", ">=4"],
+            "odds_ratio": [0.7610485449307591, 4.377726177511688],
+            "ci_low": [0.7130845733975404, 4.105143972875267],
+            "ci_high": [0.8122387011986698, 4.668407883353277],
+            "source_table": ["lactate_group_odds_ratios.csv"] * 2,
+        }
+    ).to_csv(fig_out / "publication_figure_source_data.csv", index=False)
+    return fig_out
+
+
+def _fig_step():
+    from easyicu.research_agent.schema import AnalysisStep
+
+    return AnalysisStep(
+        step_id="06_primary_association_model_figure",
+        intent="Render the primary association forest figure",
+        method="figure",
+    )
+
+
+def test_declared_parent_in_other_step_is_resolved(tmp_path: Path):
+    fig_out = _write_cross_step_run(tmp_path)
+    findings = FigureSourceDataValidator().audit(
+        step=_fig_step(), out_dir=fig_out, run_dir=tmp_path, step_summary={}
+    )
+    errors = [f for f in findings if f.severity == "error"]
+    assert errors == [], [f.message for f in findings]
+
+
+def test_cross_step_resolution_still_flags_fabrication(tmp_path: Path):
+    # Gate must NOT be weakened: a figure that names a real parent but whose
+    # values disagree with it is still a value-trace failure.
+    fig_out = _write_cross_step_run(tmp_path)
+    df = pd.read_csv(fig_out / "publication_figure_source_data.csv")
+    df.loc[0, "odds_ratio"] = 99.9  # fabricated, not in the declared parent
+    df.to_csv(fig_out / "publication_figure_source_data.csv", index=False)
+    findings = FigureSourceDataValidator().audit(
+        step=_fig_step(), out_dir=fig_out, run_dir=tmp_path, step_summary={}
+    )
+    errors = [f for f in findings if f.severity == "error"]
+    assert errors, "tampered figure must still be flagged"
