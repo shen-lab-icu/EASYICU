@@ -226,6 +226,18 @@
     const home = String(window.EU_HOME || '');
     return home && raw.startsWith(home) ? raw.replace(home, '~') : raw;
   }
+  // Long project paths (seed folders routinely exceed 80 chars) must not dominate
+  // the rail cards or the detail header — compact to '…/basename' and put the
+  // full path in the title tooltip instead.
+  function compactMiddlePath(path, max) {
+    const raw = String(path || '');
+    const cap = max || 42;
+    if (raw.length <= cap || raw.indexOf('/') === -1) return raw;
+    const parts = raw.split('/');
+    const base = parts[parts.length - 1] || raw;
+    const tail = base.length > cap - 2 ? '…' + base.slice(-(cap - 2)) : base;
+    return '…/' + tail;
+  }
   function projectFolderLabel(s) {
     if (s && s.empty) return t('No local project folder yet', '还没有本地项目文件夹');
     return s && s.ideaSeed && s.ideaSeed.project_dir
@@ -820,7 +832,7 @@
               <span class="sc-name">${t(s.name[0], s.name[1])}</span>
               <span class="sc-mode analysis">${studyBadgeLabel(s)}</span>
             </div>
-            <div class="sc-meta"><span class="sc-folder">${icon('folder', 11)} ${folder}</span></div>
+            <div class="sc-meta"><span class="sc-folder" title="${esc(folder)}">${icon('folder', 11)} ${esc(compactMiddlePath(folder))}</span></div>
             <div class="sc-meta" style="margin-top:3px;">${s.runs.length ? `${s.runs[0][0]}<span class="mid"></span>${s.runs[0][4][zh ? 1 : 0]}` : t('not run yet', '尚未运行')}</div>
           </button>`;
         }).join('')}
@@ -852,7 +864,7 @@
         <div style="min-width:0;">
           <div class="ag-title">${t(s.name[0], s.name[1])} <span class="editmk">${icon('edit', 14)}</span></div>
           <div class="ag-src">
-            <span class="lk" title="${t('Local project folder — intermediate files are written here', '本地项目文件夹 — 中间文件写在这里')}">${icon('folder', 12)} ${esc(projectFolderLabel(s))}</span>
+            <span class="lk" title="${t('Local project folder — intermediate files are written here', '本地项目文件夹 — 中间文件写在这里')}: ${esc(projectFolderLabel(s))}">${icon('folder', 12)} ${esc(compactMiddlePath(projectFolderLabel(s)))}</span>
             <span class="mid"></span>
             <span class="lk">${icon('cohort', 12)} ${s.cohort}</span>
             ${activeSourceLabel() ? `<span class="mid"></span><span class="lk">${icon('db', 12)} ${activeSourceLabel()}</span>` : ''}

@@ -129,8 +129,7 @@ body.lang-zh .eyebrow{ letter-spacing: 0.04em; }
 .sc-mode.idea{ color:oklch(46% 0.10 280); background:oklch(96% 0.03 280); border:1px solid oklch(88% 0.05 280); }
 .sc-meta{ font-size:11px; color:var(--ink-4); margin-top:5px; display:flex; align-items:center; gap:6px; padding-left:16px; }
 .sc-meta .mid{ width:3px; height:3px; border-radius:50%; background:var(--hair-3); }
-.sc-folder{ display:inline-flex; align-items:center; gap:5px; font-family:var(--font-mono); font-size:10.5px; color:var(--ink-3); max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.sc-folder .ic{ flex:none; color:var(--ink-4); }
+/* .sc-folder moved to css/agent.css (owner file), 2026-07-07 design pass. */
 
 /* detail (right) */
 .ag-detail{ min-width:0; display:flex; flex-direction:column; }
@@ -139,10 +138,7 @@ body.lang-zh .eyebrow{ letter-spacing: 0.04em; }
 .ag-title{ font-size:21px; font-weight:600; letter-spacing:-0.02em; display:flex; align-items:center; gap:9px; }
 .ag-title .editmk{ color:var(--ink-4); cursor:pointer; opacity:0; transition:opacity .12s; }
 .ag-title:hover .editmk{ opacity:1; }
-.ag-src{ display:flex; align-items:center; gap:8px; font-size:12px; color:var(--ink-3); margin-top:7px; flex-wrap:wrap; }
-.ag-src .lk{ display:inline-flex; align-items:center; gap:6px; padding:3px 9px; border:1px solid var(--hair-2); border-radius:var(--r-pill); background:var(--surface-2); cursor:pointer; }
-.ag-src .lk:hover{ border-color:var(--hair-3); }
-.ag-src .mid{ width:3px; height:3px; border-radius:50%; background:var(--hair-3); }
+/* .ag-src row moved to css/agent.css (owner file), 2026-07-07 design pass. */
 
 /* mode switch */
 .modeswitch{ display:inline-flex; padding:3px; gap:3px; background:var(--surface-2); border:1px solid var(--hair); border-radius:var(--r-2); flex:none; }
@@ -374,20 +370,7 @@ body.lang-zh .eyebrow{ letter-spacing: 0.04em; }
 .handoff .ho-body b{ color:var(--ink); font-weight:600; }
 .handoff .btn{ flex:none; }
 
-/* ============================================================
-   ENTRY — journey band
-   ============================================================ */
-.entry-journey{ margin:26px auto 2px; max-width:920px; }
-.ej-cap{ text-align:center; font-family:var(--font-mono); font-size:10.5px; font-weight:600; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-4); }
-.ej-track{ display:flex; align-items:flex-start; justify-content:center; margin-top:16px; }
-.ej-node{ display:flex; flex-direction:column; align-items:center; gap:8px; flex:none; width:140px; text-align:center; }
-.ej-num{ width:32px; height:32px; border-radius:50%; display:grid; place-items:center; background:var(--surface); border:1.5px solid var(--hair-3); color:var(--ink-3); font-family:var(--font-mono); font-size:13px; font-weight:600; }
-.ej-node:first-child .ej-num{ background:var(--accent); border-color:var(--accent); color:#fff; }
-.ej-lab{ font-size:12.5px; font-weight:600; color:var(--ink); }
-.ej-sub{ font-size:10.5px; color:var(--ink-4); margin-top:1px; }
-.ej-conn{ flex:1; max-width:54px; height:1.5px; background:var(--hair-2); margin-top:16px; }
-.ej-foot{ text-align:center; font-size:12px; color:var(--ink-3); margin-top:16px; }
-.ej-foot b{ color:var(--ink-2); font-weight:600; }
+/* ENTRY — journey band: moved to css/home.css (owner file), 2026-07-07 design pass. */
 
 /* first-time demo nudge on entry */
 .entry-firsttime{ display:flex; align-items:center; justify-content:center; gap:10px; margin:16px auto 0; padding:10px 12px 10px 18px; max-width:max-content; border:1px solid var(--accent); border-radius:var(--r-pill); background:color-mix(in srgb, var(--accent-soft) 70%, var(--surface)); box-shadow:var(--sh-1); font-size:12.5px; color:var(--ink-2); }
@@ -434,4 +417,3 @@ body.lang-zh .eyebrow{ letter-spacing: 0.04em; }
 .gate-checklist .gc-row .gc-tag{ margin-left:auto; font-family:var(--font-mono); font-size:9.5px; font-weight:600; letter-spacing:.02em; }
 .gate-checklist .gc-row.ok .gc-tag{ color:var(--ok); }
 .gate-checklist .gc-row.pending .gc-tag{ color:oklch(50% 0.11 70); }
-@media (max-width:680px){ .ej-track{ flex-wrap:wrap; gap:14px; } .ej-conn{ display:none; } .ej-node{ width:46%; } }

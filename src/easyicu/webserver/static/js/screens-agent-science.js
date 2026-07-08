@@ -29,6 +29,39 @@
   function bi(en, zh) {
     return window.t ? window.t(en, zh) : en;
   }
+  // The science-workbench backend ships label strings as slash-separated
+  // English+Chinese duals (it cannot know the client language). Split those at
+  // load so the panel shows ONE language like every other screen. Only strings
+  // under label-ish keys are touched, and only when the separator actually
+  // divides two scripts.
+  const DUAL_LABEL_KEYS = new Set([
+    'label', 'title', 'status_label', 'next_action', 'detail', 'description',
+    'kicker', 'scope', 'stage', 'evidence', 'subtitle',
+  ]);
+  function biLabel(value) {
+    const raw = String(value == null ? '' : value);
+    const cjk = /[一-鿿]/;
+    let from = 0;
+    for (;;) {
+      const i = raw.indexOf(' / ', from);
+      if (i === -1) return raw;
+      const en = raw.slice(0, i);
+      const zh = raw.slice(i + 3);
+      if (!cjk.test(en) && cjk.test(zh)) return bi(en, zh);
+      from = i + 3;
+    }
+  }
+  function localizeDualLabels(node) {
+    if (Array.isArray(node)) { node.forEach(localizeDualLabels); return node; }
+    if (node && typeof node === 'object') {
+      Object.keys(node).forEach(key => {
+        const v = node[key];
+        if (typeof v === 'string' && DUAL_LABEL_KEYS.has(key)) node[key] = biLabel(v);
+        else if (v && typeof v === 'object') localizeDualLabels(v);
+      });
+    }
+    return node;
+  }
   function settingEnabled(key, fallback) {
     const settings = window.EU_SETTINGS || {};
     if (Object.prototype.hasOwnProperty.call(settings, key)) return !!settings[key];
@@ -83,7 +116,7 @@
       if (seq !== state.seq) return;
       state.loading = false;
       state.error = null;
-      state.data = data;
+      state.data = localizeDualLabels(data);
       if (data && data.capability_policy) window.EU_CAPABILITIES = data.capability_policy;
       const items = data && data.artifact_history && Array.isArray(data.artifact_history.items)
         ? data.artifact_history.items
@@ -118,13 +151,13 @@
     const explicit = row && row.status_label;
     if (explicit) return explicit;
     const s = String((row && row.status) || '');
-    if (s === 'passed') return 'passed / 已通过';
-    if (s === 'needs_review') return 'needs review / 待审阅';
-    if (s === 'waiting_for_run') return 'waiting / 等待运行';
-    if (s === 'failed') return 'failed / 未通过';
-    if (s === 'not_applicable') return 'not applicable / 不适用';
-    if (s === 'unavailable') return 'unavailable / 不可用';
-    return s || 'unknown / 未知';
+    if (s === 'passed') return bi('passed', '已通过');
+    if (s === 'needs_review') return bi('needs review', '待审阅');
+    if (s === 'waiting_for_run') return bi('waiting', '等待运行');
+    if (s === 'failed') return bi('failed', '未通过');
+    if (s === 'not_applicable') return bi('not applicable', '不适用');
+    if (s === 'unavailable') return bi('unavailable', '不可用');
+    return s || bi('unknown', '未知');
   }
   function capabilityStackSection(data) {
     const skillsOn = policySetting(data, 'science_skills_enabled', true);
@@ -146,62 +179,62 @@
     const rows = [
       {
         icon: 'layers',
-        title: 'Skills / 技能',
-        status: skillsOn ? 'on / 开启' : 'off / 关闭',
+        title: bi('Skills', '技能'),
+        status: skillsOn ? bi('on', '开启') : bi('off', '关闭'),
         tone: skillsOn ? 'ok' : 'warn',
         desc: skillsOn
-          ? 'Reusable ICU workflows are available as local protocols. / 可复用 ICU 工作流已作为本地 protocol 可用。'
-          : 'Reusable protocol shortcuts are hidden until Skills is enabled in Settings. / Settings 启用 Skills 前会隐藏 protocol 快捷能力。',
+          ? bi('Reusable ICU workflows are available as local protocols.', '可复用 ICU 工作流已作为本地 protocol 可用。')
+          : bi('Reusable protocol shortcuts are hidden until Skills is enabled in Settings.', 'Settings 启用 Skills 前会隐藏 protocol 快捷能力。'),
         chips: ['Idea to Agent', 'Evidence checks', 'Figure review'],
       },
       {
         icon: 'db',
-        title: 'Connectors / 连接器',
-        status: connectorCount ? `${connectorCount} enabled / ${connectorCount} 已启用` : 'off / 关闭',
+        title: bi('Connectors', '连接器'),
+        status: connectorCount ? bi(`${connectorCount} enabled`, `${connectorCount} 已启用`) : bi('off', '关闭'),
         tone: connectorCount ? 'ok' : 'warn',
         desc: pubmedOn
-          ? 'PubMed metadata can be used after each source-level opt-in. / 每个来源单独 opt-in 后可使用 PubMed 元数据。'
-          : 'PubMed is disabled globally, so Idea Mining stays local-only. / PubMed 已全局关闭，Idea Mining 保持仅本地。',
+          ? bi('PubMed metadata can be used after each source-level opt-in.', '每个来源单独 opt-in 后可使用 PubMed 元数据。')
+          : bi('PubMed is disabled globally, so Idea Mining stays local-only.', 'PubMed 已全局关闭，Idea Mining 保持仅本地。'),
         chips: [`PubMed ${pubmedOn ? 'on' : 'off'}`, `Zotero ${zotero.status || (zoteroOn ? 'checking' : 'off')}`, 'source opt-in'],
       },
       {
         icon: 'globe',
-        title: 'MCP tools / MCP 工具',
-        status: mcpOn ? `${allowedTools} allowed / ${allowedTools} 允许` : 'off / 关闭',
+        title: bi('MCP tools', 'MCP 工具'),
+        status: mcpOn ? bi(`${allowedTools} allowed`, `${allowedTools} 允许`) : bi('off', '关闭'),
         tone: mcpOn ? 'info' : 'warn',
         desc: mcpOn
-          ? 'External tools must pass scope and allowlist checks. / 外部工具必须通过作用域和白名单检查。'
-          : 'The standard MCP boundary is visible but disabled until adapters are configured. / 标准 MCP 边界已展示，适配器配置前保持关闭。',
+          ? bi('External tools must pass scope and allowlist checks.', '外部工具必须通过作用域和白名单检查。')
+          : bi('The standard MCP boundary is visible but disabled until adapters are configured.', '标准 MCP 边界已展示，适配器配置前保持关闭。'),
         chips: [`${allowedTools} allowed`, `${blockedTools} blocked`, 'tool scope'],
       },
       {
         icon: 'file',
-        title: 'Prompt contracts / 提示词契约',
-        status: promptsOn ? 'on / 开启' : 'off / 关闭',
+        title: bi('Prompt contracts', '提示词契约'),
+        status: promptsOn ? bi('on', '开启') : bi('off', '关闭'),
         tone: promptsOn ? 'ok' : 'warn',
         desc: promptsOn
-          ? 'Global prompts stay case-neutral; project rules live in protocols. / 全局提示词保持 case-neutral，项目规则写入 protocol。'
-          : 'Prompt contract reminders are hidden, but existing project protocols remain unchanged. / 提示词契约提醒会隐藏，已有项目 protocol 不改变。',
+          ? bi('Global prompts stay case-neutral; project rules live in protocols.', '全局提示词保持 case-neutral，项目规则写入 protocol。')
+          : bi('Prompt contract reminders are hidden, but existing project protocols remain unchanged.', '提示词契约提醒会隐藏，已有项目 protocol 不改变。'),
         chips: [`${promptRules} active rules`, 'rubrics', 'no prompt pile-up'],
       },
       {
         icon: 'shield',
-        title: 'Tool audit / 工具审计',
-        status: auditOn ? 'on / 开启' : 'off / 关闭',
+        title: bi('Tool audit', '工具审计'),
+        status: auditOn ? bi('on', '开启') : bi('off', '关闭'),
         tone: auditOn ? 'ok' : 'warn',
         desc: auditOn
-          ? 'Claims, citations, calculations, hashes, and tool use are checked before draft release. / 草稿放行前检查论断、引用、计算、哈希和工具使用。'
-          : 'Reviewer-check evidence remains visible, but tool-audit controls are disabled. / 审阅检查证据仍可见，但工具审计控制已关闭。',
+          ? bi('Claims, citations, calculations, hashes, and tool use are checked before draft release.', '草稿放行前检查论断、引用、计算、哈希和工具使用。')
+          : bi('Reviewer-check evidence remains visible, but tool-audit controls are disabled.', '审阅检查证据仍可见，但工具审计控制已关闭。'),
         chips: [`${Number(audit.event_count || 0)} events`, 'sign-off', 'hash check'],
       },
       {
         icon: 'gear',
-        title: 'Compute / 计算环境',
-        status: remoteComputeOn ? `${remote.status || 'checking'} / 远程控制` : 'local only / 仅本地',
+        title: bi('Compute', '计算环境'),
+        status: remoteComputeOn ? bi(`${remote.status || 'checking'} remote`, `${remote.status || 'checking'} · 远程控制`) : bi('local only', '仅本地'),
         tone: remoteComputeOn ? 'info' : 'ok',
         desc: remoteComputeOn
-          ? 'Remote or HPC execution still requires credentials and artifact-return rules. / 远程或 HPC 执行仍需凭证和产物回传规则。'
-          : 'Runs stay local-first unless remote compute is explicitly enabled. / 未显式启用远程计算时，运行保持本地优先。',
+          ? bi('Remote or HPC execution still requires credentials and artifact-return rules.', '远程或 HPC 执行仍需凭证和产物回传规则。')
+          : bi('Runs stay local-first unless remote compute is explicitly enabled.', '未显式启用远程计算时，运行保持本地优先。'),
         chips: ['local first', remote.reason || 'backend policy', 'HPC control'],
       },
     ];
@@ -209,8 +242,8 @@
       <div class="ag-sci-section ag-sci-capstack">
         <div class="ag-sci-check-head">
           <div>
-            <div class="eyebrow">Research tool stack / 研究工具栈</div>
-            <div class="panel-sub">Current capability switches from Settings. / 这里显示 Settings 中当前启用的研究能力。</div>
+            <div class="eyebrow">${bi('Research tool stack', '研究工具栈')}</div>
+            <div class="panel-sub">${bi('Current capability switches from Settings.', '这里显示 Settings 中当前启用的研究能力。')}</div>
           </div>
           <button class="btn sm" data-ag-sci-open-settings>${icon('gear', 12)} ${bi('Open Settings', '打开 Settings')}</button>
         </div>
@@ -260,8 +293,8 @@
       {
         id: 'overview',
         icon: 'list',
-        label: 'Overview / 总览',
-        kicker: 'Current status / 当前状态',
+        label: bi('Overview', '总览'),
+        kicker: bi('Current status', '当前状态'),
         status: stageStatusOf(summary.status),
         metric: `${fmtMetric((summary.kpis || []).length || 0)} KPIs`,
         navMetric: `${fmtMetric((summary.kpis || []).length || 0)} KPIs`,
@@ -270,8 +303,8 @@
       {
         id: 'discovery',
         icon: 'target',
-        label: 'Discovery / 发现',
-        kicker: 'Idea pipeline / 想法流程',
+        label: bi('Discovery', '发现'),
+        kicker: bi('Idea pipeline', '想法流程'),
         status: stageStatusOf(pipeline.status),
         metric: pipeline.latest_run_id ? bi('local run', '本地 run') : bi('no run', '无 run'),
         navMetric: pipeline.latest_run_id ? 'run' : 'no run',
@@ -280,8 +313,8 @@
       {
         id: 'evidence',
         icon: 'shield',
-        label: 'Evidence / 证据',
-        kicker: 'Review package / 审阅包',
+        label: bi('Evidence', '证据'),
+        kicker: bi('Review package', '审阅包'),
         status: checksTotal && checksPassed >= checksTotal ? 'passed' : 'needs_review',
         metric: `${fmtMetric(checksPassed)}/${fmtMetric(checksTotal)} checks`,
         navMetric: `${fmtMetric(checksPassed)}/${fmtMetric(checksTotal)}`,
@@ -290,8 +323,8 @@
       {
         id: 'coverage',
         icon: 'check',
-        label: 'Coverage / 覆盖',
-        kicker: 'Workbench views / 工作台视图',
+        label: bi('Coverage', '覆盖'),
+        kicker: bi('Workbench views', '工作台视图'),
         status: alignItems.length ? (alignNeeds ? 'needs_review' : 'passed') : 'waiting_for_run',
         metric: `${fmtMetric(alignPassed)}/${fmtMetric(alignItems.length)} views`,
         navMetric: `${fmtMetric(alignPassed)}/${fmtMetric(alignItems.length)}`,
@@ -300,12 +333,12 @@
       {
         id: 'resources',
         icon: 'file',
-        label: 'Resources / 资源',
-        kicker: 'Tool stack / 工具栈',
+        label: bi('Resources', '资源'),
+        kicker: bi('Tool stack', '工具栈'),
         status: renderers.length && readyRenderers === renderers.length ? 'passed' : 'needs_review',
         metric: `${fmtMetric(protocols.length)} skills · ${fmtMetric(readyRenderers)}/${fmtMetric(renderers.length)} previews`,
         navMetric: `${fmtMetric(protocols.length)} · ${fmtMetric(readyRenderers)}/${fmtMetric(renderers.length)}`,
-        detail: 'Skills, connectors, MCP tools, prompt contracts, ICU previews. / 技能、连接器、MCP 工具、提示词契约和 ICU 预览。',
+        detail: bi('Skills, connectors, MCP tools, prompt contracts, ICU previews.', '技能、连接器、MCP 工具、提示词契约和 ICU 预览。'),
       },
     ];
   }
@@ -329,8 +362,8 @@
       <div class="ag-sci-section ag-sci-overview">
         <div class="ag-sci-check-head">
           <div>
-            <div class="eyebrow">Section status / 分区状态</div>
-            <div class="panel-sub">Current discovery, evidence, coverage, and reusable-resource status. / 当前发现、证据、覆盖范围与复用资源状态。</div>
+            <div class="eyebrow">${bi('Section status', '分区状态')}</div>
+            <div class="panel-sub">${bi('Current discovery, evidence, coverage, and reusable-resource status.', '当前发现、证据、覆盖范围与复用资源状态。')}</div>
           </div>
         </div>
         <div class="ag-sci-module-cards">
@@ -391,7 +424,7 @@
             <div class="panel-sub">${esc(checklist.description || bi('Checks whether this run has enough local evidence for review.', '检查当前 run 是否已有足够的本地证据进入审阅。'))}</div>
           </div>
           <div class="row gap-8 wrap" style="justify-content:flex-end;">
-            <span class="pill ${checklist.candidate_for_fig5 ? 'ok' : 'info'}"><span class="dot"></span>${checklist.candidate_for_fig5 ? 'Fig5 candidate / Figure 5 候选' : 'not Fig5 candidate / 非 Figure 5 候选'}</span>
+            <span class="pill ${checklist.candidate_for_fig5 ? 'ok' : 'info'}"><span class="dot"></span>${checklist.candidate_for_fig5 ? bi('Fig5 candidate', 'Figure 5 候选') : bi('not Fig5 candidate', '非 Figure 5 候选')}</span>
             <span class="pill ${progress >= 100 ? 'ok' : 'warn'}"><span class="dot"></span>${fmtMetric(checklist.passed_count || 0)}/${fmtMetric(checklist.applicable_count || 0)}</span>
           </div>
         </div>
@@ -426,8 +459,8 @@
       <div class="ag-sci-section ag-sci-align">
         <div class="ag-sci-check-head">
           <div>
-            <div class="eyebrow">Evidence coverage / 证据覆盖</div>
-            <div class="panel-sub">Shows which local evidence views are populated for this Agent or Idea Mining run. / 显示当前 Agent 或 Idea Mining run 已填充哪些本地证据视图。</div>
+            <div class="eyebrow">${bi('Evidence coverage', '证据覆盖')}</div>
+            <div class="panel-sub">${bi('Shows which local evidence views are populated for this Agent or Idea Mining run.', '显示当前 Agent 或 Idea Mining run 已填充哪些本地证据视图。')}</div>
           </div>
           <span class="pill info"><span class="dot"></span>${rows.length}</span>
         </div>
@@ -456,9 +489,9 @@
       <div class="ag-sci-section ag-sci-discovery">
         <div class="ag-sci-check-head">
           <div>
-            <div class="eyebrow">Discovery pipeline / 发现流程</div>
+            <div class="eyebrow">${bi('Discovery pipeline', '发现流程')}</div>
             <div class="ag-sci-discovery-title">${esc(pipeline.title || bi('No local discovery candidate yet', '尚无本地 discovery 候选'))}</div>
-            <div class="panel-sub">${hasRun ? esc([source.title, source.journal, source.year].filter(Boolean).join(' · ')) : 'Run Idea Mining to connect source signal, prior-art review, feasibility, plan, and Agent handoff. / 运行 Idea Mining 后串联来源线索、既有研究审阅、可行性、计划和 Agent 交接。'}</div>
+            <div class="panel-sub">${hasRun ? esc([source.title, source.journal, source.year].filter(Boolean).join(' · ')) : bi('Run Idea Mining to connect source signal, prior-art review, feasibility, plan, and Agent handoff.', '运行 Idea Mining 后串联来源线索、既有研究审阅、可行性、计划和 Agent 交接。')}</div>
           </div>
           <div class="row gap-8 wrap" style="justify-content:flex-end;">
             <span class="pill ${ready ? 'ok' : 'warn'}"><span class="dot"></span>${esc(pipeline.status_label || bi('Needs review', '待审阅'))}</span>
