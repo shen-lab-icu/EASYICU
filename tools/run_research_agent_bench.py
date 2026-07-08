@@ -1292,6 +1292,7 @@ def _render_run_registry(payload: Dict[str, Any]) -> str:
         "",
         f"- generated: `{payload.get('generated_at')}`",
         f"- provider/model: `{payload.get('provider')}` / `{payload.get('model')}`",
+        f"- backend: `{payload.get('backend_base_url', 'unknown')}`",
         f"- git: `{payload.get('git_sha', 'unknown')}`",
         f"- seed: `{payload.get('seed')}`  ·  arms: `{payload.get('arms')}`",
         "",
@@ -1361,6 +1362,26 @@ def _make_llm(*, provider: str, model: str, request_timeout: float):
             kwargs["base_url"] = base_url
         return OpenAIClient(**kwargs)
     raise SystemExit(f"Unsupported provider: {provider}")
+
+
+def _resolve_backend_base_url(provider: str) -> str:
+    """Resolve the serving backend URL a run will actually hit.
+
+    Recorded in the batch provenance so a frozen (定稿) run is unambiguous
+    about the *call path*, not just the model string: ``--provider openai
+    --model gpt-5.5`` can route to the local Codex Tools proxy
+    (``http://127.0.0.1:8787/v1``) or to ``api.openai.com`` depending on
+    ``OPENAI_BASE_URL``, and those are different serving paths with
+    different latency / concurrency / rate-limit behaviour. No credential
+    is included — a base URL carries no secret.
+    """
+    if provider == "mock":
+        return "mock://deterministic"
+    if provider == "openrouter":
+        return os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+    if provider == "openai":
+        return os.environ.get("OPENAI_BASE_URL") or "https://api.openai.com/v1"
+    return "unknown"
 
 
 def _benchmark_pipeline_options(
@@ -1540,6 +1561,7 @@ def _run_suite(
         "bench_kind": bench_kind,
         "provider": provider,
         "model": model,
+        "backend_base_url": _resolve_backend_base_url(provider),
         "arms": selected_arms,
         "case_registration": case_registration,
         "force_writer_probe": bool(force_writer_probe),
