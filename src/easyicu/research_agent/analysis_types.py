@@ -648,7 +648,33 @@ def infer_analysis_type(
     # Strong, explicit task-family cues should win before softer scoring.
     if _has_any("reinforcement_learning"):
         return _REGISTRY["reinforcement_learning"]
-    if _has_any("causal_inference"):
+    # A question explicitly framed as latent-class / trajectory clustering is a
+    # descriptive discovery task even when it mentions "causal" in a DISCLAIMING
+    # caveat ("... do NOT interpret a trajectory class as a causal group", H3).
+    # The bare "causal" cue must not hijack it into the causal-emulation family
+    # (which then imposes an unsatisfiable causal contract). Gate the causal
+    # family behind the ABSENCE of strong clustering framing. The cues below are
+    # ones a genuine causal-emulation task never uses as its primary framing:
+    # H2 (early-vasopressor -> mortality via IPTW) also says "causal" in a caveat
+    # ("do NOT state a causal conclusion the design cannot support") but has NONE
+    # of these, so H2 still routes to causal_inference. Bare "cluster" is
+    # deliberately excluded (it collides with "cluster-robust"/"clustered SE").
+    _strong_clustering_framing = any(
+        _keyword_present(text, cue)
+        for cue in (
+            "latent class",
+            "latent classes",
+            "latent-class",
+            "subphenotype",
+            "sub-phenotype",
+            "phenotype discovery",
+            "trajectory clustering",
+            "cluster trajectories",
+            "cluster the trajectories",
+            "cluster longitudinal",
+        )
+    )
+    if _has_any("causal_inference") and not _strong_clustering_framing:
         return _REGISTRY["causal_inference"]
     if _has_any("trajectory_clustering"):
         return _REGISTRY["trajectory_clustering"]
