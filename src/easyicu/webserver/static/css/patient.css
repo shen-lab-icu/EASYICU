@@ -49,11 +49,11 @@
   padding:10px 14px 11px;
 }
 .patient-flow-node.first{
-  border-color:#a9c5f7;
-  background:#fbfdff;
+  border-color:var(--accent-border);
+  background:var(--accent-soft);
 }
 .patient-flow-node.final{
-  border-color:#8bc3a0;
+  border-color:var(--ok);
   background:#f8fff9;
 }
 .patient-flow-node.has-next::after{
@@ -64,7 +64,7 @@
   width:3px;
   height:22px;
   transform:translateX(-50%);
-  background:#ff981f;
+  background:var(--warn);
 }
 .patient-flow-node.has-next::before{
   content:"";
@@ -74,14 +74,14 @@
   transform:translateX(-50%);
   border-left:8px solid transparent;
   border-right:8px solid transparent;
-  border-top:11px solid #ff981f;
+  border-top:11px solid var(--warn);
   z-index:1;
 }
 .patient-flow-label{
   font-size:12.5px;
   line-height:1.18;
   font-weight:750;
-  color:#334155;
+  color:var(--ink-2);
 }
 .patient-flow-count{
   margin-top:4px;
@@ -89,31 +89,31 @@
   line-height:1;
   font-weight:800;
   letter-spacing:0;
-  color:#1f2937;
+  color:var(--ink);
 }
 .patient-flow-pct{
   margin-top:3px;
   font-size:12px;
-  color:#64748b;
+  color:var(--ink-3);
   font-weight:650;
 }
 .patient-flow-note{
   margin-top:2px;
   font-size:10.5px;
-  color:#64748b;
+  color:var(--ink-3);
   line-height:1.2;
 }
 .patient-flow-side-link{
   position:relative;
   height:2px;
-  background:#b9a38b;
+  background:var(--hair-3);
 }
 .patient-flow-side-link::after{
   content:"";
   position:absolute;
   right:-1px;
   top:-5px;
-  border-left:9px solid #b9a38b;
+  border-left:9px solid var(--hair-3);
   border-top:6px solid transparent;
   border-bottom:6px solid transparent;
 }
@@ -138,12 +138,12 @@
   margin-top:3px;
   font-size:17px;
   font-weight:800;
-  color:#1f2937;
+  color:var(--ink);
 }
 .patient-flow-ex-pct{
   margin-top:2px;
   font-size:11px;
-  color:#64748b;
+  color:var(--ink-3);
   font-weight:650;
 }
 @media (max-width: 820px){

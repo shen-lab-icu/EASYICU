@@ -168,7 +168,7 @@ def test_native_assistant_labels_disambiguate_page_guide_guided_copilot_and_agen
     assert "js/app.js?v=20260707-residuals2" in index_html
     assert "js/copilot-dock.js?v=20260707-residuals" in index_html
     assert "js/screens-extraction.js?v=20260707-residuals2" in index_html
-    assert "js/screens-agent.js?v=20260707-evidence-merge" in index_html
+    assert "js/screens-agent.js?v=20260707-design" in index_html
     assert "js/screens-help.js?v=20260707-residuals" in index_html
 
 
@@ -184,7 +184,7 @@ def test_agent_science_workbench_has_dedicated_owner_files_and_wiring() -> None:
 
     assert "css/agent-science.css?v=20260707-evidence-merge" in index_html
     assert "css/agent-science-detail.css?v=20260702-science-workbench-v7" in index_html
-    assert "js/screens-agent-science.js?v=20260707-evidence-merge" in index_html
+    assert "js/screens-agent-science.js?v=20260707-design" in index_html
     assert "/api/agent-runs/science-workbench" in api_js
     assert "loadAgentScienceWorkbench" in api_js
     assert "/api/capabilities" in api_js
@@ -209,17 +209,17 @@ def test_agent_science_workbench_has_dedicated_owner_files_and_wiring() -> None:
     assert 'aria-controls="ag-sci-module-panel"' in science_js
     assert 'role="tabpanel"' in science_js
     assert "scienceModuleBody" in science_js
-    assert "Section status / 分区状态" in science_js
+    assert "bi('Section status', '分区状态')" in science_js
     assert "Evidence readiness checklist" in science_js
-    assert "Evidence coverage / 证据覆盖" in science_js
-    assert "Discovery pipeline / 发现流程" in science_js
-    assert "Research tool stack / 研究工具栈" in science_js
-    assert "Skills / 技能" in science_js
-    assert "Connectors / 连接器" in science_js
-    assert "MCP tools / MCP 工具" in science_js
-    assert "Prompt contracts / 提示词契约" in science_js
-    assert "Tool audit / 工具审计" in science_js
-    assert "Compute / 计算环境" in science_js
+    assert "bi('Evidence coverage', '证据覆盖')" in science_js
+    assert "bi('Discovery pipeline', '发现流程')" in science_js
+    assert "bi('Research tool stack', '研究工具栈')" in science_js
+    assert "bi('Skills', '技能')" in science_js
+    assert "bi('Connectors', '连接器')" in science_js
+    assert "bi('MCP tools', 'MCP 工具')" in science_js
+    assert "bi('Prompt contracts', '提示词契约')" in science_js
+    assert "bi('Tool audit', '工具审计')" in science_js
+    assert "bi('Compute', '计算环境')" in science_js
     assert "window.EU_SETTINGS" in science_js
     assert "window.EU_CAPABILITIES" in science_js
     assert "data && data.capability_policy" in science_js
@@ -523,7 +523,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     guided_plan_css = _static_css("guided-idea-plan.css")
     redesign_css = _static_css("redesign.css")
 
-    assert "css/guided.css?v=20260707-copilot" in index_html
+    assert "css/guided.css?v=20260707-design" in index_html
     assert "css/guided-idea-plan.css?v=20260627-ideas-feasibility-plan" in index_html
     assert "js/api.js?v=20260702-zotero-simple" in index_html
     assert (
@@ -620,8 +620,8 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     redesign_css = _static_css("redesign.css")
     index_html = _static_html("index.html")
 
-    assert "js/screens-agent.js?v=20260707-evidence-merge" in index_html
-    assert "css/agent.css?v=20260707-residuals2" in index_html
+    assert "js/screens-agent.js?v=20260707-design" in index_html
+    assert "css/agent.css?v=20260707-design" in index_html
     assert "css/agent-layout.css?v=20260702-agent-focus-layout" in index_html
     assert "css/agent-header.css?v=20260702-agent-compact-header" in index_html
     assert "css/agent-review.css?v=20260702-agent-review-compact" in index_html
@@ -758,8 +758,8 @@ def test_native_agent_research_blocks_are_project_owned() -> None:
     assert ".ag-wf-cell" in agent_css
     assert ".ag-lib-card" in agent_css
     assert ".ag-block-contract" in agent_css
-    assert "css/agent.css?v=20260707-residuals2" in index_html
-    assert "js/screens-agent.js?v=20260707-evidence-merge" in index_html
+    assert "css/agent.css?v=20260707-design" in index_html
+    assert "js/screens-agent.js?v=20260707-design" in index_html
 
     assert "ag-block-grid" not in app_js
     assert "Research Blocks" not in app_js
@@ -2379,7 +2379,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "screens-guided-projects.js?v=20260626-guided-projects-split" in index_html
     assert "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan" in index_html
     assert "screens-guided.js?v=20260707-usability" in index_html
-    assert "guided.css?v=20260707-copilot" in index_html
+    assert "guided.css?v=20260707-design" in index_html
     assert '<span class="gd-name">Guided Copilot</span>' in guided_js
     assert "Guided Copilot · local first · nothing leaves your machine" in guided_js
     assert "[t('Review Data', '审阅已有数据'), '@guidedGoal:review_data']" in guided_js
@@ -2531,7 +2531,7 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert ".patient-flow-card" not in pages_css
     assert ".patient-flow-card" not in _static_css("cohort.css")
     assert "css/pages.css?v=20260626-patient-table-pagination" in index_html
-    assert "css/patient.css?v=20260630-patient-overview-missingness2" in index_html
+    assert "css/patient.css?v=20260707-design" in index_html
     assert "css/patient-series.css?v=20260630-patient-old-series2" in index_html
     assert "js/screens-viz-demo.js?v=20260630-patient-demo-audit" in index_html
     assert "js/screens-viz-patient-series.js?v=20260707-ux" in index_html
@@ -2701,7 +2701,7 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
     redesign_css = _static_css("redesign.css")
     index_html = _static_html("index.html")
 
-    assert "css/cohort.css?v=20260707-residuals2" in index_html
+    assert "css/cohort.css?v=20260707-design" in index_html
     assert "js/screens-viz.js?v=20260707-residuals2" in index_html
     assert "let cohortView = 'idle';" in viz_js
     assert "let cohortFeatureScope = 'recommended';" in viz_js
@@ -2868,7 +2868,7 @@ def test_native_home_landing_styles_are_owned_by_home_css() -> None:
     assert ".way-card" in home_css
     assert ".mode-card" in home_css
     assert ".col-entry" in home_css
-    assert "css/home.css?v=20260707-copilot" in index_html
+    assert "css/home.css?v=20260707-design" in index_html
 
     # screens.css is no longer a landing-page catch-all
     assert ".home-wrap" not in screens_css
@@ -3122,3 +3122,23 @@ def test_seeded_autopilot_pipeline_is_demo_contained() -> None:
     parse_call = guided_js.find("const fn = parseIntent(v);")
     assert frontdoor_guard != -1 and parse_call != -1
     assert frontdoor_guard < parse_call
+
+def test_evidence_module_has_no_hardcoded_dual_language_literals() -> None:
+    """Design-consistency lock: the Evidence module must localize via bi(en, zh)
+    like every other screen — never hardcoded 'English / 中文' dual literals that
+    ignore the language toggle and double the visual text density."""
+    import re
+
+    science_js = _static_js("screens-agent-science.js")
+    # single-quoted literals whose EN half precedes ' / ' and whose second half
+    # contains CJK — the pattern the 2026-07 cleanup removed (46+ instances)
+    dual_quoted = re.findall(r"'[A-Za-z][^'一-鿿]* / [^']*[一-鿿][^']*'", science_js)
+    assert dual_quoted == [], f"hardcoded dual literals reintroduced: {dual_quoted[:5]}"
+    # raw dual text embedded in HTML template markup
+    dual_html = re.findall(r">[A-Z][A-Za-z ,.-]+ / [一-鿿][^<]*<", science_js)
+    assert dual_html == [], f"hardcoded dual HTML text reintroduced: {dual_html[:5]}"
+    # backend payload labels also arrive as duals — the load-time localizer must
+    # stay wired so they render in ONE language like the rest of the app
+    assert "function biLabel(" in science_js
+    assert "function localizeDualLabels(" in science_js
+    assert "state.data = localizeDualLabels(data);" in science_js

@@ -470,8 +470,10 @@ table.eu-table{ width: 100%; border-collapse: collapse; font-size: 12.75px; }
   cursor: pointer; display:inline-flex; align-items:center; gap: 7px;
   transition: color .12s, border-color .12s;
 }
-.tab:hover{ color: var(--ink-2); }
-.tab.active{ color: var(--ink); border-bottom-color: var(--ink); font-weight: 600; }
+.tab:hover{ color: var(--ink-2); background: var(--surface-2); border-radius: var(--r-2) var(--r-2) 0 0; }
+/* Active tab gets shape + color, not just a thin underline — the underline alone
+   was too subtle to scan on dense review screens (2026-07-07 design pass). */
+.tab.active{ color: var(--ink); border-bottom-color: var(--ink); font-weight: 600; background: var(--surface-2); border-radius: var(--r-2) var(--r-2) 0 0; }
 .tab .ico{ color: currentColor; }
 
 /* ---------- Sliders (static demo) ---------- */
