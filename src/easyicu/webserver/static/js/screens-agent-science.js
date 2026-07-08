@@ -1,7 +1,10 @@
-/* Agent Science Workbench submodule.
-   Owner: Agent Projects Science tab. Keeps public science-workbench-inspired
-   artifact history, reviewer gate, reusable protocol cards, and ICU-native renderers
-   out of the already-large screens-agent.js owner file. */
+/* Agent Projects "Evidence & provenance" submodule (tab id 'science').
+   Owner: the Agent Projects Evidence tab — the same run from Runs / Outputs,
+   opened at the artifact + evidence level. Renders artifact history, reviewer
+   gate, evidence checklist, coverage, reusable protocol cards, and ICU-native
+   views. Kept out of the already-large screens-agent.js owner file. This is a
+   deep view OF the study, not a standalone app — the header + cross-links tie it
+   back to Outputs. */
 (function () {
   'use strict';
 
@@ -72,7 +75,7 @@
     const seq = (state.seq = (state.seq || 0) + 1);
     if (!window.EU_API || !window.EU_API.loadAgentScienceWorkbench) {
       state.loading = false;
-      state.error = 'Science Workbench API is not available.';
+      state.error = 'Evidence view API is not available.';
       repaint(onDone);
       return;
     }
@@ -122,22 +125,6 @@
     if (s === 'not_applicable') return 'not applicable / 不适用';
     if (s === 'unavailable') return 'unavailable / 不可用';
     return s || 'unknown / 未知';
-  }
-  function referenceCard(data) {
-    const ref = (data && data.visual_reference) || {};
-    const cues = Array.isArray(ref.design_cues) ? ref.design_cues : [];
-    return `
-      <div class="card pad ag-sci-reference">
-        <div class="ag-sci-ref-grid">
-          <div>
-            <div class="eyebrow">${bi('Visual reference', '视觉参考')}</div>
-            <div class="panel-title" style="font-size:15px;margin-top:4px;">${bi('Artifact preview with code, environment, and review tabs', 'Artifact 预览 + 代码、环境、审阅标签')}</div>
-            <div class="panel-sub">${bi('Mapped from the public Claude Science screenshot, without loading remote media inside the local app.', '参考公开 Claude Science 截图的信息架构；本地应用内不加载远程媒体。')}</div>
-            <div class="ag-sci-cues">${cues.map(c => `<span class="ag-sci-cue">${esc(c)}</span>`).join('')}</div>
-          </div>
-          <a class="btn sm" href="${esc(ref.article_url || '#')}" target="_blank" rel="noopener">${icon('file', 12)} ${bi('Open source', '打开来源')}</a>
-        </div>
-      </div>`;
   }
   function capabilityStackSection(data) {
     const skillsOn = policySetting(data, 'science_skills_enabled', true);
@@ -326,7 +313,7 @@
     const rows = moduleRows(data || {});
     if (!rows.some(row => row.id === state.module)) state.module = 'overview';
     return `
-      <div class="ag-sci-module-nav" role="tablist" aria-label="${bi('Science Workbench modules', '科学工作台模块')}">
+      <div class="ag-sci-module-nav" role="tablist" aria-label="${bi('Evidence sections', '证据分区')}">
         ${rows.map(row => `
           <button id="ag-sci-module-tab-${esc(row.id)}" class="ag-sci-module-tab ${state.module === row.id ? 'on' : ''} ${esc(row.status)}" role="tab" aria-selected="${state.module === row.id ? 'true' : 'false'}" aria-controls="ag-sci-module-panel" data-ag-sci-module="${esc(row.id)}">
             <span class="ag-sci-module-icon">${icon(row.icon, 14)}</span>
@@ -342,7 +329,7 @@
       <div class="ag-sci-section ag-sci-overview">
         <div class="ag-sci-check-head">
           <div>
-            <div class="eyebrow">Module map / 模块地图</div>
+            <div class="eyebrow">Section status / 分区状态</div>
             <div class="panel-sub">Current discovery, evidence, coverage, and reusable-resource status. / 当前发现、证据、覆盖范围与复用资源状态。</div>
           </div>
         </div>
@@ -361,7 +348,7 @@
     if (state.module === 'discovery') return discoveryPipelineSection(safe);
     if (state.module === 'evidence') return checklistSection(safe) + workbenchLayout(safe);
     if (state.module === 'coverage') return featureAlignmentSection(safe);
-    if (state.module === 'resources') return capabilityStackSection(safe) + protocolsSection(safe) + renderersSection(safe) + referenceCard(safe);
+    if (state.module === 'resources') return capabilityStackSection(safe) + protocolsSection(safe) + renderersSection(safe);
     return overviewSection(safe);
   }
   function summaryCard(data) {
@@ -439,7 +426,7 @@
       <div class="ag-sci-section ag-sci-align">
         <div class="ag-sci-check-head">
           <div>
-            <div class="eyebrow">Workbench coverage / 工作台覆盖</div>
+            <div class="eyebrow">Evidence coverage / 证据覆盖</div>
             <div class="panel-sub">Shows which local evidence views are populated for this Agent or Idea Mining run. / 显示当前 Agent 或 Idea Mining run 已填充哪些本地证据视图。</div>
           </div>
           <span class="pill info"><span class="dot"></span>${rows.length}</span>
@@ -636,17 +623,21 @@
     if (live && live.project_dir) request(live.project_dir, ctx && ctx.repaint);
     if (!live || !live.project_dir) request('', ctx && ctx.repaint);
     return `
-      <div class="card pad">
+      <div class="card pad ag-evidence-panel">
         <div class="row" style="justify-content:space-between;align-items:baseline;margin-bottom:12px;">
           <div>
-            <div class="eyebrow">${bi('Science Workbench · advanced view', '科学工作台 · 进阶视图')}</div>
+            <div class="eyebrow">${bi('Evidence & provenance', '证据与溯源')}</div>
             <div class="panel-title" style="font-size:15px;margin-top:4px;">${bi('The same run, opened at the evidence level', '同一次运行 · 展开到证据层')}</div>
-            <div class="panel-sub">${bi('This is not a separate tool: it re-opens the run for this study (the one in Runs / Outputs) at the artifact + evidence level, so you can audit what each claim rests on. Optional — Overview and Draft cover most reviews.', '这不是独立工具：它把本研究在“运行/产出”里的同一次运行，展开到产物 + 证据层，方便你核查每条结论的依据。可选 —— 多数审阅看“概览”和“草稿”就够了。')}</div>
+            <div class="panel-sub">${bi('This is the run from Runs / Outputs, opened at the artifact + evidence level so you can audit what each claim rests on. Not a separate tool — Overview and Draft cover most reviews.', '这就是"运行 / 产出"里的那次运行，在产物 + 证据层展开，方便你核查每条结论的依据。这不是独立工具 —— 多数审阅看"概览"和"草稿"就够了。')}</div>
           </div>
-          <button class="btn sm" data-ag-sci-refresh>${icon('history', 12)} ${bi('Refresh', '刷新')}</button>
+          <div class="row gap-8" style="flex:none;">
+            <button class="btn sm" data-ag-tab="outputs">${icon('arrow', 12)} ${bi('Back to Outputs', '回到产出')}</button>
+            <button class="btn sm" data-ag-sci-refresh>${icon('history', 12)} ${bi('Refresh', '刷新')}</button>
+          </div>
         </div>
-        ${state.loading ? `<div class="note info"><div class="ico">${icon('file', 16)}</div><div class="body"><span class="t">${bi('Loading science workbench', '正在加载科学工作台')}</span><span class="d">${bi('Reading bounded local review artifacts only.', '仅读取有界本地审阅产物。')}</span></div></div>` : ''}
-        ${state.error ? `<div class="note warn"><div class="ico">${icon('alert', 16)}</div><div class="body"><span class="t">${bi('Science workbench failed', '科学工作台加载失败')}</span><span class="d">${esc(state.error)}</span></div></div>` : ''}
+        ${state.loading ? `<div class="note info"><div class="ico">${icon('file', 16)}</div><div class="body"><span class="t">${bi('Loading evidence & provenance', '正在加载证据与溯源')}</span><span class="d">${bi('Reading bounded local review artifacts only.', '仅读取有界本地审阅产物。')}</span></div></div>` : ''}
+        ${state.error ? `<div class="note warn"><div class="ico">${icon('alert', 16)}</div><div class="body"><span class="t">${bi('Evidence view failed to load', '证据视图加载失败')}</span><span class="d">${esc(state.error)}</span></div></div>` : ''}
+        <div class="ag-sci-sections-label">${bi('Sections', '分区')}</div>
         ${moduleNav(data || {})}
         <div id="ag-sci-module-panel" class="ag-sci-module-panel" role="tabpanel" aria-labelledby="ag-sci-module-tab-${esc(state.module)}">
           ${scienceModuleBody(data || {})}

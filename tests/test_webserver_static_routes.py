@@ -168,7 +168,7 @@ def test_native_assistant_labels_disambiguate_page_guide_guided_copilot_and_agen
     assert "js/app.js?v=20260707-residuals2" in index_html
     assert "js/copilot-dock.js?v=20260707-residuals" in index_html
     assert "js/screens-extraction.js?v=20260707-residuals2" in index_html
-    assert "js/screens-agent.js?v=20260707-residuals2" in index_html
+    assert "js/screens-agent.js?v=20260707-evidence-merge" in index_html
     assert "js/screens-help.js?v=20260707-residuals" in index_html
 
 
@@ -182,9 +182,9 @@ def test_agent_science_workbench_has_dedicated_owner_files_and_wiring() -> None:
     screens_css = _static_css("screens.css")
     redesign_css = _static_css("redesign.css")
 
-    assert "css/agent-science.css?v=20260702-science-workbench-v11" in index_html
+    assert "css/agent-science.css?v=20260707-evidence-merge" in index_html
     assert "css/agent-science-detail.css?v=20260702-science-workbench-v7" in index_html
-    assert "js/screens-agent-science.js?v=20260707-usability" in index_html
+    assert "js/screens-agent-science.js?v=20260707-evidence-merge" in index_html
     assert "/api/agent-runs/science-workbench" in api_js
     assert "loadAgentScienceWorkbench" in api_js
     assert "/api/capabilities" in api_js
@@ -209,9 +209,9 @@ def test_agent_science_workbench_has_dedicated_owner_files_and_wiring() -> None:
     assert 'aria-controls="ag-sci-module-panel"' in science_js
     assert 'role="tabpanel"' in science_js
     assert "scienceModuleBody" in science_js
-    assert "Module map / 模块地图" in science_js
+    assert "Section status / 分区状态" in science_js
     assert "Evidence readiness checklist" in science_js
-    assert "Workbench coverage / 工作台覆盖" in science_js
+    assert "Evidence coverage / 证据覆盖" in science_js
     assert "Discovery pipeline / 发现流程" in science_js
     assert "Research tool stack / 研究工具栈" in science_js
     assert "Skills / 技能" in science_js
@@ -248,7 +248,7 @@ def test_agent_science_workbench_has_dedicated_owner_files_and_wiring() -> None:
     assert "grid-template-columns:repeat(3,minmax(0,1fr));" in science_css
     assert "grid-template-columns:repeat(2,minmax(0,1fr));" in science_css
     assert "grid-template-columns:repeat(5,minmax(112px,1fr));" in science_css
-    assert "min-height:54px;" in science_css
+    assert "min-height:44px;" in science_css
     assert "min-height:104px;" not in science_css
     assert "grid-template-columns:repeat(4,minmax(0,1fr));" in science_css
     assert "min-height:112px;" in science_css
@@ -620,7 +620,7 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     redesign_css = _static_css("redesign.css")
     index_html = _static_html("index.html")
 
-    assert "js/screens-agent.js?v=20260707-residuals2" in index_html
+    assert "js/screens-agent.js?v=20260707-evidence-merge" in index_html
     assert "css/agent.css?v=20260707-residuals2" in index_html
     assert "css/agent-layout.css?v=20260702-agent-focus-layout" in index_html
     assert "css/agent-header.css?v=20260702-agent-compact-header" in index_html
@@ -759,7 +759,7 @@ def test_native_agent_research_blocks_are_project_owned() -> None:
     assert ".ag-lib-card" in agent_css
     assert ".ag-block-contract" in agent_css
     assert "css/agent.css?v=20260707-residuals2" in index_html
-    assert "js/screens-agent.js?v=20260707-residuals2" in index_html
+    assert "js/screens-agent.js?v=20260707-evidence-merge" in index_html
 
     assert "ag-block-grid" not in app_js
     assert "Research Blocks" not in app_js
@@ -3067,10 +3067,45 @@ def test_science_workbench_framed_as_part_of_study() -> None:
     """[12] The Science Workbench must read as an advanced view OF the current study
     (tied to Runs/Outputs), not a bolted-on second app with disconnected vocabulary."""
     science_js = _static_js("screens-agent-science.js")
-    assert "This is not a separate tool" in science_js
+    assert "Not a separate tool" in science_js
     assert "the same run" in science_js.lower()
     # implementation-heritage jargon must not leak to clinical users
     assert "molecular biology renderers" not in science_js
+
+
+def test_science_tab_is_merged_into_agent_flow_as_evidence() -> None:
+    """[12] full IA merge: the standalone 'Science Workbench' identity is dissolved
+    into the Agent Projects flow. The tab is named 'Evidence', the panel no longer
+    announces a separate app, the Claude-Science reference card is removed, and the
+    Evidence view is cross-linked bidirectionally with Outputs."""
+    agent_js = _static_js("screens-agent.js")
+    science_js = _static_js("screens-agent-science.js")
+    science_css = _static_css("agent-science.css")
+
+    # Tab renamed Science -> Evidence (both idea + full tab arrays); no user-facing
+    # "Science" / "科学工作台" identity strings survive in either owner file.
+    assert "t('Evidence', '证据')" in agent_js
+    assert "t('Science', '科学工作台')" not in agent_js
+    assert "Science Workbench" not in agent_js and "Science Workbench" not in science_js
+    assert "科学工作台" not in agent_js and "科学工作台" not in science_js
+
+    # The panel is framed as Evidence & provenance, not a self-announcing app card.
+    assert "Evidence & provenance" in science_js
+    assert "ag-evidence-panel" in science_js
+
+    # The Claude-Science mimicry reference card is gone.
+    assert "referenceCard" not in science_js
+    assert "Claude Science" not in science_js
+    assert "visual_reference" not in science_js
+
+    # Bidirectional cross-links: Outputs -> Evidence and Evidence -> Outputs.
+    assert 'data-ag-tab="science"' in agent_js          # Outputs header link
+    assert 'data-ag-tab="outputs"' in science_js         # Evidence "Back to Outputs"
+
+    # Inner section nav is de-emphasised to a subordinate sub-control (still a
+    # tablist for a11y), not a second app-level tab bar.
+    assert "ag-sci-sections-label" in science_js
+    assert ".ag-evidence-panel .ag-sci-sections-label" in science_css
 
 
 def test_seeded_autopilot_pipeline_is_demo_contained() -> None:

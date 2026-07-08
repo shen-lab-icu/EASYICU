@@ -8,48 +8,33 @@
   gap:14px;
   align-items:start;
 }
-.ag-sci-reference{
-  border:1px solid color-mix(in srgb, var(--accent) 22%, var(--hair));
-  background:color-mix(in srgb, var(--accent-soft) 38%, var(--surface));
-}
-.ag-sci-ref-grid{
-  display:grid;
-  grid-template-columns:minmax(0,1fr) auto;
-  gap:12px;
-  align-items:center;
-}
-.ag-sci-cues{
-  display:flex;
-  flex-wrap:wrap;
-  gap:6px;
-  margin-top:10px;
-}
-.ag-sci-cue{
-  border:1px solid var(--hair);
-  border-radius:999px;
-  background:var(--surface);
-  color:var(--ink-3);
-  font-size:11px;
-  line-height:1;
-  padding:6px 8px;
-}
 .ag-sci-section{
   margin-top:14px;
+}
+/* Subordinate section label + switcher: the Evidence tab is one page, so its
+   inner section nav reads as a lightweight sub-control, not a second app-level
+   tab bar. Kept as role="tablist" for a11y but visually de-emphasised. */
+.ag-evidence-panel .ag-sci-sections-label{
+  font-size:10px;
+  text-transform:uppercase;
+  letter-spacing:.06em;
+  color:var(--ink-4);
+  margin:2px 0 6px;
 }
 .ag-sci-module-nav{
   display:grid;
   grid-template-columns:repeat(5,minmax(112px,1fr));
   gap:4px;
   overflow-x:auto;
-  border:1px solid var(--hair);
+  border:none;
   border-radius:var(--r-2);
-  background:var(--surface-2);
-  padding:4px;
+  background:transparent;
+  padding:0;
   margin:0 0 12px;
 }
 .ag-sci-module-tab{
   min-width:0;
-  min-height:54px;
+  min-height:44px;
   display:grid;
   grid-template-columns:22px minmax(0,1fr) auto;
   grid-template-rows:auto;
