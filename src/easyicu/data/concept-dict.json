@@ -1837,6 +1837,8 @@
     }
   },
   "bmi": {
+    "min": 8,
+    "max": 70,
     "concepts": [
       "weight",
       "height"
@@ -4101,6 +4103,8 @@
     }
   },
   "driving_pres": {
+    "min": 0,
+    "max": 60,
     "description": "Driving pressure (Plateau - PEEP)",
     "category": "ventilator",
     "concepts": [
@@ -5627,6 +5631,8 @@
     "class_name": "rec_cncpt",
     "category": "output",
     "unit": "mL",
+    "min": -100000,
+    "max": 100000,
     "description": "cumulative fluid balance since admission (running sum of hourly fluid_balance)",
     "concepts": [
       "fluid_balance"
@@ -9743,6 +9749,8 @@
     }
   },
   "norepi_equiv": {
+    "min": 0,
+    "max": 5,
     "description": "norepinephrine equivalents",
     "category": "medications",
     "concepts": [
@@ -14702,6 +14710,8 @@
     }
   },
   "urine24": {
+    "min": 0,
+    "max": 15000,
     "concepts": "urine",
     "depends_on": [
       "urine"
@@ -15498,6 +15508,7 @@
       "10^3/mcL"
     ],
     "min": 0,
+    "max": 1000,
     "description": "white blood cell count",
     "omopid": 4298431,
     "category": "hematology",
