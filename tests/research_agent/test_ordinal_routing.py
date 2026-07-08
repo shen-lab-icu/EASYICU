@@ -33,6 +33,42 @@ def test_matches_e3_association_analysis_with_ordinal_trend_output():
     )
 
 
+def test_matches_multivariable_association_with_dose_signal():
+    # E3's real hybridfix bench (2026-07-07): the planner labelled the PRIMARY
+    # ordinal step method="multivariable_association" for a "dose-response gradient
+    # ... ORDERED categorical exposure" question. The dose signal was present (from
+    # the research question) and the cohort-sensitivity veto was correctly False,
+    # but the exact-match method allowlist missed "multivariable_association", so
+    # the deterministic ordinal runner never claimed the step -> no dose_response
+    # table -> no traceable primary figure -> fail closed. Token-matching fixes it.
+    assert (
+        _matches(
+            "multivariable_association",
+            "04_adjusted_gradient_models estimate adjusted associations of kdigo "
+            "stage; characterise the dose-response gradient; ordered categorical "
+            "exposure; monotonic-trend modelling choice on an ordinal exposure",
+            "adjusted_effect_estimates model_population_and_missingness "
+            "primary_vs_expanded_adjustment_comparison model_diagnostics",
+        )
+        is True
+    )
+
+
+def test_multivariable_association_without_dose_signal_is_not_hijacked():
+    # The token fix must NOT relax the anti-hijack guard: a multivariable
+    # association with NO dose-response signal is a plain association and must
+    # fall through to its own runner, not the ordinal one.
+    assert (
+        _matches(
+            "multivariable_association",
+            "estimate the adjusted association between vasopressor exposure and "
+            "in-hospital mortality with a multivariable logistic model",
+            "adjusted_effect_estimates model_summary forest_plot",
+        )
+        is False
+    )
+
+
 def test_matches_dose_response_question_with_association_method():
     # dose-response signal from the question + a primary-estimation method.
     assert (
