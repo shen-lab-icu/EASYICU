@@ -388,7 +388,7 @@
           <div>
             <div class="eyebrow">${hEsc(helpers, hT(helpers, 'Time-series workspace', '时间序列工作区'))}</div>
             <h2>${hEsc(helpers, hT(helpers, 'Clinical trajectory review', '临床轨迹审阅'))}</h2>
-            <p>${hEsc(helpers, hT(helpers, 'Choose the old review modes without leaving the native Patient Review page.', '在原生患者明细页内切换旧版审阅模式。'))}</p>
+            <p>${hEsc(helpers, hT(helpers, 'Choose the old review modes without leaving the native Patient Review page.', '在原生患者审阅页内切换旧版审阅模式。'))}</p>
           </div>
         </div>
         ${renderModeBar(mode, helpers)}

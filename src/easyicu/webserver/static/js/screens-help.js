@@ -64,7 +64,7 @@
             'Inspect patient-level tables and time series, step up to cohort contrasts and SOFA reclassification, then benchmark one cohort definition across two or more ICU databases.',
             '查看单患者表格和时间序列，再做队列对比、SOFA 重分类，并把同一个队列定义放到两个或更多 ICU 数据库中做基准比较。',
           ),
-          [[t('Patient Review', '患者明细'), 'patient'], [t('Cohort Statistics', '队列统计'), 'cohort'], [t('Cross-DB Benchmark', '跨库对比'), 'crossdb']],
+          [[t('Patient Review', '患者审阅'), 'patient'], [t('Cohort Statistics', '队列统计'), 'cohort'], [t('Cross-DB Benchmark', '跨库基准'), 'crossdb']],
           false,
         ],
         [

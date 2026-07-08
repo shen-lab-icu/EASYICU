@@ -108,9 +108,12 @@
     'Get Started': ['Get Started', '快速上手'],
     'Idea Mining': ['Idea Mining', '想法挖掘'],
     'Data Workspace': ['Data Workspace', '数据工作台'],
-    'Patient Review': ['Patient Review', '患者明细'],
+    /* One destination, one name: these zh labels must match the sidebar CLASSIC
+       labels and each screen's own page title. Sidebar-vs-crumb drift (患者明细 /
+       跨库对比) made the same screen read as three different places. */
+    'Patient Review': ['Patient Review', '患者审阅'],
     'Cohort Statistics': ['Cohort Statistics', '队列统计'],
-    'Cross-DB Benchmark': ['Cross-DB Benchmark', '跨库对比'],
+    'Cross-DB Benchmark': ['Cross-DB Benchmark', '跨库基准'],
     Settings: ['Settings', '设置'],
     'Workspace States': ['Workspace States', '工作区状态'],
   };
@@ -145,7 +148,7 @@
       <div class="sec-label nav-sec">${t('Discovery & Plan', '发现与计划')}</div>
       <button class="cp-entry ideas-entry ${route === 'ideas' ? 'on' : ''}" data-nav="ideas">
         <span class="cp-ico">${icon('target', 16)}</span>
-        <span class="cp-body"><span class="cp-t">${t('Find a Study Idea', '找研究想法')}</span><span class="cp-d">${t('paper, PDF, or topic → feasible plan', '文章、PDF 或主题 → 可行计划')}</span></span>
+        <span class="cp-body"><span class="cp-t">${t('Idea Mining', '想法挖掘')}</span><span class="cp-d">${t('paper, PDF, or topic → feasible plan', '文章、PDF 或主题 → 可行计划')}</span></span>
         <span class="cp-go">${icon('arrow', 14)}</span>
       </button>
       <button class="cp-entry agent-entry ${route === 'agent' ? 'on' : ''}" data-nav="agent">
@@ -208,8 +211,8 @@
       <div class="crumbs">${crumbs}</div>
       <div class="spacer"></div>
       ${scr.status || ''}
-      <div class="mode-seg" role="group" aria-label="Data mode" title="${t('Data source for the whole workspace', '整个工作台的数据源')}">
-        <button class="${window.EU_DATA !== 'real' ? 'on' : ''}" data-datamode="demo">${icon('flask', 12)} ${t('Demo', '演示')}</button>
+      <div class="mode-seg ${window.EU_DATA !== 'real' ? 'demo-active' : ''}" role="group" aria-label="Data mode" title="${window.EU_DATA !== 'real' ? t('Demo mode: every number on screen is a seeded example, not your data. Switch to Real to load a local export.', '演示模式：屏幕上的所有数字都是种子示例，不是你的数据。切换到真实模式可加载本地导出。') : t('Real mode: screens compute from your local EasyICU export. Nothing is uploaded.', '真实模式：各页面从你本地的 EasyICU 导出计算，不上传任何数据。')}">
+        <button class="${window.EU_DATA !== 'real' ? 'on' : ''}" data-datamode="demo">${icon('flask', 12)} ${window.EU_DATA !== 'real' ? t('Demo data', '演示数据') : t('Demo', '演示')}</button>
         <button class="${window.EU_DATA === 'real' ? 'on' : ''}" data-datamode="real">${icon('db', 12)} ${t('Real', '真实')}</button>
       </div>
       <div class="lang-seg" role="group" aria-label="Language">

@@ -830,7 +830,7 @@
             <div class="sc-top">
               <span class="sc-dot ${dotCls[s.status] || 'idle'}"></span>
               <span class="sc-name">${t(s.name[0], s.name[1])}</span>
-              <span class="sc-mode analysis">${studyBadgeLabel(s)}</span>
+              <span class="sc-mode analysis">${!s.ideaSeed && !s.empty && !realMode() ? `${t('Example', '示例')} · ` : ''}${studyBadgeLabel(s)}</span>
             </div>
             <div class="sc-meta"><span class="sc-folder" title="${esc(folder)}">${icon('folder', 11)} ${esc(compactMiddlePath(folder))}</span></div>
             <div class="sc-meta" style="margin-top:3px;">${s.runs.length ? `${s.runs[0][0]}<span class="mid"></span>${s.runs[0][4][zh ? 1 : 0]}` : t('not run yet', '尚未运行')}</div>
@@ -1480,7 +1480,7 @@
       </div>`;
     }
     if (!s.runs.length) {
-      return `<div class="state-hero empty-state"><div class="glyph">${icon('history', 26)}</div><div class="st-t">${t('No runs yet', '尚无运行记录')}</div><div class="st-d">${t('Run the plan from the Overview tab to populate this history. Every run writes a local manifest.', '在概览页运行计划即可填充历史。每次运行都会写入本地清单。')}</div><div class="st-actions"><button class="btn primary" data-ag-tab="overview">${icon('play', 14)} ${t('Go to Overview', '前往概览')}</button></div></div>`;
+      return `<div class="state-hero empty-state"><div class="glyph">${icon('history', 26)}</div><div class="st-t">${t('No runs yet', '尚无运行记录')}</div><div class="st-d">${t('Run the plan from the Overview tab to populate this history. Every run writes a local manifest. Not sure the plan is right yet? Refine it in Idea Mining first.', '在概览页运行计划即可填充历史。每次运行都会写入本地清单。还不确定计划是否合适？可以先回「想法挖掘」细化。')}</div><div class="st-actions"><button class="btn primary" data-ag-tab="overview">${icon('play', 14)} ${t('Go to Overview', '前往概览')}</button><button class="btn" data-nav="ideas">${icon('target', 14)} ${t('Refine in Idea Mining', '回想法挖掘细化')}</button></div></div>`;
     }
     return `
       <div class="card pad" style="padding:16px 18px 8px;">
