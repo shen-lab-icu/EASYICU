@@ -1941,14 +1941,27 @@ def run_execute_phase(
         def _publication_figure_preflight_supported() -> bool:
             # Match on the step id with the router's own token groups so the
             # preflight only claims figure steps the deterministic renderer
-            # can actually serve. Matching intent/method text here used to
-            # hijack steps whose prose merely mentioned "cohort"/"quality"
+            # can actually serve. Matching intent/method PROSE here used to
+            # hijack steps whose text merely mentioned "cohort"/"quality"
             # (e.g. a baseline/absolute-risk figure step), replacing the LLM
             # coder with a rescue that then emitted no figure exports.
-            from .pipeline import deterministic_figure_family_supported
+            from .pipeline import (
+                deterministic_figure_family_supported,
+                deterministic_figure_family_supported_for_upstream,
+            )
 
-            return _step_expects_figure(step) and deterministic_figure_family_supported(
-                step.step_id
+            if not _step_expects_figure(step):
+                return False
+            if deterministic_figure_family_supported(step.step_id):
+                return True
+            # Structural fallback: the figure's PARENT analysis step recorded a
+            # controlled ``analysis_family`` (a closed enum the runners emit, not
+            # free-text prose), so a stochastically-named primary figure whose id
+            # carries no family token is still routed to the right renderer. Only
+            # RESULT families are mapped (descriptive/baseline stay on the LLM
+            # path), so this cannot reintroduce the prose-hijack failure mode.
+            return deterministic_figure_family_supported_for_upstream(
+                run_dir, step.step_id
             )
 
         def _deterministic_publication_figure_code(
