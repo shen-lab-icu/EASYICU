@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from easyicu.research_agent.ph_schoenfeld import (
+from easyicu.research_agent.methods.ph_schoenfeld import (
     PHTestResult,
     PHTestUnavailableError,
     ph_test,
@@ -98,7 +98,7 @@ def _make_ph_violated(rng: np.random.Generator, n: int = 600) -> pd.DataFrame:
 def test_module_imports_without_lifelines():
     """The module must import on a pandas+numpy+scipy-only install."""
 
-    import easyicu.research_agent.ph_schoenfeld as mod
+    import easyicu.research_agent.methods.ph_schoenfeld as mod
 
     assert hasattr(mod, "ph_test")
     assert hasattr(mod, "PHTestResult")

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from easyicu.research_agent.decision_curve import (
+from easyicu.research_agent.methods.decision_curve import (
     net_benefit_at,
     net_benefit_curve,
     summarize_decision_curve,

@@ -76,7 +76,7 @@ class PHTestUnavailableError(RuntimeError):
 def _require_lifelines():
     """Import lifelines lazily, raising an actionable error if it is absent.
 
-    Guarded so that ``import easyicu.research_agent.ph_schoenfeld`` never fails
+    Guarded so that ``import easyicu.research_agent.methods.ph_schoenfeld`` never fails
     at module import time on a pandas+numpy+scipy-only install. The cost of a
     wrong from-scratch Schoenfeld test is a silently mis-stated PH verdict, so
     we refuse to fake it: callers get a clear install instruction instead.

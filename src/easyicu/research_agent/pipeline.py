@@ -70,7 +70,7 @@ from .replication.envelope import (
     ReproEnvelope,
     envelope_role_resolver,
 )
-from .multiple_testing import build_multiple_testing_report
+from .methods.multiple_testing import build_multiple_testing_report
 from .causal_audit import run_causal_audit
 from .reporting_checklist import (
     build_strobe_checklist,
@@ -84,7 +84,7 @@ from .provenance import (
     build_provenance_bundle,
     hash_sources,
 )
-from .sensitivity import (
+from .methods.sensitivity import (
     EValueResult,
     NegativeControlResult,
     compute_e_value,

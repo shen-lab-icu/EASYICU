@@ -52,7 +52,7 @@ def test_logistic_estimator_recovers_known_odds_ratio() -> None:
 
 def test_complete_case_and_mean_imputation_can_differ() -> None:
     from easyicu.research_agent.estimators import fit_estimator
-    from easyicu.research_agent.missing import apply_missing_strategy
+    from easyicu.research_agent.methods.missing import apply_missing_strategy
 
     df = _synthetic_binary_frame(n=300, seed=4)
     df.loc[df["x"] > 0.8, "x"] = np.nan

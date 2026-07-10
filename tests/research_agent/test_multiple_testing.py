@@ -18,7 +18,7 @@ def test_bh_matches_textbook_example(ra):
     # Benjamini-Hochberg hand-worked example: sorted p-values
     # [0.001, 0.008, 0.039, 0.041, 0.042, 0.06, 0.074, 0.205, 0.212, 0.216]
     # BH-adjusted (monotone): expected result also monotone nondecreasing.
-    from easyicu.research_agent.multiple_testing import _benjamini_hochberg
+    from easyicu.research_agent.methods.multiple_testing import _benjamini_hochberg
 
     pvals = [0.216, 0.042, 0.001, 0.041, 0.039, 0.060, 0.074, 0.008, 0.205, 0.212]
     adj = _benjamini_hochberg(pvals)
@@ -35,7 +35,7 @@ def test_bh_matches_textbook_example(ra):
 
 
 def test_bh_cap_at_one(ra):
-    from easyicu.research_agent.multiple_testing import _benjamini_hochberg
+    from easyicu.research_agent.methods.multiple_testing import _benjamini_hochberg
 
     pvals = [0.9, 0.95, 0.99]
     adj = _benjamini_hochberg(pvals)
@@ -43,13 +43,13 @@ def test_bh_cap_at_one(ra):
 
 
 def test_bonferroni_is_exact(ra):
-    from easyicu.research_agent.multiple_testing import _bonferroni
+    from easyicu.research_agent.methods.multiple_testing import _bonferroni
 
     assert _bonferroni([0.01, 0.02, 0.1]) == pytest.approx([0.03, 0.06, 0.3])
 
 
 def test_bh_empty(ra):
-    from easyicu.research_agent.multiple_testing import _benjamini_hochberg
+    from easyicu.research_agent.methods.multiple_testing import _benjamini_hochberg
 
     assert _benjamini_hochberg([]) == []
 

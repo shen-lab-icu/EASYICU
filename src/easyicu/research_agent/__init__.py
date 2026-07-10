@@ -883,7 +883,7 @@ def __getattr__(name: str):
         "PValueRecord",
         "build_multiple_testing_report",
     }:
-        from . import multiple_testing as _mt
+        from .methods import multiple_testing as _mt
 
         return getattr(_mt, name)
     if name in {
@@ -933,7 +933,7 @@ def __getattr__(name: str):
         "compute_e_value",
         "run_negative_control_check",
     }:
-        from . import sensitivity as _sens
+        from .methods import sensitivity as _sens
 
         return getattr(_sens, name)
     if name in {
@@ -951,7 +951,7 @@ def __getattr__(name: str):
         "fit_cox_model",
         "fit_fine_gray_subdistribution",
     }:
-        from . import survival as _surv
+        from .methods import survival as _surv
 
         return getattr(_surv, name)
     if name in {
@@ -960,7 +960,7 @@ def __getattr__(name: str):
         "mice_impute",
         "tipping_point_analysis",
     }:
-        from . import missing_data as _md
+        from .methods import missing_data as _md
 
         return getattr(_md, name)
     if name in {
@@ -968,7 +968,7 @@ def __getattr__(name: str):
         "SubgroupEstimate",
         "run_subgroup_analysis",
     }:
-        from . import fairness as _fair
+        from .methods import fairness as _fair
 
         return getattr(_fair, name)
     if name in {

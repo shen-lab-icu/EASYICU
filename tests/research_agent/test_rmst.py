@@ -12,7 +12,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from easyicu.research_agent.rmst import RMSTResult, rmst, rmst_difference
+from easyicu.research_agent.methods.rmst import RMSTResult, rmst, rmst_difference
 
 
 # ---------------------------------------------------------------------------

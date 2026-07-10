@@ -39,7 +39,7 @@ Code contract:
   confounding / immortal-time caveats.
   USE THE VALIDATED PRIMITIVES, do not re-derive these by hand (hand-rolled
   onset logic has mis-counted stage-0 records as events). Import from
-  `easyicu.research_agent.temporal_features`:
+  `easyicu.research_agent.methods.temporal_features`:
     * `onset_times(traj, concept, op=..., threshold=...)` — first crossing
       time (numeric); for a categorical/boolean concept pass `op="present"`
       or `positive_values={...}` (e.g. mech_vent).

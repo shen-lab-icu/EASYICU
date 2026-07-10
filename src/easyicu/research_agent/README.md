@@ -55,6 +55,12 @@ evidence id are blocked or surfaced for human review.
 
 The runtime now makes a four-layer design explicit:
 
+Deterministic statistical kernels are grouped under `methods/` (survival,
+missing-data, fairness, multiple-testing, sensitivity, RMST, DeLong and
+conformal helpers). New method implementations belong in that package rather
+than as additional top-level `research_agent/*.py` modules; stable convenience
+symbols continue to be exposed from `easyicu.research_agent`.
+
 - **Layer 1 — ICU Data Foundation**: unified concept abstraction, cohort provenance, deterministic temporal semantics, and ICU episode resolution.
 - **Layer 2 — Safe Analytical Runtime**: evidence store, audit log, validators, execution replay, and workflow graph artifacts.
 - **Layer 3 — Agent Orchestration**: planner / replanner / coder / analyzer / writer coordinated through a runtime supervisor pattern.

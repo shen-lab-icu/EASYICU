@@ -37,7 +37,7 @@ from .concept_dict_audit import (
 )
 from .cost import CostMeter
 from .evidence import EvidenceStore
-from .multiple_testing import build_multiple_testing_report
+from .methods.multiple_testing import build_multiple_testing_report
 from .pipeline_cross_db import _literature_provenance_note
 from .pipeline_report import render_report, write_readiness_artifacts
 from .prompts import PROMPT_PACK_VERSION, prompt_pack_files
@@ -50,7 +50,7 @@ from .runtime_artifacts import (
     write_json_artifact,
 )
 from .schema import AnalysisManifest, PipelineResult, ResearchContext
-from .sensitivity import compute_e_value
+from .methods.sensitivity import compute_e_value
 from .cohort_schema import COHORT_LOCK_FILENAME
 from .robustness_panel import PANEL_FILENAME, load_robustness_panel
 from .side_findings import collect_side_findings, write_side_findings
@@ -587,7 +587,7 @@ def finalise_success(
                     and outcome_name in cohort_df.columns
                     and candidate_subgroups
                 ):
-                    from .fairness import run_subgroup_analysis
+                    from .methods.fairness import run_subgroup_analysis
 
                     result = run_subgroup_analysis(
                         cohort_df=cohort_df,
