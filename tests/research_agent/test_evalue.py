@@ -12,7 +12,7 @@ import math
 
 import pytest
 
-from easyicu.research_agent.evalue import (
+from easyicu.research_agent.methods.evalue import (
     EValueResult,
     evalue,
     evalue_ci,

@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
 
 from .cohort_schema import CohortDefinition, build_cohort
-from .missing import apply_missing_strategy
+from .methods.missing import apply_missing_strategy
 from .pipeline_primary_effect import _extract_primary_effect_payload_from_records
 from .robustness_panel import PRIMARY_SPEC_ID, RobustnessPanelRow, RobustnessSpec
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from easyicu.research_agent.conformal import (
+from easyicu.research_agent.methods.conformal import (
     conformal_calibrate,
     conformal_evaluate,
     conformal_predict_sets,

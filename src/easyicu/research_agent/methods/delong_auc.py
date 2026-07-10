@@ -49,7 +49,7 @@ Scope
 -----
 This module performs **discrimination inference only**. It says nothing about
 whether predicted probabilities are *calibrated*; calibration is a separate
-question (see :mod:`easyicu.research_agent.conformal` for a distribution-free
+question (see :mod:`easyicu.research_agent.methods.conformal` for a distribution-free
 per-patient guarantee, and calibration-slope / Brier reporting elsewhere).
 
 Pure ``numpy`` + ``scipy.stats.norm``; no optional dependency is imported at
