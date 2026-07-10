@@ -13,7 +13,6 @@ from fastapi.testclient import TestClient
 
 from easyicu import concept_catalog
 from easyicu.webserver.app import app
-import easyicu.webserver.app as app_module
 from easyicu.webserver import agent_runs
 from easyicu.webserver import cohort_review
 from easyicu.webserver import copilot_sessions
@@ -4781,8 +4780,8 @@ def test_extraction_job_registers_finished_export_as_active(
         )
         return {"ok": True, "active_path": path, "sources": [{"path": path}]}
 
-    monkeypatch.setattr(app_module.dataio, "make_export_runner", fake_make_export_runner)
-    monkeypatch.setattr(app_module.source_store, "register_source", fake_register_source)
+    monkeypatch.setattr(dataio, "make_export_runner", fake_make_export_runner)
+    monkeypatch.setattr(source_store, "register_source", fake_register_source)
     client = TestClient(app)
 
     submitted = client.post(

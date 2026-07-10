@@ -12,10 +12,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from easyicu.webserver import agent_outputs
-from easyicu.webserver import app as web_app_module
 from easyicu.webserver import copilot_sessions
 from easyicu.webserver import dataio
 from easyicu.webserver import guided_sessions
+from easyicu.webserver import jobs as job_store
 from easyicu.webserver import settings as settings_store
 from easyicu.webserver import sources as source_store
 from easyicu.webserver import __main__ as web_cli
@@ -569,7 +569,7 @@ def test_job_endpoint_returns_429_when_local_capacity_is_full(
 
     first = manager.submit("blocking", blocking_runner)
     assert started.wait(timeout=1)
-    monkeypatch.setattr(web_app_module, "MANAGER", manager)
+    monkeypatch.setattr(job_store, "MANAGER", manager)
     monkeypatch.setattr(
         dataio,
         "make_convert_runner",
@@ -592,6 +592,36 @@ def test_job_endpoint_returns_429_when_local_capacity_is_full(
         "max_running": 1,
         "reason": "Wait for a running local job to finish before retrying.",
     }
+
+
+def test_job_events_replay_includes_terminal_end_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = JobManager(max_completed=2)
+    monkeypatch.setattr(job_store, "MANAGER", manager)
+
+    def runner(job):  # type: ignore[no-untyped-def]
+        job.emit({"type": "progress", "phase": "testing"})
+        return {"ok": True}
+
+    job = manager.submit("sse-replay", runner)
+    deadline = time.time() + 2
+    while job.status == "running" and time.time() < deadline:
+        time.sleep(0.01)
+
+    response = TestClient(app).get(f"/api/jobs/{job.id}/events")
+    events = [
+        json.loads(line.removeprefix("data: "))
+        for line in response.text.splitlines()
+        if line.startswith("data: ")
+    ]
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert events[0]["type"] == "progress"
+    assert events[-1]["type"] == "end"
+    assert events[-1]["status"] == "done"
+    assert events[-1]["result"] == {"ok": True}
 
 
 def test_source_registry_serializes_updates_and_writes_atomically(
