@@ -35,7 +35,8 @@ import logging
 
 from .base import BaseICULoader, get_default_data_path, detect_database_type
 from .resources import load_dictionary, load_data_sources as load_packaged_data_sources
-from .config import load_data_sources as load_user_data_sources
+from .config import DATABASE_ID_CONFIG, load_data_sources as load_user_data_sources
+from .databases.profiles import get_database_profile
 from .concept.catalog import CONCEPT_GROUPS_INTERNAL
 
 logger = logging.getLogger(__name__)
@@ -50,17 +51,16 @@ def _normalize_patient_ids_for_db(database_name: str, patient_ids):
     if patient_ids is None or isinstance(patient_ids, dict):
         return patient_ids
 
-    if database_name in ['eicu', 'eicu_demo']:
-        return {'patientunitstayid': patient_ids}
-    if database_name in ['aumc']:
-        return {'admissionid': patient_ids}
-    if database_name in ['hirid']:
-        return {'patientid': patient_ids}
-    if database_name == 'sic':
-        return {'CaseID': patient_ids}
-    if database_name == 'mimic':
-        return {'icustay_id': patient_ids}
-    return {'stay_id': patient_ids}
+    return {_database_profile_or_default(database_name).stay_id_col: patient_ids}
+
+
+def _database_profile_or_default(database_name: str):
+    """Resolve database metadata while preserving the legacy MIIV fallback."""
+
+    try:
+        return get_database_profile(database_name)
+    except KeyError:
+        return get_database_profile("miiv")
 
 
 def _patient_filter_values(patient_ids):
@@ -384,21 +384,8 @@ def _sample_patient_ids(loader: 'BaseICULoader', max_patients: int, verbose: boo
             - 'sorted': 按 ID 排序取前 N 个。用于与 ricu 金标准 fixture 对齐(parity/
               fixture 生成时显式传 'sorted')。
     """
-    db_name = loader.database
-    
-    # 数据库 -> (表名, ID列名) 映射
-    id_table_map = {
-        'miiv': ('icustays', 'stay_id'),
-        'mimic': ('icustays', 'icustay_id'),
-        'mimic_demo': ('icustays', 'icustay_id'),
-        'eicu': ('patient', 'patientunitstayid'),
-        'eicu_demo': ('patient', 'patientunitstayid'),
-        'aumc': ('admissions', 'admissionid'),
-        'hirid': ('general', 'patientid'),
-        'sic': ('cases', 'CaseID'),  # SICdb uses cases table with CaseID
-    }
-    
-    table_name, id_col = id_table_map.get(db_name, ('icustays', 'stay_id'))
+    profile = _database_profile_or_default(loader.database)
+    table_name, id_col = profile.stay_table, profile.stay_id_col
     
     try:
         fast_ids = _query_patient_ids_fast(
@@ -447,17 +434,8 @@ def _sample_patient_ids(loader: 'BaseICULoader', max_patients: int, verbose: boo
 
 def _get_patient_id_source(loader: 'BaseICULoader') -> tuple[str, str]:
     """Return the canonical (table_name, id_col) pair for a database."""
-    id_table_map = {
-        'miiv': ('icustays', 'stay_id'),
-        'mimic': ('icustays', 'icustay_id'),
-        'mimic_demo': ('icustays', 'icustay_id'),
-        'eicu': ('patient', 'patientunitstayid'),
-        'eicu_demo': ('patient', 'patientunitstayid'),
-        'aumc': ('admissions', 'admissionid'),
-        'hirid': ('general', 'patientid'),
-        'sic': ('cases', 'CaseID'),
-    }
-    return id_table_map.get(loader.database, ('icustays', 'stay_id'))
+    profile = _database_profile_or_default(loader.database)
+    return profile.stay_table, profile.stay_id_col
 
 
 def _iter_patient_id_batches(
@@ -505,18 +483,8 @@ def _get_total_patient_count(loader: 'BaseICULoader') -> Optional[int]:
     快速获取数据库中的总患者数（用于自动分批决策）。
     使用 DuckDB COUNT(DISTINCT) 避免加载全部数据。
     """
-    db_name = loader.database
-    id_table_map = {
-        'miiv': ('icustays', 'stay_id'),
-        'mimic': ('icustays', 'icustay_id'),
-        'eicu': ('patient', 'patientunitstayid'),
-        'eicu_demo': ('patient', 'patientunitstayid'),
-        'aumc': ('admissions', 'admissionid'),
-        'hirid': ('general', 'patientid'),
-        'sic': ('cases', 'CaseID'),
-    }
-    
-    table_name, id_col = id_table_map.get(db_name, ('icustays', 'stay_id'))
+    profile = _database_profile_or_default(loader.database)
+    table_name, id_col = profile.stay_table, profile.stay_id_col
     
     try:
         fast_count = _count_patient_ids_fast(loader, table_name, id_col)
@@ -956,16 +924,19 @@ def load_concepts(
         concepts_list = [c for c in concepts_list if c not in _special]
 
     # 防御性检查: 检测常见的位置参数误用 (load_concepts(['hr'], 'miiv') 应为 database='miiv')
-    _known_dbs = {'miiv', 'mimic', 'eicu', 'hirid', 'aumc', 'sic',
-                  'miiv_demo', 'mimic_demo', 'eicu_demo', 'sic_demo'}
-    if isinstance(patient_ids, str) and patient_ids.lower() in _known_dbs:
-        if database is None:
-            database = patient_ids
-            patient_ids = None
-        else:
-            raise TypeError(
-                f"patient_ids 收到字符串 '{patient_ids}'，看起来是数据库名。"
-                f"请使用关键字参数: load_concepts(concepts, database='{patient_ids}')")
+    if isinstance(patient_ids, str):
+        try:
+            positional_database = get_database_profile(patient_ids)
+        except KeyError:
+            positional_database = None
+        if positional_database is not None:
+            if database is None:
+                database = positional_database.key
+                patient_ids = None
+            else:
+                raise TypeError(
+                    f"patient_ids 收到字符串 '{patient_ids}'，看起来是数据库名。"
+                    f"请使用关键字参数: load_concepts(concepts, database='{patient_ids}')")
 
     if patient_ids is None:
         id_kwargs = [
@@ -1240,10 +1211,7 @@ def load_concepts(
             if _total_patients_in_db and _total_patients_in_db > effective_batch_size:
                 _fetched_ids = _sample_patient_ids(loader, _total_patients_in_db, verbose=False, sample_strategy='sorted')
                 if _fetched_ids:
-                    # 检测 ID 列名
-                    _db_id_map = {'miiv': 'stay_id', 'mimic': 'icustay_id', 'eicu': 'patientunitstayid',
-                                  'aumc': 'admissionid', 'hirid': 'patientid', 'sic': 'CaseID'}
-                    _id_col = _db_id_map.get(loader.database, 'stay_id')
+                    _id_col = _database_profile_or_default(loader.database).stay_id_col
                     _all_ids = list(_fetched_ids)
                     _total_patients = len(_all_ids)
                     if verbose:
@@ -3377,20 +3345,6 @@ def get_cohort_stats(
 # =============================================================================
 # 工具函数导出 - 供 webapp 和外部使用
 # =============================================================================
-
-# 数据库 -> (表名, ID列名) 的标准映射
-# 这是单一真相来源，避免在多处重复定义
-DATABASE_ID_CONFIG = {
-    'miiv': {'table': 'icustays', 'id_col': 'stay_id'},
-    'mimic': {'table': 'icustays', 'id_col': 'icustay_id'},
-    'mimic_demo': {'table': 'icustays', 'id_col': 'icustay_id'},
-    'eicu': {'table': 'patient', 'id_col': 'patientunitstayid'},
-    'eicu_demo': {'table': 'patient', 'id_col': 'patientunitstayid'},
-    'aumc': {'table': 'admissions', 'id_col': 'admissionid'},
-    'hirid': {'table': 'general', 'id_col': 'patientid'},
-    'sic': {'table': 'cases', 'id_col': 'CaseID'},  # SICdb uses cases table with CaseID
-}
-
 
 def get_id_col_for_database(database: str) -> str:
     """获取指定数据库的患者ID列名

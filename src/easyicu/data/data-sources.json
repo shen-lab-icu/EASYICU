@@ -1,6 +1,11 @@
 [
   {
     "name": "eicu",
+    "profile": {
+      "display_name": "eICU",
+      "aliases": ["eicu", "eicu-crd", "eicu_crd"],
+      "display_order": 20
+    },
     "url": "https://physionet.org/files/eicu-crd/2.0",
     "id_cfg": {
       "hadm": {
@@ -3928,6 +3933,11 @@
   },
   {
     "name": "mimic",
+    "profile": {
+      "display_name": "MIMIC-III",
+      "aliases": ["mimiciii", "mimic-iii", "mimic3", "mimic_iii"],
+      "display_order": 50
+    },
     "url": "https://physionet.org/files/mimiciii/1.4",
     "id_cfg": {
       "patient": {
@@ -7296,6 +7306,11 @@
   },
   {
     "name": "miiv",
+    "profile": {
+      "display_name": "MIMIC-IV",
+      "aliases": ["mimiciv", "mimic-iv", "miiv", "mimic_iv", "mimic-iv-3.1"],
+      "display_order": 10
+    },
     "url": "https://physionet.org/files/mimiciv/3.1",
     "id_cfg": {
       "patient": {
@@ -9277,6 +9292,11 @@
   },
   {
     "name": "hirid",
+    "profile": {
+      "display_name": "HiRID",
+      "aliases": ["hirid", "hi-rid"],
+      "display_order": 40
+    },
     "url": "https://physionet.org/files/hirid/1.1.1",
     "id_cfg": {
       "icustay": {
@@ -10023,6 +10043,11 @@
   },
   {
     "name": "aumc",
+    "profile": {
+      "display_name": "AmsterdamUMCdb",
+      "aliases": ["aumc", "amsterdamumc", "amsterdam"],
+      "display_order": 30
+    },
     "id_cfg": {
       "patient": {
         "id": "patientid",
@@ -10635,6 +10660,11 @@
   },
   {
     "name": "sic",
+    "profile": {
+      "display_name": "SICdb",
+      "aliases": ["sicdb", "sic", "sic-db"],
+      "display_order": 60
+    },
     "url": "https://physionet.org/files/sicdb/1.0.6",
     "id_cfg": {
       "patient": {

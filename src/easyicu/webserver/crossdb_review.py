@@ -13,6 +13,11 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from easyicu.concept import catalog as concept_catalog
+from easyicu.databases.profiles import (
+    DATABASE_LABELS,
+    normalize_database_key as canonical_database_key,
+    public_database_keys,
+)
 from easyicu.io.data_paths import (
     DATABASE_ALIASES,
     _path_looks_like_database,
@@ -61,16 +66,9 @@ _NON_FEATURE_COLUMNS = {
     "database",
     "source",
 }
-_RAW_DB_LABELS = {
-    "miiv": "MIMIC-IV",
-    "eicu": "eICU",
-    "aumc": "AmsterdamUMCdb",
-    "hirid": "HiRID",
-    "mimic": "MIMIC-III",
-    "sic": "SICdb",
-}
+_RAW_DB_LABELS = DATABASE_LABELS
 _COMMON_RAW_ROOT_CANDIDATES: List[str] = []
-_DEMO_MULTIDB_DATABASES = ("miiv", "eicu", "aumc", "hirid", "mimic", "sic")
+_DEMO_MULTIDB_DATABASES = public_database_keys()
 _DEMO_RECORDS_PER_FEATURE = 192
 _DEMO_MULTIDB_FEATURE_SPECS = {
     "miiv": {
@@ -1089,13 +1087,10 @@ def _raw_missing_database_payload(databases: List[str]) -> List[Dict[str, Any]]:
 
 def _normalize_database_key(value: str) -> str:
     raw = value.strip().lower()
-    if raw in _RAW_DB_LABELS:
+    try:
+        return canonical_database_key(raw)
+    except KeyError:
         return raw
-    for key, aliases in DATABASE_ALIASES.items():
-        if raw in aliases or raw.replace("_", "-") in aliases:
-            return key
-    label_hits = {label.lower(): key for key, label in _RAW_DB_LABELS.items()}
-    return label_hits.get(raw, raw)
 
 
 def _detect_raw_databases(root: Path) -> List[str]:

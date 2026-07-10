@@ -9,15 +9,7 @@ from __future__ import annotations
 
 import os
 
-
-DATABASE_ALIASES = {
-    "miiv": ["mimiciv", "mimic-iv", "miiv", "mimic_iv", "mimic-iv-3.1"],
-    "eicu": ["eicu", "eicu-crd", "eicu_crd"],
-    "aumc": ["aumc", "amsterdamumc", "amsterdam"],
-    "hirid": ["hirid", "hi-rid"],
-    "mimic": ["mimiciii", "mimic-iii", "mimic3", "mimic_iii"],
-    "sic": ["sicdb", "sic", "sic-db"],
-}
+from easyicu.databases.profiles import DATABASE_ALIASES, normalize_database_key
 
 DEFAULT_DATABASE_VERSIONS = {
     "mimiciv": "3.1",
@@ -78,11 +70,15 @@ def _latest_numeric_subdir(path: str) -> str | None:
 
 def find_database_path(root: str, db_name: str) -> str:
     """Resolve a database path from a root directory or direct database path."""
-    aliases = DATABASE_ALIASES.get(db_name, [db_name])
+    try:
+        database_key = normalize_database_key(db_name)
+    except KeyError:
+        database_key = db_name
+    aliases = DATABASE_ALIASES.get(database_key, (db_name,))
 
     if os.path.isdir(root):
         root_basename = os.path.basename(os.path.normpath(root)).lower()
-        matched = root_basename in aliases or any(
+        matched = root_basename == database_key or root_basename in aliases or any(
             alias in root_basename or root_basename.startswith(alias)
             for alias in aliases
         )
@@ -91,7 +87,8 @@ def find_database_path(root: str, db_name: str) -> str:
         if _path_looks_like_database(root):
             return root
 
-    for alias in aliases:
+    search_names = (database_key, *aliases)
+    for alias in dict.fromkeys(search_names):
         direct_path = os.path.join(root, alias)
         if os.path.isdir(direct_path):
             return _latest_numeric_subdir(direct_path) or direct_path
@@ -112,7 +109,9 @@ def find_database_path(root: str, db_name: str) -> str:
             if not os.path.isdir(entry_path):
                 continue
             entry_lower = entry.lower()
-            if any(alias in entry_lower for alias in aliases):
+            if entry_lower == database_key or any(
+                alias in entry_lower for alias in aliases
+            ):
                 return _latest_numeric_subdir(entry_path) or entry_path
 
     return root
