@@ -180,7 +180,8 @@ def test_crossdb_handoff_is_plan_only_and_non_crossdb_routes_clear_the_flag() ->
     agent_owner = _read("js/screens-agent-study-context.js")
     assert "Create cross-DB analysis plan" in viz
     assert "crossdb_plan_only" in viz_owner
-    assert "crossdb_plan_only: route === 'crossdb'" in viz_owner
+    assert "confirmations.crossdb_plan_only = route === 'crossdb'" in viz_owner
+    assert "ROUTE_CONFIRMATION_FIELDS.forEach(key => delete confirmations[key])" in viz_owner
     assert "crossdb_plan_only: false" in extraction_owner
     assert "crossdb_plan_only: false" in guided_owner
     assert "currentStage === 'crossdb_plan_only'" in agent_owner
@@ -278,8 +279,34 @@ def test_study_context_source_boundary_and_history_activation_in_javascript(
         )
         assert binding["status"] == "bound"
         assert saved["confirmations"].get("crossdb_plan_only") is False
+        if route == "patient":
+            assert saved["cohort"]["entity_count"] == 94_458
+            assert saved["cohort"]["full_entity_count"] == 94_458
+            assert saved["cohort"]["review_entities"] == 500
+            assert saved["cohort"]["review_entity_cap"] == 500
+            assert saved["cohort"]["review_scope"] == "browser_bounded_entity_sample"
+            assert saved["confirmations"]["patient_review_bounded_sample"] is True
+            assert saved["confirmations"]["patient_review_full_entity_set"] is False
         assert not {
             "source_count",
             "source_type",
             "comparison_mode",
         }.intersection(saved["cohort"])
+
+
+def test_patient_scope_truth_renderer_in_javascript() -> None:
+    node = _node_binary()
+    if not node:
+        pytest.skip("Node.js is unavailable")
+    result = subprocess.run(
+        [
+            node,
+            str(ROOT / "tests" / "js" / "patient_scope_truth.test.js"),
+            str(STATIC / "js" / "screens-viz-patient-overview.js"),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert json.loads(result.stdout) == {"ok": True}

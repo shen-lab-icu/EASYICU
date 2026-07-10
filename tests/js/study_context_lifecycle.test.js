@@ -133,7 +133,18 @@ require(path.resolve(process.argv[2]));
   global.EU_VIZ_CONTEXT = {
     snapshot: route => ({
       data_source: { path: '/exports/shared', label: 'Shared export', database: 'miiv' },
-      cohort: route === 'crossdb' ? { source_count: 2, source_type: 'prepared' } : { entity_count: 10 },
+      cohort: route === 'crossdb'
+        ? { source_count: 2, source_type: 'prepared' }
+        : route === 'patient'
+          ? {
+            entity_count: 94458,
+            full_entity_count: 94458,
+            review_entities: 500,
+            review_entity_cap: 500,
+            review_scope: 'browser_bounded_entity_sample',
+            module_count: 19,
+          }
+          : { cohort_size: 10, comparison: 'outcome' },
       modules: ['vitals'],
       comparator: route === 'crossdb' ? 'cross_database_descriptive' : '',
     }),
@@ -150,10 +161,44 @@ require(path.resolve(process.argv[2]));
   assert.notEqual(patient.context.analysis_goal, crossdb.context.analysis_goal);
   assert.notEqual(patient.context.comparator, 'cross_database_descriptive');
   assert.equal(patient.context.confirmations.crossdb_plan_only, false, 'Patient review must clear plan-only');
+  assert.equal(patient.context.cohort.entity_count, 94458, 'full cohort denominator must remain explicit');
+  assert.equal(patient.context.cohort.full_entity_count, 94458);
+  assert.equal(patient.context.cohort.review_entities, 500, 'bounded browser review denominator must survive handoff');
+  assert.equal(patient.context.cohort.review_entity_cap, 500);
+  assert.equal(patient.context.cohort.review_scope, 'browser_bounded_entity_sample');
+  assert.equal(patient.context.confirmations.patient_review_bounded_sample, true);
+  assert.equal(patient.context.confirmations.patient_review_full_entity_set, false);
   for (const key of ['source_count', 'source_type', 'comparison_mode']) {
     assert.equal(Object.hasOwn(patient.context.cohort, key), false, `Patient cohort must remove ${key}`);
   }
   await patient.persisted;
+
+  const cohort = store.handoff({ sourceRoute: 'cohort', targetRoute: 'agent' });
+  assert.equal(cohort.context.id, patient.context.id, 'same-export review routes should continue one project');
+  assert.equal(cohort.context.current_stage, 'cohort_reviewed');
+  assert.equal(cohort.context.question, patient.context.question, 'route review must preserve the project question');
+  assert.equal(cohort.context.cohort.cohort_size, 10);
+  assert.equal(cohort.context.cohort.comparison, 'outcome');
+  assert.equal(cohort.context.confirmations.cohort_review_completed, true);
+  for (const key of ['entity_count', 'full_entity_count', 'review_entities', 'review_entity_cap', 'review_scope', 'module_count']) {
+    assert.equal(Object.hasOwn(cohort.context.cohort, key), false, `Cohort review must remove Patient field ${key}`);
+  }
+  for (const key of ['patient_review_completed', 'patient_review_bounded_sample', 'patient_review_full_entity_set']) {
+    assert.equal(Object.hasOwn(cohort.context.confirmations, key), false, `Cohort review must remove Patient confirmation ${key}`);
+  }
+  await cohort.persisted;
+
+  const patientAgain = store.handoff({ sourceRoute: 'patient', targetRoute: 'agent' });
+  assert.equal(patientAgain.context.id, cohort.context.id, 'returning to Patient should keep the same export project');
+  assert.equal(patientAgain.context.question, patient.context.question);
+  assert.equal(patientAgain.context.cohort.review_entities, 500);
+  assert.equal(patientAgain.context.confirmations.patient_review_bounded_sample, true);
+  assert.equal(patientAgain.context.comparator, '', 'Patient review must not inherit Cohort UI grouping');
+  for (const key of ['cohort_size', 'comparison']) {
+    assert.equal(Object.hasOwn(patientAgain.context.cohort, key), false, `Patient review must remove Cohort field ${key}`);
+  }
+  assert.equal(Object.hasOwn(patientAgain.context.confirmations, 'cohort_review_completed'), false);
+  await patientAgain.persisted;
 
   const crossdbAgain = store.handoff({ sourceRoute: 'crossdb', targetRoute: 'agent' });
   await crossdbAgain.persisted;

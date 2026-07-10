@@ -24,6 +24,11 @@
     const drill = active === 'patient' ? patientDrilldown() : null;
     const cohort = active === 'cohort' ? cohortReview() : null;
     const ws = window.EU_VIZ_WORKSPACE;
+    const wsMatchesActive = ws && (
+      ws.route === active
+      || (!ws.route && active === 'patient' && ws.summary && ws.summary.stays != null)
+    );
+    const patientSource = active === 'patient' ? patientActiveSourceMeta() : null;
     const label = real ? t('Real', '真实') : t('Demo', '演示');
     const xdbRaw = xdb && xdb.source_type === 'raw_database_root';
     const xdbDemo = xdb && xdb.source_type === 'legacy_simulated_multidb_feature_frames';
@@ -48,7 +53,12 @@
       dataset = (cohort.source || {}).label || t('Local export', '本地导出');
       cohortLine = `${fmtInt(cohort.summary && cohort.summary.cohort_size)} ${t('entities', '个实体')}`;
       variables = `${fmtInt(cohort.summary && cohort.summary.modules)} ${t('modules', '个模块')} · ${fmtInt(fsel.selected_count)} / ${fmtInt(fsel.available_count)} ${t('features', '个特征')}`;
-    } else if (ws) {
+    } else if (real && patientSource) {
+      const summary = patientSource.summary || {};
+      dataset = patientSource.label || patientSource.database || t('Local export', '本地导出');
+      cohortLine = `${fmtInt(summary.entities != null ? summary.entities : summary.stays)} ${t('entities', '个实体')}`;
+      variables = `${fmtInt(summary.modules)} ${t('modules', '个模块')}`;
+    } else if (wsMatchesActive) {
       dataset = (ws.path || '').split('/').filter(Boolean).slice(-2).join('/') || t('Local export', '本地导出');
       const summary = ws.summary || {};
       const sample = Number(summary.sampled_stays) < Number(summary.total_stays) ? ` · ${t('metrics n', '指标 n')}=${fmtInt(summary.sampled_stays)}` : '';
@@ -91,9 +101,9 @@
   let crossDensityModule = 'all';
   let crossDensityFeature = null;
   let crossDensityScope = 'core'; // core | all — restore the old curated "one subplot per canonical concept" default
-  // Canonical clinical concepts of the legacy Figure-3 Cross-DB panel (paper_figures._render_paper_crossdb_panel).
-  // The native grid otherwise dumps all ~247 catalog features; the curated default keeps the old small-multiples look.
-  const CROSS_DENSITY_CANON = ['hr', 'map', 'sbp', 'dbp', 'resp', 'temp', 'spo2', 'crea', 'lact', 'wbc', 'plt', 'gluc'];
+  // Canonical clinical concepts and the hard-bounded raw request live in the
+  // Cross-DB raw owner loaded before this shared visualization shell.
+  const CROSS_DENSITY_CANON = window.EU_CROSSDB_RAW.coreFeatures();
   let crossRawJobId = null;
   let crossRawProg = null;
   let crossRawCancelRequested = false;
@@ -196,7 +206,19 @@
       const unique = values => Array.from(new Set((values || []).filter(Boolean)));
       if (route === 'patient') {
         const drill = patientDrilldown() || {};
-        return { data_source: dataSource, cohort: { entity_count: drill.summary && drill.summary.entities, module_count: drill.summary && drill.summary.modules }, modules: unique((drill.module_profiles || []).map(row => row.module || row.id)) };
+        const summary = drill.summary || {};
+        return {
+          data_source: dataSource,
+          cohort: {
+            entity_count: summary.entities,
+            full_entity_count: summary.entities,
+            review_entities: summary.review_entities,
+            review_entity_cap: summary.review_entity_cap,
+            review_scope: summary.review_scope,
+            module_count: summary.modules,
+          },
+          modules: unique((drill.module_profiles || []).map(row => row.module || row.id)),
+        };
       }
       if (route === 'cohort') {
         const review = cohortReview() || {};
@@ -636,6 +658,7 @@
       'Out-of-Physio': t('Out-of-Physio', '生理范围外'),
       'Temporal Integrity': t('Temporal Integrity', '时间完整性'),
       'Per-module entity coverage': t('Per-module entity coverage', '模块实体覆盖'),
+      'Per-module review metrics': t('Per-module review metrics', '逐模块审阅指标'),
       'Top concept quality issues': t('Top concept quality issues', '主要特征质量问题'),
       'Local export bounded review': t('Local export bounded review', '本地导出有界审阅'),
       'Catalog demo bounded review': t('Catalog demo bounded review', '目录演示有界审阅'),
@@ -760,6 +783,7 @@
     const s = payload && payload.summary ? payload.summary : {};
     return {
       ok: true,
+      route: 'patient',
       mode: payload && payload.mode ? payload.mode : 'real',
       demo: !!(payload && payload.demo),
       database: payload && payload.source ? payload.source.database : null,
@@ -781,6 +805,7 @@
     const s = payload && payload.summary ? payload.summary : {};
     return {
       ok: true,
+      route: 'cohort',
       mode: 'real',
       database: payload && payload.source ? payload.source.database : null,
       cohortReview: payload,
@@ -1267,7 +1292,7 @@
       loader.then(xdb => {
         window.EU_CROSSDB_WORKSPACE = xdb;
         const first = xdb.sources && xdb.sources[0];
-        if (first) window.EU_VIZ_WORKSPACE = { database: first.database, summary: first.summary };
+        if (first) window.EU_VIZ_WORKSPACE = { route: 'crossdb', database: first.database, summary: first.summary };
         vizErr = null;
         window.EU_HASWORK = true;
         done && done(true);
@@ -1303,14 +1328,13 @@
       if (crossRawJobStarting) return;
       crossRawJobStarting = true;
       crossRawRootDraft = rawRoot;
-      window.EU_API.startCrossdbRawDistributionJob({
-        data_root: rawRoot,
+      const rawRequest = window.EU_CROSSDB_RAW.buildRequest({
+        dataRoot: rawRoot,
         databases: rawDatabases,
-        feature_scope: 'all_catalog',
-        coverage_min: 2,
-        max_patients: sampleProfile.maxPatients,
-        sample_size: sampleProfile.sampleSize,
-      }).then(r => {
+        maxPatients: sampleProfile.maxPatients,
+        sampleSize: sampleProfile.sampleSize,
+      });
+      window.EU_API.startCrossdbRawDistributionJob(rawRequest).then(r => {
         if (crossRawCancelRequested) {
           crossRawJobStarting = false;
           if (r && r.job_id && window.EU_API && window.EU_API.cancelJob) {
@@ -1431,7 +1455,7 @@
         } else {
           window.EU_CROSSDB_WORKSPACE = xdb;
           const first = xdb.sources && xdb.sources[0];
-          if (first) window.EU_VIZ_WORKSPACE = { database: first.database, summary: first.summary };
+          if (first) window.EU_VIZ_WORKSPACE = { route: 'crossdb', database: first.database, summary: first.summary };
           window.EU_HASWORK = true;
           crossView = 'loaded';
           vizErr = null;
@@ -1513,7 +1537,7 @@
     }).then(xdb => {
       window.EU_CROSSDB_WORKSPACE = xdb;
       const first = xdb.sources && xdb.sources[0];
-      if (first) window.EU_VIZ_WORKSPACE = { database: first.database, summary: first.summary };
+      if (first) window.EU_VIZ_WORKSPACE = { route: 'crossdb', database: first.database, summary: first.summary };
       vizErr = null;
       window.EU_HASWORK = true;
       done && done(true);
@@ -1615,13 +1639,20 @@
       </svg>`;
   }
 
-  function skeletonWorkspace() {
+  function skeletonWorkspace(mode) {
+    const real = mode === 'real';
+    const title = real
+      ? t('Reading bounded Patient Review from local export…', '正在从本地导出读取有界患者审阅…')
+      : t('Generating demo review workspace…', '正在生成演示审阅工作区…');
+    const detail = real
+      ? t('local-only · bounded browser payload · no outbound calls', '仅本地 · 有界浏览器载荷 · 无外部调用')
+      : t('reproducible · no outbound calls', '可复现 · 无外部调用');
     return `
       <div class="load-strip">
         <span class="spin accent"></span>
         <div class="grow">
-          <div style="font-weight:600;font-size:12.75px;">Generating demo review workspace…</div>
-          <div class="mono" style="font-size:11px;color:var(--ink-4);margin-top:2px;">reproducible · no outbound calls</div>
+          <div style="font-weight:600;font-size:12.75px;">${title}</div>
+          <div class="mono" style="font-size:11px;color:var(--ink-4);margin-top:2px;">${detail}</div>
         </div>
         <button class="btn sm" data-viz-reset>${icon('stop', 13)} Cancel</button>
       </div>
@@ -2424,11 +2455,11 @@
       const boundedTitle = drill.demo ? patientQualityText('Catalog demo bounded review') : patientQualityText('Local export bounded review');
       const boundedDetail = drill.demo
         ? t('Coverage, missingness and physiologic-range flags are deterministic seeded values over the real EasyICU feature catalog. Load a real export for analysis-ready denominators.', '覆盖率、缺失率和生理范围标记是基于真实 EasyICU 特征目录的确定性演示值；分析级分母需要加载真实导出。')
-        : t('Coverage, missingness, physiologic-range flags and duplicate timestamp rates are computed from bounded local columns. Formal claims remain locked to the evidence-bound agent path.', '覆盖率、缺失率、生理范围标记和重复时间戳率都从有界本地列计算；正式结论仍锁定在证据绑定的 Agent 路径。');
+        : t('Shown coverage, missingness, physiologic-range flags and duplicate timestamp rates are computed over the bounded local review sample. Modules without computed entity coverage remain inventory-only; formal claims stay locked to the evidence-bound agent path.', '此处显示的覆盖率、缺失率、生理范围标记和重复时间戳率基于本地有界审阅样本计算。未计算实体覆盖率的模块仅显示文件清单信息；正式结论仍锁定在证据绑定的 Agent 路径。');
       return `
       <div class="note ok mt-16">
         <div class="ico">${icon('shield', 16)}</div>
-        <div class="body"><span class="t">${patientQualityText('Quality dashboard')}</span> <span class="d" style="display:inline;">— ${t('QC workbook semantics: module coverage, missingness, physiologic range, temporal integrity, and action-oriented issues.', '质控工作簿语义：模块覆盖、缺失率、生理范围、时间完整性和可处理的问题清单。')}</span></div>
+        <div class="body"><span class="t">${patientQualityText('Quality dashboard')}</span> <span class="d" style="display:inline;">— ${t('QC workbook semantics: computed module coverage within the stated review scope, missingness, physiologic range, temporal integrity, and action-oriented issues.', '质控工作簿语义：在明确审阅范围内计算的模块覆盖率、缺失率、生理范围、时间完整性和可处理的问题清单。')}</span></div>
       </div>
       ${(review.summary_cards || []).length ? `
       <div class="st-stats mt-16">
@@ -2455,9 +2486,21 @@
       </div>` : ''}
       ${qualityAudit}
       <div class="card pad mt-16">
-        <div class="eyebrow" style="margin-bottom:6px;">${patientQualityText('Per-module entity coverage')}</div>
-        ${drill.quality.map(q => `
-          <div class="qrow"><span>${esc(q.module)}</span><div class="qbar ${q.quality_status === 'ok' ? '' : q.quality_status}"><span style="width:${q.coverage_pct == null ? 0 : Math.max(0, Math.min(100, q.coverage_pct))}%"></span></div><span class="qv">${q.coverage_pct == null ? fmtInt(q.rows) : fmtPct(q.coverage_pct)}</span></div>`).join('')}
+        <div class="eyebrow" style="margin-bottom:6px;">${patientQualityText('Per-module review metrics')}</div>
+        <div class="panel-sub" style="margin-bottom:10px;">${t('Computed entity coverage uses the bounded review denominator. Inventory-only modules show row counts and are not painted as 0% coverage.', '已计算的实体覆盖率使用有界审阅分母。仅有文件清单的模块显示行数，不会被渲染成 0% 覆盖率。')}</div>
+        ${drill.quality.map(q => {
+          const hasCoverage = q.coverage_pct != null && Number.isFinite(Number(q.coverage_pct));
+          const coverage = hasCoverage ? Math.max(0, Math.min(100, Number(q.coverage_pct))) : null;
+          const metricKind = String(q.metric_kind || 'coverage');
+          const metricLabel = metricKind === 'event_rate'
+            ? t('event rate', '事件率')
+            : (metricKind === 'exposure_rate' ? t('exposure rate', '暴露率') : t('coverage', '覆盖率'));
+          const metric = hasCoverage
+            ? `${fmtPct(coverage)} ${metricLabel}`
+            : `${fmtInt(q.rows)} ${t('rows · coverage not computed', '行 · 未计算覆盖率')}`;
+          return `
+          <div class="qrow" data-patient-module-coverage="${hasCoverage ? 'computed' : 'not-computed'}"><span>${esc(q.module)}</span><div class="qbar ${hasCoverage && q.quality_status === 'ok' ? '' : (hasCoverage ? q.quality_status : 'neutral')}">${hasCoverage ? `<span style="width:${coverage}%"></span>` : ''}</div><span class="qv">${metric}</span></div>`;
+        }).join('')}
       </div>
       ${patientQualityWorkbook(review)}
       ${topIssues.length ? `
@@ -2487,8 +2530,12 @@
       return `
       <div class="card pad mt-16">
         <div class="eyebrow" style="margin-bottom:6px;">Per-module stay-id presence</div>
-        ${ws.quality.map(q => `
-          <div class="qrow"><span>${esc(q.module || q.file)}</span><div class="qbar ${q.status === 'ok' ? '' : q.status}"><span style="width:${q.coverage_pct == null ? 0 : Math.max(0, Math.min(100, q.coverage_pct))}%"></span></div><span class="qv">${q.coverage_pct == null ? fmtInt(q.rows) : fmtPct(q.coverage_pct)}</span></div>`).join('')}
+        ${ws.quality.map(q => {
+          const hasCoverage = q.coverage_pct != null && Number.isFinite(Number(q.coverage_pct));
+          const coverage = hasCoverage ? Math.max(0, Math.min(100, Number(q.coverage_pct))) : null;
+          return `
+          <div class="qrow" data-patient-module-coverage="${hasCoverage ? 'computed' : 'not-computed'}"><span>${esc(q.module || q.file)}</span><div class="qbar ${hasCoverage && q.status === 'ok' ? '' : (hasCoverage ? q.status : 'neutral')}">${hasCoverage ? `<span style="width:${coverage}%"></span>` : ''}</div><span class="qv">${hasCoverage ? fmtPct(coverage) : `${fmtInt(q.rows)} ${t('rows · coverage not computed', '行 · 未计算覆盖率')}`}</span></div>`;
+        }).join('')}
       </div>
       <div class="note info mt-16">
         <div class="ico">${icon('shield', 16)}</div>
@@ -2607,7 +2654,7 @@
       if (window.EU_GUIDED_HANDOFF && window.EU_GUIDED_HANDOFF.take) window.EU_GUIDED_HANDOFF.take('patient');
       const guidedNote = window.EU_GUIDED_HANDOFF && window.EU_GUIDED_HANDOFF.noteHtml ? window.EU_GUIDED_HANDOFF.noteHtml('patient') : '';
       if (patientView === 'loading') {
-        return `${guidedNote}<div class="card pad">${skeletonWorkspace()}</div>`;
+        return `${guidedNote}<div class="card pad">${skeletonWorkspace(window.EU_DATA)}</div>`;
       }
       if (patientView === 'loaded') {
         const drill = patientDrilldown();
@@ -2616,16 +2663,17 @@
         const readyTitle = drill
           ? (drill.demo ? t('Catalog-shaped demo review workspace ready', '目录形演示审阅工作区已就绪') : t('Local export patient drilldown ready', '本地导出患者审阅已就绪'))
           : (ws ? t('Local export workspace ready', '本地导出工作区已就绪') : t('Demo review workspace ready', '演示审阅工作区已就绪'));
-        const reviewStats = drill && s && s.review_scope === 'browser_bounded_entity_sample'
-          ? ` · ${t('browser review', '浏览器审阅')} ${fmtInt(s.review_entities)}/${fmtInt(s.entities)} ${t('entities', '个实体')}`
-          : '';
+        const boundedReview = drill && s && s.review_scope === 'browser_bounded_entity_sample';
+        const entityStats = boundedReview
+          ? `${t('full cohort', '完整队列')} ${fmtInt(s.entities)} ${t('entities', '个实体')} · ${t('bounded browser review', '浏览器有界审阅')} ${fmtInt(s.review_entities)} ${t('entities', '个实体')}`
+          : `${fmtInt(s && (s.entities != null ? s.entities : s.stays))} ${drill ? t('entities', '个实体') : t('stays', '次住院')}`;
         const loadedFeatureCount = drill && drill.data_tables && drill.data_tables.loaded_summary
           ? drill.data_tables.loaded_summary.review_features
           : null;
         const readyStats = s
           ? (drill && drill.demo
             ? `${fmtInt(s.entities)} ${t('seeded entities', '个种子实体')} · ${fmtInt(s.modules)} ${t('modules', '个模块')} · ${fmtInt(loadedFeatureCount)} ${t('catalog features', '个目录特征')}`
-            : `${fmtInt(s.entities != null ? s.entities : s.stays)} ${drill ? t('entities', '个实体') : t('stays', '次住院')} · ${fmtInt(s.modules)} ${t('modules', '个模块')} · ${fmtInt(s.total_rows)} ${t('rows', '行')}${reviewStats}`)
+            : `${entityStats} · ${fmtInt(s.modules)} ${t('modules', '个模块')} · ${fmtInt(s.total_rows)} ${t('rows', '行')}`)
           : `48 ${t('seeded entities', '个种子实体')} · 19 ${t('modules', '个模块')} · ${t('catalog features', '目录特征')}`;
         const demoLoadedNote = (drill && drill.demo) ? `
         <div class="note warn mt-12">
@@ -4875,6 +4923,7 @@
       'values': '个取值',
       'folder check ready': '文件夹检查通过',
       'check folders · need ≥ 2 detected': '检查文件夹 · 至少需识别 2 个',
+      '12 curated core concepts': '12 个精选核心概念',
       'all supported catalog concepts': '全部受支持的标准概念',
       'local only': '仅本地',
       'local-only · nothing uploaded': '仅本地 · 不上传',
@@ -5073,7 +5122,7 @@
     return `
       ${sourceChoiceHtml || `<div class="note info">
         <div class="ico">${icon('benchmark', 16)}</div>
-        <div class="body"><span class="t">${crossTerm('Real raw database mode')}</span> <span class="d" style="display:inline;">— ${t('Choose a local ICU data root containing database folders, then compare all catalog concepts with cross-database support. No rows leave this machine.', '选择一个包含数据库子文件夹的本地 ICU 数据根目录，然后对比所有具备跨库支持的标准概念。不会有任何行级数据离开本机。')}</span></div>
+        <div class="body"><span class="t">${crossTerm('Real raw database mode')}</span> <span class="d" style="display:inline;">— ${t('Choose a local ICU data root, then start with 12 curated cross-database concepts under a hard sampling budget. No rows leave this machine.', '选择本地 ICU 数据根目录，再在硬性抽样上限下先对比 12 个精选跨库概念。不会有行级数据离开本机。')}</span></div>
       </div>`}
       ${vizErr ? `<div class="note warn mt-12"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="d mono" style="font-size:11px;margin:0;">${esc(vizErr)}</div></div></div>` : ''}
       <div class="card pad mt-16">
@@ -5129,9 +5178,9 @@
           </div>`;
         }).join('')}
       </div>
-      <div class="gate-strip mt-20">
+      <div class="gate-strip crossdb-run-strip mt-20">
         <span class="pill"><span style="color:var(--ink-3);">${icon('benchmark', 12)}</span> <span id="runhint">${sel} / 6 · ${canRun ? crossTerm('folder check ready') : crossTerm('check folders · need ≥ 2 detected')}</span></span>
-        <span class="pill">${crossTerm('all supported catalog concepts')}</span>
+        <span class="pill">${crossTerm('12 curated core concepts')}</span>
         <span class="pill">${esc(crossRawSampleSummary(sampleProfile))}</span>
         <div class="grow"></div>
         <button class="btn primary" data-run ${canRun ? '' : 'aria-disabled="true"'}>${icon('play', 13)} ${crossTerm('Load real density benchmark')}</button>
@@ -5274,10 +5323,11 @@
     const coreModules = allCleaned
       .map(module => ({ ...module, features: (module.features || []).filter(f => canonSet.has(String(f.feature || '').toLowerCase())) }))
       .filter(module => module.features.length);
-    const scope = (crossDensityScope === 'all' || !coreModules.length) ? 'all' : 'core';
-    const cleaned = scope === 'core' ? coreModules : allCleaned;
     const allFeatureCount = allCleaned.reduce((acc, module) => acc + (module.features || []).length, 0);
     const coreFeatureCount = coreModules.reduce((acc, module) => acc + (module.features || []).length, 0);
+    const hasExtendedCatalog = allFeatureCount > coreFeatureCount;
+    const scope = (coreModules.length && (!hasExtendedCatalog || crossDensityScope !== 'all')) ? 'core' : 'all';
+    const cleaned = scope === 'core' ? coreModules : allCleaned;
     let selectedModule = crossDensityModule || 'all';
     if (selectedModule !== 'all' && !cleaned.some(module => module.module === selectedModule)) selectedModule = 'all';
     const visible = selectedModule === 'all' ? cleaned : cleaned.filter(module => module.module === selectedModule);
@@ -5291,7 +5341,7 @@
     ].join('');
     const detail = findCrossDensityFeature(visible, crossDensityFeature) || (visible[0] && visible[0].features && { module: visible[0], row: visible[0].features[0] });
     if (detail && (!crossDensityFeature || !findCrossDensityFeature(visible, crossDensityFeature))) crossDensityFeature = crossFeatureKey(detail.module, detail.row);
-    const scopeToggle = coreModules.length ? `
+    const scopeToggle = coreModules.length && hasExtendedCatalog ? `
         <div class="xdb-density-scope">
           <button class="chip ${scope === 'core' ? 'solid' : ''}" data-density-scope="core">${t('Core concepts', '核心概念')} <span class="mono">${fmtInt(coreFeatureCount)}</span></button>
           <button class="chip ${scope === 'all' ? 'solid' : ''}" data-density-scope="all">${t('All features', '全部特征')} <span class="mono">${fmtInt(allFeatureCount)}</span></button>

@@ -209,3 +209,9 @@
   .xdb-density-cat{ grid-template-columns:minmax(60px,96px) minmax(80px,1fr) 58px; }
   .xdb-density-svg{ height:118px; }
 }
+/* Keep the final raw-run action clear of the persistent Page guide launcher. */
+.crossdb-run-strip{
+  margin-bottom: 84px;
+  padding-right: 168px;
+  scroll-margin-bottom: 84px;
+}

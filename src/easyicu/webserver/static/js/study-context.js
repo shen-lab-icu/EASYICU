@@ -21,10 +21,11 @@
     'subjectid', 'subjectids', 'hadmid', 'hadmids', 'entityid', 'entityids',
   ]);
   const COHORT_SCHEMA = {
-    preset: 'text', label: 'text', review: 'text', comparison: 'text',
+    preset: 'text', label: 'text', review: 'text', review_scope: 'text', comparison: 'text',
     source_type: 'text', comparison_mode: 'text', icd_include: 'text', icd_exclude: 'text',
     age_min: 'number', age_max: 'number', min_icu_los_hours: 'number',
     observation_window_hours: 'number', max_patients: 'number', entity_count: 'number',
+    full_entity_count: 'number', review_entities: 'number', review_entity_cap: 'number',
     module_count: 'number', cohort_size: 'number', source_count: 'number',
     exclude_readmissions: 'bool', icd_enabled: 'bool',
     include_diagnoses: 'text_list', exclude_diagnoses: 'text_list',
