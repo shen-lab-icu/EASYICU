@@ -231,3 +231,80 @@ def test_cross_step_resolution_still_flags_fabrication(tmp_path: Path):
     )
     errors = [f for f in findings if f.severity == "error"]
     assert errors, "tampered figure must still be flagged"
+
+
+# --- fix #2 (2026-07-08): structural join fallback for unregistered key names ---
+# A faithfully-derived figure often preserves the parent's OWN key column under a
+# name absent from _KEY_COLUMNS (group / category_code / lactate_group). Rather
+# than grow the allowlist per case (the gate-allowlist anti-pattern), the
+# validator now accepts ANY shared, non-numeric, identifier-like column as the
+# join key. Value-equality still runs, so fabrication is still caught.
+
+
+def test_unregistered_identifier_column_resolves_join(tmp_path: Path):
+    # `category_code` is NOT in _KEY_COLUMNS; the structural fallback must still
+    # join on it because it is shared, non-numeric and per-row identifying.
+    up = tmp_path / "lactate_group_odds_ratios.csv"
+    pd.DataFrame(
+        {
+            "category_code": ["unmeasured", "lt2", "2to4", "ge4"],
+            "odds_ratio": [1.0, 1.42, 2.05, 3.31],
+            "ci_low": [1.0, 1.30, 1.90, 3.02],
+            "ci_high": [1.0, 1.55, 2.21, 3.63],
+        }
+    ).to_csv(up, index=False)
+    source = pd.DataFrame(
+        {
+            "category_code": ["unmeasured", "lt2", "2to4", "ge4"],
+            "group": ["Unmeasured", "<2", "2-<4", ">=4"],  # figure label, not a trace key
+            "odds_ratio": [1.0, 1.42, 2.05, 3.31],
+            "ci_low": [1.0, 1.30, 1.90, 3.02],
+            "ci_high": [1.0, 1.55, 2.21, 3.63],
+        }
+    )
+    res = FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=source,
+        source_path=tmp_path / "publication_figure_source_data.csv",
+        upstream_path=up,
+    )
+    assert res.get("ok") is True, res
+
+
+def test_fallback_key_still_flags_fabricated_value(tmp_path: Path):
+    # ADVERSARIAL: join resolves on the unregistered `category_code`, but a
+    # tampered odds_ratio must STILL fail-close (value-equality runs post-join).
+    up = tmp_path / "lactate_group_odds_ratios.csv"
+    pd.DataFrame(
+        {
+            "category_code": ["unmeasured", "lt2", "2to4", "ge4"],
+            "odds_ratio": [1.0, 1.42, 2.05, 3.31],
+        }
+    ).to_csv(up, index=False)
+    source = pd.DataFrame(
+        {
+            "category_code": ["unmeasured", "lt2", "2to4", "ge4"],
+            "odds_ratio": [1.0, 1.42, 2.05, 99.9],  # tampered last row
+        }
+    )
+    res = FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=source,
+        source_path=tmp_path / "publication_figure_source_data.csv",
+        upstream_path=up,
+    )
+    assert res.get("ok") is False
+    assert res.get("reason") == "source_values_disagree", res
+
+
+def test_numeric_only_shared_column_not_used_as_key(tmp_path: Path):
+    # A shared column that is fully numeric in both frames is a VALUE, not a key;
+    # the fallback must not join on it (that would fabricate a spurious match).
+    up = tmp_path / "some_table.csv"
+    pd.DataFrame({"odds_ratio": [1.0, 1.42, 2.05, 3.31]}).to_csv(up, index=False)
+    source = pd.DataFrame({"odds_ratio": [1.0, 1.42, 2.05, 3.31]})
+    res = FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=source,
+        source_path=tmp_path / "publication_figure_source_data.csv",
+        upstream_path=up,
+    )
+    assert res.get("ok") is False
+    assert res.get("reason") == "no_shared_key", res

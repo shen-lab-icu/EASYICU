@@ -1661,6 +1661,46 @@ class FigureSourceDataValidator:
             upstream["_source_row_index"] = upstream["_source_row_index"].astype(str)
             key_cols = ("_source_row_index",)
         if key_cols is None:
+            # Structural fallback: no composite / named / positional key matched,
+            # but a faithfully-derived figure often preserves the parent's OWN key
+            # column under a name not in _KEY_COLUMNS (e.g. category_code,
+            # lactate_group, group). Accept ANY column present in BOTH frames that
+            # is (a) not a numeric value/measure and (b) identifier-like in the
+            # source (mostly-distinct), choosing the one whose source values best
+            # join into the upstream. The value-equality checks below still run on
+            # every shared numeric column, so this only enables the JOIN and never
+            # masks a fabricated value. This moves traceability OFF the hard-coded
+            # key-name allowlist that needed a new entry per case
+            # (contrast_id/stage/level/... -> group/category_code) onto structural
+            # evidence, without weakening the fabrication gate. Only reached when
+            # the existing resolution already returned no_shared_key, so it cannot
+            # change any currently-passing figure's key.
+            n_src = max(len(source), 1)
+            best: Optional[tuple[tuple[float, float], str]] = None
+            for col in source.columns:
+                if col not in upstream.columns:
+                    continue
+                if col in ("source_row_index", "source_table") or col in cls._NUMERIC_COLUMNS:
+                    continue
+                left_num = pd.to_numeric(source[col], errors="coerce")
+                right_num = pd.to_numeric(upstream[col], errors="coerce")
+                # a column fully numeric in both frames is a value/measure, not a key
+                if left_num.notna().all() and right_num.notna().all():
+                    continue
+                s_vals = source[col].dropna().astype(str)
+                if s_vals.empty:
+                    continue
+                distinct_ratio = s_vals.nunique() / n_src
+                if distinct_ratio < 0.5:  # a real per-row key is mostly-distinct
+                    continue
+                u_vals = set(upstream[col].dropna().astype(str))
+                overlap = float(s_vals.isin(u_vals).mean())  # joinable fraction
+                score = (overlap, distinct_ratio)
+                if overlap > 0 and (best is None or score > best[0]):
+                    best = (score, col)
+            if best is not None:
+                key_cols = (best[1],)
+        if key_cols is None:
             return {
                 "ok": False,
                 "reason": "no_shared_key",
