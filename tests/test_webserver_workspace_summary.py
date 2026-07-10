@@ -4175,6 +4175,8 @@ def test_crossdb_raw_distribution_uses_real_loader_without_row_payload(
         databases: list[str],
         max_patients: int,
         sample_size: int,
+        emit_progress=None,
+        should_cancel=None,
     ) -> dict[str, pd.DataFrame]:
         assert data_root == str(root)
         assert databases == ["miiv", "eicu"]
@@ -4252,10 +4254,11 @@ def test_crossdb_raw_root_scan_reports_detected_missing_and_unrecognized(
     payload = response.json()
     assert payload["ok"] is True
     assert payload["source_type"] == "raw_database_root"
-    assert payload["runnable"] is True
+    assert payload["runnable"] is False
     assert payload["detected_selected_count"] == 2
     assert set(payload["detected_databases"]) == {"miiv", "eicu"}
     assert [row["key"] for row in payload["missing_selected"]] == ["sic"]
+    assert "Every selected database folder must be recognized" in payload["hint"]
     assert "custom_named_icu" in payload["unrecognized_folders"]
     assert "miiv" in payload["aliases"]
     assert payload["aliases"]["miiv"]["aliases"][:2] == ["mimiciv", "mimic-iv"]
@@ -4300,6 +4303,8 @@ def test_crossdb_raw_distribution_job_streams_progress_and_result(
         databases: list[str],
         max_patients: int,
         sample_size: int,
+        emit_progress=None,
+        should_cancel=None,
     ) -> dict[str, pd.DataFrame]:
         assert data_root == str(root)
         assert concepts == ["hr", "sbp"]
@@ -4499,7 +4504,9 @@ def test_crossdb_raw_distribution_fails_closed_until_two_raw_databases(
     )
 
     assert response.status_code == 400
-    assert response.json()["detail"]["error"] == "need_two_raw_databases"
+    detail = response.json()["detail"]
+    assert detail["error"] == "requested_raw_databases_not_found"
+    assert detail["missing_databases"] == ["eicu"]
 
 
 def test_crossdb_raw_distribution_requires_every_requested_database(

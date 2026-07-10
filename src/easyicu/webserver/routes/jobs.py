@@ -143,12 +143,12 @@ async def jobs_events(job_id: str) -> StreamingResponse:
     async def gen():
         sent = 0
         while True:
-            # Flush any events not yet streamed (covers both replay and live).
-            while sent < len(job.events):
-                ev = job.events[sent]
-                sent += 1
+            # Read the event slice and status under the Job's per-instance lock.
+            events, status = job.events_since(sent)
+            for ev in events:
                 yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
-            if job.status != "running":
+            sent += len(events)
+            if status != "running":
                 break
             await asyncio.sleep(0.15)
 

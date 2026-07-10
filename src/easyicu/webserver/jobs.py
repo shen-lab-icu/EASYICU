@@ -33,6 +33,7 @@ class Job:
     """A single long task: progress event history + terminal status/result."""
 
     def __init__(self, job_id: str, kind: str) -> None:
+        self._lock = threading.RLock()
         self.id = job_id
         self.kind = kind
         self.status = "running"  # running | done | failed | cancelled
@@ -44,21 +45,50 @@ class Job:
         self.cancel_requested = False
         self.cancel_reason: Optional[str] = None
 
-    def emit(self, event: Dict[str, Any]) -> None:
-        """Append a progress event (read by the SSE tailer)."""
-        event.setdefault("seq", len(self.events))
-        self.events.append(event)
+    def _append_event_locked(self, event: Dict[str, Any]) -> None:
+        payload = dict(event)
+        payload["seq"] = len(self.events)
+        self.events.append(payload)
+
+    def emit(self, event: Dict[str, Any]) -> bool:
+        """Append one non-terminal event while the job is still running."""
+        with self._lock:
+            if self.status != "running" or event.get("type") == "end":
+                return False
+            self._append_event_locked(event)
+            return True
 
     def finish(
         self, status: str, result: Any = None, error: Optional[str] = None
-    ) -> None:
+    ) -> bool:
         """Record terminal state. Emits the closing ``end`` event BEFORE flipping
         ``status`` so the SSE tailer always flushes it before breaking."""
-        self.result = result
-        self.error = error
-        self.emit({"type": "end", "status": status, "result": result, "error": error})
-        self.finished = time.time()
-        self.status = status
+        if status not in {"done", "failed", "cancelled"}:
+            raise ValueError(f"invalid terminal job status: {status}")
+        with self._lock:
+            if self.status != "running":
+                return False
+            self.result = result
+            self.error = error
+            self._append_event_locked(
+                {"type": "end", "status": status, "result": result, "error": error}
+            )
+            self.finished = time.time()
+            self.status = status
+            return True
+
+    def complete_from_runner(self, result: Any = None) -> bool:
+        """Atomically choose ``done`` versus ``cancelled`` for a runner result."""
+        with self._lock:
+            status = "cancelled" if self.cancel_requested else "done"
+            return self.finish(status, result=result)
+
+    def fail_from_runner(self, error: str) -> bool:
+        """Atomically let an accepted cancellation win over a late failure."""
+        with self._lock:
+            if self.cancel_requested:
+                return self.finish("cancelled")
+            return self.finish("failed", error=error)
 
     def request_cancel(self, reason: Optional[str] = None) -> bool:
         """Mark this job for cooperative cancellation.
@@ -67,27 +97,41 @@ class Job:
         Python threads because a runner may be inside a file/database read; the
         request is still surfaced immediately over SSE so the UI is honest.
         """
-        if self.status != "running":
-            return False
-        if not self.cancel_requested:
-            self.cancel_requested = True
-            self.cancel_reason = reason or "user_requested"
-            self.emit({"type": "cancel_requested", "reason": self.cancel_reason})
-        return True
+        with self._lock:
+            if self.status != "running":
+                return False
+            if not self.cancel_requested:
+                self.cancel_requested = True
+                self.cancel_reason = reason or "user_requested"
+                self._append_event_locked(
+                    {"type": "cancel_requested", "reason": self.cancel_reason}
+                )
+            return True
+
+    def is_cancel_requested(self) -> bool:
+        with self._lock:
+            return self.cancel_requested
+
+    def events_since(self, offset: int) -> tuple[List[Dict[str, Any]], str]:
+        """Return a consistent event slice and status for the SSE tailer."""
+        with self._lock:
+            start = max(0, int(offset))
+            return [dict(event) for event in self.events[start:]], self.status
 
     def snapshot(self) -> Dict[str, Any]:
-        return {
-            "id": self.id,
-            "kind": self.kind,
-            "status": self.status,
-            "created": self.created,
-            "finished": self.finished,
-            "events": list(self.events),
-            "result": self.result,
-            "error": self.error,
-            "cancel_requested": self.cancel_requested,
-            "cancel_reason": self.cancel_reason,
-        }
+        with self._lock:
+            return {
+                "id": self.id,
+                "kind": self.kind,
+                "status": self.status,
+                "created": self.created,
+                "finished": self.finished,
+                "events": [dict(event) for event in self.events],
+                "result": self.result,
+                "error": self.error,
+                "cancel_requested": self.cancel_requested,
+                "cancel_reason": self.cancel_reason,
+            }
 
 
 class JobManager:
@@ -123,13 +167,9 @@ class JobManager:
     def _run(self, job: Job, runner: Callable[[Job], Any]) -> None:
         try:
             result = runner(job)
-            if job.status == "running":
-                if job.cancel_requested:
-                    job.finish("cancelled", result=result)
-                else:
-                    job.finish("done", result=result)
+            job.complete_from_runner(result)
         except Exception as exc:  # noqa: BLE001 — surface any failure to the client
-            job.finish("failed", error=str(exc))
+            job.fail_from_runner(str(exc))
         finally:
             with self._lock:
                 self._prune_completed_locked()
