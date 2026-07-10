@@ -9,10 +9,12 @@ from starlette.routing import Mount
 
 from easyicu.webserver.app import app
 from easyicu.webserver.routes.copilot import router as copilot_router
+from easyicu.webserver.routes.extraction import router as extraction_router
 from easyicu.webserver.routes.guided import router as guided_router
 from easyicu.webserver.routes.ideas import router as ideas_router
 from easyicu.webserver.routes.local_data import router as local_data_router
 from easyicu.webserver.routes.page_guide import router as page_guide_router
+from easyicu.webserver.routes.reviews import router as reviews_router
 from easyicu.webserver.routes.system import router as system_router
 from easyicu.webserver.routes.workspaces import router as workspaces_router
 
@@ -117,6 +119,45 @@ EXPECTED_WORKSPACE_ROUTES = [
     ("POST", "/api/workspaces/register", "post_workspaces_register"),
     ("POST", "/api/workspaces/rename", "post_workspaces_rename"),
     ("POST", "/api/workspaces/remove", "post_workspaces_remove"),
+]
+
+EXPECTED_REVIEW_ROUTES = [
+    (
+        "POST",
+        "/api/patient-review/drilldown",
+        "patient_review_drilldown",
+    ),
+    ("POST", "/api/patient-review/sources", "patient_review_sources"),
+    ("POST", "/api/cohort-review/summary", "cohort_review_summary"),
+    ("POST", "/api/crossdb-review/summary", "crossdb_review_summary"),
+    (
+        "POST",
+        "/api/crossdb-review/raw-distribution",
+        "crossdb_raw_distribution",
+    ),
+    (
+        "POST",
+        "/api/crossdb-review/raw-root-scan",
+        "crossdb_raw_root_scan",
+    ),
+    (
+        "POST",
+        "/api/crossdb-review/demo-distribution",
+        "crossdb_demo_distribution",
+    ),
+]
+
+EXPECTED_EXTRACTION_ROUTES = [
+    (
+        "POST",
+        "/api/extraction/filter-options",
+        "extraction_filter_options",
+    ),
+    (
+        "POST",
+        "/api/extraction/filter-preview",
+        "extraction_filter_preview",
+    ),
 ]
 
 
@@ -225,6 +266,14 @@ def test_workspace_route_method_path_and_operation_name_snapshot() -> None:
     _assert_router_contract(workspaces_router, EXPECTED_WORKSPACE_ROUTES)
 
 
+def test_review_route_method_path_and_operation_name_snapshot() -> None:
+    _assert_router_contract(reviews_router, EXPECTED_REVIEW_ROUTES)
+
+
+def test_extraction_route_method_path_and_operation_name_snapshot() -> None:
+    _assert_router_contract(extraction_router, EXPECTED_EXTRACTION_ROUTES)
+
+
 def test_route_owner_boundaries() -> None:
     package_root = Path(__file__).parents[1] / "src" / "easyicu" / "webserver"
     app_source = (package_root / "app.py").read_text(encoding="utf-8")
@@ -242,6 +291,12 @@ def test_route_owner_boundaries() -> None:
     workspaces_source = (package_root / "routes" / "workspaces.py").read_text(
         encoding="utf-8"
     )
+    reviews_source = (package_root / "routes" / "reviews.py").read_text(
+        encoding="utf-8"
+    )
+    extraction_source = (package_root / "routes" / "extraction.py").read_text(
+        encoding="utf-8"
+    )
 
     assert "/api/guided/" not in app_source
     assert "/api/copilot/" not in app_source
@@ -251,6 +306,10 @@ def test_route_owner_boundaries() -> None:
     assert "/api/data/" not in app_source
     assert "/api/workspace/" not in app_source
     assert "/api/workspaces/" not in app_source
+    assert "/api/patient-review/" not in app_source
+    assert "/api/cohort-review/" not in app_source
+    assert "/api/crossdb-review/" not in app_source
+    assert "/api/extraction/" not in app_source
     assert "/api/guided/" in guided_source
     assert "/api/copilot/" not in guided_source
     assert "/api/page-guide/" not in guided_source
@@ -274,6 +333,16 @@ def test_route_owner_boundaries() -> None:
     assert "/api/jobs/" not in workspaces_source
     assert "-review/" not in local_data_source
     assert "-review/" not in workspaces_source
+    assert "/api/patient-review/" in reviews_source
+    assert "/api/cohort-review/" in reviews_source
+    assert "/api/crossdb-review/" in reviews_source
+    assert "/api/extraction/" not in reviews_source
+    assert "/api/workspaces/" not in reviews_source
+    assert "/api/jobs/" not in reviews_source
+    assert "/api/extraction/" in extraction_source
+    assert "-review/" not in extraction_source
+    assert "/api/workspaces/" not in extraction_source
+    assert "/api/jobs/" not in extraction_source
     assert "_pubmed_connector_gate" not in app_source
     assert "_pubmed_connector_gate" in ideas_source
     assert "easyicu.webserver.app" not in guided_source
@@ -282,20 +351,12 @@ def test_route_owner_boundaries() -> None:
     assert "easyicu.webserver.app" not in ideas_source
     assert "easyicu.webserver.app" not in local_data_source
     assert "easyicu.webserver.app" not in workspaces_source
+    assert "easyicu.webserver.app" not in reviews_source
+    assert "easyicu.webserver.app" not in extraction_source
 
 
 def test_root_static_mount_stays_last() -> None:
     static_mount = app.routes[-1]
-    patient_review_index = next(
-        index
-        for index, route in enumerate(app.routes)
-        if getattr(route, "path", None) == "/api/patient-review/drilldown"
-    )
-    extraction_index = next(
-        index
-        for index, route in enumerate(app.routes)
-        if getattr(route, "path", None) == "/api/extraction/filter-options"
-    )
     jobs_convert_index = next(
         index
         for index, route in enumerate(app.routes)
@@ -315,8 +376,8 @@ def test_root_static_mount_stays_last() -> None:
     assert (
         _router_registration_index(system_router)
         < _router_registration_index(local_data_router)
-        < patient_review_index
-        < extraction_index
+        < _router_registration_index(reviews_router)
+        < _router_registration_index(extraction_router)
         < _router_registration_index(workspaces_router)
         < jobs_convert_index
         < agent_history_index

@@ -26,11 +26,8 @@ from fastapi.staticfiles import StaticFiles
 
 from easyicu.webserver import agent_runs
 from easyicu.webserver import capabilities
-from easyicu.webserver import cohort_review
 from easyicu.webserver import crossdb_review
 from easyicu.webserver import dataio
-from easyicu.webserver import extraction_filters
-from easyicu.webserver import patient_drilldown
 from easyicu.webserver import provider_adapter
 from easyicu.webserver import settings as settings_store
 from easyicu.webserver import science_workbench
@@ -38,11 +35,13 @@ from easyicu.webserver import sources as source_store
 from easyicu.webserver.jobs import MANAGER, JobCapacityError
 from easyicu.webserver.host_security import AllowedHostsMiddleware
 from easyicu.webserver.routes.copilot import router as copilot_router
+from easyicu.webserver.routes.extraction import router as extraction_router
 from easyicu.webserver.routes.guided import router as guided_router
 from easyicu.webserver.routes.ideas import router as ideas_router
 from easyicu.webserver.routes.local_data import router as local_data_router
 from easyicu.webserver.routes.page_guide import router as page_guide_router
 from easyicu.webserver.routes.request_parsing import body_bool as _body_bool
+from easyicu.webserver.routes.reviews import router as reviews_router
 from easyicu.webserver.routes.system import router as system_router
 from easyicu.webserver.routes.workspaces import router as workspaces_router
 
@@ -125,87 +124,8 @@ async def no_store_native_ui_assets(request: Request, call_next):
 
 app.include_router(system_router)
 app.include_router(local_data_router)
-
-
-@app.post("/api/patient-review/drilldown")
-def patient_review_drilldown(body: Dict[str, Any]) -> dict:
-    """Return bounded real Patient Review aggregates plus one entity drilldown."""
-    try:
-        return patient_drilldown.patient_review_drilldown(body)
-    except patient_drilldown.PatientReviewError as exc:
-        raise HTTPException(status_code=400, detail=exc.detail) from exc
-
-
-@app.post("/api/patient-review/sources")
-def patient_review_sources(body: Dict[str, Any] | None = None) -> dict:
-    """Return metadata-only local export candidates for Patient Review."""
-    return patient_drilldown.patient_review_sources(body or {})
-
-
-@app.post("/api/cohort-review/summary")
-def cohort_review_summary(body: Dict[str, Any]) -> dict:
-    """Return bounded real Cohort Review aggregates for the active export."""
-    try:
-        return cohort_review.cohort_review_summary(body)
-    except cohort_review.CohortReviewError as exc:
-        raise HTTPException(status_code=400, detail=exc.detail) from exc
-
-
-@app.post("/api/crossdb-review/summary")
-def crossdb_review_summary(body: Dict[str, Any]) -> dict:
-    """Return bounded real Cross-DB descriptive aggregates for registered exports."""
-    try:
-        return crossdb_review.crossdb_review_summary(body)
-    except crossdb_review.CrossdbReviewError as exc:
-        raise HTTPException(status_code=400, detail=exc.detail) from exc
-
-
-@app.post("/api/crossdb-review/raw-distribution")
-def crossdb_raw_distribution(body: Dict[str, Any]) -> dict:
-    """Return bounded real Cross-DB density aggregates from a local ICU data root."""
-    try:
-        return crossdb_review.crossdb_raw_distribution(body)
-    except crossdb_review.CrossdbReviewError as exc:
-        raise HTTPException(status_code=400, detail=exc.detail) from exc
-
-
-@app.post("/api/crossdb-review/raw-root-scan")
-def crossdb_raw_root_scan(body: Dict[str, Any]) -> dict:
-    """Preflight a local raw ICU data root before launching Cross-DB loading."""
-    try:
-        return crossdb_review.crossdb_raw_root_scan(body)
-    except crossdb_review.CrossdbReviewError as exc:
-        raise HTTPException(status_code=400, detail=exc.detail) from exc
-
-
-@app.post("/api/crossdb-review/demo-distribution")
-def crossdb_demo_distribution(body: Dict[str, Any]) -> dict:
-    """Return bounded legacy-seeded Cross-DB demo density aggregates."""
-    try:
-        return crossdb_review.crossdb_demo_distribution(body)
-    except crossdb_review.CrossdbReviewError as exc:
-        raise HTTPException(status_code=400, detail=exc.detail) from exc
-
-
-@app.post("/api/extraction/filter-options")
-def extraction_filter_options(body: Dict[str, Any]) -> dict:
-    """Return bounded real-source filter metadata for Data Extraction."""
-    try:
-        return extraction_filters.filter_options(body)
-    except extraction_filters.ExtractionFilterError as exc:
-        raise HTTPException(status_code=400, detail=exc.detail) from exc
-
-
-@app.post("/api/extraction/filter-preview")
-def extraction_filter_preview(body: Dict[str, Any]) -> dict:
-    """Apply supported extraction metadata filters; unsupported filters fail closed."""
-    try:
-        result = extraction_filters.filter_preview(body)
-    except extraction_filters.ExtractionFilterError as exc:
-        raise HTTPException(status_code=400, detail=exc.detail) from exc
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result)
-    return result
+app.include_router(reviews_router)
+app.include_router(extraction_router)
 
 
 app.include_router(workspaces_router)
