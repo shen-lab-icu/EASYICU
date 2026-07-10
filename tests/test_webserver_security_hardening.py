@@ -22,7 +22,7 @@ from easyicu.webserver import sources as source_store
 from easyicu.webserver import __main__ as web_cli
 from easyicu.webserver.app import app
 from easyicu.webserver.ideas import mining as idea_mining
-from easyicu.webserver.jobs import JobCapacityError, JobManager
+from easyicu.webserver.jobs import Job, JobCapacityError, JobManager
 
 
 def _write_large_workspace(root: Path, stays: int = 501) -> Path:
@@ -646,6 +646,35 @@ def test_job_events_replay_includes_terminal_end_event(
     assert events[-1]["type"] == "end"
     assert events[-1]["status"] == "done"
     assert events[-1]["result"] == {"ok": True}
+
+
+def test_job_cancel_and_terminal_transition_is_atomic() -> None:
+    cancelled = Job("cancel-first", "test")
+    assert cancelled.emit({"type": "progress", "phase": "loading"}) is True
+    assert cancelled.request_cancel("test_cancel") is True
+    assert cancelled.request_cancel("duplicate") is True
+    assert cancelled.complete_from_runner({"partial": True}) is True
+
+    snapshot = cancelled.snapshot()
+    assert snapshot["status"] == "cancelled"
+    assert [event["type"] for event in snapshot["events"]].count(
+        "cancel_requested"
+    ) == 1
+    assert snapshot["events"][-1]["type"] == "end"
+    assert snapshot["events"][-1]["status"] == "cancelled"
+    assert [event["seq"] for event in snapshot["events"]] == list(
+        range(len(snapshot["events"]))
+    )
+    assert cancelled.emit({"type": "progress", "phase": "late"}) is False
+    assert cancelled.request_cancel("after_terminal") is False
+    events, status = cancelled.events_since(1)
+    assert status == "cancelled"
+    assert events == snapshot["events"][1:]
+
+    completed = Job("complete-first", "test")
+    assert completed.complete_from_runner({"ok": True}) is True
+    assert completed.request_cancel("too_late") is False
+    assert completed.snapshot()["status"] == "done"
 
 
 def test_source_registry_serializes_updates_and_writes_atomically(

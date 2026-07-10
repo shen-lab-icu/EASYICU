@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import math
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 from easyicu.concept import catalog as concept_catalog
 from easyicu.databases.profiles import (
@@ -70,6 +70,28 @@ _RAW_DB_LABELS = DATABASE_LABELS
 _COMMON_RAW_ROOT_CANDIDATES: List[str] = []
 _DEMO_MULTIDB_DATABASES = public_database_keys()
 _DEMO_RECORDS_PER_FEATURE = 192
+
+
+class _CrossdbRawCancelled(RuntimeError):
+    """Internal cooperative-cancellation signal with aggregate-only context."""
+
+    def __init__(
+        self,
+        *,
+        phase: str,
+        database: Optional[str] = None,
+        chunk_current: Optional[int] = None,
+        chunk_total: Optional[int] = None,
+        completed_databases: int = 0,
+        completed_chunks: int = 0,
+    ) -> None:
+        self.phase = phase
+        self.database = database
+        self.chunk_current = chunk_current
+        self.chunk_total = chunk_total
+        self.completed_databases = completed_databases
+        self.completed_chunks = completed_chunks
+        super().__init__("crossdb_raw_cancelled")
 _DEMO_MULTIDB_FEATURE_SPECS = {
     "miiv": {
         "hr": (80, 15),
@@ -367,7 +389,12 @@ def crossdb_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def crossdb_raw_distribution(body: Dict[str, Any]) -> Dict[str, Any]:
+def crossdb_raw_distribution(
+    body: Dict[str, Any],
+    *,
+    emit_progress: Optional[Callable[[Dict[str, Any]], None]] = None,
+    should_cancel: Optional[Callable[[], bool]] = None,
+) -> Dict[str, Any]:
     """Return real raw-database Cross-DB feature density aggregates.
 
     This is the native FastAPI equivalent of the legacy Streamlit
@@ -386,6 +413,7 @@ def crossdb_raw_distribution(body: Dict[str, Any]) -> Dict[str, Any]:
     sample_size = _bounded_int(
         body.get("sample_size"), default=1500, minimum=100, maximum=10000
     )
+    _raise_if_raw_cancelled(should_cancel, phase="resolving")
 
     if len(databases) < 2:
         raise CrossdbReviewError(
@@ -400,13 +428,22 @@ def crossdb_raw_distribution(body: Dict[str, Any]) -> Dict[str, Any]:
         )
 
     try:
+        load_options: Dict[str, Any] = {
+            "data_root": str(data_root),
+            "concepts": features,
+            "databases": databases,
+            "max_patients": max_patients,
+            "sample_size": sample_size,
+        }
+        if emit_progress is not None:
+            load_options["emit_progress"] = emit_progress
+        if should_cancel is not None:
+            load_options["should_cancel"] = should_cancel
         frames = _load_raw_feature_data(
-            data_root=str(data_root),
-            concepts=features,
-            databases=databases,
-            max_patients=max_patients,
-            sample_size=sample_size,
+            **load_options,
         )
+    except (_CrossdbRawCancelled, CrossdbReviewError):
+        raise
     except Exception as exc:
         raise CrossdbReviewError(
             {
@@ -414,10 +451,12 @@ def crossdb_raw_distribution(body: Dict[str, Any]) -> Dict[str, Any]:
                 "mode": "real",
                 "source_type": "raw_database_root",
                 "root_hash": _hash(str(data_root)),
-                "detail": str(exc),
+                "reason": "The bounded raw database loader failed.",
                 "privacy": _privacy_payload(),
             }
         ) from exc
+
+    _raise_if_raw_cancelled(should_cancel, phase="aggregating")
 
     loaded = {
         str(db): frame
@@ -444,6 +483,7 @@ def crossdb_raw_distribution(body: Dict[str, Any]) -> Dict[str, Any]:
         _raw_source_summary(db, frame, data_root) for db, frame in loaded.items()
     ]
     feature_distributions = _raw_feature_distribution_payload(loaded, features)
+    _raise_if_raw_cancelled(should_cancel, phase="aggregating")
     shared_modules = [
         row["module"]
         for row in feature_distributions
@@ -581,7 +621,21 @@ def crossdb_raw_root_scan(body: Dict[str, Any]) -> Dict[str, Any]:
     )
     if direct_unrecognized and root.name not in unrecognized:
         unrecognized.insert(0, root.name)
-    runnable = len(detected_selected) >= 2
+    enough_detected = len(detected_selected) >= 2
+    runnable = enough_detected and not missing
+    if missing:
+        hint = (
+            "Every selected database folder must be recognized before the run can start."
+        )
+    elif not enough_detected:
+        hint = (
+            "Run is available after at least two selected database folders are recognized."
+        )
+    else:
+        hint = (
+            "Every selected database folder was recognized; the loader will validate "
+            "files during run."
+        )
     return {
         **base,
         "ok": True,
@@ -593,11 +647,7 @@ def crossdb_raw_root_scan(body: Dict[str, Any]) -> Dict[str, Any]:
         "unrecognized_folders": unrecognized[:20],
         "unrecognized_count": len(unrecognized),
         "runnable": runnable,
-        "hint": (
-            "Run is available after at least two selected database folders are recognized."
-            if not runnable
-            else "At least two selected database folders were recognized; the loader will validate files during run."
-        ),
+        "hint": hint,
     }
 
 
@@ -606,14 +656,20 @@ def make_crossdb_raw_distribution_runner(body: Dict[str, Any]):
 
     The raw loader can touch multiple large local databases, so the native UI
     must not run it as a foreground request. Cancellation is cooperative: the
-    runner checks before and after the expensive load phase, but it cannot
-    forcibly interrupt a currently executing database read.
+    loader checks at database, 24-concept chunk, and fallback-concept
+    boundaries. It never force-kills a currently executing database read.
     """
     request_body = dict(body or {})
 
     def runner(job) -> Dict[str, Any]:
+        def _should_cancel() -> bool:
+            checker = getattr(job, "is_cancel_requested", None)
+            if callable(checker):
+                return bool(checker())
+            return bool(getattr(job, "cancel_requested", False))
+
         def _cancelled(phase: str) -> Dict[str, Any] | None:
-            if not getattr(job, "cancel_requested", False):
+            if not _should_cancel():
                 return None
             return {
                 "ok": False,
@@ -641,6 +697,8 @@ def make_crossdb_raw_distribution_runner(body: Dict[str, Any]):
         sample_size = _bounded_int(
             request_body.get("sample_size"), default=1500, minimum=100, maximum=10000
         )
+        chunk_total = max(1, math.ceil(len(features) / 24))
+        total_chunks = len(databases) * chunk_total
         cancelled = _cancelled("resolving")
         if cancelled is not None:
             return cancelled
@@ -654,6 +712,9 @@ def make_crossdb_raw_distribution_runner(body: Dict[str, Any]):
                 "feature_count": len(features),
                 "max_patients": max_patients,
                 "sample_size": sample_size,
+                "completed_chunks": 0,
+                "total_chunks": total_chunks,
+                "chunk_total": chunk_total,
                 "message": (
                     f"Loading sampled aggregate feature distributions for "
                     f"{len(databases)} local databases and {len(features)} concepts "
@@ -662,7 +723,27 @@ def make_crossdb_raw_distribution_runner(body: Dict[str, Any]):
                 ),
             }
         )
-        payload = crossdb_raw_distribution(request_body)
+        try:
+            payload = crossdb_raw_distribution(
+                request_body,
+                emit_progress=job.emit,
+                should_cancel=_should_cancel,
+            )
+        except _CrossdbRawCancelled as exc:
+            return {
+                "ok": False,
+                "cancelled": True,
+                "cancelled_at": exc.phase,
+                "cancel_reason": getattr(job, "cancel_reason", None)
+                or "user_requested",
+                "database": exc.database,
+                "chunk_current": exc.chunk_current,
+                "chunk_total": exc.chunk_total,
+                "completed_databases": exc.completed_databases,
+                "completed_chunks": exc.completed_chunks,
+                "requested_database_count": len(databases),
+                "privacy": _privacy_payload(),
+            }
         cancelled = _cancelled("loading")
         if cancelled is not None:
             return cancelled
@@ -672,6 +753,8 @@ def make_crossdb_raw_distribution_runner(body: Dict[str, Any]):
                 "phase": "finalizing",
                 "current": len(payload.get("sources") or []),
                 "total": len(databases),
+                "completed_chunks": total_chunks,
+                "total_chunks": total_chunks,
                 "feature_count": sum(
                     len(row.get("features") or [])
                     for row in payload.get("feature_distributions") or []
@@ -1047,7 +1130,22 @@ def _normalize_raw_root(path: Path) -> Path:
 def _resolve_raw_databases(data_root: Path, body: Dict[str, Any]) -> List[str]:
     requested = _requested_raw_database_keys(body)
     if requested:
-        return [db for db in requested if _raw_database_exists(data_root, db)]
+        available = [db for db in requested if _raw_database_exists(data_root, db)]
+        missing = [db for db in requested if db not in available]
+        if missing:
+            raise CrossdbReviewError(
+                {
+                    "error": "requested_raw_databases_not_found",
+                    "source_type": "raw_database_root",
+                    "requested_databases": requested,
+                    "detected_databases": available,
+                    "missing_databases": missing,
+                    "missing_selected": _raw_missing_database_payload(missing),
+                    "root_hash": _hash(str(data_root)),
+                    "privacy": _privacy_payload(),
+                }
+            )
+        return available
     return _detect_raw_databases(data_root)
 
 
@@ -1229,6 +1327,27 @@ def _resolve_raw_features(body: Dict[str, Any]) -> List[str]:
     return out
 
 
+def _raise_if_raw_cancelled(
+    should_cancel: Optional[Callable[[], bool]],
+    *,
+    phase: str,
+    database: Optional[str] = None,
+    chunk_current: Optional[int] = None,
+    chunk_total: Optional[int] = None,
+    completed_databases: int = 0,
+    completed_chunks: int = 0,
+) -> None:
+    if should_cancel is not None and should_cancel():
+        raise _CrossdbRawCancelled(
+            phase=phase,
+            database=database,
+            chunk_current=chunk_current,
+            chunk_total=chunk_total,
+            completed_databases=completed_databases,
+            completed_chunks=completed_chunks,
+        )
+
+
 def _load_raw_feature_data(
     *,
     data_root: str,
@@ -1236,6 +1355,8 @@ def _load_raw_feature_data(
     databases: List[str],
     max_patients: int,
     sample_size: int,
+    emit_progress: Optional[Callable[[Dict[str, Any]], None]] = None,
+    should_cancel: Optional[Callable[[], bool]] = None,
 ) -> Dict[str, Any]:
     import pandas as pd
     from easyicu import load_concepts
@@ -1244,15 +1365,82 @@ def _load_raw_feature_data(
     mdd = MultiDatabaseDistribution(data_root=data_root, language="en")
     result: Dict[str, Any] = {}
     chunk_size = 24
-    for db in databases:
+    chunks = [
+        concepts[i : i + chunk_size] for i in range(0, len(concepts), chunk_size)
+    ]
+    database_total = len(databases)
+    total_chunks = database_total * len(chunks)
+    completed_databases = 0
+    completed_chunks = 0
+
+    def _emit(event: Dict[str, Any]) -> None:
+        if emit_progress is not None:
+            emit_progress({"type": "progress", **event})
+
+    for database_index, db in enumerate(databases, start=1):
+        label = _RAW_DB_LABELS.get(db, db)
+        _raise_if_raw_cancelled(
+            should_cancel,
+            phase="database",
+            database=db,
+            completed_databases=completed_databases,
+            completed_chunks=completed_chunks,
+        )
         db_path = mdd._get_db_path(db)
         if not db_path.exists():
-            continue
-        chunks = [
-            concepts[i : i + chunk_size] for i in range(0, len(concepts), chunk_size)
-        ]
+            raise CrossdbReviewError(
+                {
+                    "error": "raw_database_path_unavailable",
+                    "database": db,
+                    "database_label": label,
+                    "privacy": _privacy_payload(),
+                }
+            )
+        _emit(
+            {
+                "phase": "database",
+                "database": db,
+                "database_label": label,
+                "database_status": "loading",
+                "database_index": database_index,
+                "database_total": database_total,
+                "current": completed_databases,
+                "total": database_total,
+                "completed_chunks": completed_chunks,
+                "total_chunks": total_chunks,
+                "chunk_total": len(chunks),
+            }
+        )
         all_data = []
-        for chunk in chunks:
+        for chunk_index, chunk in enumerate(chunks, start=1):
+            _raise_if_raw_cancelled(
+                should_cancel,
+                phase="chunk",
+                database=db,
+                chunk_current=chunk_index,
+                chunk_total=len(chunks),
+                completed_databases=completed_databases,
+                completed_chunks=completed_chunks,
+            )
+            _emit(
+                {
+                    "phase": "chunk",
+                    "database": db,
+                    "database_label": label,
+                    "database_status": "loading",
+                    "database_index": database_index,
+                    "database_total": database_total,
+                    "chunk_status": "loading",
+                    "chunk_current": chunk_index,
+                    "chunk_total": len(chunks),
+                    "feature_count": len(chunk),
+                    "current": completed_databases,
+                    "total": database_total,
+                    "completed_chunks": completed_chunks,
+                    "total_chunks": total_chunks,
+                }
+            )
+            used_fallback = False
             try:
                 frame = load_concepts(
                     concepts=chunk,
@@ -1262,9 +1450,30 @@ def _load_raw_feature_data(
                     require_bounded_sample=True,
                     verbose=False,
                 )
+                _raise_if_raw_cancelled(
+                    should_cancel,
+                    phase="chunk",
+                    database=db,
+                    chunk_current=chunk_index,
+                    chunk_total=len(chunks),
+                    completed_databases=completed_databases,
+                    completed_chunks=completed_chunks,
+                )
                 all_data.extend(_wide_concepts_to_long(frame, chunk, sample_size))
+            except _CrossdbRawCancelled:
+                raise
             except Exception:
+                used_fallback = True
                 for concept in chunk:
+                    _raise_if_raw_cancelled(
+                        should_cancel,
+                        phase="fallback",
+                        database=db,
+                        chunk_current=chunk_index,
+                        chunk_total=len(chunks),
+                        completed_databases=completed_databases,
+                        completed_chunks=completed_chunks,
+                    )
                     try:
                         frame = load_concepts(
                             concepts=[concept],
@@ -1274,13 +1483,97 @@ def _load_raw_feature_data(
                             require_bounded_sample=True,
                             verbose=False,
                         )
+                        _raise_if_raw_cancelled(
+                            should_cancel,
+                            phase="fallback",
+                            database=db,
+                            chunk_current=chunk_index,
+                            chunk_total=len(chunks),
+                            completed_databases=completed_databases,
+                            completed_chunks=completed_chunks,
+                        )
                         all_data.extend(
                             _wide_concepts_to_long(frame, [concept], sample_size)
                         )
-                    except Exception:
-                        continue
+                    except _CrossdbRawCancelled:
+                        raise
+                    except Exception as exc:
+                        raise CrossdbReviewError(
+                            {
+                                "error": "raw_database_concept_load_failed",
+                                "database": db,
+                                "database_label": label,
+                                "failed_concept": concept,
+                                "chunk_current": chunk_index,
+                                "chunk_total": len(chunks),
+                                "privacy": _privacy_payload(),
+                            }
+                        ) from exc
+            completed_chunks += 1
+            _emit(
+                {
+                    "phase": "chunk",
+                    "database": db,
+                    "database_label": label,
+                    "database_status": "loading",
+                    "database_index": database_index,
+                    "database_total": database_total,
+                    "chunk_status": "complete",
+                    "chunk_current": chunk_index,
+                    "chunk_total": len(chunks),
+                    "feature_count": len(chunk),
+                    "fallback_used": used_fallback,
+                    "current": completed_databases,
+                    "total": database_total,
+                    "completed_chunks": completed_chunks,
+                    "total_chunks": total_chunks,
+                }
+            )
+            _raise_if_raw_cancelled(
+                should_cancel,
+                phase="chunk",
+                database=db,
+                chunk_current=chunk_index,
+                chunk_total=len(chunks),
+                completed_databases=completed_databases,
+                completed_chunks=completed_chunks,
+            )
         if all_data:
-            result[db] = pd.concat(all_data, ignore_index=True)
+            frame = pd.concat(all_data, ignore_index=True)
+            result[db] = frame
+            completed_databases += 1
+            database_status = "complete"
+            feature_rows = int(len(frame))
+            concepts_present = int(frame["concept"].nunique())
+        else:
+            database_status = "empty"
+            feature_rows = 0
+            concepts_present = 0
+        _emit(
+            {
+                "phase": "database",
+                "database": db,
+                "database_label": label,
+                "database_status": database_status,
+                "database_index": database_index,
+                "database_total": database_total,
+                "current": completed_databases,
+                "total": database_total,
+                "completed_chunks": completed_chunks,
+                "total_chunks": total_chunks,
+                "chunk_current": len(chunks),
+                "chunk_total": len(chunks),
+                "feature_rows": feature_rows,
+                "concepts_present": concepts_present,
+            }
+        )
+        _raise_if_raw_cancelled(
+            should_cancel,
+            phase="database",
+            database=db,
+            completed_databases=completed_databases,
+            completed_chunks=completed_chunks,
+        )
     return result
 
 
