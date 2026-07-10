@@ -115,6 +115,26 @@ def _is_local_openai_compatible_base_url(base_url: Optional[str]) -> bool:
     return any(token in lowered for token in ("localhost", "127.0.0.1", "0.0.0.0"))
 
 
+def _no_keepalive_limits():
+    """httpx limits that DISABLE connection reuse for the local proxy.
+
+    The shared :8787 proxy (Codex Tools / cli-proxy-api) rotates its upstream
+    key mid-run. A POOLED httpx connection stays bound to the now-stale upstream
+    and 401s indefinitely ("Invalid proxy api key"), while a FRESH connection
+    binds to the current upstream and succeeds -- which is exactly why a curl
+    probe (new socket every call) returns 200 at the same instant a long-lived
+    pooled client 401s. Setting ``max_keepalive_connections=0`` makes every
+    request open a fresh connection like curl, so the poisoned-pool failure mode
+    cannot arise. Returns None if httpx is unavailable (caller omits the arg).
+    """
+    try:
+        import httpx  # type: ignore
+
+        return httpx.Limits(max_keepalive_connections=0)
+    except Exception:
+        return None
+
+
 def _response_namespace_from_payload(payload: Dict[str, Any]) -> Any:
     choices: List[Any] = []
     for raw_choice in payload.get("choices") or []:
@@ -219,16 +239,16 @@ class OpenAIClient:
                 # rocket route localhost traffic to their listener
                 # which returns 503 because vLLM is not configured as
                 # an upstream.
-                local_http_client = httpx.Client(
-                    trust_env=False,
-                    timeout=request_timeout,
-                )
+                _limits = _no_keepalive_limits()
+                _client_kw = dict(trust_env=False, timeout=request_timeout)
+                if _limits is not None:
+                    _client_kw["limits"] = _limits
+                local_http_client = httpx.Client(**_client_kw)
                 kwargs["http_client"] = local_http_client
                 if self._local_noauth_mode and resolved_base_url:
                     self._local_http_client = httpx.Client(
                         base_url=resolved_base_url.rstrip("/"),
-                        trust_env=False,
-                        timeout=request_timeout,
+                        **_client_kw,
                     )
             except Exception:
                 # Fall back to setting the env vars; the SDK's default
@@ -311,11 +331,15 @@ class OpenAIClient:
                 import httpx  # type: ignore
 
                 if self._resolved_base_url:
-                    self._local_http_client = httpx.Client(
+                    _limits = _no_keepalive_limits()
+                    _kw = dict(
                         base_url=self._resolved_base_url.rstrip("/"),
                         trust_env=False,
                         timeout=getattr(self, "_request_timeout", self._timeout),
                     )
+                    if _limits is not None:
+                        _kw["limits"] = _limits
+                    self._local_http_client = httpx.Client(**_kw)
             except Exception:
                 pass
         if getattr(self, "_client", None) is None:
@@ -329,10 +353,14 @@ class OpenAIClient:
             try:
                 import httpx  # type: ignore
 
-                kwargs["http_client"] = httpx.Client(
+                _limits = _no_keepalive_limits()
+                _kw = dict(
                     trust_env=False,
                     timeout=getattr(self, "_request_timeout", self._timeout),
                 )
+                if _limits is not None:
+                    _kw["limits"] = _limits
+                kwargs["http_client"] = httpx.Client(**_kw)
             except Exception:
                 pass
         try:
