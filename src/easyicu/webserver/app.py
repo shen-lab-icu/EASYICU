@@ -1,12 +1,8 @@
-"""EasyICU web server — FastAPI backend for the native UI.
+"""EasyICU native web application composition root.
 
-Migration target (route C, see WEBAPP_MIGRATION_PLAN.md): the static frontend
-under ``static/`` is the real product UI (vendored from the easyicu_ui design
-repo and evolved here). Python lives behind ``/api/*`` instead of rendering DOM.
-
-Runs locally to preserve the local-first contract (no data upload, local
-filesystem access for data roots). This module is Stage 0+1: it serves the
-frontend and the first real read-only endpoint, ``/api/catalog``.
+This module owns host middleware, ordered route registration, and the static
+frontend mount. Feature behavior belongs to domain modules under ``routes/``
+and their backing services.
 """
 
 from __future__ import annotations
@@ -96,26 +92,19 @@ async def no_store_native_ui_assets(request: Request, call_next):
     return response
 
 
+# Registration order is a compatibility contract; keep the root static mount last.
 app.include_router(system_router)
 app.include_router(local_data_router)
 app.include_router(reviews_router)
 app.include_router(extraction_router)
-
-
 app.include_router(workspaces_router)
 app.include_router(job_submission_router)
 app.include_router(agent_control_router)
-
-
 app.include_router(guided_router)
-
-
 app.include_router(copilot_router)
 app.include_router(page_guide_router)
 app.include_router(ideas_router)
 app.include_router(agent_artifact_router)
-
-
 app.include_router(job_lifecycle_router)
 
 
