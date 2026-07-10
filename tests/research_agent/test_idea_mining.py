@@ -1343,21 +1343,15 @@ def test_dry_run_wires_pairwise_feasibility_registry_and_stops_at_gate(
     triage_payload = json.loads(triage_report_path.read_text())
     ledger = triage_payload["discovery_ledger"]
     assert len(ledger) == 2
-    ledger_by_predictor = {
-        row["resolved_predictor_concept"]: row for row in ledger
-    }
-    assert ledger_by_predictor["crea"]["candidate_topic"].startswith(
-        "creatinine ->"
-    )
+    ledger_by_predictor = {row["resolved_predictor_concept"]: row for row in ledger}
+    assert ledger_by_predictor["crea"]["candidate_topic"].startswith("creatinine ->")
     assert ledger_by_predictor["crea"]["go_no_go"] in {
         "recommend",
         "hold",
         "db-cannot-do",
     }
     assert ledger_by_predictor["crea"]["novelty_label"] == "already_done"
-    assert ledger_by_predictor["crea"]["evidence_map_counts"][
-        "direct_same_topic"
-    ] >= 1
+    assert ledger_by_predictor["crea"]["evidence_map_counts"]["direct_same_topic"] >= 1
     assert ledger_by_predictor["crea"]["direct_same_topic_pmids"] == ["111"]
 
     import easyicu.research_agent.idea_mining as idea_mining_module
@@ -2849,3 +2843,54 @@ def test_reflection_strips_echoed_context_fields() -> None:
     )
     assert len(ideas) == 1
     assert ideas[0].exposure_or_predictor == "lactate"
+
+
+def test_generic_outcome_does_not_fall_back_to_first_unrelated_binary() -> None:
+    concepts = _sex_mortality_concepts() + [
+        ConceptDescriptor(
+            name="aki",
+            source_concept="aki",
+            role=VariableRole.OUTCOME,
+            dtype="int64",
+        )
+    ]
+    executable = map_literature_idea_to_executable_candidate(
+        _generic_outcome_idea("ICU outcomes"),
+        available_concepts=concepts,
+        outcome_determinability={
+            "aki": OutcomeDeterminability(outcome="aki", status="known_0_1"),
+            "mortality": OutcomeDeterminability(
+                outcome="mortality",
+                status="known_0_1",
+                normalized_outcome_concept="death",
+            ),
+        },
+    )
+
+    assert executable.resolved_outcome_concept == "death"
+    assert executable.normalized_outcome_concept == "death"
+
+
+def test_generic_outcome_blocks_when_only_unrelated_binary_is_available() -> None:
+    concepts = _sex_mortality_concepts()[:1] + [
+        ConceptDescriptor(
+            name="aki",
+            source_concept="aki",
+            role=VariableRole.OUTCOME,
+            dtype="int64",
+        )
+    ]
+    executable = map_literature_idea_to_executable_candidate(
+        _generic_outcome_idea("ICU outcomes"),
+        available_concepts=concepts,
+        outcome_determinability={
+            "aki": OutcomeDeterminability(outcome="aki", status="known_0_1"),
+        },
+    )
+
+    assert executable.resolved_outcome_concept is None
+    assert executable.executable is False
+    assert any(
+        "outcome concept is not available" in reason
+        for reason in executable.non_executable_reasons
+    )

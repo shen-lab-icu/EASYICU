@@ -8,6 +8,7 @@ tests for the helpers than to mock the pipeline out piecewise.
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 from pathlib import Path
 
@@ -57,7 +58,10 @@ def test_hash_sources_respects_size_cap(ra, tmp_path):
     )
     assert len(bundle.records) == 1
     assert bundle.records[0].sha256 is None
-    assert bundle.records[0].skipped_reason and "exceeds_cap" in bundle.records[0].skipped_reason
+    assert (
+        bundle.records[0].skipped_reason
+        and "exceeds_cap" in bundle.records[0].skipped_reason
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -67,7 +71,10 @@ def test_hash_sources_respects_size_cap(ra, tmp_path):
 
 def test_e_value_for_or_above_one(ra):
     result = ra.compute_e_value(
-        estimate=2.0, ci=(1.5, 2.5), estimate_type="or", baseline_prevalence=0.1,
+        estimate=2.0,
+        ci=(1.5, 2.5),
+        estimate_type="or",
+        baseline_prevalence=0.1,
     )
     assert result.e_value > 1.0
     # Lower CI bound gives a smaller E-value than the point estimate.
@@ -77,7 +84,10 @@ def test_e_value_for_or_above_one(ra):
 
 def test_e_value_for_protective_or(ra):
     result = ra.compute_e_value(
-        estimate=0.5, ci=(0.3, 0.8), estimate_type="or", baseline_prevalence=0.2,
+        estimate=0.5,
+        ci=(0.3, 0.8),
+        estimate_type="or",
+        baseline_prevalence=0.2,
     )
     # Protective effect: E-value is still > 1
     assert result.e_value > 1.0
@@ -149,8 +159,7 @@ def test_pipeline_writes_provenance_prisma_evalue_notebook_lockfile(
     assert payload["summary"]["n_sources"] >= 2  # cohort + raw
     # Raw-ingest file must be hashed
     assert any(
-        r.get("role") == "raw_ingest" and r.get("sha256")
-        for r in payload["records"]
+        r.get("role") == "raw_ingest" and r.get("sha256") for r in payload["records"]
     )
 
     # O21 — PRISMA
@@ -188,3 +197,94 @@ def test_pipeline_writes_provenance_prisma_evalue_notebook_lockfile(
     assert "provenance_sources" in ev_ids
     assert "literature_prisma" in ev_ids
     assert "requirements_lockfile" in ev_ids
+
+
+def test_requirements_lockfile_uses_captured_docker_runtime(ra, tmp_path):
+    captured = tmp_path / "runner_requirements.lock.txt"
+    captured.write_text(
+        "# runtime=docker\n" "# docker_image_id=sha256:abc\n" "numpy==2.0.0\n",
+        encoding="utf-8",
+    )
+
+    text = ra.build_requirements_lockfile(captured)
+
+    assert "# runtime=docker" in text
+    assert "docker_image_id=sha256:abc" in text
+    assert "numpy==2.0.0" in text
+
+
+def _write_runner_snapshot(
+    run_dir: Path, step_id: str, *, lock_text: str, image_id: str
+) -> None:
+    out_dir = run_dir / "steps" / step_id / "outputs"
+    out_dir.mkdir(parents=True)
+    (out_dir / "runner_requirements.lock.txt").write_text(lock_text, encoding="utf-8")
+    provenance = {
+        "runtime": "docker",
+        "image_reference": "easyicu:latest",
+        "image_id": image_id,
+        "repo_digests": [],
+        "network": "none",
+        "requirements_sha256": hashlib.sha256(lock_text.encode("utf-8")).hexdigest(),
+        "method_capabilities": ["pandas", "numpy"],
+    }
+    (out_dir / "runner_provenance.json").write_text(
+        json.dumps(provenance), encoding="utf-8"
+    )
+
+
+def test_pipeline_write_accepts_identical_step_runtime_snapshots(tmp_path):
+    from easyicu.research_agent.pipeline_write import _validated_runtime_lock
+
+    run_dir = tmp_path / "run"
+    lock_text = "# runtime=docker\nnumpy==2.0.0\n"
+    image_id = "sha256:" + "a" * 64
+    _write_runner_snapshot(run_dir, "one", lock_text=lock_text, image_id=image_id)
+    _write_runner_snapshot(run_dir, "two", lock_text=lock_text, image_id=image_id)
+
+    selected = _validated_runtime_lock(run_dir)
+
+    assert (
+        selected
+        == run_dir / "steps" / "one" / "outputs" / "runner_requirements.lock.txt"
+    )
+
+
+def test_pipeline_write_rejects_inconsistent_step_runtime_snapshots(tmp_path):
+    from easyicu.research_agent.pipeline_write import (
+        RuntimeProvenanceMismatchError,
+        _validated_runtime_lock,
+    )
+
+    run_dir = tmp_path / "run"
+    lock_text = "# runtime=docker\nnumpy==2.0.0\n"
+    _write_runner_snapshot(
+        run_dir, "one", lock_text=lock_text, image_id="sha256:" + "a" * 64
+    )
+    _write_runner_snapshot(
+        run_dir, "two", lock_text=lock_text, image_id="sha256:" + "b" * 64
+    )
+
+    with pytest.raises(RuntimeProvenanceMismatchError, match="inconsistent"):
+        _validated_runtime_lock(run_dir)
+
+
+def test_pipeline_write_rejects_stale_registered_lock_on_resume(ra, tmp_path):
+    from easyicu.research_agent.pipeline_write import (
+        RuntimeProvenanceMismatchError,
+        _assert_registered_runtime_lock_matches,
+    )
+
+    store = ra.EvidenceStore(tmp_path / "run")
+    store.register_text(
+        kind="log",
+        description="old runtime lock",
+        text="numpy==1.0.0\n",
+        filename="requirements.lock.txt",
+        evidence_id="requirements_lockfile",
+    )
+    current_lock = tmp_path / "run" / "requirements.lock.txt"
+    current_lock.write_text("numpy==2.0.0\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeProvenanceMismatchError, match="already registered"):
+        _assert_registered_runtime_lock_matches(store, current_lock)

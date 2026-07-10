@@ -386,10 +386,6 @@ class PublicationFigureSkill:
             )
             source_copy_ids.append(record.evidence_id)
 
-        source_metadata = _source_fingerprint_metadata(
-            evidence,
-            rendered.source_evidence_ids,
-        )
         contract = make_figure_contract(
             figure_id=rendered.figure_id,
             core_claim=rendered.core_claim,
@@ -412,48 +408,14 @@ class PublicationFigureSkill:
                 manuscript_facing=True,
             )
         )
-        figure_ids: List[str] = []
-        contract_evidence_id: Optional[str] = None
-        for key, path in paths.items():
-            suffix = path.suffix.lower()
-            if key == "contract" or suffix.endswith(".json"):
-                record = evidence.register_file(
-                    kind="log",
-                    description="Publication figure contract generated from analysis evidence.",
-                    source_path=path,
-                    evidence_id="publication_figure_contract",
-                    aliases=["publication_figure_contract", "figure_contract"],
-                    producer=self.name,
-                    generation_mode="deterministic_figure_skill",
-                    prompt_pack_version=prompt_pack_version,
-                    metadata=source_metadata,
-                    on_sha_change="new_id",
-                )
-                contract_evidence_id = record.evidence_id
-                continue
-            record = evidence.register_file(
-                kind="figure",
-                description=(
-                    f"Publication figure export ({suffix.lstrip('.')}) "
-                    "generated from analysis evidence."
-                ),
-                source_path=path,
-                evidence_id=f"publication_figure_{suffix.lstrip('.')}",
-                aliases=[
-                    "publication_figure",
-                    f"publication_figure_{suffix.lstrip('.')}",
-                ],
-                producer=self.name,
-                generation_mode="deterministic_figure_skill",
-                prompt_pack_version=prompt_pack_version,
-                metadata={
-                    **source_metadata,
-                    "figure_contract": "publication_figure_contract",
-                    "figure_role": "publication_figure",
-                },
-                on_sha_change="new_id",
-            )
-            figure_ids.append(record.evidence_id)
+        contract_record, figure_records = _register_publication_figure_bundle(
+            evidence=evidence,
+            paths=paths,
+            contract=contract,
+            prompt_pack_version=prompt_pack_version,
+        )
+        contract_evidence_id = contract_record.evidence_id
+        figure_ids = [record.evidence_id for record in figure_records]
 
         summary = {
             "stage": self.name,
@@ -784,49 +746,18 @@ class PublicationFigureSkill:
                 manuscript_facing=True,
             )
         )
-        figure_ids: List[str] = []
-        contract_evidence_id: Optional[str] = None
+        contract_record, figure_records = _register_publication_figure_bundle(
+            evidence=evidence,
+            paths=paths,
+            contract=contract,
+            prompt_pack_version=prompt_pack_version,
+        )
+        contract_evidence_id = contract_record.evidence_id
+        figure_ids = [record.evidence_id for record in figure_records]
         source_metadata = _source_fingerprint_metadata(
             evidence,
-            [record.evidence_id for record in source_records],
+            _figure_contract_source_ids(contract),
         )
-        for key, path in paths.items():
-            suffix = path.suffix.lower()
-            if key == "contract" or suffix.endswith(".json"):
-                record = evidence.register_file(
-                    kind="log",
-                    description="Publication figure contract generated from analysis evidence.",
-                    source_path=path,
-                    evidence_id="publication_figure_contract",
-                    aliases=["publication_figure_contract", "figure_contract"],
-                    producer=self.name,
-                    generation_mode="deterministic_figure_skill",
-                    prompt_pack_version=prompt_pack_version,
-                    metadata=source_metadata,
-                    on_sha_change="new_id",
-                )
-                contract_evidence_id = record.evidence_id
-                continue
-            record = evidence.register_file(
-                kind="figure",
-                description=f"Publication figure export ({suffix.lstrip('.')}) generated from analysis evidence.",
-                source_path=path,
-                evidence_id=f"publication_figure_{suffix.lstrip('.')}",
-                aliases=[
-                    "publication_figure",
-                    f"publication_figure_{suffix.lstrip('.')}",
-                ],
-                producer=self.name,
-                generation_mode="deterministic_figure_skill",
-                prompt_pack_version=prompt_pack_version,
-                metadata={
-                    **source_metadata,
-                    "figure_contract": "publication_figure_contract",
-                    "figure_role": "publication_figure",
-                },
-                on_sha_change="new_id",
-            )
-            figure_ids.append(record.evidence_id)
 
         source_copy_record = evidence.register_file(
             kind="table",
@@ -1253,55 +1184,18 @@ class PublicationFigureSkill:
                 manuscript_facing=True,
             )
         )
-        contract_evidence_id: Optional[str] = None
-        figure_ids: List[str] = []
+        contract_record, figure_records = _register_publication_figure_bundle(
+            evidence=evidence,
+            paths=paths,
+            contract=contract,
+            prompt_pack_version=prompt_pack_version,
+        )
+        contract_evidence_id = contract_record.evidence_id
+        figure_ids = [record.evidence_id for record in figure_records]
         source_metadata = _source_fingerprint_metadata(
             evidence,
-            [source_record.evidence_id],
+            _figure_contract_source_ids(contract),
         )
-        for key, path in paths.items():
-            suffix = path.suffix.lower()
-            if key == "contract" or suffix.endswith(".json"):
-                record = evidence.register_file(
-                    kind="log",
-                    description=(
-                        "Publication figure contract generated from the "
-                        "robustness panel."
-                    ),
-                    source_path=path,
-                    evidence_id="publication_figure_contract",
-                    aliases=["publication_figure_contract", "figure_contract"],
-                    producer=self.name,
-                    generation_mode="deterministic_figure_skill",
-                    prompt_pack_version=prompt_pack_version,
-                    metadata=source_metadata,
-                    on_sha_change="new_id",
-                )
-                contract_evidence_id = record.evidence_id
-                continue
-            record = evidence.register_file(
-                kind="figure",
-                description=(
-                    f"Publication figure export ({suffix.lstrip('.')}) generated "
-                    "from the robustness panel."
-                ),
-                source_path=path,
-                evidence_id=f"publication_figure_{suffix.lstrip('.')}",
-                aliases=[
-                    "publication_figure",
-                    f"publication_figure_{suffix.lstrip('.')}",
-                ],
-                producer=self.name,
-                generation_mode="deterministic_figure_skill",
-                prompt_pack_version=prompt_pack_version,
-                metadata={
-                    **source_metadata,
-                    "figure_contract": "publication_figure_contract",
-                    "figure_role": "publication_figure",
-                },
-                on_sha_change="new_id",
-            )
-            figure_ids.append(record.evidence_id)
 
         source_copy_record = evidence.register_file(
             kind="table",
@@ -1421,7 +1315,6 @@ class PublicationFigureSkill:
                 *source_records,
             ]
         )
-        source_metadata = _source_fingerprint_metadata(evidence, source_ids)
         contract = _contract_promoted_from_source(
             run_dir / contract_source.relative_path,
             source_ids=source_ids,
@@ -1444,51 +1337,19 @@ class PublicationFigureSkill:
             )
         )
 
-        contract_record = evidence.register_file(
-            kind="log",
-            description=(
-                "Publication figure contract promoted from registered step-level "
-                "publication figure evidence."
-            ),
-            source_path=contract_path,
-            evidence_id="publication_figure_contract",
-            aliases=["publication_figure_contract", "figure_contract"],
-            producer=self.name,
-            generation_mode="deterministic_figure_skill",
+        provenance_metadata = {
+            "promoted_from_step_id": bundle.get("step_id"),
+            "promoted_from_stem": bundle.get("stem"),
+        }
+        contract_record, registered_figures = _register_publication_figure_bundle(
+            evidence=evidence,
+            paths=paths,
+            contract=contract,
             prompt_pack_version=prompt_pack_version,
-            metadata={
-                **source_metadata,
-                "figure_role": "publication_figure",
-                "promoted_from_step_id": bundle.get("step_id"),
-                "promoted_from_stem": bundle.get("stem"),
-            },
-            on_sha_change="new_id",
+            contract_metadata=provenance_metadata,
+            figure_metadata=provenance_metadata,
         )
-
-        figure_ids: List[str] = []
-        for suffix in ("svg", "png", "pdf", "tiff"):
-            record = evidence.register_file(
-                kind="figure",
-                description=(
-                    f"Publication figure export ({suffix}) promoted from "
-                    "registered step-level publication figure evidence."
-                ),
-                source_path=targets[suffix],
-                evidence_id=f"publication_figure_{suffix}",
-                aliases=["publication_figure", f"publication_figure_{suffix}"],
-                producer=self.name,
-                generation_mode="deterministic_figure_skill",
-                prompt_pack_version=prompt_pack_version,
-                metadata={
-                    **source_metadata,
-                    "figure_contract": contract_record.evidence_id,
-                    "figure_role": "publication_figure",
-                    "promoted_from_step_id": bundle.get("step_id"),
-                    "promoted_from_stem": bundle.get("stem"),
-                },
-                on_sha_change="new_id",
-            )
-            figure_ids.append(record.evidence_id)
+        figure_ids = [record.evidence_id for record in registered_figures]
 
         summary = {
             "stage": self.name,
@@ -1567,7 +1428,6 @@ class PublicationFigureSkill:
         source_ids = [svg_record.evidence_id, png_record.evidence_id]
         if summary_record is not None:
             source_ids.append(summary_record.evidence_id)
-        source_metadata = _source_fingerprint_metadata(evidence, source_ids)
         contract = make_figure_contract(
             figure_id="easyicu_publication_figure",
             core_claim=(
@@ -1614,49 +1474,13 @@ class PublicationFigureSkill:
             )
         )
 
-        contract_record = evidence.register_file(
-            kind="log",
-            description="Publication figure contract generated from prediction-model evidence.",
-            source_path=contract_path,
-            evidence_id="publication_figure_contract",
-            aliases=["publication_figure_contract", "figure_contract"],
-            producer=self.name,
-            generation_mode="deterministic_figure_skill",
+        contract_record, registered_figures = _register_publication_figure_bundle(
+            evidence=evidence,
+            paths=paths,
+            contract=contract,
             prompt_pack_version=prompt_pack_version,
-            metadata={
-                **source_metadata,
-                "figure_role": "publication_figure",
-            },
-            on_sha_change="new_id",
         )
-
-        figure_ids: List[str] = []
-        for suffix, path in (
-            ("svg", svg_target),
-            ("png", png_target),
-            ("pdf", pdf_target),
-            ("tiff", tiff_target),
-        ):
-            record = evidence.register_file(
-                kind="figure",
-                description=(
-                    "Publication figure export "
-                    f"({suffix}) promoted from prediction-model evidence."
-                ),
-                source_path=path,
-                evidence_id=f"publication_figure_{suffix}",
-                aliases=["publication_figure", f"publication_figure_{suffix}"],
-                producer=self.name,
-                generation_mode="deterministic_figure_skill",
-                prompt_pack_version=prompt_pack_version,
-                metadata={
-                    **source_metadata,
-                    "figure_contract": contract_record.evidence_id,
-                    "figure_role": "publication_figure",
-                },
-                on_sha_change="new_id",
-            )
-            figure_ids.append(record.evidence_id)
+        figure_ids = [record.evidence_id for record in registered_figures]
 
         summary = {
             "stage": self.name,
@@ -2175,6 +1999,106 @@ def _source_fingerprint_metadata(
     if len(ids) == 1:
         metadata["source_evidence_id"] = ids[0]
     return metadata
+
+
+def _figure_contract_source_ids(contract: Any) -> List[str]:
+    """Return every EvidenceStore id named by a figure contract."""
+
+    ids = [str(item) for item in contract.source_data if str(item)]
+    for panel in contract.panels:
+        ids.extend(str(item) for item in panel.evidence_ids if str(item))
+    return list(dict.fromkeys(ids))
+
+
+def _register_publication_figure_bundle(
+    *,
+    evidence: EvidenceStore,
+    paths: Dict[str, Path],
+    contract: Any,
+    prompt_pack_version: Optional[str],
+    contract_metadata: Optional[Dict[str, Any]] = None,
+    figure_metadata: Optional[Dict[str, Any]] = None,
+) -> Tuple[EvidenceRecord, List[EvidenceRecord]]:
+    """Register a contract and every export with strict provenance links."""
+
+    source_ids = _figure_contract_source_ids(contract)
+    source_metadata = _source_fingerprint_metadata(evidence, source_ids)
+    script_record = evidence.register_file(
+        kind="code",
+        description="Deterministic PublicationFigureSkill renderer source.",
+        source_path=Path(__file__).resolve(),
+        evidence_id="publication_figure_skill_renderer",
+        aliases=["publication_figure_renderer_code"],
+        producer=PublicationFigureSkill.name,
+        generation_mode="deterministic_figure_skill",
+        prompt_pack_version=prompt_pack_version,
+        metadata={
+            "artifact_role": "figure_renderer",
+            "figure_id": contract.figure_id,
+        },
+        on_sha_change="new_id",
+    )
+
+    contract_path = paths.get("contract")
+    if contract_path is None:
+        raise ValueError("publication figure bundle has no contract export")
+    contract_record = evidence.register_file(
+        kind="log",
+        description="Publication figure contract generated from analysis evidence.",
+        source_path=contract_path,
+        evidence_id="publication_figure_contract",
+        aliases=["publication_figure_contract", "figure_contract"],
+        inputs=source_ids,
+        script_evidence_id=script_record.evidence_id,
+        producer=PublicationFigureSkill.name,
+        generation_mode="deterministic_figure_skill",
+        prompt_pack_version=prompt_pack_version,
+        metadata={
+            **source_metadata,
+            **dict(contract_metadata or {}),
+            "artifact_role": "figure_contract",
+            "figure_id": contract.figure_id,
+            "source_evidence_ids": source_ids,
+        },
+        on_sha_change="new_id",
+    )
+
+    figure_records: List[EvidenceRecord] = []
+    for key, path in paths.items():
+        suffix = path.suffix.lower()
+        if key == "contract" or suffix.endswith(".json"):
+            continue
+        record = evidence.register_file(
+            kind="figure",
+            description=(
+                f"Publication figure export ({suffix.lstrip('.')}) generated "
+                "from analysis evidence."
+            ),
+            source_path=path,
+            evidence_id=f"publication_figure_{suffix.lstrip('.')}",
+            aliases=[
+                "publication_figure",
+                f"publication_figure_{suffix.lstrip('.')}",
+            ],
+            inputs=[*source_ids, contract_record.evidence_id],
+            script_evidence_id=script_record.evidence_id,
+            producer=PublicationFigureSkill.name,
+            generation_mode="deterministic_figure_skill",
+            prompt_pack_version=prompt_pack_version,
+            metadata={
+                **source_metadata,
+                **dict(figure_metadata or {}),
+                "artifact_role": "manuscript_figure",
+                "figure_id": contract.figure_id,
+                "contract_evidence_id": contract_record.evidence_id,
+                "source_evidence_ids": source_ids,
+                "figure_contract": contract_record.evidence_id,
+                "figure_role": "publication_figure",
+            },
+            on_sha_change="new_id",
+        )
+        figure_records.append(record)
+    return contract_record, figure_records
 
 
 def _bundle_source_ids(bundle: Dict[str, Any]) -> List[str]:

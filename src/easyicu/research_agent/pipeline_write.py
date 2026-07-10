@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import re
+import hashlib
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -28,7 +29,11 @@ from .contracts import (
     _PlanPhaseResult,
     _WritePhaseResult,
 )
-from .evidence import EvidenceEnforcementError, EvidenceEnforcementMode
+from .evidence import (
+    EvidenceEnforcementError,
+    EvidenceEnforcementMode,
+    sha256_of_file,
+)
 from .figure_skill import PublicationFigureSkill
 from .latex import scaffold_to_latex
 from .literature import LiteratureAgent, LiteratureBundle
@@ -64,6 +69,71 @@ from .schema import EvidenceRef, ManuscriptDraftPacket
 from .side_findings import collect_side_findings
 from .visual_qa import VLMVisualQAAdapter, VisualQAAuditor
 from .pdf_render import render_pdf_for_run
+
+
+class RuntimeProvenanceMismatchError(RuntimeError):
+    """Docker steps disagree about the immutable execution environment."""
+
+
+def _validated_runtime_lock(run_dir: Path) -> Optional[Path]:
+    """Return one lock only when every Docker step has the same snapshot."""
+
+    lock_paths = sorted(run_dir.glob("steps/*/outputs/runner_requirements.lock.txt"))
+    provenance_paths = sorted(run_dir.glob("steps/*/outputs/runner_provenance.json"))
+    if not lock_paths and not provenance_paths:
+        return None
+    lock_by_parent = {path.parent.resolve(): path for path in lock_paths}
+    provenance_by_parent = {path.parent.resolve(): path for path in provenance_paths}
+    if set(lock_by_parent) != set(provenance_by_parent):
+        raise RuntimeProvenanceMismatchError(
+            "Docker runtime provenance is incomplete: every step output must "
+            "contain both runner_requirements.lock.txt and runner_provenance.json"
+        )
+
+    reference_lock: Optional[bytes] = None
+    reference_provenance: Optional[str] = None
+    for parent in sorted(lock_by_parent, key=str):
+        lock_path = lock_by_parent[parent]
+        provenance_path = provenance_by_parent[parent]
+        lock_bytes = lock_path.read_bytes()
+        try:
+            provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise RuntimeProvenanceMismatchError(
+                f"Invalid Docker runtime provenance: {provenance_path}"
+            ) from exc
+        if not isinstance(provenance, dict):
+            raise RuntimeProvenanceMismatchError(
+                f"Docker runtime provenance must be an object: {provenance_path}"
+            )
+        expected_lock_sha = provenance.get("requirements_sha256")
+        actual_lock_sha = hashlib.sha256(lock_bytes).hexdigest()
+        if expected_lock_sha != actual_lock_sha:
+            raise RuntimeProvenanceMismatchError(
+                f"Docker runtime lock hash mismatch for {lock_path}"
+            )
+        canonical_provenance = json.dumps(
+            provenance, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        )
+        if reference_lock is None:
+            reference_lock = lock_bytes
+            reference_provenance = canonical_provenance
+        elif (
+            lock_bytes != reference_lock or canonical_provenance != reference_provenance
+        ):
+            raise RuntimeProvenanceMismatchError(
+                "Docker steps used inconsistent image provenance or dependency locks"
+            )
+    return lock_paths[0]
+
+
+def _assert_registered_runtime_lock_matches(evidence: Any, lockfile_path: Path) -> None:
+    existing = evidence.get("requirements_lockfile")
+    if existing is not None and existing.sha256 != sha256_of_file(lockfile_path):
+        raise RuntimeProvenanceMismatchError(
+            "Resume produced a requirements.lock.txt that differs from the "
+            "already registered requirements_lockfile evidence"
+        )
 
 
 def _failed_step_labels_from_execution_gate(
@@ -115,8 +185,7 @@ def _has_substantive_manuscript_text(text: str) -> bool:
     prose_lines = [
         line.strip()
         for line in stripped.splitlines()
-        if line.strip()
-        and not line.lstrip().startswith(("#", "[", "|", "<!--"))
+        if line.strip() and not line.lstrip().startswith(("#", "[", "|", "<!--"))
     ]
     return any(re.search(r"[A-Za-z0-9]", line) for line in prose_lines)
 
@@ -1247,6 +1316,7 @@ def run_write_phase(
     # packages in ``requirements.lock.txt``. Runs regardless of
     # reviewer / checklist flags so the reproducibility artefacts
     # are always present.
+    captured_runtime_lock = _validated_runtime_lock(run_dir)
     try:
         notebook_steps: List[NotebookStep] = []
         intent_by_id = {s.step_id: s.intent for s in plan_result.plan.steps}
@@ -1302,19 +1372,32 @@ def run_write_phase(
                     generation_mode="system",
                 )
         lockfile_path = run_dir / "requirements.lock.txt"
-        lockfile_path.write_text(build_requirements_lockfile(), encoding="utf-8")
-        if evidence.get("requirements_lockfile") is None:
+        lockfile_path.write_text(
+            build_requirements_lockfile(captured_runtime_lock), encoding="utf-8"
+        )
+        _assert_registered_runtime_lock_matches(evidence, lockfile_path)
+        existing_lock_record = evidence.get("requirements_lockfile")
+        if existing_lock_record is None:
             evidence.register_file(
                 kind="log",
                 description=(
-                    "Interpreter-level requirements lockfile captured "
+                    "Execution-runtime requirements lockfile captured "
                     "at run time (O26)."
                 ),
                 source_path=lockfile_path,
                 evidence_id="requirements_lockfile",
                 producer="pipeline",
                 generation_mode="system",
+                metadata={
+                    "runtime_source": (
+                        "docker_runner"
+                        if captured_runtime_lock is not None
+                        else "host_interpreter"
+                    )
+                },
             )
+    except RuntimeProvenanceMismatchError:
+        raise
     except Exception as exc:
         findings.append(
             ValidationFinding(
