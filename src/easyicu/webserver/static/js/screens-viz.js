@@ -12,6 +12,12 @@
     demoFeatureTone, demoCategorySection, demoQualityPanelRows,
   } = window.VIZ_DEMO;
 
+  function workspaceSamplingNote(summary) {
+    const s = summary || {};
+    if (!(Number(s.sampled_stays) < Number(s.total_stays))) return '';
+    return `<div class="note warn mt-12"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="t">${t('Bounded analysis snapshot', '有界分析快照')}</div><div class="d">${t('Displayed aggregate metrics use', '当前展示的聚合指标使用')} ${fmtInt(s.sampled_stays)} / ${fmtInt(s.total_stays)} ${t('stays; the full denominator remains visible.', '次住院；完整分母仍明确展示。')} <span class="mono">${esc(s.snapshot_basis || '')}</span></div></div></div>`;
+  }
+
   function vizRail(active) {
     const real = window.EU_DATA === 'real';
     const xdb = active === 'crossdb' ? window.EU_CROSSDB_WORKSPACE : null;
@@ -44,7 +50,9 @@
       variables = `${fmtInt(cohort.summary && cohort.summary.modules)} ${t('modules', '个模块')} · ${fmtInt(fsel.selected_count)} / ${fmtInt(fsel.available_count)} ${t('features', '个特征')}`;
     } else if (ws) {
       dataset = (ws.path || '').split('/').filter(Boolean).slice(-2).join('/') || t('Local export', '本地导出');
-      cohortLine = `${fmtInt(ws.summary && ws.summary.stays)} ${t('stays', '次住院')}`;
+      const summary = ws.summary || {};
+      const sample = Number(summary.sampled_stays) < Number(summary.total_stays) ? ` · ${t('metrics n', '指标 n')}=${fmtInt(summary.sampled_stays)}` : '';
+      cohortLine = `${fmtInt(summary.stays)} ${t('stays', '次住院')}${sample}`;
       variables = `${fmtInt(ws.summary && ws.summary.modules)} ${t('modules', '个模块')}`;
     } else {
       const cat = window.EU_CATALOG || {};
@@ -1924,6 +1932,7 @@
           [t('Observed features', '已观测特征'), fmtInt(loaded.observed_features), 'accent'],
         ].map(([l, v, c]) => `<div class="stat ${c}"><div class="label">${l}</div><div class="val">${v}</div></div>`).join('')}
       </div>
+      ${workspaceSamplingNote(s)}
       <div class="note ok mt-16">
         <div class="ico">${icon('rows', 16)}</div>
         <div class="body"><span class="t">${t('Table preview', '表格预览')}</span> <span class="d" style="display:inline;">— ${drill.demo ? t('Seeded demo rows for UI preview.', '演示行仅用于界面预览。') : t('Capped local rows from the active export; identifiers are replaced by pseudonymous entity tokens.', '来自当前本地导出的有界行预览；标识符已替换为去标识化实体 token。')}</span></div>
@@ -4085,6 +4094,7 @@
       ];
       return `
       <div class="sec-stack"><div class="lbl">Cohort profile</div><h2>${t('Local export snapshot', '本地导出队列概览')}</h2></div>
+      ${workspaceSamplingNote(s)}
       <div class="stat-grid">
         <div class="stat accent"><div class="label">${t('Stays', '住院数')}</div><div class="val">${fmtInt(s.stays)}</div></div>
         <div class="stat"><div class="label">${t('Mean age', '平均年龄')}</div><div class="val">${fmtNum(s.mean_age, 1)}</div></div>
@@ -4181,6 +4191,7 @@
       const profileRows = activeProfile.rows || [];
       const radio = (row) => `<label class="radio ${active.id === row.id ? 'on' : ''}" role="button" tabindex="0" data-cohort-comp="${esc(row.id)}"><span class="mk"></span> ${esc(cohortText(row.label || row.id))}</label>`;
       return `
+      ${workspaceSamplingNote(s)}
       <div class="coh-jump">
         <button class="cj-card" data-cohgo="coverage">
           <span class="cj-ico">${icon('shield', 16)}</span>

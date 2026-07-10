@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import secrets
 import threading
 import unicodedata
 from datetime import datetime, timezone
@@ -187,7 +188,7 @@ def _merge_slots(current: Any, patch: Any) -> Dict[str, Any]:
 
 
 def _session_id(seed: str) -> str:
-    return "guided_" + hashlib.sha1(seed.encode("utf-8")).hexdigest()[:12]
+    return "guided_" + hashlib.sha1(seed.encode("utf-8")).hexdigest()[:20]
 
 
 def _sanitize_context(raw: Any) -> Dict[str, Any]:
@@ -394,17 +395,21 @@ def _public_session(session: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _project_dir_for_session(session_id: str) -> Path:
-    return _PROJECTS_ROOT / f"guided-copilot-{session_id[-6:]}"
+    return _PROJECTS_ROOT / f"guided-copilot-{session_id[-12:]}"
 
 
 def _prefill_for(goal: str, session: Dict[str, Any]) -> Dict[str, Any]:
     context = session.get("context") if isinstance(session.get("context"), dict) else {}
     slots = session.get("slots") if isinstance(session.get("slots"), dict) else {}
-    design = slots.get("study_design") if isinstance(slots.get("study_design"), dict) else {}
+    design = (
+        slots.get("study_design") if isinstance(slots.get("study_design"), dict) else {}
+    )
     study_params = (
         slots.get("study_params") if isinstance(slots.get("study_params"), dict) else {}
     )
-    extraction = slots.get("extraction") if isinstance(slots.get("extraction"), dict) else {}
+    extraction = (
+        slots.get("extraction") if isinstance(slots.get("extraction"), dict) else {}
+    )
     return {
         "source": "guided_copilot",
         "goal": goal,
@@ -587,7 +592,9 @@ def create_guided_session(body: Dict[str, Any]) -> Dict[str, Any]:
     context = _sanitize_context(payload.get("context"))
     mode = _choice(payload.get("mode"), {"local", "ai"}, "local")
     now = _now()
-    session_id = _session_id("|".join([now, mode, context["route"]]))
+    session_id = _session_id(
+        "|".join([now, mode, context["route"], secrets.token_hex(16)])
+    )
     project_dir = _project_dir_for_session(session_id)
     session = {
         "id": session_id,

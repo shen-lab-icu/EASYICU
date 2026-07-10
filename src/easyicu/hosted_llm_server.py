@@ -4,26 +4,31 @@ This module exposes an OpenAI-compatible `/v1/chat/completions` endpoint so
 EasyICU clients can talk to a project-owned backend instead of requiring each
 end user to bring an API key.
 
-The relay is intentionally minimal:
+The relay is intentionally minimal and fail-closed:
 - Accept OpenAI-style chat completion requests
 - Resolve local model aliases such as `hosted-default`
 - Forward requests to OpenRouter with the server's own API key
-- Optionally require a shared bearer token from the frontend
+- Require a shared bearer token unless explicit loopback-only development mode is set
 - Apply a simple in-memory per-IP rate limit
 
 Environment variables:
     OPENROUTER_API_KEY              Required. Server-side OpenRouter key.
     OPENROUTER_BASE_URL             Optional. Defaults to OpenRouter API v1.
     EASYICU_HOSTED_DEFAULT_MODEL    Optional. Default upstream model alias target.
-    EASYICU_HOSTED_SERVER_TOKEN     Optional. Shared bearer token expected from clients.
+    EASYICU_HOSTED_SERVER_TOKEN     Shared bearer token expected from clients.
+    EASYICU_HOSTED_ALLOWED_MODELS   Optional direct model allowlist; aliases remain allowed.
+    EASYICU_HOSTED_ALLOWED_ORIGINS  Optional exact browser-origin allowlist.
+    EASYICU_HOSTED_TRUSTED_PROXIES Optional trusted proxy IP/CIDR list for X-Forwarded-For.
     EASYICU_HOSTED_RATE_LIMIT       Optional. Requests/minute per IP. Default 20.
-    EASYICU_HOSTED_HOST             Optional. Bind host. Default 0.0.0.0.
+    EASYICU_HOSTED_HOST             Optional. Bind host. Default 127.0.0.1.
     EASYICU_HOSTED_PORT             Optional. Bind port. Default 8787.
 """
 
 from __future__ import annotations
 
 import argparse
+import hmac
+import ipaddress
 import json
 import os
 import threading
@@ -36,8 +41,11 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from easyicu.webserver.host_security import AllowedHostsMiddleware
 
-OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
+OPENROUTER_BASE_URL = os.getenv(
+    "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
+).rstrip("/")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
 HOSTED_DEFAULT_MODEL = os.getenv(
     "EASYICU_HOSTED_DEFAULT_MODEL",
@@ -58,11 +66,52 @@ HOSTED_FALLBACK_MODELS = [
 ]
 HOSTED_SERVER_TOKEN = os.getenv("EASYICU_HOSTED_SERVER_TOKEN", "").strip()
 HOSTED_RATE_LIMIT = int(os.getenv("EASYICU_HOSTED_RATE_LIMIT", "20") or "20")
-HOSTED_ALLOWED_ORIGINS = [
+HOSTED_ALLOW_UNAUTHENTICATED_LOCAL = os.getenv(
+    "EASYICU_HOSTED_ALLOW_UNAUTHENTICATED_LOCAL", ""
+).strip().lower() in {"1", "true", "yes", "on"}
+HOSTED_ALLOW_WILDCARD_ORIGIN = os.getenv(
+    "EASYICU_HOSTED_ALLOW_WILDCARD_ORIGIN", ""
+).strip().lower() in {"1", "true", "yes", "on"}
+HOSTED_ALLOW_ANY_HOST = os.getenv(
+    "EASYICU_HOSTED_ALLOW_ANY_HOST", ""
+).strip().lower() in {"1", "true", "yes", "on"}
+_RAW_ALLOWED_ORIGINS = [
     origin.strip()
-    for origin in os.getenv("EASYICU_HOSTED_ALLOWED_ORIGINS", "*").split(",")
+    for origin in os.getenv("EASYICU_HOSTED_ALLOWED_ORIGINS", "").split(",")
     if origin.strip()
 ]
+HOSTED_ALLOWED_ORIGINS = [
+    origin
+    for origin in _RAW_ALLOWED_ORIGINS
+    if origin != "*" or HOSTED_ALLOW_WILDCARD_ORIGIN
+]
+HOSTED_ALLOWED_MODELS = {
+    model.strip()
+    for model in os.getenv("EASYICU_HOSTED_ALLOWED_MODELS", "").split(",")
+    if model.strip()
+}
+_RAW_ALLOWED_HOSTS = [
+    host.strip()
+    for host in os.getenv("EASYICU_HOSTED_ALLOWED_HOSTS", "").split(",")
+    if host.strip()
+]
+HOSTED_ALLOWED_HOSTS = [
+    host for host in _RAW_ALLOWED_HOSTS if host != "*" or HOSTED_ALLOW_ANY_HOST
+] or ["127.0.0.1", "localhost", "[::1]", "testserver"]
+
+
+def _trusted_proxy_networks() -> (
+    tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]
+):
+    networks = []
+    for value in os.getenv("EASYICU_HOSTED_TRUSTED_PROXIES", "").split(","):
+        value = value.strip()
+        if value:
+            networks.append(ipaddress.ip_network(value, strict=False))
+    return tuple(networks)
+
+
+HOSTED_TRUSTED_PROXY_NETWORKS = _trusted_proxy_networks()
 
 MODEL_ALIASES = {
     "hosted-default": HOSTED_DEFAULT_MODEL,
@@ -74,16 +123,69 @@ _RATE_LIMIT_STATE: dict[str, deque[float]] = {}
 
 def _require_openrouter_key() -> None:
     if not OPENROUTER_API_KEY:
-        raise RuntimeError("OPENROUTER_API_KEY is required to run the hosted LLM server.")
+        raise RuntimeError(
+            "OPENROUTER_API_KEY is required to run the hosted LLM server."
+        )
 
 
-def _client_ip(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for", "").strip()
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+def _is_loopback_address(value: str) -> bool:
+    if value.strip().lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(value.strip()).is_loopback
+    except ValueError:
+        return False
+
+
+def _validate_security_configuration(bind_host: str) -> None:
+    if "*" in _RAW_ALLOWED_ORIGINS and not HOSTED_ALLOW_WILDCARD_ORIGIN:
+        raise RuntimeError(
+            "Wildcard CORS requires EASYICU_HOSTED_ALLOW_WILDCARD_ORIGIN=true."
+        )
+    if "*" in _RAW_ALLOWED_HOSTS and not HOSTED_ALLOW_ANY_HOST:
+        raise RuntimeError(
+            "Wildcard Host access requires EASYICU_HOSTED_ALLOW_ANY_HOST=true."
+        )
+    if HOSTED_SERVER_TOKEN:
+        return
+    if HOSTED_ALLOW_UNAUTHENTICATED_LOCAL and _is_loopback_address(bind_host):
+        return
+    raise RuntimeError(
+        "EASYICU_HOSTED_SERVER_TOKEN is required. For explicit loopback-only "
+        "development, set EASYICU_HOSTED_ALLOW_UNAUTHENTICATED_LOCAL=true."
+    )
+
+
+def _peer_ip(request: Request) -> str:
     if request.client and request.client.host:
         return request.client.host
     return "unknown"
+
+
+def _peer_is_trusted_proxy(peer: str) -> bool:
+    try:
+        address = ipaddress.ip_address(peer)
+    except ValueError:
+        return False
+    return any(address in network for network in HOSTED_TRUSTED_PROXY_NETWORKS)
+
+
+def _client_ip(request: Request) -> str:
+    peer = _peer_ip(request)
+    forwarded = request.headers.get("x-forwarded-for", "").strip()
+    if forwarded and _peer_is_trusted_proxy(peer):
+        chain = []
+        for candidate in [*forwarded.split(","), peer]:
+            try:
+                chain.append(str(ipaddress.ip_address(candidate.strip())))
+            except ValueError:
+                continue
+        for candidate in reversed(chain):
+            if not _peer_is_trusted_proxy(candidate):
+                return candidate
+        if chain:
+            return chain[0]
+    return peer
 
 
 def _check_rate_limit(client_ip: str) -> None:
@@ -106,24 +208,35 @@ def _check_rate_limit(client_ip: str) -> None:
 
 def _check_auth(request: Request) -> None:
     if not HOSTED_SERVER_TOKEN:
-        return
+        if HOSTED_ALLOW_UNAUTHENTICATED_LOCAL and _is_loopback_address(
+            _peer_ip(request)
+        ):
+            return
+        raise HTTPException(
+            status_code=503,
+            detail="Hosted service authentication is not configured.",
+        )
 
     auth_header = request.headers.get("authorization", "")
     expected = f"Bearer {HOSTED_SERVER_TOKEN}"
-    if auth_header != expected:
+    if not hmac.compare_digest(auth_header, expected):
         raise HTTPException(status_code=401, detail="Invalid hosted service token.")
 
 
 def _resolve_model(model_name: str | None) -> str:
-    candidate = (model_name or "").strip() or "hosted-default"
-    return MODEL_ALIASES.get(candidate, candidate)
+    candidate = str(model_name or "").strip() or "hosted-default"
+    if candidate in MODEL_ALIASES:
+        return MODEL_ALIASES[candidate]
+    if candidate in HOSTED_ALLOWED_MODELS:
+        return candidate
+    raise HTTPException(status_code=400, detail="Requested model is not allowed.")
 
 
 def _build_upstream_headers(request: Request) -> dict[str, str]:
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
-        "HTTP-Referer": request.headers.get("origin", "https://easyicu.local"),
+        "HTTP-Referer": "https://easyicu.local",
         "X-Title": "EasyICU Hosted LLM",
     }
     return headers
@@ -140,18 +253,31 @@ def _should_retry_with_fallback(response: requests.Response) -> bool:
         return False
     data = _json_or_text(response)
     message = json.dumps(data, ensure_ascii=False).lower()
-    return any(token in message for token in ("rate", "limit", "temporarily", "overloaded", "provider returned error"))
+    return any(
+        token in message
+        for token in (
+            "rate",
+            "limit",
+            "temporarily",
+            "overloaded",
+            "provider returned error",
+        )
+    )
 
 
 def _fallback_models_for(requested_model: str) -> list[str]:
-    resolved_default = _resolve_model("hosted-default")
-    current = _resolve_model(requested_model)
+    resolved_default = MODEL_ALIASES["hosted-default"]
+    current = MODEL_ALIASES.get(requested_model, requested_model)
     candidates = []
     for model in HOSTED_FALLBACK_MODELS:
-        resolved = _resolve_model(model)
+        resolved = MODEL_ALIASES.get(model, model)
         if resolved and resolved not in {current} and resolved not in candidates:
             candidates.append(resolved)
-    if current != resolved_default and resolved_default not in {current} and resolved_default not in candidates:
+    if (
+        current != resolved_default
+        and resolved_default not in {current}
+        and resolved_default not in candidates
+    ):
         candidates.insert(0, resolved_default)
     return candidates
 
@@ -174,7 +300,9 @@ def _post_upstream(
             stream=stream,
         )
     except requests.RequestException as exc:
-        raise HTTPException(status_code=502, detail=f"Upstream request failed: {exc}") from exc
+        raise HTTPException(
+            status_code=502, detail=f"Upstream request failed: {exc}"
+        ) from exc
 
     if stream or not _should_retry_with_fallback(upstream_response):
         return upstream_response
@@ -193,7 +321,9 @@ def _post_upstream(
             )
         except requests.RequestException:
             continue
-        if upstream_response.status_code < 400 or not _should_retry_with_fallback(upstream_response):
+        if upstream_response.status_code < 400 or not _should_retry_with_fallback(
+            upstream_response
+        ):
             return upstream_response
 
     return upstream_response
@@ -216,12 +346,13 @@ def _stream_upstream(response: requests.Response) -> Iterator[bytes]:
 
 
 app = FastAPI(title="EasyICU Hosted LLM", version="1.0.0")
+app.add_middleware(AllowedHostsMiddleware, allowed_hosts=HOSTED_ALLOWED_HOSTS)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=HOSTED_ALLOWED_ORIGINS or ["*"],
+    allow_origins=HOSTED_ALLOWED_ORIGINS,
     allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 
@@ -233,11 +364,14 @@ def health() -> dict[str, Any]:
         "default_model": HOSTED_DEFAULT_MODEL,
         "rate_limit_per_minute": HOSTED_RATE_LIMIT,
         "auth_required": bool(HOSTED_SERVER_TOKEN),
+        "unauthenticated_local_development": HOSTED_ALLOW_UNAUTHENTICATED_LOCAL,
+        "allowed_model_aliases": sorted(MODEL_ALIASES),
     }
 
 
 @app.get("/v1/models")
-def list_models() -> dict[str, Any]:
+def list_models(request: Request) -> dict[str, Any]:
+    _check_auth(request)
     return {
         "object": "list",
         "data": [
@@ -254,13 +388,27 @@ def list_models() -> dict[str, Any]:
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
-    _require_openrouter_key()
     _check_auth(request)
+    if not OPENROUTER_API_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="Hosted service upstream provider is not configured.",
+        )
     _check_rate_limit(_client_ip(request))
 
-    payload = await request.json()
+    try:
+        payload = await request.json()
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=400, detail="Request body must be JSON."
+        ) from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Request body must be an object.")
     upstream_payload = _build_upstream_payload(payload)
-    stream = bool(upstream_payload.get("stream"))
+    stream_value = upstream_payload.get("stream", False)
+    if not isinstance(stream_value, bool):
+        raise HTTPException(status_code=400, detail="stream must be a boolean.")
+    stream = stream_value
     upstream_response = _post_upstream(request, upstream_payload, stream=stream)
 
     if stream:
@@ -280,8 +428,10 @@ async def chat_completions(request: Request):
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the EasyICU hosted LLM relay.")
-    parser.add_argument("--host", default=os.getenv("EASYICU_HOSTED_HOST", "0.0.0.0"))
-    parser.add_argument("--port", type=int, default=int(os.getenv("EASYICU_HOSTED_PORT", "8787")))
+    parser.add_argument("--host", default=os.getenv("EASYICU_HOSTED_HOST", "127.0.0.1"))
+    parser.add_argument(
+        "--port", type=int, default=int(os.getenv("EASYICU_HOSTED_PORT", "8787"))
+    )
     return parser
 
 
@@ -289,6 +439,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     _require_openrouter_key()
     parser = build_parser()
     args = parser.parse_args(argv)
+    _validate_security_configuration(args.host)
 
     import uvicorn
 

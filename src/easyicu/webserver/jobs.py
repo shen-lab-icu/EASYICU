@@ -22,6 +22,13 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional
 
 
+class JobCapacityError(RuntimeError):
+    def __init__(self, *, max_running: int, running: int) -> None:
+        self.max_running = max_running
+        self.running = running
+        super().__init__(f"running job limit reached ({running}/{max_running})")
+
+
 class Job:
     """A single long task: progress event history + terminal status/result."""
 
@@ -30,6 +37,7 @@ class Job:
         self.kind = kind
         self.status = "running"  # running | done | failed | cancelled
         self.created = time.time()
+        self.finished: Optional[float] = None
         self.events: List[Dict[str, Any]] = []
         self.result: Optional[Dict[str, Any]] = None
         self.error: Optional[str] = None
@@ -49,6 +57,7 @@ class Job:
         self.result = result
         self.error = error
         self.emit({"type": "end", "status": status, "result": result, "error": error})
+        self.finished = time.time()
         self.status = status
 
     def request_cancel(self, reason: Optional[str] = None) -> bool:
@@ -71,6 +80,8 @@ class Job:
             "id": self.id,
             "kind": self.kind,
             "status": self.status,
+            "created": self.created,
+            "finished": self.finished,
             "events": list(self.events),
             "result": self.result,
             "error": self.error,
@@ -82,16 +93,29 @@ class Job:
 class JobManager:
     """Owns running jobs and runs each runner on its own daemon thread."""
 
-    def __init__(self) -> None:
+    def __init__(self, max_completed: int = 100, max_running: int = 8) -> None:
+        if max_completed < 0:
+            raise ValueError("max_completed must be non-negative")
+        if max_running <= 0:
+            raise ValueError("max_running must be positive")
         self._jobs: Dict[str, Job] = {}
         self._lock = threading.Lock()
+        self._max_completed = max_completed
+        self._max_running = max_running
 
     def submit(self, kind: str, runner: Callable[[Job], Any]) -> Job:
         """Start ``runner(job)`` on a background thread. ``runner`` emits progress
         via ``job.emit(...)`` and may return a result dict; an exception flips the
         job to ``failed``. Returns the Job immediately (non-blocking)."""
-        job = Job(uuid.uuid4().hex[:12], kind)
         with self._lock:
+            self._prune_completed_locked()
+            running = sum(job.status == "running" for job in self._jobs.values())
+            if running >= self._max_running:
+                raise JobCapacityError(
+                    max_running=self._max_running,
+                    running=running,
+                )
+            job = Job(uuid.uuid4().hex[:12], kind)
             self._jobs[job.id] = job
         threading.Thread(target=self._run, args=(job, runner), daemon=True).start()
         return job
@@ -106,9 +130,21 @@ class JobManager:
                     job.finish("done", result=result)
         except Exception as exc:  # noqa: BLE001 — surface any failure to the client
             job.finish("failed", error=str(exc))
+        finally:
+            with self._lock:
+                self._prune_completed_locked()
+
+    def _prune_completed_locked(self) -> None:
+        completed = sorted(
+            (job for job in self._jobs.values() if job.status != "running"),
+            key=lambda job: job.finished or job.created,
+        )
+        for job in completed[: max(0, len(completed) - self._max_completed)]:
+            self._jobs.pop(job.id, None)
 
     def get(self, job_id: str) -> Optional[Job]:
-        return self._jobs.get(job_id)
+        with self._lock:
+            return self._jobs.get(job_id)
 
 
 MANAGER = JobManager()

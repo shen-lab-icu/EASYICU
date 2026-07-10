@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 import easyicu
+from easyicu.webserver.input_validation import parse_bool
 
 _CONFIG_DIR = Path.home() / ".easyicu"
 _CONFIG_PATH = _CONFIG_DIR / "webserver_settings.json"
@@ -87,7 +88,7 @@ def _choice(key: str):
 
 
 _COERCE = {
-    "ai_enabled": bool,
+    "ai_enabled": parse_bool,
     "language": _choice("language"),
     "data_mode": _choice("data_mode"),
     "evidence_gate": _choice("evidence_gate"),
@@ -95,21 +96,21 @@ _COERCE = {
     "demo_duration": _choice("demo_duration"),
     "working_dir": _optional_path,
     "export_dir": _optional_path,
-    "module_folder_mode": bool,
-    "telemetry_enabled": bool,
-    "cache_cohort_frames": bool,
+    "module_folder_mode": parse_bool,
+    "telemetry_enabled": parse_bool,
+    "cache_cohort_frames": parse_bool,
     "agent_model_mode": _choice("agent_model_mode"),
     "token_budget": int,
-    "auto_repair": bool,
-    "science_skills_enabled": bool,
-    "connector_pubmed_enabled": bool,
-    "connector_zotero_enabled": bool,
-    "mcp_tools_enabled": bool,
-    "prompt_contracts_enabled": bool,
-    "tool_audit_enabled": bool,
-    "remote_compute_enabled": bool,
+    "auto_repair": parse_bool,
+    "science_skills_enabled": parse_bool,
+    "connector_pubmed_enabled": parse_bool,
+    "connector_zotero_enabled": parse_bool,
+    "mcp_tools_enabled": parse_bool,
+    "prompt_contracts_enabled": parse_bool,
+    "tool_audit_enabled": parse_bool,
+    "remote_compute_enabled": parse_bool,
     "density": _choice("density"),
-    "reduce_motion": bool,
+    "reduce_motion": parse_bool,
 }
 
 
@@ -141,6 +142,11 @@ def load_settings() -> Dict[str, Any]:
         merged = dict(DEFAULTS)
         for k, v in _read_raw().items():
             if k in DEFAULTS:
+                if k in _COERCE:
+                    try:
+                        v = _COERCE[k](v)
+                    except (TypeError, ValueError):
+                        continue
                 merged[k] = v
         return merged
 
@@ -151,6 +157,11 @@ def update_settings(patch: Dict[str, Any]) -> Dict[str, Any]:
         current = dict(DEFAULTS)
         for key, value in _read_raw().items():
             if key in DEFAULTS:
+                if key in _COERCE:
+                    try:
+                        value = _COERCE[key](value)
+                    except (TypeError, ValueError):
+                        continue
                 current[key] = value
         for k, v in patch.items():
             if k not in DEFAULTS:

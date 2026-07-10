@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import os
 from pathlib import Path
 import signal
@@ -37,6 +38,15 @@ def _log_file() -> Path:
 
 def _probe_host(host: str) -> str:
     return "127.0.0.1" if host in {"0.0.0.0", "::"} else host
+
+
+def _is_loopback_bind(host: str) -> bool:
+    if str(host or "").strip().lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(str(host).strip()).is_loopback
+    except ValueError:
+        return False
 
 
 def _health_url(host: str, port: int) -> str:
@@ -146,6 +156,13 @@ def _find_easyicu_webserver_processes_on_port(port: int) -> list[int]:
 def run_app(
     host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, *, background: bool = False
 ) -> int:
+    if not _is_loopback_bind(host):
+        print(
+            "EasyICU WebApp is local-only because its filesystem APIs do not have "
+            "remote authentication. Bind to 127.0.0.1, localhost, or ::1.",
+            file=sys.stderr,
+        )
+        return 2
     cmd = _uvicorn_cmd(host, port)
     if background:
         log_path = _log_file()

@@ -78,6 +78,10 @@ Default local URL:
 http://127.0.0.1:8765
 ```
 
+The native Web app is intentionally **loopback-only** because it exposes local
+filesystem and job APIs. Bind requests such as `--host 0.0.0.0` are rejected;
+use a local browser or an authenticated tunnel instead of exposing it directly.
+
 ### Path B: Python API
 
 Choose this path if you want to:
@@ -108,6 +112,13 @@ The **core install (`easyicu`) already bundles the research-agent's analytical
 stack** (`scikit-learn`, `statsmodels`), so the Python API and the deterministic
 agent path work out of the box. The research-agent CLI additionally needs an LLM
 client — install `easyicu[webapp]` (bundles `openai`) or run `easyicu-llm-server`.
+
+`easyicu-llm-server` is a credential-bearing relay and therefore fails closed:
+it binds to `127.0.0.1` by default and requires
+`EASYICU_HOSTED_SERVER_TOKEN`. Browser origins and any direct upstream model
+names must be explicitly allowlisted. Unauthenticated development mode is
+available only through the explicit local-only opt-in documented by
+`easyicu.hosted_llm_server` and must never be used for a remote bind.
 
 **Install it to develop it** (editable clone):
 

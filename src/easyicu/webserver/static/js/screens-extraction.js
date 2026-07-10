@@ -1001,11 +1001,24 @@
         listEl.innerHTML = '';
         r.entries.forEach(en => {
           const b = document.createElement('button'); b.className = 'eu-pick-row';
-          b.innerHTML = `<span style="color:var(--ink-3);flex:none;">${icon('folder', 15)}</span><span class="nm">${en.name}</span>${en.hint ? `<span class="hint">${en.hint}</span>` : ''}`;
+          const folderIcon = document.createElement('span');
+          folderIcon.style.cssText = 'color:var(--ink-3);flex:none;';
+          folderIcon.innerHTML = icon('folder', 15);
+          const name = document.createElement('span'); name.className = 'nm';
+          name.textContent = String(en.name || '');
+          b.appendChild(folderIcon); b.appendChild(name);
+          if (en.hint) {
+            const hint = document.createElement('span'); hint.className = 'hint';
+            hint.textContent = String(en.hint);
+            b.appendChild(hint);
+          }
           b.onclick = () => load(en.path); listEl.appendChild(b);
         });
       }).catch(err => {
-        listEl.innerHTML = `<div class="eu-pick-empty">${t('Failed to list folder', '列目录失败')}: ${String(err && err.message || err)}</div>`;
+        listEl.innerHTML = '';
+        const failure = document.createElement('div'); failure.className = 'eu-pick-empty';
+        failure.textContent = `${t('Failed to list folder', '列目录失败')}: ${String(err && err.message || err)}`;
+        listEl.appendChild(failure);
       });
     }
     load(cur);

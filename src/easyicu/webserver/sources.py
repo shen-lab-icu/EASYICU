@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from datetime import datetime
+from functools import wraps
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
@@ -18,6 +20,16 @@ from easyicu.webserver import settings as settings_store
 
 _CONFIG_DIR = Path.home() / ".easyicu"
 _CONFIG_PATH = _CONFIG_DIR / "webserver_sources.json"
+_LOCK = threading.RLock()
+
+
+def _registry_locked(func):
+    @wraps(func)
+    def wrapped(*args, **kwargs):
+        with _LOCK:
+            return func(*args, **kwargs)
+
+    return wrapped
 
 
 def _now() -> str:
@@ -33,10 +45,10 @@ def _read_raw() -> Dict[str, Any]:
 
 
 def _write_raw(data: Dict[str, Any]) -> None:
-    _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    _CONFIG_PATH.write_text(
-        json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
+    _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _CONFIG_PATH.with_suffix(_CONFIG_PATH.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(_CONFIG_PATH)
 
 
 def _norm_path(raw_path: str) -> str:
@@ -211,6 +223,7 @@ def _autodiscovered_paths() -> List[str]:
     return _dedup_paths(paths)
 
 
+@_registry_locked
 def load_registry() -> Dict[str, Any]:
     raw = _read_raw()
     removed_paths = set(_raw_removed_paths(raw))
@@ -268,6 +281,7 @@ def load_registry() -> Dict[str, Any]:
     }
 
 
+@_registry_locked
 def save_registry(patch: Dict[str, Any]) -> Dict[str, Any]:
     raw = _read_raw()
     removed_paths = set(_raw_removed_paths(raw))
@@ -317,6 +331,7 @@ def save_registry(patch: Dict[str, Any]) -> Dict[str, Any]:
     return load_registry()
 
 
+@_registry_locked
 def register_source(
     path: str, label: str | None = None, active: bool = True, crossdb: bool = True
 ) -> Dict[str, Any]:
@@ -331,12 +346,15 @@ def register_source(
         {
             "sources": [source],
             "active_path": source["path"] if active else registry.get("active_path"),
-            "active_source": "registered_source" if active else registry.get("active_source"),
+            "active_source": (
+                "registered_source" if active else registry.get("active_source")
+            ),
             "crossdb_paths": next_paths,
         }
     )
 
 
+@_registry_locked
 def rename_source(path: str, label: str) -> Dict[str, Any]:
     """Rename a registered source in metadata only; never touches export files."""
     norm = _norm_path(path)
@@ -410,6 +428,7 @@ def rename_source(path: str, label: str) -> Dict[str, Any]:
     return result
 
 
+@_registry_locked
 def remove_source(path: str) -> Dict[str, Any]:
     """Unregister one source without deleting or modifying its export folder."""
     norm = _norm_path(path)

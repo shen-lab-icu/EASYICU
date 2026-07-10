@@ -1,8 +1,9 @@
 """Local-first Page guide / Copilot sessions for the native WebApp.
 
-This module is intentionally deterministic. It gives the floating Page guide
-and future Guided Copilot shells a real backend contract without constructing an
-external model client, reading patient rows, or creating manuscript artifacts.
+This module keeps routing deterministic while assigning collision-safe session
+IDs. It gives the floating Page guide and future Guided Copilot shells a real
+backend contract without constructing an external model client, reading patient
+rows, or creating manuscript artifacts.
 The backend owns session metadata, shortcut classification, allowed UI actions,
 and fail-closed blockers.
 """
@@ -12,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import secrets
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -74,7 +76,7 @@ def _slug(value: Any, fallback: str = "copilot-session") -> str:
 
 
 def _session_id(seed: str) -> str:
-    return "copilot_" + hashlib.sha1(seed.encode("utf-8")).hexdigest()[:12]
+    return "copilot_" + hashlib.sha1(seed.encode("utf-8")).hexdigest()[:20]
 
 
 def _read_raw() -> Dict[str, Any]:
@@ -107,7 +109,7 @@ def _row_level_markers(value: Any, markers: List[str] | None = None) -> List[str
 
 def _project_dir_for(session_id: str, route: str, scope: str) -> Path:
     prefix = "page-guide" if scope == "page_guide" else "guided-copilot"
-    return _PROJECTS_ROOT / f"{prefix}-{_slug(route)}-{session_id[-6:]}"
+    return _PROJECTS_ROOT / f"{prefix}-{_slug(route)}-{session_id[-12:]}"
 
 
 def _sanitize_context(raw: Any) -> Dict[str, Any]:
@@ -371,7 +373,9 @@ def create_session(body: Dict[str, Any]) -> Dict[str, Any]:
     context = _sanitize_context(body.get("context"))
     scope = _scope(body.get("scope"))
     now = _now()
-    session_id = _session_id("|".join([now, scope, context["route"]]))
+    session_id = _session_id(
+        "|".join([now, scope, context["route"], secrets.token_hex(16)])
+    )
     project_dir = _project_dir_for(session_id, context["route"], scope)
     project_kind = (
         "page_guide_session_folder"

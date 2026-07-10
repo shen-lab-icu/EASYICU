@@ -13,13 +13,15 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import ipaddress
 import json
+import os
 from pathlib import Path
 
 from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from easyicu.webserver import agent_runs
@@ -37,18 +39,74 @@ from easyicu.webserver import science_workbench
 from easyicu.webserver import sources as source_store
 from easyicu.webserver.catalog import build_catalog
 from easyicu.webserver.ideas import mining as idea_mining_web
-from easyicu.webserver.jobs import MANAGER
+from easyicu.webserver.jobs import MANAGER, JobCapacityError
+from easyicu.webserver.input_validation import parse_bool
+from easyicu.webserver.host_security import AllowedHostsMiddleware
 
 STATIC_DIR = Path(__file__).with_name("static")
 
 app = FastAPI(title="EasyICU", version="0.1.0")
 
 
+def _web_allowed_hosts() -> list[str]:
+    configured = [
+        host.strip()
+        for host in os.getenv("EASYICU_WEB_ALLOWED_HOSTS", "").split(",")
+        if host.strip()
+    ]
+    allow_any = os.getenv("EASYICU_WEB_ALLOW_ANY_HOST", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if "*" in configured and not allow_any:
+        configured = [host for host in configured if host != "*"]
+    return configured or ["127.0.0.1", "localhost", "[::1]", "testserver"]
+
+
+WEB_ALLOWED_HOSTS = _web_allowed_hosts()
+app.add_middleware(AllowedHostsMiddleware, allowed_hosts=WEB_ALLOWED_HOSTS)
+
+
+def _is_local_web_client(request: Request) -> bool:
+    peer = request.client.host if request.client else ""
+    if peer in {"testclient", "testserver"}:
+        return True
+    try:
+        address = ipaddress.ip_address(peer)
+    except ValueError:
+        return False
+    if address.is_loopback:
+        return True
+    return bool(
+        address.version == 6 and address.ipv4_mapped and address.ipv4_mapped.is_loopback
+    )
+
+
 def _body_bool(body: Dict[str, Any], key: str, default: bool = False) -> bool:
-    value = body.get(key, default)
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-    return bool(value)
+    try:
+        return parse_bool(body.get(key), default=default)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "invalid_boolean", "field": key},
+        ) from exc
+
+
+def _submit_job(kind: str, runner: Any):
+    try:
+        return MANAGER.submit(kind, runner)
+    except JobCapacityError as exc:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error": "job_capacity_exceeded",
+                "running": exc.running,
+                "max_running": exc.max_running,
+                "reason": "Wait for a running local job to finish before retrying.",
+            },
+        ) from exc
 
 
 def _pubmed_connector_gate(
@@ -71,6 +129,17 @@ def _pubmed_connector_gate(
         {"reason": reason, "path": "ideas"},
     )
     return patched, reason
+
+
+@app.middleware("http")
+async def local_clients_only(request: Request, call_next):
+    """Keep filesystem and job APIs local until the product has remote auth."""
+    if not _is_local_web_client(request):
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "EasyICU WebApp accepts loopback clients only."},
+        )
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -313,8 +382,8 @@ def post_workspaces_register(body: Dict[str, Any]) -> dict:
     result = source_store.register_source(
         path,
         label=body.get("label"),
-        active=bool(body.get("active", True)),
-        crossdb=bool(body.get("crossdb", True)),
+        active=_body_bool(body, "active", True),
+        crossdb=_body_bool(body, "crossdb", True),
     )
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result)
@@ -354,7 +423,7 @@ def jobs_convert(body: Dict[str, Any]) -> dict:
     database = str(body.get("database") or "")
     if not path or not database:
         raise HTTPException(status_code=400, detail="path and database are required")
-    job = MANAGER.submit("convert", dataio.make_convert_runner(path, database))
+    job = _submit_job("convert", dataio.make_convert_runner(path, database))
     return {"job_id": job.id, "kind": job.kind, "status": job.status}
 
 
@@ -374,7 +443,7 @@ def jobs_extract(body: Dict[str, Any]) -> dict:
         modules=body.get("modules"),
         concepts=body.get("concepts"),
         export_format=str(body.get("format") or "csv"),
-        merge=bool(body.get("merge")),
+        merge=_body_bool(body, "merge"),
         out_dir=out_dir,
         create_run_subdir=True,
         max_patients=body.get("max_patients"),
@@ -401,7 +470,7 @@ def jobs_extract(body: Dict[str, Any]) -> dict:
             }
         return result
 
-    job = MANAGER.submit("extract", runner)
+    job = _submit_job("extract", runner)
     return {"job_id": job.id, "kind": job.kind, "status": job.status}
 
 
@@ -413,7 +482,7 @@ def jobs_crossdb_raw_distribution(body: Dict[str, Any]) -> dict:
     many concepts, so the native UI runs them through the same local job/SSE
     model as extraction instead of a foreground request.
     """
-    job = MANAGER.submit(
+    job = _submit_job(
         "crossdb-raw-distribution",
         crossdb_review.make_crossdb_raw_distribution_runner(body),
     )
@@ -448,10 +517,11 @@ def jobs_agent_run(body: Dict[str, Any]) -> dict:
             raise HTTPException(status_code=400, detail=seed_check)
 
     run_type = str(
-        body.get("run_type") or ("full" if body.get("full_run") else "preflight")
+        body.get("run_type")
+        or ("full" if _body_bool(body, "full_run") else "preflight")
     )
     llm_provider = str(body.get("llm_provider") or body.get("provider") or "mock")
-    external_llm_opt_in = bool(body.get("external_llm_opt_in"))
+    external_llm_opt_in = _body_bool(body, "external_llm_opt_in")
     settings = settings_store.load_settings()
     compute = capabilities.validate_compute_target(body)
     if not compute.get("ok"):
@@ -477,7 +547,7 @@ def jobs_agent_run(body: Dict[str, Any]) -> dict:
         external_llm_opt_in=external_llm_opt_in,
         ai_enabled=bool(settings.get("ai_enabled")),
     )
-    job = MANAGER.submit("agent-run", runner)
+    job = _submit_job("agent-run", runner)
     capabilities.record_tool_event(
         "agent_run_submitted",
         {
@@ -556,9 +626,9 @@ def _validate_agent_project_seed_for_run(
 
     expected_hash = str(contract.get("path_hash") or "")
     if expected_hash:
-        active_hash = hashlib.sha256(str(export_path or "").encode("utf-8")).hexdigest()[
-            :16
-        ]
+        active_hash = hashlib.sha256(
+            str(export_path or "").encode("utf-8")
+        ).hexdigest()[:16]
         if active_hash != expected_hash:
             return {
                 "ok": False,
@@ -621,7 +691,7 @@ def post_agent_run_provider_config(body: Dict[str, Any]) -> dict:
 
     # Fail closed: writing provider credentials must not silently flip the
     # global AI opt-in — only an explicit enable_ai=true may enable it.
-    updates: Dict[str, Any] = {"ai_enabled": bool(body.get("enable_ai", False))}
+    updates: Dict[str, Any] = {"ai_enabled": _body_bool(body, "enable_ai")}
     if updates["ai_enabled"]:
         updates["agent_model_mode"] = "external"
     settings = settings_store.update_settings(updates)
@@ -875,7 +945,7 @@ def post_ideas_discover(body: Dict[str, Any]) -> dict:
         capabilities.record_tool_event(
             "pubmed_discovery",
             {
-                "allow_network": bool((body or {}).get("allow_network")),
+                "allow_network": _body_bool(body, "allow_network"),
                 "search_performed": bool(payload.get("search_performed")),
                 "status": payload.get("status"),
             },
@@ -914,7 +984,7 @@ def post_ideas_prior_art(body: Dict[str, Any]) -> dict:
         capabilities.record_tool_event(
             "pubmed_prior_art",
             {
-                "allow_network": bool((body or {}).get("allow_network")),
+                "allow_network": _body_bool(body, "allow_network"),
                 "search_performed": bool(
                     (payload.get("prior_art") or {}).get("search_performed")
                 ),
