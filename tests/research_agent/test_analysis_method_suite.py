@@ -98,11 +98,15 @@ def test_deterministic_methods_name_a_real_runner():
                 f"easyicu.research_agent.{m.runner}"
             )
             is not None
+            or importlib.util.find_spec(
+                f"easyicu.research_agent.methods.{m.runner}"
+            )
+            is not None
         )
         assert known, (
             f"{suite.family}.{m.key} deterministic runner {m.runner!r} is neither a "
             f"capability_registry primary/auxiliary runner, a FAMILY_RENDERERS key, "
-            f"nor an importable research_agent module"
+            f"nor an importable research_agent methods module"
         )
 
 
