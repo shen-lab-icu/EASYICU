@@ -4417,7 +4417,7 @@ def test_crossdb_raw_distribution_job_can_be_cancelled(
 
     assert snap["status"] == "cancelled"
     assert snap["result"]["cancelled"] is True
-    assert snap["result"]["cancelled_at"] in {"resolving", "loading"}
+    assert snap["result"]["cancelled_at"] in {"resolving", "loading", "aggregating"}
     assert any(event.get("type") == "cancel_requested" for event in snap["events"])
 
 

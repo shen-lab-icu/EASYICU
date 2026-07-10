@@ -1901,6 +1901,7 @@ def test_native_extraction_include_feature_definitions_bool_parsing() -> None:
 def test_native_crossdb_restores_distribution_visuals() -> None:
     api_js = _static_js("api.js")
     viz_js = _static_js("screens-viz.js")
+    setup_js = _static_js("screens-viz-crossdb-setup.js")
     continuity_js = _static_js("screens-viz-crossdb-job-continuity.js")
     progress_js = _static_js("screens-viz-crossdb-progress.js")
     screens_css = _static_css("screens.css")
@@ -1932,14 +1933,14 @@ def test_native_crossdb_restores_distribution_visuals() -> None:
     assert "feature_scope: 'all_catalog'" in viz_js
     assert "window.EU_CROSSDB_RAW.coreFeatures()" in viz_js
     assert "window.EU_CROSSDB_RAW.buildRequest" in viz_js
-    assert "12 curated core concepts" in viz_js
+    assert "12 curated core concepts" in setup_js
     assert "max_features: 90" not in viz_js
     assert "records_per_feature: 96" in viz_js
     assert "demoCurvePoints" not in viz_js
     assert "crossFeatureCurve" in viz_js
     assert "one subplot per feature" in viz_js
-    assert "['SICdb', true, 'sic']" in viz_js
-    assert "all supported catalog concepts" in viz_js
+    assert "{ label: 'SICdb', key: 'sic', selected: true }" in setup_js
+    assert "all supported catalog concepts" in setup_js
     assert "全部受支持的标准概念" in viz_js
     assert "Feature distribution by shared concept" not in viz_js
     assert "Module coverage distribution by export" not in viz_js
@@ -1955,47 +1956,44 @@ def test_native_crossdb_restores_distribution_visuals() -> None:
     assert "new window.EventSource('/api/jobs/' + encodeURIComponent(meta.job_id) + '/events')" in continuity_js
     assert "new EventSource('/api/jobs/' + r.job_id + '/events')" not in viz_js
     assert "data-crossdb-cancel" in progress_js
-    assert "data-crossdb-root-browse" in viz_js
-    assert "data-crossdb-root-scan" in viz_js
-    assert "Check folders" in viz_js
-    assert "检查文件夹" in viz_js
-    assert "Detected database folders" in viz_js
-    assert "Missing selected database folders" in viz_js
-    assert "Unrecognized folders" in viz_js
-    assert "crossRawScanReadyFor" in viz_js
-    assert "function crossRawSelectionStatusFor(" in viz_js
-    assert (
-        "toggling a database changes selection,\n          // not whether sibling folders were recognized"
-        in viz_js
-    )
-    assert (
-        "if (window.EU_DATA === 'real') {\n          invalidateCrossRawRootScan();"
-        not in viz_js
-    )
+    assert "data-crossdb-root-browse" in setup_js
+    assert "data-crossdb-root-scan" in setup_js
+    assert "Check folders" in setup_js
+    assert "检查文件夹" in setup_js
+    assert "Detected database folders" in setup_js
+    assert "Missing selected database folders" in setup_js
+    assert "Unrecognized folders" in setup_js
+    assert "function selectionStatus(" in setup_js
+    assert "missingSelectedKeys.length === 0" in setup_js
+    selection_binding = setup_js.split("const grid =", 1)[1].split(
+        "root.querySelectorAll('[data-crossdb-run-raw]')", 1
+    )[0]
+    assert "if (window.EU_DATA === 'real')" in selection_binding
+    assert "invalidateScan" not in selection_binding
     assert "Check the ICU data root first" in viz_js
-    assert "Choose local ICU data root" in viz_js
-    assert "选择本地 ICU 数据根目录" in viz_js
+    assert "Choose local ICU data root" in setup_js
+    assert "选择本地 ICU 数据根目录" in setup_js
     assert (
         "Local folder picker API is not ready. Paste a raw ICU data root path instead."
-        in viz_js
+        in setup_js
     )
     assert "api.cancelJob(state.jobId, 'user_requested')" in progress_js
-    assert "crossRawProgress.requestCancel" in viz_js
+    assert "progress.requestCancel" in setup_js
     assert "Cancellation requested. EasyICU will stop after the current bounded read returns." in progress_js
     assert (
         "Choose a local ICU data root before loading real Cross-DB densities." in viz_js
     )
     assert "加载真实跨库密度前，请先选择本地 ICU 数据根目录。" in viz_js
-    assert "crossRawRootDraft" in viz_js
-    assert "let crossRawSampleMode = 'quick';" in viz_js
-    assert "function crossRawSampleProfiles()" in viz_js
-    assert "Quick preview" in viz_js
-    assert "快速预览" in viz_js
-    assert "maxPatients: 200" in viz_js
-    assert "sampleSize: 600" in viz_js
-    assert "data-crossdb-sample-mode" in viz_js
-    assert "Sampling budget before plotting" in viz_js
-    assert "绘图前抽样预算" in viz_js
+    assert "rawRootDraft: ''" in setup_js
+    assert "sampleMode: 'quick'" in setup_js
+    assert "function sampleProfiles(" in setup_js
+    assert "Quick preview" in setup_js
+    assert "快速预览" in setup_js
+    assert "maxPatients: 200" in setup_js
+    assert "sampleSize: 600" in setup_js
+    assert "data-crossdb-sample-mode" in setup_js
+    assert "Sampling budget before plotting" in setup_js
+    assert "绘图前抽样预算" in setup_js
     assert "max_patients: sampleProfile.maxPatients" in viz_js
     assert "sample_size: sampleProfile.sampleSize" in viz_js
     assert "Queued local raw Cross-DB density job" in viz_js
@@ -2013,14 +2011,16 @@ def test_native_crossdb_restores_distribution_visuals() -> None:
     assert "easyicu_raw_data_root" not in viz_js
     assert "window.EU_DATA === 'real' && !crossRawJobId" not in viz_js
     assert "loadRealWorkspace(done);" not in viz_js
-    assert "crossdbRunBound" in viz_js
-    assert "crossdbRootBound" in viz_js
+    assert "data-crossdb-run-raw" in setup_js
+    assert "data-crossdb-run-demo" in setup_js
+    assert "querySelectorAll('[data-run]')" not in setup_js
     assert "--xdb-grid-cols" in viz_js
     assert "xdb-density-svg" in viz_js
     assert "xdb-density-line" in viz_js
-    assert "js/screens-viz.js?v=20260710-crossdb-progress" in index_html
-    assert "css/crossdb.css?v=20260710-structured-progress" in index_html
-    assert "crossdb-run-strip" in viz_js
+    assert "js/screens-viz-crossdb-setup.js?v=20260710-setup-owner" in index_html
+    assert "js/screens-viz.js?v=20260710-crossdb-setup-owner" in index_html
+    assert "css/crossdb.css?v=20260710-setup-owner" in index_html
+    assert "crossdb-run-strip" in setup_js
     assert ".crossdb-run-strip" in crossdb_css
     assert "padding-right: 168px" in crossdb_css
     assert "scroll-margin-bottom: 84px" in crossdb_css
@@ -2088,7 +2088,7 @@ def test_native_cohort_snapshot_renders_real_clinical_profile() -> None:
     assert ".cprof-grid" in cohort_css
     assert ".cxh" not in cohort_css
     # Cache-bust bumped so the restored charts ship to existing clients.
-    assert "js/screens-viz.js?v=20260710-crossdb-progress" in index_html
+    assert "js/screens-viz.js?v=20260710-crossdb-setup-owner" in index_html
 
 
 def test_native_cohort_groups_render_comparison_bar_chart() -> None:
@@ -2668,7 +2668,7 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert index_html.index("js/screens-viz-patient-tables.js?") < index_html.index(
         "js/screens-viz.js?"
     )
-    assert "js/screens-viz.js?v=20260710-crossdb-progress" in index_html
+    assert "js/screens-viz.js?v=20260710-crossdb-setup-owner" in index_html
     assert "bounded browser review', '浏览器有界审阅" in viz_js
     assert "function buildDemoPatientDrilldown" in viz_js
     assert "function demoTablePreviewRowContext" in viz_js
@@ -2836,7 +2836,7 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
     index_html = _static_html("index.html")
 
     assert "css/cohort.css?v=20260707-design" in index_html
-    assert "js/screens-viz.js?v=20260710-crossdb-progress" in index_html
+    assert "js/screens-viz.js?v=20260710-crossdb-setup-owner" in index_html
     assert "let cohortView = 'idle';" in viz_js
     assert "let cohortFeatureScope = 'recommended';" in viz_js
     assert 'data-cohort-config-required="true"' in viz_js
@@ -3317,20 +3317,25 @@ def test_cohort_and_crossdb_consume_guided_handoff() -> None:
     """A study configured in Guided Copilot must not silently vanish when the
     conversation lands the user on Cohort Statistics or Cross-DB Benchmark."""
     viz_js = _static_js("screens-viz.js")
+    setup_js = _static_js("screens-viz-crossdb-setup.js")
     assert "window.EU_GUIDED_HANDOFF.take('cohort')" in viz_js
     assert "window.EU_GUIDED_HANDOFF.noteHtml('cohort')" in viz_js
-    assert "window.EU_GUIDED_HANDOFF.take('crossdb')" in viz_js
-    assert "window.EU_GUIDED_HANDOFF.noteHtml('crossdb')" in viz_js
+    assert "window.EU_GUIDED_HANDOFF.take('crossdb')" in setup_js
+    assert "window.EU_GUIDED_HANDOFF.noteHtml('crossdb')" in setup_js
 
 
 def test_topbar_actions_only_appear_once_workspace_is_loaded() -> None:
     """Before any data is loaded the page body owns the single primary action;
     a context-free topbar "Render"/"Run" button is noise that confused users."""
     viz_js = _static_js("screens-viz.js")
+    setup_js = _static_js("screens-viz-crossdb-setup.js")
     # the pre-load Render button is gone from the patient screen
     assert "${t('Render', '渲染')}" not in viz_js
     # each viz actionHtml falls through to an empty string when not loaded
-    assert viz_js.count("Topbar actions only exist once") == 3
+    assert viz_js.count("Topbar actions only exist once") == 2
+    assert "function actionHtml(config)" in setup_js
+    assert "if (!loaded) return '';" in setup_js
+    assert "${rawLoaded ? '' : `<button" in setup_js
 
 
 def test_result_charts_carry_reading_captions() -> None:
