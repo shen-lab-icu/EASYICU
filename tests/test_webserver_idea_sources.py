@@ -890,6 +890,34 @@ def test_provider_config_route_fails_closed_when_enable_ai_omitted(
     assert payload["settings"]["agent_model_mode"] != "external"
 
 
+def test_provider_config_rejects_invalid_enable_ai_before_writing_credentials(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env_path = tmp_path / "provider.env"
+    settings_path = tmp_path / "settings.json"
+    monkeypatch.setattr(provider_adapter, "_DEFAULT_PROVIDER_ENV_FILE", env_path)
+    monkeypatch.setattr(settings_store, "_CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(settings_store, "_CONFIG_PATH", settings_path)
+
+    response = TestClient(app).post(
+        "/api/agent-runs/provider-config",
+        json={
+            "provider": "openai",
+            "api_key": "sk-must-not-be-written",
+            "enable_ai": "sometimes",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == {
+        "error": "invalid_boolean",
+        "field": "enable_ai",
+    }
+    assert not env_path.exists()
+    assert not settings_path.exists()
+
+
 def test_blocked_prior_art_recheck_does_not_clobber_successful_review(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -210,6 +210,7 @@ def get_agent_run_provider_status(provider: str = "openai") -> dict:
 def post_agent_run_provider_config(body: Dict[str, Any]) -> dict:
     """Persist a private provider config without returning secrets."""
     provider = str(body.get("provider") or "openai")
+    enable_ai = body_bool(body, "enable_ai")
     try:
         meta = provider_adapter.write_provider_config(
             provider,
@@ -225,7 +226,7 @@ def post_agent_run_provider_config(body: Dict[str, Any]) -> dict:
 
     # Fail closed: writing provider credentials must not silently flip the
     # global AI opt-in — only an explicit enable_ai=true may enable it.
-    updates: Dict[str, Any] = {"ai_enabled": body_bool(body, "enable_ai")}
+    updates: Dict[str, Any] = {"ai_enabled": enable_ai}
     if updates["ai_enabled"]:
         updates["agent_model_mode"] = "external"
     settings = settings_store.update_settings(updates)
