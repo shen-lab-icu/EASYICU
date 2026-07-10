@@ -38,10 +38,14 @@ def test_crossdb_source_choice_owner_is_explicitly_wired() -> None:
 
     assert "window.EU_CROSSDB_SOURCE_HOST" in viz
     assert "window.EU_CROSSDB_SOURCE_CHOICE" in viz
-    assert "sourceChoice.render()" in viz
+    assert "sourceChoice.render({ registryHtml: sourceRegistryBlock('multi') })" in viz
     assert "sourceChoice.renderLoading()" in viz
     assert "window.EU_CROSSDB_SOURCE_CHOICE.wire(root)" in viz
     assert "data-crossdb-run-registered" not in viz
+    assert "explicitRegistryCrossdbPaths" in viz
+    assert 'type="button" data-src-cross=' in viz
+    assert 'aria-pressed="${on ? \'true\' : \'false\'}"' in viz
+    assert "const cur = explicitRegistryCrossdbPaths();" in viz
 
     for marker in (
         "window.EU_CROSSDB_SOURCE_CHOICE",
@@ -51,7 +55,7 @@ def test_crossdb_source_choice_owner_is_explicitly_wired() -> None:
         "data-crossdb-registered-loading",
         "Registered EasyICU exports",
         "Run registered exports",
-        "source rail on the left",
+        "Add and select at least two EasyICU exports below.",
     ):
         assert marker in owner
 
@@ -79,7 +83,7 @@ def test_registered_export_host_bypasses_raw_root_scan() -> None:
     )[0]
 
     assert "registeredPaths()" in host
-    assert "registryCrossdbPaths()" in host
+    assert "explicitRegistryCrossdbPaths()" in host
     assert "runRegistered()" in host
     assert "crossView = 'loading'" in host
     assert "loadRealCrossdb(ok =>" in host

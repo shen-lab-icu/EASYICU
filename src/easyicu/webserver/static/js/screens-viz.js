@@ -101,14 +101,12 @@
   // Canonical clinical concepts and the hard-bounded raw request live in the
   // Cross-DB raw owner loaded before this shared visualization shell.
   const CROSS_DENSITY_CANON = window.EU_CROSSDB_RAW.coreFeatures();
-  let crossRawJobId = null;
-  let crossRawProg = null;
-  let crossRawCancelRequested = false;
-  let crossRawJobStarting = false;
+  const crossRawProgress = window.EU_CROSSDB_PROGRESS;
   let crossRawRootDraft = '';
   let crossRawRootScan = null;
   let crossRawRootScanPath = '';
   let crossRawRootScanning = false;
+  let crossRawScanRequestSeq = 0;
   let crossRawSampleMode = 'quick';
   let crossRegisteredLoading = false;
   let cohortView = 'idle';    // idle | loaded | loading
@@ -166,6 +164,14 @@
     if (window.EU_SOURCES && window.EU_SOURCES.crossdbPaths) return window.EU_SOURCES.crossdbPaths();
     const reg = window.EU_WORKSPACE_REGISTRY || {};
     return Array.isArray(reg.crossdb_paths) ? reg.crossdb_paths : [];
+  }
+  function explicitRegistryCrossdbPaths() {
+    const reg = window.EU_SOURCES && window.EU_SOURCES.registry
+      ? window.EU_SOURCES.registry()
+      : (window.EU_WORKSPACE_REGISTRY || {});
+    return Array.isArray(reg.crossdb_paths)
+      ? Array.from(new Set(reg.crossdb_paths.map(path => String(path || '').trim()).filter(Boolean)))
+      : registryCrossdbPaths();
   }
   function defaultExportPath() {
     if (window.EU_LAST_EXPORT && window.EU_LAST_EXPORT.out_dir) return window.EU_LAST_EXPORT.out_dir;
@@ -280,6 +286,7 @@
     return String(path || '').trim();
   }
   function invalidateCrossRawRootScan() {
+    crossRawScanRequestSeq += 1;
     crossRawRootScan = null;
     crossRawRootScanPath = '';
     crossRawRootScanning = false;
@@ -303,7 +310,7 @@
       detectedKeys,
       detectedSelectedKeys,
       missingSelectedKeys,
-      runnable: !!(rawRoot && current && current.ok && detectedSelectedKeys.length >= 2),
+      runnable: !!(rawRoot && current && current.ok && detectedSelectedKeys.length >= 2 && missingSelectedKeys.length === 0),
     };
   }
   function crossRawScanReadyFor(path) {
@@ -330,12 +337,14 @@
     }
     crossRawRootScanning = true;
     crossRawRootScanPath = rawRoot;
+    const requestSeq = ++crossRawScanRequestSeq;
     vizErr = null;
     repaintScreen('crossdb');
     return window.EU_API.scanCrossdbRawRoot({
       data_root: rawRoot,
       databases: selectedCrossDbKeys(),
     }).then(scan => {
+      if (requestSeq !== crossRawScanRequestSeq || crossRawRootDraft !== rawRoot) return false;
       crossRawRootScanning = false;
       crossRawRootScan = scan || null;
       crossRawRootScanPath = rawRoot;
@@ -347,6 +356,7 @@
       repaintScreen('crossdb');
       return crossRawScanReadyFor(rawRoot);
     }).catch(err => {
+      if (requestSeq !== crossRawScanRequestSeq || crossRawRootDraft !== rawRoot) return false;
       crossRawRootScanning = false;
       crossRawRootScan = null;
       crossRawRootScanPath = rawRoot;
@@ -359,23 +369,29 @@
     const continuity = window.EU_CROSSDB_JOB_CONTINUITY;
     if (continuity && typeof continuity.disconnect === 'function') continuity.disconnect(options || {});
   }
-  function cancelCrossRawJob() {
-    if (crossRawCancelRequested) return;
-    const jobId = crossRawJobId;
-    crossRawCancelRequested = true;
-    crossRawJobStarting = false;
-    crossRawJobId = null;
-    crossRawProg = null;
-    teardownCrossRawES();
-    crossView = 'idle';
-    vizErr = t('Raw Cross-DB density job cancellation requested.', '已请求取消原始跨库密度任务。');
+  function repaintCrossRawProgress() {
+    const restoreCancelFocus = document.activeElement && document.activeElement.matches('[data-crossdb-cancel]');
     repaintScreen('crossdb');
-    if (!jobId || !window.EU_API || !window.EU_API.cancelJob) return;
-    window.EU_API.cancelJob(jobId, 'user_requested')
-      .catch(err => {
-        vizErr = String(err && err.message || err);
-        repaintScreen('crossdb');
+    if (restoreCancelFocus && typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(() => {
+        const button = document.querySelector('[data-crossdb-cancel]');
+        if (button) button.focus();
       });
+    }
+  }
+  function cancelCrossRawJob() {
+    crossRawProgress.requestCancel({
+      api: window.EU_API,
+      onStateChange() {
+        crossView = 'loading';
+        vizErr = null;
+        repaintCrossRawProgress();
+      },
+      onError(err) {
+        vizErr = String(err && err.message || err);
+        repaintCrossRawProgress();
+      },
+    });
   }
   function patientDrilldown() {
     if (window.EU_PATIENT_DRILLDOWN) return window.EU_PATIENT_DRILLDOWN;
@@ -870,7 +886,7 @@
   function sourceRegistryBlock(mode) {
     const multi = mode === 'multi';
     const active = defaultExportPath();
-    const selected = new Set(defaultCrossdbPaths());
+    const selected = new Set(explicitRegistryCrossdbPaths());
     const sources = registrySources().slice().sort((a, b) => {
       const aOn = multi ? selected.has(a.path) : a.path === active;
       const bOn = multi ? selected.has(b.path) : b.path === active;
@@ -891,13 +907,15 @@
           ${sources.length ? (() => {
             const rowHtml = (s) => {
               const on = multi ? selected.has(s.path) : s.path === active;
-              const attr = multi ? `data-src-cross="${esc(s.path)}"` : `data-src-active="${esc(s.path)}"`;
+              const attr = multi ? '' : `data-src-active="${esc(s.path)}"`;
               const label = s.label || s.database || t('local', '本地');
               return `
               <div class="src-row ${on ? 'on' : ''}" ${attr}>
                 <span class="src-ico">${icon(multi && on ? 'check' : 'folder', 14, multi && on ? 2.6 : undefined)}</span>
                 <span class="src-body"><span class="src-name">${esc(label)}</span><span class="src-meta">${esc(sourceLine(s))}</span><span class="src-path mono">${esc(s.path)}</span></span>
-                <span class="pill ${on ? 'ok' : 'dashed'}" style="height:20px;">${on ? (multi ? t('selected', '已选择') : t('active', '当前')) : (multi ? t('add', '添加') : t('use', '使用'))}</span>
+                ${multi
+                  ? `<button class="btn sm ${on ? '' : 'ghost'}" type="button" data-src-cross="${esc(s.path)}" aria-pressed="${on ? 'true' : 'false'}">${on ? t('selected', '已选择') : t('add', '添加')}</button>`
+                  : `<span class="pill ${on ? 'ok' : 'dashed'}" style="height:20px;">${on ? t('active', '当前') : t('use', '使用')}</span>`}
                 <span class="src-actions">
                   <button class="btn icon sm ghost" data-src-action data-src-rename="${esc(s.path)}" data-src-label="${esc(label)}" title="${esc(t('Rename source', '重命名来源'))}">${icon('edit', 12)}</button>
                   <button class="btn icon sm ghost" data-src-action data-src-remove="${esc(s.path)}" title="${esc(t('Remove registration only; files stay on disk', '仅移除注册记录；磁盘文件保留'))}">${icon('close', 12)}</button>
@@ -1094,7 +1112,7 @@
     root.querySelectorAll('[data-src-cross]').forEach(b => b.addEventListener('click', e => {
       if (e.target.closest('[data-src-action]')) return;
       const path = b.dataset.srcCross;
-      const cur = defaultCrossdbPaths().filter(Boolean);
+      const cur = explicitRegistryCrossdbPaths();
       const next = cur.includes(path) ? cur.filter(p => p !== path) : cur.concat([path]);
       if (!(window.EU_API && window.EU_API.saveWorkspaceRegistry)) return;
       window.EU_API.saveWorkspaceRegistry({ crossdb_paths: next }).then(() => {
@@ -1269,9 +1287,7 @@
   }
   function loadRealCrossdb(done, opts) {
     teardownCrossRawES({ forget: true });
-    crossRawJobId = null;
-    crossRawProg = null;
-    crossRawCancelRequested = false;
+    crossRawProgress.clear();
     window.EU_CROSSDB_WORKSPACE = null;
     window.EU_COHORT_REVIEW = null;
     resetCohortFeatureSelection();
@@ -1325,8 +1341,8 @@
     }
     const jobContinuity = window.EU_CROSSDB_JOB_CONTINUITY;
     if (rawRoot && rawDatabases.length >= 2 && window.EU_API && window.EU_API.startCrossdbRawDistributionJob && jobContinuity && typeof jobContinuity.start === 'function' && window.EventSource) {
-      if (crossRawJobStarting) return;
-      crossRawJobStarting = true;
+      if (crossRawProgress.snapshot().starting) return;
+      crossRawProgress.beginStart();
       crossRawRootDraft = rawRoot;
       const rawRequest = window.EU_CROSSDB_RAW.buildRequest({
         dataRoot: rawRoot,
@@ -1335,36 +1351,34 @@
         sampleSize: sampleProfile.sampleSize,
       });
       window.EU_API.startCrossdbRawDistributionJob(rawRequest).then(r => {
-        if (crossRawCancelRequested) {
-          crossRawJobStarting = false;
-          if (r && r.job_id && window.EU_API && window.EU_API.cancelJob) {
-            window.EU_API.cancelJob(r.job_id, 'user_requested').catch(() => {});
-          }
-          return;
-        }
-        crossRawProg = {
+        const queuedProgress = {
           phase: 'queued',
           max_patients: sampleProfile.maxPatients,
           sample_size: sampleProfile.sampleSize,
           message: `${t('Queued local raw Cross-DB density job.', '本地原始跨库密度任务已排队。')} ${crossRawSampleSummary(sampleProfile)}`,
         };
+        crossRawProgress.attach(r && r.job_id, queuedProgress);
         const watching = jobContinuity.start({
           job_id: r && r.job_id,
           kind: r && r.kind,
           raw_root: rawRoot,
           source_identity: crossRawSourceIdentity(rawDatabases),
           sample_mode: crossRawSampleMode,
-        }, crossRawProg, done);
+        }, queuedProgress, done);
         if (!watching) {
-          crossRawJobStarting = false;
+          crossRawProgress.clear();
           vizErr = t('Could not keep the raw Cross-DB job attached to this browser session.', '无法将原始跨库任务绑定到当前浏览器会话。');
           if (r && r.job_id && window.EU_API.cancelJob) window.EU_API.cancelJob(r.job_id, 'client_attach_failed').catch(() => {});
           done && done(false);
+        } else {
+          crossRawProgress.flushCancel(window.EU_API, err => {
+            vizErr = String(err && err.message || err);
+            repaintCrossRawProgress();
+          });
         }
         repaintScreen('crossdb');
       }).catch(err => {
-        crossRawJobStarting = false;
-        if (crossRawCancelRequested) return;
+        crossRawProgress.clear();
         vizErr = String(err && err.message || err);
         done && done(false);
       });
@@ -1401,54 +1415,40 @@
         && String(meta && meta.source_identity || '') === crossRawSourceIdentity(selectedCrossDbKeys());
     },
     onProbe(meta) {
-      crossRawJobId = meta.job_id;
-      crossRawJobStarting = true;
-      crossRawCancelRequested = false;
-      crossRawProg = { phase: 'reconnect', message: t('Checking the saved raw Cross-DB job…', '正在检查已保存的原始跨库任务…') };
+      crossRawProgress.beginProbe(meta.job_id, { phase: 'reconnect', message: t('Checking the saved raw Cross-DB job…', '正在检查已保存的原始跨库任务…') });
       crossView = 'loading';
       vizErr = null;
       repaintScreen('crossdb');
     },
-    onRunning(meta, progress) {
-      crossRawJobId = meta.job_id;
-      crossRawJobStarting = false;
-      crossRawCancelRequested = !!(progress && progress.type === 'cancel_requested');
-      crossRawProg = progress && progress.type === 'progress'
+    onRunning(meta, progress, history) {
+      crossRawProgress.resume(meta.job_id, progress && (progress.type === 'progress' || progress.type === 'cancel_requested')
         ? progress
-        : {
-            phase: crossRawCancelRequested ? 'cancel' : 'reconnect',
-            message: crossRawCancelRequested
-              ? t('Cancel requested. The current database read may finish before the job stops.', '已请求取消。当前数据库读取可能会先完成，然后任务才停止。')
-              : t('Reconnected to the running raw Cross-DB density job.', '已重新连接正在运行的原始跨库密度任务。'),
-          };
+        : { phase: 'reconnect', message: t('Reconnected to the running raw Cross-DB density job.', '已重新连接正在运行的原始跨库密度任务。') }, history);
       crossView = 'loading';
       vizErr = null;
       repaintScreen('crossdb');
     },
     onProgress(meta, progress) {
-      if (crossRawJobId !== meta.job_id) return;
-      crossRawProg = progress;
-      repaintScreen('crossdb');
+      if (!crossRawProgress.appliesTo(meta.job_id)) return;
+      if (crossRawProgress.applyProgress(progress)) repaintCrossRawProgress();
     },
-    onCancelRequested(meta) {
-      if (crossRawJobId !== meta.job_id) return;
-      crossRawCancelRequested = true;
-      crossRawProg = {
-        phase: 'cancel',
-        message: t('Cancel requested. The current database read may finish before the job stops.', '已请求取消。当前数据库读取可能会先完成，然后任务才停止。'),
-      };
-      repaintScreen('crossdb');
+    onCancelRequested(meta, event) {
+      if (!crossRawProgress.appliesTo(meta.job_id)) return;
+      crossRawProgress.applyCancelRequested(event);
+      repaintCrossRawProgress();
     },
     onTerminal(meta, snapshot) {
-      if (!window.EU_CROSSDB_JOB_HOST.matchesSource(meta)) return;
+      if (!window.EU_CROSSDB_JOB_HOST.matchesSource(meta) || !crossRawProgress.appliesTo(meta.job_id)) return false;
       let accepted = true;
-      crossRawJobId = null;
-      crossRawJobStarting = false;
-      crossRawCancelRequested = snapshot.status === 'cancelled';
-      crossRawProg = null;
       if (snapshot.status === 'done') {
         const xdb = snapshot.result;
-        if (!xdb || typeof xdb !== 'object' || xdb.source_type !== 'raw_database_root') {
+        const expectedDatabases = crossRawIdentityKeys(meta);
+        const loadedDatabases = Array.isArray(xdb && xdb.sources)
+          ? xdb.sources.map(row => String(row && row.database || '')).filter(Boolean).sort()
+          : [];
+        if (!xdb || typeof xdb !== 'object' || xdb.ok !== true || xdb.source_type !== 'raw_database_root'
+            || Number(xdb.source_count || 0) !== expectedDatabases.length
+            || loadedDatabases.join(',') !== expectedDatabases.join(',')) {
           accepted = false;
           crossView = 'idle';
           vizErr = t('The restored raw Cross-DB job returned an invalid result.', '恢复的原始跨库任务返回了无效结果。');
@@ -1467,22 +1467,18 @@
           ? t('Raw Cross-DB density job cancelled before completion.', '原始跨库密度任务已在完成前取消。')
           : (snapshot.error || t('Raw Cross-DB density job failed.', '原始跨库密度任务失败。'));
       }
+      crossRawProgress.clear();
       repaintScreen('crossdb');
       return accepted;
     },
     onUnavailable(meta) {
-      crossRawJobId = null;
-      crossRawJobStarting = false;
-      crossRawCancelRequested = false;
-      crossRawProg = null;
+      crossRawProgress.clear();
       crossView = 'idle';
       vizErr = t('This saved raw Cross-DB job is no longer available; the local server may have restarted. Start it again from this data root.', '已保存的原始跨库任务已不可用；本地服务可能已重启。请从当前数据根目录重新运行。');
       repaintScreen('crossdb');
     },
     onConnectionError(meta) {
-      crossRawJobId = null;
-      crossRawJobStarting = false;
-      crossRawProg = null;
+      crossRawProgress.clear();
       crossView = 'idle';
       vizErr = t('Could not reconnect to the saved raw Cross-DB job. Refresh to try again; no completed result was assumed.', '无法重新连接已保存的原始跨库任务。请刷新后重试；系统没有假定任务已完成。');
       repaintScreen('crossdb');
@@ -1490,13 +1486,13 @@
   };
   window.EU_CROSSDB_SOURCE_HOST = {
     registeredPaths() {
-      return Array.from(new Set(registryCrossdbPaths().map(path => String(path || '').trim()).filter(Boolean)));
+      return explicitRegistryCrossdbPaths();
     },
     runRegistered() {
       if (crossView === 'loading') return;
       const paths = window.EU_CROSSDB_SOURCE_HOST.registeredPaths();
       if (paths.length < 2) {
-        vizErr = t('Select at least two registered EasyICU exports from the source rail.', '请从来源栏至少选择两个已注册的 EasyICU 导出。');
+        vizErr = t('Select at least two registered EasyICU exports below.', '请在下方至少选择两个已注册的 EasyICU 导出。');
         repaintScreen('crossdb');
         return;
       }
@@ -4961,8 +4957,18 @@
       inferential_statistics: '推断统计',
       row_level_filters: '行级筛选',
       queued: '排队中',
+      resolving: '解析中',
+      loading: '加载中',
+      database: '逐库加载',
+      chunk: '分块加载',
+      finalizing: '汇总中',
+      reconnect: '重新连接中',
       cancel: '取消中',
       running: '运行中',
+      pending: '等待中',
+      complete: '已完成',
+      empty: '无可用值',
+      stopping: '停止中',
       done: '完成',
       failed: '失败',
     };
@@ -4986,8 +4992,9 @@
     const ws = window.EU_VIZ_WORKSPACE;
     const xdb = window.EU_CROSSDB_WORKSPACE;
     const xdbDemo = xdb && xdb.source_type === 'legacy_simulated_multidb_feature_frames';
+    const xdbRaw = xdb && xdb.source_type === 'raw_database_root';
     const sourceLabel = xdb
-      ? (xdbDemo ? crossTerm('Demo simulated frames') : crossTerm('Local exports'))
+      ? (xdbDemo ? crossTerm('Demo simulated frames') : (xdbRaw ? t('Local raw databases', '本地原始数据库') : crossTerm('Local exports')))
       : (ws ? crossTerm('Local export') : (window.EU_DATA === 'real' ? crossTerm('Not configured') : crossTerm('Demo cohort')));
     return `
       <div class="row gap-8" style="font-family:var(--font-mono);font-size:10.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--ink-4);margin-bottom:6px;white-space:nowrap;flex-wrap:wrap;row-gap:2px;">
@@ -5099,7 +5106,7 @@
     const sampleProfiles = crossRawSampleProfiles();
     const sourceChoice = window.EU_CROSSDB_SOURCE_CHOICE;
     const sourceChoiceHtml = sourceChoice && typeof sourceChoice.render === 'function'
-      ? sourceChoice.render()
+      ? sourceChoice.render({ registryHtml: sourceRegistryBlock('multi') })
       : '';
     return `
       ${sourceChoiceHtml || `<div class="note info">
@@ -5133,7 +5140,7 @@
         </div>
         <div class="db-grid mt-14" style="grid-template-columns:repeat(3,minmax(0,1fr));">
           ${sampleProfiles.map(profile => `
-            <button class="db-card ${profile.id === sampleProfile.id ? 'sel' : ''}" type="button" data-crossdb-sample-mode="${esc(profile.id)}" style="text-align:left;">
+            <button class="db-card ${profile.id === sampleProfile.id ? 'sel' : ''}" type="button" data-crossdb-sample-mode="${esc(profile.id)}" aria-pressed="${profile.id === sampleProfile.id ? 'true' : 'false'}" style="text-align:left;">
               <div style="min-width:0;">
                 <div style="font-weight:650;font-size:12.5px;">${esc(profile.label)}</div>
                 <div class="mono" style="font-size:10.5px;color:var(--ink-4);">≤${fmtInt(profile.maxPatients)} ${t('entities/database', '实体/数据库')} · ≤${fmtInt(profile.sampleSize)} ${t('values/feature', '值/特征')}</div>
@@ -5148,7 +5155,7 @@
         ${CROSS_DBS.map(([n, on, key]) => {
           const status = rawCrossdbDbStatus(key, on);
           return `
-          <div class="db-card ${on ? 'sel' : ''}" data-db="${CROSS_DBS.findIndex(d => d[0] === n)}">
+          <button class="db-card ${on ? 'sel' : ''}" type="button" data-db="${CROSS_DBS.findIndex(d => d[0] === n)}" aria-pressed="${on ? 'true' : 'false'}">
             <div class="row gap-8" style="min-width:0;">
               <span class="${on ? '' : 'ink-4'}" style="flex:none;color:${on ? 'var(--accent-ink)' : 'var(--ink-4)'};">${icon('db', 15)}</span>
               <div style="min-width:0;">
@@ -5157,7 +5164,7 @@
               </div>
             </div>
             <span class="db-mk pill ${status.cls}" style="flex:none;height:20px;">${status.cls === 'ok' ? '<span class="dot"></span>' : ''}${esc(status.label)}</span>
-          </div>`;
+          </button>`;
         }).join('')}
       </div>
       <div class="gate-strip crossdb-run-strip mt-20">
@@ -5562,35 +5569,23 @@
     if (crossRegisteredLoading && sourceChoice && typeof sourceChoice.renderLoading === 'function') {
       return sourceChoice.renderLoading();
     }
-    const p = crossRawProg || {};
-    const cur = p.current || 0;
-    const tot = p.total || 0;
-    const pct = tot ? Math.round((cur / tot) * 100) : 0;
-    const sampleMax = p.max_patients || p.maxPatients || (window.EU_DATA === 'real' ? crossRawSampleProfile().maxPatients : null);
-    const sampleValues = p.sample_size || p.sampleSize || (window.EU_DATA === 'real' ? crossRawSampleProfile().sampleSize : null);
-    const sampleText = sampleMax && sampleValues
-      ? ` · ≤${fmtInt(sampleMax)} ${t('entities/db', '实体/库')} · ≤${fmtInt(sampleValues)} ${t('values/feature', '值/特征')}`
-      : '';
-    const loadingTitle = window.EU_DATA === 'real'
-      ? crossProgressMessage('Loading real feature densities from local databases…')
-      : crossProgressMessage('Loading seeded frames for selected databases…');
-    const progressText = p.message || (window.EU_DATA === 'real'
-      ? crossProgressMessage('Starting local raw Cross-DB density job…')
-      : crossProgressMessage('Building seeded density frames…'));
-    return `<div class="card pad">
-      <div class="load-strip">
-        <span class="spin accent"></span>
-        <div class="grow"><div style="font-weight:600;font-size:12.75px;">${loadingTitle}</div><div class="mono" style="font-size:11px;color:var(--ink-4);margin-top:2px;">${crossTerm('local-only · nothing uploaded')}${p.phase ? ` · ${esc(crossStatusLabel(p.phase))}` : ''}${sampleText}</div></div>
-        ${tot ? `<span class="mono" style="font-size:11px;color:var(--ink-3);">${cur}/${tot}</span>` : ''}
-        <button class="btn sm" ${window.EU_DATA === 'real' ? 'data-crossdb-cancel' : 'data-viz-reset'} ${crossRawCancelRequested ? 'disabled' : ''}>${icon('stop', 13)} ${crossRawCancelRequested ? t('Cancel requested', '已请求取消') : t('Cancel', '取消')}</button>
-      </div>
-      ${tot ? `<div style="height:8px;border-radius:999px;background:var(--surface-2,#eef0f4);overflow:hidden;margin:12px 0 8px;"><div style="height:100%;width:${pct}%;background:var(--accent,#2f7d6b);transition:width .25s;"></div></div>` : '<div class="indet mt-12"></div>'}
-      <div style="font-size:12px;color:var(--ink-3);min-height:18px;margin-top:8px;">${esc(crossProgressMessage(progressText))}</div>
-      <div class="sk-table mt-16">
-        <div class="sk-trow head">${[30,18,18,18,18].map(w => `<div class="sk sk-line sm" style="width:${w}%"></div>`).join('')}</div>
-        ${[0,1,2,3,4,5].map(() => `<div class="sk-trow">${[55,40,40,40,40].map(w => `<div class="sk sk-line" style="width:${w}%"></div>`).join('')}</div>`).join('')}
-      </div>
-    </div>`;
+    if (window.EU_DATA !== 'real') {
+      return `<div class="card pad">
+        <div class="load-strip"><span class="spin accent"></span><div class="grow"><div style="font-weight:600;font-size:12.75px;">${crossProgressMessage('Loading seeded frames for selected databases…')}</div><div class="mono" style="font-size:11px;color:var(--ink-4);margin-top:2px;">${crossTerm('local-only · nothing uploaded')}</div></div><button class="btn sm" data-viz-reset>${icon('stop', 13)} ${t('Cancel', '取消')}</button></div>
+        <div class="indet mt-12"></div>
+        <div style="font-size:12px;color:var(--ink-3);min-height:18px;margin-top:8px;">${crossProgressMessage('Building seeded density frames…')}</div>
+      </div>`;
+    }
+    return crossRawProgress.render({
+      esc,
+      errorMessage: vizErr,
+      fmtInt,
+      icon,
+      progressMessage: crossProgressMessage,
+      sampleProfile: crossRawSampleProfile(),
+      statusLabel: crossStatusLabel,
+      t,
+    });
   }
 
   S.crossdb = {
@@ -5599,9 +5594,10 @@
     get actionHtml() {
       // Topbar actions only exist once a benchmark is loaded — the gate strip in
       // the body owns the Run action before that.
-      return crossView === 'loaded' || (window.EU_DATA === 'real' && window.EU_CROSSDB_WORKSPACE)
-        ? `<button class="btn" data-viz-reset>${icon('sliders', 13)} ${crossTerm('Change selection')}</button><button class="btn" data-crossdb-export>${icon('download', 13)} ${crossTerm('Export JSON')}</button><button class="btn primary" data-run>${icon('refresh', 13)} ${crossTerm('Re-run')}</button>`
-        : '';
+      const loaded = crossView === 'loaded' || (window.EU_DATA === 'real' && window.EU_CROSSDB_WORKSPACE);
+      if (!loaded) return '';
+      const rawLoaded = window.EU_CROSSDB_WORKSPACE && window.EU_CROSSDB_WORKSPACE.source_type === 'raw_database_root';
+      return `<button class="btn" data-viz-reset>${icon('sliders', 13)} ${crossTerm('Change selection')}</button><button class="btn" data-crossdb-export>${icon('download', 13)} ${crossTerm('Export JSON')}</button>${rawLoaded ? '' : `<button class="btn primary" data-run>${icon('refresh', 13)} ${crossTerm('Re-run')}</button>`}`;
     },
     rail: () => vizRail('crossdb'),
     render() {
@@ -5637,7 +5633,7 @@
         <div class="sec-stack"><div class="lbl">${crossTerm('Available databases')} · <span id="dbcount">${sel}</span> ${crossTerm('selected')}</div></div>
         <div class="db-grid" id="dbgrid">
           ${CROSS_DBS.map(([n, on], i) => `
-            <div class="db-card ${on ? 'sel' : ''}" data-db="${i}">
+            <button class="db-card ${on ? 'sel' : ''}" type="button" data-db="${i}" aria-pressed="${on ? 'true' : 'false'}">
               <div class="row gap-8" style="min-width:0;">
                 <span class="${on ? '' : 'ink-4'}" style="flex:none;color:${on ? 'var(--accent-ink)' : 'var(--ink-4)'};">${icon('db', 15)}</span>
                 <div style="min-width:0;">
@@ -5646,7 +5642,7 @@
                 </div>
               </div>
               <span class="db-mk pill ${on ? 'ok' : 'dashed'}" style="flex:none;height:20px;">${on ? `<span class="dot"></span>${crossTerm('selected')}` : crossTerm('add')}</span>
-            </div>`).join('')}
+            </button>`).join('')}
         </div>
         <div class="gate-strip mt-20">
           <span class="pill"><span style="color:var(--ink-3);">${icon('benchmark', 12)}</span> <span id="runhint">${sel} / 6 · ${t('need ≥ 2', '至少需要 2 个')}</span></span>
@@ -5709,6 +5705,7 @@
         }
         const on = CROSS_DBS[i][1];
         card.classList.toggle('sel', on);
+        card.setAttribute('aria-pressed', on ? 'true' : 'false');
         const mk = card.querySelector('.db-mk');
         mk.className = `db-mk pill ${on ? 'ok' : 'dashed'}`;
         mk.innerHTML = on ? `<span class="dot"></span>${crossTerm('selected')}` : crossTerm('add');
@@ -5817,13 +5814,11 @@
         });
       }));
       root.querySelectorAll('[data-viz-reset]').forEach(b => b.addEventListener('click', () => {
+        const preserveRawScan = window.EU_CROSSDB_WORKSPACE && window.EU_CROSSDB_WORKSPACE.source_type === 'raw_database_root';
         teardownCrossRawES({ forget: true });
-        crossRawJobStarting = false;
-        crossRawJobId = null;
-        crossRawProg = null;
-        crossRawCancelRequested = false;
+        crossRawProgress.clear();
         crossRegisteredLoading = false;
-        invalidateCrossRawRootScan();
+        if (!preserveRawScan) invalidateCrossRawRootScan();
         crossView = 'idle'; crossDensityModule = 'all'; crossDensityFeature = null; window.EU_VIZ_WORKSPACE = null; window.EU_CROSSDB_WORKSPACE = null; repaintScreen('crossdb');
       }));
     },

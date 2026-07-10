@@ -1902,6 +1902,7 @@ def test_native_crossdb_restores_distribution_visuals() -> None:
     api_js = _static_js("api.js")
     viz_js = _static_js("screens-viz.js")
     continuity_js = _static_js("screens-viz-crossdb-job-continuity.js")
+    progress_js = _static_js("screens-viz-crossdb-progress.js")
     screens_css = _static_css("screens.css")
     crossdb_css = _static_css("crossdb.css")
     unrelated_route_css = {
@@ -1953,7 +1954,7 @@ def test_native_crossdb_restores_distribution_visuals() -> None:
     assert "startCrossdbRawDistributionJob" in viz_js
     assert "new window.EventSource('/api/jobs/' + encodeURIComponent(meta.job_id) + '/events')" in continuity_js
     assert "new EventSource('/api/jobs/' + r.job_id + '/events')" not in viz_js
-    assert "data-crossdb-cancel" in viz_js
+    assert "data-crossdb-cancel" in progress_js
     assert "data-crossdb-root-browse" in viz_js
     assert "data-crossdb-root-scan" in viz_js
     assert "Check folders" in viz_js
@@ -1978,8 +1979,9 @@ def test_native_crossdb_restores_distribution_visuals() -> None:
         "Local folder picker API is not ready. Paste a raw ICU data root path instead."
         in viz_js
     )
-    assert "window.EU_API.cancelJob(jobId, 'user_requested')" in viz_js
-    assert "Raw Cross-DB density job cancellation requested." in viz_js
+    assert "api.cancelJob(state.jobId, 'user_requested')" in progress_js
+    assert "crossRawProgress.requestCancel" in viz_js
+    assert "Cancellation requested. EasyICU will stop after the current bounded read returns." in progress_js
     assert (
         "Choose a local ICU data root before loading real Cross-DB densities." in viz_js
     )
@@ -2016,8 +2018,8 @@ def test_native_crossdb_restores_distribution_visuals() -> None:
     assert "--xdb-grid-cols" in viz_js
     assert "xdb-density-svg" in viz_js
     assert "xdb-density-line" in viz_js
-    assert "js/screens-viz.js?v=20260710-real-qa3" in index_html
-    assert "css/crossdb.css?v=20260710-action-clearance2" in index_html
+    assert "js/screens-viz.js?v=20260710-crossdb-progress" in index_html
+    assert "css/crossdb.css?v=20260710-structured-progress" in index_html
     assert "crossdb-run-strip" in viz_js
     assert ".crossdb-run-strip" in crossdb_css
     assert "padding-right: 168px" in crossdb_css
@@ -2086,7 +2088,7 @@ def test_native_cohort_snapshot_renders_real_clinical_profile() -> None:
     assert ".cprof-grid" in cohort_css
     assert ".cxh" not in cohort_css
     # Cache-bust bumped so the restored charts ship to existing clients.
-    assert "js/screens-viz.js?v=20260710-real-qa3" in index_html
+    assert "js/screens-viz.js?v=20260710-crossdb-progress" in index_html
 
 
 def test_native_cohort_groups_render_comparison_bar_chart() -> None:
@@ -2666,7 +2668,7 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert index_html.index("js/screens-viz-patient-tables.js?") < index_html.index(
         "js/screens-viz.js?"
     )
-    assert "js/screens-viz.js?v=20260710-real-qa3" in index_html
+    assert "js/screens-viz.js?v=20260710-crossdb-progress" in index_html
     assert "bounded browser review', '浏览器有界审阅" in viz_js
     assert "function buildDemoPatientDrilldown" in viz_js
     assert "function demoTablePreviewRowContext" in viz_js
@@ -2834,7 +2836,7 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
     index_html = _static_html("index.html")
 
     assert "css/cohort.css?v=20260707-design" in index_html
-    assert "js/screens-viz.js?v=20260710-real-qa3" in index_html
+    assert "js/screens-viz.js?v=20260710-crossdb-progress" in index_html
     assert "let cohortView = 'idle';" in viz_js
     assert "let cohortFeatureScope = 'recommended';" in viz_js
     assert 'data-cohort-config-required="true"' in viz_js
