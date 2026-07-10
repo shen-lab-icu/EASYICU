@@ -71,3 +71,6 @@ def crossdb_demo_distribution(body: Dict[str, Any]) -> dict:
         return crossdb_review.crossdb_demo_distribution(body)
     except crossdb_review.CrossdbReviewError as exc:
         raise HTTPException(status_code=400, detail=exc.detail) from exc
+
+
+__all__ = ["router"]

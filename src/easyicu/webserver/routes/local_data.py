@@ -42,3 +42,6 @@ def workspace_summary(body: Dict[str, Any]) -> dict:
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result)
     return result
+
+
+__all__ = ["router"]
