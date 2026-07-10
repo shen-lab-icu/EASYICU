@@ -7,7 +7,9 @@ from pathlib import Path
 from fastapi.routing import APIRoute
 from starlette.routing import Mount
 
+from easyicu.webserver import patient_drilldown
 from easyicu.webserver.app import app
+from easyicu.webserver.patient_drilldown import eligibility as patient_eligibility
 from easyicu.webserver.routes.agent import artifact_router as agent_artifact_router
 from easyicu.webserver.routes.agent import control_router as agent_control_router
 from easyicu.webserver.routes.copilot import router as copilot_router
@@ -450,6 +452,32 @@ def test_route_owner_boundaries() -> None:
     assert "easyicu.webserver.app" not in extraction_source
     assert "easyicu.webserver.app" not in jobs_source
     assert "easyicu.webserver.app" not in agent_source
+
+
+def test_patient_review_eligibility_owner_boundary() -> None:
+    package_root = Path(__file__).parents[1] / "src" / "easyicu" / "webserver"
+    patient_package = package_root / "patient_drilldown"
+    facade_source = (patient_package / "__init__.py").read_text(encoding="utf-8")
+    eligibility_source = (patient_package / "eligibility.py").read_text(
+        encoding="utf-8"
+    )
+    owner_names = (
+        "_eligibility_flow_payload",
+        "_first_int",
+        "_demographic_flow_label",
+        "_demographic_flow_note",
+        "_target_clinical_flow_preset",
+        "_target_clinical_flow_label",
+        "_target_clinical_flow_note",
+        "_int_or_none",
+    )
+
+    assert not (package_root / "patient_drilldown.py").exists()
+    for name in owner_names:
+        assert getattr(patient_drilldown, name) is getattr(patient_eligibility, name)
+        assert f"def {name}(" not in facade_source
+        assert f"def {name}(" in eligibility_source
+    assert "easyicu.webserver.patient_drilldown" not in eligibility_source
 
 
 def test_root_static_mount_stays_last() -> None:
