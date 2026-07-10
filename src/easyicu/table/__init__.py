@@ -92,7 +92,7 @@ class ICUTable:
         wide = (
             self.data.set_index(self.id_columns + [self.index_column])[self.value_column]
             .unstack(self.index_column)
-            .rename(concept_col)
+            .rename_axis(columns=concept_col)
         )
         return wide
 

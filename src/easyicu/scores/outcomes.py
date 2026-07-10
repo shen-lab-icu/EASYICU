@@ -58,10 +58,28 @@ def _raw_table(database: str, data_path: object, table: str) -> pd.DataFrame:
             return pd.read_parquet(path)
     raise FileNotFoundError(f"{table}.parquet not found under {root}")
 
+
 # DBs with post-discharge death follow-up usable for fixed-horizon mortality.
-_FOLLOWUP_DATABASES = {"miiv", "miiv_demo", "mimic", "mimic_demo",
-                       "sic", "sic_demo", "aumc"}
+_FOLLOWUP_DATABASES = {
+    "miiv",
+    "miiv_demo",
+    "mimic",
+    "mimic_demo",
+    "sic",
+    "sic_demo",
+    "aumc",
+}
 _HORIZONS = {"mort_28d": 28, "mort_90d": 90, "mort_365d": 365}
+
+
+def _patient_values(patient_ids):
+    if patient_ids is None:
+        return None
+    if isinstance(patient_ids, dict):
+        if not patient_ids:
+            return []
+        patient_ids = next(iter(patient_ids.values()))
+    return list(patient_ids)
 
 
 def _eicu_vent_free_days(database, data_path, patient_ids, verbose) -> pd.DataFrame:
@@ -73,17 +91,24 @@ def _eicu_vent_free_days(database, data_path, patient_ids, verbose) -> pd.DataFr
     apr.columns = [c.lower() for c in apr.columns]
     apr = apr[apr["apacheversion"] == "IVa"].copy()
     vent = pd.to_numeric(apr["actualventdays"], errors="coerce")
-    vent = vent.where(vent >= 0)                       # -1 sentinel -> NaN
+    vent = vent.where(vent >= 0)  # -1 sentinel -> NaN
     died = apr["actualhospitalmortality"].astype(str).str.upper().eq("EXPIRED")
-    vfd = np.where(died, 0.0, 28.0 - np.clip(vent.fillna(0.0), 0, 28))
-    out = pd.DataFrame({
-        "patientunitstayid": apr["patientunitstayid"].values,
-        "vent_free_days_28": vfd,
-    })
+    vfd = np.where(
+        died,
+        0.0,
+        np.where(vent.isna(), np.nan, 28.0 - np.clip(vent, 0, 28)),
+    )
+    out = pd.DataFrame(
+        {
+            "patientunitstayid": apr["patientunitstayid"].values,
+            "vent_free_days_28": vfd,
+        }
+    )
     # one row per stay (apachepatientresult can have dup IVa rows)
     out = out.groupby("patientunitstayid", as_index=False)["vent_free_days_28"].min()
-    if patient_ids:
-        out = out[out["patientunitstayid"].isin(list(patient_ids))]
+    patient_values = _patient_values(patient_ids)
+    if patient_values is not None:
+        out = out[out["patientunitstayid"].isin(patient_values)]
     return out.reset_index(drop=True)
 
 
@@ -93,12 +118,18 @@ def _mimic_stay_death_days(database, data_path) -> pd.DataFrame:
     stay_col = "stay_id" if "stay_id" in icu.columns else "icustay_id"
     icu = icu[["subject_id", "hadm_id", stay_col, "intime", "los"]].copy()
     icu["intime"] = pd.to_datetime(icu["intime"], errors="coerce")
-    pat = _lower_cols(_raw_table(database, data_path, "patients"))[["subject_id", "dod"]].copy()
+    pat = _lower_cols(_raw_table(database, data_path, "patients"))[
+        ["subject_id", "dod"]
+    ].copy()
     pat["dod"] = pd.to_datetime(pat["dod"], errors="coerce")
     df = icu.merge(pat, on="subject_id", how="left")
-    df["days_to_death"] = (df["dod"] - df["intime"].dt.normalize()).dt.total_seconds() / 86400.0
+    df["days_to_death"] = (
+        df["dod"] - df["intime"].dt.normalize()
+    ).dt.total_seconds() / 86400.0
     df["los_days"] = pd.to_numeric(df["los"], errors="coerce")
-    return df.rename(columns={stay_col: "_stay"})[["_stay", "hadm_id", "days_to_death", "los_days"]]
+    return df.rename(columns={stay_col: "_stay", "intime": "_intime"})[
+        ["_stay", "hadm_id", "_intime", "days_to_death", "los_days"]
+    ]
 
 
 def _sic_stay_death_days(database, data_path) -> pd.DataFrame:
@@ -108,7 +139,7 @@ def _sic_stay_death_days(database, data_path) -> pd.DataFrame:
     df = pd.DataFrame({"_stay": cases[cid].values})
     off_death = pd.to_numeric(cases[cmap["offsetofdeath"]], errors="coerce")
     icu_off = pd.to_numeric(cases[cmap["icuoffset"]], errors="coerce").fillna(0)
-    df["days_to_death"] = (off_death - icu_off) / 86400.0          # SICdb offsets are seconds
+    df["days_to_death"] = (off_death - icu_off) / 86400.0  # SICdb offsets are seconds
     df["los_days"] = pd.to_numeric(cases[cmap["timeofstay"]], errors="coerce") / 86400.0
     df["hadm_id"] = np.nan
     return df
@@ -120,9 +151,11 @@ def _aumc_stay_death_days(database, data_path) -> pd.DataFrame:
     # admittedat is the 0 reference; dateofdeath / dischargedat are ms offsets.
     dod = pd.to_numeric(adm["dateofdeath"], errors="coerce")
     admit = pd.to_numeric(adm.get("admittedat", 0), errors="coerce").fillna(0)
-    df["days_to_death"] = (dod - admit) / 86400000.0              # ms -> days
+    df["days_to_death"] = (dod - admit) / 86400000.0  # ms -> days
     if "dischargedat" in adm.columns:
-        df["los_days"] = (pd.to_numeric(adm["dischargedat"], errors="coerce") - admit) / 86400000.0
+        df["los_days"] = (
+            pd.to_numeric(adm["dischargedat"], errors="coerce") - admit
+        ) / 86400000.0
     elif "lengthofstay" in adm.columns:
         df["los_days"] = pd.to_numeric(adm["lengthofstay"], errors="coerce") / 24.0
     else:
@@ -132,9 +165,12 @@ def _aumc_stay_death_days(database, data_path) -> pd.DataFrame:
 
 
 _STAY_OUT_COL = {
-    "miiv": "stay_id", "miiv_demo": "stay_id",
-    "mimic": "icustay_id", "mimic_demo": "icustay_id",
-    "sic": "CaseID", "sic_demo": "CaseID",
+    "miiv": "stay_id",
+    "miiv_demo": "stay_id",
+    "mimic": "icustay_id",
+    "mimic_demo": "icustay_id",
+    "sic": "CaseID",
+    "sic_demo": "CaseID",
     "aumc": "admissionid",
 }
 
@@ -156,16 +192,21 @@ def load_outcomes(
     frame.
     """
     db = database.lower()
+    patient_values = _patient_values(patient_ids)
+    if patient_values == []:
+        return pd.DataFrame()
     if db in ("eicu", "eicu_demo"):
         # eICU has no post-discharge follow-up (horizon mortality N/A) but
         # DOES carry native ventilator days -> a clean ventilator-free-days
         # endpoint, which MIMIC cannot support (its mech_vent concept is
         # too fragmented: median ~0.02 vent-days/stay).
-        return _eicu_vent_free_days(database, data_path, patient_ids, verbose)
+        return _eicu_vent_free_days(database, data_path, patient_values, verbose)
     if db not in _FOLLOWUP_DATABASES:
         if verbose:
-            print(f"[outcomes] {database}: no post-discharge death follow-up — "
-                  "fixed-horizon mortality N/A (use 'death' for in-hospital)")
+            print(
+                f"[outcomes] {database}: no post-discharge death follow-up — "
+                "fixed-horizon mortality N/A (use 'death' for in-hospital)"
+            )
         return pd.DataFrame()
 
     if db in ("miiv", "miiv_demo", "mimic", "mimic_demo"):
@@ -189,23 +230,29 @@ def load_outcomes(
 
     los = pd.to_numeric(base["los_days"], errors="coerce").values
     dead28 = out["mort_28d"].fillna(False).to_numpy(dtype=bool)
-    los_capped = np.clip(np.nan_to_num(los, nan=0.0), 0, 28)
-    icu_free = np.where(dead28, 0.0, 28.0 - los_capped)
+    los_capped = np.clip(los, 0, 28)
+    icu_free = np.where(
+        dead28,
+        0.0,
+        np.where(np.isnan(los), np.nan, 28.0 - los_capped),
+    )
     out["icu_free_days_28"] = icu_free
 
     # ICU readmission: only well-defined where icustays groups by hadm_id.
     if db in ("miiv", "miiv_demo", "mimic", "mimic_demo") and "hadm_id" in base.columns:
         readmit = (
             base.dropna(subset=["hadm_id"])
+            .sort_values(["hadm_id", "_intime"], kind="mergesort", na_position="last")
             .assign(_n=lambda d: d.groupby("hadm_id").cumcount())
         )
         readmit_map = dict(zip(readmit["_stay"], readmit["_n"] > 0))
         out["icu_readmission"] = pd.array(
-            [readmit_map.get(s, pd.NA) for s in base["_stay"].values], dtype="boolean")
+            [readmit_map.get(s, pd.NA) for s in base["_stay"].values], dtype="boolean"
+        )
 
-    if patient_ids:
+    if patient_values is not None:
         stay_col = _STAY_OUT_COL[db]
-        out = out[out[stay_col].isin(list(patient_ids))]
+        out = out[out[stay_col].isin(patient_values)]
     return out.reset_index(drop=True)
 
 

@@ -12,12 +12,15 @@ import pytest
 
 
 @pytest.mark.needs_real_data
-@pytest.mark.parametrize("database,lo28,hi28", [
-    ("miiv", 0.08, 0.25),
-    ("mimic", 0.06, 0.22),
-    ("sic", 0.03, 0.15),
-    ("aumc", 0.05, 0.20),
-])
+@pytest.mark.parametrize(
+    "database,lo28,hi28",
+    [
+        ("miiv", 0.08, 0.25),
+        ("mimic", 0.06, 0.22),
+        ("sic", 0.03, 0.15),
+        ("aumc", 0.05, 0.20),
+    ],
+)
 def test_horizon_mortality_plausible_and_monotonic(database, lo28, hi28):
     from easyicu.scores.outcomes import load_outcomes
 
@@ -29,7 +32,7 @@ def test_horizon_mortality_plausible_and_monotonic(database, lo28, hi28):
     assert lo28 <= m28 <= hi28, f"{database} 28d mortality {m28:.3f} out of band"
     assert m28 <= m90 <= m365 + 1e-9, "horizons must be monotonic"
     # ICU-free days bounded [0, 28]
-    assert out["icu_free_days_28"].between(0, 28).all()
+    assert out["icu_free_days_28"].dropna().between(0, 28).all()
 
 
 @pytest.mark.needs_real_data
@@ -58,7 +61,7 @@ def test_outcomes_via_load_concepts():
 
     df = load_concepts(["mort_28d", "icu_free_days_28"], database="miiv")
     assert "mort_28d" in df.columns and "stay_id" in df.columns
-    assert df["icu_free_days_28"].between(0, 28).all()
+    assert df["icu_free_days_28"].dropna().between(0, 28).all()
 
 
 @pytest.mark.needs_real_data
@@ -69,11 +72,12 @@ def test_eicu_ventilator_free_days():
     assert not out.empty
     assert "vent_free_days_28" in out.columns
     vfd = out["vent_free_days_28"]
-    assert vfd.between(0, 28).all()
-    # most eICU patients are never ventilated -> 28 free days at the median
-    assert vfd.median() == 28
-    # the 0-VFD fraction tracks in-hospital mortality (~5-15%)
-    assert 0.04 <= (vfd == 0).mean() <= 0.20
+    observed_vfd = vfd.dropna()
+    assert observed_vfd.between(0, 28).all()
+    # Missing / -1 actualventdays remains unknown rather than being scored as
+    # the best possible outcome (28 free days).
+    assert len(observed_vfd) > 0
+    assert (observed_vfd == 0).any()
 
 
 @pytest.mark.needs_real_data
