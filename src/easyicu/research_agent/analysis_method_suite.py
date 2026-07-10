@@ -188,7 +188,7 @@ _PREDICTION = MethodSuite(
             tier="standard_supporting",
             implementation="deterministic",
             produces="per-subgroup performance table",
-            runner="fairness",  # research_agent/fairness.py
+            runner="fairness",  # research_agent/methods/fairness.py
             reporting_items=("TRIPOD+AI 12", "TRIPOD+AI 18"),
         ),
         AnalysisMethod(
@@ -208,7 +208,7 @@ _PREDICTION = MethodSuite(
             tier="exploratory",
             implementation="deterministic",
             produces="conformal coverage table",
-            runner="conformal",  # research_agent/conformal.py
+            runner="conformal",  # research_agent/methods/conformal.py
         ),
         AnalysisMethod(
             key="external_validation",
@@ -445,7 +445,7 @@ _ASSOCIATION = MethodSuite(
             tier="standard_supporting",
             implementation="deterministic",
             produces="missingness_summary.csv + sensitivity contrast",
-            runner="missing_data",  # research_agent/missing_data.py
+            runner="missing_data",  # research_agent/methods/missing_data.py
             reporting_items=("STROBE 12c",),
         ),
         AnalysisMethod(
@@ -455,7 +455,7 @@ _ASSOCIATION = MethodSuite(
             tier="standard_supporting",
             implementation="deterministic",
             produces="adjusted p-value table",
-            runner="multiple_testing",  # research_agent/multiple_testing.py
+            runner="multiple_testing",  # research_agent/methods/multiple_testing.py
             reporting_items=("STROBE 12e",),
         ),
         AnalysisMethod(
