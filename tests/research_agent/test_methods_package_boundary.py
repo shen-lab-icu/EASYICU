@@ -24,6 +24,8 @@ METHOD_MODULES = (
     "temporal_features",
 )
 
+LEGACY_METHOD_SHIMS = {"temporal_features"}
+
 
 def test_statistical_methods_are_owned_by_methods_package() -> None:
     package_root = (
@@ -37,7 +39,8 @@ def test_statistical_methods_are_owned_by_methods_package() -> None:
     assert (methods_root / "__init__.py").is_file()
     for module_name in METHOD_MODULES:
         assert (methods_root / f"{module_name}.py").is_file()
-        assert not (package_root / f"{module_name}.py").exists()
+        legacy_path = package_root / f"{module_name}.py"
+        assert legacy_path.exists() is (module_name in LEGACY_METHOD_SHIMS)
 
 
 @pytest.mark.parametrize("module_name", METHOD_MODULES)
@@ -59,3 +62,11 @@ def test_existing_root_convenience_exports_remain_available() -> None:
         "run_subgroup_analysis",
     ):
         assert callable(getattr(research_agent, name))
+
+
+def test_saved_temporal_feature_scripts_keep_their_legacy_import() -> None:
+    from easyicu.research_agent import temporal_features as legacy
+    from easyicu.research_agent.methods import temporal_features as canonical
+
+    assert legacy.onset_times is canonical.onset_times
+    assert legacy.incident_outcome_cohort is canonical.incident_outcome_cohort
