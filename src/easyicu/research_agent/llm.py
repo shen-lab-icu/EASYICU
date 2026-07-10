@@ -243,6 +243,20 @@ class OpenAIClient:
         # to the SDK as default headers when supplied.
         if extra_headers:
             kwargs["default_headers"] = dict(extra_headers)
+        # Stash the params needed to REBUILD the client with a fresh httpx
+        # connection pool on a transient proxy-401 (see _rebuild_openai_client):
+        # the shared :8787 proxy rotates its upstream key, and a POOLED httpx
+        # connection stays bound to the stale upstream -> 401s forever, while a
+        # NEW connection binds to the current upstream -> 200. Exclude the live
+        # ``http_client`` (a fresh one is created on rebuild).
+        self._client_base_kwargs = {
+            k: v for k, v in kwargs.items() if k != "http_client"
+        }
+        self._needs_local_http_client = _is_local_openai_compatible_base_url(
+            resolved_base_url
+        )
+        self._resolved_base_url = resolved_base_url
+        self._request_timeout = request_timeout
         if not self._local_noauth_mode:
             try:
                 from openai import OpenAI  # type: ignore
@@ -279,6 +293,59 @@ class OpenAIClient:
             if reasoning_body:
                 for k, v in reasoning_body.items():
                     self._extra_body.setdefault(k, v)
+
+    def _rebuild_openai_client(self) -> None:
+        """Recreate the OpenAI client with a FRESH httpx connection pool.
+
+        The shared local proxy (:8787) rotates its upstream key; a POOLED httpx
+        connection stays bound to the STALE upstream and 401s indefinitely, while
+        a NEW connection binds to the current upstream and succeeds (verified live:
+        a fresh probe got 200 on the same backend/key/instant that a long-lived
+        pooled client got 401). Called from the transient-proxy-401 retry branch so
+        the next attempt uses a fresh pool instead of hammering the dead connection.
+        Best-effort: on any failure it keeps the existing client.
+        """
+        # Recreate the raw local http client (used by the no-auth POST path).
+        if getattr(self, "_local_http_client", None) is not None:
+            try:
+                import httpx  # type: ignore
+
+                if self._resolved_base_url:
+                    self._local_http_client = httpx.Client(
+                        base_url=self._resolved_base_url.rstrip("/"),
+                        trust_env=False,
+                        timeout=getattr(self, "_request_timeout", self._timeout),
+                    )
+            except Exception:
+                pass
+        if getattr(self, "_client", None) is None:
+            return
+        try:
+            from openai import OpenAI  # type: ignore
+        except Exception:
+            return
+        kwargs = dict(getattr(self, "_client_base_kwargs", {}) or {})
+        if getattr(self, "_needs_local_http_client", False):
+            try:
+                import httpx  # type: ignore
+
+                kwargs["http_client"] = httpx.Client(
+                    trust_env=False,
+                    timeout=getattr(self, "_request_timeout", self._timeout),
+                )
+            except Exception:
+                pass
+        try:
+            new_client = OpenAI(**kwargs)
+        except Exception:
+            return
+        old = self._client
+        self._client = new_client
+        try:  # best-effort close of the stale pool
+            if hasattr(old, "close"):
+                old.close()
+        except Exception:
+            pass
 
     def complete(
         self,
@@ -437,6 +504,11 @@ class OpenAIClient:
                     or ("401" in msg and "proxy" in msg)
                 ):
                     last_exc = exc
+                    # Recreate the client so the retry uses a FRESH connection
+                    # pool: the shared proxy rotates its upstream key and a pooled
+                    # connection stays bound to the stale upstream -> 401 forever,
+                    # while a fresh connection binds to the current upstream -> 200.
+                    self._rebuild_openai_client()
                     _time.sleep(min(5.0 * (attempt + 1), 60.0))
                     continue
                 raise
