@@ -22,6 +22,33 @@ def patient_review_drilldown(body: Dict[str, Any]) -> dict:
         raise HTTPException(status_code=400, detail=exc.detail) from exc
 
 
+@router.post("/api/patient-review/entities")
+def patient_review_entities(body: Dict[str, Any]) -> dict:
+    """Return one bounded page of pseudonymous Patient Review entities."""
+    try:
+        return patient_drilldown.patient_review_entity_page(body)
+    except patient_drilldown.PatientReviewError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
+
+
+@router.post("/api/patient-review/entity")
+def patient_review_entity(body: Dict[str, Any]) -> dict:
+    """Return one verified pseudonymous entity without rebuilding the workspace."""
+    try:
+        return patient_drilldown.patient_review_entity(body)
+    except patient_drilldown.PatientReviewError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
+
+
+@router.post("/api/patient-review/table-preview")
+def patient_review_table_preview(body: Dict[str, Any]) -> dict:
+    """Return one bounded module table page without rebuilding Patient Review."""
+    try:
+        return patient_drilldown.patient_review_table_preview(body)
+    except patient_drilldown.PatientReviewError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
+
+
 @router.post("/api/patient-review/sources")
 def patient_review_sources(body: Dict[str, Any] | None = None) -> dict:
     """Return metadata-only local export candidates for Patient Review."""
