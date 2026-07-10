@@ -16,6 +16,7 @@ from easyicu.webserver import copilot_sessions
 from easyicu.webserver import dataio
 from easyicu.webserver import guided_sessions
 from easyicu.webserver import jobs as job_store
+from easyicu.webserver import patient_drilldown
 from easyicu.webserver import settings as settings_store
 from easyicu.webserver import sources as source_store
 from easyicu.webserver import __main__ as web_cli
@@ -453,6 +454,29 @@ def test_parquet_export_reader_pushes_projection_and_stay_filter(
 
     assert list(frame.columns) == ["stay_id", "hr"]
     assert set(frame["stay_id"].tolist()) == {2, 999}
+
+
+def test_patient_preview_parquet_batch_failure_never_falls_back_to_full_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import pyarrow.parquet as pq
+
+    path = tmp_path / "vitals.parquet"
+    pd.DataFrame({"stay_id": [1, 2], "hr": [80, 90]}).to_parquet(
+        path, index=False
+    )
+
+    def fail_bounded_read(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise RuntimeError("bounded parquet batch read failed")
+
+    def fail_full_read(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("full parquet fallback must not be used")
+
+    monkeypatch.setattr(pq, "ParquetFile", fail_bounded_read)
+    monkeypatch.setattr(pd, "read_parquet", fail_full_read)
+
+    with pytest.raises(RuntimeError, match="bounded parquet batch read failed"):
+        patient_drilldown._read_table_preview(path, ["stay_id", "hr"], 1)
 
 
 def test_extraction_folder_picker_uses_text_content_for_server_names() -> None:

@@ -424,15 +424,17 @@ def crossdb_raw_distribution(body: Dict[str, Any]) -> Dict[str, Any]:
         for db, frame in (frames or {}).items()
         if _raw_frame_has_values(frame)
     }
-    if len(loaded) < 2:
+    missing_loaded = [db for db in databases if db not in loaded]
+    if missing_loaded:
         raise CrossdbReviewError(
             {
-                "error": "loaded_fewer_than_two_raw_databases",
+                "error": "loaded_fewer_than_requested_raw_databases",
                 "mode": "real",
                 "source_type": "raw_database_root",
                 "root_hash": _hash(str(data_root)),
                 "requested_databases": databases,
                 "loaded_databases": sorted(loaded),
+                "missing_databases": missing_loaded,
                 "feature_count": len(features),
                 "privacy": _privacy_payload(),
             }
@@ -1257,6 +1259,7 @@ def _load_raw_feature_data(
                     database=db,
                     data_path=str(db_path),
                     max_patients=max_patients,
+                    require_bounded_sample=True,
                     verbose=False,
                 )
                 all_data.extend(_wide_concepts_to_long(frame, chunk, sample_size))
@@ -1268,6 +1271,7 @@ def _load_raw_feature_data(
                             database=db,
                             data_path=str(db_path),
                             max_patients=max_patients,
+                            require_bounded_sample=True,
                             verbose=False,
                         )
                         all_data.extend(
