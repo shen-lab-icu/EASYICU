@@ -74,7 +74,7 @@ A `planned` method carries no runner. It must fail closed if requested as a prim
 | Stability / reproducibility (bootstrap, consensus, adjusted Rand) | standard_supporting | LLM-coded ⚠️ | stability report | — |
 | Cluster sizes + degenerate-cluster flag | standard_supporting | deterministic ✅ | cluster_sizes.csv; figure panel | `phenotyping` |
 | Outcome-by-cluster descriptive comparison | standard_supporting | deterministic ✅ | outcome_by_cluster.csv; figure panel | `phenotyping` |
-| Trajectory-feature clustering (deterministic) | primary | planned ⛔ | trajectory_features.csv + cluster assignments + silhouette/stability/size QC + outcome-by-trajectory | — |
+| Trajectory-feature clustering (deterministic) | primary | deterministic ✅ | trajectory_features.csv + cluster assignments + silhouette/stability/size QC + outcome-by-trajectory | `trajectory_clustering` |
 | LCGA / group-based trajectory modelling (GBTM) | planned | planned ⛔ | latent-class trajectory model | — |
 | Mixed-effects / growth-mixture trajectory models | planned | planned ⛔ | mixed-effects / GMM trajectory model | — |
 | DTW / time-series distance clustering | planned | planned ⛔ | DTW distance clustering | — |
@@ -107,7 +107,6 @@ A `planned` method carries no runner. It must fail closed if requested as a prim
 | prediction | External / cross-database validation | Transportability of discrimination + calibration to a second ICU database. |
 | prediction | Net reclassification / IDI vs a baseline model | Incremental value of new predictors over an established score. |
 | prediction | Dynamic / landmark prediction (time-updated risk) | Re-estimated risk from time-updated features (landmarking). |
-| phenotyping | Trajectory-feature clustering (deterministic) | Longitudinal phenotyping: cluster on 0-72h trajectory FEATURES (baseline, early/late change, slope, AUC, variability, coverage) via KMeans/GMM/hierarchical with fixed seed + QC. |
 | phenotyping | LCGA / group-based trajectory modelling (GBTM) | Latent-class growth / group-based trajectory model — a model-based longitudinal method. |
 | phenotyping | Mixed-effects / growth-mixture trajectory models | Random-effects longitudinal models with latent classes. |
 | phenotyping | DTW / time-series distance clustering | Cluster raw trajectories under a shape-aware (dynamic time warping) distance. |

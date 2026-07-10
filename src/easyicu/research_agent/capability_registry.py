@@ -194,7 +194,15 @@ CAPABILITY_REGISTRY: Tuple[FamilyCapability, ...] = (
             "figure_strategy anti-pattern blocks 'clusters are causal entities'; "
             "an LLM failure fails closed to diagnostic_only."
         ),
-        notes="Cluster heatmap + stability + outcome-by-cluster figure is deterministic.",
+        notes=(
+            "Cluster heatmap + stability + outcome-by-cluster figure is "
+            "deterministic. The trajectory-clustering STEP now runs via the "
+            "deterministic `trajectory_clustering` auxiliary runner (observed-"
+            "window features, silhouette-selected k, seed stability); "
+            "primary_analysis stays llm_coded because phenotyping binds no scalar "
+            "deterministic estimand — the report layer's no-deterministic-primary "
+            "waiver depends on this."
+        ),
     ),
     FamilyCapability(
         family="descriptive",
@@ -231,6 +239,39 @@ AUXILIARY_DETERMINISTIC_RUNNERS: Tuple[AuxiliaryRunner, ...] = (
             "Degrades to a CLEAN skip (status=skipped, not_applicable) when no "
             "alternative_cohort_attrition.csv exists upstream — it does NOT block "
             "(this removed the H2 'produce the missing file' replan loop)."
+        ),
+    ),
+    AuxiliaryRunner(
+        name="missingness_measurement_audit",
+        entrypoint="missingness_measurement_audit_code",
+        module="deterministic_missingness",
+        purpose=(
+            "Per-concept measured-vs-missing counts + structural-vs-measurement "
+            "split for a missingness / measurement-process audit step (never "
+            "imputes)."
+        ),
+        fail_closed=(
+            "Blocks with a reason when no <concept>_measured columns resolve. "
+            "Owns the audit so the LLM coder no longer times out on it (~27.6 min "
+            "then fail); the figure step renders via the data_quality->missingness "
+            "renderer."
+        ),
+    ),
+    AuxiliaryRunner(
+        name="trajectory_clustering",
+        entrypoint="trajectory_clustering_analysis_code",
+        module="deterministic_clustering",
+        purpose=(
+            "Deterministic phenotyping partition: features over OBSERVED trajectory "
+            "windows (never zero-imputed), silhouette-selected k, seed-stability, "
+            "and a DESCRIPTIVE outcome-by-cluster contrast (adjusted_effect=None)."
+        ),
+        fail_closed=(
+            "Blocks with a specific reason when no trajectory columns resolve — "
+            "never fabricates a partition. Supports the phenotyping figure "
+            "(cluster_characteristics + clustering_metrics) without binding a "
+            "scalar primary estimand, so phenotyping stays LLM-coded-primary for "
+            "the report layer's no-deterministic-primary waiver."
         ),
     ),
 )
