@@ -78,6 +78,7 @@
   }
 
   function asNumber(value) {
+    if (value == null || value === '' || typeof value === 'boolean') return null;
     const numeric = Number(value);
     return Number.isFinite(numeric) ? numeric : null;
   }
@@ -127,9 +128,12 @@
 
   function cohortDenominator(drill, rows) {
     const loaded = drill && drill.data_tables && drill.data_tables.loaded_summary;
+    const summary = (drill && drill.summary) || {};
+    const boundedReview = summary.review_scope === 'browser_bounded_entity_sample';
     const candidates = [
-      drill && drill.summary && drill.summary.entities,
-      drill && drill.summary && drill.summary.stays,
+      boundedReview && summary.review_entities,
+      summary.entities,
+      summary.stays,
       loaded && loaded.entities,
       loaded && loaded.stays,
       ...rows.map(item => item && item.entities),
@@ -195,6 +199,13 @@
   function renderMissingnessCoverage(drill, helpers) {
     const rows = moduleAuditRows(drill);
     if (!rows.length) return '';
+    const summary = (drill && drill.summary) || {};
+    const fullEntities = asNumber(summary.entities != null ? summary.entities : summary.stays);
+    const reviewEntities = asNumber(summary.review_entities);
+    const boundedReview = summary.review_scope === 'browser_bounded_entity_sample'
+      && reviewEntities != null
+      && fullEntities != null
+      && reviewEntities < fullEntities;
     const denominator = cohortDenominator(drill, rows);
     const coverageRows = rows
       .map(item => {
@@ -213,19 +224,36 @@
     const presenceRows = coverageRows
       .filter(item => item.is_presence_rate)
       .sort((a, b) => (b.coverage_pct || 0) - (a.coverage_pct || 0));
+    const inventoryOnlyCount = rows.length - coverageRows.length;
     const medianCoverage = median(trueMissingRows.map(item => item.coverage_pct));
     const topMissing = trueMissingRows.length ? trueMissingRows[0].missing_pct : null;
     const watchCount = trueMissingRows.filter(item => (item.missing_pct || 0) >= 10).length;
     const visibleMissing = trueMissingRows.slice(0, 8);
     const visiblePresence = presenceRows.slice(0, 6);
-    const denomText = denominator ? `${hFmtInt(helpers, denominator)} ${hT(helpers, 'entities', '实体')}` : hT(helpers, 'active export', '当前导出');
+    const denomText = boundedReview
+      ? `${hFmtInt(helpers, reviewEntities)} ${hT(helpers, 'reviewed', '已审阅')} / ${hFmtInt(helpers, fullEntities)} ${hT(helpers, 'full', '完整队列')}`
+      : (denominator ? `${hFmtInt(helpers, denominator)} ${hT(helpers, 'entities', '实体')}` : hT(helpers, 'active export', '当前导出'));
+    const scopeDescription = boundedReview
+      ? hT(
+        helpers,
+        'Computed coverage uses the bounded browser review sample, not the full export cohort. The full cohort denominator remains visible for context; the currently selected patient is not the denominator.',
+        '当前覆盖率以浏览器有界审阅样本计算，并非基于完整导出队列。完整队列分母会同时显示作为背景；当前所选患者不是分母。',
+      )
+      : hT(
+        helpers,
+        'Computed coverage uses the review denominator shown here, not the currently selected patient. Event or exposure modules are labelled separately and are not treated as missingness.',
+        '当前覆盖率使用此处显示的审阅分母计算，不以当前所选患者为分母。事件或暴露模块单独标注，不当作缺失率。',
+      );
+    const denominatorLabel = boundedReview
+      ? hT(helpers, 'coverage denominator: bounded browser review sample', '覆盖率分母：浏览器有界审阅样本')
+      : hT(helpers, 'coverage denominator: current review entities', '覆盖率分母：当前审阅实体');
     return `
       <section class="pt-missingness-workbench mt-16" data-patient-overview-missingness>
         <div class="pt-missingness-head">
           <div>
             <div class="eyebrow">${hEsc(helpers, hT(helpers, 'Missingness audit · cohort context', '缺失率审计 · 队列背景'))}</div>
             <h2>${hEsc(helpers, hT(helpers, 'Missingness and coverage', '缺失率与覆盖率'))}</h2>
-            <p>${hEsc(helpers, hT(helpers, 'This is a cohort-level data-availability audit (coverage across all selected entities), not the currently selected patient. Coverage is at entity level for true availability modules; event or exposure modules are labelled separately and not treated as missingness.', '这是队列层面的数据可用性审计（覆盖率跨所有已选实体），不是当前所选患者。真正的可用性模块按实体计算覆盖率；事件或暴露模块单独标注，不当作缺失率。'))}</p>
+            <p>${hEsc(helpers, scopeDescription)}</p>
           </div>
           <span class="pill ok">${hEsc(helpers, denomText)}</span>
         </div>
@@ -251,7 +279,7 @@
           <div class="pt-missingness-panel">
             <div class="pt-missingness-panel-head">
               <b>${hEsc(helpers, hT(helpers, 'Top module missingness', '模块缺失率排行'))}</b>
-              <span>${hEsc(helpers, hT(helpers, 'coverage denominator: selected cohort entities', '分母：当前队列实体'))}</span>
+              <span>${hEsc(helpers, denominatorLabel)}</span>
             </div>
             <div class="pt-missingness-list">
               ${visibleMissing.length ? visibleMissing.map(item => {
@@ -301,7 +329,7 @@
               </div>
             </div>` : ''}
         </div>
-        <div class="pt-missingness-note">${hEsc(helpers, hT(helpers, 'Clinical flags such as Sepsis-3, outcome, vasopressor exposure, or ventilation prevalence describe event occurrence. They are deliberately excluded from the missingness watchlist.', 'Sepsis-3、结局、血管活性药物暴露、机械通气等临床标志描述事件发生；这里刻意不把它们放进缺失率风险列表。'))}</div>
+        <div class="pt-missingness-note">${hEsc(helpers, hT(helpers, 'Clinical flags such as Sepsis-3, outcome, vasopressor exposure, or ventilation prevalence describe event occurrence. They are deliberately excluded from the missingness watchlist.', 'Sepsis-3、结局、血管活性药物暴露、机械通气等临床标志描述事件发生；这里刻意不把它们放进缺失率风险列表。'))}${inventoryOnlyCount ? ` ${hEsc(helpers, hT(helpers, `${hFmtInt(helpers, inventoryOnlyCount)} modules have inventory metadata only; entity coverage was not computed and they are excluded from these percentages.`, `${hFmtInt(helpers, inventoryOnlyCount)} 个模块仅有文件清单元数据；未计算实体覆盖率，因此不纳入这些百分比。`))}` : ''}</div>
       </section>`;
   }
 

@@ -1904,6 +1904,18 @@ def test_native_crossdb_restores_distribution_visuals() -> None:
     continuity_js = _static_js("screens-viz-crossdb-job-continuity.js")
     screens_css = _static_css("screens.css")
     crossdb_css = _static_css("crossdb.css")
+    unrelated_route_css = {
+        name: _static_css(name)
+        for name in (
+            "agent.css",
+            "cohort.css",
+            "extraction.css",
+            "guided.css",
+            "ideas.css",
+            "patient.css",
+            "settings.css",
+        )
+    }
     index_html = _static_html("index.html")
 
     assert "startCrossdbRawDistributionJob" in api_js
@@ -1917,6 +1929,9 @@ def test_native_crossdb_restores_distribution_visuals() -> None:
     assert "loadCrossdbDemoDistribution" in viz_js
     assert "legacy_simulated_multidb_feature_frames" in viz_js
     assert "feature_scope: 'all_catalog'" in viz_js
+    assert "window.EU_CROSSDB_RAW.coreFeatures()" in viz_js
+    assert "window.EU_CROSSDB_RAW.buildRequest" in viz_js
+    assert "12 curated core concepts" in viz_js
     assert "max_features: 90" not in viz_js
     assert "records_per_feature: 96" in viz_js
     assert "demoCurvePoints" not in viz_js
@@ -2001,8 +2016,14 @@ def test_native_crossdb_restores_distribution_visuals() -> None:
     assert "--xdb-grid-cols" in viz_js
     assert "xdb-density-svg" in viz_js
     assert "xdb-density-line" in viz_js
-    assert "js/screens-viz.js?v=20260707-logic" in index_html
-    assert "css/crossdb.css?v=20260707-residuals2" in index_html
+    assert "js/screens-viz.js?v=20260710-real-qa3" in index_html
+    assert "css/crossdb.css?v=20260710-action-clearance2" in index_html
+    assert "crossdb-run-strip" in viz_js
+    assert ".crossdb-run-strip" in crossdb_css
+    assert "padding-right: 168px" in crossdb_css
+    assert "scroll-margin-bottom: 84px" in crossdb_css
+    for name, css in unrelated_route_css.items():
+        assert ".crossdb-run-strip" not in css, f"Cross-DB action CSS leaked into {name}"
     # Legacy Figure-3 Cross-DB layout restored: curated canonical-concept density grid
     # (one subplot per concept) instead of dumping all ~247 catalog features, plus
     # the per-database record-count cards from paper_figures._render_paper_crossdb_panel.
@@ -2065,7 +2086,7 @@ def test_native_cohort_snapshot_renders_real_clinical_profile() -> None:
     assert ".cprof-grid" in cohort_css
     assert ".cxh" not in cohort_css
     # Cache-bust bumped so the restored charts ship to existing clients.
-    assert "js/screens-viz.js?v=20260707-logic" in index_html
+    assert "js/screens-viz.js?v=20260710-real-qa3" in index_html
 
 
 def test_native_cohort_groups_render_comparison_bar_chart() -> None:
@@ -2494,6 +2515,15 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert "loadPatientSources" in viz_js
     assert "Ready to load local export" in viz_js
     assert "No registered export is active" in viz_js
+    assert "Reading bounded Patient Review from local export" in viz_js
+    assert "const wsMatchesActive = ws" in viz_js
+    assert "const patientSource = active === 'patient' ? patientActiveSourceMeta() : null" in viz_js
+    assert "route: 'patient'" in viz_js
+    assert "route: 'cohort'" in viz_js
+    assert "route: 'crossdb'" in viz_js
+    assert "skeletonWorkspace(window.EU_DATA)" in viz_js
+    assert "full cohort', '完整队列'" in viz_js
+    assert "bounded browser review', '浏览器有界审阅'" in viz_js
     assert "data-patient-export" in viz_js
     assert "bounded_patient_review_drilldown" in viz_js
     assert "data-pt-table-module" in viz_js
@@ -2555,6 +2585,13 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert "不是缺失率" in patient_overview_js
     assert "renderQualityAudit" in patient_overview_js
     assert "renderQualityAudit" in viz_js
+    assert "value == null || value === '' || typeof value === 'boolean'" in patient_overview_js
+    assert "coverage across all selected entities" not in patient_overview_js
+    assert "entity coverage was not computed" in patient_overview_js
+    assert 'data-patient-module-coverage="${hasCoverage ? \'computed\' : \'not-computed\'}"' in viz_js
+    assert "q.coverage_pct == null ? 0" not in viz_js
+    assert "metricKind === 'event_rate'" in viz_js
+    assert "metricKind === 'exposure_rate'" in viz_js
     assert "Selected entity trend tiles" not in viz_js
     assert "Table preview" in viz_js
     assert "表格预览" in viz_js
@@ -2595,9 +2632,9 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert "css/patient-series.css?v=20260630-patient-old-series2" in index_html
     assert "js/screens-viz-demo.js?v=20260630-patient-demo-audit" in index_html
     assert "js/screens-viz-patient-series.js?v=20260707-logic" in index_html
-    assert "js/screens-viz-patient-overview.js?v=20260707-ux" in index_html
-    assert "js/screens-viz.js?v=20260707-logic" in index_html
-    assert "browser review', '浏览器审阅" in viz_js
+    assert "js/screens-viz-patient-overview.js?v=20260710-review-scope" in index_html
+    assert "js/screens-viz.js?v=20260710-real-qa3" in index_html
+    assert "bounded browser review', '浏览器有界审阅" in viz_js
     assert "function buildDemoPatientDrilldown" in viz_js
     assert "function demoTablePreviewRowContext" in viz_js
     assert "const timepointsPerEntity = 12" in viz_js
@@ -2764,7 +2801,7 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
     index_html = _static_html("index.html")
 
     assert "css/cohort.css?v=20260707-design" in index_html
-    assert "js/screens-viz.js?v=20260707-logic" in index_html
+    assert "js/screens-viz.js?v=20260710-real-qa3" in index_html
     assert "let cohortView = 'idle';" in viz_js
     assert "let cohortFeatureScope = 'recommended';" in viz_js
     assert 'data-cohort-config-required="true"' in viz_js
