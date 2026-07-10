@@ -8,9 +8,17 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
+from easyicu.research_agent.discovery_handoff import (
+    DiscoveryHandoffPacket,
+    build_handoff_from_row,
+)
 from easyicu.webserver import capabilities
 from easyicu.webserver import provider_adapter
 from easyicu.webserver import settings as settings_store
+from easyicu.webserver.ideas.handoff import (
+    build_web_handoff_packet,
+    map_web_ledger_row,
+)
 from easyicu.webserver.ideas import mining as idea_mining
 from easyicu.webserver.app import app
 
@@ -417,6 +425,204 @@ def test_idea_plan_stage_precedes_agent_handoff_and_stays_metadata_only(
     assert frozen["agent_seed"]["requires_human_confirmation"] is True
     assert frozen["agent_seed"]["reportable"] is False
     assert frozen["agent_seed"]["draft_unlocked"] is False
+    canonical = DiscoveryHandoffPacket.model_validate(frozen["canonical_handoff"])
+    assert canonical.human_confirmed is False
+    assert canonical.analysis_ready is False
+    assert frozen["canonical_handoff_path"] == "discovery_handoff.json"
+    assert len(frozen["canonical_handoff_sha256"]) == 64
+    assert (
+        idea_mining._run_dir(run["run_id"]) / "discovery_handoff.json"
+    ).is_file()
+
+
+def test_web_handoff_adapter_matches_canonical_core_semantics(tmp_path: Path) -> None:
+    idea = {
+        "idea_id": "idea_adapter",
+        "idea_title": "Vasopressor exposure and ICU mortality",
+        "rationale": "Mapped from a bounded literature seed.",
+        "go_no_go": "recommend",
+        "go_no_go_reason": "Required concepts are available.",
+        "outcome": "In-hospital mortality",
+        "analysis_family": "association",
+        "mapped_concepts": [
+            {"role": "exposure", "concept_id": "vaso_ind", "label": "Vasopressor"},
+            {"role": "outcome", "concept_id": "death", "label": "Mortality"},
+        ],
+        "feasibility": {"tier": "executable"},
+        "prior_art": {"novelty_label": "unknown_until_search"},
+        "next_action": "Run bounded feasibility review.",
+    }
+    source = {
+        "source_id": "source_adapter",
+        "source_type": "url",
+        "title": "Bounded source",
+        "evidence_quote": "A bounded gap statement.",
+        "source_text_sha256": "a" * 64,
+    }
+    plan = {
+        "selection_mode": "human_curated_with_text_edits",
+        "research_question": "Is vasopressor exposure associated with ICU mortality?",
+        "cohort": {"default": "adult ICU cohort from active EasyICU export"},
+        "active_export_contract": {"database": "eicu"},
+    }
+    pre = {"status": "ready", "source": {"database": "eicu"}}
+    mapped = map_web_ledger_row(
+        idea=idea,
+        source=source,
+        plan=plan,
+        pre_experiment=pre,
+    )
+    adapter_packet = build_web_handoff_packet(
+        idea=idea,
+        source=source,
+        plan=plan,
+        pre_experiment=pre,
+        prior_art_check=None,
+        run_dir=tmp_path,
+    )
+    core_packet = build_handoff_from_row(
+        mapped,
+        triage_report_path=tmp_path / "idea_mining_run.json",
+        selection_mode="human_curated",
+        selection_rationale=idea["rationale"],
+        target_outcome="death",
+        database="eicu",
+        research_question=plan["research_question"],
+        inclusion_criteria=[plan["cohort"]["default"]],
+        human_confirmed=False,
+    )
+    adapter_payload = adapter_packet.model_dump(mode="json")
+    core_payload = core_packet.model_dump(mode="json")
+    adapter_payload.pop("created_at")
+    core_payload.pop("created_at")
+    assert adapter_payload == core_payload
+
+
+def test_web_handoff_without_database_stays_unspecified(tmp_path: Path) -> None:
+    packet = build_web_handoff_packet(
+        idea={
+            "idea_id": "idea_unknown_db",
+            "idea_title": "Unknown-database ICU candidate",
+            "go_no_go": "hold",
+            "go_no_go_reason": "No active export is selected.",
+            "outcome": "In-hospital mortality",
+            "mapped_concepts": [],
+        },
+        source={},
+        plan={},
+        pre_experiment={},
+        prior_art_check=None,
+        run_dir=tmp_path,
+    )
+    assert packet.database == "unspecified"
+    assert packet.database != "miiv"
+
+
+@pytest.mark.parametrize(
+    "tamper_target",
+    [
+        "artifact",
+        "artifact_with_replan",
+        "envelope",
+        "partial_field",
+        "legacy_identity",
+    ],
+)
+def test_agent_project_rejects_tampered_canonical_handoff(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tamper_target: str,
+) -> None:
+    monkeypatch.setattr(idea_mining, "_RUN_ROOT", tmp_path / "idea_runs")
+    monkeypatch.setattr(idea_mining, "_HISTORY_PATH", tmp_path / "idea_history.json")
+    monkeypatch.setattr(idea_mining, "_active_export", lambda: None)
+    run = idea_mining.mine_ideas(
+        {
+            "source_type": "url",
+            "title": "Vasopressors and mortality in ICU patients",
+            "excerpt": "Vasopressors may be associated with mortality.",
+        }
+    )
+    idea = run["idea_ledger"][0]
+    idea_mining.create_handoff(
+        {"run_id": run["run_id"], "idea_id": idea["idea_id"]}
+    )
+    run_dir = idea_mining._run_dir(run["run_id"])
+    if tamper_target in {"artifact", "artifact_with_replan"}:
+        path = run_dir / "discovery_handoff.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["candidate_topic"] = "tampered artifact"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+    elif tamper_target == "envelope":
+        path = run_dir / "idea_handoff.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["canonical_handoff"]["candidate_topic"] = "tampered envelope"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+    elif tamper_target == "partial_field":
+        path = run_dir / "idea_handoff.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload.pop("canonical_handoff_path")
+        path.write_text(json.dumps(payload), encoding="utf-8")
+    else:
+        path = run_dir / "idea_handoff.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["candidate_topic"] = "mismatched legacy topic"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(idea_mining.IdeaMiningWebError) as exc_info:
+        project_body = {"run_id": run["run_id"], "idea_id": idea["idea_id"]}
+        if tamper_target == "artifact_with_replan":
+            project_body["plan_edits"] = "A legitimate new plan note."
+        idea_mining.create_agent_project(project_body)
+    assert exc_info.value.detail["error"] == "canonical_handoff_integrity_error"
+
+
+def test_legacy_handoff_refreshes_to_locked_unconfirmed_agent_seed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(idea_mining, "_RUN_ROOT", tmp_path / "idea_runs")
+    monkeypatch.setattr(idea_mining, "_HISTORY_PATH", tmp_path / "idea_history.json")
+    monkeypatch.setattr(
+        idea_mining, "_AGENT_PROJECTS_ROOT", tmp_path / "agent_projects"
+    )
+    monkeypatch.setattr(
+        idea_mining, "_AGENT_PROJECTS_PATH", tmp_path / "agent_projects.json"
+    )
+    monkeypatch.setattr(idea_mining, "_active_export", lambda: None)
+    run = idea_mining.mine_ideas(
+        {
+            "source_type": "url",
+            "title": "Vasopressors and mortality in ICU patients",
+            "excerpt": "Vasopressors may be associated with mortality.",
+        }
+    )
+    idea = run["idea_ledger"][0]
+    handoff = idea_mining.create_handoff(
+        {"run_id": run["run_id"], "idea_id": idea["idea_id"]}
+    )
+    run_dir = idea_mining._run_dir(run["run_id"])
+    legacy = dict(handoff)
+    legacy.pop("canonical_handoff")
+    legacy.pop("canonical_handoff_path")
+    legacy.pop("canonical_handoff_sha256")
+    (run_dir / "idea_handoff.json").write_text(
+        json.dumps(legacy), encoding="utf-8"
+    )
+    (run_dir / "discovery_handoff.json").unlink()
+
+    result = idea_mining.create_agent_project(
+        {"run_id": run["run_id"], "idea_id": idea["idea_id"]}
+    )
+    seed = result["project"]
+    packet = DiscoveryHandoffPacket.model_validate(seed["canonical_handoff"])
+    assert packet.human_confirmed is False
+    assert packet.analysis_ready is False
+    assert seed["human_confirmed"] is False
+    assert seed["analysis_ready"] is False
+    assert seed["requires_human_confirmation"] is True
+    assert seed["draft_unlocked"] is False
+    assert len(seed["canonical_handoff_sha256"]) == 64
 
 
 def test_idea_mining_does_not_recommend_mock_export_as_real_feasibility(
