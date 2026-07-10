@@ -11,8 +11,10 @@ from easyicu.webserver.app import app
 from easyicu.webserver.routes.copilot import router as copilot_router
 from easyicu.webserver.routes.guided import router as guided_router
 from easyicu.webserver.routes.ideas import router as ideas_router
+from easyicu.webserver.routes.local_data import router as local_data_router
 from easyicu.webserver.routes.page_guide import router as page_guide_router
 from easyicu.webserver.routes.system import router as system_router
+from easyicu.webserver.routes.workspaces import router as workspaces_router
 
 
 EXPECTED_SYSTEM_ROUTES = [
@@ -97,6 +99,26 @@ EXPECTED_IDEAS_ROUTES = [
     ("POST", "/api/ideas/run", "post_ideas_run"),
 ]
 
+EXPECTED_LOCAL_DATA_ROUTES = [
+    ("GET", "/api/fs/list", "fs_list"),
+    ("POST", "/api/fs/mkdir", "fs_mkdir"),
+    ("POST", "/api/data/scan", "data_scan"),
+    ("POST", "/api/workspace/summary", "workspace_summary"),
+]
+
+EXPECTED_WORKSPACE_ROUTES = [
+    (
+        "POST",
+        "/api/workspaces/crossdb-summary",
+        "workspaces_crossdb_summary",
+    ),
+    ("GET", "/api/workspaces/registry", "workspaces_registry"),
+    ("POST", "/api/workspaces/registry", "post_workspaces_registry"),
+    ("POST", "/api/workspaces/register", "post_workspaces_register"),
+    ("POST", "/api/workspaces/rename", "post_workspaces_rename"),
+    ("POST", "/api/workspaces/remove", "post_workspaces_remove"),
+]
+
 
 def _router_routes(router) -> list[APIRoute]:
     return [route for route in router.routes if isinstance(route, APIRoute)]
@@ -120,8 +142,9 @@ def _router_registration_index(router) -> int:
     return _router_registration_indices(router)[0]
 
 
-def _assert_router_contract(router, prefix: str, expected: list[tuple]) -> None:
+def _assert_router_contract(router, expected: list[tuple]) -> None:
     routes = _router_routes(router)
+    endpoints = {route.endpoint for route in routes}
     actual = [
         (method, route.path, route.name)
         for route in routes
@@ -130,7 +153,7 @@ def _assert_router_contract(router, prefix: str, expected: list[tuple]) -> None:
     eager_app_routes = [
         route
         for route in app.routes
-        if isinstance(route, APIRoute) and route.path.startswith(prefix)
+        if isinstance(route, APIRoute) and route.endpoint in endpoints
     ]
     eager_app_actual = [
         (method, route.path, route.name)
@@ -176,26 +199,33 @@ def test_system_route_operation_names_and_favicon_schema_contract() -> None:
 
 
 def test_guided_route_method_path_and_operation_name_snapshot() -> None:
-    _assert_router_contract(guided_router, "/api/guided/", EXPECTED_GUIDED_ROUTES)
+    _assert_router_contract(guided_router, EXPECTED_GUIDED_ROUTES)
 
 
 def test_copilot_route_method_path_and_operation_name_snapshot() -> None:
-    _assert_router_contract(copilot_router, "/api/copilot/", EXPECTED_COPILOT_ROUTES)
+    _assert_router_contract(copilot_router, EXPECTED_COPILOT_ROUTES)
 
 
 def test_page_guide_route_method_path_and_operation_name_snapshot() -> None:
     _assert_router_contract(
         page_guide_router,
-        "/api/page-guide/",
         EXPECTED_PAGE_GUIDE_ROUTES,
     )
 
 
 def test_ideas_route_method_path_and_operation_name_snapshot() -> None:
-    _assert_router_contract(ideas_router, "/api/ideas/", EXPECTED_IDEAS_ROUTES)
+    _assert_router_contract(ideas_router, EXPECTED_IDEAS_ROUTES)
 
 
-def test_guided_route_owner_boundary() -> None:
+def test_local_data_route_method_path_and_operation_name_snapshot() -> None:
+    _assert_router_contract(local_data_router, EXPECTED_LOCAL_DATA_ROUTES)
+
+
+def test_workspace_route_method_path_and_operation_name_snapshot() -> None:
+    _assert_router_contract(workspaces_router, EXPECTED_WORKSPACE_ROUTES)
+
+
+def test_route_owner_boundaries() -> None:
     package_root = Path(__file__).parents[1] / "src" / "easyicu" / "webserver"
     app_source = (package_root / "app.py").read_text(encoding="utf-8")
     guided_source = (package_root / "routes" / "guided.py").read_text(encoding="utf-8")
@@ -206,11 +236,21 @@ def test_guided_route_owner_boundary() -> None:
         encoding="utf-8"
     )
     ideas_source = (package_root / "routes" / "ideas.py").read_text(encoding="utf-8")
+    local_data_source = (package_root / "routes" / "local_data.py").read_text(
+        encoding="utf-8"
+    )
+    workspaces_source = (package_root / "routes" / "workspaces.py").read_text(
+        encoding="utf-8"
+    )
 
     assert "/api/guided/" not in app_source
     assert "/api/copilot/" not in app_source
     assert "/api/page-guide/" not in app_source
     assert "/api/ideas/" not in app_source
+    assert "/api/fs/" not in app_source
+    assert "/api/data/" not in app_source
+    assert "/api/workspace/" not in app_source
+    assert "/api/workspaces/" not in app_source
     assert "/api/guided/" in guided_source
     assert "/api/copilot/" not in guided_source
     assert "/api/page-guide/" not in guided_source
@@ -224,20 +264,42 @@ def test_guided_route_owner_boundary() -> None:
     assert "/api/guided/" not in ideas_source
     assert "/api/copilot/" not in ideas_source
     assert "/api/page-guide/" not in ideas_source
+    assert "/api/fs/" in local_data_source
+    assert "/api/data/" in local_data_source
+    assert "/api/workspace/" in local_data_source
+    assert "/api/workspaces/" not in local_data_source
+    assert "/api/workspaces/" in workspaces_source
+    assert "/api/workspace/" not in workspaces_source
+    assert "/api/jobs/" not in local_data_source
+    assert "/api/jobs/" not in workspaces_source
+    assert "-review/" not in local_data_source
+    assert "-review/" not in workspaces_source
     assert "_pubmed_connector_gate" not in app_source
     assert "_pubmed_connector_gate" in ideas_source
     assert "easyicu.webserver.app" not in guided_source
     assert "easyicu.webserver.app" not in copilot_source
     assert "easyicu.webserver.app" not in page_guide_source
     assert "easyicu.webserver.app" not in ideas_source
+    assert "easyicu.webserver.app" not in local_data_source
+    assert "easyicu.webserver.app" not in workspaces_source
 
 
 def test_root_static_mount_stays_last() -> None:
     static_mount = app.routes[-1]
-    fs_list_index = next(
+    patient_review_index = next(
         index
         for index, route in enumerate(app.routes)
-        if getattr(route, "path", None) == "/api/fs/list"
+        if getattr(route, "path", None) == "/api/patient-review/drilldown"
+    )
+    extraction_index = next(
+        index
+        for index, route in enumerate(app.routes)
+        if getattr(route, "path", None) == "/api/extraction/filter-options"
+    )
+    jobs_convert_index = next(
+        index
+        for index, route in enumerate(app.routes)
+        if getattr(route, "path", None) == "/api/jobs/convert"
     )
     agent_history_index = next(
         index
@@ -252,7 +314,11 @@ def test_root_static_mount_stays_last() -> None:
 
     assert (
         _router_registration_index(system_router)
-        < fs_list_index
+        < _router_registration_index(local_data_router)
+        < patient_review_index
+        < extraction_index
+        < _router_registration_index(workspaces_router)
+        < jobs_convert_index
         < agent_history_index
         < _router_registration_index(guided_router)
         < _router_registration_index(copilot_router)
