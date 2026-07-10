@@ -10,6 +10,7 @@ from starlette.routing import Mount
 from easyicu.webserver.app import app
 from easyicu.webserver.routes.copilot import router as copilot_router
 from easyicu.webserver.routes.guided import router as guided_router
+from easyicu.webserver.routes.ideas import router as ideas_router
 from easyicu.webserver.routes.page_guide import router as page_guide_router
 from easyicu.webserver.routes.system import router as system_router
 
@@ -70,6 +71,30 @@ EXPECTED_PAGE_GUIDE_ROUTES = [
     ("POST", "/api/page-guide/message", "post_page_guide_message"),
     ("POST", "/api/page-guide/action", "post_page_guide_action"),
     ("POST", "/api/page-guide/sessions/list", "post_page_guide_sessions_list"),
+]
+
+EXPECTED_IDEAS_ROUTES = [
+    ("POST", "/api/ideas/mine", "post_ideas_mine"),
+    ("POST", "/api/ideas/resolve-source", "post_ideas_resolve_source"),
+    ("POST", "/api/ideas/discover", "post_ideas_discover"),
+    ("POST", "/api/ideas/ingest-pdf", "post_ideas_ingest_pdf"),
+    ("POST", "/api/ideas/literature-folder", "post_ideas_literature_folder"),
+    ("POST", "/api/ideas/prior-art", "post_ideas_prior_art"),
+    ("POST", "/api/ideas/plan", "post_ideas_plan"),
+    (
+        "POST",
+        "/api/ideas/bounded-feasibility",
+        "post_ideas_bounded_feasibility",
+    ),
+    ("POST", "/api/ideas/handoff", "post_ideas_handoff"),
+    (
+        "POST",
+        "/api/ideas/create-agent-project",
+        "post_ideas_create_agent_project",
+    ),
+    ("POST", "/api/ideas/agent-projects", "post_ideas_agent_projects"),
+    ("POST", "/api/ideas/history", "post_ideas_history"),
+    ("POST", "/api/ideas/run", "post_ideas_run"),
 ]
 
 
@@ -166,6 +191,10 @@ def test_page_guide_route_method_path_and_operation_name_snapshot() -> None:
     )
 
 
+def test_ideas_route_method_path_and_operation_name_snapshot() -> None:
+    _assert_router_contract(ideas_router, "/api/ideas/", EXPECTED_IDEAS_ROUTES)
+
+
 def test_guided_route_owner_boundary() -> None:
     package_root = Path(__file__).parents[1] / "src" / "easyicu" / "webserver"
     app_source = (package_root / "app.py").read_text(encoding="utf-8")
@@ -176,10 +205,12 @@ def test_guided_route_owner_boundary() -> None:
     page_guide_source = (package_root / "routes" / "page_guide.py").read_text(
         encoding="utf-8"
     )
+    ideas_source = (package_root / "routes" / "ideas.py").read_text(encoding="utf-8")
 
     assert "/api/guided/" not in app_source
     assert "/api/copilot/" not in app_source
     assert "/api/page-guide/" not in app_source
+    assert "/api/ideas/" not in app_source
     assert "/api/guided/" in guided_source
     assert "/api/copilot/" not in guided_source
     assert "/api/page-guide/" not in guided_source
@@ -189,9 +220,16 @@ def test_guided_route_owner_boundary() -> None:
     assert "/api/page-guide/" in page_guide_source
     assert "/api/guided/" not in page_guide_source
     assert "/api/copilot/" not in page_guide_source
+    assert "/api/ideas/" in ideas_source
+    assert "/api/guided/" not in ideas_source
+    assert "/api/copilot/" not in ideas_source
+    assert "/api/page-guide/" not in ideas_source
+    assert "_pubmed_connector_gate" not in app_source
+    assert "_pubmed_connector_gate" in ideas_source
     assert "easyicu.webserver.app" not in guided_source
     assert "easyicu.webserver.app" not in copilot_source
     assert "easyicu.webserver.app" not in page_guide_source
+    assert "easyicu.webserver.app" not in ideas_source
 
 
 def test_root_static_mount_stays_last() -> None:
@@ -206,10 +244,10 @@ def test_root_static_mount_stays_last() -> None:
         for index, route in enumerate(app.routes)
         if getattr(route, "path", None) == "/api/agent-runs/history"
     )
-    ideas_index = next(
+    artifact_index = next(
         index
         for index, route in enumerate(app.routes)
-        if getattr(route, "path", None) == "/api/ideas/mine"
+        if getattr(route, "path", None) == "/api/agent-runs/artifact"
     )
 
     assert (
@@ -219,7 +257,8 @@ def test_root_static_mount_stays_last() -> None:
         < _router_registration_index(guided_router)
         < _router_registration_index(copilot_router)
         < _router_registration_index(page_guide_router)
-        < ideas_index
+        < _router_registration_index(ideas_router)
+        < artifact_index
         < len(app.routes) - 1
     )
     assert isinstance(static_mount, Mount)
