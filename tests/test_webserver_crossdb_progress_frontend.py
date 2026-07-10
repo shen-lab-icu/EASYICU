@@ -29,27 +29,38 @@ def _node_binary() -> str | None:
 def test_crossdb_progress_has_one_explicit_owner() -> None:
     index = _read("index.html")
     owner = _read("js/screens-viz-crossdb-progress.js")
+    setup = _read("js/screens-viz-crossdb-setup.js")
     viz = _read("js/screens-viz.js")
     owner_src = "js/screens-viz-crossdb-progress.js?v=20260710-structured-progress"
 
     assert owner_src in index
     assert index.index("js/screens-viz-crossdb-raw.js?") < index.index(owner_src)
-    assert index.index(owner_src) < index.index("js/screens-viz.js?")
+    assert index.index(owner_src) < index.index("js/screens-viz-crossdb-setup.js?")
+    assert index.index("js/screens-viz-crossdb-setup.js?") < index.index("js/screens-viz.js?")
     assert "window.EU_CROSSDB_PROGRESS" in owner
     assert "const crossRawProgress = window.EU_CROSSDB_PROGRESS" in viz
     assert "let crossRawJobId" not in viz
     assert "let crossRawProg" not in viz
     assert "let crossRawCancelRequested" not in viz
     assert "let crossRawJobStarting" not in viz
-    assert "let crossRawScanRequestSeq = 0" in viz
-    assert "requestSeq !== crossRawScanRequestSeq" in viz
-    assert "missingSelectedKeys.length === 0" in viz
-    assert 'type="button" data-db=' in viz
-    assert 'aria-pressed="${on ? \'true\' : \'false\'}"' in viz
-    assert "const rawLoaded = window.EU_CROSSDB_WORKSPACE" in viz
-    assert "${rawLoaded ? '' : `<button" in viz
-    assert "const preserveRawScan = window.EU_CROSSDB_WORKSPACE" in viz
-    assert "if (!preserveRawScan) invalidateCrossRawRootScan();" in viz
+    assert "scanRequestSeq: 0" in setup
+    assert "requestSeq !== state.scanRequestSeq" in setup
+    assert "missingSelectedKeys.length === 0" in setup
+    assert 'data-db="${index}"' in setup
+    assert 'aria-pressed="${row.selected ? \'true\' : \'false\'}"' in setup
+    assert "const rawLoaded = window.EU_CROSSDB_WORKSPACE" in setup
+    assert "${rawLoaded ? '' : `<button" in setup
+    assert "const preserveScan = window.EU_CROSSDB_WORKSPACE" in setup
+    assert "if (!preserveScan) invalidateScan();" in setup
+    for marker in (
+        "rawRootDraft:",
+        "scanRequestSeq:",
+        "sampleMode:",
+        "registeredLoading:",
+        "data-crossdb-root",
+        "data-crossdb-sample-mode",
+    ):
+        assert marker not in viz
     for marker in (
         "data-crossdb-cancel",
         "crossdb-progress-databases",

@@ -33,5 +33,5 @@ def test_patient_seeded_demo_uses_clinical_table_shape() -> None:
     assert "2026-01-01" not in viz_js
 
     assert "js/screens-viz-demo.js?v=20260630-patient-demo-audit" in index_html
-    assert "js/screens-viz.js?v=20260710-real-qa3" in index_html
+    assert "js/screens-viz.js?v=20260710-crossdb-setup-owner" in index_html
     assert "js/screens-viz.js?v=20260627-survival-outcome-summary" not in index_html

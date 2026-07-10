@@ -29,6 +29,7 @@ def _node_binary() -> str | None:
 def test_crossdb_source_choice_owner_is_explicitly_wired() -> None:
     index = _read("index.html")
     viz = _read("js/screens-viz.js")
+    setup = _read("js/screens-viz-crossdb-setup.js")
     owner = _read("js/screens-viz-crossdb-source.js")
 
     owner_src = "js/screens-viz-crossdb-source.js?v=20260710-source-choice"
@@ -37,15 +38,19 @@ def test_crossdb_source_choice_owner_is_explicitly_wired() -> None:
     assert index.index(owner_src) < index.index("js/screens-viz-study-context.js?")
 
     assert "window.EU_CROSSDB_SOURCE_HOST" in viz
-    assert "window.EU_CROSSDB_SOURCE_CHOICE" in viz
-    assert "sourceChoice.render({ registryHtml: sourceRegistryBlock('multi') })" in viz
-    assert "sourceChoice.renderLoading()" in viz
-    assert "window.EU_CROSSDB_SOURCE_CHOICE.wire(root)" in viz
+    assert "window.EU_CROSSDB_SOURCE_CHOICE" in setup
+    assert "sourceChoice.render({ registryHtml })" in setup
+    assert "sourceChoice.renderLoading()" in setup
+    assert "sourceChoice.wire(root)" in setup
     assert "data-crossdb-run-registered" not in viz
+    assert "registryHtml() { return sourceRegistryBlock('multi'); }" in viz
     assert "explicitRegistryCrossdbPaths" in viz
     assert 'type="button" data-src-cross=' in viz
     assert 'aria-pressed="${on ? \'true\' : \'false\'}"' in viz
     assert "const cur = explicitRegistryCrossdbPaths();" in viz
+    assert "let registeredOpen = false" in owner
+    assert "registeredOpen ? 'open' : ''" in owner
+    assert "registeredOption.addEventListener('toggle'" in owner
 
     for marker in (
         "window.EU_CROSSDB_SOURCE_CHOICE",
@@ -78,6 +83,7 @@ def test_crossdb_source_choice_owner_stays_route_pure() -> None:
 
 def test_registered_export_host_bypasses_raw_root_scan() -> None:
     viz = _read("js/screens-viz.js")
+    setup = _read("js/screens-viz-crossdb-setup.js")
     host = viz.split("window.EU_CROSSDB_SOURCE_HOST =", 1)[1].split(
         "function loadDemoCrossdb", 1
     )[0]
@@ -85,17 +91,18 @@ def test_registered_export_host_bypasses_raw_root_scan() -> None:
     assert "registeredPaths()" in host
     assert "explicitRegistryCrossdbPaths()" in host
     assert "runRegistered()" in host
-    assert "crossView = 'loading'" in host
+    assert "crossSetup.setRegisteredLoading(true)" in host
+    assert "crossSetup.setView('loading')" in host
     assert "loadRealCrossdb(ok =>" in host
-    assert "{ registeredPaths: paths }" in host
+    assert "{ operationId, registeredPaths: paths }" in host
     assert "scanCrossdbRawRoot" not in host
     assert "rawRoot" not in host
 
     assert "const registeredPathOverride" in viz
     assert "window.EU_API.loadCrossdbReviewSummary({ paths: paths })" in viz
-    assert "loadedCrossdb.source_type !== 'raw_database_root'" in viz
-    assert "window.EU_CROSSDB_SOURCE_HOST.runRegistered();" in viz
-    assert "loadRealCrossdb(() => { crossView = 'idle'; repaintScreen('crossdb'); }, { rawRoot });" in viz
+    assert "runRaw: loadRealCrossdb" in viz
+    assert "config.runRaw(ok =>" in setup
+    assert "{ operationId, rawRoot: rootValue, setup: runSnapshot }" in setup
 
 
 def test_crossdb_registered_action_executes_owner_contract() -> None:

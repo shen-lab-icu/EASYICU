@@ -86,7 +86,7 @@
       <div class="setup-row"><span class="k">${t('Dataset', '数据集')}</span><span class="vv">${esc(dataset)}</span></div>
       <div class="setup-row"><span class="k">${t('Cohort', '队列')}</span><span class="vv">${cohortLine}</span></div>
       <div class="setup-row"><span class="k">${t('Variables', '变量')}</span><span class="vv">${variables}</span></div>
-      <button class="btn sm block" data-viz-reset style="margin-top:12px;">${icon('sliders', 13)} ${t('Edit setup', '编辑设置')}</button>
+      ${active === 'crossdb' && crossSetup.view() === 'loading' ? '' : `<button class="btn sm block" data-viz-reset style="margin-top:12px;">${icon('sliders', 13)} ${t('Edit setup', '编辑设置')}</button>`}
     </div>`;
   }
 
@@ -94,21 +94,17 @@
   let patientView = 'idle';   // idle | loading | loaded
   let patientTab = 'tables';
   let patientSeriesMode = 'lanes';
-  let crossView = 'idle';     // idle | loading | loaded
   let crossDensityModule = 'all';
   let crossDensityFeature = null;
   let crossDensityScope = 'core'; // core | all — restore the old curated "one subplot per canonical concept" default
   // Canonical clinical concepts and the hard-bounded raw request live in the
   // Cross-DB raw owner loaded before this shared visualization shell.
   const CROSS_DENSITY_CANON = window.EU_CROSSDB_RAW.coreFeatures();
+  const crossSetup = window.EU_CROSSDB_SETUP;
   const crossRawProgress = window.EU_CROSSDB_PROGRESS;
-  let crossRawRootDraft = '';
-  let crossRawRootScan = null;
-  let crossRawRootScanPath = '';
-  let crossRawRootScanning = false;
-  let crossRawScanRequestSeq = 0;
-  let crossRawSampleMode = 'quick';
-  let crossRegisteredLoading = false;
+  function resetCrossSetupForSourceChange() {
+    crossSetup.onRegistryChanged();
+  }
   let cohortView = 'idle';    // idle | loaded | loading
   let cohortPanel = 'groups'; // groups | coverage | snapshot | sofa
   let cohortCompare = 'outcome';
@@ -233,142 +229,6 @@
       return { data_source: dataSource, cohort: { source_count: xdb.source_count, source_type: xdb.source_type, comparison_mode: xdb.compatibility_gate && xdb.compatibility_gate.comparison_mode }, modules: unique(xdb.shared_modules || []), comparator: 'cross_database_descriptive' };
     },
   };
-  function defaultRawCrossdbRoot() {
-    return crossRawRootDraft || '';
-  }
-  function selectedCrossDbKeys() {
-    return CROSS_DBS.filter(d => d[1]).map(d => d[2]);
-  }
-  function crossRawSourceIdentity(databases) {
-    return Array.from(new Set((databases || []).map(key => String(key || '').trim()).filter(Boolean))).sort().join(',');
-  }
-  function selectedCrossDbCount() {
-    return CROSS_DBS.filter(d => d[1]).length;
-  }
-  function crossRawSampleProfiles() {
-    return [
-      {
-        id: 'quick',
-        label: t('Quick preview', '快速预览'),
-        note: t('Fast first look for module-level density checks.', '优先快速看模块级分布。'),
-        maxPatients: 200,
-        sampleSize: 600,
-      },
-      {
-        id: 'standard',
-        label: t('Standard sample', '标准抽样'),
-        note: t('Balanced default for smoother density curves.', '平衡速度和曲线稳定性。'),
-        maxPatients: 300,
-        sampleSize: 1500,
-      },
-      {
-        id: 'deeper',
-        label: t('Deeper sample', '较深抽样'),
-        note: t('More stable, but can take longer on six raw databases.', '更稳定，但六库原始数据会更慢。'),
-        maxPatients: 800,
-        sampleSize: 3000,
-      },
-    ];
-  }
-  function crossRawSampleProfile() {
-    return crossRawSampleProfiles().find(row => row.id === crossRawSampleMode)
-      || crossRawSampleProfiles()[0];
-  }
-  function crossRawSampleSummary(profile) {
-    const p = profile || crossRawSampleProfile();
-    return `${p.label} · ≤${fmtInt(p.maxPatients)} ${t('entities/db', '实体/库')} · ≤${fmtInt(p.sampleSize)} ${t('values/feature', '值/特征')}`;
-  }
-  function crossRawDbLabel(dbKey) {
-    const row = CROSS_DBS.find(d => d[2] === dbKey);
-    return row ? row[0] : String(dbKey || '');
-  }
-  function crossRawPathValue(path) {
-    return String(path || '').trim();
-  }
-  function invalidateCrossRawRootScan() {
-    crossRawScanRequestSeq += 1;
-    crossRawRootScan = null;
-    crossRawRootScanPath = '';
-    crossRawRootScanning = false;
-  }
-  function crossRawSelectionStatusFor(path) {
-    const rawRoot = crossRawPathValue(path);
-    const current = rawRoot && crossRawRootScan && crossRawRootScanPath === rawRoot
-      ? crossRawRootScan
-      : null;
-    const selectedKeys = selectedCrossDbKeys();
-    const detectedKeys = new Set(
-      current && current.ok
-        ? (current.detected || []).map(row => row && row.key).filter(Boolean)
-        : []
-    );
-    const detectedSelectedKeys = selectedKeys.filter(key => detectedKeys.has(key));
-    const missingSelectedKeys = selectedKeys.filter(key => !detectedKeys.has(key));
-    return {
-      current,
-      selectedKeys,
-      detectedKeys,
-      detectedSelectedKeys,
-      missingSelectedKeys,
-      runnable: !!(rawRoot && current && current.ok && detectedSelectedKeys.length >= 2 && missingSelectedKeys.length === 0),
-    };
-  }
-  function crossRawScanReadyFor(path) {
-    return crossRawSelectionStatusFor(path).runnable;
-  }
-  function crossRawScanCurrentFor(path) {
-    const rawRoot = crossRawPathValue(path);
-    return !!(rawRoot && crossRawRootScan && crossRawRootScanPath === rawRoot);
-  }
-  function scanCrossdbRawRoot(path) {
-    const rawRoot = crossRawPathValue(path || defaultRawCrossdbRoot());
-    crossRawRootDraft = rawRoot;
-    if (!rawRoot) {
-      invalidateCrossRawRootScan();
-      vizErr = t('Choose a local ICU data root before checking Cross-DB folders.', '检查跨库文件夹前，请先选择本地 ICU 数据根目录。');
-      repaintScreen('crossdb');
-      return Promise.resolve(false);
-    }
-    if (!window.EU_API || !window.EU_API.scanCrossdbRawRoot) {
-      invalidateCrossRawRootScan();
-      vizErr = t('Raw Cross-DB folder check API is unavailable in this browser session.', '当前浏览器会话无法使用原始跨库文件夹检查 API。');
-      repaintScreen('crossdb');
-      return Promise.resolve(false);
-    }
-    crossRawRootScanning = true;
-    crossRawRootScanPath = rawRoot;
-    const requestSeq = ++crossRawScanRequestSeq;
-    vizErr = null;
-    repaintScreen('crossdb');
-    return window.EU_API.scanCrossdbRawRoot({
-      data_root: rawRoot,
-      databases: selectedCrossDbKeys(),
-    }).then(scan => {
-      if (requestSeq !== crossRawScanRequestSeq || crossRawRootDraft !== rawRoot) return false;
-      crossRawRootScanning = false;
-      crossRawRootScan = scan || null;
-      crossRawRootScanPath = rawRoot;
-      if (scan && scan.ok === false) {
-        vizErr = scan.hint || scan.error || 'Could not check that raw ICU data root.';
-      } else {
-        vizErr = null;
-      }
-      repaintScreen('crossdb');
-      return crossRawScanReadyFor(rawRoot);
-    }).catch(err => {
-      if (requestSeq !== crossRawScanRequestSeq || crossRawRootDraft !== rawRoot) return false;
-      crossRawRootScanning = false;
-      crossRawRootScan = null;
-      crossRawRootScanPath = rawRoot;
-      vizErr = String(err && err.message || err);
-      repaintScreen('crossdb');
-      return false;
-    });
-  }
-  function teardownCrossRawES(options) {
-    const continuity = window.EU_CROSSDB_JOB_CONTINUITY;
-    if (continuity && typeof continuity.disconnect === 'function') continuity.disconnect(options || {});
-  }
   function repaintCrossRawProgress() {
     const restoreCancelFocus = document.activeElement && document.activeElement.matches('[data-crossdb-cancel]');
     repaintScreen('crossdb');
@@ -378,20 +238,6 @@
         if (button) button.focus();
       });
     }
-  }
-  function cancelCrossRawJob() {
-    crossRawProgress.requestCancel({
-      api: window.EU_API,
-      onStateChange() {
-        crossView = 'loading';
-        vizErr = null;
-        repaintCrossRawProgress();
-      },
-      onError(err) {
-        vizErr = String(err && err.message || err);
-        repaintCrossRawProgress();
-      },
-    });
   }
   function patientDrilldown() {
     if (window.EU_PATIENT_DRILLDOWN) return window.EU_PATIENT_DRILLDOWN;
@@ -992,7 +838,7 @@
     setSourceAddFeedback(container, t('Checking and adding this local export...', '正在检查并添加这个本地导出...'), 'info');
     const multi = container && container.dataset && container.dataset.srcMode === 'multi';
     window.EU_API.registerWorkspaceSource(path, { active: !multi, crossdb: true }).then(() => {
-      vizErr = null; window.EU_VIZ_WORKSPACE = null; window.EU_CROSSDB_WORKSPACE = null; window.EU_PATIENT_DRILLDOWN = null; window.EU_PATIENT_SOURCES = null; window.EU_COHORT_REVIEW = null; resetCohortFeatureSelection(); crossView = 'idle'; patientView = 'idle'; repaintScreen(screenId);
+      vizErr = null; window.EU_VIZ_WORKSPACE = null; window.EU_CROSSDB_WORKSPACE = null; window.EU_PATIENT_DRILLDOWN = null; window.EU_PATIENT_SOURCES = null; window.EU_COHORT_REVIEW = null; resetCohortFeatureSelection(); resetCrossSetupForSourceChange(); patientView = 'idle'; repaintScreen(screenId);
     }).catch(err => {
       const msg = String(err && err.message || err);
       vizErr = msg;
@@ -1001,6 +847,7 @@
     });
   }
   let sourcePickerEl = null;
+  let sourcePickerReturnFocus = null;
   function ensureSourcePickerStyles() {
     if (document.getElementById('euPickerCss')) return;
     const s = document.createElement('style'); s.id = 'euPickerCss';
@@ -1021,28 +868,52 @@
       .eu-pick-empty{padding:24px;text-align:center;color:var(--ink-4,#8a91a0);font-size:12px;}`;
     document.head.appendChild(s);
   }
-  function closeSourcePicker() {
+  function closeSourcePicker(options) {
+    const returnFocus = sourcePickerReturnFocus;
     if (sourcePickerEl) { sourcePickerEl.remove(); sourcePickerEl = null; }
+    sourcePickerReturnFocus = null;
     document.removeEventListener('keydown', sourcePickerKey);
+    if (!(options && options.restoreFocus === false) && returnFocus && returnFocus.isConnected && typeof returnFocus.focus === 'function') {
+      returnFocus.focus();
+    }
   }
-  function sourcePickerKey(e) { if (e.key === 'Escape') closeSourcePicker(); }
+  function sourcePickerKey(e) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closeSourcePicker();
+      return;
+    }
+    if (e.key !== 'Tab' || !sourcePickerEl) return;
+    const focusable = Array.from(sourcePickerEl.querySelectorAll('button:not([disabled]), [href], input:not([disabled]), [tabindex]:not([tabindex="-1"])'));
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  }
   function openSourceFolderPicker(startPath, onPick, title) {
     if (!(window.EU_API && window.EU_API.listDir)) {
       if (onPick) onPick('');
       return;
     }
     ensureSourcePickerStyles();
-    closeSourcePicker();
+    closeSourcePicker({ restoreFocus: false });
+    sourcePickerReturnFocus = document.activeElement;
     let cur = startPath || '';
     const pickerTitle = title || t('Choose EasyICU export folder', '选择 EasyICU 导出文件夹');
     const back = document.createElement('div'); back.className = 'eu-pick-back';
     back.innerHTML = `
-      <div class="eu-pick" role="dialog" aria-label="${esc(pickerTitle)}">
+      <div class="eu-pick" role="dialog" aria-modal="true" aria-labelledby="eu-source-picker-title">
         <div class="eu-pick-h">
           <span style="color:var(--ink-3);">${icon('folder', 16)}</span>
-          <span class="t">${esc(pickerTitle)}</span>
+          <span class="t" id="eu-source-picker-title">${esc(pickerTitle)}</span>
           <span class="grow" style="flex:1;"></span>
-          <button class="btn sm ghost" data-pk-close>${icon('close', 13)}</button>
+          <button class="btn sm ghost" type="button" data-pk-close aria-label="${esc(t('Close folder picker', '关闭文件夹选择器'))}">${icon('close', 13)}</button>
         </div>
         <div class="eu-pick-cur" data-pk-cur></div>
         <div class="eu-pick-sc" data-pk-sc></div>
@@ -1061,6 +932,12 @@
     back.querySelector('[data-pk-close]').addEventListener('click', closeSourcePicker);
     back.querySelector('[data-pk-use]').addEventListener('click', () => { closeSourcePicker(); if (cur && onPick) onPick(cur); });
     document.addEventListener('keydown', sourcePickerKey);
+    if (typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(() => {
+        const closeButton = back.querySelector('[data-pk-close]');
+        if (closeButton) closeButton.focus();
+      });
+    }
 
     function load(path) {
       listEl.innerHTML = `<div class="eu-pick-empty">${t('Loading...', '加载中...')}</div>`;
@@ -1099,7 +976,7 @@
       window.EU_API.saveWorkspaceRegistry({ active_path: path }).then(() => {
         try { localStorage.setItem('easyicu_last_export_dir', path); } catch (e) {}
         window.EU_VIZ_WORKSPACE = null; window.EU_CROSSDB_WORKSPACE = null; window.EU_PATIENT_DRILLDOWN = null; window.EU_PATIENT_SOURCES = null; window.EU_COHORT_REVIEW = null; resetCohortFeatureSelection(); window.EU_STALE = true;
-        patientView = 'idle'; crossView = 'idle';
+        patientView = 'idle'; resetCrossSetupForSourceChange();
         if (screenId === 'cohort' && window.EU_DATA === 'real') {
           cohortView = 'loading';
           repaintScreen('cohort');
@@ -1116,7 +993,7 @@
       const next = cur.includes(path) ? cur.filter(p => p !== path) : cur.concat([path]);
       if (!(window.EU_API && window.EU_API.saveWorkspaceRegistry)) return;
       window.EU_API.saveWorkspaceRegistry({ crossdb_paths: next }).then(() => {
-        window.EU_CROSSDB_WORKSPACE = null; window.EU_COHORT_REVIEW = null; resetCohortFeatureSelection(); crossView = 'idle'; repaintScreen(screenId);
+        window.EU_CROSSDB_WORKSPACE = null; window.EU_COHORT_REVIEW = null; resetCohortFeatureSelection(); resetCrossSetupForSourceChange(); repaintScreen(screenId);
       }).catch(err => { vizErr = String(err && err.message || err); repaintScreen(screenId); });
     }));
     root.querySelectorAll('[data-src-add]').forEach(b => b.addEventListener('click', () => {
@@ -1165,7 +1042,7 @@
       if (!path || !(window.EU_API && window.EU_API.removeWorkspaceSource)) return;
       if (!window.confirm(t('Remove this source from the registry? Export files stay on disk.', '从注册表中移除此来源？导出文件仍会保留在磁盘上。'))) return;
       window.EU_API.removeWorkspaceSource(path).then(() => {
-        vizErr = null; window.EU_VIZ_WORKSPACE = null; window.EU_CROSSDB_WORKSPACE = null; window.EU_PATIENT_DRILLDOWN = null; window.EU_PATIENT_SOURCES = null; window.EU_COHORT_REVIEW = null; resetCohortFeatureSelection(); crossView = 'idle'; patientView = 'idle'; repaintScreen(screenId);
+        vizErr = null; window.EU_VIZ_WORKSPACE = null; window.EU_CROSSDB_WORKSPACE = null; window.EU_PATIENT_DRILLDOWN = null; window.EU_PATIENT_SOURCES = null; window.EU_COHORT_REVIEW = null; resetCohortFeatureSelection(); resetCrossSetupForSourceChange(); patientView = 'idle'; repaintScreen(screenId);
       }).catch(err => { vizErr = String(err && err.message || err); repaintScreen(screenId); });
     }));
     root.querySelectorAll('[data-src-refresh]').forEach(b => b.addEventListener('click', () => {
@@ -1285,8 +1162,41 @@
       done && done(false);
     });
   }
+  function crossSetupConfig() {
+    return {
+      api: window.EU_API,
+      helpers: {
+        esc,
+        fmtInt,
+        icon,
+        progressMessage: crossProgressMessage,
+        statusLabel: crossStatusLabel,
+        t,
+        term: crossTerm,
+      },
+      bindRegistry: bindSourceRegistry,
+      getError() { return vizErr; },
+      setError(value) { vizErr = value; },
+      repaint() { repaintScreen('crossdb'); },
+      registryHtml() { return sourceRegistryBlock('multi'); },
+      openFolderPicker: openSourceFolderPicker,
+      runRaw: loadRealCrossdb,
+      runDemo: loadDemoCrossdb,
+      header: crossHeader,
+      renderLoaded: crossRealLoaded,
+      resetResult() {
+        crossDensityModule = 'all';
+        crossDensityFeature = null;
+        window.EU_VIZ_WORKSPACE = null;
+        window.EU_CROSSDB_WORKSPACE = null;
+      },
+    };
+  }
   function loadRealCrossdb(done, opts) {
-    teardownCrossRawES({ forget: true });
+    const operationId = opts && opts.operationId;
+    const operationActive = () => operationId == null || crossSetup.operationCurrent(operationId);
+    if (!operationActive()) return;
+    crossSetup.disconnectJob({ forget: true });
     crossRawProgress.clear();
     window.EU_CROSSDB_WORKSPACE = null;
     window.EU_COHORT_REVIEW = null;
@@ -1306,6 +1216,7 @@
         ? window.EU_API.loadCrossdbReviewSummary({ paths: paths })
         : window.EU_API.loadCrossdbSummary(paths);
       loader.then(xdb => {
+        if (!operationActive()) return;
         window.EU_CROSSDB_WORKSPACE = xdb;
         const first = xdb.sources && xdb.sources[0];
         if (first) window.EU_VIZ_WORKSPACE = { route: 'crossdb', database: first.database, summary: first.summary };
@@ -1313,6 +1224,7 @@
         window.EU_HASWORK = true;
         done && done(true);
       }).catch(err => {
+        if (!operationActive()) return;
         vizErr = String(err && err.message || err);
         done && done(false);
       });
@@ -1325,16 +1237,18 @@
       done && done(false);
       return;
     }
-    const rawRootInput = document.querySelector('[data-crossdb-root]');
-    const rawRoot = requestedRawRoot || (rawRootInput && rawRootInput.value ? rawRootInput.value.trim() : '');
-    const rawDatabases = selectedCrossDbKeys();
-    const sampleProfile = crossRawSampleProfile();
+    const setupSnapshot = opts && opts.setup ? opts.setup : crossSetup.snapshot(crossSetupConfig());
+    const rawRoot = requestedRawRoot || setupSnapshot.rawRoot || '';
+    const rawDatabases = Array.isArray(setupSnapshot.selectedKeys)
+      ? setupSnapshot.selectedKeys.slice()
+      : crossSetup.selectedKeys();
+    const sampleProfile = setupSnapshot.sampleProfile || crossSetup.sampleProfile(crossSetupConfig());
     if (!rawRoot) {
       vizErr = t('Choose a local ICU data root before loading real Cross-DB densities.', '加载真实跨库密度前，请先选择本地 ICU 数据根目录。');
       done && done(false);
       return;
     }
-    if (!crossRawScanReadyFor(rawRoot)) {
+    if (!crossSetup.scanReady(rawRoot)) {
       vizErr = t('Check the ICU data root first so EasyICU can confirm at least two selected database folders.', '请先检查 ICU 数据根目录，确认至少两个已选数据库文件夹可识别。');
       done && done(false);
       return;
@@ -1343,7 +1257,7 @@
     if (rawRoot && rawDatabases.length >= 2 && window.EU_API && window.EU_API.startCrossdbRawDistributionJob && jobContinuity && typeof jobContinuity.start === 'function' && window.EventSource) {
       if (crossRawProgress.snapshot().starting) return;
       crossRawProgress.beginStart();
-      crossRawRootDraft = rawRoot;
+      crossSetup.setRawRoot(rawRoot);
       const rawRequest = window.EU_CROSSDB_RAW.buildRequest({
         dataRoot: rawRoot,
         databases: rawDatabases,
@@ -1351,19 +1265,25 @@
         sampleSize: sampleProfile.sampleSize,
       });
       window.EU_API.startCrossdbRawDistributionJob(rawRequest).then(r => {
+        if (!operationActive()) {
+          if (r && r.job_id && window.EU_API.cancelJob) {
+            window.EU_API.cancelJob(r.job_id, 'client_operation_invalidated').catch(() => {});
+          }
+          return;
+        }
         const queuedProgress = {
           phase: 'queued',
           max_patients: sampleProfile.maxPatients,
           sample_size: sampleProfile.sampleSize,
-          message: `${t('Queued local raw Cross-DB density job.', '本地原始跨库密度任务已排队。')} ${crossRawSampleSummary(sampleProfile)}`,
+          message: `${t('Queued local raw Cross-DB density job.', '本地原始跨库密度任务已排队。')} ${crossSetup.sampleSummary(sampleProfile, crossSetupConfig())}`,
         };
         crossRawProgress.attach(r && r.job_id, queuedProgress);
         const watching = jobContinuity.start({
           job_id: r && r.job_id,
           kind: r && r.kind,
           raw_root: rawRoot,
-          source_identity: crossRawSourceIdentity(rawDatabases),
-          sample_mode: crossRawSampleMode,
+          source_identity: crossSetup.sourceIdentity(rawDatabases),
+          sample_mode: setupSnapshot.sampleMode || crossSetup.sampleMode(),
         }, queuedProgress, done);
         if (!watching) {
           crossRawProgress.clear();
@@ -1378,6 +1298,7 @@
         }
         repaintScreen('crossdb');
       }).catch(err => {
+        if (!operationActive()) return;
         crossRawProgress.clear();
         vizErr = String(err && err.message || err);
         done && done(false);
@@ -1389,34 +1310,19 @@
       : t('Raw Cross-DB density job API is unavailable in this browser session.', '当前浏览器会话无法使用原始跨库密度任务 API。');
     done && done(false);
   }
-  function crossRawIdentityKeys(meta) {
-    const identity = String(meta && meta.source_identity || '').trim();
-    const keys = Array.from(new Set(identity.split(',').map(key => key.trim()).filter(Boolean))).sort();
-    const known = new Set(CROSS_DBS.map(row => row[2]));
-    if (keys.length < 2 || keys.some(key => !known.has(key)) || keys.join(',') !== identity) return [];
-    return keys;
-  }
   window.EU_CROSSDB_JOB_HOST = {
     canRestore() {
-      return window.EU_DATA === 'real' && crossView === 'idle' && !window.EU_CROSSDB_WORKSPACE;
+      return window.EU_DATA === 'real' && crossSetup.view() === 'idle' && !window.EU_CROSSDB_WORKSPACE;
     },
     acceptResume(meta) {
-      const rawRoot = crossRawPathValue(meta && meta.raw_root);
-      const keys = crossRawIdentityKeys(meta);
-      if (!rawRoot || !keys.length || (crossRawRootDraft && crossRawRootDraft !== rawRoot)) return false;
-      crossRawRootDraft = rawRoot;
-      crossRawSampleMode = ['quick', 'standard', 'deeper'].includes(meta.sample_mode) ? meta.sample_mode : 'quick';
-      const selected = new Set(keys);
-      CROSS_DBS.forEach(row => { row[1] = selected.has(row[2]); });
-      return true;
+      return crossSetup.acceptResume(meta);
     },
     matchesSource(meta) {
-      return crossRawPathValue(meta && meta.raw_root) === crossRawRootDraft
-        && String(meta && meta.source_identity || '') === crossRawSourceIdentity(selectedCrossDbKeys());
+      return crossSetup.matchesSource(meta);
     },
     onProbe(meta) {
       crossRawProgress.beginProbe(meta.job_id, { phase: 'reconnect', message: t('Checking the saved raw Cross-DB job…', '正在检查已保存的原始跨库任务…') });
-      crossView = 'loading';
+      crossSetup.setView('loading');
       vizErr = null;
       repaintScreen('crossdb');
     },
@@ -1424,7 +1330,7 @@
       crossRawProgress.resume(meta.job_id, progress && (progress.type === 'progress' || progress.type === 'cancel_requested')
         ? progress
         : { phase: 'reconnect', message: t('Reconnected to the running raw Cross-DB density job.', '已重新连接正在运行的原始跨库密度任务。') }, history);
-      crossView = 'loading';
+      crossSetup.setView('loading');
       vizErr = null;
       repaintScreen('crossdb');
     },
@@ -1442,7 +1348,7 @@
       let accepted = true;
       if (snapshot.status === 'done') {
         const xdb = snapshot.result;
-        const expectedDatabases = crossRawIdentityKeys(meta);
+        const expectedDatabases = crossSetup.identityKeys(meta);
         const loadedDatabases = Array.isArray(xdb && xdb.sources)
           ? xdb.sources.map(row => String(row && row.database || '')).filter(Boolean).sort()
           : [];
@@ -1450,19 +1356,19 @@
             || Number(xdb.source_count || 0) !== expectedDatabases.length
             || loadedDatabases.join(',') !== expectedDatabases.join(',')) {
           accepted = false;
-          crossView = 'idle';
+          crossSetup.setView('idle');
           vizErr = t('The restored raw Cross-DB job returned an invalid result.', '恢复的原始跨库任务返回了无效结果。');
         } else {
           window.EU_CROSSDB_WORKSPACE = xdb;
           const first = xdb.sources && xdb.sources[0];
           if (first) window.EU_VIZ_WORKSPACE = { route: 'crossdb', database: first.database, summary: first.summary };
           window.EU_HASWORK = true;
-          crossView = 'loaded';
+          crossSetup.setView('loaded');
           vizErr = null;
         }
       } else {
         window.EU_CROSSDB_WORKSPACE = null;
-        crossView = 'idle';
+        crossSetup.setView('idle');
         vizErr = snapshot.status === 'cancelled'
           ? t('Raw Cross-DB density job cancelled before completion.', '原始跨库密度任务已在完成前取消。')
           : (snapshot.error || t('Raw Cross-DB density job failed.', '原始跨库密度任务失败。'));
@@ -1473,13 +1379,13 @@
     },
     onUnavailable(meta) {
       crossRawProgress.clear();
-      crossView = 'idle';
+      crossSetup.setView('idle');
       vizErr = t('This saved raw Cross-DB job is no longer available; the local server may have restarted. Start it again from this data root.', '已保存的原始跨库任务已不可用；本地服务可能已重启。请从当前数据根目录重新运行。');
       repaintScreen('crossdb');
     },
     onConnectionError(meta) {
       crossRawProgress.clear();
-      crossView = 'idle';
+      crossSetup.setView('idle');
       vizErr = t('Could not reconnect to the saved raw Cross-DB job. Refresh to try again; no completed result was assumed.', '无法重新连接已保存的原始跨库任务。请刷新后重试；系统没有假定任务已完成。');
       repaintScreen('crossdb');
     },
@@ -1489,7 +1395,7 @@
       return explicitRegistryCrossdbPaths();
     },
     runRegistered() {
-      if (crossView === 'loading') return;
+      if (crossSetup.view() === 'loading') return;
       const paths = window.EU_CROSSDB_SOURCE_HOST.registeredPaths();
       if (paths.length < 2) {
         vizErr = t('Select at least two registered EasyICU exports below.', '请在下方至少选择两个已注册的 EasyICU 导出。');
@@ -1497,25 +1403,32 @@
         return;
       }
       vizErr = null;
-      crossRegisteredLoading = true;
-      crossView = 'loading';
+      const operationId = crossSetup.beginOperation();
+      crossSetup.setRegisteredLoading(true);
+      crossSetup.setView('loading');
       repaintScreen('crossdb');
       loadRealCrossdb(ok => {
-        crossRegisteredLoading = false;
-        crossView = ok ? 'loaded' : 'idle';
+        if (!crossSetup.operationCurrent(operationId)) return;
+        crossSetup.setRegisteredLoading(false);
+        crossSetup.setView(ok ? 'loaded' : 'idle');
         repaintScreen('crossdb');
-      }, { registeredPaths: paths });
+      }, { operationId, registeredPaths: paths });
     },
     repaint() {
       repaintScreen('crossdb');
     },
   };
-  function loadDemoCrossdb(done) {
+  function loadDemoCrossdb(done, opts) {
+    const operationId = opts && opts.operationId;
+    const operationActive = () => operationId == null || crossSetup.operationCurrent(operationId);
+    if (!operationActive()) return;
     window.EU_CROSSDB_WORKSPACE = null;
     window.EU_VIZ_WORKSPACE = null;
     crossDensityModule = 'all';
     crossDensityFeature = null;
-    const databases = selectedCrossDbKeys();
+    const databases = opts && Array.isArray(opts.selectedKeys)
+      ? opts.selectedKeys.slice()
+      : crossSetup.selectedKeys();
     if (databases.length < 2) {
       vizErr = t('Select at least two demo databases.', '请至少选择两个演示数据库。');
       done && done(false);
@@ -1531,6 +1444,7 @@
       feature_scope: 'all_catalog',
       records_per_feature: 96,
     }).then(xdb => {
+      if (!operationActive()) return;
       window.EU_CROSSDB_WORKSPACE = xdb;
       const first = xdb.sources && xdb.sources[0];
       if (first) window.EU_VIZ_WORKSPACE = { route: 'crossdb', database: first.database, summary: first.summary };
@@ -1538,6 +1452,7 @@
       window.EU_HASWORK = true;
       done && done(true);
     }).catch(err => {
+      if (!operationActive()) return;
       window.EU_CROSSDB_WORKSPACE = null;
       vizErr = String(err && err.message || err);
       done && done(false);
@@ -1547,14 +1462,12 @@
   /* allow the print harness to preset loaded states for a richer PDF */
   window.__euVizPreset = function (which) {
     if (!which || which === 'patient') patientView = 'loaded';
-    if (!which || which === 'crossdb') crossView = 'loaded';
+    if (!which || which === 'crossdb') crossSetup.presetLoaded();
   };
   window.__euVizResetForDataMode = function () {
-    teardownCrossRawES({ forget: true });
+    crossSetup.resetForDataMode(crossSetupConfig());
     resetPatientBrowseOwners();
     patientView = 'idle';
-    crossView = 'idle';
-    crossRegisteredLoading = false;
     cohortView = 'idle';
     vizErr = null;
     window.EU_PATIENT_SOURCES = null;
@@ -4844,11 +4757,6 @@
   };
 
   /* ---------------- CROSS-DB BENCHMARK ---------------- */
-  const CROSS_DBS = [
-    ['MIMIC-IV', true, 'miiv'], ['eICU-CRD', true, 'eicu'], ['AmsterdamUMCdb', true, 'aumc'],
-    ['HiRID', true, 'hirid'], ['MIMIC-III', true, 'mimic'], ['SICdb', true, 'sic'],
-  ];
-
   function crossTerm(value) {
     const raw = String(value == null ? '' : value);
     const map = {
@@ -5011,169 +4919,6 @@
     if (key === 'feature_rows' || key === 'concepts_present') return fmtInt(value);
     if (key === 'female_pct' || key === 'mortality' || key === 'mortality_pct' || key === 'sepsis_pct' || key === 'coverage_median_pct') return fmtPct(value);
     return fmtNum(value, 1);
-  }
-  function rawCrossdbAliasSummary(scan) {
-    const aliases = scan && scan.aliases ? scan.aliases : {};
-    return Object.keys(aliases).map(key => {
-      const row = aliases[key] || {};
-      const names = (row.aliases || []).slice(0, 4).join('/');
-      return `${row.label || key}: ${names}`;
-    }).join(' · ');
-  }
-  function rawCrossdbDbStatus(dbKey, selected) {
-    const path = defaultRawCrossdbRoot();
-    if (crossRawRootScanning && crossRawRootScanPath === path) {
-      return { cls: 'dashed', label: t('checking', '检查中'), sub: t('checking folder', '正在检查文件夹') };
-    }
-    const current = crossRawScanCurrentFor(path) ? crossRawRootScan : null;
-    if (!current || current.ok === false) {
-      return {
-        cls: selected ? 'ok' : 'dashed',
-        label: selected ? t('selected', '已选择') : t('add', '添加'),
-        sub: t('not checked yet', '尚未检查'),
-      };
-    }
-    const detected = (current.detected || []).find(row => row.key === dbKey);
-    if (detected) {
-      return {
-        cls: selected ? 'ok' : 'dashed',
-        label: selected ? t('detected', '已识别') : t('not selected', '未选择'),
-        sub: detected.folder_name ? `${t('folder', '文件夹')} ${detected.folder_name}` : t('recognized folder', '已识别文件夹'),
-      };
-    }
-    return {
-      cls: selected ? 'warn' : 'dashed',
-      label: selected ? t('missing', '缺失') : t('not found', '未找到'),
-      sub: selected ? t('not found in root', '根目录中未找到') : t('not detected', '未识别'),
-    };
-  }
-  function rawCrossdbScanPanel() {
-    const path = defaultRawCrossdbRoot();
-    if (!path) {
-      return `<div class="note info mt-12">
-        <div class="ico">${icon('folder', 14)}</div>
-        <div class="body"><div class="t">${t('Choose a parent folder first', '先选择一个父文件夹')}</div><div class="d">${t('It should contain database subfolders. Accepted aliases include mimiciv, mimic-iv, miiv, eicu, eicu-crd, aumc, amsterdamumc, hirid, mimiciii, sicdb, and sic.', '它应包含数据库子文件夹。可识别别名包括 mimiciv、mimic-iv、miiv、eicu、eicu-crd、aumc、amsterdamumc、hirid、mimiciii、sicdb、sic。')}</div></div>
-      </div>`;
-    }
-    if (crossRawRootScanning && crossRawRootScanPath === path) {
-      return `<div class="note info mt-12">
-        <div class="ico"><span class="spin accent"></span></div>
-        <div class="body"><div class="t">${t('Checking database folders', '正在检查数据库文件夹')}</div><div class="d">${t('EasyICU is matching top-level folders against supported database aliases. No patient rows are read.', 'EasyICU 正在用支持的数据库别名匹配顶层文件夹；不会读取患者行。')}</div></div>
-      </div>`;
-    }
-    if (!crossRawScanCurrentFor(path)) {
-      return `<div class="note warn mt-12">
-        <div class="ico">${icon('alert', 14)}</div>
-        <div class="body"><div class="t">${t('Folder not checked', '文件夹尚未检查')}</div><div class="d">${t('Check this root before running so missing or custom-named database folders are visible.', '运行前先检查这个根目录，这样缺失或自定义命名的数据库文件夹会直接显示出来。')}</div></div>
-      </div>`;
-    }
-    const scan = crossRawRootScan || {};
-    if (scan.ok === false) {
-      return `<div class="note warn mt-12">
-        <div class="ico">${icon('alert', 14)}</div>
-        <div class="body"><div class="t">${t('Folder check failed', '文件夹检查失败')}</div><div class="d">${esc(scan.hint || scan.error || t('Could not check this folder.', '无法检查该文件夹。'))}</div></div>
-      </div>`;
-    }
-    const status = crossRawSelectionStatusFor(path);
-    const detected = scan.detected || [];
-    const selectedDetected = new Set(status.detectedSelectedKeys);
-    const missing = status.missingSelectedKeys.map(key => ({
-      key,
-      label: crossRawDbLabel(key),
-    }));
-    const unknown = scan.unrecognized_folders || [];
-    const tone = status.runnable ? 'ok' : 'warn';
-    const title = status.runnable ? t('Folder check ready', '文件夹检查通过') : t('Folder check needs attention', '文件夹检查需要处理');
-    return `<div class="note ${tone} mt-12">
-      <div class="ico">${icon(status.runnable ? 'check' : 'alert', 14)}</div>
-      <div class="body">
-        <div class="t">${title}</div>
-        <div class="d">${t('Detected database folders', '已识别数据库文件夹')}: ${fmtInt(detected.length)} · ${t('selected recognized', '已选且识别')}: ${fmtInt(status.detectedSelectedKeys.length)}/${fmtInt(status.selectedKeys.length)} · ${t('need at least 2', '至少需要 2 个')}.</div>
-        <div class="row gap-8 mt-8" style="flex-wrap:wrap;">
-          ${detected.length ? detected.map(row => `<span class="chip ${selectedDetected.has(row.key) ? 'solid' : ''}">${esc(row.label || row.key)} · ${esc(row.folder_name || row.key)}${selectedDetected.has(row.key) ? '' : ` · ${t('not selected', '未选择')}`}</span>`).join('') : `<span class="pill warn">${t('No supported database folders detected', '未识别到支持的数据库文件夹')}</span>`}
-        </div>
-        ${missing.length ? `<div class="d mt-8">${t('Missing selected database folders', '已选但缺失的数据库文件夹')}: ${missing.map(row => esc(row.label || row.key)).join(', ')}</div>` : ''}
-        ${unknown.length ? `<div class="d mt-8">${t('Unrecognized folders', '未识别文件夹')}: ${unknown.map(esc).join(', ')}${scan.unrecognized_count > unknown.length ? ` +${fmtInt(scan.unrecognized_count - unknown.length)}` : ''}</div>` : ''}
-        <div class="d mt-8">${t('Accepted aliases', '可识别别名')}: ${esc(rawCrossdbAliasSummary(scan))}</div>
-      </div>
-    </div>`;
-  }
-  function rawCrossdbSetup() {
-    const sel = CROSS_DBS.filter(d => d[1]).length;
-    const rawRoot = defaultRawCrossdbRoot();
-    const canRun = sel >= 2 && crossRawScanReadyFor(rawRoot);
-    const sampleProfile = crossRawSampleProfile();
-    const sampleProfiles = crossRawSampleProfiles();
-    const sourceChoice = window.EU_CROSSDB_SOURCE_CHOICE;
-    const sourceChoiceHtml = sourceChoice && typeof sourceChoice.render === 'function'
-      ? sourceChoice.render({ registryHtml: sourceRegistryBlock('multi') })
-      : '';
-    return `
-      ${sourceChoiceHtml || `<div class="note info">
-        <div class="ico">${icon('benchmark', 16)}</div>
-        <div class="body"><span class="t">${crossTerm('Real raw database mode')}</span> <span class="d" style="display:inline;">— ${t('Choose a local ICU data root, then start with 12 curated cross-database concepts under a hard sampling budget. No rows leave this machine.', '选择本地 ICU 数据根目录，再在硬性抽样上限下先对比 12 个精选跨库概念。不会有行级数据离开本机。')}</span></div>
-      </div>`}
-      ${vizErr ? `<div class="note warn mt-12"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="d mono" style="font-size:11px;margin:0;">${esc(vizErr)}</div></div></div>` : ''}
-      <div class="card pad mt-16">
-        <div class="row between gap-12" style="align-items:flex-start;">
-          <div>
-            <div class="panel-title">${crossTerm('Raw ICU data root')}</div>
-            <div class="panel-sub mt-4">${t('Folder that contains database subfolders such as mimiciv, eicu, aumc, hirid, mimiciii, or sic.', '包含数据库子文件夹的目录，例如 mimiciv、eicu、aumc、hirid、mimiciii 或 sic。')}</div>
-          </div>
-          <span class="pill ok"><span class="dot"></span>${crossTerm('local only')}</span>
-        </div>
-        <div class="path-field editable mt-14">
-          <span class="pf-ico">${icon('folder', 14)}</span>
-          <input class="pf-input" data-crossdb-root type="text" spellcheck="false" autocomplete="off" value="${esc(defaultRawCrossdbRoot())}" placeholder="${esc(t('Paste a local ICU database root folder', '粘贴本地 ICU 数据库根目录'))}" aria-label="${esc(t('ICU data root', 'ICU 数据根目录'))}" />
-          <button class="btn sm" type="button" data-crossdb-root-browse>${icon('folder', 12)} ${t('Browse...', '浏览...')}</button>
-          <button class="btn sm" type="button" data-crossdb-root-scan>${icon('search', 12)} ${t('Check folders', '检查文件夹')}</button>
-        </div>
-        ${rawCrossdbScanPanel()}
-      </div>
-      <div class="card pad mt-16">
-        <div class="row between gap-12" style="align-items:flex-start;">
-          <div>
-            <div class="panel-title">${t('Sampling budget before plotting', '绘图前抽样预算')}</div>
-            <div class="panel-sub mt-4">${t('Raw Cross-DB density uses bounded local sampling so six databases do not trigger an unbounded full-table scan.', '原始跨库密度使用有界本地抽样，避免六个数据库触发无界全表扫描。')}</div>
-          </div>
-          <span class="pill ok">${esc(crossRawSampleSummary(sampleProfile))}</span>
-        </div>
-        <div class="db-grid mt-14" style="grid-template-columns:repeat(3,minmax(0,1fr));">
-          ${sampleProfiles.map(profile => `
-            <button class="db-card ${profile.id === sampleProfile.id ? 'sel' : ''}" type="button" data-crossdb-sample-mode="${esc(profile.id)}" aria-pressed="${profile.id === sampleProfile.id ? 'true' : 'false'}" style="text-align:left;">
-              <div style="min-width:0;">
-                <div style="font-weight:650;font-size:12.5px;">${esc(profile.label)}</div>
-                <div class="mono" style="font-size:10.5px;color:var(--ink-4);">≤${fmtInt(profile.maxPatients)} ${t('entities/database', '实体/数据库')} · ≤${fmtInt(profile.sampleSize)} ${t('values/feature', '值/特征')}</div>
-                <div style="font-size:11px;color:var(--ink-3);margin-top:4px;">${esc(profile.note)}</div>
-              </div>
-              <span class="db-mk pill ${profile.id === sampleProfile.id ? 'ok' : 'dashed'}" style="flex:none;height:20px;">${profile.id === sampleProfile.id ? `<span class="dot"></span>${t('selected', '已选择')}` : t('choose', '选择')}</span>
-            </button>`).join('')}
-        </div>
-      </div>
-      <div class="sec-stack"><div class="lbl">${crossTerm('Databases')} · <span id="dbcount">${sel}</span> ${crossTerm('selected')}</div></div>
-      <div class="db-grid" id="dbgrid">
-        ${CROSS_DBS.map(([n, on, key]) => {
-          const status = rawCrossdbDbStatus(key, on);
-          return `
-          <button class="db-card ${on ? 'sel' : ''}" type="button" data-db="${CROSS_DBS.findIndex(d => d[0] === n)}" aria-pressed="${on ? 'true' : 'false'}">
-            <div class="row gap-8" style="min-width:0;">
-              <span class="${on ? '' : 'ink-4'}" style="flex:none;color:${on ? 'var(--accent-ink)' : 'var(--ink-4)'};">${icon('db', 15)}</span>
-              <div style="min-width:0;">
-                <div style="font-weight:600;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${n}</div>
-                <div class="mono" style="font-size:10.5px;color:var(--ink-4);">${esc(status.sub)}</div>
-              </div>
-            </div>
-            <span class="db-mk pill ${status.cls}" style="flex:none;height:20px;">${status.cls === 'ok' ? '<span class="dot"></span>' : ''}${esc(status.label)}</span>
-          </button>`;
-        }).join('')}
-      </div>
-      <div class="gate-strip crossdb-run-strip mt-20">
-        <span class="pill"><span style="color:var(--ink-3);">${icon('benchmark', 12)}</span> <span id="runhint">${sel} / 6 · ${canRun ? crossTerm('folder check ready') : crossTerm('check folders · need ≥ 2 detected')}</span></span>
-        <span class="pill">${crossTerm('12 curated core concepts')}</span>
-        <span class="pill">${esc(crossRawSampleSummary(sampleProfile))}</span>
-        <div class="grow"></div>
-        <button class="btn primary" data-run ${canRun ? '' : 'aria-disabled="true"'}>${icon('play', 13)} ${crossTerm('Load real density benchmark')}</button>
-      </div>`;
   }
   function crossAvailCell(v) {
     if (!v || !v.present) return `<td class="num xdb-avail-cell missing">${crossTerm('Missing')}</td>`;
@@ -5564,100 +5309,18 @@
       </div>`;
   }
 
-  function crossLoadingState() {
-    const sourceChoice = window.EU_CROSSDB_SOURCE_CHOICE;
-    if (crossRegisteredLoading && sourceChoice && typeof sourceChoice.renderLoading === 'function') {
-      return sourceChoice.renderLoading();
-    }
-    if (window.EU_DATA !== 'real') {
-      return `<div class="card pad">
-        <div class="load-strip"><span class="spin accent"></span><div class="grow"><div style="font-weight:600;font-size:12.75px;">${crossProgressMessage('Loading seeded frames for selected databases…')}</div><div class="mono" style="font-size:11px;color:var(--ink-4);margin-top:2px;">${crossTerm('local-only · nothing uploaded')}</div></div><button class="btn sm" data-viz-reset>${icon('stop', 13)} ${t('Cancel', '取消')}</button></div>
-        <div class="indet mt-12"></div>
-        <div style="font-size:12px;color:var(--ink-3);min-height:18px;margin-top:8px;">${crossProgressMessage('Building seeded density frames…')}</div>
-      </div>`;
-    }
-    return crossRawProgress.render({
-      esc,
-      errorMessage: vizErr,
-      fmtInt,
-      icon,
-      progressMessage: crossProgressMessage,
-      sampleProfile: crossRawSampleProfile(),
-      statusLabel: crossStatusLabel,
-      t,
-    });
-  }
-
   S.crossdb = {
     section: 'viz', nav: 'viz', sub: 'crossdb', wide: true,
     crumbs: ['Home', 'Data Workspace','Cross-DB Benchmark'],
     get actionHtml() {
-      // Topbar actions only exist once a benchmark is loaded — the gate strip in
-      // the body owns the Run action before that.
-      const loaded = crossView === 'loaded' || (window.EU_DATA === 'real' && window.EU_CROSSDB_WORKSPACE);
-      if (!loaded) return '';
-      const rawLoaded = window.EU_CROSSDB_WORKSPACE && window.EU_CROSSDB_WORKSPACE.source_type === 'raw_database_root';
-      return `<button class="btn" data-viz-reset>${icon('sliders', 13)} ${crossTerm('Change selection')}</button><button class="btn" data-crossdb-export>${icon('download', 13)} ${crossTerm('Export JSON')}</button>${rawLoaded ? '' : `<button class="btn primary" data-run>${icon('refresh', 13)} ${crossTerm('Re-run')}</button>`}`;
+      return crossSetup.actionHtml(crossSetupConfig());
     },
     rail: () => vizRail('crossdb'),
     render() {
-      // Consume a Guided Copilot handoff so a study configured in conversation
-      // does not silently vanish when Copilot lands the user here.
-      if (window.EU_GUIDED_HANDOFF && window.EU_GUIDED_HANDOFF.take) window.EU_GUIDED_HANDOFF.take('crossdb');
-      const guidedNote = window.EU_GUIDED_HANDOFF && window.EU_GUIDED_HANDOFF.noteHtml ? window.EU_GUIDED_HANDOFF.noteHtml('crossdb') : '';
-      if (crossView === 'loading') {
-        return guidedNote + crossHeader() + crossLoadingState();
-      }
-      if (window.EU_DATA === 'real') {
-        const xdb = window.EU_CROSSDB_WORKSPACE;
-        if (xdb) {
-          return guidedNote + crossHeader() + crossRealLoaded(xdb);
-        }
-        return guidedNote + crossHeader() + rawCrossdbSetup();
-      }
-      if (crossView === 'loaded') {
-        const xdb = window.EU_CROSSDB_WORKSPACE;
-        if (xdb) return guidedNote + crossHeader() + crossRealLoaded(xdb);
-        return guidedNote + crossHeader() + `<div class="note warn">
-          <div class="ico">${icon('alert', 14)}</div>
-          <div class="body"><span class="t">${crossTerm('Demo benchmark was not loaded')}</span> <span class="d" style="display:inline;">— ${t('Run the benchmark again so the backend can build the seeded distribution payload.', '请重新运行对比，让后端生成种子分布载荷。')}</span></div>
-        </div>`;
-      }
-      /* idle — select databases */
-      const sel = CROSS_DBS.filter(d => d[1]).length;
-      return guidedNote + crossHeader() + `
-        <div class="note info">
-          <div class="ico">${icon('benchmark', 16)}</div>
-          <div class="body"><span class="t">${crossTerm('Select databases to compare')}</span> <span class="d" style="display:inline;">— ${t('Pick two or more standardized ICU sources, then run the benchmark. Each uses an independent seeded feature frame in Demo Mode.', '选择两个或更多标准化 ICU 来源后运行对比。演示模式下，每个数据库使用独立的种子特征帧。')}</span></div>
-        </div>
-        <div class="sec-stack"><div class="lbl">${crossTerm('Available databases')} · <span id="dbcount">${sel}</span> ${crossTerm('selected')}</div></div>
-        <div class="db-grid" id="dbgrid">
-          ${CROSS_DBS.map(([n, on], i) => `
-            <button class="db-card ${on ? 'sel' : ''}" type="button" data-db="${i}" aria-pressed="${on ? 'true' : 'false'}">
-              <div class="row gap-8" style="min-width:0;">
-                <span class="${on ? '' : 'ink-4'}" style="flex:none;color:${on ? 'var(--accent-ink)' : 'var(--ink-4)'};">${icon('db', 15)}</span>
-                <div style="min-width:0;">
-                  <div style="font-weight:600;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${n}</div>
-                  <div class="mono" style="font-size:10.5px;color:var(--ink-4);">${crossTerm('all supported catalog concepts')}</div>
-                </div>
-              </div>
-              <span class="db-mk pill ${on ? 'ok' : 'dashed'}" style="flex:none;height:20px;">${on ? `<span class="dot"></span>${crossTerm('selected')}` : crossTerm('add')}</span>
-            </button>`).join('')}
-        </div>
-        <div class="gate-strip mt-20">
-          <span class="pill"><span style="color:var(--ink-3);">${icon('benchmark', 12)}</span> <span id="runhint">${sel} / 6 · ${t('need ≥ 2', '至少需要 2 个')}</span></span>
-          <div class="grow"></div>
-          <button class="btn primary" data-run ${sel < 2 ? 'aria-disabled="true"' : ''}>${icon('play', 13)} ${crossTerm('Run benchmark')}</button>
-        </div>`;
+      return crossSetup.renderBody(crossSetupConfig());
     },
     afterRender(root) {
-      bindSourceRegistry(root, 'crossdb');
-      if (window.EU_CROSSDB_JOB_CONTINUITY && typeof window.EU_CROSSDB_JOB_CONTINUITY.restoreIfNeeded === 'function') {
-        window.EU_CROSSDB_JOB_CONTINUITY.restoreIfNeeded();
-      }
-      if (window.EU_CROSSDB_SOURCE_CHOICE && typeof window.EU_CROSSDB_SOURCE_CHOICE.wire === 'function') {
-        window.EU_CROSSDB_SOURCE_CHOICE.wire(root);
-      }
+      crossSetup.bind(root, crossSetupConfig());
       root.querySelectorAll('[data-density-scope]').forEach(b => b.addEventListener('click', () => {
         crossDensityScope = b.dataset.densityScope || 'core';
         crossDensityModule = 'all';
@@ -5678,128 +5341,6 @@
         crossDensityFeature = b.dataset.densityFeatureKey || null;
         repaintScreen('crossdb');
       }));
-      root.querySelectorAll('[data-crossdb-sample-mode]').forEach(b => b.addEventListener('click', e => {
-        e.preventDefault();
-        e.stopPropagation();
-        const nextMode = b.dataset.crossdbSampleMode || 'quick';
-        if (window.EU_CROSSDB_JOB_CONTINUITY && typeof window.EU_CROSSDB_JOB_CONTINUITY.onSourceChanged === 'function') {
-          window.EU_CROSSDB_JOB_CONTINUITY.onSourceChanged(crossRawRootDraft, crossRawSourceIdentity(selectedCrossDbKeys()), nextMode);
-        }
-        crossRawSampleMode = nextMode;
-        repaintScreen('crossdb');
-      }));
-      const grid = root.querySelector('#dbgrid');
-      if (grid) grid.addEventListener('click', e => {
-        const card = e.target.closest('[data-db]'); if (!card) return;
-        const i = +card.dataset.db;
-        CROSS_DBS[i][1] = !CROSS_DBS[i][1];
-        if (window.EU_DATA === 'real') {
-          if (window.EU_CROSSDB_JOB_CONTINUITY && typeof window.EU_CROSSDB_JOB_CONTINUITY.onSourceChanged === 'function') {
-            window.EU_CROSSDB_JOB_CONTINUITY.onSourceChanged(crossRawRootDraft, crossRawSourceIdentity(selectedCrossDbKeys()), crossRawSampleMode);
-          }
-          // Keep the last folder scan: toggling a database changes selection,
-          // not whether sibling folders were recognized under the same root.
-          vizErr = null;
-          repaintScreen('crossdb');
-          return;
-        }
-        const on = CROSS_DBS[i][1];
-        card.classList.toggle('sel', on);
-        card.setAttribute('aria-pressed', on ? 'true' : 'false');
-        const mk = card.querySelector('.db-mk');
-        mk.className = `db-mk pill ${on ? 'ok' : 'dashed'}`;
-        mk.innerHTML = on ? `<span class="dot"></span>${crossTerm('selected')}` : crossTerm('add');
-        card.querySelector('span[style*="flex:none"]').style.color = on ? 'var(--accent-ink)' : 'var(--ink-4)';
-        const sel = CROSS_DBS.filter(d => d[1]).length;
-        const cnt = root.querySelector('#dbcount'); if (cnt) cnt.textContent = sel;
-        const hint = root.querySelector('#runhint'); if (hint) hint.textContent = `${sel} / 6 · ${t('need ≥ 2', '至少需要 2 个')}`;
-        root.querySelectorAll('[data-run]').forEach(b => { if (sel < 2) b.setAttribute('aria-disabled', 'true'); else b.removeAttribute('aria-disabled'); });
-      });
-      root.querySelectorAll('[data-run]').forEach(b => {
-        if (b.dataset.crossdbRunBound === '1') return;
-        b.dataset.crossdbRunBound = '1';
-        b.addEventListener('click', e => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (b.getAttribute('aria-disabled') === 'true' || crossView === 'loading') return;
-        if (window.EU_DATA === 'real') {
-          const loadedCrossdb = window.EU_CROSSDB_WORKSPACE;
-          if (loadedCrossdb && loadedCrossdb.source_type !== 'raw_database_root') {
-            b.setAttribute('aria-disabled', 'true');
-            window.EU_CROSSDB_SOURCE_HOST.runRegistered();
-            return;
-          }
-          const rawRootInput = root.querySelector('[data-crossdb-root]');
-          let rawRoot = rawRootInput && rawRootInput.value ? rawRootInput.value.trim() : '';
-          crossRawRootDraft = rawRoot;
-          if (!crossRawScanReadyFor(rawRoot)) {
-            scanCrossdbRawRoot(rawRoot);
-            return;
-          }
-          b.setAttribute('aria-disabled', 'true');
-          crossRegisteredLoading = false;
-          crossView = 'loading'; repaintScreen('crossdb');
-          loadRealCrossdb(() => { crossView = 'idle'; repaintScreen('crossdb'); }, { rawRoot });
-        } else {
-          b.setAttribute('aria-disabled', 'true');
-          crossView = 'loading'; repaintScreen('crossdb');
-          loadDemoCrossdb(ok => { crossView = ok ? 'loaded' : 'idle'; repaintScreen('crossdb'); });
-        }
-        });
-      });
-      root.querySelectorAll('[data-crossdb-root]').forEach(input => {
-        if (input.dataset.crossdbRootBound === '1') return;
-        input.dataset.crossdbRootBound = '1';
-        input.addEventListener('input', () => {
-          const next = (input.value || '').trim();
-          if (window.EU_CROSSDB_JOB_CONTINUITY && typeof window.EU_CROSSDB_JOB_CONTINUITY.onSourceChanged === 'function') {
-            window.EU_CROSSDB_JOB_CONTINUITY.onSourceChanged(next, crossRawSourceIdentity(selectedCrossDbKeys()), crossRawSampleMode);
-          }
-          if (next !== crossRawRootDraft) invalidateCrossRawRootScan();
-          crossRawRootDraft = next;
-        });
-        input.addEventListener('change', () => {
-          const next = (input.value || '').trim();
-          if (window.EU_CROSSDB_JOB_CONTINUITY && typeof window.EU_CROSSDB_JOB_CONTINUITY.onSourceChanged === 'function') {
-            window.EU_CROSSDB_JOB_CONTINUITY.onSourceChanged(next, crossRawSourceIdentity(selectedCrossDbKeys()), crossRawSampleMode);
-          }
-          if (next !== crossRawRootDraft) invalidateCrossRawRootScan();
-          crossRawRootDraft = next;
-          repaintScreen('crossdb');
-        });
-      });
-      root.querySelectorAll('[data-crossdb-root-browse]').forEach(b => b.addEventListener('click', e => {
-        e.preventDefault();
-        e.stopPropagation();
-        const input = root.querySelector('[data-crossdb-root]');
-        openSourceFolderPicker(
-          (input && input.value.trim()) || crossRawRootDraft,
-          picked => {
-            if (!picked || !input) {
-              vizErr = t('Local folder picker API is not ready. Paste a raw ICU data root path instead.', '本地文件夹选择 API 尚未就绪。请改为粘贴原始 ICU 数据根目录路径。');
-              repaintScreen('crossdb');
-              return;
-            }
-            if (window.EU_CROSSDB_JOB_CONTINUITY && typeof window.EU_CROSSDB_JOB_CONTINUITY.onSourceChanged === 'function') {
-              window.EU_CROSSDB_JOB_CONTINUITY.onSourceChanged(picked, crossRawSourceIdentity(selectedCrossDbKeys()), crossRawSampleMode);
-            }
-            crossRawRootDraft = picked;
-            vizErr = null;
-            input.value = picked;
-            input.focus();
-            scanCrossdbRawRoot(picked);
-          },
-          t('Choose local ICU data root', '选择本地 ICU 数据根目录')
-        );
-      }));
-      root.querySelectorAll('[data-crossdb-root-scan]').forEach(b => b.addEventListener('click', e => {
-        e.preventDefault();
-        e.stopPropagation();
-        const input = root.querySelector('[data-crossdb-root]');
-        const rawRoot = input && input.value ? input.value.trim() : crossRawRootDraft;
-        scanCrossdbRawRoot(rawRoot);
-      }));
-      root.querySelectorAll('[data-crossdb-cancel]').forEach(b => b.addEventListener('click', cancelCrossRawJob));
       root.querySelectorAll('[data-crossdb-export]').forEach(b => b.addEventListener('click', () => {
         const payload = window.EU_CROSSDB_WORKSPACE;
         if (!payload) {
@@ -5812,14 +5353,6 @@
           payload_scope: 'bounded_crossdb_review',
           crossdb_review: payload,
         });
-      }));
-      root.querySelectorAll('[data-viz-reset]').forEach(b => b.addEventListener('click', () => {
-        const preserveRawScan = window.EU_CROSSDB_WORKSPACE && window.EU_CROSSDB_WORKSPACE.source_type === 'raw_database_root';
-        teardownCrossRawES({ forget: true });
-        crossRawProgress.clear();
-        crossRegisteredLoading = false;
-        if (!preserveRawScan) invalidateCrossRawRootScan();
-        crossView = 'idle'; crossDensityModule = 'all'; crossDensityFeature = null; window.EU_VIZ_WORKSPACE = null; window.EU_CROSSDB_WORKSPACE = null; repaintScreen('crossdb');
       }));
     },
   };

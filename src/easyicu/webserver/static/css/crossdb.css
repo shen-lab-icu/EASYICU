@@ -1,3 +1,27 @@
+/* ---------- Cross-DB source choice ---------- */
+.crossdb-source-option{ padding:0; overflow:hidden; }
+.crossdb-source-summary{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:12px;
+  padding:14px 16px;
+  cursor:pointer;
+  list-style:none;
+}
+.crossdb-source-summary::-webkit-details-marker{ display:none; }
+.crossdb-source-summary::after{
+  content:"▸";
+  flex:none;
+  margin-top:2px;
+  color:var(--ink-4);
+  font-size:12px;
+  transition:transform .15s ease;
+}
+.crossdb-source-option[open] .crossdb-source-summary::after{ transform:rotate(90deg); }
+.crossdb-source-summary:focus-visible{ outline:2px solid var(--accent); outline-offset:-3px; }
+.crossdb-source-detail{ padding:0 16px 16px; border-top:1px solid var(--hair); }
+
 /* ---------- Cross-DB module availability heatmap ---------- */
 .xdb-avail-cell{
   font-variant-numeric:tabular-nums;

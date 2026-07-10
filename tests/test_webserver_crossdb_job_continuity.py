@@ -28,11 +28,13 @@ def _node_binary() -> str | None:
 
 def test_crossdb_raw_job_continuity_has_one_explicit_owner() -> None:
     viz = _read("js/screens-viz.js")
+    setup = _read("js/screens-viz-crossdb-setup.js")
     owner = _read("js/screens-viz-crossdb-job-continuity.js")
     index = _read("index.html")
 
     owner_src = "js/screens-viz-crossdb-job-continuity.js?v=20260710-cancel-fence"
     assert owner_src in index
+    assert index.index("js/screens-viz-crossdb-setup.js?") < index.index("js/screens-viz.js?")
     assert index.index("js/screens-viz.js?") < index.index(owner_src)
     assert index.index(owner_src) < index.index("js/screens-viz-crossdb-source.js?")
 
@@ -56,13 +58,18 @@ def test_crossdb_raw_job_continuity_has_one_explicit_owner() -> None:
     for marker in (
         "window.EU_CROSSDB_JOB_HOST",
         "jobContinuity.start({",
-        "source_identity: crossRawSourceIdentity(rawDatabases)",
-        "window.EU_CROSSDB_JOB_CONTINUITY.restoreIfNeeded()",
-        "teardownCrossRawES({ forget: true })",
-        "window.EU_CROSSDB_JOB_CONTINUITY.onSourceChanged",
+        "source_identity: crossSetup.sourceIdentity(rawDatabases)",
+        "crossSetup.disconnectJob({ forget: true })",
         "This saved raw Cross-DB job is no longer available",
     ):
         assert marker in viz
+
+    for marker in (
+        "continuity.restoreIfNeeded()",
+        "continuity.onSourceChanged(pathValue(nextRoot), sourceIdentity(), nextMode || state.sampleMode)",
+        "disconnectJob({ forget: true })",
+    ):
+        assert marker in setup
 
     assert "easyicu_crossdb_raw_job_v1" not in viz
     assert "new EventSource('/api/jobs/' + r.job_id + '/events')" not in viz

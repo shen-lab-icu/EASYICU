@@ -14,14 +14,17 @@ def _read(relative: str) -> str:
 def test_crossdb_raw_scope_owner_is_wired_before_shared_viz() -> None:
     index = _read("index.html")
     owner = _read("js/screens-viz-crossdb-raw.js")
+    setup = _read("js/screens-viz-crossdb-setup.js")
     viz = _read("js/screens-viz.js")
 
     owner_src = "js/screens-viz-crossdb-raw.js?v=20260710-core-scope"
     assert owner_src in index
-    assert index.index(owner_src) < index.index("js/screens-viz.js?")
+    assert index.index(owner_src) < index.index("js/screens-viz-crossdb-setup.js?")
+    assert index.index("js/screens-viz-crossdb-setup.js?") < index.index("js/screens-viz.js?")
     assert "window.EU_CROSSDB_RAW = { coreFeatures, buildRequest }" in owner
     assert "window.EU_CROSSDB_RAW.coreFeatures()" in viz
     assert "window.EU_CROSSDB_RAW.buildRequest" in viz
+    assert "12 curated core concepts" in setup
 
 
 def test_crossdb_raw_scope_is_curated_and_route_pure() -> None:

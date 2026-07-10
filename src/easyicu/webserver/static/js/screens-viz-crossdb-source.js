@@ -1,6 +1,7 @@
 /* Cross-DB source choice owner: registered EasyICU exports vs raw ICU roots. */
 (function () {
   'use strict';
+  let registeredOpen = false;
 
   function text(en, zh) {
     return window.EU_LANG === 'zh' ? zh : en;
@@ -28,23 +29,25 @@
             <div class="d">${text('Use prepared EasyICU exports for a bounded aggregate comparison, or read raw ICU database folders with local sampling.', '使用已准备好的 EasyICU 导出进行有界聚合对比，或通过本地抽样读取原始 ICU 数据库文件夹。')}</div>
           </div>
         </div>
-        <div class="card pad mt-16" data-crossdb-registered-option>
-          <div class="row between gap-12" style="align-items:flex-start;">
+        <details class="card crossdb-source-option mt-16" data-crossdb-registered-option ${registeredOpen ? 'open' : ''}>
+          <summary class="crossdb-source-summary">
             <div>
               <div class="eyebrow">${text('Source A', '来源 A')}</div>
               <div class="panel-title mt-4">${text('Registered EasyICU exports', '已注册的 EasyICU 导出')}</div>
-              <div class="panel-sub mt-4">${text('Select at least two prepared exports below, then compare their bounded aggregate summaries. This path does not scan raw database folders.', '请在下方选择至少两个已准备的导出，再对比其有界聚合摘要；此路径不会扫描原始数据库文件夹。')}</div>
+              <div class="panel-sub mt-4">${text('Open to select prepared exports. This path compares bounded aggregate summaries and never scans raw database folders.', '展开后选择已准备的导出。此路径只比较有界聚合摘要，不会扫描原始数据库文件夹。')}</div>
             </div>
             <span class="pill ${ready ? 'ok' : 'warn'}">${sourceLabel}</span>
+          </summary>
+          <div class="crossdb-source-detail">
+            ${registryHtml}
+            <div class="row gap-8 mt-14" style="align-items:center;flex-wrap:wrap;">
+              <button class="btn primary" type="button" data-crossdb-run-registered ${ready ? '' : 'aria-disabled="true"'}>${text('Run registered exports', '运行已注册导出')}</button>
+              ${ready
+                ? `<span class="panel-sub">${text('Ready for aggregate-only comparison.', '已可运行仅聚合对比。')}</span>`
+                : `<span class="panel-sub">${text('Add and select at least two EasyICU exports below.', '请在下方添加并选择至少两个 EasyICU 导出。')}</span>`}
+            </div>
           </div>
-          ${registryHtml}
-          <div class="row gap-8 mt-14" style="align-items:center;flex-wrap:wrap;">
-            <button class="btn primary" type="button" data-crossdb-run-registered ${ready ? '' : 'aria-disabled="true"'}>${text('Run registered exports', '运行已注册导出')}</button>
-            ${ready
-              ? `<span class="panel-sub">${text('Ready for aggregate-only comparison.', '已可运行仅聚合对比。')}</span>`
-              : `<span class="panel-sub">${text('Add and select at least two EasyICU exports below.', '请在下方添加并选择至少两个 EasyICU 导出。')}</span>`}
-          </div>
-        </div>
+        </details>
         <div class="sec-stack"><div class="lbl">${text('Or · Source B · Raw ICU database root', '或者 · 来源 B · 原始 ICU 数据库根目录')}</div></div>
       </section>`;
   }
@@ -66,6 +69,13 @@
 
   function wire(root) {
     if (!root || typeof root.querySelectorAll !== 'function') return;
+    const registeredOption = typeof root.querySelector === 'function'
+      ? root.querySelector('[data-crossdb-registered-option]')
+      : null;
+    if (registeredOption && registeredOption.dataset.crossdbOpenBound !== '1') {
+      registeredOption.dataset.crossdbOpenBound = '1';
+      registeredOption.addEventListener('toggle', () => { registeredOpen = registeredOption.open; });
+    }
     root.querySelectorAll('[data-crossdb-run-registered]').forEach(button => {
       if (button.dataset.crossdbRegisteredBound === '1') return;
       button.dataset.crossdbRegisteredBound = '1';
