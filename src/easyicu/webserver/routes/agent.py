@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from pathlib import Path
 from typing import Any, Dict
 
@@ -17,6 +18,7 @@ from easyicu.webserver import provider_adapter
 from easyicu.webserver import settings as settings_store
 from easyicu.webserver import science_workbench
 from easyicu.webserver import sources as source_store
+from easyicu.webserver import study_contexts as context_store
 from easyicu.webserver.routes.jobs import submit_job
 from easyicu.webserver.routes.request_parsing import body_bool
 
@@ -43,6 +45,21 @@ def jobs_agent_run(body: Dict[str, Any]) -> dict:
     desc = dataio.describe_export_source(path)
     if not desc.get("ok"):
         raise HTTPException(status_code=400, detail=desc)
+    study_context_id = str(body.get("study_context_id") or "").strip()
+    study_context = None
+    if study_context_id:
+        try:
+            study_context = context_store.get_context(study_context_id)
+        except context_store.StudyContextError as exc:
+            raise HTTPException(status_code=400, detail=exc.detail) from exc
+        if study_context is None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "study_context_not_found",
+                    "study_context_id": study_context_id,
+                },
+            )
     project_seed_dir = str(
         body.get("project_seed_dir") or body.get("project_seed_path") or ""
     ).strip()
@@ -70,28 +87,153 @@ def jobs_agent_run(body: Dict[str, Any]) -> dict:
     except agent_runs.AgentRunConfigError as exc:
         raise HTTPException(status_code=400, detail=exc.detail) from exc
 
-    runner = agent_runs.make_agent_run_runner(
-        export_path=path,
-        study_id=str(body.get("study_id") or "study"),
-        mode=str(body.get("mode") or "analysis"),
-        question=body.get("question"),
-        project_root=body.get("project_root") or _agent_seed_run_root(project_seed_dir),
-        run_type=run_type,
-        llm_provider=llm_provider,
-        external_llm_opt_in=external_llm_opt_in,
-        ai_enabled=bool(settings.get("ai_enabled")),
-    )
+    try:
+        if study_context is not None:
+            # Validate before a background job is created. Do not persist an
+            # ``analyze`` stage yet: capacity rejection must leave the prior
+            # context untouched.
+            context_store.build_agent_context_binding(
+                study_context,
+                export_path=path,
+                request_question=body.get("question"),
+            )
+        base_runner = agent_runs.make_agent_run_runner(
+            export_path=path,
+            study_id=str(
+                (study_context or {}).get("id") or body.get("study_id") or "study"
+            ),
+            mode=str(body.get("mode") or "analysis"),
+            question=body.get("question"),
+            project_root=body.get("project_root")
+            or _agent_seed_run_root(project_seed_dir),
+            run_type=run_type,
+            llm_provider=llm_provider,
+            external_llm_opt_in=external_llm_opt_in,
+            ai_enabled=bool(settings.get("ai_enabled")),
+            study_context=study_context,
+        )
+    except context_store.StudyContextError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
+    start_gate = threading.Event()
+    start_abort: Dict[str, Any] = {}
+
+    def runner(job: Any) -> dict:
+        # ``submit`` starts its daemon thread immediately. Hold execution until
+        # the route has bound the returned job id to StudyContext, then always
+        # clear that active pointer at the terminal boundary.
+        start_gate.wait()
+        if start_abort:
+            error = str(start_abort.get("error") or "study_context_sync_failed")
+            raise RuntimeError(f"agent_run_start_blocked:{error}")
+        terminal_stage = "agent_failed"
+        result: Dict[str, Any] | None = None
+        try:
+            result = base_runner(job)
+            if job.cancel_requested:
+                terminal_stage = "agent_cancelled"
+            elif (result.get("gate") or {}).get("status") == "blocked":
+                terminal_stage = "review_blocked"
+            else:
+                terminal_stage = "review"
+            return result
+        finally:
+            if study_context is not None:
+                try:
+                    cleanup = context_store.clear_active_job_if(
+                        study_context_id,
+                        job.id,
+                        current_stage=terminal_stage,
+                        last_route="agent",
+                    )
+                    if isinstance(result, dict):
+                        result["study_context_revision"] = int(
+                            cleanup["context"].get("revision") or 0
+                        )
+                except Exception:
+                    # Metadata cleanup must never turn a completed analysis
+                    # into a failed job. The job snapshot remains authoritative.
+                    pass
+
     job = submit_job("agent-run", runner)
-    capabilities.record_tool_event(
-        "agent_run_submitted",
-        {
+    context_sync_warning = None
+    synced_context = None
+    try:
+        if study_context is not None:
+            synced_context = context_store.handoff_context(
+                study_context_id,
+                current_stage="analyze",
+                last_route="agent",
+                active_job_id=job.id,
+                expected_revision=int(study_context.get("revision") or 0),
+            )
+    except context_store.StudyContextError as exc:
+        if study_context is not None:
+            start_abort.update(exc.detail)
+    except OSError:
+        if study_context is not None:
+            # The job is already running. Do not return a misleading 400 or
+            # orphan it from the caller; surface the metadata sync failure.
+            context_sync_warning = {
+                "error": "study_context_active_job_sync_failed",
+                "study_context_id": study_context_id,
+                "job_id": job.id,
+            }
+    except Exception as exc:
+        if study_context is not None:
+            start_abort.update(
+                {
+                    "error": "study_context_active_job_sync_failed",
+                    "reason": type(exc).__name__,
+                }
+            )
+    finally:
+        start_gate.set()
+
+    if start_abort:
+        error = str(start_abort.get("error") or "study_context_sync_failed")
+        status_code = 409 if error.startswith("study_context_revision_") else 500
+        raise HTTPException(
+            status_code=status_code,
+            detail={
+                **start_abort,
+                "job_id": job.id,
+                "job_started": False,
+            },
+        )
+
+    audit_warning = None
+    try:
+        capabilities.record_tool_event(
+            "agent_run_submitted",
+            {
+                "job_id": job.id,
+                "run_type": run_type,
+                "llm_provider": llm_provider,
+                "compute_target": compute.get("compute_target"),
+                "study_context_id": study_context_id or None,
+                "context_sync_warning": bool(context_sync_warning),
+            },
+        )
+    except Exception:
+        # The analysis is already running; an audit-log filesystem failure is
+        # a warning, not a false 500 that loses the job id for the caller. The
+        # audit helper also reads JSON settings, so malformed local metadata
+        # can raise non-I/O exceptions after submission.
+        audit_warning = {
+            "error": "agent_run_audit_write_failed",
             "job_id": job.id,
-            "run_type": run_type,
-            "llm_provider": llm_provider,
-            "compute_target": compute.get("compute_target"),
-        },
-    )
-    return {"job_id": job.id, "kind": job.kind, "status": job.status}
+        }
+    return {
+        "job_id": job.id,
+        "kind": job.kind,
+        "status": job.status,
+        "study_context_id": study_context_id or None,
+        "study_context_revision": (
+            int(synced_context.get("revision") or 0) if synced_context else None
+        ),
+        "context_sync_warning": context_sync_warning,
+        "audit_warning": audit_warning,
+    }
 
 
 def _validate_agent_project_seed_for_run(

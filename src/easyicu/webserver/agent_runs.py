@@ -26,6 +26,7 @@ from easyicu.webserver import dataio
 from easyicu.webserver import numeric_evidence_audit
 from easyicu.webserver import provider_adapter
 from easyicu.webserver import provider_gate
+from easyicu.webserver import study_contexts as context_store
 
 
 class AgentRunConfigError(ValueError):
@@ -72,9 +73,19 @@ def make_agent_run_runner(
     llm_provider: str = "mock",
     external_llm_opt_in: bool = False,
     ai_enabled: bool = False,
+    study_context: Optional[Dict[str, Any]] = None,
 ) -> Any:
     """Build a deterministic local runner for ``JobManager``."""
     resolved_run_type = normalize_run_type(run_type)
+    context_binding = None
+    resolved_question = question
+    if study_context is not None:
+        context_binding = context_store.build_agent_context_binding(
+            study_context,
+            export_path=export_path,
+            request_question=question,
+        )
+        resolved_question = context_binding["applied"]["question"]
     provider = resolve_agent_provider_config(
         run_type=resolved_run_type,
         llm_provider=llm_provider,
@@ -103,6 +114,11 @@ def make_agent_run_runner(
                 "mode": mode,
                 "run_type": resolved_run_type,
                 "provider": dict(provider),
+                "study_context_id": (
+                    context_binding.get("study_context_id")
+                    if context_binding is not None
+                    else None
+                ),
                 "local_only": True,
                 "uploads": 0,
                 "tokens": 0,
@@ -168,7 +184,9 @@ def make_agent_run_runner(
                 ),
                 "stays": summary.get("stays"),
                 "modules": summary.get("modules"),
-                "snapshot_basis": summary.get("snapshot_basis", "bounded_row_level_sample"),
+                "snapshot_basis": summary.get(
+                    "snapshot_basis", "bounded_row_level_sample"
+                ),
             }
         )
         if getattr(job, "cancel_requested", False):
@@ -185,22 +203,25 @@ def make_agent_run_runner(
                 summary=summary,
             )
 
-        artifacts = {
-            "run_context.json": {
-                "run_id": run_id,
-                "study_id": study_id,
-                "mode": mode,
-                "question": question,
-                "source": {
-                    "path": source.get("path"),
-                    "label": source.get("label"),
-                    "database": source.get("database"),
-                    "generated": source.get("generated"),
-                    "modules": source.get("modules", []),
-                },
-                "summary": summary,
-                "local_first": {"uploads": 0, "tokens": 0},
+        run_context = {
+            "run_id": run_id,
+            "study_id": study_id,
+            "mode": mode,
+            "question": resolved_question,
+            "source": {
+                "path": source.get("path"),
+                "label": source.get("label"),
+                "database": source.get("database"),
+                "generated": source.get("generated"),
+                "modules": source.get("modules", []),
             },
+            "summary": summary,
+            "local_first": {"uploads": 0, "tokens": 0},
+        }
+        if context_binding is not None:
+            run_context["context_binding"] = context_binding
+        artifacts = {
+            "run_context.json": run_context,
             "cohort_summary.json": {
                 "summary": summary,
                 "cohort": cohort,
@@ -239,7 +260,7 @@ def make_agent_run_runner(
                     provider_meta=provider,
                     run_id=run_id,
                     study_id=study_id,
-                    question=question,
+                    question=resolved_question,
                     summary=summary,
                     cohort=cohort,
                     quality=quality,
@@ -261,7 +282,7 @@ def make_agent_run_runner(
                 full_payload = _mock_full_agent_payload(
                     run_id=run_id,
                     study_id=study_id,
-                    question=question,
+                    question=resolved_question,
                     summary=summary,
                     cohort=cohort,
                     quality=quality,
@@ -307,6 +328,18 @@ def make_agent_run_runner(
             numeric_audit=numeric_audit,
         )
 
+        persisted_artifacts, privacy_scan = _privacy_safe_artifacts(
+            artifacts, privacy_scan
+        )
+        if not privacy_scan.get("passed"):
+            # Audits are derived from the original artifacts and can copy a
+            # patient identifier into an otherwise metadata-only ledger. A
+            # privacy failure therefore persists only a newly built minimal
+            # gate and drops every derived audit payload.
+            gate = persisted_artifacts["quality_gate.json"]["gate"]
+            strict_audit = None
+            numeric_audit = None
+
         job.emit(
             {
                 "type": "gate",
@@ -331,18 +364,15 @@ def make_agent_run_runner(
                 summary=summary,
             )
 
-        written = []
-        for name, payload in artifacts.items():
-            out = run_dir / name
-            _write_json(out, payload)
-            written.append(
-                _artifact(
-                    out,
-                    run_dir,
-                    payload.get("summary") if isinstance(payload, dict) else None,
-                )
+        written = [
+            _artifact_payload(
+                name,
+                run_dir,
+                payload,
+                payload.get("summary") if isinstance(payload, dict) else None,
             )
-
+            for name, payload in persisted_artifacts.items()
+        ]
         ledger = _ledger_payload(
             run_id,
             gate,
@@ -353,6 +383,38 @@ def make_agent_run_runner(
             strict_audit,
             numeric_audit,
         )
+        final_scan = _scan_artifact_payloads(
+            {**persisted_artifacts, "evidence_ledger.json": ledger}
+        )
+        if not final_scan.get("passed"):
+            persisted_artifacts, privacy_scan = _privacy_safe_artifacts(
+                {**artifacts, "evidence_ledger.json": ledger}, final_scan
+            )
+            gate = persisted_artifacts["quality_gate.json"]["gate"]
+            strict_audit = None
+            numeric_audit = None
+            written = [
+                _artifact_payload(name, run_dir, payload)
+                for name, payload in persisted_artifacts.items()
+            ]
+            ledger = _ledger_payload(
+                run_id,
+                gate,
+                written,
+                privacy_scan,
+                resolved_run_type,
+                provider,
+                None,
+                None,
+            )
+            if not _scan_artifact_payloads(
+                {**persisted_artifacts, "evidence_ledger.json": ledger}
+            ).get("passed"):
+                raise RuntimeError("privacy failure package did not pass final scan")
+
+        for name, payload in persisted_artifacts.items():
+            out = run_dir / name
+            _write_json(out, payload)
         ledger_path = run_dir / "evidence_ledger.json"
         _write_json(ledger_path, ledger)
         written.append(_artifact(ledger_path, run_dir))
@@ -363,7 +425,11 @@ def make_agent_run_runner(
                 "current": total_steps,
                 "total": total_steps,
                 "step": "artifacts",
-                "label": "Local artifacts written",
+                "label": (
+                    "Safe local artifacts written; row-level payloads withheld"
+                    if privacy_scan.get("payloads_withheld")
+                    else "Local artifacts written"
+                ),
                 "artifacts": written,
             }
         )
@@ -385,6 +451,11 @@ def make_agent_run_runner(
             "quality": quality,
             "gate": gate,
             "provider": provider,
+            "study_context_id": (
+                context_binding.get("study_context_id")
+                if context_binding is not None
+                else None
+            ),
             "strict_evidence_audit": strict_audit,
             "numeric_evidence_audit": numeric_audit,
             "artifacts": written,
@@ -1235,6 +1306,7 @@ def _public_review_payloads(
             "summary": row.get("summary"),
             "local_first": row.get("local_first"),
             "source": row.get("source"),
+            "context_binding": row.get("context_binding"),
         }
     if "cohort_summary.json" in payloads:
         row = payloads["cohort_summary.json"]
@@ -1314,6 +1386,8 @@ def _ledger_payload(
     strict_audit: Optional[Dict[str, Any]] = None,
     numeric_audit: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    detected = not bool(privacy_scan.get("passed"))
+    withheld = list(privacy_scan.get("payloads_withheld") or [])
     return {
         "run_id": run_id,
         "run_type": normalize_run_type(run_type),
@@ -1323,7 +1397,9 @@ def _ledger_payload(
         "strict_evidence_audit": strict_audit,
         "numeric_evidence_audit": numeric_audit,
         "privacy": {
-            "patient_rows_persisted": False,
+            "patient_rows_detected": detected,
+            "patient_rows_persisted": bool(detected and not withheld),
+            "payloads_withheld": withheld,
             "ui_preview_payload_excluded": True,
             "uploads": 0,
             "tokens": 0,
@@ -1530,13 +1606,36 @@ def _strict_evidence_audit(artifacts: Dict[str, Dict[str, Any]]) -> Dict[str, An
     }
 
 
-_ROW_LEVEL_KEYS = {"tableRows", "series", "patient", "stay_id", "subject_id", "hadm_id"}
+_ROW_LEVEL_KEYS = {
+    "tablerows",
+    "series",
+    "patient",
+    "patients",
+    "patientid",
+    "patientids",
+    "stayid",
+    "stayids",
+    "subjectid",
+    "subjectids",
+    "hadmid",
+    "hadmids",
+    "entityid",
+    "entityids",
+}
 
 
 def _scan_artifact_payloads(artifacts: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     hits = []
     for name, payload in artifacts.items():
-        hits.extend(_row_level_markers(payload, name))
+        try:
+            # Scan the same JSON-shaped tree that will be written. Python
+            # tuples, non-string dict keys, and other json.dumps coercions must
+            # not create a scanner/writer type gap.
+            canonical = json.loads(_json_bytes(payload).decode("utf-8"))
+        except (TypeError, ValueError, UnicodeDecodeError):
+            hits.append({"path": name, "marker": "non_json_serializable"})
+            continue
+        hits.extend(_row_level_markers(canonical, name))
     return {
         "passed": not hits,
         "scanned_artifacts": len(artifacts),
@@ -1544,12 +1643,80 @@ def _scan_artifact_payloads(artifacts: Dict[str, Dict[str, Any]]) -> Dict[str, A
     }
 
 
+def _privacy_safe_artifacts(
+    artifacts: Dict[str, Dict[str, Any]],
+    privacy_scan: Dict[str, Any],
+) -> tuple[Dict[str, Dict[str, Any]], Dict[str, Any]]:
+    """Return the minimal failure package allowed after a privacy violation."""
+    if privacy_scan.get("passed"):
+        return artifacts, privacy_scan
+    # Never reuse quality_gate.json from the unsafe bundle: strict/numeric
+    # audit failures and even nested object paths can contain values copied
+    # from row-level inputs. Build a fixed-schema failure package instead.
+    hits = privacy_scan.get("row_level_markers")
+    hits = hits if isinstance(hits, list) else []
+    marker_types = sorted(
+        {
+            normalized
+            for hit in hits
+            if isinstance(hit, dict)
+            for normalized in [
+                re.sub(r"[^a-z0-9]+", "", str(hit.get("marker") or "").lower())
+            ]
+            if normalized in _ROW_LEVEL_KEYS
+        }
+    )
+    safe_scan = {
+        "passed": False,
+        "scanned_artifacts": int(privacy_scan.get("scanned_artifacts") or 0),
+        "row_level_marker_count": len(hits),
+        "marker_types": marker_types,
+        "payloads_withheld": sorted(str(name) for name in artifacts),
+    }
+    gate = {
+        "status": "blocked",
+        "reportable": False,
+        "draft_unlocked": False,
+        "reason": "privacy_gate_failed",
+        "checks": [
+            {
+                "id": "no_patient_rows_persisted",
+                "label": "No patient rows persisted in agent artifacts",
+                "passed": False,
+                "evidence": "artifact_json_scan",
+                "scanned_artifacts": safe_scan["scanned_artifacts"],
+                "row_level_marker_count": safe_scan["row_level_marker_count"],
+                "marker_types": marker_types,
+            },
+            {
+                "id": "human_signoff",
+                "label": "Human sign-off before manuscript claims",
+                "passed": False,
+            },
+        ],
+    }
+    safe = {
+        "quality_gate.json": {
+            "gate": gate,
+            "privacy_failure": {
+                "row_level_marker_count": safe_scan["row_level_marker_count"],
+                "marker_types": marker_types,
+                "payloads_withheld": safe_scan["payloads_withheld"],
+            },
+        }
+    }
+    if not _scan_artifact_payloads(safe).get("passed"):
+        raise RuntimeError("minimal privacy failure gate is not metadata-only")
+    return safe, safe_scan
+
+
 def _row_level_markers(value: Any, path: str) -> List[Dict[str, str]]:
     hits: List[Dict[str, str]] = []
     if isinstance(value, dict):
         for key, child in value.items():
             child_path = f"{path}.{key}"
-            if key in _ROW_LEVEL_KEYS:
+            normalized_key = re.sub(r"[^a-z0-9]+", "", str(key).lower())
+            if normalized_key in _ROW_LEVEL_KEYS:
                 hits.append({"path": child_path, "marker": key})
             hits.extend(_row_level_markers(child, child_path))
     elif isinstance(value, list):

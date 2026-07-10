@@ -17,7 +17,11 @@ from easyicu.webserver import agent_runs
 from easyicu.webserver import cohort_review
 from easyicu.webserver import copilot_sessions
 from easyicu.webserver import numeric_evidence_audit
-from easyicu.webserver.agent_runs import _scan_artifact_payloads
+from easyicu.webserver.agent_runs import (
+    _ledger_payload,
+    _privacy_safe_artifacts,
+    _scan_artifact_payloads,
+)
 from easyicu.webserver import dataio
 from easyicu.webserver import crossdb_review
 from easyicu.webserver import catalog as catalog_module
@@ -4983,6 +4987,67 @@ def test_agent_run_job_uses_active_registry_and_writes_bounded_artifacts(
     )
 
 
+def test_agent_runner_withholds_tuple_wrapped_patient_identifier_from_disk(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    export_dir = _write_csv_export(tmp_path / "miiv", database="miiv")
+    source_store.register_source(str(export_dir), active=True, crossdb=True)
+    patient_identifier = 987654321
+    original_builder = agent_runs.agent_outputs.build_agent_output_artifacts
+
+    def inject_tuple_marker(**kwargs):
+        artifacts = original_builder(**kwargs)
+        artifacts["table1_summary.json"]["audit_items"] = (
+            {"stay_id": patient_identifier},
+        )
+        return artifacts
+
+    monkeypatch.setattr(
+        agent_runs.agent_outputs,
+        "build_agent_output_artifacts",
+        inject_tuple_marker,
+    )
+    client = TestClient(app)
+    started = client.post(
+        "/api/jobs/agent-run",
+        json={
+            "study_id": "tuple-privacy",
+            "project_root": str(tmp_path / "projects"),
+        },
+    )
+
+    assert started.status_code == 200
+    snapshot = _wait_for_job(client, started.json()["job_id"])
+    assert snapshot["status"] == "done"
+    result = snapshot["result"]
+    assert result["gate"]["status"] == "blocked"
+    assert result["gate"]["reason"] == "privacy_gate_failed"
+    assert result["strict_evidence_audit"] is None
+    assert result["numeric_evidence_audit"] is None
+    artifact_paths = [Path(item["path"]) for item in result["artifacts"]]
+    assert {path.name for path in artifact_paths} == {
+        "quality_gate.json",
+        "evidence_ledger.json",
+    }
+    persisted_text = "\n".join(path.read_text(encoding="utf-8") for path in artifact_paths)
+    assert str(patient_identifier) not in persisted_text
+    ledger = json.loads(
+        (Path(result["project_dir"]) / "evidence_ledger.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert ledger["strict_evidence_audit"] is None
+    assert ledger["numeric_evidence_audit"] is None
+    assert ledger["privacy"]["patient_rows_detected"] is True
+    assert ledger["privacy"]["patient_rows_persisted"] is False
+    assert ledger["privacy"]["artifact_scan"]["passed"] is False
+    assert "stayid" in ledger["privacy"]["artifact_scan"]["marker_types"]
+
+
 def test_agent_run_large_export_preflight_uses_registry_metadata_fast_path(
     tmp_path: Path,
     monkeypatch,
@@ -5474,6 +5539,55 @@ def test_agent_artifact_privacy_scan_flags_row_level_payloads() -> None:
     markers = {(hit["path"], hit["marker"]) for hit in scan["row_level_markers"]}
     assert ("run_context.json.tableRows", "tableRows") in markers
     assert ("run_context.json.tableRows[0].stay_id", "stay_id") in markers
+
+
+def test_agent_privacy_failure_withholds_offending_payload_and_ledger_is_honest() -> None:
+    patient_identifier = 987654
+    artifacts = {
+        "run_context.json": {
+            "summary": {"stays": 3},
+            "tableRows": [{"stay_id": patient_identifier, "age": 50}],
+        },
+        "quality_gate.json": {
+            "gate": {"status": "blocked"},
+            "numeric_evidence_audit": {
+                "matches": [
+                    {
+                        "evidence_path": "run_context.json.tableRows[0].stay_id",
+                        "evidence_value": patient_identifier,
+                    }
+                ]
+            },
+        },
+    }
+    scan = _scan_artifact_payloads(artifacts)
+
+    safe, bounded_scan = _privacy_safe_artifacts(artifacts, scan)
+    gate = safe["quality_gate.json"]["gate"]
+    ledger = _ledger_payload(
+        "run_privacy",
+        gate,
+        [],
+        bounded_scan,
+        strict_audit=None,
+        numeric_audit=None,
+    )
+
+    assert set(safe) == {"quality_gate.json"}
+    assert bounded_scan["payloads_withheld"] == [
+        "quality_gate.json",
+        "run_context.json",
+    ]
+    assert bounded_scan["marker_types"] == ["stayid", "tablerows"]
+    assert ledger["privacy"]["patient_rows_detected"] is True
+    assert ledger["privacy"]["patient_rows_persisted"] is False
+    assert ledger["privacy"]["payloads_withheld"] == [
+        "quality_gate.json",
+        "run_context.json",
+    ]
+    final_bundle = {**safe, "evidence_ledger.json": ledger}
+    assert _scan_artifact_payloads(final_bundle)["passed"] is True
+    assert str(patient_identifier) not in json.dumps(final_bundle)
 
 
 def test_numeric_evidence_audit_passes_bound_percent_rounding_range_and_delta() -> None:

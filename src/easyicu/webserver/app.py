@@ -27,6 +27,7 @@ from easyicu.webserver.routes.jobs import submission_router as job_submission_ro
 from easyicu.webserver.routes.local_data import router as local_data_router
 from easyicu.webserver.routes.page_guide import router as page_guide_router
 from easyicu.webserver.routes.reviews import router as reviews_router
+from easyicu.webserver.routes.study_contexts import router as study_contexts_router
 from easyicu.webserver.routes.system import router as system_router
 from easyicu.webserver.routes.workspaces import router as workspaces_router
 
@@ -98,6 +99,7 @@ app.include_router(local_data_router)
 app.include_router(reviews_router)
 app.include_router(extraction_router)
 app.include_router(workspaces_router)
+app.include_router(study_contexts_router)
 app.include_router(job_submission_router)
 app.include_router(agent_control_router)
 app.include_router(guided_router)
