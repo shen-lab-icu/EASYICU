@@ -213,29 +213,6 @@
   margin:8px 0 0;
   line-height:1.45;
 }
-.pt-entity-nav{
-  border:1px solid var(--hair);
-  border-radius:var(--r-2);
-  background:var(--surface);
-  padding:11px 12px;
-  display:grid;
-  grid-template-columns:minmax(180px, 260px) 1fr;
-  gap:12px;
-  align-items:center;
-}
-.pt-entity-detail{
-  margin-top:3px;
-  font-size:11.5px;
-  line-height:1.35;
-  color:var(--ink-4);
-}
-.pt-entity-chiprow{
-  display:flex;
-  flex-wrap:wrap;
-  justify-content:flex-end;
-  gap:6px;
-  min-width:0;
-}
 .pt-overview-workbench,
 .pt-category-summary,
 .pt-missingness-workbench,
@@ -704,8 +681,6 @@
   .pt-category-values,
   .pt-module-ledger-grid{ grid-template-columns:1fr; }
   .pt-module-head{ flex-direction:column; }
-  .pt-entity-nav{ grid-template-columns:1fr; }
-  .pt-entity-chiprow{ justify-content:flex-start; }
   .pt-overview-head,
   .pt-missingness-head,
   .pt-module-ledger-head{ flex-direction:column; }

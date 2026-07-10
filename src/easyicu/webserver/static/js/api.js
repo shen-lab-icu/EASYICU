@@ -238,6 +238,15 @@
   function loadPatientReviewDrilldown(body) {
     return postJSON('/api/patient-review/drilldown', body || {});
   }
+  function loadPatientReviewEntities(body) {
+    return postJSON('/api/patient-review/entities', body || {});
+  }
+  function loadPatientReviewEntity(body) {
+    return postJSON('/api/patient-review/entity', body || {});
+  }
+  function loadPatientReviewTablePreview(body) {
+    return postJSON('/api/patient-review/table-preview', body || {});
+  }
   function loadCohortReviewSummary(body) {
     return postJSON('/api/cohort-review/summary', body || {});
   }
@@ -460,6 +469,9 @@
   window.EU_API.loadWorkspaceSummary = loadWorkspaceSummary;
   window.EU_API.loadPatientReviewSources = loadPatientReviewSources;
   window.EU_API.loadPatientReviewDrilldown = loadPatientReviewDrilldown;
+  window.EU_API.loadPatientReviewEntities = loadPatientReviewEntities;
+  window.EU_API.loadPatientReviewEntity = loadPatientReviewEntity;
+  window.EU_API.loadPatientReviewTablePreview = loadPatientReviewTablePreview;
   window.EU_API.loadCohortReviewSummary = loadCohortReviewSummary;
   window.EU_API.loadCrossdbReviewSummary = loadCrossdbReviewSummary;
   window.EU_API.loadCrossdbRawDistribution = loadCrossdbRawDistribution;
