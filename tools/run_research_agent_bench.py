@@ -88,13 +88,6 @@ _TRAJECTORY_ENV_KEYS = (
 )
 
 
-def _local_openai_base_url(base_url: Optional[str]) -> bool:
-    lowered = (base_url or "").strip().lower()
-    if not lowered:
-        return False
-    return any(token in lowered for token in ("localhost", "127.0.0.1", "0.0.0.0"))
-
-
 def _normalize_arms(arms: Optional[Sequence[str]]) -> List[str]:
     selected = list(arms or _ARM_ORDER)
     unknown = [arm for arm in selected if arm not in _ARM_ORDER]
@@ -1332,46 +1325,25 @@ def _render_run_registry(payload: Dict[str, Any]) -> str:
 
 
 def _make_llm(*, provider: str, model: str, request_timeout: float):
+    _bootstrap_imports()
     from easyicu.research_agent import MockLLMClient, OpenAIClient  # type: ignore
-    from easyicu.research_agent.llm import openrouter_reasoning_extra_body  # type: ignore
+    from easyicu.research_agent.providers import (  # type: ignore
+        ProviderConfigurationError,
+        build_provider_client,
+    )
 
     if provider == "mock":
         return MockLLMClient()
-    if provider == "openrouter":
-        key = os.environ.get("OPENROUTER_API_KEY") or os.environ.get("OPENAI_API_KEY")
-        if not key:
-            raise SystemExit("OPENROUTER_API_KEY is required for --provider openrouter")
-        kwargs = dict(
+    try:
+        return build_provider_client(
+            provider=provider,
             model=model,
-            api_key=key,
-            base_url=os.environ.get(
-                "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
-            ),
-            request_timeout=float(request_timeout),
-            extra_headers={
-                "HTTP-Referer": "https://github.com/shen-lab-icu/easyicu",
-                "X-Title": "EasyICU research-agent benchmark",
-            },
+            request_timeout=request_timeout,
+            title="EasyICU research-agent benchmark",
+            client_cls=OpenAIClient,
         )
-        extra_body = openrouter_reasoning_extra_body(model)
-        if extra_body is not None:
-            kwargs["extra_body"] = extra_body
-        return OpenAIClient(**kwargs)
-    if provider == "openai":
-        key = os.environ.get("OPENAI_API_KEY")
-        base_url = os.environ.get("OPENAI_BASE_URL")
-        if not key and not _local_openai_base_url(base_url):
-            raise SystemExit("OPENAI_API_KEY is required for --provider openai")
-        kwargs: Dict[str, Any] = {
-            "model": model,
-            "request_timeout": float(request_timeout),
-        }
-        if key:
-            kwargs["api_key"] = key
-        if base_url:
-            kwargs["base_url"] = base_url
-        return OpenAIClient(**kwargs)
-    raise SystemExit(f"Unsupported provider: {provider}")
+    except ProviderConfigurationError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 def _resolve_backend_base_url(provider: str) -> str:
@@ -1387,11 +1359,10 @@ def _resolve_backend_base_url(provider: str) -> str:
     """
     if provider == "mock":
         return "mock://deterministic"
-    if provider == "openrouter":
-        return os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
-    if provider == "openai":
-        return os.environ.get("OPENAI_BASE_URL") or "https://api.openai.com/v1"
-    return "unknown"
+    _bootstrap_imports()
+    from easyicu.research_agent.providers import resolve_provider_base_url
+
+    return resolve_provider_base_url(provider)
 
 
 def _benchmark_pipeline_options(

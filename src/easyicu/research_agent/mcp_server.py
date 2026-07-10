@@ -49,8 +49,9 @@ from .concept_availability import (
 )
 from .context import build_research_context
 from .evidence import EvidenceStore
-from .llm import OpenAIClient, openrouter_reasoning_extra_body
+from .llm import OpenAIClient
 from .pipeline import ResearchAgentPipeline
+from .providers import ProviderConfigurationError, build_provider_client
 from .skills import list_skills
 from .audits.validators import CohortAuditor, ConceptUsageAuditor
 
@@ -60,22 +61,33 @@ MCP_BEARER_TOKEN_ENV = "EASYICU_MCP_BEARER_TOKEN"
 DEFAULT_HTTP_MAX_BODY_BYTES = 1024 * 1024
 
 
-def _local_openai_base_url(base_url: Optional[str]) -> bool:
-    """Return True only for a parsed loopback HTTP(S) endpoint."""
+def _provider_configuration_error_payload(
+    error: ProviderConfigurationError,
+) -> Dict[str, str]:
+    """Render the canonical provider failure in the MCP response contract."""
 
-    try:
-        parsed = urllib.parse.urlsplit(str(base_url or ""))
-    except ValueError:
-        return False
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        return False
-    hostname = parsed.hostname.rstrip(".").lower()
-    if hostname == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(hostname).is_loopback
-    except ValueError:
-        return False
+    if error.issue == "missing_openrouter_key":
+        message = "OPENROUTER_API_KEY is required for provider=openrouter"
+        error_code = "llm_configuration_required"
+    elif error.issue == "missing_openai_key":
+        message = (
+            "OPENAI_API_KEY is required for provider=openai unless base_url "
+            "is a local OpenAI-compatible server"
+        )
+        error_code = "llm_configuration_required"
+    elif error.issue in {
+        "invalid_openai_base_url_override",
+        "openrouter_base_url_override",
+    }:
+        message = str(error)
+        error_code = "llm_configuration_invalid"
+    else:
+        message = f"unsupported provider {error.provider!r}"
+        error_code = "llm_configuration_required"
+    return {
+        "error": f"configuration_error: {message}",
+        "error_code": error_code,
+    }
 
 
 def _build_run_llm(args: Dict[str, Any]):
@@ -93,79 +105,19 @@ def _build_run_llm(args: Dict[str, Any]):
             ),
             "error_code": "llm_configuration_required",
         }
-    if provider == "openrouter":
-        if base_url_arg is not None:
-            return None, {
-                "error": (
-                    "configuration_error: provider=openrouter does not accept a "
-                    "per-call base_url; configure OPENROUTER_BASE_URL on the server"
-                ),
-                "error_code": "llm_configuration_invalid",
-            }
-        api_key = os.environ.get("OPENROUTER_API_KEY")
-        if not api_key:
-            return None, {
-                "error": (
-                    "configuration_error: OPENROUTER_API_KEY is required for "
-                    "provider=openrouter"
-                ),
-                "error_code": "llm_configuration_required",
-            }
-        base_url = str(
-            base_url_arg
-            or os.environ.get("OPENROUTER_BASE_URL")
-            or "https://openrouter.ai/api/v1"
-        )
-        kwargs: Dict[str, Any] = {
-            "model": model,
-            "api_key": api_key,
-            "base_url": base_url,
-            "request_timeout": request_timeout,
-            "extra_headers": {
-                "HTTP-Referer": "https://github.com/shen-lab-icu/easyicu",
-                "X-Title": "EasyICU research-agent MCP",
-            },
-        }
-        extra_body = openrouter_reasoning_extra_body(model)
-        if extra_body is not None:
-            kwargs["extra_body"] = extra_body
-        return OpenAIClient(**kwargs), None
-    if provider == "openai":
-        api_key = os.environ.get("OPENAI_API_KEY")
-        if base_url_arg is not None and not _local_openai_base_url(str(base_url_arg)):
-            return None, {
-                "error": (
-                    "configuration_error: a per-call base_url is permitted only "
-                    "for a parsed loopback HTTP(S) endpoint"
-                ),
-                "error_code": "llm_configuration_invalid",
-            }
-        base_url = str(base_url_arg or os.environ.get("OPENAI_BASE_URL") or "")
-        if not api_key and not _local_openai_base_url(base_url):
-            return None, {
-                "error": (
-                    "configuration_error: OPENAI_API_KEY is required for "
-                    "provider=openai unless base_url is a local OpenAI-compatible server"
-                ),
-                "error_code": "llm_configuration_required",
-            }
-        kwargs = {"model": model, "request_timeout": request_timeout}
-        if _local_openai_base_url(base_url):
-            # OpenAIClient otherwise falls back to OPENAI_API_KEY and then
-            # OPENROUTER_API_KEY internally.  Supplying a dummy credential is
-            # deliberate: a loopback-compatible endpoint must never receive a
-            # paid provider secret, regardless of whether the URL came from
-            # this request or the server environment.
-            kwargs["api_key"] = "easyicu-local-noauth"
-        elif api_key:
-            kwargs["api_key"] = api_key
-        if base_url:
-            kwargs["base_url"] = base_url
-        return OpenAIClient(**kwargs), None
-    return None, {
-        "error": f"configuration_error: unsupported provider {provider!r}",
-        "error_code": "llm_configuration_required",
+    build_kwargs: Dict[str, Any] = {
+        "provider": provider,
+        "model": model,
+        "request_timeout": request_timeout,
+        "title": "EasyICU research-agent MCP",
+        "client_cls": OpenAIClient,
     }
+    if base_url_arg is not None:
+        build_kwargs["base_url_override"] = base_url_arg
+    try:
+        return build_provider_client(**build_kwargs), None
+    except ProviderConfigurationError as exc:
+        return None, _provider_configuration_error_payload(exc)
 
 
 def _safe_run_id(value: Any) -> str:
