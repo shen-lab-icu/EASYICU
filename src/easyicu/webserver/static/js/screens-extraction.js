@@ -18,9 +18,30 @@
     window.EU_DATA = m; try { localStorage.setItem('easyicu_home_data', m); } catch (e) {}
   }
 
+  const HOME_BRANCH_GOALS = Object.freeze({
+    predict: 'Model an outcome',
+    crossdb: 'Compare databases',
+    quality: 'Audit data quality',
+  });
+  const RESUME_ROUTE_ALLOWLIST = new Set(['guided', 'ideas', 'extraction', 'patient', 'cohort', 'crossdb', 'agent']);
+  const LEGACY_RESUME_ROUTES = Object.freeze({ predict: 'patient', crossdb: 'crossdb', quality: 'cohort' });
+  let homeQuestionDraft = '';
+
+  function startHomeStudy(route, patch) {
+    const store = window.EU_STUDY_CONTEXT;
+    if (!store || typeof store.startNew !== 'function') return;
+    store.startNew(Object.assign({
+      last_route: route,
+      current_stage: 'study_setup',
+    }, patch || {}), { reason: 'home-new-study' });
+  }
+
   function launchCopilot(text, branchHint) {
+    const question = String(text || '').trim();
+    const analysisGoal = question || HOME_BRANCH_GOALS[branchHint] || '';
+    startHomeStudy('guided', { question, analysis_goal: analysisGoal });
     try {
-      window.__cpBridge = { ts: Date.now(), route: 'entry', lastUser: text || null, dataMode: homeDataMode(), branchHint: branchHint || null };
+      window.__cpBridge = { ts: Date.now(), route: 'entry', lastUser: question || null, dataMode: homeDataMode(), branchHint: branchHint || null };
     } catch (e) {}
     location.hash = '#guided';
   }
@@ -37,8 +58,8 @@
         </div>
         <div class="row gap-10">
           <div class="lang-seg" role="group" aria-label="Language">
-            <button class="${window.EU_LANG !== 'zh' ? 'on' : ''}" data-lang="en">EN</button>
-            <button class="${window.EU_LANG === 'zh' ? 'on' : ''}" data-lang="zh">中</button>
+            <button type="button" class="${window.EU_LANG !== 'zh' ? 'on' : ''}" data-lang="en" aria-pressed="${window.EU_LANG !== 'zh'}">EN</button>
+            <button type="button" class="${window.EU_LANG === 'zh' ? 'on' : ''}" data-lang="zh" aria-pressed="${window.EU_LANG === 'zh'}">中</button>
           </div>
           <span class="mono" style="font-size:11px;color:var(--ink-4);">v1.0 · py3.10+</span>
         </div>
@@ -53,13 +74,58 @@
       const inner = `
         <div class="home-inner" style="max-width:1180px;">
           <h1 class="home-h1">${t('Welcome to EasyICU', '欢迎使用 EasyICU')}</h1>
-          <p class="home-sub">${t('Your local-first ICU research workspace. Pick how you want to work — start a Guided study, or drive the panels yourself. Both go from question to a review-ready draft; nothing is uploaded.', '本地优先的 ICU 研究工作台。选一种你习惯的方式 —— 开始研究引导,或自己操作面板。两者都能从问题走到待核验草稿;不上传任何数据。')}</p>
-          <div class="entry-firsttime" id="firstTimeNudge" hidden>
-            <span class="ft-ico">${icon('play', 13)}</span>
-            <span>${t('New here?', '第一次使用?')} <b>${t('Take the 2-minute demo', '先跑 2 分钟演示')}</b> ${t('— no setup, no data, fully explorable.', '—— 无需配置、无需数据,全程可探索。')}</span>
-            <button class="ft-go" data-firsttime>${t('Start the tour', '开始引导')} ${icon('arrow', 13)}</button>
-            <button class="ft-x" data-firsttime-dismiss aria-label="${t('Dismiss', '忽略')}">${icon('close', 13)}</button>
+          <p class="home-sub">${t('Start from what you already have: a paper or topic, a clear research question, or local ICU data. EasyICU keeps the study local and carries its context between modules.', '从你已有的内容开始：文章或主题、明确的研究问题，或本地 ICU 数据。EasyICU 全程在本地运行，并在模块之间延续同一研究上下文。')}</p>
+          <div class="home-split">
+            <div class="home-col col-copilot">
+              <div class="col-head"><div class="col-mk">${icon('spark', 17)}</div><div><div class="col-t">${t('I have a clear research question', '我有明确的研究问题')}</div><div class="col-sub">${t('Guided study · describe it in one sentence', '研究引导 · 用一句话描述')}</div></div><span class="col-badge">${t('Recommended', '推荐')}</span></div>
+              <div class="col-body">
+                <p class="col-lead">${t('Guided study collects the cohort, outcome, time window, modules, and export settings in the conversation before anything runs.', '研究引导会先在对话中收集队列、结局、时间窗、模块和导出设置，再开始运行。')}</p>
+                <div class="col-prompt">
+                  <textarea class="hp-input" id="homeInput" rows="3" placeholder="${t('e.g. Among Sepsis-3 patients, does early lactate predict in-hospital mortality, and does adding it to SOFA improve the model?', '例如:在脓毒症(Sepsis-3)患者中,早期乳酸能否预测院内死亡?把它加入 SOFA 是否提升模型?')}" autocomplete="off" aria-label="${t('Describe your study', '描述你的研究')}">${escHtml(homeQuestionDraft)}</textarea>
+                  <div class="hp-bar">
+                    <span class="hp-hint">${icon('shield', 12)} ${t('local-only · nothing uploaded', '仅本地 · 不上传')}</span>
+                    <button type="button" class="hp-send" id="homeSend" aria-label="${t('Start Guided study', '开始研究引导')}">${icon('arrow', 17)}</button>
+                  </div>
+                </div>
+                <div class="col-chips">
+                  <span class="cc-lead">${t('or start from a question type', '或选一种研究类型')}</span>
+                  <button type="button" class="home-chip" data-hbranch="predict">${t('Model an outcome', '结局建模')}</button>
+                  <button type="button" class="home-chip" data-hbranch="crossdb">${t('Compare databases', '跨库比较')}</button>
+                  <button type="button" class="home-chip" data-hbranch="quality">${t('Audit data quality', '数据质量审计')}</button>
+                </div>
+              </div>
+            </div>
+            <div class="home-col col-classic">
+              <div class="col-head"><div class="col-mk">${icon('grid', 17)}</div><div><div class="col-t">${t('Classic Workspace', '经典工作台')}</div><div class="col-sub">${t('drive it yourself · for when you know the steps', '自己操作 · 熟悉流程后使用')}</div></div></div>
+              <div class="col-body">
+                <p class="col-lead">${t('Choose the entry that matches what you already have.', '按照你已经拥有的材料选择入口。')}</p>
+                <div class="col-entries">
+                  ${[
+                    ['ideas', 'target', t('I have a paper or topic', '我有文章或研究主题'), t('Mine a feasible question in Idea Mining', '在想法挖掘中形成可行问题'), 'ideas'],
+                    ['extraction', 'extract', t('I have local ICU data', '我有本地 ICU 数据'), t('Validate and extract analysis-ready tables', '校验并抽取可分析数据表'), 'extraction'],
+                    ['patient', 'viz', t('Patient Review', '患者审阅'), t('Review patients, tables, and trends from an export', '审阅导出中的患者、表格与趋势'), ''],
+                    ['agent', 'agent', t('Agent Projects', '研究项目'), t('Continue a confirmed plan with auditable runs', '用可审计运行继续已确认计划'), ''],
+                  ].map(([nav, ic, ti, d, newStudy]) => `
+                    <button type="button" class="col-entry" data-nav="${nav}" ${newStudy ? `data-home-new-study="${newStudy}"` : ''}>
+                      <span class="ce-ico">${icon(ic, 15)}</span>
+                      <span><span class="ce-t">${ti}</span><span class="ce-d">${d}</span></span>
+                      <span class="ce-go">${icon('arrow', 14)}</span>
+                    </button>`).join('')}
+                </div>
+                <div class="col-foot">
+                  <div class="home-datamode">
+                    <span class="hdm-lab">${t('Data', '数据')}</span>
+                    <div class="seg home-data-seg" id="homeData" role="group" aria-label="${t('Data mode', '数据模式')}">
+                      <button type="button" class="${dm === 'demo' ? 'on' : ''}" data-hd="demo" aria-pressed="${dm === 'demo'}">${t('Demo', '演示')}</button>
+                      <button type="button" class="${dm === 'real' ? 'on' : ''}" data-hd="real" aria-pressed="${dm === 'real'}">${t('Real', '真实')}</button>
+                    </div>
+                    <span class="col-dataline">${icon('shield', 12)} ${dm === 'demo' ? t('Demo data · reproducible', '演示数据 · 可复现') : t('Real data · local-only', '真实数据 · 仅本地')}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
+          <div id="resumeSlot" class="home-resume"></div>
           <div class="entry-journey">
             <div class="ej-cap">${t('The research journey · 4 steps', '研究旅程 · 四步')}</div>
             <div class="ej-track">
@@ -72,58 +138,14 @@
                 ${i > 0 ? '<div class="ej-conn"></div>' : ''}
                 <button type="button" class="ej-node" data-nav="${n[3]}" title="${t('Go to this step', '前往这一步')}"><div class="ej-num">${n[0]}</div><div><div class="ej-lab">${n[1]}</div><div class="ej-sub">${n[2]}</div></div></button>`).join('')}
             </div>
-            <div class="ej-foot">${t('Two ways through it:', '两种走法:')} <b>${t('① Guided study', '① 研究引导')}</b> ${t('or', '或')} <b>${t('② drive the panels yourself', '② 自己操作面板')}</b></div>
+            <div class="ej-foot">${t('Plan → extract → review → analyze, with the same study context carried forward.', '计划 → 抽取 → 审阅 → 分析，全程延续同一研究上下文。')}</div>
           </div>
-          <div class="home-split">
-            <div class="home-col col-copilot">
-              <div class="col-head"><div class="col-mk">${icon('spark', 17)}</div><div><div class="col-t">${t('Guided study', '研究引导')}</div><div class="col-sub">${t('talk it through · easiest way to start', '对话引导 · 最推荐的入口')}</div></div><span class="col-badge">${t('Recommended', '推荐')}</span></div>
-              <div class="col-body">
-                <p class="col-lead">${t('Describe your study in a sentence — I frame it, pull the cohort, run the analysis, and prepare a review-ready draft.', '用一句话描述你的研究 —— 我来框定问题、筛取队列、运行分析,并准备一份待证据核验的草稿。')}</p>
-                <div class="col-prompt">
-                  <textarea class="hp-input" id="homeInput" rows="3" placeholder="${t('e.g. Among Sepsis-3 patients, does early lactate predict in-hospital mortality, and does adding it to SOFA improve the model?', '例如:在脓毒症(Sepsis-3)患者中,早期乳酸能否预测院内死亡?把它加入 SOFA 是否提升模型?')}" autocomplete="off" aria-label="Describe your study"></textarea>
-                  <div class="hp-bar">
-                    <span class="hp-hint">${icon('shield', 12)} ${t('local-only · nothing uploaded', '仅本地 · 不上传')}</span>
-                    <button class="hp-send" id="homeSend" aria-label="Start study">${icon('arrow', 17)}</button>
-                  </div>
-                </div>
-                <div class="col-chips">
-                  <span class="cc-lead">${t('or start from a question type', '或选一种研究类型')}</span>
-                  <button class="home-chip" data-hbranch="predict">${t('Model an outcome', '结局建模')}</button>
-                  <button class="home-chip" data-hbranch="crossdb">${t('Compare databases', '跨库比较')}</button>
-                  <button class="home-chip" data-hbranch="quality">${t('Audit data quality', '数据质量审计')}</button>
-                </div>
-              </div>
-            </div>
-            <div class="home-col col-classic">
-              <div class="col-head"><div class="col-mk">${icon('grid', 17)}</div><div><div class="col-t">${t('Classic Workspace', '经典工作台')}</div><div class="col-sub">${t('drive it yourself · for when you know the steps', '自己操作 · 熟悉流程后使用')}</div></div></div>
-              <div class="col-body">
-                <p class="col-lead">${t('Open any section directly and work hands-on, at your own pace.', '直接打开任意模块,按自己的节奏动手操作。')}</p>
-                <div class="col-entries">
-                  ${[
-                    ['extraction', 'extract', t('Data Extraction', '数据抽取'), t('One click to analysis-ready tables', '一键得到可分析的数据表')],
-                    ['patient', 'viz', t('Data Workspace', '数据工作台'), t('Patient review · cohort stats · cross-DB', '患者审阅 · 队列统计 · 跨库')],
-                    ['agent', 'agent', t('Agent Projects', '研究项目'), t('Auditable runs → review-ready manuscript', '可审计运行 → 待核验草稿')],
-                  ].map(([nav, ic, ti, d]) => `
-                    <button class="col-entry" data-nav="${nav}">
-                      <span class="ce-ico">${icon(ic, 15)}</span>
-                      <span><span class="ce-t">${ti}</span><span class="ce-d">${d}</span></span>
-                      <span class="ce-go">${icon('arrow', 14)}</span>
-                    </button>`).join('')}
-                </div>
-                <div class="col-foot">
-                  <div class="home-datamode">
-                    <span class="hdm-lab">${t('Data', '数据')}</span>
-                    <div class="seg home-data-seg" id="homeData" role="group" aria-label="${t('Data mode', '数据模式')}">
-                      <button class="${dm === 'demo' ? 'on' : ''}" data-hd="demo">${t('Demo', '演示')}</button>
-                      <button class="${dm === 'real' ? 'on' : ''}" data-hd="real">${t('Real', '真实')}</button>
-                    </div>
-                    <span class="col-dataline">${icon('shield', 12)} ${dm === 'demo' ? t('Demo data · reproducible', '演示数据 · 可复现') : t('Real data · local-only', '真实数据 · 仅本地')}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
+          <div class="entry-firsttime" id="firstTimeNudge" hidden>
+            <span class="ft-ico">${icon('play', 13)}</span>
+            <span>${t('Want to explore first?', '想先体验一下？')} <b>${t('Try the 2-minute demo', '试用 2 分钟演示')}</b> ${t('— no setup or data required.', '—— 无需配置或自备数据。')}</span>
+            <button type="button" class="ft-go" data-firsttime>${t('Start the tour', '开始引导')} ${icon('arrow', 13)}</button>
+            <button type="button" class="ft-x" data-firsttime-dismiss aria-label="${t('Dismiss', '忽略')}">${icon('close', 13)}</button>
           </div>
-          <div id="resumeSlot" class="home-resume"></div>
         </div>`;
       return `
       <div class="entry-shell">
@@ -145,48 +167,87 @@
       const send = root.querySelector('#homeSend');
       const ft = root.querySelector('[data-firsttime]');
       if (ft) ft.addEventListener('click', () => { try { localStorage.setItem('easyicu_onboarded', '1'); } catch (e) {} if (window.setDataMode) window.setDataMode('demo', { force: true }); location.hash = '#tutorial'; });
-      // First-run demo nudge: prominent for genuine newcomers, gone once seen.
+      // Keep the demo as a secondary, one-time option below the real start paths.
       const nudge = root.querySelector('#firstTimeNudge');
       if (nudge) {
         let onboarded = false, hasStudy = false;
         try { onboarded = !!localStorage.getItem('easyicu_onboarded'); } catch (e) {}
         try { hasStudy = !!localStorage.getItem('easyicu_study'); } catch (e) {}
+        try { hasStudy = hasStudy || !!(window.EU_STUDY_CONTEXT && window.EU_STUDY_CONTEXT.active && window.EU_STUDY_CONTEXT.active()); } catch (e) {}
         if (!onboarded && !hasStudy && !window.EU_HASWORK) nudge.hidden = false;
         const dx = nudge.querySelector('[data-firsttime-dismiss]');
         if (dx) dx.addEventListener('click', () => { try { localStorage.setItem('easyicu_onboarded', '1'); } catch (e) {} nudge.hidden = true; });
       }
-      function submit() { const v = (input.value || '').trim(); launchCopilot(v || null); }
+      root.querySelectorAll('[data-home-new-study]').forEach(button => button.addEventListener('click', () => {
+        const target = button.dataset.homeNewStudy;
+        startHomeStudy(target, target === 'ideas' ? { purpose: 'idea_mining' } : {});
+        if (target === 'extraction' && window.setDataMode) window.setDataMode('real', { force: true });
+      }));
+      function submit() { const v = ((input && input.value) || '').trim(); launchCopilot(v || null); }
       if (send) send.addEventListener('click', submit);
-      if (input) input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } });
+      if (input) {
+        input.addEventListener('input', () => { homeQuestionDraft = input.value; });
+        input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } });
+      }
       root.querySelectorAll('[data-hbranch]').forEach(c => c.addEventListener('click', () => {
         launchCopilot(null, c.dataset.hbranch);
       }));
       // resume banner
       const slot = root.querySelector('#resumeSlot');
       if (slot) {
-        let s = null;
-        try { s = JSON.parse(localStorage.getItem('easyicu_study') || 'null'); } catch (e) {}
-        if (s) {
-          const names = { predict: t('Sepsis mortality prediction', '脓毒症死亡率预测'), crossdb: t('Cross-database comparison', '跨数据库对比'), quality: t('Data-quality audit', '数据质量审计') };
-          const when = (function (ts) { const d = Math.round((Date.now() - ts) / 60000); return d < 1 ? t('just now', '刚刚') : d < 60 ? d + t('m ago', ' 分钟前') : Math.round(d / 60) + t('h ago', ' 小时前'); })(s.ts || Date.now());
+        let activeContext = null, legacyStudy = null;
+        try {
+          const store = window.EU_STUDY_CONTEXT;
+          activeContext = store && typeof store.active === 'function' ? store.active() : null;
+        } catch (e) {}
+        try { legacyStudy = JSON.parse(localStorage.getItem('easyicu_study') || 'null'); } catch (e) {}
+        const contextRoute = activeContext && RESUME_ROUTE_ALLOWLIST.has(activeContext.last_route) ? activeContext.last_route : null;
+        const legacyRoute = legacyStudy ? LEGACY_RESUME_ROUTES[legacyStudy.branch] : null;
+        const resumeRoute = contextRoute || legacyRoute || null;
+        const usingContext = !!contextRoute;
+        let contextDismissed = false;
+        try {
+          contextDismissed = usingContext && !!activeContext.id
+            && sessionStorage.getItem('easyicu.studyContext.resumeDismissed.v1') === activeContext.id;
+        } catch (e) {}
+        if (resumeRoute && !contextDismissed) {
+          const branchNames = { predict: t('Sepsis mortality prediction', '脓毒症死亡率预测'), crossdb: t('Cross-database comparison', '跨数据库对比'), quality: t('Data-quality audit', '数据质量审计') };
+          const routeNames = {
+            guided: t('Guided study', '研究引导'), ideas: t('Idea Mining', '想法挖掘'),
+            extraction: t('Data Extraction', '数据抽取'), patient: t('Patient Review', '患者审阅'),
+            cohort: t('Cohort Statistics', '队列统计'), crossdb: t('Cross-DB Benchmark', '跨库基准'),
+            agent: t('Agent Projects', '研究项目'),
+          };
+          const rawTime = usingContext ? Date.parse(activeContext.updated_at || '') : Number(legacyStudy.ts || 0);
+          const when = (function (ts) { const d = Math.max(0, Math.round((Date.now() - (Number.isFinite(ts) && ts > 0 ? ts : Date.now())) / 60000)); return d < 1 ? t('just now', '刚刚') : d < 60 ? d + t('m ago', ' 分钟前') : Math.round(d / 60) + t('h ago', ' 小时前'); })(rawTime);
+          const contextTitle = usingContext ? String(activeContext.question || activeContext.title || '').trim() : '';
+          const contextSummary = contextTitle && contextTitle !== 'Untitled ICU study'
+            ? `${escHtml(contextTitle)} · ${routeNames[resumeRoute]} · ${when}`
+            : `${routeNames[resumeRoute]} · ${when}`;
+          const legacySummary = `${branchNames[legacyStudy && legacyStudy.branch] || t('Study', '研究')} · ${(legacyStudy && legacyStudy.patientN) || 10} ${t('stays', '次住院')} · ${((legacyStudy && legacyStudy.mods) || []).length} ${t('modules', '模块')} · ${when}`;
           slot.innerHTML = `
             <div class="card flat" style="border-color:var(--accent-border);background:color-mix(in srgb, var(--accent-soft) 40%, var(--surface));">
               <div class="row gap-12">
                 <div class="aux-ico" style="background:var(--accent-soft);color:var(--accent-ink);">${icon('history', 16)}</div>
-                <div><div style="font-weight:600;font-size:13px;">${t('Resume your last study', '继续上次的研究')}</div><div style="font-size:12px;color:var(--ink-3);margin-top:1px;">${names[s.branch] || t('Study', '研究')} · ${s.patientN || 10} ${t('stays', '次住院')} · ${(s.mods || []).length} ${t('modules', '模块')} · ${when}</div></div>
+                <div><div style="font-weight:600;font-size:13px;">${t('Resume your last study', '继续上次的研究')}</div><div style="font-size:12px;color:var(--ink-3);margin-top:1px;">${usingContext ? contextSummary : legacySummary}</div></div>
               </div>
               <div class="row gap-8">
-                <button class="btn sm" data-resume-open>${t('Open workspace', '打开工作台')} ${icon('arrow', 14)}</button>
-                <button class="btn sm ghost" data-resume-clear>${t('Dismiss', '忽略')}</button>
+                <button type="button" class="btn sm" data-resume-open>${t('Open', '打开')} ${routeNames[resumeRoute]} ${icon('arrow', 14)}</button>
+                <button type="button" class="btn sm ghost" data-resume-clear>${t('Dismiss', '忽略')}</button>
               </div>
             </div>`;
           slot.querySelector('[data-resume-open]').addEventListener('click', () => {
-            try { if (window.__euExtractApply) window.__euExtractApply(s.mods); } catch (e) {}
-            try { if (window.__euVizPreset) window.__euVizPreset(); } catch (e) {}
-            location.hash = '#patient';
+            if (!usingContext && legacyStudy) {
+              try { if (window.__euExtractApply) window.__euExtractApply(legacyStudy.mods); } catch (e) {}
+              try { if (window.__euVizPreset) window.__euVizPreset(); } catch (e) {}
+            }
+            location.hash = '#' + resumeRoute;
           });
           slot.querySelector('[data-resume-clear]').addEventListener('click', () => {
-            try { localStorage.removeItem('easyicu_study'); } catch (e) {}
+            try {
+              if (usingContext && activeContext.id) sessionStorage.setItem('easyicu.studyContext.resumeDismissed.v1', activeContext.id);
+              else localStorage.removeItem('easyicu_study');
+            } catch (e) {}
             slot.innerHTML = '';
           });
         }
@@ -201,7 +262,6 @@
   const MAX_OBSERVATION_WINDOW_HOURS = 24 * 30;
   let exView = 'home';          // home | running | done
   let exMaxPatients = 500;      // cohort sample cap for real extraction (full-cohort = 3c follow-up)
-  let exportES = null;          // EventSource for the extract job
   let exportJobId = null;       // current extract job id for cooperative cancel
   let exportProg = null;        // {current,total,module} latest extract progress
   let exportResult = null;      // terminal export summary {out_dir,files,total_rows,...}
@@ -219,10 +279,7 @@
   let exManualSourceOpen = false;
   let exExpandedMod = 'demographics';
   let exSelectedConcepts = {};
-  let convTimer = null;
-  let convDone = 0;         // completed conversion steps (mock fallback only)
   let convJobId = null;     // live convert job id (SSE-driven)
-  let convES = null;        // EventSource for the convert job
   let convProg = null;      // {current,total,file,counts} latest progress
   let convResult = null;    // terminal summary {converted,failed,skipped,nothing_to_do}
   let convErr = null;       // terminal error message
@@ -441,6 +498,7 @@
 
   /* continuity hook for Copilot / resume */
   window.__euExtractApply = function (modules) {
+    abandonExtractionContinuity();
     if (Array.isArray(modules) && modules.length) {
       MODS.forEach(m => { m[3] = modules.includes(m[0]); });
     } else if (modules && typeof modules === 'object') {
@@ -455,12 +513,11 @@
      the previous run belonged to the other source. Reset to the start so the
      screen never shows a stale "Extraction complete" for the new source. */
   window.__euExtractReset = function () {
+    abandonExtractionContinuity();
     exView = 'home';
     exReal = 'connect';
-    if (convTimer) { clearInterval(convTimer); convTimer = null; }
   };
 
-  function teardownExportES() { if (exportES) { try { exportES.close(); } catch (e) {} exportES = null; } }
   function runExtract(mode) {
     const runMode = mode === 'recommended' ? 'recommended' : 'custom';
     const modules = runModuleKeys(runMode);
@@ -477,7 +534,7 @@
     }
     const support = runMode === 'recommended' ? { ok: true, reason: 'recommended' } : cohortExportSupport();
     if (real && !support.ok) {
-      teardownExportES();
+      abandonExtractionContinuity();
       exportRunMode = runMode;
       exportRunModules = modules;
       exportProg = null;
@@ -489,7 +546,7 @@
       repaint();
       return;
     }
-    teardownExportES();
+    abandonExtractionContinuity();
     exportRunMode = runMode;
     exportRunModules = modules;
     exportProg = null; exportResult = null; exportErr = null; exportJobId = null; exportCancelRequested = false;
@@ -497,7 +554,8 @@
     const database = (exScanResult && exScanResult.db_key) || 'miiv';
     const conceptSelection = selectedConceptPayload(modules);
     // Real path: only in real mode with a scanned/ready folder + live backend.
-    if (real && exPath && window.EU_API && window.EU_API.postJSON && window.EventSource) {
+    const continuity = window.EU_EXTRACTION_JOB_CONTINUITY;
+    if (real && exPath && window.EU_API && window.EU_API.postJSON && window.EventSource && continuity) {
       const payload = {
         path: exPath, database: database, modules: modules,
         format: exFormat, merge: exMerge === 'merged', max_patients: exMaxPatients,
@@ -506,48 +564,43 @@
       };
       payload.out_dir = outDir;
       if (Object.keys(conceptSelection).length) payload.concepts = conceptSelection;
+      const ticket = continuity.prepare({
+        kind: 'extract',
+        source: { path: exPath, database },
+        config: {
+          run_mode: runMode,
+          modules,
+          format: exFormat,
+          merge: exMerge === 'merged',
+          max_patients: exMaxPatients,
+          out_dir: outDir,
+        },
+      });
+      if (!ticket) {
+        exportErr = t('The extraction reconnect metadata is invalid; the task was not started.', '抽取任务的续接信息无效；任务未启动。');
+        repaint();
+        return;
+      }
       window.EU_API.postJSON('/api/jobs/extract', payload).then(r => {
-        exportJobId = r.job_id;
-        exportES = new EventSource('/api/jobs/' + r.job_id + '/events');
-        exportES.onmessage = ev => {
-          let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
-          if (m.type === 'progress') { exportProg = m; }
-          else if (m.type === 'cancel_requested') {
-            exportCancelRequested = true;
-            exportProg = { phase: 'cancel', message: t('Cancel requested. The current database read may finish before the job stops.', '已请求取消。当前数据库读取可能会先完成，然后任务停止。') };
-          }
-          else if (m.type === 'end') {
-            if (m.status === 'done') {
-              exportResult = m.result || {};
-              window.EU_LAST_EXPORT = exportResult;
-              if (exportResult.out_dir) {
-                rememberExportPath(exportResult.out_dir)
-                  .catch(() => null)
-                  .finally(() => {
-                    exView = 'done'; window.EU_STALE = false; window.EU_HASWORK = true;
-                    repaint();
-                  });
-                teardownExportES();
-                return;
-              }
-              exView = 'done'; window.EU_STALE = false; window.EU_HASWORK = true;
-            }
-            else if (m.status === 'cancelled') {
-              exportErr = t('Extraction cancelled before completion.', '抽取已在完成前取消。');
-            }
-            else { exportErr = m.error || 'extraction failed'; }
-            teardownExportES();
-          }
+        if (!continuity.attach(ticket, r.job_id) && continuity.isPending(ticket)) {
+          continuity.abandon();
+          exportErr = t('The extraction job returned an invalid task identifier.', '抽取任务返回了无效的任务标识。');
           repaint();
-        };
-        exportES.onerror = () => {
-          if (!exportResult && !exportErr) exportErr = t('Lost connection to the extraction job.', '与抽取任务的连接中断。');
-          teardownExportES(); repaint();
-        };
-      }).catch(err => { exportErr = String(err && err.message || err); repaint(); });
-    } else {
-      // Demo / offline fallback: keep the lightweight mock completion.
+        }
+      }).catch(err => {
+        if (!continuity.isPending(ticket)) return;
+        continuity.abandon();
+        exportErr = String(err && err.message || err); repaint();
+      });
+    } else if (!real) {
+      // Demo mode intentionally uses a seeded, in-browser completion.
       setTimeout(() => { exView = 'done'; window.EU_STALE = false; window.EU_HASWORK = true; repaint(); }, 1200);
+    } else {
+      exportErr = t(
+        'Real extraction could not start. Reconnect a local source and restart the EasyICU WebApp so the job API and event stream are available.',
+        '真实抽取无法启动。请重新连接本地数据源，并重启 EasyICU WebApp，确保任务 API 与事件流可用。'
+      );
+      repaint();
     }
   }
   function resetToCore() { MODS.forEach(m => { m[3] = m[4]; }); exSelectedConcepts = {}; window.EU_STALE = true; }
@@ -663,6 +716,8 @@
       ? t('Permission denied reading that folder.', '没有读取该文件夹的权限。')
       : exScanError === 'unrecognized_folder'
       ? t('EasyICU could not identify a supported ICU data layout in that folder.', 'EasyICU 未能在该文件夹中识别出支持的 ICU 数据结构。')
+      : exScanError === 'scan_api_unavailable'
+      ? t('The local folder scan API is unavailable. Restart the EasyICU WebApp; this screen will not guess a real data layout.', '本地文件夹扫描 API 不可用。请重启 EasyICU WebApp；此页面不会猜测真实数据结构。')
       : t('Could not scan that folder.', '无法扫描该文件夹。');
     return `
       <div class="cfg" style="max-width:680px;">
@@ -783,7 +838,7 @@
       body = `
         <div class="note mt-4" style="padding:11px 13px;background:color-mix(in srgb,var(--bad,#c0392b) 7%,transparent);border-color:color-mix(in srgb,var(--bad,#c0392b) 22%,transparent);">
           <div class="ico" style="color:var(--bad,#c0392b);">${icon('alert', 15)}</div>
-          <div class="body"><div class="d mono" style="font-size:11.5px;margin:0;">${convErr}</div></div>
+          <div class="body"><div class="d mono" style="font-size:11.5px;margin:0;">${escHtml(convErr)}</div></div>
         </div>
         <div class="row gap-8 mt-16">
           <button class="btn primary" data-ex-startconv>${icon('refresh', 14)} ${t('Retry conversion', '重试转换')}</button>
@@ -819,43 +874,43 @@
         <div class="cfg-body">${body}</div>
       </div>`;
   }
-  function teardownConvES() { if (convES) { try { convES.close(); } catch (e) {} convES = null; } }
   function startConvert() {
-    teardownConvES();
+    abandonExtractionContinuity();
     convProg = null; convResult = null; convErr = null; convJobId = null;
     exReal = 'converting'; convFail = false; repaint();
     const database = (exScanResult && exScanResult.db_key) || 'miiv';
+    const continuity = window.EU_EXTRACTION_JOB_CONTINUITY;
     // Live path: submit a convert job, stream progress over SSE.
-    if (window.EU_API && window.EU_API.postJSON && window.EventSource) {
+    if (window.EU_API && window.EU_API.postJSON && window.EventSource && continuity) {
+      const ticket = continuity.prepare({
+        kind: 'convert',
+        source: { path: exPath, database },
+        config: {},
+      });
+      if (!ticket) {
+        convErr = t('The conversion reconnect metadata is invalid; the task was not started.', '转换任务的续接信息无效；任务未启动。');
+        repaint();
+        return;
+      }
       window.EU_API.postJSON('/api/jobs/convert', { path: exPath, database: database })
         .then(r => {
-          convJobId = r.job_id;
-          convES = new EventSource('/api/jobs/' + convJobId + '/events');
-          convES.onmessage = ev => {
-            let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
-            if (m.type === 'progress') { convProg = m; }
-            else if (m.type === 'end') {
-              if (m.status === 'done') convResult = m.result || {};
-              else convErr = m.error || 'conversion failed';
-              teardownConvES();
-            }
-            if (exReal === 'converting') repaint();
-          };
-          convES.onerror = () => {
-            // Stream dropped before 'end' — surface as a soft error unless done.
-            if (!convResult && !convErr) { convErr = t('Lost connection to the conversion job.', '与转换任务的连接中断。'); }
-            teardownConvES(); if (exReal === 'converting') repaint();
-          };
+          if (!continuity.attach(ticket, r.job_id) && continuity.isPending(ticket)) {
+            continuity.abandon();
+            convErr = t('The conversion job returned an invalid task identifier.', '转换任务返回了无效的任务标识。');
+            repaint();
+          }
         })
-        .catch(err => { convErr = String(err && err.message || err); if (exReal === 'converting') repaint(); });
+        .catch(err => {
+          if (!continuity.isPending(ticket)) return;
+          continuity.abandon();
+          convErr = String(err && err.message || err); if (exReal === 'converting') repaint();
+        });
     } else {
-      // Offline fallback: simple deterministic completion (no fake failure).
-      convDone = 0; if (convTimer) clearInterval(convTimer);
-      convTimer = setInterval(() => {
-        convDone++;
-        if (convDone >= CONV_STEPS.length) { clearInterval(convTimer); convTimer = null; convResult = { converted: CONV_STEPS.length, failed: 0, skipped: 0 }; }
-        repaint();
-      }, 600);
+      convErr = t(
+        'Real conversion could not start because the local job API or event stream is unavailable. Restart the EasyICU WebApp and retry.',
+        '真实转换无法启动，因为本地任务 API 或事件流不可用。请重启 EasyICU WebApp 后重试。'
+      );
+      repaint();
     }
   }
   function resumeConvert() { startConvert(); }  // re-run is idempotent: cached tables are skipped
@@ -1025,6 +1080,7 @@
   }
 
   function startScan(src) {
+    abandonExtractionContinuity();
     if (!String(exPath || '').trim()) {
       exSource = src || null;
       exScanResult = null;
@@ -1035,8 +1091,7 @@
     }
     exSource = src || null; exScanResult = null; exScanError = null;
     exReal = 'scanning'; repaint();
-    // Live scan via the FastAPI backend. Falls back to the mock DETECTED table
-    // only if the API is unreachable (e.g. opened as a static file).
+    // Real folder recognition is authoritative only when returned by FastAPI.
     if (window.EU_API && window.EU_API.scanPath) {
       window.EU_API.scanPath(exPath, src).then(r => {
         if (exReal !== 'scanning') return;          // user navigated away
@@ -1048,7 +1103,9 @@
         exScanError = String(err && err.message || err); exReal = 'scanresult'; repaint();
       });
     } else {
-      setTimeout(() => { exReal = 'scanresult'; repaint(); }, 950);
+      exScanError = 'scan_api_unavailable';
+      exReal = 'scanresult';
+      repaint();
     }
   }
 
@@ -1152,6 +1209,120 @@
       sepsis_definition: sepsisDefinitionContract(),
     };
   }
+  window.EU_EXTRACTION_CONTEXT = {
+    snapshot() {
+    const recommended = exportRunMode === 'recommended';
+    const cohort = recommended ? recommendedCohortContract() : cohortContract();
+    const preset = COHORT_PRESETS.find(row => row[0] === cohort.preset) || COHORT_PRESETS[1];
+    const active = window.EU_SOURCES && window.EU_SOURCES.activeSource ? window.EU_SOURCES.activeSource() : null;
+    const resultPath = exportResult && exportResult.out_dir;
+    const sourcePath = resultPath || (active && active.path) || '';
+    const sourceLabel = (active && active.label) || (dataMode() === 'demo' ? 'Demo data' : 'Local EasyICU export');
+    const modules = (exportRunModules || runModuleKeys(recommended ? 'recommended' : 'custom')).slice();
+    return {
+      data_source: {
+        path: sourcePath,
+        label: sourceLabel,
+        database: (active && active.database) || (dataMode() === 'demo' ? 'demo' : ''),
+      },
+      cohort,
+      modules,
+      preset_label: preset[1],
+      export_format: exFormat,
+      observation_hours: cohort.observation_window_hours,
+    };
+    },
+  };
+
+  /* Minimal closure adapter for the dedicated long-job continuity owner. */
+  function abandonExtractionContinuity() {
+    if (window.EU_EXTRACTION_JOB_CONTINUITY) window.EU_EXTRACTION_JOB_CONTINUITY.abandon();
+  }
+  function continuityMessage(record, missing, error) {
+    const kind = record && record.kind === 'convert' ? t('conversion', '转换') : t('extraction', '抽取');
+    if (missing) {
+      return t(
+        `The saved ${kind} task is no longer available. The local server was restarted or its job history expired; start the task again. EasyICU did not infer a successful result.`,
+        `已保存的${kind}任务已不可用。本地服务可能已重启，或任务历史已过期；请重新开始。EasyICU 没有推断任务成功。`
+      );
+    }
+    const detail = error && error.message ? ` (${error.message})` : '';
+    return t(
+      `EasyICU could not verify the ${kind} task${detail}. Refresh to reconnect; this screen will not mark it complete without a terminal server result.`,
+      `EasyICU 暂时无法核验${kind}任务${detail}。请刷新页面重新连接；没有服务端终态，本页面不会把任务标记为完成。`
+    );
+  }
+  window.EU_EXTRACTION_JOB_HOST = {
+    begin(record) {
+      const source = record.source || {};
+      const config = record.config || {};
+      exPath = source.path || '';
+      exScanResult = Object.assign({}, exScanResult || {}, { ok: true, db_key: source.database || '' });
+      if (record.kind === 'extract') {
+        exportJobId = record.job_id;
+        exportRunMode = config.run_mode === 'recommended' ? 'recommended' : 'custom';
+        exportRunModules = Array.isArray(config.modules) ? config.modules.slice() : [];
+        exFormat = config.format || 'parquet';
+        exMerge = config.merge ? 'merged' : 'separate';
+        exMaxPatients = Number(config.max_patients || 0);
+        if (config.out_dir) exExportDir = config.out_dir;
+        exportProg = null; exportResult = null; exportErr = null; exportCancelRequested = false;
+        exView = 'running';
+      } else {
+        convJobId = record.job_id;
+        convProg = null; convResult = null; convErr = null;
+        exReal = 'converting';
+      }
+      repaint();
+    },
+    applyEvent(record, message) {
+      if (!message || typeof message !== 'object') return;
+      if (record.kind === 'extract') {
+        if (exportJobId !== record.job_id) return;
+        if (message.type === 'progress') exportProg = message;
+        else if (message.type === 'cancel_requested') {
+          exportCancelRequested = true;
+          exportProg = { phase: 'cancel', message: t('Cancel requested. The current database read may finish before the job stops.', '已请求取消。当前数据库读取可能会先完成，然后任务停止。') };
+        } else if (message.type === 'end') {
+          if (message.status === 'done') {
+            exportResult = message.result && typeof message.result === 'object' ? message.result : {};
+            window.EU_LAST_EXPORT = exportResult;
+            exView = 'done'; window.EU_STALE = false; window.EU_HASWORK = true;
+            if (exportResult.out_dir) rememberExportPath(exportResult.out_dir).catch(() => null);
+          } else if (message.status === 'cancelled') {
+            exportErr = t('Extraction cancelled before completion.', '抽取已在完成前取消。');
+          } else {
+            exportErr = message.error || t('Extraction failed.', '抽取失败。');
+          }
+        }
+      } else {
+        if (convJobId !== record.job_id) return;
+        if (message.type === 'progress') convProg = message;
+        else if (message.type === 'end') {
+          if (message.status === 'done') {
+            convResult = message.result && typeof message.result === 'object' ? message.result : {};
+          } else if (message.status === 'cancelled') {
+            convErr = t('Conversion cancelled before completion.', '转换已在完成前取消。');
+          } else {
+            convErr = message.error || t('Conversion failed.', '转换失败。');
+          }
+        }
+      }
+      repaint();
+    },
+    missing(record) {
+      const message = continuityMessage(record, true);
+      if (record.kind === 'extract') { exportJobId = null; exportErr = message; exView = 'running'; }
+      else { convJobId = null; convErr = message; exReal = 'converting'; }
+      repaint();
+    },
+    connectionLost(record, error) {
+      const message = continuityMessage(record, false, error);
+      if (record.kind === 'extract') { exportErr = message; exView = 'running'; }
+      else { convErr = message; exReal = 'converting'; }
+      repaint();
+    },
+  };
   function cohortExportSupport() {
     if (dataMode() !== 'real') return { ok: true, reason: 'demo' };
     if (!cohortPresetIsRealExportReady(exCohortPreset)) {
@@ -1578,7 +1749,7 @@
         ${tot ? `<span class="mono" style="font-size:11px;color:var(--ink-3);">${cur}/${tot}</span>` : ''}
       </div>
       ${err
-        ? `<div class="note mt-12" style="padding:11px 13px;background:color-mix(in srgb,var(--bad,#c0392b) 7%,transparent);border-color:color-mix(in srgb,var(--bad,#c0392b) 22%,transparent);"><div class="ico" style="color:var(--bad,#c0392b);">${icon('alert', 15)}</div><div class="body"><div class="d mono" style="font-size:11.5px;margin:0;">${exportErr}</div></div></div>
+        ? `<div class="note mt-12" style="padding:11px 13px;background:color-mix(in srgb,var(--bad,#c0392b) 7%,transparent);border-color:color-mix(in srgb,var(--bad,#c0392b) 22%,transparent);"><div class="ico" style="color:var(--bad,#c0392b);">${icon('alert', 15)}</div><div class="body"><div class="d mono" style="font-size:11.5px;margin:0;">${escHtml(exportErr)}</div></div></div>
            <div class="row gap-8 mt-16"><button class="btn primary" data-ex-run="${exportRunMode}">${icon('refresh', 14)} ${t('Retry', '重试')}</button><button class="btn ghost" data-ex-reset>${t('Back', '返回')}</button></div>`
         : `<div style="height:8px;border-radius:999px;background:var(--surface-2,#eef0f4);overflow:hidden;margin:12px 0 8px;"><div style="height:100%;width:${pct}%;background:var(--accent,#2f7d6b);transition:width .25s;"></div></div>
            <div style="font-size:12px;color:var(--ink-3);min-height:18px;">${p.phase === 'cohort' || p.phase === 'cancel' ? `${escHtml(progressText)}` : `<span class="mono">${escHtml(progressText)}</span>`}</div>
@@ -1603,7 +1774,7 @@
         <div class="st-d">${(r ? r.file_count : files.length)} ${t('concept files', '个概念文件')}${totalRows != null ? ` · ${Number(totalRows).toLocaleString()} ${t('rows total', '行(合计)')}` : ''} + <span class="mono">_manifest.json</span> ${t('written to', '已写入')} <span class="mono">${outDir}</span>. ${t('Everything stayed on your machine.', '全部留在你的机器上。')}</div>
         <div class="st-actions">
           <button class="btn primary" data-nav="patient">${icon('patient', 14)} ${t('Open in Patient Review', '打开患者审阅')}</button>
-          <button class="btn" data-nav="agent">${icon('agent', 14)} ${t('Hand off to Agent Projects', '交给研究项目')}</button>
+          <button class="btn" data-study-handoff data-study-source="extraction" data-study-target="agent">${icon('agent', 14)} ${t('Hand off to Agent Projects', '交给研究项目')}</button>
           <button class="btn ghost" data-ex-reset>${icon('refresh', 14)} ${t('Extract again', '重新抽取')}</button>
         </div>
       </div>
@@ -1727,8 +1898,8 @@
       });
       const startConvBtn = root.querySelector('[data-ex-startconv]'); if (startConvBtn) startConvBtn.addEventListener('click', () => { startConvert(); });
       const resumeBtn = root.querySelector('[data-ex-resume]'); if (resumeBtn) resumeBtn.addEventListener('click', () => { resumeConvert(); });
-      root.querySelectorAll('[data-ex-rescan]').forEach(b => b.addEventListener('click', () => { teardownConvES(); exReal = 'connect'; exSource = null; exScanResult = null; exScanError = null; convDone = 0; convProg = null; convResult = null; convErr = null; repaint(); }));
-      const convDoneBtn = root.querySelector('[data-ex-convdone]'); if (convDoneBtn) convDoneBtn.addEventListener('click', () => { exReal = 'ready'; repaint(); });
+      root.querySelectorAll('[data-ex-rescan]').forEach(b => b.addEventListener('click', () => { abandonExtractionContinuity(); exReal = 'connect'; exSource = null; exScanResult = null; exScanError = null; convProg = null; convResult = null; convErr = null; repaint(); }));
+      const convDoneBtn = root.querySelector('[data-ex-convdone]'); if (convDoneBtn) convDoneBtn.addEventListener('click', () => { abandonExtractionContinuity(); exReal = 'ready'; repaint(); });
       const sampleBtn = root.querySelector('[data-ex-sample]'); if (sampleBtn) sampleBtn.addEventListener('click', () => { if (window.setDataMode) window.setDataMode('demo'); });
       // run
       root.querySelectorAll('[data-ex-run]').forEach(b => b.addEventListener('click', () => runExtract(b.dataset.exRun || 'custom')));
@@ -1737,7 +1908,7 @@
         setTimeout(() => { const el = document.querySelector('.ex-export-destination'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 60);
       }));
       root.querySelectorAll('[data-ex-cancel]').forEach(b => b.addEventListener('click', cancelExportJob));
-      root.querySelectorAll('[data-ex-reset]').forEach(b => b.addEventListener('click', () => { teardownExportES(); exView = 'home'; exportProg = null; exportResult = null; exportErr = null; exportJobId = null; exportCancelRequested = false; exportRunModules = null; repaint(); }));
+      root.querySelectorAll('[data-ex-reset]').forEach(b => b.addEventListener('click', () => { abandonExtractionContinuity(); exView = 'home'; exportProg = null; exportResult = null; exportErr = null; exportJobId = null; exportCancelRequested = false; exportRunModules = null; repaint(); }));
       // custom disclosure
       const cust = root.querySelector('[data-ex-custom]');
       if (cust) cust.addEventListener('click', () => { exCustomOpen = !exCustomOpen; repaint(); setTimeout(() => { const el = root.querySelector('.ex2-custom'); if (el && exCustomOpen) el.scrollIntoView ? null : null; }, 0); });

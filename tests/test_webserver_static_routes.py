@@ -8,7 +8,8 @@ from fastapi.testclient import TestClient
 
 from easyicu import concept_catalog as cc
 from easyicu.webserver import dataio
-from easyicu.webserver.app import app, _body_bool
+from easyicu.webserver.app import app
+from easyicu.webserver.routes.request_parsing import body_bool as _body_bool
 
 STATIC_DIR = (
     Path(__file__).resolve().parents[1] / "src" / "easyicu" / "webserver" / "static"
@@ -432,7 +433,8 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "function runGuidedAgentPreflight" in guided_js
     assert "window.EU_API.startAgentRun" in guided_js
     assert "run_type: 'preflight'" in guided_js
-    assert "llm_provider: 'mock'" in guided_js
+    assert "provider: 'mock'" in guided_js
+    assert "llm_provider: runToken.provider" in guided_js
     assert "external_llm_opt_in: false" in guided_js
     assert "goal === 'run_agent'" in guided_js
     assert "isGuidedAgentIntent(v)" in guided_js
@@ -764,18 +766,18 @@ def test_native_agent_research_blocks_are_project_owned() -> None:
     assert "Data availability block" in render_js
     assert "const BLOCK_LIBRARY = [" not in agent_js
     assert "AG_BLOCKS_VERSION" in agent_js
-    assert "Workflow Blocks" in agent_js
-    assert "Research Blocks" in agent_js
+    assert "Planning Blocks" in agent_js
+    assert "Workflow Blocks" not in agent_js
     assert "data-ag-block-add" in agent_js
     assert "data-ag-block-pack" in agent_js
     assert "workflowBlocks(s).length" in agent_js
     assert "Turn the project into reviewable research steps" in agent_js
-    assert "Workflow step table" in agent_js
-    assert "工作流步骤表" in agent_js
+    assert "Planning step table" in agent_js
+    assert "规划步骤表" in agent_js
     assert "What you confirm" in agent_js
     assert "你确认什么" in agent_js
-    assert "Agent produces" in agent_js
-    assert "Agent 产出" in agent_js
+    assert "Planned outputs" in agent_js
+    assert "计划产出" in agent_js
     assert "Evidence check" in agent_js
     assert "证据检查" in agent_js
 
@@ -1899,6 +1901,7 @@ def test_native_extraction_include_feature_definitions_bool_parsing() -> None:
 def test_native_crossdb_restores_distribution_visuals() -> None:
     api_js = _static_js("api.js")
     viz_js = _static_js("screens-viz.js")
+    continuity_js = _static_js("screens-viz-crossdb-job-continuity.js")
     screens_css = _static_css("screens.css")
     crossdb_css = _static_css("crossdb.css")
     index_html = _static_html("index.html")
@@ -1933,7 +1936,8 @@ def test_native_crossdb_restores_distribution_visuals() -> None:
     assert "data-density-feature-key" in viz_js
     assert "xdb-density-detail" in viz_js
     assert "startCrossdbRawDistributionJob" in viz_js
-    assert "new EventSource('/api/jobs/' + r.job_id + '/events')" in viz_js
+    assert "new window.EventSource('/api/jobs/' + encodeURIComponent(meta.job_id) + '/events')" in continuity_js
+    assert "new EventSource('/api/jobs/' + r.job_id + '/events')" not in viz_js
     assert "data-crossdb-cancel" in viz_js
     assert "data-crossdb-root-browse" in viz_js
     assert "data-crossdb-root-scan" in viz_js
@@ -1959,7 +1963,7 @@ def test_native_crossdb_restores_distribution_visuals() -> None:
         "Local folder picker API is not ready. Paste a raw ICU data root path instead."
         in viz_js
     )
-    assert "'/api/jobs/' + jobId + '/cancel'" in viz_js
+    assert "window.EU_API.cancelJob(jobId, 'user_requested')" in viz_js
     assert "Raw Cross-DB density job cancellation requested." in viz_js
     assert (
         "Choose a local ICU data root before loading real Cross-DB densities." in viz_js
@@ -3095,7 +3099,9 @@ def test_review_breadcrumb_parent_matches_sidebar_group() -> None:
     app_js = _static_js("app.js")
     assert "'Home', 'Data Workspace'" in viz_js
     assert "'Data Visualization'" not in viz_js  # gone as a crumb parent
-    assert "'Data Workspace': 'patient'" in app_js  # crumb-nav key updated to match
+    assert "'Data Workspace': 'patient'" not in app_js
+    assert "CRUMB_NAV" not in app_js  # the group label is not a fake patient link
+    assert 'else node = `<span class="mid">${label}</span>`;' in app_js
 
 
 def test_seeded_demo_pipeline_is_named_guided_copilot_and_labeled() -> None:

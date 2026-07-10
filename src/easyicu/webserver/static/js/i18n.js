@@ -51,6 +51,9 @@
       });
     }
     applyLangDom(l);
+    if (window.__euGuidedBeforeLanguageRerender) {
+      window.__euGuidedBeforeLanguageRerender();
+    }
     if (window.__euRender) window.__euRender();
     try { window.dispatchEvent(new CustomEvent('easyicu:languagechange', { detail: { language: l } })); } catch (e) {}
   };
@@ -64,23 +67,40 @@
   window.euConfirm = function (opts) {
     opts = opts || {};
     const ic = (n, s) => (window.icon ? window.icon(n, s || 18) : '');
+    const priorFocus = document.activeElement;
+    const modalId = 'euConfirm-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
     const ov = document.createElement('div');
     ov.className = 'eu-modal-ov';
     ov.innerHTML =
-      '<div class="eu-modal" role="dialog" aria-modal="true">' +
+      '<div class="eu-modal" role="dialog" aria-modal="true" aria-labelledby="' + modalId + '-title" aria-describedby="' + modalId + '-body">' +
         '<div class="em-ico ' + (opts.tone || '') + '">' + ic(opts.icon || 'refresh') + '</div>' +
-        '<div class="em-t">' + (opts.title || '') + '</div>' +
-        '<div class="em-d">' + (opts.body || '') + '</div>' +
+        '<div class="em-t" id="' + modalId + '-title">' + (opts.title || '') + '</div>' +
+        '<div class="em-d" id="' + modalId + '-body">' + (opts.body || '') + '</div>' +
         '<div class="em-actions">' +
-          '<button class="btn sm" data-em-cancel>' + (opts.cancel || window.t('Cancel', '取消')) + '</button>' +
-          '<button class="btn primary sm" data-em-ok>' + (opts.ok || window.t('Continue', '继续')) + '</button>' +
+          '<button type="button" class="btn sm" data-em-cancel>' + (opts.cancel || window.t('Cancel', '取消')) + '</button>' +
+          '<button type="button" class="btn primary sm" data-em-ok>' + (opts.ok || window.t('Continue', '继续')) + '</button>' +
         '</div>' +
       '</div>';
     document.body.appendChild(ov);
-    const close = () => ov.remove();
-    ov.addEventListener('click', (e) => { if (e.target === ov) { close(); if (opts.oncancel) opts.oncancel(); } });
-    ov.querySelector('[data-em-cancel]').addEventListener('click', () => { close(); if (opts.oncancel) opts.oncancel(); });
-    ov.querySelector('[data-em-ok]').addEventListener('click', () => { close(); if (opts.onok) opts.onok(); });
+    const buttons = Array.from(ov.querySelectorAll('button'));
+    const close = (callback) => {
+      document.removeEventListener('keydown', onKeydown, true);
+      ov.remove();
+      if (priorFocus && typeof priorFocus.focus === 'function') priorFocus.focus();
+      if (callback) callback();
+    };
+    const cancel = () => close(opts.oncancel);
+    const onKeydown = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); cancel(); return; }
+      if (e.key !== 'Tab' || buttons.length < 2) return;
+      const first = buttons[0], last = buttons[buttons.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', onKeydown, true);
+    ov.addEventListener('click', (e) => { if (e.target === ov) cancel(); });
+    ov.querySelector('[data-em-cancel]').addEventListener('click', cancel);
+    ov.querySelector('[data-em-ok]').addEventListener('click', () => close(opts.onok));
     setTimeout(() => { const b = ov.querySelector('[data-em-ok]'); if (b) b.focus(); }, 30);
   };
 

@@ -23,6 +23,32 @@
     return m.status && m.status !== 'failed' ? m.status : '';
   }
 
+  function guidedGateState(result) {
+    const resultValid = !!result && typeof result === 'object' && !Array.isArray(result);
+    const gate = resultValid && result.gate && typeof result.gate === 'object' && !Array.isArray(result.gate)
+      ? result.gate
+      : {};
+    const checks = Array.isArray(gate.checks) ? gate.checks : [];
+    const passed = checks.filter(check => check && check.passed === true).length;
+    const ids = checks.map(check => check && check.id);
+    const required = ['source_valid', 'denominator_resolved', 'quality_audited', 'no_bad_non_event_coverage', 'no_patient_rows_persisted', 'human_signoff'];
+    const checksValid = checks.length >= required.length
+      && checks.every(check => check && typeof check.id === 'string' && typeof check.passed === 'boolean')
+      && new Set(ids).size === ids.length
+      && required.every(id => ids.includes(id));
+    const hardChecksPassed = checksValid && checks.every(check => check.id === 'human_signoff' || check.passed === true);
+    const humanSignoff = checksValid ? checks.find(check => check.id === 'human_signoff') : null;
+    const validPreflight = resultValid
+      && result.run_type === 'preflight'
+      && gate.status === 'analysis_only'
+      && gate.reportable === false
+      && gate.draft_unlocked === false
+      && gate.reason === 'preflight_complete_human_signoff_required'
+      && hardChecksPassed
+      && humanSignoff.passed === false;
+    return { gate, checks, passed, blocked: !validPreflight, contractValid: validPreflight };
+  }
+
   /* ============== study panel model ============== */
   const STUDY = [
     ['question', 'Research question', 'spark', '研究问题'],
@@ -142,6 +168,17 @@
   /* ============== runtime state ============== */
   let branch, depth, dataMode, mods, cohortPhase, extractPhase, runPhase, draftPhase;
   let thread, chips, busy, expandedStep, whyOpen, autop, patientN, clarified, outputsReady, diffExpanded, liveAgentRun, workspaceSnapshot, workspaceSnapshotPath, guidedExtract, guidedDesign, guidedReview, guidedAgent, guidedIdea, guidedIdeaProvider, guidedLiteratureBrowser;
+  let guidedRunStream = null;
+  const guidedRunChannel = window.EU_AGENT_STUDY_CONTEXT.createRunChannel();
+
+  function disconnectGuidedRunUi() {
+    if (guidedRunStream) {
+      try { guidedRunStream.close(); } catch (_) {}
+      guidedRunStream = null;
+    }
+    guidedRunChannel.clear();
+  }
+
   let guidedDrafts = { loading: false, error: null, data: null };
   let guidedCopilot = { loading: false, error: null, session: null, last: null };
   let selectedGuidedRun = null;
@@ -157,6 +194,9 @@
   let guidedKnownProjectsOpen = false;
   let guidedPipelineOpen = false;
   let guidedSlotSaveTimer = null;
+  let guidedMounted = false;
+  let guidedInitialRender = false;
+  let guidedComposerDraft = '';
   let studyParams;   // dynamic params extracted from clarify answers + free text
 
   const DEFAULT_MODS = ['Demographics', 'Vital signs', 'Lab — Chemistry', 'SOFA-2 scores', 'Sepsis-3 (SOFA-2)', 'Outcome'];
@@ -193,6 +233,7 @@
     ['respiratory', 'Respiratory failure', '呼吸衰竭', 'Respiratory support and blood-gas focused cohort.', '呼吸支持与血气相关队列。'],
   ];
   function reset() {
+    disconnectGuidedRunUi();
     branch = 'predict'; depth = 'full'; dataMode = 'demo'; mods = DEFAULT_MODS.slice();
     cohortPhase = 'normal'; extractPhase = 'run'; runPhase = 'run'; draftPhase = 'gate';
     thread = []; chips = []; busy = false; expandedStep = 'question'; whyOpen = {}; autop = false; patientN = 10; clarified = null; outputsReady = false; diffExpanded = false; liveAgentRun = null; workspaceSnapshot = null; workspaceSnapshotPath = null; guidedExtract = null; guidedDesign = null; guidedReview = null; guidedAgent = null; guidedIdea = null; guidedLiteratureBrowser = null;
@@ -772,6 +813,21 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       runLivePipeline(src);
       return;
     }
+    if (dataMode !== 'demo') {
+      const unavailableToken = guidedRunChannel.start({
+        surface: 'guided-legacy',
+        study_id: branch || 'guided',
+        question: branch && BRANCH[branch] ? (frameFor(branch) || BRANCH[branch].chip) : '',
+        source_path: src && src.path,
+      });
+      failLivePipeline(
+        unavailableToken,
+        src
+          ? 'The Agent backend or browser event stream is unavailable; no real run was submitted.'
+          : 'No active registered export is selected; no real run was submitted.',
+      );
+      return;
+    }
     streamTasks('#gdRunProg', BRANCH[branch].runTasks.map(t => t[1]), () => {
       runPhase = 'done';
       const p = document.getElementById('gdRunPill'); if (p) p.outerHTML = '<span class="pill ok" id="gdRunPill"><span class="dot"></span>Complete</span>';
@@ -793,6 +849,18 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   }
 
   function runLivePipeline(src) {
+    const capturedBranch = branch;
+    const capturedQuestion = frameFor(capturedBranch) || BRANCH[capturedBranch].chip;
+    let runToken = guidedRunChannel.start({
+      surface: 'guided-legacy',
+      study_id: capturedBranch || 'guided',
+      context_id: window.EU_GUIDED_STUDY_CONTEXT && window.EU_GUIDED_STUDY_CONTEXT.activeId ? window.EU_GUIDED_STUDY_CONTEXT.activeId() : '',
+      question: capturedQuestion,
+      source_path: src.path,
+      study_mode: 'analysis',
+      run_type: 'preflight',
+      provider: 'mock',
+    });
     liveAgentRun = { active: true, result: null, error: null, step: 'Submitting local run' };
     const rows = () => [...document.querySelectorAll('#gdRunProg .gd-task')];
     const setProgress = (current, total, label) => {
@@ -812,36 +880,90 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       const bar = document.getElementById('gdRunProg-bar');
       if (bar && total) bar.style.width = Math.round(Math.min(1, Number(current || 0) / Number(total || 1)) * 100) + '%';
     };
-    window.EU_API.startAgentRun({
-      path: src.path,
-      study_id: branch || 'guided',
-      mode: 'analysis',
-      run_type: 'preflight',
-      question: BRANCH[branch].chip,
+    const contextReady = window.EU_GUIDED_STUDY_CONTEXT && window.EU_GUIDED_STUDY_CONTEXT.persistForRun
+      ? window.EU_GUIDED_STUDY_CONTEXT.persistForRun('agent_preflight')
+      : Promise.reject(new Error('StudyContext persistence is unavailable; the real Guided run was not submitted.'));
+    contextReady.then(studyContext => {
+      if (!studyContext || !studyContext.id) throw new Error('StudyContext persistence did not return a project id.');
+      runToken = guidedRunChannel.bind(runToken, { context_id: studyContext.id, study_id: studyContext.id });
+      return window.EU_API.startAgentRun({
+        path: runToken.source_path,
+        study_id: runToken.study_id,
+        study_context_id: runToken.context_id,
+        mode: runToken.study_mode,
+        run_type: runToken.run_type,
+        llm_provider: runToken.provider,
+        external_llm_opt_in: false,
+        question: runToken.question,
+      });
     }).then(r => {
-      const es = new EventSource('/api/jobs/' + r.job_id + '/events');
-      liveAgentRun.jobId = r.job_id;
+      runToken = guidedRunChannel.bind(runToken, { job_id: r.job_id, context_revision: r.study_context_revision });
+      if (window.EU_AGENT_STUDY_CONTEXT && window.EU_AGENT_STUDY_CONTEXT.markContextRunning) {
+        window.EU_AGENT_STUDY_CONTEXT.markContextRunning(runToken.context_id, runToken.job_id, runToken.context_revision);
+      }
+      const es = new EventSource('/api/jobs/' + encodeURIComponent(runToken.job_id) + '/events');
+      if (guidedRunChannel.isCurrent(runToken)) {
+        guidedRunStream = es;
+        liveAgentRun.jobId = runToken.job_id;
+      }
+      let ended = false;
       es.onmessage = msg => {
         const ev = JSON.parse(msg.data);
+        if (ev.type === 'end') {
+          ended = true;
+          try { es.close(); } catch (_) {}
+          if (window.EU_AGENT_STUDY_CONTEXT && window.EU_AGENT_STUDY_CONTEXT.markContextFinished) {
+            window.EU_AGENT_STUDY_CONTEXT.markContextFinished(
+              runToken.context_id,
+              ev.status,
+              ev.result || null,
+              runToken.job_id,
+              ev.study_context_revision || (ev.result && ev.result.study_context_revision),
+            );
+          }
+          if (ev.status === 'done') completeLivePipeline(runToken, ev.result);
+          else failLivePipeline(runToken, guidedJobEndError(ev) || 'Agent run failed.');
+          return;
+        }
+        if (!guidedRunChannel.isCurrent(runToken)) return;
         if (ev.label) liveAgentRun.step = ev.label;
         if (ev.total) setProgress(ev.current, ev.total, ev.label);
         const pill = document.getElementById('gdRunPill');
         if (pill && ev.label) pill.innerHTML = `<span class="dot"></span>${esc(ev.label)}`;
-        if (ev.type === 'end') {
-          es.close();
-          if (ev.status === 'done') completeLivePipeline(ev.result);
-          else failLivePipeline(ev.error || 'Agent run failed.');
-        }
       };
-      es.onerror = () => { es.close(); failLivePipeline('Lost connection to the agent run.'); };
-    }).catch(err => failLivePipeline(err.message || String(err)));
+      es.onerror = () => {
+        if (ended) return;
+        try { es.close(); } catch (_) {}
+        failLivePipeline(runToken, 'Lost connection to the agent run. The server job may still be running.');
+      };
+    }).catch(err => failLivePipeline(runToken, err.message || String(err)));
   }
 
-  function completeLivePipeline(result) {
+  function completeLivePipeline(runToken, result) {
+    if (!guidedRunChannel.isCurrent(runToken)) return;
+    if (guidedRunStream) { try { guidedRunStream.close(); } catch (_) {} guidedRunStream = null; }
     liveAgentRun = { active: false, result: result, error: null };
     runPhase = 'done';
-    outputsReady = true;
+    const gateState = guidedGateState(result);
+    outputsReady = !gateState.blocked;
     if (result && result.summary) workspaceSnapshot = { summary: result.summary, cohort: result.cohort || {}, quality: result.quality || [] };
+    if (gateState.blocked) {
+      setVal({ analysis: 'verification blocked', draft: 'locked · review_blocked' });
+      markThrough('analysis', 'locked');
+      setStudy({ draft: 'locked' });
+      const p = document.getElementById('gdRunPill');
+      if (p) p.outerHTML = '<span class="pill bad" id="gdRunPill"><span class="dot"></span>Verification blocked</span>';
+      renderThread();
+      const reason = gateState.gate.reason ? ` <span class="mono">${esc(gateState.gate.reason)}</span>` : '';
+      pushBot(
+        `The run finished, but evidence verification blocked the Findings step.${reason} Artifacts were retained for review; the manuscript draft remains <strong>locked</strong>.`,
+        `运行已结束，但证据核验未通过，因此没有进入 Findings。${reason} Artifacts 已保留供复核；稿件草稿仍保持<strong>锁定</strong>。`,
+      );
+      chips = [['Review blocked checks', '@reviewBlocked'], ['Retry analysis', 'toRun'], ['Open Agent Projects', '@openAgent']];
+      guidedRunChannel.clear(runToken);
+      renderThread(); renderAside(); renderChips();
+      return;
+    }
     setVal({ analysis: () => analysisLine(), draft: 'locked · analysis_only' });
     const p = document.getElementById('gdRunPill'); if (p) p.outerHTML = '<span class="pill ok" id="gdRunPill"><span class="dot"></span>Preflight complete</span>';
     renderThread();
@@ -856,10 +978,13 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       `现在可以在 Agent Projects 中打开它。人工签署前，稿件 claims 仍保持<strong>锁定</strong>。`,
     );
     chips = []; renderThread();
+    guidedRunChannel.clear(runToken);
     go('toFindings');
   }
 
-  function failLivePipeline(error) {
+  function failLivePipeline(runToken, error) {
+    if (!guidedRunChannel.isCurrent(runToken)) return;
+    if (guidedRunStream) { try { guidedRunStream.close(); } catch (_) {} guidedRunStream = null; }
     liveAgentRun = { active: false, result: null, error: error };
     runPhase = 'run';
     const p = document.getElementById('gdRunPill'); if (p) p.outerHTML = '<span class="pill bad" id="gdRunPill"><span class="dot"></span>Failed closed</span>';
@@ -867,7 +992,8 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       `The run failed closed: <span class="mono">${esc(error)}</span>`,
       `这次 run 已 fail-closed：<span class="mono">${esc(error)}</span>`,
     );
-    chips = [['Retry analysis', 'toRun'], ['Open Agent Projects', '@draft']];
+    chips = [['Retry analysis', 'toRun'], ['Open Agent Projects', '@openAgent']];
+    guidedRunChannel.clear(runToken);
     renderThread(); renderChips();
   }
   function schedule(fn) { const myGen = gen; const t = () => { if (myGen !== gen) return; if (busy) return setTimeout(t, 160); fn(); }; setTimeout(t, 520); }
@@ -1037,10 +1163,10 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         const live = liveAgentRun && liveAgentRun.result;
         // For a live run, drive the pill + progress bar from the real evidence
         // gate — never hard-pin 100%/green when the gate came back blocked.
-        const gate = (live && live.gate) || null;
-        const gchecks = gate && Array.isArray(gate.checks) ? gate.checks : [];
-        const gpassed = gchecks.filter(c => c.passed).length;
-        const gateBlocked = !!gate && (gate.status === 'blocked' || (gchecks.length > 0 && gpassed < gchecks.length));
+        const gateState = guidedGateState(live);
+        const gchecks = gateState.checks;
+        const gpassed = gateState.passed;
+        const gateBlocked = gateState.blocked;
         const barPct = live ? (gchecks.length ? Math.round((gpassed / gchecks.length) * 100) : 100) : 100;
         const pillCls = gateBlocked ? 'warn' : 'ok';
         const pillTxt = live ? (gateBlocked ? `Verification: ${gpassed}/${gchecks.length} checks` : 'Preflight complete') : 'Complete';
@@ -1057,13 +1183,26 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       const b = BRANCH[branch];
       const live = liveAgentRun && liveAgentRun.result;
       if (live) {
-        const gate = live.gate || {};
-        const checks = Array.isArray(gate.checks) ? gate.checks : [];
-        return cardShell('draft', 'shield', 'Preflight complete · draft locked', gate.status || 'analysis_only', `
-          <div class="m-bubble" style="background:var(--surface-2);border:1px solid var(--hair);font-size:12.25px;margin-bottom:12px;">Local preflight finished for <span class="mono">${esc(live.run_id || 'run')}</span>. <span style="color:var(--ink-4);">No external model call, no uploads, and no patient rows persisted. Manuscript claims remain locked.</span></div>
+        const gateState = guidedGateState(live);
+        const gate = gateState.gate;
+        const checks = gateState.checks;
+        const title = gateState.blocked ? 'Evidence verification blocked · draft locked' : 'Preflight complete · draft locked';
+        const intro = gateState.blocked
+          ? 'Preflight execution finished, but evidence verification blocked the Findings step.'
+          : 'Local preflight finished.';
+        return cardShell('draft', 'shield', title, gate.status || 'analysis_only', `
+          <div class="m-bubble" style="background:var(--surface-2);border:1px solid var(--hair);font-size:12.25px;margin-bottom:12px;">${intro} Run <span class="mono">${esc(live.run_id || 'run')}</span>. <span style="color:var(--ink-4);">No external model call, no uploads, and no patient rows persisted. Manuscript claims remain locked.</span></div>
           <div class="eyebrow" style="margin:0 0 8px;">Evidence checks</div>
           <div class="checks">
-            ${checks.map(c => `<div class="check-row ${c.passed ? 'ok' : 'pending'}"><span class="check-mk">${c.passed ? icon('check', 11, 2.8) : icon('clock', 11)}</span><span style="font-size:11.75px;color:${c.passed ? 'var(--ink)' : 'var(--ink-3)'};">${esc(c.label || c.id)}</span><span class="grow"></span><span class="mono" style="font-size:10px;color:${c.passed ? 'var(--ok)' : 'var(--ink-4)'};">${c.passed ? 'passed' : 'pending'}</span></div>`).join('')}
+            ${checks.map(c => {
+              const pending = !c.passed && c.id === 'human_signoff';
+              const state = c.passed ? 'ok' : pending ? 'pending' : 'bad';
+              const markerStyle = c.passed || pending ? '' : 'background:var(--bad-soft);color:var(--bad);';
+              const marker = c.passed ? icon('check', 11, 2.8) : pending ? icon('clock', 11) : icon('x', 11);
+              const color = c.passed ? 'var(--ink)' : pending ? 'var(--ink-3)' : 'var(--bad)';
+              const status = c.passed ? 'passed' : pending ? 'pending' : 'failed';
+              return `<div class="check-row ${state}"><span class="check-mk" style="${markerStyle}">${marker}</span><span style="font-size:11.75px;color:${color};">${esc(c.label || c.id)}</span><span class="grow"></span><span class="mono" style="font-size:10px;color:${c.passed ? 'var(--ok)' : color};">${status}</span></div>`;
+            }).join('')}
           </div>`,
           `<button class="btn primary sm" data-act="draft">Open in Research Agent</button>
            <button class="btn sm" data-act="open">${icon('grid', 13)} Open workspace</button>`);
@@ -1175,6 +1314,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       progress: null,
       result: null,
       error: null,
+      warning: null,
       registered: false,
     };
     if (!guidedDesign) resetGuidedDesignState();
@@ -1738,6 +1878,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
 
   /* ============== inline Agent preflight ============== */
   function resetGuidedAgentState() {
+    disconnectGuidedRunUi();
     // Derive the objective from the study design the user actually collected in the
     // conversation — never a hard-coded exposure/outcome framing. If they never set
     // one, keep an honest generic sentence they can edit, not a fictional example.
@@ -1756,9 +1897,11 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       question,
       running: false,
       jobId: null,
+      contextId: null,
       progress: null,
       result: null,
       error: null,
+      warning: null,
     };
   }
   function startGuidedAgentFlow(label) {
@@ -1785,8 +1928,10 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     if (guidedAgent.running) return t('Starting local Agent preflight...', '正在启动本地 Agent 预检...');
     if (guidedAgent.error) return esc(guidedAgent.error);
     if (guidedAgent.result) {
-      const gate = guidedAgent.result.gate || {};
-      return `${t('Agent preflight complete', 'Agent 预检完成')} · ${esc(gate.status || 'analysis_only')}`;
+      const gateState = guidedGateState(guidedAgent.result);
+      return gateState.blocked
+        ? `${t('Agent preflight blocked', 'Agent 预检未通过')} · ${esc(gateState.gate.status || 'blocked')}`
+        : `${t('Agent preflight complete', 'Agent 预检完成')} · ${esc(gateState.gate.status || 'analysis_only')}`;
     }
     const src = activeExportSource();
     return src ? t('Ready to run against the active export. No external provider is used.', '可以基于 active export 运行。不会使用外部 provider。') : t('No active export. Prepare/register data first.', '没有 active export。请先准备或注册数据。');
@@ -1811,7 +1956,34 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       export_destination_hint: (guidedExtract && guidedExtract.exportDir) || (src && src.path) || '',
     };
   }
+  window.EU_GUIDED_CONTEXT = {
+    snapshot() {
+    const src = activeExportSource() || {};
+    const windowLabel = window.EU_GUIDED_EXTRACT ? window.EU_GUIDED_EXTRACT.windowLabel(guidedDesign, t) : '';
+    return {
+      question: (guidedAgent && guidedAgent.question) || (branch && BRANCH[branch] ? (frameFor(branch) || BRANCH[branch].chip) : ''),
+      source: {
+        path: (guidedExtract && guidedExtract.result && (guidedExtract.result.out_dir || guidedExtract.result.path)) || src.path || '',
+        label: src.label || src.database || (dataMode === 'demo' ? 'Demo data' : 'Local EasyICU export'),
+        database: src.database || (dataMode === 'demo' ? 'demo' : ''),
+      },
+      cohort_preset: (guidedExtract && guidedExtract.cohort) || 'adult_first',
+      max_patients: guidedExtract && guidedExtract.maxPatients,
+      modules: guidedExtract && Array.isArray(guidedExtract.modules) ? guidedExtract.modules.slice() : [],
+      outcome: guidedDesign && guidedDesign.collected ? guidedDesignOutcome() : '',
+      window_preset: (guidedDesign && guidedDesign.window) || 'whole_stay',
+      window_label: windowLabel,
+      comparator: guidedDesign && guidedDesign.collected && guidedDesign.comparator !== 'none' ? guidedDesignComparator() : '',
+      export_format: (guidedExtract && guidedExtract.format) || '',
+      configured: !!(guidedDesign && guidedDesign.collected),
+    };
+    },
+  };
   function openGuidedAgentHandoff() {
+    if (window.EU_GUIDED_STUDY_CONTEXT && window.EU_GUIDED_STUDY_CONTEXT.handoff) {
+      const sync = window.EU_GUIDED_STUDY_CONTEXT.handoff('agent');
+      sync.persisted.catch(error => console.warn('[EasyICU] Guided StudyContext handoff stayed local:', error));
+    }
     if (window.EU_GUIDED_HANDOFF && window.EU_GUIDED_HANDOFF.set) {
       window.EU_GUIDED_HANDOFF.set({
         type: 'module_handoff', status: 'ready', goal: 'run_agent',
@@ -1825,6 +1997,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     const src = activeExportSource();
     const result = guidedAgent.result || {};
     const gate = result.gate || {};
+    const gateBlocked = !!guidedAgent.result && guidedGateState(guidedAgent.result).blocked;
     const artifacts = result.artifacts || result.artifact_manifest || [];
     const artCount = Array.isArray(artifacts) ? artifacts.length : (result.artifact_count || 0);
     return `
@@ -1844,17 +2017,18 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           <span>${icon(src ? 'check' : 'shield', 12)}</span>
           <div><strong>${src ? t('Active local export', 'active 本地导出') : t('No active export', '没有 active export')}</strong><small>${src ? esc(activeExportLabel()) : t('Use Prepare Data first, or register an existing EasyICU export.', '先使用准备数据，或注册已有 EasyICU 导出。')}</small></div>
         </div>
-        <div class="gdx-status ${guidedAgent.error ? 'bad' : guidedAgent.result ? 'ok' : ''}">
-          <span>${icon(guidedAgent.error ? 'x' : guidedAgent.result ? 'check' : 'shield', 12)}</span>
+        <div class="gdx-status ${guidedAgent.error || gateBlocked ? 'bad' : guidedAgent.result ? 'ok' : ''}">
+          <span>${icon(guidedAgent.error ? 'x' : gateBlocked ? 'alert' : guidedAgent.result ? 'check' : 'shield', 12)}</span>
           <div><strong>${guidedAgentStatusText()}</strong>${guidedAgent.jobId ? `<small>job ${esc(guidedAgent.jobId)}</small>` : ''}</div>
         </div>
+        ${window.EU_AGENT_STUDY_CONTEXT && window.EU_AGENT_STUDY_CONTEXT.warningNote ? window.EU_AGENT_STUDY_CONTEXT.warningNote(guidedAgent.warning) : ''}
         ${guidedAgent.result ? `<div class="gda-result">
           ${guidedMetricCard(t('Run type', '运行类型'), result.run_type || 'preflight')}
           ${guidedMetricCard(t('Reportable', '可报告'), result.reportable ? 'true' : 'false', t('Draft remains locked until sign-off.', '签署前草稿保持锁定。'))}
           ${guidedMetricCard(t('Evidence check', '证据核验'), gate.status || 'analysis_only', gate.reason || '')}
           ${guidedMetricCard(t('Artifacts', 'Artifacts'), fmtInt(artCount), result.project_dir ? compactPath(result.project_dir) : '')}
         </div>
-        <div class="note info" style="margin-top:10px;padding:9px 11px;"><div class="ico">${icon('shield', 13)}</div><div class="body"><div class="d" style="font-size:10.5px;margin:0;">${t('This was a local, no-cost preflight (mock provider — no external model call): it checks coverage and the evidence contract, but is not a reportable run. To run a full, reportable analysis, continue in Agent Projects — your question and study design carry over. Enabling an external model there is opt-in and never automatic.', '这是一次本地零成本预检（mock provider —— 不调用外部模型）：它检查覆盖率与证据合约，但不是可报告运行。若要运行完整、可报告的分析，请到 Agent Projects 继续 —— 你的问题与研究设计会一并带过去。是否在那里启用外部模型由你显式开启，绝不自动进行。')}</div></div></div>` : ''}
+        <div class="note info" style="margin-top:10px;padding:9px 11px;"><div class="ico">${icon('shield', 13)}</div><div class="body"><div class="d" style="font-size:10.5px;margin:0;">${t('This was a local, no-cost preflight (mock provider — no external model call): it checks coverage and the evidence contract, but is not a reportable run. Continue in Agent Projects for a provider-backed plan and draft scaffold; that scaffold is still not a complete or reportable analysis. Your question and study design carry over, and external-provider use is always explicit opt-in.', '这是一次本地零成本预检（mock provider —— 不调用外部模型）：它检查覆盖率与证据合约，但不是可报告运行。你可以到 Agent Projects 生成 provider-backed 计划与草稿骨架；该骨架仍不是完整或可报告分析。研究问题与设计会一并带过去，外部 provider 始终需要显式授权。')}</div></div></div>` : ''}
         <div class="gdx-actions">
           <button type="button" class="btn ${guidedAgent.result ? '' : 'primary'}" data-ga-run ${!src || guidedAgent.running ? 'disabled' : ''}>${icon('play', 13)} ${guidedAgent.result ? t('Re-run preflight', '重跑预检') : t('Start local preflight', '启动本地预检')}</button>
           <button type="button" class="btn" data-guided-goal="data_extraction">${t('Prepare/register data', '准备/注册数据')}</button>
@@ -1879,54 +2053,118 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     guidedAgent.error = null;
     guidedAgent.result = null;
     guidedAgent.progress = null;
+    guidedAgent.warning = null;
     renderThread();
-    const studyId = slugifyDraftFolder((guidedAgent.question || 'guided-agent-preflight').slice(0, 80)) || 'guided-agent-preflight';
-    window.EU_API.startAgentRun({
-      path: src.path,
+    const runState = guidedAgent;
+    const capturedQuestion = runState.question || 'Evaluate the active ICU cohort with an evidence-bound local preflight.';
+    const studyId = slugifyDraftFolder(capturedQuestion.slice(0, 80)) || 'guided-agent-preflight';
+    let runToken = guidedRunChannel.start({
+      surface: 'guided-agent-card',
       study_id: studyId,
-      mode: 'analysis',
+      context_id: window.EU_GUIDED_STUDY_CONTEXT && window.EU_GUIDED_STUDY_CONTEXT.activeId ? window.EU_GUIDED_STUDY_CONTEXT.activeId() : '',
+      question: capturedQuestion,
+      source_path: src.path,
+      study_mode: 'analysis',
       run_type: 'preflight',
-      llm_provider: 'mock',
-      external_llm_opt_in: false,
-      question: guidedAgent.question,
+      provider: 'mock',
+    });
+    const contextReady = window.EU_GUIDED_STUDY_CONTEXT && window.EU_GUIDED_STUDY_CONTEXT.persistForRun
+      ? window.EU_GUIDED_STUDY_CONTEXT.persistForRun('agent_preflight')
+      : Promise.resolve(null);
+    contextReady.then(studyContext => {
+      runToken = guidedRunChannel.bind(runToken, {
+        context_id: studyContext && studyContext.id,
+        study_id: (studyContext && studyContext.id) || studyId,
+      });
+      if (guidedRunChannel.isCurrent(runToken) && guidedAgent === runState) guidedAgent.contextId = runToken.context_id || null;
+      return window.EU_API.startAgentRun({
+        path: runToken.source_path,
+        study_id: runToken.study_id,
+        study_context_id: runToken.context_id || undefined,
+        mode: runToken.study_mode,
+        run_type: runToken.run_type,
+        llm_provider: runToken.provider,
+        external_llm_opt_in: false,
+        question: runToken.question,
+      });
     }).then(r => {
-      guidedAgent.jobId = r.job_id;
-      renderThread();
-      scheduleGuidedSlotSave('start_agent_preflight');
-      const es = new EventSource('/api/jobs/' + encodeURIComponent(r.job_id) + '/events');
+      runToken = guidedRunChannel.bind(runToken, { job_id: r.job_id, context_revision: r.study_context_revision });
+      const isCurrent = guidedRunChannel.isCurrent(runToken) && guidedAgent === runState;
+      if (isCurrent) {
+        guidedAgent.jobId = runToken.job_id;
+        guidedAgent.warning = window.EU_AGENT_STUDY_CONTEXT && window.EU_AGENT_STUDY_CONTEXT.submissionWarning
+          ? window.EU_AGENT_STUDY_CONTEXT.submissionWarning(r)
+          : null;
+      }
+      if (runToken.context_id && window.EU_AGENT_STUDY_CONTEXT && window.EU_AGENT_STUDY_CONTEXT.markContextRunning) {
+        window.EU_AGENT_STUDY_CONTEXT.markContextRunning(runToken.context_id, runToken.job_id, runToken.context_revision);
+      }
+      if (isCurrent) {
+        renderThread();
+        scheduleGuidedSlotSave('start_agent_preflight');
+      }
+      const es = new EventSource('/api/jobs/' + encodeURIComponent(runToken.job_id) + '/events');
+      if (isCurrent) guidedRunStream = es;
+      let ended = false;
       es.onmessage = ev => {
         let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
         if (m.type === 'progress') {
+          if (!guidedRunChannel.isCurrent(runToken) || guidedAgent !== runState) return;
           guidedAgent.progress = m;
           renderThread();
           return;
         }
         if (m.type === 'end') {
+          ended = true;
           try { es.close(); } catch (e) {}
+          if (runToken.context_id && window.EU_AGENT_STUDY_CONTEXT && window.EU_AGENT_STUDY_CONTEXT.markContextFinished) {
+            window.EU_AGENT_STUDY_CONTEXT.markContextFinished(
+              runToken.context_id,
+              m.status,
+              m.result || null,
+              runToken.job_id,
+              m.study_context_revision || (m.result && m.result.study_context_revision),
+            );
+          }
+          if (!guidedRunChannel.isCurrent(runToken) || guidedAgent !== runState) return;
+          if (guidedRunStream === es) guidedRunStream = null;
           guidedAgent.running = false;
           if (m.status === 'done') {
             guidedAgent.result = m.result || {};
             liveAgentRun = { result: guidedAgent.result };
-            setVal({ analysis: 'preflight complete', draft: 'locked' });
-            markThrough('draft', 'locked');
+            if (guidedGateState(guidedAgent.result).blocked) {
+              setVal({ analysis: 'verification blocked', draft: 'locked · review_blocked' });
+              markThrough('analysis', 'locked');
+              setStudy({ draft: 'locked' });
+            } else {
+              setVal({ analysis: 'preflight complete', draft: 'locked' });
+              markThrough('draft', 'locked');
+            }
           } else {
             guidedAgent.error = guidedJobEndError(m) || 'Agent preflight failed.';
           }
+          guidedRunChannel.clear(runToken);
           renderThread();
           renderAside();
           scheduleGuidedSlotSave('finish_agent_preflight');
         }
       };
       es.onerror = () => {
+        if (ended) return;
         try { es.close(); } catch (e) {}
+        if (!guidedRunChannel.isCurrent(runToken) || guidedAgent !== runState) return;
+        if (guidedRunStream === es) guidedRunStream = null;
         guidedAgent.running = false;
         guidedAgent.error = 'Agent event stream stopped before completion.';
+        guidedRunChannel.clear(runToken);
         renderThread();
         scheduleGuidedSlotSave('agent_event_stream_error');
       };
     }).catch(err => {
+      if (!guidedRunChannel.isCurrent(runToken) || guidedAgent !== runState) return;
       guidedAgent.running = false;
       guidedAgent.error = err.message || String(err);
+      guidedRunChannel.clear(runToken);
       renderThread();
       scheduleGuidedSlotSave('start_agent_preflight_error');
     });
@@ -3459,6 +3697,20 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     clearTimeout(guidedSlotSaveTimer);
     guidedSlotSaveTimer = setTimeout(() => { saveGuidedSlotsNow(reason); }, 350);
   }
+  function captureGuidedComposerDraft() {
+    const input = document.getElementById('gdInput');
+    if (input) guidedComposerDraft = input.value || '';
+  }
+  function flushGuidedSlotSave(reason) {
+    clearTimeout(guidedSlotSaveTimer);
+    guidedSlotSaveTimer = null;
+    return saveGuidedSlotsNow(reason);
+  }
+  window.__euGuidedBeforeLanguageRerender = function () {
+    if (!guidedMounted) return Promise.resolve(null);
+    captureGuidedComposerDraft();
+    return flushGuidedSlotSave('language_change');
+  };
   function restoreGuidedSlotsFromSession(session) {
     const slots = session && session.slots && typeof session.slots === 'object' ? session.slots : {};
     if (slots.study_params && typeof slots.study_params === 'object') {
@@ -3655,6 +3907,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     return { bot: true, html: bi(reply.en || esc(text), reply.zh || reply.en || esc(text)) };
   }
   function restoreGuidedProjectThread(result, row, kind) {
+    disconnectGuidedRunUi();
     const session = result && result.session ? result.session : null;
     guidedCopilot = { loading: false, error: null, session, last: result || guidedCopilot.last };
     const restoredFlow = restoreGuidedSlotsFromSession(session);
@@ -3698,6 +3951,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     renderThread(); renderChips();
   }
   function startFreshGuidedProjectThread(title, path) {
+    disconnectGuidedRunUi();
     currentId = 'frontdoor';
     pendingGuidedGoal = null;
     busy = false;
@@ -4605,11 +4859,21 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   }
 
   /* ============== screen ============== */
+  function initializeGuidedState() {
+    if (guidedMounted) {
+      captureGuidedComposerDraft();
+      return false;
+    }
+    reset();
+    currentId = 'frontdoor';
+    guidedMounted = true;
+    return true;
+  }
+
   S.guided = {
     section: 'guided', full: true,
     render() {
-      reset();
-      currentId = 'frontdoor';
+      guidedInitialRender = initializeGuidedState();
       return `
       <div class="gd-shell">
         <div class="gd-top">
@@ -4642,8 +4906,8 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
             <div class="gd-suggest" id="gdSuggest"></div>
             <div class="gd-composer-wrap">
               <div class="gd-composer">
-                <input class="gd-input" id="gdInput" placeholder="${t('Reply, or tap an option above to continue…', '回复，或点击上方选项继续…')}" autocomplete="off" />
-                <button class="gd-send" id="gdSend">${icon('arrow', 16)}</button>
+                <input class="gd-input" id="gdInput" value="${attr(guidedComposerDraft)}" placeholder="${t('Reply, or tap an option above to continue…', '回复，或点击上方选项继续…')}" autocomplete="off" aria-label="${t('Message Guided Copilot', '给研究引导发送消息')}" />
+                <button type="button" class="gd-send" id="gdSend" aria-label="${t('Send message', '发送消息')}">${icon('arrow', 16)}</button>
               </div>
               <div class="gd-foot-note">${t('Guided Copilot · local first · nothing leaves your machine', '引导式 Copilot · 本地优先 · 数据不离开你的电脑')}</div>
             </div>
@@ -4658,6 +4922,8 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       </div>`;
     },
     afterRender(root) {
+      const initialRender = guidedInitialRender;
+      guidedInitialRender = false;
       renderGuidedFolderControls();
       renderGuidedFolderDialog();
       renderAside();
@@ -4705,7 +4971,13 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           }
         }
       } catch (e) {}
-      if (!bridged) go('frontdoor');
+      if (!bridged) {
+        if (initialRender) go('frontdoor');
+        else {
+          renderThread();
+          renderChips();
+        }
+      }
       setTimeout(() => { const inp = root.querySelector('#gdInput'); if (inp) inp.focus(); }, 400);
 
       const shell = root.querySelector('.gd-shell');
@@ -4770,6 +5042,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           if (tok === '@noop') { pushUser(label); pushBot(`Go ahead — type your own wording in the box and I’ll work from it.`, `可以，直接在输入框里写你的表述，我会基于你的文字继续。`); renderThread(); return; }
           if (tok === '@typemine') { pushUser(label); pushBot(`Of course — type your research question in the box below and I’ll frame it with you.`, `当然可以。请在下面输入你的研究问题，我会帮你整理成可执行框架。`); renderThread(); const inp = document.getElementById('gdInput'); if (inp) inp.focus(); return; }
           if (tok === '@openAgent') { pushUser(label); location.hash = '#agent'; return; }
+          if (tok === '@reviewBlocked') { expandedStep = 'analysis'; renderThread(); jumpToStep('analysis'); return; }
           if (tok === '@reviewLocalRun') { openGuidedRunReview(selectedGuidedRun, label); return; }
           if (tok === '@activeExport') { pushUser(label); dataMode = 'real'; go('realConfirm', label); return; }
           if (tok === '@folderquick') { quickCreateGuidedStarterFolder(); return; }
@@ -5359,9 +5632,11 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         const v = input.value.trim();
         if (!v || busy) return;
         input.value = '';
+        guidedComposerDraft = '';
         handleText(v);
       }
       send.addEventListener('click', handleTextLocal);
+      input.addEventListener('input', () => { guidedComposerDraft = input.value; });
       input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); handleTextLocal(); } });
     },
   };

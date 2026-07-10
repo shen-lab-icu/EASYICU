@@ -269,6 +269,21 @@
   function startAgentRun(body) {
     return postJSON('/api/jobs/agent-run', body || {});
   }
+  function loadActiveStudyContext() {
+    return getJSON('/api/study-contexts/active');
+  }
+  function listStudyContexts() {
+    return getJSON('/api/study-contexts');
+  }
+  function loadStudyContext(id) {
+    return getJSON('/api/study-contexts/' + encodeURIComponent(id || ''));
+  }
+  function saveStudyContext(body) {
+    return postJSON('/api/study-contexts', body || {});
+  }
+  function handoffStudyContext(body) {
+    return postJSON('/api/study-contexts/handoff', body || {});
+  }
   function loadJobSnapshot(jobId) {
     return getJSON('/api/jobs/' + encodeURIComponent(jobId || ''));
   }
@@ -455,6 +470,11 @@
   window.EU_API.loadAgentProviderStatus = loadAgentProviderStatus;
   window.EU_API.saveAgentProviderConfig = saveAgentProviderConfig;
   window.EU_API.startAgentRun = startAgentRun;
+  window.EU_API.loadActiveStudyContext = loadActiveStudyContext;
+  window.EU_API.listStudyContexts = listStudyContexts;
+  window.EU_API.loadStudyContext = loadStudyContext;
+  window.EU_API.saveStudyContext = saveStudyContext;
+  window.EU_API.handoffStudyContext = handoffStudyContext;
   window.EU_API.loadJobSnapshot = loadJobSnapshot;
   window.EU_API.cancelJob = cancelJob;
   window.EU_API.loadAgentRunReview = loadAgentRunReview;

@@ -51,6 +51,7 @@ a{ color: inherit; text-decoration: none; }
   display: flex; align-items: center; gap: 11px;
   padding: 16px 16px 14px;
   margin: 6px 8px 2px;
+  border: 0; background: transparent; color: inherit; font: inherit; text-align: left;
   border-radius: var(--r-2);
   cursor: pointer;
   transition: background .12s;
@@ -64,13 +65,14 @@ a{ color: inherit; text-decoration: none; }
   display: grid; place-items: center;
 }
 .brand .mark svg{ display:block; }
-.brand .name{ font-size: 15px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.1; }
-.brand .tag{ font-size: 11px; color: var(--ink-4); margin-top: 2px; letter-spacing: 0; }
+.brand .name{ display:block; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.1; }
+.brand .tag{ display:block; font-size: 11px; color: var(--ink-4); margin-top: 2px; letter-spacing: 0; }
 
 .nav{ padding: 8px 12px 4px; display: flex; flex-direction: column; gap: 2px; }
 .nav-item{
   display: flex; align-items: center; gap: 11px;
   height: 36px; padding: 0 11px;
+  width: 100%; border: 0; background: transparent; font: inherit; text-align: left;
   border-radius: var(--r-2);
   font-size: 13.5px; font-weight: 500;
   color: var(--ink-2);
@@ -168,6 +170,7 @@ a{ color: inherit; text-decoration: none; }
 .rail-foot .icobtn{
   width: 30px; height: 30px; border-radius: var(--r-2);
   display: grid; place-items: center;
+  padding: 0; background: transparent; font: inherit;
   color: var(--ink-3); cursor: pointer;
   border: 1px solid transparent;
   transition: background .12s, color .12s;
@@ -192,15 +195,15 @@ a{ color: inherit; text-decoration: none; }
   border-bottom: 1px solid var(--hair);
 }
 .crumbs{ display: flex; align-items: center; gap: 8px; font-size: 13px; min-width: 0; flex: 0 1 auto; overflow: hidden; }
-.crumbs a, .crumbs .mid{ color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 2 1 auto; min-width: 20px; }
-.crumbs a{ cursor: pointer; }
-.crumbs a:hover{ color: var(--ink); }
+.crumbs .crumb-link, .crumbs .mid{ color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 2 1 auto; min-width: 20px; }
+.crumbs .crumb-link{ border:0; padding:0; background:transparent; font:inherit; text-align:left; cursor:pointer; }
+.crumbs .crumb-link:hover{ color: var(--ink); }
 .crumbs .sep{ color: var(--ink-4); flex: none; }
 /* the current page name gives way only as a last resort — parents truncate first */
 .crumbs .cur{ color: var(--ink); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; min-width: 0; }
 /* on tighter widths the parent trail is dropped — the page H1 carries the context */
 @media (max-width: 1180px){
-  .crumbs a, .crumbs .mid, .crumbs .sep{ display: none; }
+  .crumbs .crumb-link, .crumbs .mid, .crumbs .sep{ display: none; }
 }
 .topbar .spacer{ flex: 1; }
 
@@ -557,7 +560,7 @@ table.eu-table{ width: 100%; border-collapse: collapse; font-size: 12.75px; }
     height: 52px; padding: 0 16px;
     background: var(--rail); border-bottom: 1px solid var(--hair);
   }
-  .mtopbar .mark{ width: 28px; height: 28px; border-radius: 7px; background: var(--ink); color:#fff; display:grid; place-items:center; }
+  .mtopbar .mark{ width: 28px; height: 28px; padding:0; border:0; border-radius: 7px; background: var(--ink); color:#fff; display:grid; place-items:center; cursor:pointer; }
   .mtopbar .name{ flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; font-size: 14px; }
   .mtopbar .spacer{ display: none; }
   .mtopbar .btn{ width: 34px; padding: 0; flex: none; gap: 0; font-size: 0; }
