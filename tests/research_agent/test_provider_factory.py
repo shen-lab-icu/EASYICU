@@ -141,6 +141,40 @@ def test_loopback_openai_never_forwards_paid_secrets_from_any_entry(
         }
 
 
+def test_loopback_opt_in_forwards_real_openai_key_to_trusted_proxy(ra, monkeypatch):
+    # A TRUSTED authenticating loopback proxy (e.g. Codex Tools on :8787) that
+    # validates the client key needs the real key. With the explicit opt-in set,
+    # the factory forwards OPENAI_API_KEY instead of the dummy so the proxy does
+    # not 401. This is off by default (see the security test above).
+    mcp, discovery, benchmark, seen = _install_entrypoint_recorders(monkeypatch, ra)
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://127.0.0.1:8787/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-real-proxy-key")
+    monkeypatch.setenv("EASYICU_TRUST_LOOPBACK_PROXY_KEY", "1")
+
+    _build_all_three(mcp, discovery, benchmark, provider="openai")
+
+    assert set(seen) == {"mcp", "discovery", "benchmark"}
+    for kwargs in seen.values():
+        assert kwargs["base_url"] == "http://127.0.0.1:8787/v1"
+        assert kwargs["api_key"] == "sk-real-proxy-key"
+
+
+def test_loopback_opt_in_without_key_still_uses_dummy(ra, monkeypatch):
+    # Opt-in set but no real key present (true no-auth vLLM): still the dummy,
+    # never an empty/None credential.
+    from easyicu.research_agent.providers import LOCAL_OPENAI_DUMMY_API_KEY
+
+    mcp, discovery, benchmark, seen = _install_entrypoint_recorders(monkeypatch, ra)
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://127.0.0.1:8787/v1")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("EASYICU_TRUST_LOOPBACK_PROXY_KEY", "1")
+
+    _build_all_three(mcp, discovery, benchmark, provider="openai")
+
+    for kwargs in seen.values():
+        assert kwargs["api_key"] == LOCAL_OPENAI_DUMMY_API_KEY
+
+
 @pytest.mark.parametrize(
     ("provider", "available_key", "missing_key"),
     [

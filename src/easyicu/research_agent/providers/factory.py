@@ -19,6 +19,22 @@ DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 LOCAL_OPENAI_DUMMY_API_KEY = "easyicu-local-noauth"
 EASYICU_HTTP_REFERER = "https://github.com/shen-lab-icu/easyicu"
 
+# Opt-in: forward the real OPENAI_API_KEY to a LOOPBACK OpenAI-compatible
+# endpoint. Default OFF -- a loopback endpoint receives only the non-secret
+# dummy key, so an untrusted local server cannot harvest a paid secret. Set this
+# to a truthy value ONLY when the loopback endpoint is a TRUSTED authenticating
+# proxy that requires the real key (e.g. the local Codex Tools proxy on :8787,
+# which now validates the client key and 401s the dummy). vLLM / Ollama ignore
+# the key either way, so this is a no-op for a true no-auth local server.
+TRUST_LOOPBACK_PROXY_KEY_ENV = "EASYICU_TRUST_LOOPBACK_PROXY_KEY"
+
+
+def _loopback_forwards_real_key(env: Mapping[str, str]) -> bool:
+    """True when the operator has opted in to forwarding the real key to a
+    trusted loopback proxy (see ``TRUST_LOOPBACK_PROXY_KEY_ENV``)."""
+    raw = str(env.get(TRUST_LOOPBACK_PROXY_KEY_ENV, "") or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
 MISSING_OPENAI_KEY = "missing_openai_key"
 MISSING_OPENROUTER_KEY = "missing_openrouter_key"
 INVALID_OPENAI_BASE_URL_OVERRIDE = "invalid_openai_base_url_override"
@@ -167,10 +183,23 @@ def build_provider_client(
                 MISSING_OPENAI_KEY,
                 normalized_provider,
             )
+        # Loopback endpoints get the non-secret dummy key by default so an
+        # untrusted local server cannot harvest a paid secret. When the operator
+        # explicitly opts in (trusted authenticating proxy, e.g. Codex Tools on
+        # :8787) AND a real key is present, forward the real key so the proxy
+        # accepts the request instead of 401-ing the dummy.
+        if loopback:
+            loopback_key = (
+                api_key
+                if (api_key and _loopback_forwards_real_key(env))
+                else LOCAL_OPENAI_DUMMY_API_KEY
+            )
+        else:
+            loopback_key = api_key
         kwargs = {
             "model": model,
             "request_timeout": float(request_timeout),
-            "api_key": LOCAL_OPENAI_DUMMY_API_KEY if loopback else api_key,
+            "api_key": loopback_key,
         }
         if base_url:
             kwargs["base_url"] = base_url
