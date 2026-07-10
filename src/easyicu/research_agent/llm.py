@@ -176,6 +176,13 @@ class OpenAIClient:
         extra_body: Optional[Dict[str, Any]] = None,
         supports_vision: Optional[bool] = None,
     ) -> None:
+        # 🔧 2026-07-10: allow env overrides so a flaky SHARED local proxy (the
+        # cli-proxy-api / Codex Tools instance that intermittently rotates its key
+        # or drops the connection) can be given a longer per-call timeout and a
+        # bigger retry budget without a code change:
+        #   EASYICU_LLM_TIMEOUT=<seconds>   EASYICU_LLM_MAX_RETRIES=<attempts>
+        request_timeout = float(os.environ.get("EASYICU_LLM_TIMEOUT") or request_timeout)
+        max_retries = int(os.environ.get("EASYICU_LLM_MAX_RETRIES") or max_retries)
         kwargs: Dict[str, Any] = {}
         # Accept either OPENAI_API_KEY (vanilla) or OPENROUTER_API_KEY so
         # users don't have to alias the variable themselves.
@@ -248,6 +255,7 @@ class OpenAIClient:
             self._client = OpenAI(**kwargs)
         self._model = model
         self._timeout = request_timeout
+        self._max_retries = int(max_retries)
         self._extra_body = dict(extra_body or {})
         self.supports_vision = (
             bool(supports_vision)
@@ -359,7 +367,7 @@ class OpenAIClient:
         # observed ~30s Retry-After headers repeating) can't tip the run into
         # uncaught RateLimitError. Also honor the provider's Retry-After when
         # present in the exception body.
-        for attempt in range(8):
+        for attempt in range(max(8, getattr(self, "_max_retries", 8))):
             try:
                 resp = _do_call()
                 break
@@ -410,6 +418,26 @@ class OpenAIClient:
                 ):
                     last_exc = exc
                     _time.sleep(2.0 * (attempt + 1))
+                    continue
+                # 🔧 2026-07-10: the SHARED local proxy (cli-proxy-api / Codex
+                # Tools) intermittently rotates its key or briefly drops the
+                # connection, surfacing as a TRANSIENT 401 "invalid proxy api
+                # key" or an APIConnectionError. These are NOT real auth failures
+                # (small probes succeed seconds later) and the OpenAI SDK does not
+                # retry 401/connection by default, so a full bench died at the
+                # plan phase on a momentary blip. Retry them with a longer backoff
+                # instead of aborting the whole run.
+                if (
+                    "invalid proxy api key" in msg
+                    or "apiconnectionerror" in msg
+                    or "connection error" in msg
+                    or "connection aborted" in msg
+                    or "connection reset" in msg
+                    or "server disconnected" in msg
+                    or ("401" in msg and "proxy" in msg)
+                ):
+                    last_exc = exc
+                    _time.sleep(min(5.0 * (attempt + 1), 60.0))
                     continue
                 raise
         else:
