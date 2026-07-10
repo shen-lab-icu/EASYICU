@@ -14,9 +14,14 @@ import base64
 import binascii
 import hashlib
 import html
+import http.client
+import ipaddress
 import json
 import re
+import socket
+import ssl
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib import parse, request
@@ -25,6 +30,7 @@ from xml.etree import ElementTree as ET
 from easyicu.concept import catalog as concept_catalog
 from easyicu.webserver import dataio
 from easyicu.webserver import sources as source_store
+from easyicu.webserver.input_validation import parse_bool
 
 _CONFIG_DIR = Path.home() / ".easyicu"
 _RUN_ROOT = _CONFIG_DIR / "idea_mining_runs"
@@ -36,6 +42,7 @@ _MAX_SOURCE_QUOTE = 420
 _MAX_FEATURE_STATS = 24
 _MAX_FETCH_BYTES = 256_000
 _MAX_PDF_BYTES = 20 * 1024 * 1024
+_MAX_PDF_BASE64_CHARS = 4 * ((_MAX_PDF_BYTES + 2) // 3)
 _MAX_PDF_EXTRACT_PAGES = 8
 _MAX_PDF_EXCERPT = 1_200
 _MAX_LITERATURE_PDFS = 80
@@ -97,6 +104,23 @@ class IdeaMiningWebError(ValueError):
         super().__init__(str(detail.get("error") or "idea_mining_error"))
 
 
+class UnsafeURL(ValueError):
+    """Raised before a user URL can reach a local or non-routable address."""
+
+
+def _request_bool(body: Dict[str, Any], key: str, default: bool = False) -> bool:
+    try:
+        return parse_bool(body.get(key), default=default)
+    except ValueError as exc:
+        raise IdeaMiningWebError(
+            {
+                "error": "invalid_boolean",
+                "field": key,
+                "reason": f"{key} must be an explicit true or false value.",
+            }
+        ) from exc
+
+
 def ingest_pdf_source(body: Dict[str, Any]) -> Dict[str, Any]:
     """Extract bounded local metadata from a selected PDF file.
 
@@ -110,6 +134,13 @@ def ingest_pdf_source(body: Dict[str, Any]) -> Dict[str, Any]:
             {
                 "error": "pdf_file_required",
                 "reason": "Choose a local PDF file before ingesting a PDF source.",
+            }
+        )
+    if len(encoded) > _MAX_PDF_BASE64_CHARS:
+        raise IdeaMiningWebError(
+            {
+                "error": "pdf_too_large",
+                "reason": f"Selected PDF is larger than the local bounded parser limit ({_MAX_PDF_BYTES // (1024 * 1024)} MB).",
             }
         )
     try:
@@ -290,7 +321,7 @@ def resolve_source(body: Dict[str, Any]) -> Dict[str, Any]:
     _require_source_seed(body)
     source = _source_record(body)
     source_type = str(source.get("source_type") or "manual")
-    allow_network = bool(body.get("allow_network"))
+    allow_network = _request_bool(body, "allow_network")
     adapter = {
         "status": "metadata_ready",
         "source_type": source_type,
@@ -405,7 +436,7 @@ def discover_literature(body: Dict[str, Any]) -> Dict[str, Any]:
         220,
     )
     journal = _clean(body.get("journal") or "", 120)
-    allow_network = bool(body.get("allow_network"))
+    allow_network = _request_bool(body, "allow_network")
     limit = max(1, min(int(body.get("limit") or 8), 20))
     if not topic:
         raise IdeaMiningWebError(
@@ -582,7 +613,7 @@ def check_prior_art(body: Dict[str, Any]) -> Dict[str, Any]:
             "mapped_concepts": [],
         }
     queries = _prior_art_queries(source, str(idea.get("idea_title") or "ICU idea"))
-    allow_network = bool(body.get("allow_network"))
+    allow_network = _request_bool(body, "allow_network")
     if not allow_network:
         prior = {
             "status": "blocked_network_opt_in_required",
@@ -2924,14 +2955,216 @@ def _best_evidence_sentence(text: str) -> str:
     return _clean(sentences[0] if sentences else text, _MAX_SOURCE_QUOTE)
 
 
+@dataclass(frozen=True)
+class _ResolvedPublicTarget:
+    url: str
+    scheme: str
+    hostname: str
+    port: int
+    request_target: str
+    host_header: str
+    addresses: tuple[tuple[int, int, int, tuple[Any, ...]], ...]
+
+
+def _resolve_public_http_target(url: str) -> _ResolvedPublicTarget:
+    """Resolve a URL once and retain only globally routable socket targets."""
+    try:
+        parsed = parse.urlsplit(str(url or "").strip())
+        hostname = parsed.hostname
+        scheme = parsed.scheme.lower()
+        port = parsed.port or (443 if scheme == "https" else 80)
+    except ValueError as exc:
+        raise UnsafeURL("URL contains an invalid host or port.") from exc
+    if scheme not in {"http", "https"} or not hostname:
+        raise UnsafeURL("URL must use http:// or https:// with a host.")
+    if parsed.username is not None or parsed.password is not None:
+        raise UnsafeURL("URLs containing embedded credentials are not allowed.")
+    normalized_host = hostname.rstrip(".").lower()
+    if normalized_host == "localhost" or normalized_host.endswith(".localhost"):
+        raise UnsafeURL("Localhost URLs are not allowed.")
+    try:
+        resolved = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise UnsafeURL("URL host could not be resolved.") from exc
+    if not resolved:
+        raise UnsafeURL("URL host did not resolve to an address.")
+    addresses: list[tuple[int, int, int, tuple[Any, ...]]] = []
+    seen = set()
+    for family, socktype, proto, _canonname, sockaddr in resolved:
+        address = str(sockaddr[0]).split("%", 1)[0]
+        try:
+            ip = ipaddress.ip_address(address)
+        except ValueError as exc:
+            raise UnsafeURL("URL host resolved to an invalid address.") from exc
+        if not ip.is_global:
+            raise UnsafeURL("URL target resolves to a non-public network address.")
+        key = (family, socktype, proto, sockaddr)
+        if key not in seen:
+            seen.add(key)
+            addresses.append((family, socktype, proto, sockaddr))
+    request_target = parsed.path or "/"
+    if parsed.query:
+        request_target += "?" + parsed.query
+    display_host = f"[{hostname}]" if ":" in hostname else hostname
+    default_port = 443 if scheme == "https" else 80
+    host_header = display_host if port == default_port else f"{display_host}:{port}"
+    return _ResolvedPublicTarget(
+        url=parsed.geturl(),
+        scheme=scheme,
+        hostname=hostname,
+        port=port,
+        request_target=request_target,
+        host_header=host_header,
+        addresses=tuple(addresses),
+    )
+
+
+def _validate_public_http_url(url: str) -> str:
+    return _resolve_public_http_target(url).url
+
+
+def _connect_resolved_addresses(
+    addresses: tuple[tuple[int, int, int, tuple[Any, ...]], ...],
+    *,
+    timeout: int,
+) -> socket.socket:
+    """Connect only to vetted sockaddr tuples; never perform a second DNS lookup."""
+    last_error: OSError | None = None
+    for family, socktype, proto, sockaddr in addresses:
+        sock = socket.socket(family, socktype, proto)
+        sock.settimeout(timeout)
+        try:
+            sock.connect(sockaddr)
+            return sock
+        except OSError as exc:
+            last_error = exc
+            sock.close()
+    raise last_error or OSError("No vetted public address was available.")
+
+
+class _PinnedHTTPResponse:
+    def __init__(
+        self,
+        connection: http.client.HTTPConnection,
+        response: http.client.HTTPResponse,
+        url: str,
+    ) -> None:
+        self._connection = connection
+        self._response = response
+        self._url = url
+        self.status = response.status
+
+    def read(self, amount: int = -1) -> bytes:
+        return self._response.read(amount)
+
+    def getheader(self, name: str, default: Any = None) -> Any:
+        return self._response.getheader(name, default)
+
+    def geturl(self) -> str:
+        return self._url
+
+    def close(self) -> None:
+        try:
+            self._response.close()
+        finally:
+            self._connection.close()
+
+    def __enter__(self) -> "_PinnedHTTPResponse":
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:  # type: ignore[no-untyped-def]
+        self.close()
+
+
+def _request_pinned_target(
+    target: _ResolvedPublicTarget,
+    req: request.Request,
+    *,
+    timeout: int,
+) -> _PinnedHTTPResponse:
+    raw_socket = _connect_resolved_addresses(target.addresses, timeout=timeout)
+    if target.scheme == "https":
+        context = ssl.create_default_context()
+        try:
+            connected_socket = context.wrap_socket(
+                raw_socket,
+                server_hostname=target.hostname,
+            )
+        except Exception:
+            raw_socket.close()
+            raise
+        connection: http.client.HTTPConnection = http.client.HTTPSConnection(
+            target.hostname,
+            target.port,
+            timeout=timeout,
+            context=context,
+        )
+    else:
+        connected_socket = raw_socket
+        connection = http.client.HTTPConnection(
+            target.hostname,
+            target.port,
+            timeout=timeout,
+        )
+    connection.sock = connected_socket
+    headers = dict(req.header_items())
+    headers["Host"] = target.host_header
+    try:
+        connection.request(
+            req.get_method(),
+            target.request_target,
+            body=req.data,
+            headers=headers,
+        )
+        response = connection.getresponse()
+    except Exception:
+        connection.close()
+        raise
+    return _PinnedHTTPResponse(connection, response, target.url)
+
+
+def _open_public_url(
+    req: request.Request,
+    *,
+    timeout: int,
+    target: _ResolvedPublicTarget | None = None,
+) -> _PinnedHTTPResponse:
+    """Open a pinned public URL, resolving and re-pinning every redirect hop."""
+    current = target or _resolve_public_http_target(req.full_url)
+    current_request = req
+    for _redirect in range(6):
+        response = _request_pinned_target(current, current_request, timeout=timeout)
+        if response.status in {301, 302, 303, 307, 308}:
+            location = response.getheader("Location")
+            response.close()
+            if not location:
+                raise UnsafeURL("Redirect response did not provide a target URL.")
+            next_url = parse.urljoin(current.url, str(location))
+            current = _resolve_public_http_target(next_url)
+            current_request = request.Request(
+                current.url,
+                headers=dict(req.header_items()),
+                method="GET",
+            )
+            continue
+        if response.status >= 400:
+            status = response.status
+            response.close()
+            raise OSError(f"HTTP Error {status}")
+        return response
+    raise UnsafeURL("Too many URL redirects.")
+
+
 def _fetch_url_metadata(url: str) -> Dict[str, Any]:
-    if not url.lower().startswith(("http://", "https://")):
+    try:
+        target = _resolve_public_http_target(url)
+    except UnsafeURL as exc:
         return {
-            "status": "invalid_url",
+            "status": "unsafe_url",
             "network_calls": 0,
-            "reason": "URL must start with http:// or https://.",
+            "reason": str(exc),
         }
-    doi_hint = _doi_from_text(parse.unquote(url))
+    doi_hint = _doi_from_text(parse.unquote(target.url))
     calls = 0
     fetch_error = ""
     title = ""
@@ -2940,12 +3173,23 @@ def _fetch_url_metadata(url: str) -> Dict[str, Any]:
     raw = b""
     try:
         req = request.Request(
-            url, headers={"User-Agent": "EasyICU-local-metadata-resolver/1.0"}
+            target.url, headers={"User-Agent": "EasyICU-local-metadata-resolver/1.0"}
         )
-        with request.urlopen(req, timeout=_NETWORK_TIMEOUT_SEC) as resp:
+        with _open_public_url(
+            req,
+            timeout=_NETWORK_TIMEOUT_SEC,
+            target=target,
+        ) as resp:
             calls += 1
             raw = resp.read(_MAX_FETCH_BYTES)
         text = raw.decode("utf-8", errors="replace")
+    except UnsafeURL as exc:
+        return {
+            "status": "unsafe_url",
+            "network_calls": 1,
+            "reason": str(exc),
+            "doi": doi_hint or None,
+        }
     except Exception as exc:
         calls += 1
         fetch_error = str(exc)[:240]

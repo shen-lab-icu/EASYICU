@@ -27,6 +27,8 @@ import re
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
+from easyicu.webserver.input_validation import parse_bool
+
 # Core metadata tables per database — a folder that holds these (as parquet or
 # csv) is recognised as that database. Mirrors check_data_status' core_tables.
 _CORE_TABLES = {
@@ -48,6 +50,7 @@ _DB_LABELS = {
 
 _MODULE_MANIFESTS = ("easyicu_export_manifest.json", "_manifest.json")
 DEFAULT_OBSERVATION_WINDOW_HOURS = 24 * 30
+_WORKSPACE_SAMPLE_LIMIT = 500
 
 _COHORT_PROGRESS_MESSAGES = {
     "normalizing": "Preparing cohort contract",
@@ -948,9 +951,9 @@ def _shareable_path_reference(
             pass
     return {
         "hint": hint,
-        "sha256_12": hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
-        if raw
-        else "",
+        "sha256_12": (
+            hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12] if raw else ""
+        ),
         "absolute_path_omitted": bool(raw and path.is_absolute()),
     }
 
@@ -1135,7 +1138,18 @@ def _normalize_export_cohort(cohort: Optional[Dict[str, Any]]) -> Dict[str, Any]
         or raw.get("exclude")
         or ""
     )
-    icd_enabled = bool(raw.get("icd_enabled")) or preset == "icd"
+    try:
+        icd_enabled = (
+            parse_bool(raw.get("icd_enabled"), default=False) or preset == "icd"
+        )
+        exclude_readmissions = parse_bool(
+            raw.get("exclude_readmissions"), default=preset == "adult_first"
+        )
+    except ValueError as exc:
+        raise ExportCohortError(
+            "invalid_cohort_boolean",
+            {"fields": ["icd_enabled", "exclude_readmissions"]},
+        ) from exc
     if not icd_enabled:
         include = []
         exclude = []
@@ -1164,9 +1178,7 @@ def _normalize_export_cohort(cohort: Optional[Dict[str, Any]]) -> Dict[str, Any]
         "age_max": age_max,
         "min_icu_los_hours": min_los,
         "observation_window_hours": window,
-        "exclude_readmissions": bool(
-            raw.get("exclude_readmissions", preset == "adult_first")
-        ),
+        "exclude_readmissions": exclude_readmissions,
         "icd_enabled": icd_enabled,
         "icd_include": include,
         "icd_exclude": exclude,
@@ -1868,12 +1880,12 @@ def make_export_runner(
             "total_rows": sum(f["rows"] for f in files),
             "manifest": "_manifest.json",
             "readme": "README.md",
-            "feature_definitions": "feature_definitions.json"
-            if definition_files
-            else None,
-            "feature_definitions_csv": "feature_definitions.csv"
-            if definition_files
-            else None,
+            "feature_definitions": (
+                "feature_definitions.json" if definition_files else None
+            ),
+            "feature_definitions_csv": (
+                "feature_definitions.csv" if definition_files else None
+            ),
         }
 
     return runner
@@ -1906,30 +1918,76 @@ def summarize_export_workspace(raw_path: str) -> Dict[str, Any]:
             manifest = {}
 
     files = _export_file_inventory(path, manifest)
+    module_files = {
+        module: next((f for f in files if f.get("module") == module), None)
+        for module in (
+            "demographics",
+            "outcome",
+            "vitals",
+            "sofa2_score",
+            "sepsis3_sofa2",
+        )
+    }
+    id_file = module_files.get("demographics") or next(
+        (f for f in files if "stay_id" in (f.get("columns") or [])),
+        None,
+    )
+    if id_file is None:
+        return {
+            "ok": False,
+            "error": "no_stay_id",
+            "path": str(path),
+            "files": files,
+        }
+    id_frame = _read_stay_id_frame(path / str(id_file["file"]))
+    if id_frame is None or id_frame.empty or "stay_id" not in id_frame.columns:
+        return {
+            "ok": False,
+            "error": "no_stay_id",
+            "path": str(path),
+            "files": files,
+        }
+    all_stay_ids = [
+        stay_id
+        for stay_id in id_frame["stay_id"].map(_norm_id).drop_duplicates().tolist()
+        if stay_id
+    ]
+    total_stays = len(all_stay_ids)
+    sampled_id_order = all_stay_ids[:_WORKSPACE_SAMPLE_LIMIT]
+    stay_ids = set(sampled_id_order)
+
+    selected_columns = {
+        "demographics": ["stay_id", "age", "sex"],
+        "outcome": ["stay_id", "death", "los_icu"],
+        "vitals": ["stay_id", "charttime", "hr", "map", "spo2", "temp"],
+        "sofa2_score": ["stay_id", "sofa2"],
+        "sepsis3_sofa2": ["stay_id", "sep3_sofa2"],
+    }
     frames: Dict[str, Any] = {}
-    for module in ("demographics", "outcome", "vitals", "sofa2_score", "sepsis3_sofa2"):
-        hit = next((f for f in files if f.get("module") == module), None)
+    for module, hit in module_files.items():
         if hit:
-            frames[module] = _read_export_frame(path / str(hit["file"]))
+            frames[module] = _read_export_frame(
+                path / str(hit["file"]),
+                columns=selected_columns[module],
+                stay_ids=stay_ids,
+            )
 
     demo = frames.get("demographics")
     if demo is None or demo.empty:
-        first = next(
-            (f for f in frames.values() if f is not None and not f.empty), None
-        )
-        if first is None or "stay_id" not in first.columns:
-            return {
-                "ok": False,
-                "error": "no_stay_id",
-                "path": str(path),
-                "files": files,
-            }
-        demo = first[["stay_id"]].drop_duplicates().head(100).copy()
+        import pandas as pd
+
+        demo = pd.DataFrame({"stay_id": sampled_id_order})
 
     demo = demo.copy()
     demo["stay_id"] = demo["stay_id"].map(_norm_id)
-    demo = demo.drop_duplicates("stay_id").head(500)
-    stay_ids = {sid for sid in demo["stay_id"].dropna().astype(str) if sid}
+    demo = demo[demo["stay_id"].astype(str).str.len() > 0].drop_duplicates("stay_id")
+    demo = demo.head(_WORKSPACE_SAMPLE_LIMIT)
+    sampled_stays = len(stay_ids)
+    snapshot_basis = (
+        f"bounded_first_{_WORKSPACE_SAMPLE_LIMIT}_stays"
+        if sampled_stays < total_stays
+        else "complete_export"
+    )
 
     outcome = _filter_by_stay(frames.get("outcome"), stay_ids)
     sofa2 = _filter_by_stay(frames.get("sofa2_score"), stay_ids)
@@ -1977,11 +2035,20 @@ def summarize_export_workspace(raw_path: str) -> Dict[str, Any]:
         "sepsis3": bool(sep_by_stay.get(first_id)) if first_id in sep_by_stay else None,
     }
 
+    sampled_rows = _cohort_total_rows(path, files, stay_ids)
+    manifest_rows = sum(
+        int(file_meta.get("rows") or 0) for file_meta in files if file_meta.get("rows")
+    )
     summary = {
-        "stays": len(stay_ids),
+        "stays": total_stays,
+        "total_stays": total_stays,
+        "sampled_stays": sampled_stays,
+        "sample_limit": _WORKSPACE_SAMPLE_LIMIT,
+        "snapshot_basis": snapshot_basis,
         "modules": len({f.get("module") for f in files if f.get("module")}),
         "file_count": len(files),
-        "total_rows": _cohort_total_rows(path, files, stay_ids),
+        "total_rows": manifest_rows or sampled_rows,
+        "sampled_rows": sampled_rows,
         "mean_age": _series_mean(demo.get("age")),
         "female_pct": _sex_pct(demo.get("sex"), "female"),
         "mortality": _bool_pct(list(death_by_stay.values())),
@@ -1991,6 +2058,13 @@ def summarize_export_workspace(raw_path: str) -> Dict[str, Any]:
     }
 
     cohort = _cohort_summary(cohort_rows)
+    cohort.update(
+        {
+            "total_stays": total_stays,
+            "sampled_stays": sampled_stays,
+            "snapshot_basis": snapshot_basis,
+        }
+    )
     quality = [
         _quality_row(path / str(f["file"]), f, stay_ids) for f in files if f.get("file")
     ]
@@ -2399,14 +2473,113 @@ def _crossdb_label(result: Dict[str, Any]) -> str:
     return path.name or "local"
 
 
-def _read_export_frame(path: Path) -> Any:
+def _read_export_frame(
+    path: Path,
+    *,
+    columns: Optional[List[str]] = None,
+    stay_ids: Optional[set[str]] = None,
+) -> Any:
+    return _read_export_projection(path, columns=columns, stay_ids=stay_ids)
+
+
+def _read_stay_id_frame(
+    path: Path,
+    *,
+    stay_ids: Optional[set[str]] = None,
+) -> Any:
+    return _read_export_projection(
+        path,
+        columns=["stay_id"],
+        stay_ids=stay_ids,
+    )
+
+
+def _read_export_projection(
+    path: Path,
+    *,
+    columns: Optional[List[str]],
+    stay_ids: Optional[set[str]],
+) -> Any:
+    """Read projected export columns, pushing a bounded stay filter when set."""
     import pandas as pd
 
-    if path.suffix.lower() == ".parquet":
-        return pd.read_parquet(path)
-    if path.suffix.lower() == ".xlsx":
-        return pd.read_excel(path)
-    return pd.read_csv(path)
+    suffix = path.suffix.lower()
+    available = _read_columns(path)
+    selected = (
+        [column for column in columns if column in available]
+        if columns is not None
+        else list(available)
+    )
+    if stay_ids is not None and "stay_id" in available and "stay_id" not in selected:
+        selected.insert(0, "stay_id")
+    if not selected:
+        return pd.DataFrame()
+    if stay_ids is not None and not stay_ids:
+        return pd.DataFrame(columns=selected)
+
+    if suffix == ".parquet":
+        try:
+            import pyarrow as pa
+            import pyarrow.compute as pc
+            import pyarrow.dataset as ds
+
+            dataset = ds.dataset(path, format="parquet")
+            filter_expression = None
+            if stay_ids is not None:
+                if "stay_id" not in dataset.schema.names:
+                    return pd.DataFrame(columns=selected)
+                field_type = dataset.schema.field("stay_id").type
+                values = pc.cast(pa.array(sorted(stay_ids)), field_type)
+                filter_expression = ds.field("stay_id").isin(values)
+            return dataset.to_table(
+                columns=selected,
+                filter=filter_expression,
+            ).to_pandas()
+        except Exception:
+            return _read_export_frame_duckdb(
+                path,
+                selected,
+                stay_ids=stay_ids,
+                source="parquet",
+            )
+    if suffix == ".csv":
+        return _read_export_frame_duckdb(
+            path,
+            selected,
+            stay_ids=stay_ids,
+            source="csv",
+        )
+    frame = pd.read_excel(path, usecols=selected)
+    if stay_ids is not None and "stay_id" in frame.columns:
+        frame = frame[frame["stay_id"].map(_norm_id).isin(stay_ids)].copy()
+    return frame
+
+
+def _read_export_frame_duckdb(
+    path: Path,
+    columns: List[str],
+    *,
+    stay_ids: Optional[set[str]],
+    source: str,
+) -> Any:
+    import duckdb
+
+    projection = ", ".join(
+        f'"{column.replace(chr(34), chr(34) * 2)}"' for column in columns
+    )
+    reader = (
+        "read_parquet(?)" if source == "parquet" else "read_csv_auto(?, header=true)"
+    )
+    query = f"SELECT {projection} FROM {reader}"
+    params: List[Any] = [str(path)]
+    if stay_ids is not None:
+        query += ' WHERE CAST("stay_id" AS VARCHAR) IN (SELECT UNNEST(?))'
+        params.append(sorted(stay_ids))
+    connection = duckdb.connect(database=":memory:")
+    try:
+        return connection.execute(query, params).fetch_df()
+    finally:
+        connection.close()
 
 
 def _read_columns(path: Path) -> List[str]:
@@ -2447,17 +2620,12 @@ def _count_rows(path: Path) -> int:
         return 0
 
 
-def _read_stay_ids(path: Path) -> Optional[set[str]]:
+def _read_stay_ids(
+    path: Path,
+    stay_ids: Optional[set[str]] = None,
+) -> Optional[set[str]]:
     try:
-        import pandas as pd
-
-        suffix = path.suffix.lower()
-        if suffix == ".parquet":
-            frame = pd.read_parquet(path, columns=["stay_id"])
-        elif suffix == ".xlsx":
-            frame = pd.read_excel(path, usecols=["stay_id"])
-        else:
-            frame = pd.read_csv(path, usecols=["stay_id"])
+        frame = _read_stay_id_frame(path, stay_ids=stay_ids)
     except Exception:
         return None
     if "stay_id" not in frame.columns:
@@ -2670,15 +2838,7 @@ def _cohort_total_rows(
 
 def _count_matching_stay_rows(path: Path, stay_ids: set[str]) -> int:
     try:
-        import pandas as pd
-
-        suffix = path.suffix.lower()
-        if suffix == ".parquet":
-            frame = pd.read_parquet(path, columns=["stay_id"])
-        elif suffix == ".xlsx":
-            frame = pd.read_excel(path, usecols=["stay_id"])
-        else:
-            frame = pd.read_csv(path, usecols=["stay_id"])
+        frame = _read_stay_id_frame(path, stay_ids=stay_ids)
     except Exception:
         return 0
     if "stay_id" not in frame.columns:
@@ -2692,7 +2852,7 @@ def _quality_row(
     module = file_meta.get("module")
     rows = int(file_meta.get("rows") or 0)
     denominator = len(stay_ids)
-    file_stays = _read_stay_ids(path)
+    file_stays = _read_stay_ids(path, stay_ids=stay_ids)
     unique_stays = len(file_stays & stay_ids) if file_stays is not None else None
     coverage = (
         round(unique_stays / denominator * 100, 1)

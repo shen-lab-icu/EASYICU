@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -62,13 +63,17 @@ def test_idea_mining_ingests_selected_local_pdf_metadata_only(tmp_path: Path) ->
     assert "septic shock mortality" in payload["pdf"]["excerpt"]
     assert payload["suggested_payload"]["source_type"] == "pdf"
     assert payload["suggested_payload"]["source_file_name"] == "shock-paper.pdf"
-    assert payload["suggested_payload"]["source_file_sha256"] == payload["pdf"]["sha256"]
+    assert (
+        payload["suggested_payload"]["source_file_sha256"] == payload["pdf"]["sha256"]
+    )
     assert "stay_id" not in str(payload)
     assert "subject_id" not in str(payload)
     assert "tableRows" not in str(payload)
 
 
-def test_idea_mining_scans_local_literature_folder_without_full_text_persistence(tmp_path: Path) -> None:
+def test_idea_mining_scans_local_literature_folder_without_full_text_persistence(
+    tmp_path: Path,
+) -> None:
     literature = tmp_path / "papers"
     literature.mkdir()
     _write_pdf(
@@ -112,7 +117,7 @@ def test_idea_url_resolution_falls_back_to_crossref_when_journal_html_blocks(
         def read(self, limit: int = -1) -> bytes:
             return self.payload if limit < 0 else self.payload[:limit]
 
-    def fake_urlopen(req, timeout=0):  # type: ignore[no-untyped-def]
+    def fake_urlopen(req, timeout=0, **kwargs):  # type: ignore[no-untyped-def]
         url = getattr(req, "full_url", str(req))
         calls.append(url)
         if "api.crossref.org" not in url:
@@ -131,6 +136,12 @@ def test_idea_url_resolution_falls_back_to_crossref_when_journal_html_blocks(
             ).encode("utf-8")
         )
 
+    monkeypatch.setattr(
+        idea_mining,
+        "_resolve_public_http_target",
+        lambda url: SimpleNamespace(url=str(url)),
+    )
+    monkeypatch.setattr(idea_mining, "_open_public_url", fake_urlopen)
     monkeypatch.setattr(idea_mining.request, "urlopen", fake_urlopen)
 
     payload = idea_mining.resolve_source(
@@ -145,12 +156,21 @@ def test_idea_url_resolution_falls_back_to_crossref_when_journal_html_blocks(
     assert payload["source_adapter"]["status"] == "metadata_fetched"
     assert payload["source_adapter"]["metadata_source"] == "crossref"
     assert payload["source_adapter"]["network_calls"] == 2
-    assert payload["suggested_payload"]["title"] == "Vasopressors or Fluids in Early Septic Shock"
-    assert payload["suggested_payload"]["topic"] == "Vasopressors or Fluids in Early Septic Shock"
+    assert (
+        payload["suggested_payload"]["title"]
+        == "Vasopressors or Fluids in Early Septic Shock"
+    )
+    assert (
+        payload["suggested_payload"]["topic"]
+        == "Vasopressors or Fluids in Early Septic Shock"
+    )
     assert payload["suggested_payload"]["journal"] == "New England Journal of Medicine"
     assert payload["suggested_payload"]["year"] == 2026
     assert payload["suggested_payload"]["doi"] == "10.1056/NEJMoa2516225"
-    assert payload["resolved_source"]["title"] == "Vasopressors or Fluids in Early Septic Shock"
+    assert (
+        payload["resolved_source"]["title"]
+        == "Vasopressors or Fluids in Early Septic Shock"
+    )
 
 
 def test_idea_mining_maps_resolved_nejm_title_to_vasopressor_fluid_concepts(
@@ -248,15 +268,13 @@ def test_pasted_literature_source_flows_to_agent_project_list(
 
     imported = client.post(
         "/api/capabilities/zotero/import",
-        json={
-            "text": """@article{smith2026shock,
+        json={"text": """@article{smith2026shock,
               title={Early Vasopressors in Septic Shock},
               journal={Intensive Care Medicine},
               year={2026},
               doi={10.1000/example},
               abstract={Early vasopressors may define a measurable ICU exposure.}
-            }"""
-        },
+            }"""},
     )
     assert imported.status_code == 200
     source_payload = imported.json()["suggested_payload"]
@@ -304,7 +322,9 @@ def test_pasted_literature_source_flows_to_agent_project_list(
     assert listed.status_code == 200
     listed_body = listed.json()
     assert listed_body["privacy"]["patient_rows_returned"] is False
-    assert any(row["study_id"] == project["study_id"] for row in listed_body["projects"])
+    assert any(
+        row["study_id"] == project["study_id"] for row in listed_body["projects"]
+    )
     assert "stay_id" not in str(listed_body)
     assert "subject_id" not in str(listed_body)
 
@@ -358,11 +378,16 @@ def test_idea_plan_stage_precedes_agent_handoff_and_stays_metadata_only(
     assert plan["reference_analysis_patterns"]
     assert plan["clinical_icu_constraints"]
     assert plan["required_user_confirmations"]
-    assert "prepare or register a usable EasyICU export" in plan["required_user_confirmations"]
+    assert (
+        "prepare or register a usable EasyICU export"
+        in plan["required_user_confirmations"]
+    )
     assert isinstance(plan["analysis_plan"][0], dict)
     assert plan["analysis_plan"][0]["phase"] == "Question"
     assert "Freeze the clinical question" in plan["analysis_plan"][0]["title"]
-    assert "Prior work does not automatically block the idea" in str(plan["analysis_plan"])
+    assert "Prior work does not automatically block the idea" in str(
+        plan["analysis_plan"]
+    )
     assert plan["agent_boundary"]["agent_run_created"] is False
     assert plan["agent_boundary"]["draft_unlocked"] is False
     assert "target-trial-style translation" in str(plan["reference_analysis_patterns"])
@@ -445,14 +470,19 @@ def test_idea_mining_does_not_recommend_mock_export_as_real_feasibility(
     assert "real EasyICU export" in idea["next_action"]
 
 
-def test_idea_literature_discovery_blocks_without_network_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_idea_literature_discovery_blocks_without_network_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     def fail_network(*args, **kwargs):  # type: ignore[no-untyped-def]
         raise AssertionError("network should not be called without opt-in")
 
     monkeypatch.setattr(idea_mining, "_pubmed_esearch", fail_network)
     response = TestClient(app).post(
         "/api/ideas/discover",
-        json={"topic": "septic shock vasopressor fluid mortality", "allow_network": False},
+        json={
+            "topic": "septic shock vasopressor fluid mortality",
+            "allow_network": False,
+        },
     )
 
     assert response.status_code == 200
@@ -481,7 +511,10 @@ def test_pubmed_connector_setting_blocks_idea_discovery_network(
 
     response = TestClient(app).post(
         "/api/ideas/discover",
-        json={"topic": "septic shock vasopressor fluid mortality", "allow_network": True},
+        json={
+            "topic": "septic shock vasopressor fluid mortality",
+            "allow_network": True,
+        },
     )
 
     assert response.status_code == 200
@@ -495,7 +528,9 @@ def test_pubmed_connector_setting_blocks_idea_discovery_network(
 def test_idea_literature_discovery_maps_pubmed_candidates_metadata_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(idea_mining, "_pubmed_esearch", lambda query, limit=5: ["12345"])
+    monkeypatch.setattr(
+        idea_mining, "_pubmed_esearch", lambda query, limit=5: ["12345"]
+    )
     monkeypatch.setattr(
         idea_mining,
         "_pubmed_article_records",
@@ -678,9 +713,7 @@ def test_blocked_prior_art_recheck_does_not_clobber_successful_review(
     assert blocked["prior_art"]["search_performed"] is False
     assert blocked["persisted"] is False
     assert blocked["retained_prior_art_status"] == "searched_no_hits"
-    on_disk = json.loads(
-        (run_dir / "prior_art_check.json").read_text(encoding="utf-8")
-    )
+    on_disk = json.loads((run_dir / "prior_art_check.json").read_text(encoding="utf-8"))
     assert on_disk["prior_art"]["search_performed"] is True
     assert on_disk["prior_art"]["status"] == "searched_no_hits"
 
@@ -689,9 +722,7 @@ def test_execution_gate_treats_failed_prior_art_search_as_unreviewed() -> None:
     """status=search_failed returned no reviewable metadata; the gate stays closed."""
     idea = {"go_no_go": "recommend"}
     pre_experiment = {"status": "ready", "missing_required_concepts": []}
-    failed_check = {
-        "prior_art": {"status": "search_failed", "search_performed": True}
-    }
+    failed_check = {"prior_art": {"status": "search_failed", "search_performed": True}}
     gate = idea_mining._execution_gate(idea, pre_experiment, failed_check)
     assert "run prior-art review before Agent execution" in gate["blockers"]
 

@@ -20,6 +20,7 @@ OUTPUT_ARTIFACT_NAMES = [
 ]
 
 _ENTITY_COLUMN = "stay_id"
+_ENTITY_SAMPLE_LIMIT = 500
 _HIDDEN_COLUMNS = {
     "stay_id",
     "subject_id",
@@ -63,16 +64,18 @@ def build_agent_output_artifacts(
     context = _load_context(export_path, source)
     frames = context["frames"]
     entity_ids = context["entity_ids"]
+    sampling = context["sampling"]
+    analysis_summary = {**summary, **sampling}
     death_by_entity = _bool_by_entity(
         frames.get("outcome"), "death", missing_false=True
     )
     feature_values = _feature_values_by_entity(frames, entity_ids)
     predictor = _select_predictor(feature_values, death_by_entity)
 
-    return {
+    artifacts = {
         "table1_summary.json": _table1_payload(
             source=source,
-            summary=summary,
+            summary=analysis_summary,
             cohort=cohort,
             frames=frames,
             entity_ids=entity_ids,
@@ -80,24 +83,27 @@ def build_agent_output_artifacts(
         ),
         "missingness_audit.json": _missingness_payload(
             source=source,
-            summary=summary,
+            summary=analysis_summary,
             quality=quality,
             frames=frames,
             entity_ids=entity_ids,
         ),
         "roc_curve.json": _roc_payload(
             source=source,
-            summary=summary,
+            summary=analysis_summary,
             predictor=predictor,
             death_by_entity=death_by_entity,
         ),
         "calibration_curve.json": _calibration_payload(
             source=source,
-            summary=summary,
+            summary=analysis_summary,
             predictor=predictor,
             death_by_entity=death_by_entity,
         ),
     }
+    for artifact in artifacts.values():
+        artifact["sampling"] = sampling
+    return artifacts
 
 
 def _is_metadata_only_summary(summary: Dict[str, Any]) -> bool:
@@ -261,7 +267,7 @@ def _metadata_features(source: Dict[str, Any]) -> List[Dict[str, Any]]:
 def _load_context(export_path: str, source: Dict[str, Any]) -> Dict[str, Any]:
     root = Path(export_path).expanduser()
     files = [f for f in source.get("files", []) if isinstance(f, dict)]
-    frames: Dict[str, Any] = {}
+    entries: List[Tuple[str, Path, Dict[str, Any]]] = []
     for meta in files:
         module = str(meta.get("module") or "")
         file_name = str(meta.get("file") or "")
@@ -270,8 +276,54 @@ def _load_context(export_path: str, source: Dict[str, Any]) -> Dict[str, Any]:
         path = root / file_name
         if not path.exists() or not path.is_file():
             continue
+        entries.append((module, path, meta))
+
+    id_entry = next((entry for entry in entries if entry[0] == "demographics"), None)
+    if id_entry is None:
+        id_entry = next(
+            (
+                entry
+                for entry in entries
+                if _ENTITY_COLUMN
+                in (entry[2].get("columns") or dataio._read_columns(entry[1]))
+            ),
+            None,
+        )
+    all_entity_ids: List[str] = []
+    if id_entry is not None:
         try:
-            frame = dataio._read_export_frame(path)  # local exported module table
+            id_frame = dataio._read_stay_id_frame(id_entry[1])
+        except Exception:
+            id_frame = None
+        if (
+            id_frame is not None
+            and not getattr(id_frame, "empty", True)
+            and _ENTITY_COLUMN in id_frame.columns
+        ):
+            all_entity_ids = [
+                sid
+                for sid in id_frame[_ENTITY_COLUMN]
+                .map(dataio._norm_id)
+                .drop_duplicates()
+                .tolist()
+                if sid
+            ]
+    entity_ids = all_entity_ids[:_ENTITY_SAMPLE_LIMIT]
+    entity_set = set(entity_ids)
+    frames: Dict[str, Any] = {}
+    for module, path, meta in entries:
+        available = list(meta.get("columns") or dataio._read_columns(path))
+        columns = [_ENTITY_COLUMN] + [
+            column
+            for column in available
+            if column != _ENTITY_COLUMN and not _is_hidden_column(str(column))
+        ]
+        try:
+            frame = dataio._read_export_frame(
+                path,
+                columns=columns,
+                stay_ids=entity_set,
+            )
         except Exception:
             continue
         if (
@@ -283,42 +335,22 @@ def _load_context(export_path: str, source: Dict[str, Any]) -> Dict[str, Any]:
         frame = frame.copy()
         frame[_ENTITY_COLUMN] = frame[_ENTITY_COLUMN].map(dataio._norm_id)
         frames[module] = frame
-
-    demo = frames.get("demographics")
-    entity_ids: List[str] = []
-    if demo is not None and _ENTITY_COLUMN in demo.columns:
-        entity_ids = [
-            sid
-            for sid in demo[_ENTITY_COLUMN]
-            .dropna()
-            .astype(str)
-            .drop_duplicates()
-            .head(500)
-            .tolist()
-            if sid
-        ]
-    if not entity_ids:
-        for frame in frames.values():
-            if _ENTITY_COLUMN in frame.columns:
-                entity_ids = [
-                    sid
-                    for sid in frame[_ENTITY_COLUMN]
-                    .dropna()
-                    .astype(str)
-                    .drop_duplicates()
-                    .head(500)
-                    .tolist()
-                    if sid
-                ]
-                if entity_ids:
-                    break
-    entity_set = set(entity_ids)
-    if entity_set:
-        frames = {
-            module: frame[frame[_ENTITY_COLUMN].astype(str).isin(entity_set)].copy()
-            for module, frame in frames.items()
-        }
-    return {"frames": frames, "entity_ids": entity_ids}
+    sampled_entities = len(entity_ids)
+    total_entities = len(all_entity_ids)
+    return {
+        "frames": frames,
+        "entity_ids": entity_ids,
+        "sampling": {
+            "total_entities": total_entities,
+            "sampled_entities": sampled_entities,
+            "sample_limit": _ENTITY_SAMPLE_LIMIT,
+            "snapshot_basis": (
+                f"bounded_first_{_ENTITY_SAMPLE_LIMIT}_stays"
+                if sampled_entities < total_entities
+                else "complete_export"
+            ),
+        },
+    }
 
 
 def _table1_payload(
