@@ -136,7 +136,7 @@ def test_corrupt_single_parquet_output_requires_reconversion(tmp_path: Path) -> 
     assert reason == "parquet file corrupted"
 
 
-def test_hirid_readiness_accepts_source_named_general_table_parquet(
+def test_hirid_readiness_rejects_untracked_source_named_general_table_parquet(
     tmp_path: Path,
 ) -> None:
     csv_path = tmp_path / "general_table.csv"
@@ -149,9 +149,13 @@ def test_hirid_readiness_accepts_source_named_general_table_parquet(
     converter = DataConverter(tmp_path, database="hirid", verbose=False)
 
     needs_conversion, reason = converter._is_conversion_needed(csv_path)
-    assert not needs_conversion
-    assert "parquet" in reason
-    assert converter.is_ready() == (True, [])
+    assert needs_conversion
+    assert reason == "parquet exists without completed conversion status"
+    ready, missing = converter.is_ready()
+    assert not ready
+    assert missing == [
+        "general_table.csv: parquet exists without completed conversion status"
+    ]
 
 
 def test_hirid_status_verification_uses_selected_parquet_candidate(

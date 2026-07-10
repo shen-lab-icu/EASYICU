@@ -2811,15 +2811,15 @@ def load_bucketed_table_aggregated(
 ) -> pd.DataFrame:
     """
     🚀 高性能分桶表加载：在DuckDB中完成聚合降采样
-    
+
     针对AUMC numericitems、HiRID observations等分桶表优化。
     直接在DuckDB中完成小时聚合，避免加载3700万行到Python再降采样。
-    
+
     关键优化：
     - 只扫描目标桶（而非全部100个桶）
     - 在DuckDB中完成时间聚合（37M → 2.5M行）
     - 显著降低内存使用（<500MB vs 5GB+）
-    
+
     Args:
         data_source: ICU数据源
         table_name: 原始表名（如'numericitems'），会自动查找对应的分桶目录
@@ -2830,13 +2830,15 @@ def load_bucketed_table_aggregated(
         agg_func: 聚合函数，默认'median'（与R ricu一致）
         id_col: ID列名（可选，默认根据数据库推断）
         time_col: 时间列名（可选，默认根据数据库推断）
-        
+
     Returns:
         聚合后的DataFrame
     """
     import duckdb
     
     # 确定数据库类型
+    if patient_ids is not None and len(patient_ids) == 0:
+        return pd.DataFrame()
     db_name = data_source.config.name if hasattr(data_source.config, 'name') else 'unknown'
     
     # 🔧 直接查找分桶目录（不依赖_resolve_loader_from_disk）
@@ -3017,6 +3019,9 @@ def load_bucketed_table_aggregated(
                 pass
 
     # 构建WHERE条件
+    _has_inline_convert = (
+        convert_unit_op is not None and convert_unit_factor is not None
+    )
     where_conditions = []
     
     # itemid过滤 (handle both numeric and string itemids)
@@ -3040,13 +3045,8 @@ def load_bucketed_table_aggregated(
     # 🚀 当 value_transform 或 inline convert_unit 存在时，min/max 不在 WHERE 过滤 raw column
     # - value_transform (fahr_to_cels/percent_as_numeric): raw column 可能是 VARCHAR 或不同单位
     # - _has_inline_convert (binary_op(*, factor)): raw 值单位与 min/max 不同（如 µmol/L vs mg/dL）
-    # R ricu 流程: callback(convert) → change_interval(aggregate) → filter_bounds
-    # 所以 bounds 应该在 post-aggregation 阶段（concept.py ~L3838）应用
-    if not value_transform and not (convert_unit_op is not None and convert_unit_factor is not None):
-        if value_min is not None:
-            where_conditions.append(f"{_value_col_numeric} >= {value_min}")
-        if value_max is not None:
-            where_conditions.append(f"{_value_col_numeric} <= {value_max}")
+    # 对这些路径不能在 WHERE 中按 raw column 过滤；下方会先转换每个原始值，
+    # 再用 CASE 应用 bounds 后聚合，并保留 raw/bounded counts 供 unit-suspect 审计。
     
     where_clause = "WHERE " + " AND ".join(where_conditions)
     
@@ -3066,7 +3066,35 @@ def load_bucketed_table_aggregated(
     # 🚀 DuckDB内联convert_unit：在聚合前转换单位值
     # 当 convert_unit_op/factor 有效时，用 CASE WHEN 在聚合前转换值
     # 并且不按 itemid 分组（R ricu 行为：跨 itemid 取 median）
-    _has_inline_convert = (convert_unit_op is not None and convert_unit_factor is not None)
+    _raw_count_col = "__easyicu_raw_transformed_non_null"
+    _bounded_count_col = "__easyicu_bounded_transformed_non_null"
+    _needs_bounds_diagnostics = bool(
+        value_min is not None or value_max is not None
+    )
+
+    def _bounded_value(expr: str) -> str:
+        """Return the transformed value with declared bounds applied per row."""
+        conditions = []
+        if value_min is not None:
+            conditions.append(f"({expr}) >= {value_min}")
+        if value_max is not None:
+            conditions.append(f"({expr}) <= {value_max}")
+        if conditions:
+            return f"CASE WHEN {' AND '.join(conditions)} THEN ({expr}) END"
+        return expr
+
+    def _aggregate_select(expr: str):
+        """Build bounded aggregation plus raw-value diagnostics."""
+        bounded_expr = _bounded_value(expr)
+        bounded_agg = f"{duckdb_agg}({bounded_expr})"
+        unbounded_agg = f"{duckdb_agg}({expr})"
+        select = f"{bounded_agg} as {value_column}"
+        if _needs_bounds_diagnostics:
+            select += (
+                f", COUNT({expr}) as {_raw_count_col}"
+                f", COUNT({bounded_expr}) as {_bounded_count_col}"
+            )
+        return select, bounded_agg, unbounded_agg
     
     # 🔧 FIX: 如果 convert_unit_filter 需要 unit 列但表没有该列，
     # 仍然应用转换（匹配 R ricu 行为：无 unit 列时按 item ID 的隐含单位转换）。
@@ -3094,7 +3122,7 @@ def load_bucketed_table_aggregated(
     
     if _has_inline_convert:
         # 构建 CASE WHEN 表达式做单位转换
-        _op_sql = {'*': '*', '/': '/', '+': '+', '-': '-'}.get(convert_unit_op, '*')
+        _op_sql = {"*": "*", "/": "/", "+": "+", "-": "-"}.get(convert_unit_op, "*")
         if convert_unit_filter:
             # 有单位过滤：只对匹配的行做转换
             # 使用 DuckDB regexp_matches 进行正则匹配（case-insensitive）
@@ -3102,16 +3130,20 @@ def load_bucketed_table_aggregated(
         else:
             # 无单位过滤：转换所有行
             _value_expr = f"{value_column} {_op_sql} {convert_unit_factor}"
-        _agg_value_expr = f"{duckdb_agg}({_value_expr}) as {value_column}"
+        _agg_value_expr, _bounded_agg, _unbounded_agg = _aggregate_select(_value_expr)
     elif value_transform:
         # 🚀 通用值转换表达式（percent_as_numeric, set_val_na, fahr_to_cels）
-        # R ricu 流程: callback → change_interval(aggregate) → filter_bounds
-        # filter_bounds 在 aggregation 之后执行，所以 DuckDB 只做 MEDIAN(transform)
-        # 不在 MEDIAN 内部过滤 min/max。post-agg filter_bounds 在 concept.py 中处理
-        _agg_value_expr = f"{duckdb_agg}({value_transform}) as {value_column}"
+        # 在聚合表达式内部对转换后的原始值应用 bounds。
+        _agg_value_expr, _bounded_agg, _unbounded_agg = _aggregate_select(
+            value_transform
+        )
     else:
-        _agg_value_expr = f"{duckdb_agg}({_value_col_numeric}) as {value_column}"
+        _agg_value_expr, _bounded_agg, _unbounded_agg = _aggregate_select(
+            _value_col_numeric
+        )
     
+    _query_bounded_agg = _bounded_agg
+    _query_unbounded_agg = _unbounded_agg
     unit_select = ",\n            ANY_VALUE(unit) as unit" if include_unit else ""
     
     # R ricu 的 change_interval 聚合不按 itemid 分组:
@@ -3125,12 +3157,14 @@ def load_bucketed_table_aggregated(
     _select_itemid = ""
     _order_itemid = ""
     
-    if db_name == 'aumc':
+    if db_name == "aumc":
         # AUMC measuredat是Unix毫秒时间戳，转换为分钟后再取整
         # NOTE: 这里输出的是分钟(measuredat_minutes)。分钟→小时的归一由 concept.py
         # 经 time_units.minutes_to_hours_series 单点完成（批量路径或 _align_time_to_admission，
         # 两者互斥，每列只转一次）。本层只产出分钟，不做单位换算。
-        time_round_expr = f"FLOOR(({time_col} / 60000.0) / {interval_minutes}) * {interval_minutes}"
+        time_round_expr = (
+            f"FLOOR(({time_col} / 60000.0) / {interval_minutes}) * {interval_minutes}"
+        )
         # 输出时间列为分钟偏移量（相对于admittedat）
         output_time_expr = f"{time_round_expr} as measuredat_minutes"
         # 标准查询
@@ -3144,55 +3178,72 @@ def load_bucketed_table_aggregated(
         GROUP BY {id_col}, {time_round_expr}{_group_itemid}
         ORDER BY {id_col}, 2{_order_itemid}
         """
-    elif db_name == 'hirid':
+    elif db_name == "hirid":
         # 🚀 HiRID 优化: 在 DuckDB 中直接完成时间转换（datetime → 相对入院小时数）
         # 这样避免了 Python 中的 merge + 时间计算开销（从 20s 优化到 0.6s）
         # 🔧 FIX: HiRID 的 general_table 可能有多种文件名和格式
-        general_path = data_source.base_path / 'general_table.parquet'
-        general_read_func = 'read_parquet'
+        general_path = data_source.base_path / "general_table.parquet"
+        general_read_func = "read_parquet"
         if not general_path.exists():
             # R ricu 惯例使用 general.parquet
-            general_alt = data_source.base_path / 'general.parquet'
+            general_alt = data_source.base_path / "general.parquet"
             if general_alt.exists():
                 general_path = general_alt
             else:
                 # 最后回退到 CSV
-                general_csv = data_source.base_path / 'general_table.csv'
+                general_csv = data_source.base_path / "general_table.csv"
                 if general_csv.exists():
                     general_path = general_csv
-                    general_read_func = 'read_csv'
-        
+                    general_read_func = "read_csv"
+
         # HiRID: 使用 general 表的 admissiontime 计算相对小时数
         time_round_expr = f"FLOOR(EPOCH(o.{time_col} - CAST(a.admissiontime AS TIMESTAMP)) / 3600.0 / {interval_minutes / 60}) * {interval_minutes / 60}"
         output_time_expr = f"{time_round_expr} as charttime"
-        
+
         # 🔧 修复: 为 HiRID 的 JOIN 查询添加表别名前缀
         # 因为使用了 JOIN，列名需要明确来自哪个表
-        hirid_where_clause = where_clause.replace(f'{itemid_col}', f'o.{itemid_col}')
-        hirid_where_clause = hirid_where_clause.replace(f'{id_col} IN', f'o.{id_col} IN')
-        
+        hirid_where_clause = where_clause.replace(f"{itemid_col}", f"o.{itemid_col}")
+        hirid_where_clause = hirid_where_clause.replace(
+            f"{id_col} IN", f"o.{id_col} IN"
+        )
+
         # 🚀 HiRID 内联 convert_unit
         if _has_inline_convert:
             # HiRID 内联 convert_unit: 为列名添加表别名 'o.'
-            _op_sql = {'*': '*', '/': '/', '+': '+', '-': '-'}.get(convert_unit_op, '*')
+            _op_sql = {"*": "*", "/": "/", "+": "+", "-": "-"}.get(convert_unit_op, "*")
             if convert_unit_filter:
                 _hirid_value_expr = f"CASE WHEN regexp_matches(CAST(o.{_unit_col_name} AS VARCHAR), '(?i){convert_unit_filter}') THEN o.{value_column} {_op_sql} {convert_unit_factor} ELSE o.{value_column} END"
             else:
                 _hirid_value_expr = f"o.{value_column} {_op_sql} {convert_unit_factor}"
-            _hirid_agg_expr = f"{duckdb_agg}({_hirid_value_expr}) as {value_column}"
+            _hirid_agg_expr, _query_bounded_agg, _query_unbounded_agg = (
+                _aggregate_select(_hirid_value_expr)
+            )
         elif value_transform:
-            # 🚀 通用值转换表达式 — post-agg filter_bounds 在 concept.py 中处理
-            _vt_aliased = value_transform.replace(f'"{value_column}"', f'o."{value_column}"')
-            _hirid_agg_expr = f"{duckdb_agg}({_vt_aliased}) as {value_column}"
+            # 🚀 通用值转换表达式 — bounds 在聚合表达式内部应用
+            _vt_aliased = value_transform.replace(
+                f'"{value_column}"', f'o."{value_column}"'
+            )
+            _hirid_agg_expr, _query_bounded_agg, _query_unbounded_agg = (
+                _aggregate_select(_vt_aliased)
+            )
         else:
-            _hirid_agg_expr = f"{duckdb_agg}(o.{value_column}) as {value_column}"
+            _hirid_value_expr = (
+                f"TRY_CAST(o.{value_column} AS DOUBLE)"
+                if _value_col_is_string
+                else f"o.{value_column}"
+            )
+            _hirid_agg_expr, _query_bounded_agg, _query_unbounded_agg = (
+                _aggregate_select(_hirid_value_expr)
+            )
         # R ricu 不按 variableid 分组（跨 variableid 池化取聚合）
         _hirid_group_itemid = ""
         _hirid_select_itemid = ""
         _hirid_order_itemid = ""
-        
-        hirid_unit_select = ",\n            ANY_VALUE(o.unit) as unit" if include_unit else ""
-        
+
+        hirid_unit_select = (
+            ",\n            ANY_VALUE(o.unit) as unit" if include_unit else ""
+        )
+
         query = f"""
         WITH adm AS (
             SELECT patientid, CAST(admissiontime AS TIMESTAMP) as admissiontime 
@@ -3208,84 +3259,115 @@ def load_bucketed_table_aggregated(
         GROUP BY o.{id_col}, {time_round_expr}{_hirid_group_itemid}
         ORDER BY o.{id_col}, 2{_hirid_order_itemid}
         """
-    elif db_name in ('miiv', 'miiv_demo', 'mimic', 'mimic_demo'):
+    elif db_name in ("miiv", "miiv_demo", "mimic", "mimic_demo"):
         # MIIV/MIMIC: charttime is absolute datetime, need JOIN with icustays to compute relative hours
         # Find icustays parquet
-        icustays_path = base_path / 'icustays.parquet'
+        icustays_path = base_path / "icustays.parquet"
         if not icustays_path.exists():
-            icustays_path = base_path / 'icu' / 'icustays.parquet'
+            icustays_path = base_path / "icu" / "icustays.parquet"
         if not icustays_path.exists():
             # Fallback: try CSV
-            icustays_csv = base_path / 'icustays.csv.gz'
+            icustays_csv = base_path / "icustays.csv.gz"
             if icustays_csv.exists():
                 icustays_path = icustays_csv
-        
-        stay_col = 'icustay_id' if db_name in ('mimic', 'mimic_demo') else 'stay_id'
-        
+
+        stay_col = "icustay_id" if db_name in ("mimic", "mimic_demo") else "stay_id"
+
         # Compute hours from admission: FLOOR(EPOCH(charttime - intime) / 3600)
         _interval_hours = interval_minutes / 60.0
         time_round_expr = f"FLOOR(EPOCH(o.{time_col} - CAST(a.intime AS TIMESTAMP)) / 3600.0 / {_interval_hours}) * {_interval_hours}"
         output_time_expr = f"{time_round_expr} as charttime"
-        
+
         # Alias value references for JOIN query
         if _has_inline_convert:
-            _op_sql = {'*': '*', '/': '/', '+': '+', '-': '-'}.get(convert_unit_op, '*')
+            _op_sql = {"*": "*", "/": "/", "+": "+", "-": "-"}.get(convert_unit_op, "*")
             if convert_unit_filter:
                 _mimic_value_expr = f"CASE WHEN regexp_matches(CAST(o.{_unit_col_name} AS VARCHAR), '(?i){convert_unit_filter}') THEN o.{value_column} {_op_sql} {convert_unit_factor} ELSE o.{value_column} END"
             else:
                 _mimic_value_expr = f"o.{value_column} {_op_sql} {convert_unit_factor}"
-            _mimic_agg_expr = f"{duckdb_agg}({_mimic_value_expr}) as {value_column}"
+            _mimic_agg_expr, _query_bounded_agg, _query_unbounded_agg = (
+                _aggregate_select(_mimic_value_expr)
+            )
         elif value_transform:
-            # 🚀 通用值转换表达式 — post-agg filter_bounds 在 concept.py 中处理
-            _vt_aliased = value_transform.replace(f'"{value_column}"', f'o."{value_column}"')
-            _mimic_agg_expr = f"{duckdb_agg}({_vt_aliased}) as {value_column}"
+            # 🚀 通用值转换表达式 — bounds 在聚合表达式内部应用
+            _vt_aliased = value_transform.replace(
+                f'"{value_column}"', f'o."{value_column}"'
+            )
+            _mimic_agg_expr, _query_bounded_agg, _query_unbounded_agg = (
+                _aggregate_select(_vt_aliased)
+            )
         else:
-            _mimic_agg_expr = f"{duckdb_agg}(o.{value_column}) as {value_column}"
-        _mimic_unit_select = ",\n            ANY_VALUE(o.unit) as unit" if include_unit else ""
-        
+            _mimic_value_expr = (
+                f"TRY_CAST(o.{value_column} AS DOUBLE)"
+                if _value_col_is_string
+                else f"o.{value_column}"
+            )
+            _mimic_agg_expr, _query_bounded_agg, _query_unbounded_agg = (
+                _aggregate_select(_mimic_value_expr)
+            )
+        _mimic_unit_select = (
+            ",\n            ANY_VALUE(o.unit) as unit" if include_unit else ""
+        )
+
         # Alias WHERE clause for JOIN
-        _mimic_where = where_clause.replace(f'{itemid_col}', f'o.{itemid_col}')
-        _mimic_where = _mimic_where.replace(f'{patient_filter_col} IN', f'o.{patient_filter_col} IN')
+        _mimic_where = where_clause.replace(f"{itemid_col}", f"o.{itemid_col}")
+        _mimic_where = _mimic_where.replace(
+            f"{patient_filter_col} IN", f"o.{patient_filter_col} IN"
+        )
         # Also handle value_column filters
-        _mimic_where = _mimic_where.replace(f'{value_column} >=', f'o.{value_column} >=')
-        _mimic_where = _mimic_where.replace(f'{value_column} <=', f'o.{value_column} <=')
-        _mimic_where = _mimic_where.replace(f'{value_column} IS NOT NULL', f'o.{value_column} IS NOT NULL')
-        
-        _read_func = 'read_csv' if str(icustays_path).endswith('.csv.gz') else 'read_parquet'
-        
-        if join_left_col == 'hadm_id':
+        _mimic_where = _mimic_where.replace(
+            f"{value_column} >=", f"o.{value_column} >="
+        )
+        _mimic_where = _mimic_where.replace(
+            f"{value_column} <=", f"o.{value_column} <="
+        )
+        _mimic_where = _mimic_where.replace(
+            f"{value_column} IS NOT NULL", f"o.{value_column} IS NOT NULL"
+        )
+
+        _read_func = (
+            "read_csv" if str(icustays_path).endswith(".csv.gz") else "read_parquet"
+        )
+
+        if join_left_col == "hadm_id":
             # Hospital tables (labevents, prescriptions, etc.): need rolling join
             # R ricu uses data.table rolling join with roll=-Inf on outtime:
             # - For each event, find the ICU stay with smallest outtime >= charttime (NOCB)
             # - Events after all outtimes go to the last stay (rollends=TRUE)
             # Must join with ALL stays for matching hadm_ids (not just target stays),
             # then filter to target stays after assignment.
-            _target_stay_ids_str = ", ".join(str(x) for x in patient_ids) if patient_ids else ""
-            
+            _target_stay_ids_str = (
+                ", ".join(str(x) for x in patient_ids) if patient_ids else ""
+            )
+
             # Build event WHERE: reuse _mimic_where but remove hadm_id patient filter
             # (we filter by hadm_id IN target_hadms instead, and by stay_id after assignment)
             _rolling_event_where = _mimic_where
-            if patient_filter_col == 'hadm_id' and patient_filter_values:
-                _hadm_ids_str = ', '.join(str(x) for x in patient_filter_values)
+            if patient_filter_col == "hadm_id" and patient_filter_values:
+                _hadm_ids_str = ", ".join(str(x) for x in patient_filter_values)
                 _rolling_event_where = _rolling_event_where.replace(
                     f"AND o.hadm_id IN ({_hadm_ids_str})", ""
                 )
-            
+
             # Time expression without table alias (for outer query on events_joined CTE)
             _outer_time_expr = f"FLOOR(EPOCH({time_col} - CAST(intime AS TIMESTAMP)) / 3600.0 / {_interval_hours}) * {_interval_hours}"
             # Value agg expression without table alias
-            _outer_agg_expr = _mimic_agg_expr.replace('o.', '')
+            _outer_agg_expr = _mimic_agg_expr.replace("o.", "")
+            _query_bounded_agg = _query_bounded_agg.replace("o.", "")
+            _query_unbounded_agg = _query_unbounded_agg.replace("o.", "")
             # Extra columns needed in CTE for outer agg expression (e.g. unit column for convert_unit)
             _cte_extra_cols = ""
             if _has_inline_convert and convert_unit_filter and _unit_col_name:
                 _cte_extra_cols = f", o.{_unit_col_name}"
-            
+
             if patient_ids:
                 # Targeted patient loading: filter hadm_ids by target stay_ids
                 _hadm_filter = f"WHERE {stay_col} IN ({_target_stay_ids_str})"
-                _hadm_scope_filter = "AND o.hadm_id IN (SELECT hadm_id FROM target_hadms)"
+                _hadm_scope_filter = (
+                    "AND o.hadm_id IN (SELECT hadm_id FROM target_hadms)"
+                )
                 _final_stay_filter = f"AND {stay_col} IN ({_target_stay_ids_str})"
-                
+
                 query = f"""
                 WITH target_hadms AS (
                     SELECT DISTINCT hadm_id
@@ -3368,7 +3450,7 @@ def load_bucketed_table_aggregated(
             GROUP BY a.{output_id_col}, {time_round_expr}
             ORDER BY a.{output_id_col}, 2
             """
-    elif db_name in ('sic', 'sic_demo'):
+    elif db_name in ("sic", "sic_demo"):
         # SIC: Offset is in seconds relative to hospital admission
         # 🔧 FIX: R ricu 和旧 Python 路径不减去 ICUOffset，直接 Offset/3600 → 小时
         # _align_time_to_admission 中 SIC 用 magnitude check > 5000 来决定是否除以 3600
@@ -3378,21 +3460,34 @@ def load_bucketed_table_aggregated(
         # 🔧 输出小时而非秒，避免 _align_time_to_admission magnitude check 误判
         time_round_expr = f'FLOOR(o."Offset" / {_interval_seconds})'
         output_time_expr = f"{time_round_expr} as charttime"
-        
+
         if _has_inline_convert:
-            _op_sql = {'*': '*', '/': '/', '+': '+', '-': '-'}.get(convert_unit_op, '*')
+            _op_sql = {"*": "*", "/": "/", "+": "+", "-": "-"}.get(convert_unit_op, "*")
             if convert_unit_filter:
                 _sic_value_expr = f"CASE WHEN regexp_matches(CAST(o.{_unit_col_name} AS VARCHAR), '(?i){convert_unit_filter}') THEN o.{value_column} {_op_sql} {convert_unit_factor} ELSE o.{value_column} END"
             else:
                 _sic_value_expr = f"o.{value_column} {_op_sql} {convert_unit_factor}"
-            _sic_agg_expr = f"{duckdb_agg}({_sic_value_expr}) as {value_column}"
+            _sic_agg_expr, _query_bounded_agg, _query_unbounded_agg = _aggregate_select(
+                _sic_value_expr
+            )
         elif value_transform:
-            # 🚀 通用值转换表达式 — post-agg filter_bounds 在 concept.py 中处理
-            _vt_aliased = value_transform.replace(f'"{value_column}"', f'o."{value_column}"')
-            _sic_agg_expr = f"{duckdb_agg}({_vt_aliased}) as {value_column}"
+            # 🚀 通用值转换表达式 — bounds 在聚合表达式内部应用
+            _vt_aliased = value_transform.replace(
+                f'"{value_column}"', f'o."{value_column}"'
+            )
+            _sic_agg_expr, _query_bounded_agg, _query_unbounded_agg = _aggregate_select(
+                _vt_aliased
+            )
         else:
-            _sic_agg_expr = f"{duckdb_agg}(o.{value_column}) as {value_column}"
-        
+            _sic_value_expr = (
+                f"TRY_CAST(o.{value_column} AS DOUBLE)"
+                if _value_col_is_string
+                else f"o.{value_column}"
+            )
+            _sic_agg_expr, _query_bounded_agg, _query_unbounded_agg = _aggregate_select(
+                _sic_value_expr
+            )
+
         # 🔧 FIX: SIC 不再需要 JOIN cases 表（不减 ICUOffset），直接查询
         query = f"""
         SELECT
@@ -3404,13 +3499,15 @@ def load_bucketed_table_aggregated(
         GROUP BY {id_col}, {time_round_expr}
         ORDER BY {id_col}, 2
         """
-    elif db_name in ('eicu', 'eicu_demo'):
+    elif db_name in ("eicu", "eicu_demo"):
         # eICU: time columns are already relative offsets in minutes
         # 🔧 FIX: 输出保持分钟单位（与原始数据一致），让 _align_time_to_admission 统一转换为小时
         # 之前输出小时导致 _align_time_to_admission 再除以60（双重转换）
         time_round_expr = f"FLOOR({time_col} / {interval_minutes}) * {interval_minutes}"
         output_time_expr = f"{time_round_expr} as charttime"
-        default_unit_select = ",\n            ANY_VALUE(unit) as unit" if include_unit else ""
+        default_unit_select = (
+            ",\n            ANY_VALUE(unit) as unit" if include_unit else ""
+        )
         query = f"""
         SELECT 
             {id_col},
@@ -3425,7 +3522,9 @@ def load_bucketed_table_aggregated(
         # Generic fallback: assume time_col is numeric in minutes
         time_round_expr = f"FLOOR({time_col} / {interval_minutes}) * {interval_minutes}"
         output_time_expr = f"{time_round_expr} as charttime"
-        default_unit_select = ",\n            ANY_VALUE(unit) as unit" if include_unit else ""
+        default_unit_select = (
+            ",\n            ANY_VALUE(unit) as unit" if include_unit else ""
+        )
         query = f"""
         SELECT 
             {id_col},
@@ -3437,19 +3536,78 @@ def load_bucketed_table_aggregated(
         ORDER BY {id_col}, 2{_order_itemid}
         """
     
-    try:
+    def _execute_aggregation(sql: str) -> pd.DataFrame:
         try:
-            arrow_table = conn.execute(query).fetch_arrow_table()
-            df = _arrow_to_pandas_compat(arrow_table, split_blocks=True)
+            arrow_table = conn.execute(sql).fetch_arrow_table()
+            result = _arrow_to_pandas_compat(arrow_table, split_blocks=True)
             del arrow_table
+            return result
         except Exception:
-            df = conn.execute(query).fetchdf()
+            return conn.execute(sql).fetchdf()
+
+    try:
+        df = _execute_aggregation(query)
+        bounds_diagnostics = None
+        if _needs_bounds_diagnostics and _raw_count_col in df.columns:
+            raw_non_null = int(
+                pd.to_numeric(df[_raw_count_col], errors="coerce").fillna(0).sum()
+            )
+            bounded_non_null = int(
+                pd.to_numeric(df[_bounded_count_col], errors="coerce").fillna(0).sum()
+            )
+            bounded_aggregate_non_null = int(
+                pd.to_numeric(df[value_column], errors="coerce").notna().sum()
+            )
+            unit_suspect = bool(
+                raw_non_null >= 100
+                and bounded_non_null == 0
+                and bounded_aggregate_non_null == 0
+            )
+            unbounded_retry = False
+            if unit_suspect:
+                unbounded_query = query.replace(
+                    _query_bounded_agg,
+                    _query_unbounded_agg,
+                    1,
+                )
+                if unbounded_query == query:
+                    raise RuntimeError(
+                        "Could not construct unbounded retry for unit-suspect values"
+                    )
+                df = _execute_aggregation(unbounded_query)
+                unbounded_retry = True
+            df = df.drop(columns=[_raw_count_col, _bounded_count_col], errors="ignore")
+            bounds_diagnostics = {
+                "bounds_raw_transformed_non_null": raw_non_null,
+                "bounds_bounded_transformed_non_null": bounded_non_null,
+                "bounds_bounded_aggregate_non_null": bounded_aggregate_non_null,
+                "bounds_unit_suspect": unit_suspect,
+                "bounds_unbounded_retry": unbounded_retry,
+            }
+            df.attrs["easyicu_bounds_loader"] = bounds_diagnostics
+        if (
+            bounds_diagnostics is not None
+            and not value_transform
+            and not _has_inline_convert
+            and not bounds_diagnostics["bounds_unit_suspect"]
+        ):
+            # The former raw-value WHERE bounds omitted groups containing only
+            # invalid values. Preserve that output shape while retaining the
+            # new pre-aggregation diagnostic counts.
+            df = df.loc[df[value_column].notna()].reset_index(drop=True)
         # Downcast float64 value columns to float32 (skip ID/time columns)
-        _skip_cols = {id_col, 'charttime', 'unit'}
+        _skip_cols = {id_col, "charttime", "unit"}
         for c in df.columns:
             if c not in _skip_cols and df[c].dtype == np.float64:
                 df[c] = df[c].astype(np.float32)
-        logger.info("Bucketed DuckDB aggregation complete: %s itemids=%d -> %d rows", table_name, len(itemids), len(df))
+        if bounds_diagnostics is not None:
+            df.attrs["easyicu_bounds_loader"] = bounds_diagnostics
+        logger.info(
+            "Bucketed DuckDB aggregation complete: %s itemids=%d -> %d rows",
+            table_name,
+            len(itemids),
+            len(df),
+        )
         return df
     except Exception as e:
         logger.warning("DuckDB aggregation failed: %s", e)
@@ -3834,10 +3992,10 @@ def load_wide_table_aggregated(
 ) -> pd.DataFrame:
     """
     🚀 高性能宽表批量加载：在DuckDB中完成聚合和去重
-    
+
     针对eICU vitalperiodic等宽表优化，一次加载多个概念列，
     直接在DuckDB中完成小时聚合，避免pandas后处理开销。
-    
+
     Args:
         data_source: ICU数据源
         table_name: 表名（如'vitalperiodic'）
@@ -3845,14 +4003,14 @@ def load_wide_table_aggregated(
         interval_hours: 时间聚合间隔（小时）
         patient_ids: 可选的患者ID过滤
         agg_func: 聚合函数（'first', 'mean', 'max', 'min'）
-        
+
     Returns:
         聚合后的DataFrame，包含id列、时间列和所有值列
-        
+
     Example:
         >>> df = load_wide_table_aggregated(
-        ...     data_source, 'vitalperiodic', 
-        ...     ['heartrate', 'respiration', 'sao2'], 
+        ...     data_source, 'vitalperiodic',
+        ...     ['heartrate', 'respiration', 'sao2'],
         ...     interval_hours=1.0
         ... )
         >>> # 返回: patientunitstayid | charttime | heartrate | respiration | sao2
@@ -3860,6 +4018,8 @@ def load_wide_table_aggregated(
     import duckdb
     
     # 获取表配置
+    if patient_ids is not None and len(patient_ids) == 0:
+        return pd.DataFrame()
     table_cfg = data_source.config.get_table(table_name)
     
     # 确定ID列和时间列

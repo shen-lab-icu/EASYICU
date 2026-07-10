@@ -27,10 +27,23 @@ _EICU_NEGATIVE = {"no growth", "no growth on culture", "", "none"}
 _NO_MICRO_DATABASES = {"sic", "aumc", "hirid"}
 
 _STAY_ID_COL = {
-    "miiv": "stay_id", "miiv_demo": "stay_id",
-    "mimic": "icustay_id", "mimic_demo": "icustay_id",
-    "eicu": "patientunitstayid", "eicu_demo": "patientunitstayid",
+    "miiv": "stay_id",
+    "miiv_demo": "stay_id",
+    "mimic": "icustay_id",
+    "mimic_demo": "icustay_id",
+    "eicu": "patientunitstayid",
+    "eicu_demo": "patientunitstayid",
 }
+
+
+def _patient_values(patient_ids):
+    if patient_ids is None:
+        return None
+    if isinstance(patient_ids, dict):
+        if not patient_ids:
+            return []
+        patient_ids = next(iter(patient_ids.values()))
+    return list(patient_ids)
 
 
 def load_microbiology(
@@ -43,6 +56,9 @@ def load_microbiology(
 ) -> pd.DataFrame:
     """Load per-ICU-stay culture-positivity flags for a database."""
     db = database.lower()
+    patient_values = _patient_values(patient_ids)
+    if patient_values == []:
+        return pd.DataFrame()
     if db in _NO_MICRO_DATABASES:
         if verbose:
             print(f"[microbiology] {database} ships no structured culture table — N/A")
@@ -58,11 +74,13 @@ def load_microbiology(
             positive &= mb[org_col].astype(str).str.strip().ne("")
         spec = mb.get("spec_type_desc", pd.Series("", index=mb.index)).astype(str)
         is_blood = spec.str.contains("blood", case=False, na=False)
-        per_hadm = pd.DataFrame({
-            "hadm_id": mb["hadm_id"],
-            "culture_positive": positive.values,
-            "bld_culture_positive": (positive & is_blood).values,
-        })
+        per_hadm = pd.DataFrame(
+            {
+                "hadm_id": mb["hadm_id"],
+                "culture_positive": positive.values,
+                "bld_culture_positive": (positive & is_blood).values,
+            }
+        )
         flags = per_hadm.groupby("hadm_id").any().reset_index()
         stays = _lower_cols(_table_df(ds, "icustays"))
         stay_col = "stay_id" if "stay_id" in stays.columns else "icustay_id"
@@ -77,12 +95,20 @@ def load_microbiology(
         positive = mb["organism"].notna() & ~org.isin(_EICU_NEGATIVE)
         site = mb.get("culturesite", pd.Series("", index=mb.index)).astype(str)
         is_blood = site.str.contains("blood", case=False, na=False)
-        per_stay = pd.DataFrame({
-            "patientunitstayid": mb["patientunitstayid"],
-            "culture_positive": positive.values,
-            "bld_culture_positive": (positive & is_blood).values,
-        })
-        out = per_stay.groupby("patientunitstayid").any().reset_index()
+        per_stay = pd.DataFrame(
+            {
+                "patientunitstayid": mb["patientunitstayid"],
+                "culture_positive": positive.values,
+                "bld_culture_positive": (positive & is_blood).values,
+            }
+        )
+        flags = per_stay.groupby("patientunitstayid").any().reset_index()
+        stays = _lower_cols(_table_df(ds, "patient"))[
+            ["patientunitstayid"]
+        ].drop_duplicates()
+        out = stays.merge(flags, on="patientunitstayid", how="left")
+        out["culture_positive"] = out["culture_positive"].fillna(False)
+        out["bld_culture_positive"] = out["bld_culture_positive"].fillna(False)
 
     else:  # pragma: no cover
         return pd.DataFrame()
@@ -90,10 +116,10 @@ def load_microbiology(
     for c in ("culture_positive", "bld_culture_positive"):
         out[c] = out[c].astype("boolean")
 
-    if patient_ids:
+    if patient_values is not None:
         stay_col = _STAY_ID_COL.get(db)
         if stay_col and stay_col in out.columns:
-            out = out[out[stay_col].isin(list(patient_ids))]
+            out = out[out[stay_col].isin(patient_values)]
     return out.reset_index(drop=True)
 
 

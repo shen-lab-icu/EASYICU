@@ -6,11 +6,11 @@ for faster data loading and reduced memory usage.
 
 Usage:
     from easyicu.io.data_converter import DataConverter
-    
+
     # Check and convert all tables for a database
     converter = DataConverter('/path/to/eicu/2.0.1')
     converter.ensure_parquet_ready()
-    
+
     # Or use the CLI
     # python -m easyicu.data_converter /path/to/eicu/2.0.1
 """
@@ -187,7 +187,7 @@ class ConversionStatus:
 class DataConverter:
     """
     Converts CSV/CSV.GZ files to Parquet format for faster loading.
-    
+
     Features:
     - Automatic detection of CSV/CSV.GZ files
     - Memory-efficient DuckDB-based conversion (primary method)
@@ -430,23 +430,69 @@ class DataConverter:
         """Detect database type from directory structure."""
         path_str = str(self.data_path).lower()
         
-        if 'eicu' in path_str:
-            return 'eicu'
-        elif 'miiv' in path_str or 'mimic' in path_str:
-            return 'miiv'
-        elif 'aumc' in path_str:
-            return 'aumc'
-        elif 'hirid' in path_str:
-            return 'hirid'
+        compact_path = path_str.replace("-", "").replace("_", "")
+
+        def _mimic_generation_from_icustays() -> Optional[str]:
+            candidates = []
+            for pattern in (
+                "icustays.parquet",
+                "ICUSTAYS.parquet",
+                "icustays.csv",
+                "ICUSTAYS.csv",
+                "icustays.csv.gz",
+                "ICUSTAYS.csv.gz",
+            ):
+                candidates.extend(self.data_path.rglob(pattern))
+            for path in candidates:
+                try:
+                    if path.suffix == ".parquet":
+                        import pyarrow.parquet as pq
+
+                        columns = {
+                            name.lower() for name in pq.ParquetFile(path).schema.names
+                        }
+                    else:
+                        columns = {name.lower() for name in self._read_csv_header(path)}
+                except Exception:
+                    continue
+                if "stay_id" in columns:
+                    return "miiv"
+                if "icustay_id" in columns:
+                    return "mimic"
+            return None
+        if "eicu" in path_str:
+            return "eicu"
+        elif "miiv" in compact_path or "mimiciv" in compact_path:
+            return "miiv"
+        elif "mimiciii" in compact_path:
+            return "mimic"
+        elif "mimic" in path_str:
+            detected = _mimic_generation_from_icustays()
+            if detected is not None:
+                return detected
+            raise ValueError(
+                "Ambiguous MIMIC data path; pass database='miiv' or "
+                "database='mimic' explicitly"
+            )
+        elif "aumc" in path_str:
+            return "aumc"
+        elif "hirid" in path_str:
+            return "hirid"
         
         # Try to detect from files
         files = list(self.data_path.glob('*.csv*'))
         file_names = [f.name.lower() for f in files]
         
-        if any('patient.csv' in f for f in file_names):
-            return 'eicu'
-        elif any('admissions.csv' in f for f in file_names):
-            return 'miiv'
+        if any("patient.csv" in f for f in file_names):
+            return "eicu"
+        elif any("admissions.csv" in f for f in file_names):
+            detected = _mimic_generation_from_icustays()
+            if detected is not None:
+                return detected
+            raise ValueError(
+                "Admissions files alone do not distinguish MIMIC-III from "
+                "MIMIC-IV; pass database explicitly"
+            )
         
         return 'unknown'
     
@@ -941,33 +987,124 @@ class DataConverter:
 
         return False, 0
     
+    def _sharded_parquet_paths(self, csv_path: Path) -> List[Path]:
+        """Return every parquet output for the shard layout selected above."""
+        table_name = self._get_table_name(csv_path)
+        bucket_root = self.data_path / f"{table_name}_bucket"
+        if bucket_root.is_dir():
+            bucket_files = sorted(bucket_root.glob("bucket_id=*/*.parquet"))
+            if bucket_files:
+                return bucket_files
+
+        seen = set()
+        for shard_dir in (
+            self._get_shard_dir(csv_path),
+            self._get_shard_dir_with_subdir(csv_path),
+        ):
+            if shard_dir in seen or not shard_dir.is_dir():
+                continue
+            seen.add(shard_dir)
+            try:
+                numbered = [
+                    path
+                    for path in shard_dir.iterdir()
+                    if path.suffix == ".parquet" and path.stem.isdigit()
+                ]
+            except OSError:
+                continue
+            if numbered:
+                return sorted(numbered, key=lambda path: int(path.stem))
+        return []
+
+    @staticmethod
+    def _parquet_metadata_row_count(paths: List[Path]) -> Optional[int]:
+        """Sum row counts from parquet footers without scanning column data."""
+        if not paths:
+            return None
+        try:
+            import pyarrow.parquet as pq
+
+            return sum(pq.ParquetFile(path).metadata.num_rows for path in paths)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _validated_status_row_count(value: Any) -> Optional[int]:
+        """Return a non-negative integral status count, else fail closed."""
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            parsed = int(value)
+            if parsed < 0 or value != parsed:
+                return None
+            return parsed
+        except (TypeError, ValueError):
+            return None
     def _is_conversion_needed(self, csv_path: Path) -> Tuple[bool, str]:
         """
         Check if conversion is needed for a CSV file.
-        
+
         Handles both single parquet files and sharded directories.
         Checks both root directory and subdirectory locations.
-        
+
         Returns:
             (needs_conversion, reason)
         """
         # First check for sharded directory (for large files)
+        file_key = csv_path.name
+        previous = self._status.get(file_key, {})
+        previous_status = previous.get("status")
+        if previous_status in (ConversionStatus.CONVERTING, ConversionStatus.FAILED):
+            return True, f"previous conversion is {previous_status}"
         has_shards, shard_count = self._has_valid_shards(csv_path)
         if has_shards:
+            # A valid Parquet footer proves only that one shard finished, not
+            # that the whole CSV conversion completed. Without the persisted
+            # completed status and expected shard count, fail closed and
+            # rebuild instead of accepting an interrupted prefix as a dataset.
+            if previous_status != ConversionStatus.COMPLETED:
+                return True, "shards exist without completed conversion status"
+            expected_shards = previous.get("shards")
+            if not expected_shards:
+                return (
+                    True,
+                    "completed shard conversion is missing expected shard count",
+                )
+            if int(expected_shards) != shard_count:
+                return True, (
+                    f"incomplete shard set ({shard_count}/{int(expected_shards)})"
+                )
             # Check if CSV is newer than shards
             shard_dir = self._get_shard_dir(csv_path)
             if not shard_dir.is_dir():
                 shard_dir = self._get_shard_dir_with_subdir(csv_path)
-            
+
             csv_mtime = csv_path.stat().st_mtime
-            
+
             # Check any shard file's mtime
             first_shard = shard_dir / "1.parquet"
             if first_shard.exists():
                 shard_mtime = first_shard.stat().st_mtime
                 if csv_mtime > shard_mtime:
                     return True, "CSV is newer than shards"
-            
+
+            stored_rows = previous.get("row_count")
+            if stored_rows is None:
+                return True, "completed shard conversion is missing row count"
+            stored_rows = self._validated_status_row_count(stored_rows)
+            if stored_rows is None:
+                return True, "completed shard conversion has invalid row count"
+            actual_rows = self._parquet_metadata_row_count(
+                self._sharded_parquet_paths(csv_path)
+            )
+            if actual_rows is None:
+                return True, "shard parquet metadata is unreadable"
+            if actual_rows != stored_rows:
+                return True, (
+                    "shard row-count mismatch "
+                    f"(status {stored_rows}, parquet {actual_rows})"
+                )
+
             return False, f"sharded ({shard_count} files)"
         
         existing_parquet = None
@@ -989,24 +1126,23 @@ class DataConverter:
         if csv_mtime > parquet_mtime:
             return True, "CSV is newer than parquet"
         
-        # Check status file for previous conversion
-        file_key = csv_path.name
-        if file_key in self._status:
-            status = self._status[file_key]
-            if status.get('status') == ConversionStatus.COMPLETED:
-                # Verify row count using pyarrow metadata (no memory overhead)
-                stored_rows = status.get('row_count', 0)
-                try:
-                    import pyarrow.parquet as pq_reader
-                    # Only read metadata, not actual data
-                    parquet_file = pq_reader.ParquetFile(existing_parquet)
-                    actual_rows = parquet_file.metadata.num_rows
-                    if actual_rows == stored_rows:
-                        return False, "already converted and verified"
-                except Exception:
-                    return True, "parquet file corrupted"
-        
-        return False, "parquet exists and is up to date"
+        if previous_status != ConversionStatus.COMPLETED:
+            return True, "parquet exists without completed conversion status"
+        stored_rows = previous.get("row_count")
+        if stored_rows is None:
+            return True, "completed conversion is missing row count"
+        stored_rows = self._validated_status_row_count(stored_rows)
+        if stored_rows is None:
+            return True, "completed conversion has invalid row count"
+        actual_rows = self._parquet_metadata_row_count([existing_parquet])
+        if actual_rows is None:
+            return True, "parquet file corrupted"
+        if actual_rows != stored_rows:
+            return True, (
+                "row-count mismatch "
+                f"(status {stored_rows}, parquet {actual_rows})"
+            )
+        return False, "already converted and verified"
     
     def _detect_encoding(self, csv_path: Path) -> str:
         """Detect the correct encoding for a CSV file.
@@ -1097,6 +1233,7 @@ class DataConverter:
 
         Set ``EASYICU_CSV_READER=pandas`` to force the legacy path.
         """
+        bad_row_counter = kwargs.pop("_bad_row_counter", None)
         is_gzipped = csv_path.name.endswith('.gz') or csv_path.name.endswith('.GZ')
 
         # Detect encoding first
@@ -1119,11 +1256,17 @@ class DataConverter:
         )
         if prefer_arrow:
             try:
-                return self._read_csv_arrow_chunks(csv_path, int(chunksize), is_gzipped)
+                return self._read_csv_arrow_chunks(
+                    csv_path,
+                    int(chunksize),
+                    is_gzipped,
+                    bad_row_counter=bad_row_counter,
+                )
             except Exception as exc:
                 logger.info(
                     "  ⚠️ pyarrow CSV reader failed on %s (%s), falling back to pandas",
-                    csv_path.name, type(exc).__name__,
+                    csv_path.name,
+                    type(exc).__name__,
                 )
 
         # Base read arguments - optimized for memory efficiency
@@ -1143,9 +1286,43 @@ class DataConverter:
         if is_gzipped:
             read_args['compression'] = 'gzip'
 
-        return pd.read_csv(csv_path, **read_args)
+        if bad_row_counter is None:
+            return pd.read_csv(csv_path, **read_args)
 
-    def _read_csv_arrow_chunks(self, csv_path: Path, chunksize: int, is_gzipped: bool):
+        import warnings
+
+        def _add_warning_counts(caught) -> None:
+            bad_row_counter[0] += sum(
+                str(warning.message).count("Skipping line") for warning in caught
+            )
+
+        if chunksize is None:
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always", pd.errors.ParserWarning)
+                frame = pd.read_csv(csv_path, **read_args)
+            _add_warning_counts(caught)
+            return frame
+
+        def _iterator():
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always", pd.errors.ParserWarning)
+                reader = pd.read_csv(csv_path, **read_args)
+                try:
+                    yield from reader
+                finally:
+                    if hasattr(reader, "close"):
+                        reader.close()
+            _add_warning_counts(caught)
+        return _iterator()
+
+    def _read_csv_arrow_chunks(
+        self,
+        csv_path: Path,
+        chunksize: int,
+        is_gzipped: bool,
+        *,
+        bad_row_counter=None,
+    ):
         """Yield pandas DataFrames of ~``chunksize`` rows each via
         pyarrow.csv streaming reader.
 
@@ -1163,7 +1340,13 @@ class DataConverter:
         # pinning here keeps row counts predictable.
         block_size = max(8 * 1024 * 1024, chunksize * 200)
         read_opts = pa_csv.ReadOptions(block_size=block_size)
-        parse_opts = pa_csv.ParseOptions(invalid_row_handler=lambda row: 'skip')
+
+        def _handle_invalid_row(row):
+            if bad_row_counter is not None:
+                bad_row_counter[0] += 1
+            return "skip"
+
+        parse_opts = pa_csv.ParseOptions(invalid_row_handler=_handle_invalid_row)
         convert_opts = pa_csv.ConvertOptions(strings_can_be_null=True)
 
         def _iterator():
@@ -1381,10 +1564,10 @@ class DataConverter:
     def _convert_file(self, csv_path: Path) -> Dict[str, Any]:
         """
         Convert a single CSV file to Parquet.
-        
+
         For large files (>500MB compressed), creates a sharded directory structure
         like ricu: tablename/1.parquet, 2.parquet, etc.
-        
+
         Returns:
             Conversion result dictionary
         """
@@ -1392,12 +1575,13 @@ class DataConverter:
         table_name = self._get_table_name(csv_path)
         
         result = {
-            'file': file_key,
-            'table': table_name,
-            'status': ConversionStatus.PENDING,
-            'row_count': 0,
-            'shards': 0,
-            'error': None,
+            "file": file_key,
+            "table": table_name,
+            "status": ConversionStatus.PENDING,
+            "row_count": 0,
+            "bad_rows_skipped": 0,
+            "shards": 0,
+            "error": None,
         }
         
         try:
@@ -1431,7 +1615,7 @@ class DataConverter:
     
     def _convert_file_single(self, csv_path: Path, result: Dict[str, Any]) -> Dict[str, Any]:
         """Convert a smaller CSV file to a single parquet file.
-        
+
         Uses streaming write for large files to avoid memory issues.
         Handles mixed-type columns by converting them to string before parquet export.
         """
@@ -1442,6 +1626,7 @@ class DataConverter:
         parquet_path = self._get_parquet_path(csv_path)
         
         # Check file size to decide on streaming vs direct write
+        bad_row_counter = [0]
         file_size = csv_path.stat().st_size
         use_streaming = file_size > 50 * 1024 * 1024  # > 50MB use streaming
         
@@ -1451,56 +1636,65 @@ class DataConverter:
             writer = None
             chunk_iter = None
             reference_schema = None
-            
+
             # Pre-infer stable schema for files with potential type issues
             file_size_mb = file_size / (1024 * 1024)
             if file_size_mb > 100:
                 try:
-                    reference_schema = self._infer_stable_schema(csv_path, sample_chunks=3)
+                    reference_schema = self._infer_stable_schema(
+                        csv_path, sample_chunks=3
+                    )
                     if self.verbose:
-                        logger.info(f"  Pre-inferred stable schema with {len(reference_schema)} columns")
+                        logger.info(
+                            f"  Pre-inferred stable schema with {len(reference_schema)} columns"
+                        )
                 except Exception as e:
                     logger.warning(f"  Failed to pre-infer schema: {e}")
-            
+
             try:
                 chunk_iter = self._read_csv_with_encoding(
-                    csv_path, 
+                    csv_path,
                     chunksize=self.chunk_size,
                     low_memory=True,
+                    _bad_row_counter=bad_row_counter,
                 )
-                
+
                 for i, chunk in enumerate(chunk_iter):
                     # Fix mixed-type columns in each chunk
                     chunk = self._fix_mixed_type_columns(chunk, csv_path.name)
-                    
+
                     # Convert to PyArrow table
                     table = pa.Table.from_pandas(chunk, preserve_index=False)
-                    
+
                     # Initialize writer on first chunk
                     if writer is None:
                         if reference_schema is None:
                             reference_schema = table.schema
-                        writer = pq.ParquetWriter(parquet_path, reference_schema, compression=self.parquet_compression)
-                    
+                        writer = pq.ParquetWriter(
+                            parquet_path,
+                            reference_schema,
+                            compression=self.parquet_compression,
+                        )
+
                     # Normalize schema if different from reference
                     if table.schema != reference_schema:
                         table = self._normalize_schema(table, reference_schema)
-                    
+
                     writer.write_table(table)
                     total_rows += len(chunk)
-                    
+
                     if self.verbose and (i + 1) % 20 == 0:
                         logger.info(f"  Written {total_rows:,} rows...")
-                    
+
                     # Aggressive memory cleanup for Windows
                     del chunk, table
                     # GC every 10 chunks for memory safety
                     if (i + 1) % 10 == 0:
                         gc.collect()
-                
+
                 if writer is not None:
                     writer.close()
-                    
+
             except Exception:
                 if writer is not None:
                     writer.close()
@@ -1508,38 +1702,55 @@ class DataConverter:
             finally:
                 # Clean up iterator
                 if chunk_iter is not None:
-                    if hasattr(chunk_iter, 'close'):
+                    if hasattr(chunk_iter, "close"):
                         chunk_iter.close()
                     del chunk_iter
                 gc.collect()
-            
-            result['row_count'] = total_rows
-            
+
+            result["row_count"] = total_rows
+
         else:
             # Read entire file at once for small files
-            df = self._read_csv_with_encoding(csv_path, low_memory=True)
-            
+            df = self._read_csv_with_encoding(
+                csv_path,
+                low_memory=True,
+                _bad_row_counter=bad_row_counter,
+            )
+
             # Fix mixed-type columns before parquet export
             df = self._fix_mixed_type_columns(df, csv_path.name)
-            
+
             # Convert to parquet with error handling
             try:
-                df.to_parquet(parquet_path, index=False, engine='pyarrow', compression=self.parquet_compression)
+                df.to_parquet(
+                    parquet_path,
+                    index=False,
+                    engine="pyarrow",
+                    compression=self.parquet_compression,
+                )
             except Exception as e:
-                if 'Expected bytes' in str(e) or 'object' in str(e).lower():
+                if "Expected bytes" in str(e) or "object" in str(e).lower():
                     # Convert all object columns to string
-                    logger.warning(f"  ⚠️ Converting object columns to string for {csv_path.name}")
-                    for col in df.select_dtypes(include=['object']).columns:
+                    logger.warning(
+                        f"  ⚠️ Converting object columns to string for {csv_path.name}"
+                    )
+                    for col in df.select_dtypes(include=["object"]).columns:
                         df[col] = df[col].astype(str)
-                    df.to_parquet(parquet_path, index=False, engine='pyarrow', compression=self.parquet_compression)
+                    df.to_parquet(
+                        parquet_path,
+                        index=False,
+                        engine="pyarrow",
+                        compression=self.parquet_compression,
+                    )
                 else:
                     raise
-            
-            result['row_count'] = len(df)
+
+            result["row_count"] = len(df)
         
         result['status'] = ConversionStatus.COMPLETED
         result['shards'] = 0
         
+        result["bad_rows_skipped"] = bad_row_counter[0]
         if self.verbose:
             logger.info(f"  ✅ Converted {result['file']}: {result['row_count']:,} rows")
         
@@ -1565,11 +1776,11 @@ class DataConverter:
     def _convert_file_sharded(self, csv_path: Path, result: Dict[str, Any]) -> Dict[str, Any]:
         """
         Convert a large CSV file to sharded parquet files in a directory.
-        
+
         Uses ricu's ID-based partitioning logic:
         - If partitioning config exists: partition by ID column using breakpoints
         - Otherwise: partition by row count
-        
+
         Creates: tablename/1.parquet, 2.parquet, etc. (like ricu)
         Preserves subdirectory structure (e.g., icu/chartevents/).
         """
@@ -1580,6 +1791,7 @@ class DataConverter:
         shard_dir.mkdir(parents=True, exist_ok=True)
         
         # Check for ricu-style partitioning config
+        self._wipe_shard_dir(shard_dir)
         partition_config = self._get_partitioning_config(table_name)
         
         # ID-based partitioning matches ricu's output format exactly.
@@ -1666,6 +1878,7 @@ class DataConverter:
         partition_total_rows: Dict[int, int] = {i: 0 for i in range(1, n_partitions + 1)}
         
         total_rows = 0
+        bad_row_counter = [0]
         reference_schema = None
         
         # Pre-infer stable schema for large files
@@ -1729,24 +1942,27 @@ class DataConverter:
         try:
             # Read in chunks and stream to partitions
             chunk_iter = self._read_csv_with_encoding(
-                csv_path, 
+                csv_path,
                 chunksize=self.chunk_size,
                 low_memory=True,
+                _bad_row_counter=bad_row_counter,
             )
-            
+
             for chunk_num, chunk in enumerate(chunk_iter):
                 chunk_rows = len(chunk)
                 total_rows += chunk_rows
-                
+
                 if self.verbose and (chunk_num + 1) % 10 == 0:
                     logger.info(f"  Read {total_rows:,} rows...")
-                
+
                 # Fix mixed-type columns before conversion
                 chunk = self._fix_mixed_type_columns(chunk, csv_path.name)
-                
+
                 # Assign each row to a partition
                 if partition_col not in chunk.columns:
-                    logger.warning(f"  Partition column '{partition_col}' not found, using row-based partitioning")
+                    logger.warning(
+                        f"  Partition column '{partition_col}' not found, using row-based partitioning"
+                    )
                     close_all_writers()
                     # Clean up partial files
                     for part_num in range(1, n_partitions + 1):
@@ -1754,15 +1970,19 @@ class DataConverter:
                             get_partition_path(part_num).unlink()
                         except Exception:
                             pass
-                    return self._convert_with_row_partitioning(csv_path, shard_dir, result)
-                
+                    return self._convert_with_row_partitioning(
+                        csv_path, shard_dir, result
+                    )
+
                 # 🚀 perf A5: actually-vectorized partition assignment.
                 # The original code claimed vectorization but ran a Python
                 # list comprehension over `col_values`; np.searchsorted is
                 # C-vectorized and 10-100× faster on million-row chunks.
                 col_values = chunk[partition_col].values
                 _np_breaks = np.asarray(breaks)
-                chunk['_partition'] = np.searchsorted(_np_breaks, col_values, side='right') + 1
+                chunk["_partition"] = (
+                    np.searchsorted(_np_breaks, col_values, side="right") + 1
+                )
 
                 # 🚀 perf Z (eicu wide-table cohort speedup): sort each chunk
                 # by partition_col before writing. Each parquet row group
@@ -1783,18 +2003,16 @@ class DataConverter:
                 _secondary = _pick_secondary_sort_column(chunk.columns, partition_col)
                 if _secondary is not None:
                     _sort_cols.append(_secondary)
-                chunk = chunk.sort_values(
-                    _sort_cols, kind='mergesort'
-                )
+                chunk = chunk.sort_values(_sort_cols, kind="mergesort")
 
                 # 🚀 perf A6: single groupby pass instead of N boolean
                 # masks + N drops. Each `chunk[mask].drop(...)` allocated
                 # a new DataFrame; on 5M-row chunks with 8 partitions that
                 # was 8× the necessary memory churn.
-                for part_num, part_chunk in chunk.groupby('_partition', sort=False):
+                for part_num, part_chunk in chunk.groupby("_partition", sort=False):
                     if len(part_chunk) == 0:
                         continue
-                    part_chunk = part_chunk.drop(columns=['_partition'])
+                    part_chunk = part_chunk.drop(columns=["_partition"])
                     write_to_partition(int(part_num), part_chunk)
                     del part_chunk
 
@@ -1803,21 +2021,24 @@ class DataConverter:
                 # below is sufficient); calling gc every chunk inserts a
                 # 20–100 ms STW pause that compounded on macfuse runs.
                 del chunk
-            
+
             # Close all writers
             close_all_writers()
             gc.collect()
-            
-            result['status'] = ConversionStatus.COMPLETED
-            result['row_count'] = total_rows
-            result['shards'] = n_partitions
-            result['shard_dir'] = str(shard_dir)
-            result['partition_col'] = partition_col
-            result['partition_breaks'] = breaks
-            
+
+            result["status"] = ConversionStatus.COMPLETED
+            result["row_count"] = total_rows
+            result["shards"] = n_partitions
+            result["shard_dir"] = str(shard_dir)
+            result["partition_col"] = partition_col
+            result["partition_breaks"] = breaks
+            result["bad_rows_skipped"] = bad_row_counter[0]
+
             if self.verbose:
-                logger.info(f"  ✅ Converted {result['file']}: {total_rows:,} rows in {n_partitions} partitions")
-            
+                logger.info(
+                    f"  ✅ Converted {result['file']}: {total_rows:,} rows in {n_partitions} partitions"
+                )
+
         except Exception:
             # Make sure to close writers on error
             close_all_writers()
@@ -1825,7 +2046,7 @@ class DataConverter:
         finally:
             # Clean up iterator to release file handles and memory
             if chunk_iter is not None:
-                if hasattr(chunk_iter, 'close'):
+                if hasattr(chunk_iter, "close"):
                     chunk_iter.close()
                 del chunk_iter
             gc.collect()
@@ -1990,6 +2211,7 @@ class DataConverter:
         import pyarrow.parquet as pq
         
         total_rows = 0
+        bad_row_counter = [0]
         shard_num = 1
         current_writer = None
         current_shard_rows = 0
@@ -2022,34 +2244,39 @@ class DataConverter:
         try:
             # Read and write in chunks
             chunk_iter = self._read_csv_with_encoding(
-                csv_path, 
+                csv_path,
                 chunksize=self.chunk_size,
                 low_memory=True,
+                _bad_row_counter=bad_row_counter,
             )
-            
+
             for chunk in chunk_iter:
                 chunk_len = len(chunk)
                 total_rows += chunk_len
-                
+
                 # Fix mixed-type columns before conversion
                 chunk = self._fix_mixed_type_columns(chunk, csv_path.name)
-                
+
                 # Convert to PyArrow table
                 table = pa.Table.from_pandas(chunk, preserve_index=False)
-                
+
                 # Initialize writer if needed (use reference schema if available)
                 if current_writer is None:
                     if reference_schema is None:
                         reference_schema = table.schema
                     shard_path = shard_dir / f"{shard_num}.parquet"
-                    current_writer = pq.ParquetWriter(shard_path, reference_schema, compression=self.parquet_compression)
-                
+                    current_writer = pq.ParquetWriter(
+                        shard_path,
+                        reference_schema,
+                        compression=self.parquet_compression,
+                    )
+
                 # Normalize table to match reference schema
                 if table.schema != reference_schema:
                     table = self._normalize_schema(table, reference_schema)
-                
+
                 current_writer.write_table(table)
-                
+
                 current_shard_rows += chunk_len
                 del chunk, table
 
@@ -2059,11 +2286,11 @@ class DataConverter:
                     # 🚀 perf A7: keep one gc.collect at shard boundaries
                     # (cheap, infrequent) but drop the per-chunk call below.
                     gc.collect()
-        
+
         finally:
             # Clean up iterator to release file handles and memory
             if chunk_iter is not None:
-                if hasattr(chunk_iter, 'close'):
+                if hasattr(chunk_iter, "close"):
                     chunk_iter.close()
                 del chunk_iter
             gc.collect()
@@ -2079,6 +2306,7 @@ class DataConverter:
         result['shards'] = shard_num
         result['shard_dir'] = str(shard_dir)
         
+        result["bad_rows_skipped"] = bad_row_counter[0]
         if self.verbose:
             logger.info(f"  ✅ Converted {result['file']}: {total_rows:,} rows in {shard_num} shards")
         
@@ -2117,7 +2345,7 @@ class DataConverter:
         except Exception:  # noqa: BLE001
             pass
 
-    def _open_arrow_csv(self, csv_path: Path, table_name: str):
+    def _open_arrow_csv(self, csv_path: Path, table_name: str, *, bad_row_counter=None):
         """Open a pyarrow streaming CSV reader (.gz handled transparently).
 
         Known mixed-type columns are pinned to string up front via
@@ -2152,8 +2380,14 @@ class DataConverter:
                     col_types[c.upper()] = pa.string()
 
         read_opts = pa_csv.ReadOptions(block_size=16 * 1024 * 1024)
+
+        def _handle_invalid_row(row):
+            if bad_row_counter is not None:
+                bad_row_counter[0] += 1
+            return "skip"
+
         parse_opts = pa_csv.ParseOptions(
-            invalid_row_handler=lambda row: 'skip',
+            invalid_row_handler=_handle_invalid_row,
             # MIMIC-III NOTEEVENTS embeds newlines inside the quoted TEXT
             # column. Without this flag pyarrow reports
             #   "CSV parser got out of sync with chunker"
@@ -2279,7 +2513,10 @@ class DataConverter:
                 f"{n_partitions} partitions (Arrow streaming)"
             )
 
-        reader = self._open_arrow_csv(csv_path, table_name)
+        bad_row_counter = [0]
+        reader = self._open_arrow_csv(
+            csv_path, table_name, bad_row_counter=bad_row_counter
+        )
         schema = reader.schema
         if partition_col not in schema.names:
             try:
@@ -2369,6 +2606,7 @@ class DataConverter:
         result['shard_dir'] = str(shard_dir)
         result['partition_col'] = partition_col
         result['partition_breaks'] = breaks
+        result["bad_rows_skipped"] = bad_row_counter[0]
         if self.verbose:
             logger.info(
                 f"  ✅ Converted {result['file']}: {total_rows:,} rows "
@@ -2387,7 +2625,10 @@ class DataConverter:
         import pyarrow.parquet as pq
 
         table_name = self._get_table_name(csv_path)
-        reader = self._open_arrow_csv(csv_path, table_name)
+        bad_row_counter = [0]
+        reader = self._open_arrow_csv(
+            csv_path, table_name, bad_row_counter=bad_row_counter
+        )
         schema = reader.schema
 
         total_rows = 0
@@ -2452,6 +2693,7 @@ class DataConverter:
         result['row_count'] = total_rows
         result['shards'] = max(shards_written, 1)
         result['shard_dir'] = str(shard_dir)
+        result["bad_rows_skipped"] = bad_row_counter[0]
         if self.verbose:
             logger.info(
                 f"  ✅ Converted {result['file']}: {total_rows:,} rows "
@@ -2462,7 +2704,7 @@ class DataConverter:
     def get_conversion_status(self) -> Dict[str, Dict[str, Any]]:
         """
         Get the current conversion status for all files.
-        
+
         Returns:
             Dictionary mapping file names to their status
         """
@@ -2472,18 +2714,21 @@ class DataConverter:
         for csv_path in csv_files:
             file_key = csv_path.name
             needs_conversion, reason = self._is_conversion_needed(csv_path)
-            
+
             if not needs_conversion:
-                status[file_key] = {
-                    'status': ConversionStatus.SKIPPED,
-                    'reason': reason,
-                }
+                status[file_key] = dict(self._status.get(file_key, {}))
+                status[file_key].update(
+                    {
+                        "status": ConversionStatus.SKIPPED,
+                        "reason": reason,
+                    }
+                )
             elif file_key in self._status:
                 status[file_key] = self._status[file_key]
             else:
                 status[file_key] = {
-                    'status': ConversionStatus.PENDING,
-                    'reason': reason,
+                    "status": ConversionStatus.PENDING,
+                    "reason": reason,
                 }
         
         return status
@@ -2841,7 +3086,11 @@ class DataConverter:
             except Exception as exc:  # noqa: BLE001 — clustering is best-effort
                 logger.warning(f"patient-clustering pass failed: {exc}")
         if write_manifest:
-            self.write_conversion_manifest(results, evidence_root=evidence_root)
+            manifest_results = self.get_conversion_status()
+            manifest_results.update(results)
+            self.write_conversion_manifest(
+                manifest_results, evidence_root=evidence_root
+            )
         return results
 
     def is_ready(self) -> Tuple[bool, List[str]]:
@@ -3000,17 +3249,20 @@ class DataConverter:
         outputs = self._converted_outputs_for_result(csv_path, result)
         return {
             "file": file_name,
-            "table": result.get("table") or (self._get_table_name(csv_path) if csv_path else None),
+            "table": result.get("table")
+            or (self._get_table_name(csv_path) if csv_path else None),
             "status": result.get("status"),
             "reason": result.get("reason"),
             "error": result.get("error"),
             "row_count": result.get("row_count"),
+            "bad_rows_skipped": result.get("bad_rows_skipped", 0),
             "shards": result.get("shards"),
             "partition_col": result.get("partition_col"),
             "partition_breaks": result.get("partition_breaks"),
             "input": (
                 self._file_manifest_record(csv_path, hash_files=hash_files)
-                if csv_path else None
+                if csv_path
+                else None
             ),
             "outputs": [
                 self._file_manifest_record(path, hash_files=hash_files)

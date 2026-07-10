@@ -63,6 +63,17 @@ def _normalize_patient_ids_for_db(database_name: str, patient_ids):
     return {'stay_id': patient_ids}
 
 
+def _patient_filter_values(patient_ids):
+    """Return concrete IDs from either public patient-filter representation."""
+    if patient_ids is None:
+        return None
+    if isinstance(patient_ids, dict):
+        if not patient_ids:
+            return []
+        values = next(iter(patient_ids.values()))
+    else:
+        values = patient_ids
+    return list(values)
 def _expand_public_numeric_win_tbl_output(
     result: pd.DataFrame,
     concept_name: str,
@@ -907,6 +918,7 @@ def load_concepts(
         concepts_list = list(concepts)
 
     # SOFA2 相关概念集合（需要加载 sofa2-dict）— 共享定义见 _SOFA2_TRIGGER_CONCEPTS
+    requested_concepts = list(concepts_list)
     if _concepts_need_sofa2(concepts_list):
         use_sofa2 = True
 
@@ -955,6 +967,26 @@ def load_concepts(
                 f"patient_ids 收到字符串 '{patient_ids}'，看起来是数据库名。"
                 f"请使用关键字参数: load_concepts(concepts, database='{patient_ids}')")
 
+    if patient_ids is None:
+        id_kwargs = [
+            "patientunitstayid",
+            "admissionid",
+            "stay_id",
+            "subject_id",
+            "patientid",
+        ]
+        for id_key in id_kwargs:
+            if id_key in kwargs:
+                patient_ids = {id_key: kwargs.pop(id_key)}
+                break
+
+    # An explicitly empty cohort means "no patients", never "all patients".
+    # Return before constructing a loader so every downstream fast path is
+    # fail-closed, including dedicated outcome/comorbidity loaders.
+    if patient_ids is not None and len(_patient_filter_values(patient_ids)) == 0:
+        if merge:
+            return pd.DataFrame()
+        return {name: pd.DataFrame() for name in requested_concepts}
     if verbose:
         print(f"📊 使用统一API加载 {len(concepts_list)} 个概念...")
         print(f"   概念: {', '.join(concepts_list)}")
@@ -969,12 +1001,6 @@ def load_concepts(
     )
 
     # 🚀 从 kwargs 中提取患者 ID（支持通过 patientunitstayid=, admissionid=, stay_id= 等传入）
-    if patient_ids is None:
-        id_kwargs = ['patientunitstayid', 'admissionid', 'stay_id', 'subject_id', 'patientid']
-        for id_key in id_kwargs:
-            if id_key in kwargs:
-                patient_ids = {id_key: kwargs.pop(id_key)}
-                break
 
     # 🚀 处理患者数量别名（兼容旧测试/benchmark）
     n_patients_alias = kwargs.pop('n_patients', None)
@@ -1006,6 +1032,10 @@ def load_concepts(
         effective_max_patients = int(n_patients_alias)
 
     # 🚀 max_patients 支持：自动从数据库采样患者ID
+    if effective_max_patients == 0 and patient_ids is None:
+        if merge:
+            return pd.DataFrame()
+        return {name: pd.DataFrame() for name in requested_concepts}
     if effective_max_patients is not None and patient_ids is None:
         patient_ids = _sample_patient_ids(loader, effective_max_patients, verbose,
                                           sample_strategy=sample_strategy)
@@ -1015,6 +1045,7 @@ def load_concepts(
         patient_ids = _normalize_patient_ids_for_db(loader.database, patient_ids)
 
     # 🚀 智能并行配置：根据概念数量和患者数量自动优化
+    special_patient_ids = _patient_filter_values(patient_ids)
     num_patients = None
     if patient_ids is not None:
         if isinstance(patient_ids, dict):
@@ -1451,9 +1482,18 @@ def load_concepts(
 
         _pre: Dict[str, pd.DataFrame] = {}
         if isinstance(result, dict):
-            for name in ("crea", "urine", "weight", "rrt",
-                         "lact", "map", "norepi_rate", "epi_rate",
-                         "dobu_rate", "dopa_rate"):
+            for name in (
+                "crea",
+                "urine",
+                "weight",
+                "rrt",
+                "lact",
+                "map",
+                "norepi_rate",
+                "epi_rate",
+                "dobu_rate",
+                "dopa_rate",
+            ):
                 df = _frame_of(result.get(name))
                 if df is not None:
                     _pre[name] = df
@@ -1462,19 +1502,31 @@ def load_concepts(
         if _need_kdigo:
             try:
                 from .scores.kdigo_aki import load_kdigo_aki
+
                 aki_df = load_kdigo_aki(
-                    database=database, data_path=str(data_path) if data_path else None,
-                    patient_ids=patient_ids if isinstance(patient_ids, list) else None,
-                    max_patients=max_patients, verbose=verbose,
+                    database=loader.database,
+                    data_path=str(loader.data_path),
+                    patient_ids=special_patient_ids,
+                    max_patients=effective_max_patients,
+                    verbose=verbose,
                     preloaded_data=_pre or None,
                 )
                 if isinstance(aki_df, pd.DataFrame) and not aki_df.empty:
-                    id_time = [c for c in ('stay_id', 'icustay_id',
-                                           'patientunitstayid', 'admissionid',
-                                           'patientid', 'CaseID',
-                                           'charttime', 'datetime',
-                                           'observationoffset')
-                               if c in aki_df.columns]
+                    id_time = [
+                        c
+                        for c in (
+                            "stay_id",
+                            "icustay_id",
+                            "patientunitstayid",
+                            "admissionid",
+                            "patientid",
+                            "CaseID",
+                            "charttime",
+                            "datetime",
+                            "observationoffset",
+                        )
+                        if c in aki_df.columns
+                    ]
                     for c in _need_kdigo:
                         if c in aki_df.columns:
                             special_dict[c] = aki_df[id_time + [c]].copy()
@@ -1483,19 +1535,31 @@ def load_concepts(
         if _need_circ:
             try:
                 from .scores.circ_failure import load_circ_failure
+
                 cf_df = load_circ_failure(
-                    database=database, data_path=str(data_path) if data_path else None,
-                    max_patients=max_patients,
-                    patient_ids=patient_ids if isinstance(patient_ids, list) else None,
-                    verbose=verbose, preloaded_data=_pre or None,
+                    database=loader.database,
+                    data_path=str(loader.data_path),
+                    max_patients=effective_max_patients,
+                    patient_ids=special_patient_ids,
+                    verbose=verbose,
+                    preloaded_data=_pre or None,
                 )
                 if isinstance(cf_df, pd.DataFrame) and not cf_df.empty:
-                    id_time = [c for c in ('stay_id', 'icustay_id',
-                                           'patientunitstayid', 'admissionid',
-                                           'patientid', 'CaseID',
-                                           'charttime', 'datetime',
-                                           'observationoffset')
-                               if c in cf_df.columns]
+                    id_time = [
+                        c
+                        for c in (
+                            "stay_id",
+                            "icustay_id",
+                            "patientunitstayid",
+                            "admissionid",
+                            "patientid",
+                            "CaseID",
+                            "charttime",
+                            "datetime",
+                            "observationoffset",
+                        )
+                        if c in cf_df.columns
+                    ]
                     for c in _need_circ:
                         if c in cf_df.columns:
                             special_dict[c] = cf_df[id_time + [c]].copy()
@@ -1506,13 +1570,18 @@ def load_concepts(
             # The full per-condition flags remain available via
             # easyicu.comorbidity.load_comorbidity(...).
             from .scores.comorbidity import load_comorbidity
-            _comorb_index_col = {'charlson': 'charlson_index',
-                                 'elixhauser': 'elixhauser_vw'}
+
+            _comorb_index_col = {
+                "charlson": "charlson_index",
+                "elixhauser": "elixhauser_vw",
+            }
             for c in _need_comorb:
                 try:
                     como = load_comorbidity(
-                        database, data_path=str(data_path) if data_path else None,
-                        system=c, patient_ids=patient_ids if isinstance(patient_ids, list) else None,
+                        loader.database,
+                        data_path=str(loader.data_path),
+                        system=c,
+                        patient_ids=special_patient_ids,
                         verbose=verbose,
                     )
                 except Exception as e:
@@ -1520,47 +1589,62 @@ def load_concepts(
                     continue
                 if not isinstance(como, pd.DataFrame) or como.empty:
                     continue
-                id_cols = [col for col in ('stay_id', 'icustay_id',
-                                           'patientunitstayid', 'CaseID')
-                           if col in como.columns]
+                id_cols = [
+                    col
+                    for col in ("stay_id", "icustay_id", "patientunitstayid", "CaseID")
+                    if col in como.columns
+                ]
                 src_col = _comorb_index_col[c]
                 if src_col in como.columns and id_cols:
                     col = como[id_cols + [src_col]].rename(columns={src_col: c})
                     special_dict[c] = col.copy()
         if _need_outcome:
             from .scores.outcomes import load_outcomes
+
             try:
                 oc = load_outcomes(
-                    database, data_path=str(data_path) if data_path else None,
-                    patient_ids=patient_ids if isinstance(patient_ids, list) else None,
+                    loader.database,
+                    data_path=str(loader.data_path),
+                    patient_ids=special_patient_ids,
                     verbose=verbose,
                 )
             except Exception as e:
                 logger.warning(f"load_outcomes failed: {e}")
                 oc = None
             if isinstance(oc, pd.DataFrame) and not oc.empty:
-                id_cols = [col for col in ('stay_id', 'icustay_id',
-                                           'patientunitstayid', 'CaseID',
-                                           'admissionid')
-                           if col in oc.columns]
+                id_cols = [
+                    col
+                    for col in (
+                        "stay_id",
+                        "icustay_id",
+                        "patientunitstayid",
+                        "CaseID",
+                        "admissionid",
+                    )
+                    if col in oc.columns
+                ]
                 for c in _need_outcome:
                     if c in oc.columns and id_cols:
                         special_dict[c] = oc[id_cols + [c]].copy()
         if _need_micro:
             from .scores.microbiology import load_microbiology
+
             try:
                 mic = load_microbiology(
-                    database, data_path=str(data_path) if data_path else None,
-                    patient_ids=patient_ids if isinstance(patient_ids, list) else None,
+                    loader.database,
+                    data_path=str(loader.data_path),
+                    patient_ids=special_patient_ids,
                     verbose=verbose,
                 )
             except Exception as e:
                 logger.warning(f"load_microbiology failed: {e}")
                 mic = None
             if isinstance(mic, pd.DataFrame) and not mic.empty:
-                id_cols = [col for col in ('stay_id', 'icustay_id',
-                                           'patientunitstayid')
-                           if col in mic.columns]
+                id_cols = [
+                    col
+                    for col in ("stay_id", "icustay_id", "patientunitstayid")
+                    if col in mic.columns
+                ]
                 for c in _need_micro:
                     if c in mic.columns and id_cols:
                         special_dict[c] = mic[id_cols + [c]].copy()
@@ -1588,12 +1672,15 @@ def load_concepts(
                     # bring it back to DataFrame form.
                     if result:
                         from functools import reduce
+
                         frames = list(result.values())
                         if frames and all(isinstance(f, pd.DataFrame) for f in frames):
                             result = reduce(
                                 lambda a, b: a.merge(
-                                    b, on=[c for c in a.columns if c in b.columns],
-                                    how="outer"),
+                                    b,
+                                    on=[c for c in a.columns if c in b.columns],
+                                    how="outer",
+                                ),
                                 frames,
                             )
                         else:
@@ -1602,8 +1689,9 @@ def load_concepts(
                         result = pd.DataFrame()
                 if isinstance(result, pd.DataFrame):
                     for name, sdf in special_dict.items():
-                        join_cols = [c for c in sdf.columns
-                                     if c in result.columns and c != name]
+                        join_cols = [
+                            c for c in sdf.columns if c in result.columns and c != name
+                        ]
                         if join_cols:
                             try:
                                 result = result.merge(sdf, on=join_cols, how="outer")
@@ -2719,11 +2807,46 @@ __all__ = [
 import pickle
 import hashlib
 
+import json
 def _get_cache_key(concepts: List[str], source: str, **kwargs) -> str:
     """Generate cache key from parameters."""
-    key_str = f"{source}_{','.join(sorted(concepts))}_{str(sorted(kwargs.items()))}"
-    return hashlib.md5(key_str.encode()).hexdigest()
+    payload = {
+        "source": source,
+        "concepts": sorted(concepts),
+        "parameters": kwargs,
+    }
+    key_str = json.dumps(payload, sort_keys=True, default=str, separators=(",", ":"))
+    return hashlib.sha256(key_str.encode()).hexdigest()
 
+def _data_path_fingerprint(
+    data_path: Union[str, Path],
+    *,
+    exclude_dir: Optional[Union[str, Path]] = None,
+) -> str:
+    """Fingerprint dataset identity and file metadata for cache isolation."""
+    root = Path(data_path).expanduser().resolve()
+    excluded = Path(exclude_dir).expanduser().resolve() if exclude_dir else None
+    digest = hashlib.sha256(str(root).encode())
+    if root.is_file():
+        stat = root.stat()
+        digest.update(f"{root.name}:{stat.st_size}:{stat.st_mtime_ns}".encode())
+        return digest.hexdigest()
+
+    suffixes = {".parquet", ".csv", ".gz", ".json"}
+    for path in sorted(
+        (
+            p
+            for p in root.rglob("*")
+            if p.is_file()
+            and p.suffix.lower() in suffixes
+            and (excluded is None or not p.is_relative_to(excluded))
+        ),
+        key=lambda p: str(p.relative_to(root)),
+    ):
+        stat = path.stat()
+        rel = path.relative_to(root)
+        digest.update(f"{rel}:{stat.st_size}:{stat.st_mtime_ns}\n".encode())
+    return digest.hexdigest()
 def load_concept_cached(
     concepts: Union[str, List[str]],
     source: str,
@@ -2740,7 +2863,7 @@ def load_concept_cached(
 ) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
     """
     Load ICU concept data with caching support.
-    
+
     Args:
         concepts: Concept name(s) to load
         source: Data source name ('mimic', 'miiv', etc.)
@@ -2754,7 +2877,7 @@ def load_concept_cached(
         use_pickle: If True, cache as pickle; if False, use CSV
         n_patients: If provided, randomly sample N patients (for testing)
         **kwargs: Additional parameters for concept resolver
-        
+
     Returns:
         DataFrame with concept data (and optionally time-aligned)
     """
@@ -2771,10 +2894,21 @@ def load_concept_cached(
         concept_list = list(concepts)
     
     # Generate cache key
-    cache_params = {'merge': merge, 'align_time': align_time, **kwargs}
+    cache_params = {
+        "merge": merge,
+        "align_time": align_time,
+        "patient_ids": patient_ids,
+        "n_patients": n_patients,
+        "data_path": str(Path(data_path).expanduser().resolve()),
+        "data_fingerprint": _data_path_fingerprint(data_path, exclude_dir=cache_dir),
+        **kwargs,
+    }
     cache_key = _get_cache_key(concept_list, source, **cache_params)
     cache_ext = 'pkl' if use_pickle else 'csv'
-    cache_file = cache_dir / f"{source}_{'_'.join(concept_list[:3])}_{cache_key[:8]}.{cache_ext}"
+    cache_file = (
+        cache_dir
+        / f"{source}_{'_'.join(concept_list[:3])}_{cache_key[:32]}.{cache_ext}"
+    )
     
     # Try to load from cache
     if not force_reload and cache_file.exists():
@@ -2805,10 +2939,18 @@ def load_concept_cached(
         data_path=data_path,
         merge=merge,
         verbose=verbose,
-        **kwargs
+        n_patients=n_patients,
+        **kwargs,
     )
     
     # Save to cache
+    if align_time:
+        result = align_to_icu_admission(
+            result,
+            database=source,
+            data_path=data_path,
+            verbose=verbose,
+        )
     try:
         if use_pickle:
             with open(cache_file, 'wb') as f:
@@ -3512,6 +3654,19 @@ def _extract_worker_env_setup(data_path: str) -> None:
 _CONCEPT_BOUNDS_CACHE = None
 
 
+_BOUNDS_METADATA_KEYS = (
+    "rows_before",
+    "bounds_dropped",
+    "bounds_dropped_post_aggregation",
+    "bounds_count_status",
+    "bounds_raw_transformed_non_null",
+    "bounds_bounded_transformed_non_null",
+    "bounds_bounded_aggregate_non_null",
+    "bounds_unit_suspect",
+    "bounds_unbounded_retry",
+    "bounds_skipped",
+    "bounds_status",
+)
 def _load_concept_bounds_map():
     """Return ``{concept_name: (min, max)}`` from the active concept dictionary.
 
@@ -3525,27 +3680,59 @@ def _load_concept_bounds_map():
     import os as _os
     import json as _json
     bounds = {}
-    dict_path = _os.path.join(
-        _os.path.dirname(_os.path.abspath(__file__)), 'data', 'concept-dict.json'
-    )
+    data_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "data")
+    dict_paths = [
+        _os.path.join(data_dir, "concept-dict.json"),
+        _os.path.join(data_dir, "sofa2-dict.json"),
+    ]
     try:
-        with open(dict_path) as _f:
-            _d = _json.load(_f)
-        for _name, _entry in _d.items():
-            if not isinstance(_entry, dict):
-                continue
-            _mn = _entry.get('min')
-            _mx = _entry.get('max')
-            _mn = float(_mn) if _mn is not None else None
-            _mx = float(_mx) if _mx is not None else None
-            if _mn is not None or _mx is not None:
-                bounds[_name] = (_mn, _mx)
-    except Exception:
+        for dict_path in dict_paths:
+            with open(dict_path) as _f:
+                _d = _json.load(_f)
+            for _name, _entry in _d.items():
+                if not isinstance(_entry, dict):
+                    continue
+                _mn = _entry.get("min")
+                _mx = _entry.get("max")
+                _mn = float(_mn) if _mn is not None else None
+                _mx = float(_mx) if _mx is not None else None
+                if _mn is not None or _mx is not None:
+                    bounds[_name] = (_mn, _mx)
+    except Exception as exc:
+        import warnings as _warnings
+
+        _warnings.warn(
+            f"Could not load concept bounds from {dict_path}: {exc}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
         bounds = {}
     _CONCEPT_BOUNDS_CACHE = bounds
     return bounds
 
 
+def _bounds_metadata_from_manifest_info(info):
+    """Subset persisted concept-bound audit fields from a worker manifest entry."""
+    if not isinstance(info, dict):
+        return {}
+    return {k: info[k] for k in _BOUNDS_METADATA_KEYS if k in info}
+
+
+def _attach_bounds_metadata(df, info):
+    """Attach bounds audit metadata to an in-memory concept DataFrame."""
+    meta = _bounds_metadata_from_manifest_info(info)
+    if meta and hasattr(df, "attrs"):
+        df.attrs["easyicu_bounds"] = meta
+        for key, value in meta.items():
+            df.attrs[f"easyicu_{key}"] = value
+    return meta
+
+
+def _concept_result_info(path, info):
+    """Build the public output-dir concept entry, preserving bounds audit data."""
+    out = {"path": path, "rows": info.get("rows", 0)}
+    out.update(_bounds_metadata_from_manifest_info(info))
+    return out
 def _enforce_concept_bounds(df, concept_name):
     """Drop rows whose numeric value for ``concept_name`` is outside its declared
     [min, max]. The per-concept extraction DataFrame holds the value in a column
@@ -3558,6 +3745,14 @@ def _enforce_concept_bounds(df, concept_name):
     bnd = _load_concept_bounds_map().get(concept_name)
     if bnd is None:
         return df, 0
+    loader_diagnostics = df.attrs.get("easyicu_bounds_loader", {})
+    if isinstance(loader_diagnostics, dict) and loader_diagnostics.get(
+        "bounds_unit_suspect"
+    ):
+        # The SQL fast path saw at least 100 transformed non-null values but
+        # none within the declared bounds. It already retried without bounds,
+        # so retain those recovered values and surface the existing -1 signal.
+        return df, -1
     mn, mx = bnd
     v = _pd.to_numeric(df[concept_name], errors='coerce')
     numeric = v.notna()
@@ -3614,6 +3809,7 @@ def _run_module_extraction(
     # 构造 load_concepts 参数
     # use_sofa2 显式传入：分组模式下保持全组 loader 配置一致，
     # 避免 sofa2 自动检测切换字典时重建 loader、丢掉组内共享缓存。
+    warnings = []
     kwargs = dict(
         data_path=data_path, database=database,
         concepts=concepts, verbose=False, merge=False,
@@ -3703,25 +3899,79 @@ def _run_module_extraction(
     if isinstance(result, dict):
         for c, df in result.items():
             try:
-                if hasattr(df, 'data') and isinstance(df.data, pd.DataFrame):
+                if hasattr(df, "data") and isinstance(df.data, pd.DataFrame):
                     df = df.data
-                elif hasattr(df, 'to_pandas'):
+                elif hasattr(df, "to_pandas"):
                     df = df.to_pandas()
                 # 🔧 Post-aggregation concept-bounds enforcement (the missing
                 # ricu-style filter_bounds): drop physiologically-impossible values
                 # that survive the DuckDB aggregation path. See _enforce_concept_bounds.
                 _n_oob = 0
+                _rows_before = len(df) if isinstance(df, pd.DataFrame) else None
+                _has_bounds = c in _load_concept_bounds_map()
+                _bounds_skipped = False
+                _loader_bounds = {}
                 if isinstance(df, pd.DataFrame):
+                    candidate = df.attrs.get("easyicu_bounds_loader", {})
+                    if isinstance(candidate, dict):
+                        _loader_bounds = {
+                            key: candidate[key]
+                            for key in _BOUNDS_METADATA_KEYS
+                            if key in candidate
+                        }
                     df, _n_oob = _enforce_concept_bounds(df, c)
                 if _n_oob == -1:
                     # unit-safety guard tripped: bounds NOT enforced for this concept
                     # (median out of range → wrong unit for this DB). Surface loudly.
-                    errors.append(f"{c}: BOUNDS SKIPPED (unit-suspect: median outside declared range)")
+                    warnings.append(
+                        f"{c}: BOUNDS SKIPPED (unit-suspect: median outside declared range)"
+                    )
+                    _bounds_skipped = True
                     _n_oob = 0
                 if isinstance(df, pd.DataFrame) and len(df) > 0:
                     path = os.path.join(output_dir, f"{c}.parquet")
-                    df.to_parquet(path, index=False, engine='pyarrow')
-                    saved[c] = {'path': path, 'rows': len(df), 'bounds_dropped': _n_oob}
+                    df.to_parquet(path, index=False, engine="pyarrow")
+                    if not _has_bounds:
+                        _bounds_status = "not_declared"
+                    elif _bounds_skipped:
+                        _bounds_status = "skipped_unit_suspect"
+                    else:
+                        _bounds_status = "enforced"
+                    _raw_non_null = _loader_bounds.get(
+                        "bounds_raw_transformed_non_null"
+                    )
+                    _bounded_non_null = _loader_bounds.get(
+                        "bounds_bounded_transformed_non_null"
+                    )
+                    if _bounds_skipped:
+                        _bounds_dropped = None
+                        _bounds_count_status = "skipped_unit_suspect"
+                    elif _raw_non_null is not None and _bounded_non_null is not None:
+                        _bounds_dropped = max(
+                            0, int(_raw_non_null) - int(_bounded_non_null)
+                        )
+                        _bounds_count_status = "pre_aggregation_exact"
+                    else:
+                        _bounds_dropped = None if _has_bounds else 0
+                        _bounds_count_status = (
+                            "pre_aggregation_count_unavailable"
+                            if _has_bounds
+                            else "not_applicable"
+                        )
+                    saved[c] = {
+                        "path": path,
+                        "rows": len(df),
+                        "rows_before": _rows_before,
+                        # Fast SQL paths enforce bounds before aggregation but
+                        # do not materialise rejected raw rows. Never report
+                        # the post-aggregation guard count as the total.
+                        "bounds_dropped": _bounds_dropped,
+                        "bounds_dropped_post_aggregation": _n_oob,
+                        "bounds_count_status": _bounds_count_status,
+                        "bounds_skipped": _bounds_skipped,
+                        "bounds_status": _bounds_status,
+                        **_loader_bounds,
+                    }
             except Exception as e:
                 errors.append(f"{c}: {e}")
     elif isinstance(result, pd.DataFrame) and len(result) > 0:
@@ -3732,16 +3982,17 @@ def _run_module_extraction(
         for c in concepts:
             if c in result.columns:
                 path = os.path.join(output_dir, f"{c}.parquet")
-                result.to_parquet(path, index=False, engine='pyarrow')
-                saved[c] = {'path': path, 'rows': len(result)}
+                result.to_parquet(path, index=False, engine="pyarrow")
+                saved[c] = {"path": path, "rows": len(result)}
                 break
 
     elapsed = time.time() - t0
     manifest = {
-        'module': module_name,
-        'saved': saved,
-        'errors': errors,
-        'elapsed_sec': round(elapsed, 1),
+        "module": module_name,
+        "saved": saved,
+        "errors": errors,
+        "warnings": warnings,
+        "elapsed_sec": round(elapsed, 1),
     }
     with open(os.path.join(output_dir, '_manifest.json'), 'w') as f:
         json.dump(manifest, f)
@@ -4180,7 +4431,13 @@ def extract_database(
 
     def _collect_module_result(tmp_mod_dir: str, mod_name: str) -> Dict:
         """读回单个模块 worker 的 manifest + parquet 输出。"""
-        mod_result = {'concepts': {}, 'elapsed': 0.0, 'errors': []}
+        mod_result = {
+            "concepts": {},
+            "elapsed": 0.0,
+            "errors": [],
+            "warnings": [],
+            "bounds": {},
+        }
         manifest_path = os.path.join(tmp_mod_dir, '_manifest.json')
         if not os.path.exists(manifest_path):
             mod_result['errors'] = [
@@ -4190,22 +4447,43 @@ def extract_database(
         with open(manifest_path) as f:
             manifest = json.load(f)
         mod_result['errors'] = manifest.get('errors', [])
+        mod_result["warnings"] = manifest.get("warnings", [])
         mod_result['elapsed'] = manifest.get('elapsed_sec', 0.0)
-        for c_name, info in manifest.get('saved', {}).items():
-            pq_path = info['path']
+        output_manifest = {
+            "module": mod_name,
+            "saved": {},
+            "errors": mod_result["errors"],
+            "warnings": mod_result["warnings"],
+            "bounds": mod_result["bounds"],
+            "elapsed_sec": mod_result["elapsed"],
+        }
+        for c_name, info in manifest.get("saved", {}).items():
+            pq_path = info["path"]
             if os.path.exists(pq_path):
-                rows = info.get('rows', 0)
+                rows = info.get("rows", 0)
+                meta = _bounds_metadata_from_manifest_info(info)
+                if meta:
+                    mod_result["bounds"][c_name] = meta
                 if output_dir is not None:
                     # 流式写盘：move 文件到输出目录，不读回内存
                     mod_out = os.path.join(output_dir, mod_name)
                     os.makedirs(mod_out, exist_ok=True)
                     dst = os.path.join(mod_out, f"{c_name}.parquet")
                     shutil.move(pq_path, dst)
-                    mod_result['concepts'][c_name] = {'path': dst, 'rows': rows}
+                    concept_info = _concept_result_info(dst, info)
+                    concept_info["rows"] = rows
+                    mod_result["concepts"][c_name] = concept_info
+                    output_manifest["saved"][c_name] = concept_info
                 else:
                     # 无输出目录：读回 DataFrame 到内存
                     df = pd.read_parquet(pq_path)
-                    mod_result['concepts'][c_name] = df
+                    _attach_bounds_metadata(df, info)
+                    mod_result["concepts"][c_name] = df
+        if output_dir is not None:
+            mod_out = os.path.join(output_dir, mod_name)
+            os.makedirs(mod_out, exist_ok=True)
+            with open(os.path.join(mod_out, "_manifest.json"), "w") as f:
+                json.dump(output_manifest, f)
         return mod_result
 
     def _count_rows(mod_result: Dict) -> int:
@@ -4229,59 +4507,99 @@ def extract_database(
         for mod_name in sp_modules:
             concepts = EXTRACT_MODULES.get(mod_name, [])
             if manifest is None:
-                mod_result = {'concepts': {}, 'elapsed': 0.0, 'errors': [
-                    f"{mod_name}: worker produced no manifest (process may have died)"
-                ]}
+                mod_result = {
+                    "concepts": {},
+                    "elapsed": 0.0,
+                    "errors": [
+                        f"{mod_name}: worker produced no manifest (process may have died)"
+                    ],
+                    "warnings": [],
+                    "bounds": {},
+                }
             else:
-                mod_result = {'concepts': {}, 'elapsed': sp_elapsed,
-                              'errors': manifest.get('errors', [])}
+                mod_result = {
+                    "concepts": {},
+                    "elapsed": sp_elapsed,
+                    "errors": manifest.get("errors", []),
+                    "warnings": manifest.get("warnings", []),
+                    "bounds": {},
+                }
+                output_manifest = {
+                    "module": mod_name,
+                    "saved": {},
+                    "errors": mod_result["errors"],
+                    "warnings": mod_result["warnings"],
+                    "bounds": mod_result["bounds"],
+                    "elapsed_sec": sp_elapsed,
+                }
                 for c_name in concepts:
-                    info = manifest.get('saved', {}).get(c_name)
-                    if info and os.path.exists(info['path']):
-                        rows = info.get('rows', 0)
+                    info = manifest.get("saved", {}).get(c_name)
+                    if info and os.path.exists(info["path"]):
+                        rows = info.get("rows", 0)
+                        meta = _bounds_metadata_from_manifest_info(info)
+                        if meta:
+                            mod_result["bounds"][c_name] = meta
                         if output_dir is not None:
                             mod_out = os.path.join(output_dir, mod_name)
                             os.makedirs(mod_out, exist_ok=True)
                             dst = os.path.join(mod_out, f"{c_name}.parquet")
-                            shutil.move(info['path'], dst)
-                            mod_result['concepts'][c_name] = {'path': dst, 'rows': rows}
+                            shutil.move(info["path"], dst)
+                            concept_info = _concept_result_info(dst, info)
+                            concept_info["rows"] = rows
+                            mod_result["concepts"][c_name] = concept_info
+                            output_manifest["saved"][c_name] = concept_info
                         else:
-                            df = pd.read_parquet(info['path'])
-                            mod_result['concepts'][c_name] = df
-            result['modules'][mod_name] = mod_result
+                            df = pd.read_parquet(info["path"])
+                            _attach_bounds_metadata(df, info)
+                            mod_result["concepts"][c_name] = df
+                if output_dir is not None:
+                    mod_out = os.path.join(output_dir, mod_name)
+                    os.makedirs(mod_out, exist_ok=True)
+                    with open(os.path.join(mod_out, "_manifest.json"), "w") as f:
+                        json.dump(output_manifest, f)
+            result["modules"][mod_name] = mod_result
             units_done += 1
             if verbose:
-                print(f"   {'✅' if not mod_result['errors'] else '⚠️'} "
-                      f"[{units_done}/{n_units_total}] {mod_name}: "
-                      f"{len(mod_result['concepts'])} concepts, "
-                      f"{_count_rows(mod_result):,} rows, {sp_elapsed:.1f}s")
+                print(
+                    f"   {'✅' if not mod_result['errors'] else '⚠️'} "
+                    f"[{units_done}/{n_units_total}] {mod_name}: "
+                    f"{len(mod_result['concepts'])} concepts, "
+                    f"{_count_rows(mod_result):,} rows, {sp_elapsed:.1f}s"
+                )
 
     # ---- 逐组在子进程中加载 ----
     from collections import deque
     pending_groups = deque(groups)
     while pending_groups:
         group = pending_groups.popleft()
-        group_mods = [m for m in group['modules'] if EXTRACT_MODULES.get(m)]
-        group_special = list(group['special'])
+        group_mods = [m for m in group["modules"] if EXTRACT_MODULES.get(m)]
+        group_special = list(group["special"])
         if not group_mods and not group_special:
             continue
 
         module_specs = [(m, EXTRACT_MODULES[m]) for m in group_mods]
-        group_use_sofa2 = (
-            any(_concepts_need_sofa2(c) for _, c in module_specs)
-            or any('sofa2' in m for m in group_special)
+        group_use_sofa2 = any(_concepts_need_sofa2(c) for _, c in module_specs) or any(
+            "sofa2" in m for m in group_special
         )
 
-        tmp_root = tempfile.mkdtemp(prefix='easyicu_grp_')
+        tmp_root = tempfile.mkdtemp(prefix="easyicu_grp_")
         if verbose:
             rss = get_rss_mb()
-            label = ' + '.join(group_mods + group_special)
+            label = " + ".join(group_mods + group_special)
             print(f"\n⏳ {label} ... RSS={rss:.0f}MB")
 
         proc = mp_ctx.Process(
             target=_extract_module_group_worker,
-            args=(module_specs, group_special, database, data_path,
-                  patient_ids_filter, batch_size, tmp_root, group_use_sofa2),
+            args=(
+                module_specs,
+                group_special,
+                database,
+                data_path,
+                patient_ids_filter,
+                batch_size,
+                tmp_root,
+                group_use_sofa2,
+            ),
             daemon=True,
         )
         proc.start()
@@ -4291,35 +4609,53 @@ def extract_database(
         # 模块拆成单模块组重试一次，避免一个组的失败拖垮整组输出。
         crashed = proc.exitcode not in (0, None)
         incomplete_mods = [
-            m for m in group_mods
-            if not os.path.exists(os.path.join(tmp_root, m, '_manifest.json'))
+            m
+            for m in group_mods
+            if not os.path.exists(os.path.join(tmp_root, m, "_manifest.json"))
         ]
         special_incomplete = bool(group_special) and not os.path.exists(
-            os.path.join(tmp_root, _SPECIAL_OUTPUT_DIRNAME, '_manifest.json')
+            os.path.join(tmp_root, _SPECIAL_OUTPUT_DIRNAME, "_manifest.json")
         )
         can_split = len(group_mods) + (1 if group_special else 0) > 1
         if crashed and can_split and (incomplete_mods or special_incomplete):
             if verbose:
-                retry_units = incomplete_mods + (group_special if special_incomplete else [])
-                print(f"   ⚠️ group worker exit={proc.exitcode}; "
-                      f"retrying individually: {retry_units}")
+                retry_units = incomplete_mods + (
+                    group_special if special_incomplete else []
+                )
+                print(
+                    f"   ⚠️ group worker exit={proc.exitcode}; "
+                    f"retrying individually: {retry_units}"
+                )
             if special_incomplete:
-                pending_groups.appendleft({'modules': [], 'special': group_special})
+                pending_groups.appendleft({"modules": [], "special": group_special})
                 group_special = []
             for m in reversed(incomplete_mods):
-                pending_groups.appendleft({'modules': [m], 'special': []})
+                pending_groups.appendleft({"modules": [m], "special": []})
             group_mods = [m for m in group_mods if m not in incomplete_mods]
 
         for mod_name in group_mods:
-            mod_result = _collect_module_result(os.path.join(tmp_root, mod_name), mod_name)
-            result['modules'][mod_name] = mod_result
+            mod_result = _collect_module_result(
+                os.path.join(tmp_root, mod_name), mod_name
+            )
+            result["modules"][mod_name] = mod_result
             units_done += 1
             if verbose:
-                status = '✅' if not mod_result['errors'] else '⚠️'
-                print(f"   {status} [{units_done}/{n_units_total}] {mod_name}: "
-                      f"{len(mod_result['concepts'])} concepts, "
-                      f"{_count_rows(mod_result):,} rows, {mod_result['elapsed']:.1f}s"
-                      + (f" | errors: {mod_result['errors']}" if mod_result['errors'] else ''))
+                status = "✅" if not mod_result["errors"] else "⚠️"
+                print(
+                    f"   {status} [{units_done}/{n_units_total}] {mod_name}: "
+                    f"{len(mod_result['concepts'])} concepts, "
+                    f"{_count_rows(mod_result):,} rows, {mod_result['elapsed']:.1f}s"
+                    + (
+                        f" | errors: {mod_result['errors']}"
+                        if mod_result["errors"]
+                        else ""
+                    )
+                    + (
+                        f" | warnings: {mod_result['warnings']}"
+                        if mod_result.get("warnings")
+                        else ""
+                    )
+                )
 
         if group_special:
             _collect_special_results(
@@ -4334,22 +4670,30 @@ def extract_database(
 
     if verbose:
         rss = get_rss_mb()
-        total_concepts = sum(len(m['concepts']) for m in result['modules'].values())
+        total_concepts = sum(len(m["concepts"]) for m in result["modules"].values())
         total_rows = 0
-        for m in result['modules'].values():
-            for v in m['concepts'].values():
+        for m in result["modules"].values():
+            for v in m["concepts"].values():
                 if isinstance(v, dict):
-                    total_rows += v.get('rows', 0)
+                    total_rows += v.get("rows", 0)
                 elif isinstance(v, pd.DataFrame):
                     total_rows += len(v)
-        all_errors = [e for m in result['modules'].values() for e in m['errors']]
+        all_errors = [e for m in result["modules"].values() for e in m["errors"]]
+        all_warnings = [
+            w for m in result["modules"].values() for w in m.get("warnings", [])
+        ]
         print(f"\n{'='*60}")
-        print(f"✅ {database} 完成: {total_concepts} concepts, "
-              f"{total_rows:,} rows, {total_elapsed:.1f}s")
-        print(f"   RSS: {rss:.0f}MB" +
-              (f"  |  输出: {output_dir}" if output_dir else ''))
+        print(
+            f"✅ {database} 完成: {total_concepts} concepts, "
+            f"{total_rows:,} rows, {total_elapsed:.1f}s"
+        )
+        print(
+            f"   RSS: {rss:.0f}MB" + (f"  |  输出: {output_dir}" if output_dir else "")
+        )
         if all_errors:
             print(f"   ⚠️ {len(all_errors)} 错误: {all_errors[:5]}")
+        if all_warnings:
+            print(f"   ⚠️ {len(all_warnings)} 警告: {all_warnings[:5]}")
         print(f"{'='*60}")
 
     return result
