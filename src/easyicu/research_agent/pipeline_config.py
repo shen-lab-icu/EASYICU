@@ -12,7 +12,8 @@ dataclass so:
 * tests can build a baseline config and override only what they care
   about (``config = PipelineConfig.default().with_overrides(...)``);
 * configuration can be loaded from YAML / TOML via
-  :meth:`PipelineConfig.from_kwargs` without inspecting ``__init__``;
+  :meth:`PipelineConfig.from_kwargs`, with unknown or misspelled keys
+  rejected instead of silently ignored;
 * future refactors that group flags (literature, runner, audits, ...)
   can add nested config objects without breaking ``__init__``.
 
@@ -31,7 +32,7 @@ and benefits more from being a lightweight dataclass that mirrors
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field, fields, replace
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Sequence, Union
 
@@ -123,6 +124,9 @@ class PipelineConfig:
     enable_causal_audit: bool = True
     enable_reporting_checklist: bool = True
     reporting_checklist_names: Optional[Sequence[str]] = None
+    # Authoritative benchmark task kind used for kind-specific reporting
+    # checks. Optional for non-benchmark pipeline runs.
+    task_kind: Optional[str] = None
     enable_reviewer_round: bool = True
     enable_fairness_subgroups: bool = True
     enable_hypothesis_generator: bool = False
@@ -238,12 +242,12 @@ class PipelineConfig:
 
     @classmethod
     def from_kwargs(cls, **kwargs: Any) -> "PipelineConfig":
-        """Build a config from an arbitrary kwargs dict, ignoring keys
-        that don't correspond to a field. Use when loading from YAML /
-        TOML / argparse where extra keys may be present.
+        """Build a config from keyword arguments.
+
+        Unknown keys raise :class:`TypeError` so misspelled YAML, TOML, or
+        argparse options cannot silently fall back to a pipeline default.
         """
-        known = {f.name for f in fields(cls)}
-        return cls(**{k: v for k, v in kwargs.items() if k in known})
+        return cls(**kwargs)
 
     def with_overrides(self, **overrides: Any) -> "PipelineConfig":
         """Return a new :class:`PipelineConfig` with the given fields
