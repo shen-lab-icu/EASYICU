@@ -8,6 +8,8 @@ from fastapi.routing import APIRoute
 from starlette.routing import Mount
 
 from easyicu.webserver.app import app
+from easyicu.webserver.routes.agent import artifact_router as agent_artifact_router
+from easyicu.webserver.routes.agent import control_router as agent_control_router
 from easyicu.webserver.routes.copilot import router as copilot_router
 from easyicu.webserver.routes.extraction import router as extraction_router
 from easyicu.webserver.routes.guided import router as guided_router
@@ -178,6 +180,42 @@ EXPECTED_JOB_LIFECYCLE_ROUTES = [
     ("GET", "/api/jobs/{job_id}/events", "jobs_events"),
 ]
 
+EXPECTED_AGENT_CONTROL_ROUTES = [
+    ("POST", "/api/jobs/agent-run", "jobs_agent_run"),
+    (
+        "GET",
+        "/api/agent-runs/provider-status",
+        "get_agent_run_provider_status",
+    ),
+    (
+        "POST",
+        "/api/agent-runs/provider-config",
+        "post_agent_run_provider_config",
+    ),
+    ("POST", "/api/agent-runs/review", "post_agent_run_review"),
+    (
+        "POST",
+        "/api/agent-runs/science-workbench",
+        "post_agent_run_science_workbench",
+    ),
+    ("POST", "/api/agent-runs/signoff", "post_agent_run_signoff"),
+    ("POST", "/api/agent-runs/history", "post_agent_run_history"),
+]
+
+EXPECTED_AGENT_ARTIFACT_ROUTES = [
+    ("POST", "/api/agent-runs/artifact", "post_agent_run_artifact"),
+    (
+        "POST",
+        "/api/agent-runs/download-artifact",
+        "post_agent_run_download_artifact",
+    ),
+    (
+        "POST",
+        "/api/agent-runs/download-bundle",
+        "post_agent_run_download_bundle",
+    ),
+]
+
 
 def _router_routes(router) -> list[APIRoute]:
     return [route for route in router.routes if isinstance(route, APIRoute)]
@@ -300,6 +338,14 @@ def test_job_lifecycle_route_method_path_and_operation_name_snapshot() -> None:
     _assert_router_contract(job_lifecycle_router, EXPECTED_JOB_LIFECYCLE_ROUTES)
 
 
+def test_agent_control_route_method_path_and_operation_name_snapshot() -> None:
+    _assert_router_contract(agent_control_router, EXPECTED_AGENT_CONTROL_ROUTES)
+
+
+def test_agent_artifact_route_method_path_and_operation_name_snapshot() -> None:
+    _assert_router_contract(agent_artifact_router, EXPECTED_AGENT_ARTIFACT_ROUTES)
+
+
 def test_route_owner_boundaries() -> None:
     package_root = Path(__file__).parents[1] / "src" / "easyicu" / "webserver"
     app_source = (package_root / "app.py").read_text(encoding="utf-8")
@@ -324,6 +370,7 @@ def test_route_owner_boundaries() -> None:
         encoding="utf-8"
     )
     jobs_source = (package_root / "routes" / "jobs.py").read_text(encoding="utf-8")
+    agent_source = (package_root / "routes" / "agent.py").read_text(encoding="utf-8")
 
     assert "/api/guided/" not in app_source
     assert "/api/copilot/" not in app_source
@@ -341,6 +388,8 @@ def test_route_owner_boundaries() -> None:
     assert '"/api/jobs/extract"' not in app_source
     assert '"/api/jobs/crossdb-raw-distribution"' not in app_source
     assert '"/api/jobs/{job_id}' not in app_source
+    assert '"/api/jobs/agent-run"' not in app_source
+    assert "/api/agent-runs/" not in app_source
     assert "/api/guided/" in guided_source
     assert "/api/copilot/" not in guided_source
     assert "/api/page-guide/" not in guided_source
@@ -381,6 +430,14 @@ def test_route_owner_boundaries() -> None:
     assert '"/api/jobs/agent-run"' not in jobs_source
     assert "/api/agent-runs/" not in jobs_source
     assert "job_store.MANAGER" in jobs_source
+    assert '"/api/jobs/agent-run"' in agent_source
+    assert "/api/agent-runs/" in agent_source
+    assert '"/api/jobs/convert"' not in agent_source
+    assert '"/api/jobs/extract"' not in agent_source
+    assert '"/api/jobs/{job_id}' not in agent_source
+    assert "/api/guided/" not in agent_source
+    assert "/api/copilot/" not in agent_source
+    assert "/api/ideas/" not in agent_source
     assert "_pubmed_connector_gate" not in app_source
     assert "_pubmed_connector_gate" in ideas_source
     assert "easyicu.webserver.app" not in guided_source
@@ -392,21 +449,11 @@ def test_route_owner_boundaries() -> None:
     assert "easyicu.webserver.app" not in reviews_source
     assert "easyicu.webserver.app" not in extraction_source
     assert "easyicu.webserver.app" not in jobs_source
+    assert "easyicu.webserver.app" not in agent_source
 
 
 def test_root_static_mount_stays_last() -> None:
     static_mount = app.routes[-1]
-    agent_history_index = next(
-        index
-        for index, route in enumerate(app.routes)
-        if getattr(route, "path", None) == "/api/agent-runs/history"
-    )
-    artifact_index = next(
-        index
-        for index, route in enumerate(app.routes)
-        if getattr(route, "path", None) == "/api/agent-runs/artifact"
-    )
-
     assert (
         _router_registration_index(system_router)
         < _router_registration_index(local_data_router)
@@ -414,12 +461,12 @@ def test_root_static_mount_stays_last() -> None:
         < _router_registration_index(extraction_router)
         < _router_registration_index(workspaces_router)
         < _router_registration_index(job_submission_router)
-        < agent_history_index
+        < _router_registration_index(agent_control_router)
         < _router_registration_index(guided_router)
         < _router_registration_index(copilot_router)
         < _router_registration_index(page_guide_router)
         < _router_registration_index(ideas_router)
-        < artifact_index
+        < _router_registration_index(agent_artifact_router)
         < _router_registration_index(job_lifecycle_router)
         < len(app.routes) - 1
     )
