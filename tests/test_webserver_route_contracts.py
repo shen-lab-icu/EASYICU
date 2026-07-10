@@ -8,7 +8,9 @@ from fastapi.routing import APIRoute
 from starlette.routing import Mount
 
 from easyicu.webserver.app import app
+from easyicu.webserver.routes.copilot import router as copilot_router
 from easyicu.webserver.routes.guided import router as guided_router
+from easyicu.webserver.routes.page_guide import router as page_guide_router
 from easyicu.webserver.routes.system import router as system_router
 
 
@@ -56,6 +58,20 @@ EXPECTED_GUIDED_ROUTES = [
     ("POST", "/api/guided/sessions/list", "post_guided_sessions_list"),
 ]
 
+EXPECTED_COPILOT_ROUTES = [
+    ("POST", "/api/copilot/sessions", "post_copilot_session"),
+    ("POST", "/api/copilot/message", "post_copilot_message"),
+    ("POST", "/api/copilot/action", "post_copilot_action"),
+    ("POST", "/api/copilot/sessions/list", "post_copilot_sessions_list"),
+]
+
+EXPECTED_PAGE_GUIDE_ROUTES = [
+    ("POST", "/api/page-guide/sessions", "post_page_guide_session"),
+    ("POST", "/api/page-guide/message", "post_page_guide_message"),
+    ("POST", "/api/page-guide/action", "post_page_guide_action"),
+    ("POST", "/api/page-guide/sessions/list", "post_page_guide_sessions_list"),
+]
+
 
 def _router_routes(router) -> list[APIRoute]:
     return [route for route in router.routes if isinstance(route, APIRoute)]
@@ -79,6 +95,42 @@ def _router_registration_index(router) -> int:
     return _router_registration_indices(router)[0]
 
 
+def _assert_router_contract(router, prefix: str, expected: list[tuple]) -> None:
+    routes = _router_routes(router)
+    actual = [
+        (method, route.path, route.name)
+        for route in routes
+        for method in sorted(route.methods or set())
+    ]
+    eager_app_routes = [
+        route
+        for route in app.routes
+        if isinstance(route, APIRoute) and route.path.startswith(prefix)
+    ]
+    eager_app_actual = [
+        (method, route.path, route.name)
+        for route in eager_app_routes
+        for method in sorted(route.methods or set())
+    ]
+    registration_indices = _router_registration_indices(router)
+
+    assert actual == expected
+    if eager_app_routes:
+        assert eager_app_actual == expected
+    else:
+        assert len(registration_indices) == 1
+        assert (
+            getattr(app.routes[registration_indices[0]], "original_router", None)
+            is router
+        )
+    assert registration_indices == list(
+        range(
+            registration_indices[0],
+            registration_indices[0] + len(registration_indices),
+        )
+    )
+
+
 def test_system_route_method_path_snapshot() -> None:
     routes = _router_routes(system_router)
     actual = [
@@ -99,38 +151,18 @@ def test_system_route_operation_names_and_favicon_schema_contract() -> None:
 
 
 def test_guided_route_method_path_and_operation_name_snapshot() -> None:
-    routes = _router_routes(guided_router)
-    actual = [
-        (method, route.path, route.name)
-        for route in routes
-        for method in sorted(route.methods or set())
-    ]
-    eager_app_routes = [
-        route
-        for route in app.routes
-        if isinstance(route, APIRoute) and route.path.startswith("/api/guided/")
-    ]
-    eager_app_actual = [
-        (method, route.path, route.name)
-        for route in eager_app_routes
-        for method in sorted(route.methods or set())
-    ]
-    registration_indices = _router_registration_indices(guided_router)
+    _assert_router_contract(guided_router, "/api/guided/", EXPECTED_GUIDED_ROUTES)
 
-    assert actual == EXPECTED_GUIDED_ROUTES
-    if eager_app_routes:
-        assert eager_app_actual == EXPECTED_GUIDED_ROUTES
-    else:
-        assert len(registration_indices) == 1
-        assert (
-            getattr(app.routes[registration_indices[0]], "original_router", None)
-            is guided_router
-        )
-    assert registration_indices == list(
-        range(
-            registration_indices[0],
-            registration_indices[0] + len(registration_indices),
-        )
+
+def test_copilot_route_method_path_and_operation_name_snapshot() -> None:
+    _assert_router_contract(copilot_router, "/api/copilot/", EXPECTED_COPILOT_ROUTES)
+
+
+def test_page_guide_route_method_path_and_operation_name_snapshot() -> None:
+    _assert_router_contract(
+        page_guide_router,
+        "/api/page-guide/",
+        EXPECTED_PAGE_GUIDE_ROUTES,
     )
 
 
@@ -138,12 +170,28 @@ def test_guided_route_owner_boundary() -> None:
     package_root = Path(__file__).parents[1] / "src" / "easyicu" / "webserver"
     app_source = (package_root / "app.py").read_text(encoding="utf-8")
     guided_source = (package_root / "routes" / "guided.py").read_text(encoding="utf-8")
+    copilot_source = (package_root / "routes" / "copilot.py").read_text(
+        encoding="utf-8"
+    )
+    page_guide_source = (package_root / "routes" / "page_guide.py").read_text(
+        encoding="utf-8"
+    )
 
     assert "/api/guided/" not in app_source
+    assert "/api/copilot/" not in app_source
+    assert "/api/page-guide/" not in app_source
     assert "/api/guided/" in guided_source
     assert "/api/copilot/" not in guided_source
     assert "/api/page-guide/" not in guided_source
+    assert "/api/copilot/" in copilot_source
+    assert "/api/guided/" not in copilot_source
+    assert "/api/page-guide/" not in copilot_source
+    assert "/api/page-guide/" in page_guide_source
+    assert "/api/guided/" not in page_guide_source
+    assert "/api/copilot/" not in page_guide_source
     assert "easyicu.webserver.app" not in guided_source
+    assert "easyicu.webserver.app" not in copilot_source
+    assert "easyicu.webserver.app" not in page_guide_source
 
 
 def test_root_static_mount_stays_last() -> None:
@@ -158,10 +206,10 @@ def test_root_static_mount_stays_last() -> None:
         for index, route in enumerate(app.routes)
         if getattr(route, "path", None) == "/api/agent-runs/history"
     )
-    copilot_index = next(
+    ideas_index = next(
         index
         for index, route in enumerate(app.routes)
-        if getattr(route, "path", None) == "/api/copilot/sessions"
+        if getattr(route, "path", None) == "/api/ideas/mine"
     )
 
     assert (
@@ -169,7 +217,9 @@ def test_root_static_mount_stays_last() -> None:
         < fs_list_index
         < agent_history_index
         < _router_registration_index(guided_router)
-        < copilot_index
+        < _router_registration_index(copilot_router)
+        < _router_registration_index(page_guide_router)
+        < ideas_index
         < len(app.routes) - 1
     )
     assert isinstance(static_mount, Mount)
