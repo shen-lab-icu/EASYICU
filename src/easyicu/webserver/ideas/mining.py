@@ -28,8 +28,16 @@ from urllib import parse, request
 from xml.etree import ElementTree as ET
 
 from easyicu.concept import catalog as concept_catalog
+from easyicu.research_agent.discovery_handoff import DiscoveryHandoffPacket
 from easyicu.webserver import dataio
 from easyicu.webserver import sources as source_store
+from easyicu.webserver.ideas.handoff import (
+    CanonicalHandoffIntegrityError,
+    build_web_handoff_packet,
+    is_legacy_handoff_envelope,
+    load_validated_canonical_handoff,
+    persist_canonical_handoff,
+)
 from easyicu.webserver.input_validation import parse_bool
 
 _CONFIG_DIR = Path.home() / ".easyicu"
@@ -920,9 +928,30 @@ def create_handoff(body: Dict[str, Any]) -> Dict[str, Any]:
             "external_llm_calls": 0,
         },
     }
-    _assert_no_row_payload(handoff)
     run_dir = _run_dir(run_id)
     run_dir.mkdir(parents=True, exist_ok=True)
+    source = ((payload.get("source_evidence") or [{}])[0]) or {}
+    try:
+        canonical_packet = build_web_handoff_packet(
+            idea=idea,
+            source=source,
+            plan=plan,
+            pre_experiment=pre_experiment,
+            prior_art_check=prior_art_check,
+            run_dir=run_dir,
+        )
+        handoff.update(
+            persist_canonical_handoff(canonical_packet, run_dir=run_dir)
+        )
+    except (TypeError, ValueError) as exc:
+        raise IdeaMiningWebError(
+            {
+                "error": "canonical_handoff_build_failed",
+                "run_id": run_id,
+                "reason": str(exc),
+            }
+        ) from exc
+    _assert_no_row_payload(handoff)
     (run_dir / "idea_handoff.json").write_text(
         json.dumps(handoff, indent=2, ensure_ascii=False), encoding="utf-8"
     )
@@ -934,24 +963,49 @@ def create_agent_project(body: Dict[str, Any]) -> Dict[str, Any]:
     run_id = str(body.get("run_id") or "").strip()
     idea_id = str(body.get("idea_id") or "").strip()
     handoff = _load_handoff(run_id)
+    canonical_packet: Optional[DiscoveryHandoffPacket] = None
     if not handoff:
         handoff = create_handoff(body)
     if idea_id and str(handoff.get("idea_id") or "") != idea_id:
         handoff = create_handoff(body)
-    elif _handoff_needs_refresh(handoff, run_id) or _handoff_plan_is_stale(
-        handoff, run_id, body
-    ):
-        refresh_body = dict(body)
-        if not refresh_body.get("plan_edits"):
-            # Prefer the freshest human plan notes: the on-disk plan (the user's
-            # latest edit, which may never have been re-frozen) over the frozen
-            # handoff notes, so a re-plan is not silently dropped from the seed.
-            plan = _load_plan(run_id) or {}
-            refresh_body["plan_edits"] = plan.get("human_plan_notes") or (
-                handoff.get("handoff_plan") or {}
-            ).get("human_plan_notes")
-        handoff = create_handoff(refresh_body)
-    seed = _agent_project_seed(handoff)
+    try:
+        # A canonical envelope is immutable evidence. Validate it before any
+        # legitimate plan/prior-art refresh so a simultaneous update cannot
+        # mask a tampered frozen packet. True pre-canonical legacy envelopes
+        # are the sole exception and are rebuilt once below.
+        if not is_legacy_handoff_envelope(handoff):
+            canonical_packet = load_validated_canonical_handoff(
+                handoff,
+                run_dir=_run_dir(run_id),
+            )
+        if _handoff_needs_refresh(handoff, run_id) or _handoff_plan_is_stale(
+            handoff, run_id, body
+        ):
+            refresh_body = dict(body)
+            if not refresh_body.get("plan_edits"):
+                # Prefer the freshest human plan notes: the on-disk plan (the user's
+                # latest edit, which may never have been re-frozen) over the frozen
+                # handoff notes, so a re-plan is not silently dropped from the seed.
+                plan = _load_plan(run_id) or {}
+                refresh_body["plan_edits"] = plan.get("human_plan_notes") or (
+                    handoff.get("handoff_plan") or {}
+                ).get("human_plan_notes")
+            handoff = create_handoff(refresh_body)
+            canonical_packet = None
+        if canonical_packet is None:
+            canonical_packet = load_validated_canonical_handoff(
+                handoff,
+                run_dir=_run_dir(run_id),
+            )
+    except CanonicalHandoffIntegrityError as exc:
+        raise IdeaMiningWebError(
+            {
+                "error": "canonical_handoff_integrity_error",
+                "run_id": run_id,
+                "reason": exc.reason,
+            }
+        ) from exc
+    seed = _agent_project_seed(handoff, canonical_packet)
     project_dir = _AGENT_PROJECTS_ROOT / str(seed["study_id"])
     project_dir.mkdir(parents=True, exist_ok=True)
     (project_dir / "project_seed.json").write_text(
@@ -2545,6 +2599,11 @@ def _handoff_plan_is_stale(
 
 
 def _handoff_needs_refresh(handoff: Dict[str, Any], run_id: str) -> bool:
+    # Legacy Web envelopes predate the canonical research-agent packet. Rebuild
+    # them once; envelopes that claim a canonical packet are validated later
+    # and must fail closed rather than being silently refreshed after tampering.
+    if is_legacy_handoff_envelope(handoff):
+        return True
     prior_art_check = _load_prior_art(run_id)
     if prior_art_check and not handoff.get("prior_art_check"):
         return True
@@ -2557,7 +2616,10 @@ def _handoff_needs_refresh(handoff: Dict[str, Any], run_id: str) -> bool:
     ) or str(prior.get("status") or "") != str(plan_review.get("status") or "")
 
 
-def _agent_project_seed(handoff: Dict[str, Any]) -> Dict[str, Any]:
+def _agent_project_seed(
+    handoff: Dict[str, Any],
+    canonical_packet: DiscoveryHandoffPacket,
+) -> Dict[str, Any]:
     idea = handoff.get("selected_ledger_row") or {}
     plan = handoff.get("handoff_plan") or {}
     agent_seed = handoff.get("agent_seed") or {}
@@ -2636,6 +2698,11 @@ def _agent_project_seed(handoff: Dict[str, Any]) -> Dict[str, Any]:
         "execution_gate": execution_gate,
         "analysis_plan": list(plan.get("analysis_plan") or []),
         "human_plan_notes": plan.get("human_plan_notes"),
+        "canonical_handoff": canonical_packet.model_dump(mode="json"),
+        "canonical_handoff_path": handoff.get("canonical_handoff_path"),
+        "canonical_handoff_sha256": handoff.get("canonical_handoff_sha256"),
+        "human_confirmed": canonical_packet.human_confirmed,
+        "analysis_ready": canonical_packet.analysis_ready,
         "reportable": False,
         "draft_unlocked": False,
         "requires_human_confirmation": True,
