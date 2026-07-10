@@ -35,19 +35,28 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
-
 # ---------------------------------------------------------------------------
 # Lockfile
 # ---------------------------------------------------------------------------
 
 
-def build_requirements_lockfile() -> str:
+def build_requirements_lockfile(
+    captured_runtime_path: Optional[Path] = None,
+) -> str:
     """Return a pip-style lockfile reflecting the current interpreter.
 
     Ordering is case-insensitive by package name so diffs across runs
     are meaningful. The Python interpreter version is written as the
     first comment so downstream tooling can verify before installing.
+    When ``captured_runtime_path`` is supplied, return the runner-captured
+    execution environment instead of incorrectly freezing the host process.
     """
+    if captured_runtime_path is not None:
+        path = Path(captured_runtime_path)
+        text = path.read_text(encoding="utf-8")
+        if "# runtime=docker" not in text or "==" not in text:
+            raise ValueError(f"invalid runner requirements lockfile: {path}")
+        return text if text.endswith("\n") else text + "\n"
     rows: List[str] = []
     try:
         dists = list(_im.distributions())
@@ -123,9 +132,7 @@ def build_notebook(
         ),
     ]
     for step in steps:
-        cells.append(
-            _md_cell(f"## Step `{step.step_id}` — {step.intent}")
-        )
+        cells.append(_md_cell(f"## Step `{step.step_id}` — {step.intent}"))
         cells.append(_code_cell(step.code))
     return {
         "cells": cells,

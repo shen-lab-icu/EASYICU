@@ -1209,20 +1209,31 @@ def _default_mortality_outcome(
 ) -> Optional[OutcomeDeterminability]:
     """Pick a caller-declared mortality determinable to back a generic outcome.
 
-    Returns the first ``known_0_1`` determinable whose concept actually resolves
-    in the available catalog, so a generic outcome is never normalised to an
-    endpoint the cohort cannot measure. The mortality default comes entirely from
-    the caller-supplied ``outcome_determinability`` specs, not from a hard-coded
-    concept, keeping this case-neutral.
+    Returns the first explicitly mortality-labelled ``known_0_1`` determinable
+    whose concept resolves in the available catalog. A generic mortality phrase
+    must never fall through to an unrelated binary endpoint merely because it is
+    the first 0/1 variable in a mapping.
     """
     for key, raw in specs.items():
         det = _coerce_outcome_determinability(raw, outcome=str(key))
         if det.status != "known_0_1":
             continue
+        semantic_labels = (
+            str(key),
+            det.outcome,
+            det.normalized_outcome_concept or "",
+        )
+        if not any(_is_mortality_label(label) for label in semantic_labels):
+            continue
         target = det.normalized_outcome_concept or str(key)
         if _resolve_concept(str(target), lookup) is not None:
             return det
     return None
+
+
+def _is_mortality_label(value: str) -> bool:
+    normalised = normalize_concept_name(str(value or ""))
+    return bool(re.search(r"(?:^|_)(?:death|mortality)(?:_|$)", normalised))
 
 
 # Minimum DISTINCT resolvable concepts a concept-set family needs to be

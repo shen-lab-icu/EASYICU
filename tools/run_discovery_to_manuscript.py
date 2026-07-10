@@ -33,8 +33,11 @@ def _bootstrap_imports() -> Path:
 
 REPO_ROOT = _bootstrap_imports()
 
-from easyicu.research_agent.data_foundation import acquire_universe_for_question  # noqa: E402
+from easyicu.research_agent.data_foundation import (  # noqa: E402
+    acquire_universe_for_question,
+)
 from easyicu.research_agent.discovery_handoff import (  # noqa: E402
+    assert_discovery_analysis_ready,
     build_handoff_from_row,
     load_discovery_ledger,
     select_discovery_row,
@@ -47,7 +50,15 @@ from easyicu.research_agent.discovery_package import (  # noqa: E402
 from easyicu.research_agent.discovery_story_figure import (  # noqa: E402
     render_discovery_story_figure,
 )
-from easyicu.research_agent.llm import OpenAIClient  # noqa: E402
+from easyicu.research_agent.evidence import (  # noqa: E402
+    EvidenceRecord,
+    EvidenceStore,
+    sha256_of_file,
+)
+from easyicu.research_agent.llm import (  # noqa: E402
+    OpenAIClient,
+    openrouter_reasoning_extra_body,
+)
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -63,19 +74,27 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     parser.add_argument("--selection-rationale", default=None)
     parser.add_argument("--research-question", default=None)
-    parser.add_argument("--target-outcome", default="death")
+    parser.add_argument(
+        "--target-outcome",
+        default=None,
+        help=(
+            "Explicit endpoint concept. Defaults to the selected ledger row's "
+            "resolved_outcome_concept; conflicting values are rejected."
+        ),
+    )
+    parser.add_argument(
+        "--human-confirm",
+        action="store_true",
+        help="Record explicit human approval of the selected go/recommend idea.",
+    )
+    parser.add_argument("--human-confirmation-note", default=None)
     parser.add_argument(
         "--outcome-concepts",
         default=None,
         help=(
-            "Comma-separated concept ids to materialise DETERMINISTICALLY as "
-            "binary outcomes (each emits a bare <c> 0/1 column plus <c>_time "
-            "onset), independent of the data-foundation agent's feature "
-            "selection. Use when --target-outcome is a non-death outcome whose "
-            "presence must not depend on the LLM picking it as a feature "
-            "(e.g. --outcome-concepts aki --target-outcome aki). Defaults to "
-            "the target outcome when it is not a per-stay summary suffix, else "
-            "to death."
+            "Optional consistency assertion for deterministic outcome "
+            "materialisation. It must contain exactly the frozen handoff "
+            "target; the handoff remains the sole source of truth."
         ),
     )
     parser.add_argument("--database", default="miiv")
@@ -98,13 +117,17 @@ def main(argv: Optional[list[str]] = None) -> int:
         default=None,
         help="Prepared EasyICU export directory required when --run-analysis is set.",
     )
-    parser.add_argument("--provider", choices=["openai", "openrouter"], default="openai")
+    parser.add_argument(
+        "--provider", choices=["openai", "openrouter"], default="openai"
+    )
     parser.add_argument(
         "--model",
         default=os.environ.get("EASYICU_HOSTED_DEFAULT_MODEL", "gpt-5.4"),
     )
     parser.add_argument("--request-timeout", type=float, default=240.0)
-    parser.add_argument("--runner", choices=["subprocess", "docker"], default="subprocess")
+    parser.add_argument(
+        "--runner", choices=["auto", "subprocess", "docker"], default="auto"
+    )
     parser.add_argument("--llm-seed", type=int, default=None)
     parser.add_argument("--max-total-steps", type=int, default=None)
     parser.add_argument("--disable-replanning", action="store_true")
@@ -116,7 +139,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     triage_report = Path(args.triage_report).resolve()
 
     rows = load_discovery_ledger(triage_report)
-    selected = select_discovery_row(rows, index=args.idea_index)
+    selected = select_discovery_row(
+        rows,
+        index=args.idea_index,
+        require_analysis_ready=args.run_analysis,
+    )
     handoff = build_handoff_from_row(
         selected,
         triage_report_path=triage_report,
@@ -125,6 +152,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         target_outcome=args.target_outcome,
         database=args.database,
         research_question=args.research_question,
+        human_confirmed=args.human_confirm,
+        human_confirmation_note=args.human_confirmation_note,
     )
     handoff_path = write_handoff_packet(handoff, out_root / "discovery_handoff.json")
     print(f"[discovery] handoff: {handoff_path}")
@@ -136,9 +165,13 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     if not args.export_dir:
         raise SystemExit("--export-dir is required with --run-analysis")
-    llm = OpenAIClient(
+    try:
+        assert_discovery_analysis_ready(handoff)
+    except ValueError as exc:
+        raise SystemExit(f"analysis gate blocked: {exc}") from exc
+    llm = _build_data_foundation_llm(
+        provider=args.provider,
         model=args.model,
-        base_url=os.environ.get("OPENAI_BASE_URL"),
         request_timeout=args.request_timeout,
     )
     universe_dir = out_root / "universe"
@@ -149,14 +182,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     # at 0 steps). When --outcome-concepts is given we pass them as outcome
     # concepts so the materialiser emits a bare 0/1 column (+ <c>_time onset)
     # regardless of feature selection.
-    if args.outcome_concepts:
-        outcome_concepts = tuple(
-            c.strip() for c in args.outcome_concepts.split(",") if c.strip()
-        )
-    elif args.target_outcome and args.target_outcome != "death":
-        outcome_concepts = (args.target_outcome,)
-    else:
-        outcome_concepts = ("death",)
+    outcome_concepts = _outcome_concepts_for_handoff(
+        handoff_target=handoff.target_outcome,
+        requested=args.outcome_concepts,
+    )
     acquisition = acquire_universe_for_question(
         export_dir=Path(args.export_dir).resolve(),
         question=handoff.research_question,
@@ -175,29 +204,23 @@ def main(argv: Optional[list[str]] = None) -> int:
     if acquisition.blocked or acquisition.universe_path is None:
         raise SystemExit(f"data foundation blocked: {acquisition.note}")
 
-    # Make the long-format trajectory reachable inside the analysis sandbox.
-    # The bench loads the cohort parquet into a DataFrame (the original universe
-    # dir path is lost), so the runner's sibling auto-discovery cannot find the
-    # trajectory. Export it in the environment instead: the bench subprocess
-    # inherits it, and the runner's os.environ.copy() carries it through to the
-    # sandbox, where the coder reads os.environ["TRAJECTORY_PARQUET"]. Keyed by
-    # stay_id, so it stays valid through any cohort 纳排 re-pointing.
+    # Declare the long-format trajectory in the JSONL handoff. The bench keeps
+    # the cohort as a path and forwards only these explicit input paths through
+    # runner_kwargs, so both CodeRunner and DockerRunner can expose it without
+    # inheriting the launcher's ambient environment.
     trajectory_path = Path(acquisition.universe_path).with_name(
         f"{Path(acquisition.universe_path).stem}_trajectory.parquet"
     )
     if trajectory_path.exists():
-        for traj_alias in (
-            "TRAJECTORY_PARQUET",
-            "EASYICU_TRAJECTORY_PARQUET",
-            "COHORT_TRAJECTORY_PARQUET",
-        ):
-            os.environ[traj_alias] = str(trajectory_path)
         print(f"[discovery] trajectory: {trajectory_path}")
+    else:
+        trajectory_path = None
 
     jsonl_path = _write_ehrflowbench_row(
         out_root=out_root,
         handoff=handoff,
         cohort_path=acquisition.universe_path,
+        trajectory_path=trajectory_path,
     )
     bench_root = out_root / "bench"
     cmd = [
@@ -235,8 +258,33 @@ def main(argv: Optional[list[str]] = None) -> int:
     run_dir = _latest_aware_run_dir(bench_root)
     if run_dir is None:
         raise SystemExit(f"could not locate aware run under {bench_root}")
-    write_handoff_packet(handoff, run_dir / "discovery_handoff.json")
-    render_discovery_story_figure(run_dir=run_dir, handoff=handoff)
+    evidence = EvidenceStore(run_dir)
+    # Register from the already-frozen launcher packet before touching the run
+    # root.  A reused run carrying the same id with different handoff content
+    # therefore fails without first overwriting its plain provenance JSON.
+    handoff_record = _register_file_exact(
+        evidence,
+        source_path=handoff_path,
+        kind="log",
+        description=(
+            "Human-confirmed discovery-to-analysis handoff with frozen "
+            "literature and endpoint provenance."
+        ),
+        evidence_id="discovery_handoff",
+        producer="discovery_launcher",
+        generation_mode="human_confirmed",
+        metadata={"artifact_role": "discovery_handoff"},
+    )
+    run_handoff_path = write_handoff_packet(handoff, run_dir / "discovery_handoff.json")
+    if sha256_of_file(run_handoff_path) != handoff_record.sha256:
+        raise ValueError("run-root discovery handoff differs from registered evidence")
+    _register_story_source_records(evidence=evidence, run_dir=run_dir)
+    story_paths = render_discovery_story_figure(run_dir=run_dir, handoff=handoff)
+    _register_story_figure_provenance(
+        evidence=evidence,
+        run_dir=run_dir,
+        paths=story_paths,
+    )
     assessment = validate_discovery_manuscript_package(run_dir=run_dir)
     assessment_path = write_discovery_package_assessment(
         assessment, run_dir / "discovery_package_assessment.json"
@@ -246,11 +294,314 @@ def main(argv: Optional[list[str]] = None) -> int:
     return 0 if assessment.package_ready else 3
 
 
+def _normalise_endpoint(value: Any) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _outcome_concepts_for_handoff(
+    *,
+    handoff_target: str,
+    requested: Optional[str],
+) -> tuple[str, ...]:
+    """Return the sole licensed outcome concept for universe materialisation.
+
+    CLI input is a consistency assertion only.  The frozen handoff remains the
+    single source of truth so an AKI discovery cannot silently fall back to the
+    historical mortality default.
+    """
+
+    target = str(handoff_target or "").strip()
+    if not target:
+        raise SystemExit("discovery handoff has no target_outcome")
+    if requested is not None:
+        supplied = [item.strip() for item in requested.split(",") if item.strip()]
+        if len(supplied) != 1 or _normalise_endpoint(
+            supplied[0]
+        ) != _normalise_endpoint(target):
+            raise SystemExit(
+                "--outcome-concepts is a consistency assertion and must contain "
+                f"exactly the frozen handoff target {target!r}"
+            )
+    return (target,)
+
+
+def _register_file_exact(
+    evidence: EvidenceStore,
+    *,
+    source_path: Path,
+    kind: str,
+    description: str,
+    evidence_id: str,
+    producer: str,
+    generation_mode: str,
+    inputs: Optional[list[str]] = None,
+    script_evidence_id: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> EvidenceRecord:
+    """Register an exact artifact, failing before copy on id/hash mismatch."""
+
+    source = Path(source_path)
+    digest = sha256_of_file(source)
+    existing = evidence.get(evidence_id)
+    if existing is not None and existing.sha256 != digest:
+        raise ValueError(
+            f"Evidence id collision for {evidence_id}: existing "
+            f"sha256={existing.sha256[:8]} new sha256={digest[:8]}"
+        )
+    record = evidence.register_file(
+        kind=kind,
+        description=description,
+        source_path=source,
+        inputs=list(inputs or []),
+        script_evidence_id=script_evidence_id,
+        evidence_id=evidence_id,
+        producer=producer,
+        generation_mode=generation_mode,
+        metadata=dict(metadata or {}),
+        on_sha_change="raise",
+    )
+    if record.sha256 != digest or record.evidence_id != evidence_id:
+        raise ValueError(f"strict evidence registration failed for {evidence_id}")
+    return record
+
+
+def _register_story_source_records(
+    *,
+    evidence: EvidenceStore,
+    run_dir: Path,
+) -> Dict[str, EvidenceRecord]:
+    """Bind the root audit files consumed by the universal story renderer."""
+
+    specs = (
+        (
+            "run_status.json",
+            "run_status",
+            "Research-agent run status and publication readiness gates.",
+        ),
+        (
+            "evidence_audit.json",
+            "evidence_audit",
+            "Research-agent evidence audit consumed by the story figure.",
+        ),
+        (
+            "numeric_audit.json",
+            "numeric_audit",
+            "Research-agent numeric audit consumed by the story figure.",
+        ),
+    )
+    records: Dict[str, EvidenceRecord] = {}
+    for filename, evidence_id, description in specs:
+        source_path = Path(run_dir) / filename
+        if not source_path.is_file():
+            raise FileNotFoundError(
+                f"story figure source is missing after analysis: {source_path}"
+            )
+        records[evidence_id] = _register_file_exact(
+            evidence,
+            source_path=source_path,
+            kind="log",
+            description=description,
+            evidence_id=evidence_id,
+            producer="research_agent_pipeline",
+            generation_mode="system",
+            metadata={"artifact_role": "story_figure_source"},
+        )
+    return records
+
+
+def _contract_source_evidence_ids(contract: Dict[str, Any]) -> list[str]:
+    identifiers: list[str] = []
+    for value in contract.get("source_data") or []:
+        text = str(value or "").strip()
+        if text and text not in identifiers:
+            identifiers.append(text)
+    for panel in contract.get("panels") or []:
+        if not isinstance(panel, dict):
+            continue
+        for value in panel.get("evidence_ids") or []:
+            text = str(value or "").strip()
+            if text and text not in identifiers:
+                identifiers.append(text)
+    return identifiers
+
+
+def _register_story_figure_provenance(
+    *,
+    evidence: EvidenceStore,
+    run_dir: Path,
+    paths: Dict[str, Path],
+) -> Dict[str, EvidenceRecord]:
+    """Register code, contract, SVG and PNG with a closed evidence chain."""
+
+    stem = "easyicu_discovery_story"
+    contract_path = Path(paths.get("contract") or "")
+    if not contract_path.is_file():
+        raise FileNotFoundError("story figure renderer did not emit its contract")
+    try:
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid story figure contract: {contract_path}") from exc
+    if not isinstance(contract, dict) or contract.get("figure_id") != stem:
+        raise ValueError(f"story figure contract must declare figure_id={stem!r}")
+    source_ids = _contract_source_evidence_ids(contract)
+    if not source_ids:
+        raise ValueError("story figure contract has no source evidence ids")
+    missing = [
+        evidence_id for evidence_id in source_ids if evidence.get(evidence_id) is None
+    ]
+    if missing:
+        raise ValueError(
+            "story figure contract references unregistered evidence: "
+            + ", ".join(missing)
+        )
+
+    script_record = _register_file_exact(
+        evidence,
+        source_path=(
+            REPO_ROOT
+            / "src"
+            / "easyicu"
+            / "research_agent"
+            / "discovery_story_figure.py"
+        ),
+        kind="code",
+        description="Deterministic code used to render the discovery story figure.",
+        evidence_id="discovery_story_figure_script",
+        producer="discovery_launcher",
+        generation_mode="deterministic_code",
+        metadata={"artifact_role": "figure_script", "figure_id": stem},
+    )
+    contract_id = "discovery_story_figure_contract"
+    contract_metadata = {
+        "artifact_role": "figure_contract",
+        "figure_id": stem,
+        "source_evidence_ids": source_ids,
+        "inputs": source_ids,
+    }
+    contract_record = _register_file_exact(
+        evidence,
+        source_path=contract_path,
+        kind="log",
+        description="Strict contract for the universal discovery story figure.",
+        evidence_id=contract_id,
+        producer="discovery_launcher",
+        generation_mode="deterministic_contract",
+        inputs=source_ids,
+        metadata=contract_metadata,
+    )
+
+    figure_inputs = [contract_id, *source_ids]
+    records: Dict[str, EvidenceRecord] = {
+        "script": script_record,
+        "contract": contract_record,
+    }
+    for extension in ("svg", "png", "pdf", "tiff"):
+        artifact_path = Path(paths.get(extension) or "")
+        if not artifact_path.is_file():
+            if extension in {"svg", "png"}:
+                raise FileNotFoundError(
+                    f"story figure renderer did not emit a non-empty {extension} export"
+                )
+            continue
+        if artifact_path.stat().st_size <= 0:
+            raise ValueError(f"story figure {extension} export is empty")
+        record = _register_file_exact(
+            evidence,
+            source_path=artifact_path,
+            kind="figure",
+            description=f"Universal discovery story figure ({extension.upper()}).",
+            evidence_id=f"discovery_story_figure_{extension}",
+            producer="discovery_story_figure",
+            generation_mode="deterministic_matplotlib",
+            inputs=figure_inputs,
+            script_evidence_id=script_record.evidence_id,
+            metadata={
+                "artifact_role": "manuscript_figure",
+                "figure_id": stem,
+                "contract_evidence_id": contract_id,
+                "source_evidence_ids": source_ids,
+                "inputs": figure_inputs,
+            },
+        )
+        if (
+            record.script_evidence_id != script_record.evidence_id
+            or record.metadata.get("contract_evidence_id") != contract_id
+            or not set(source_ids).issubset(record.inputs)
+        ):
+            raise ValueError(
+                f"story figure {extension} evidence has incomplete provenance"
+            )
+        records[extension] = record
+    return records
+
+
+def _local_openai_base_url(base_url: Optional[str]) -> bool:
+    from urllib.parse import urlsplit
+    import ipaddress
+
+    try:
+        parsed = urlsplit(str(base_url or ""))
+    except ValueError:
+        return False
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return False
+    hostname = parsed.hostname.rstrip(".").lower()
+    if hostname == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
+def _build_data_foundation_llm(*, provider: str, model: str, request_timeout: float):
+    """Use the same explicit provider contract for acquisition and benchmark."""
+
+    if provider == "openrouter":
+        key = os.environ.get("OPENROUTER_API_KEY")
+        if not key:
+            raise SystemExit("OPENROUTER_API_KEY is required for --provider openrouter")
+        kwargs: Dict[str, Any] = {
+            "model": model,
+            "api_key": key,
+            "base_url": os.environ.get(
+                "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
+            ),
+            "request_timeout": float(request_timeout),
+            "extra_headers": {
+                "HTTP-Referer": "https://github.com/shen-lab-icu/easyicu",
+                "X-Title": "EasyICU discovery-to-manuscript",
+            },
+        }
+        extra_body = openrouter_reasoning_extra_body(model)
+        if extra_body is not None:
+            kwargs["extra_body"] = extra_body
+        return OpenAIClient(**kwargs)
+    if provider == "openai":
+        key = os.environ.get("OPENAI_API_KEY")
+        base_url = os.environ.get("OPENAI_BASE_URL")
+        if not key and not _local_openai_base_url(base_url):
+            raise SystemExit("OPENAI_API_KEY is required for --provider openai")
+        kwargs = {"model": model, "request_timeout": float(request_timeout)}
+        if _local_openai_base_url(base_url):
+            # OpenAIClient also falls back to OPENROUTER_API_KEY internally.
+            # An explicit dummy value guarantees that neither paid-provider
+            # credential is forwarded to a loopback-compatible endpoint.
+            kwargs["api_key"] = "easyicu-local-noauth"
+        elif key:
+            kwargs["api_key"] = key
+        if base_url:
+            kwargs["base_url"] = base_url
+        return OpenAIClient(**kwargs)
+    raise SystemExit(f"Unsupported provider: {provider}")
+
+
 def _write_ehrflowbench_row(
     *,
     out_root: Path,
     handoff,
     cohort_path: Path,
+    trajectory_path: Optional[Path] = None,
 ) -> Path:
     row: Dict[str, Any] = {
         "key": f"discovery_{handoff.literature_idea_id}",
@@ -263,6 +614,8 @@ def _write_ehrflowbench_row(
         "kind": "descriptive_association",
         "inclusion_criteria": list(handoff.inclusion_criteria),
     }
+    if trajectory_path is not None:
+        row["trajectory_path"] = str(Path(trajectory_path).resolve())
     path = out_root / "discovery_ehrflowbench.jsonl"
     path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
     return path

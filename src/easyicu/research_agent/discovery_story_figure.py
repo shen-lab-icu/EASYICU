@@ -9,11 +9,14 @@ artifacts.
 from __future__ import annotations
 
 import json
+import re
 import textwrap
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional, Sequence
 
 from .discovery_handoff import DiscoveryHandoffPacket
+from .evidence import EvidenceStore
+from .schema import EvidenceRecord
 from .publication_figures import (
     add_panel_label,
     apply_publication_style,
@@ -42,6 +45,28 @@ def render_discovery_story_figure(
     evidence_audit = _load_json(root / "evidence_audit.json")
     numeric_audit = _load_json(root / "numeric_audit.json")
     blocked = _has_blocked_outcome_gate(root)
+    evidence = EvidenceStore(root)
+    cohort_record = _find_semantic_record(
+        evidence,
+        terms=("cohort_attrition", "cohort", "denominator", "sample_flow"),
+        kinds=("table", "statistic"),
+    )
+    evaluability_record = _find_semantic_record(
+        evidence,
+        terms=(
+            "evaluability",
+            "missingness",
+            "completeness",
+            "coverage",
+            "availability",
+        ),
+        kinds=("table", "statistic", "log"),
+        excluded_ids=(cohort_record.evidence_id,) if cohort_record else (),
+    )
+    handoff_record = evidence.get("discovery_handoff")
+    run_status_record = evidence.get("run_status")
+    evidence_audit_record = evidence.get("evidence_audit")
+    numeric_audit_record = evidence.get("numeric_audit")
 
     palette = apply_publication_style()
     fig, axes = plt.subplots(2, 2, figsize=(183 / 25.4, 132 / 25.4))
@@ -60,13 +85,13 @@ def render_discovery_story_figure(
             "B",
             axes[0, 1],
             "Cohort and evaluability contract",
-            _panel_b_text(root),
+            _panel_b_text(cohort_record, evaluability_record),
             palette["teal"],
         ),
         (
             "C",
             axes[1, 0],
-            "Result or fail-closed gate",
+            "Analysis authorization status",
             _panel_c_text(status, blocked),
             palette["orange"] if not blocked else palette["red"],
         ),
@@ -82,12 +107,25 @@ def render_discovery_story_figure(
         _draw_text_panel(ax, title=title, body=body, color=color)
         add_panel_label(ax, label)
 
+    panel_a_evidence = _record_ids(handoff_record)
+    panel_b_evidence = _record_ids(cohort_record, evaluability_record)
+    panel_c_evidence = _record_ids(run_status_record)
+    panel_d_evidence = _record_ids(
+        run_status_record,
+        evidence_audit_record,
+        numeric_audit_record,
+    )
+    source_data = list(
+        dict.fromkeys(
+            panel_a_evidence + panel_b_evidence + panel_c_evidence + panel_d_evidence
+        )
+    )
     contract = make_figure_contract(
         figure_id=stem,
         core_claim=(
             "The discovery manuscript package preserves the path from mined "
-            "literature idea to cohort/evaluability evidence, result or "
-            "fail-closed gate, and audited manuscript readiness."
+            "literature idea to cohort/evaluability evidence, analysis "
+            "authorization, and audited manuscript readiness."
         ),
         panels=[
             {
@@ -95,36 +133,34 @@ def render_discovery_story_figure(
                 "title": "Literature source and idea funnel",
                 "role": "overview",
                 "claim": "The manuscript story starts from a frozen mined idea.",
-                "evidence_ids": ["discovery_handoff"],
+                "evidence_ids": panel_a_evidence,
+                "metadata": {"story_role": "discovery_provenance"},
             },
             {
                 "panel_id": "B",
                 "title": "Cohort evaluability and missingness",
                 "role": "audit",
                 "claim": "Cohort construction and evaluability are explicit.",
-                "evidence_ids": ["cohort_attrition", "evidence_audit"],
+                "evidence_ids": panel_b_evidence,
+                "metadata": {"story_role": "cohort_evaluability"},
             },
             {
                 "panel_id": "C",
-                "title": "Primary result or blocked outcome gate",
-                "role": "relationship",
-                "claim": "Outcome claims are reported only when the gate authorizes them.",
-                "evidence_ids": ["run_status"],
+                "title": "Analysis authorization gate",
+                "role": "workflow",
+                "claim": "The recorded gate determines whether analysis may proceed.",
+                "evidence_ids": panel_c_evidence,
             },
             {
                 "panel_id": "D",
                 "title": "Evidence audit and reproducibility gate",
                 "role": "validation",
                 "claim": "Manuscript readiness is tied to evidence and numeric audits.",
-                "evidence_ids": ["run_status", "evidence_audit", "numeric_audit"],
+                "evidence_ids": panel_d_evidence,
+                "metadata": {"story_role": "audit_reproducibility"},
             },
         ],
-        source_data=[
-            "discovery_handoff.json",
-            "run_status.json",
-            "evidence_audit.json",
-            "numeric_audit.json",
-        ],
+        source_data=source_data,
     )
     paths = save_publication_figure(
         fig,
@@ -189,28 +225,20 @@ def _panel_a_text(handoff: DiscoveryHandoffPacket) -> str:
     )
 
 
-def _panel_b_text(root: Path) -> str:
-    cohort = _first_existing(
-        root,
+def _panel_b_text(
+    cohort: Optional[EvidenceRecord],
+    evaluability: Optional[EvidenceRecord],
+) -> str:
+    return "\n".join(
         [
-            "steps/01_define_cohort_and_attrition/outputs/cohort_attrition.csv",
-            "steps/00_probe/outputs/cohort_summary.csv",
-        ],
+            f"Cohort evidence: {cohort.evidence_id if cohort else 'not found'}",
+            (
+                "Evaluability evidence: "
+                f"{evaluability.evidence_id if evaluability else 'not found'}"
+            ),
+            "Missingness and component availability must remain explicit.",
+        ]
     )
-    evaluability = _first_existing(
-        root,
-        [
-            "steps/02_derive_aki_component_flags_and_evaluability/outputs/definition_component_evaluability.csv",
-            "steps/00_probe/outputs/aki_definition_evaluability.csv",
-        ],
-    )
-    parts = []
-    parts.append(f"Cohort evidence: {cohort.name if cohort else 'not found'}")
-    parts.append(
-        f"Evaluability evidence: {evaluability.name if evaluability else 'not found'}"
-    )
-    parts.append("Missingness and component availability must remain explicit.")
-    return "\n".join(parts)
 
 
 def _panel_c_text(status: Mapping[str, Any], blocked: bool) -> str:
@@ -275,12 +303,54 @@ def _has_blocked_outcome_gate(root: Path) -> bool:
     return False
 
 
-def _first_existing(root: Path, rels: list[str]) -> Optional[Path]:
-    for rel in rels:
-        path = root / rel
-        if path.exists():
-            return path
-    return None
+def _record_ids(*records: Optional[EvidenceRecord]) -> list[str]:
+    return list(
+        dict.fromkeys(record.evidence_id for record in records if record is not None)
+    )
+
+
+def _find_semantic_record(
+    evidence: EvidenceStore,
+    *,
+    terms: Sequence[str],
+    kinds: Sequence[str],
+    excluded_ids: Sequence[str] = (),
+) -> Optional[EvidenceRecord]:
+    """Select by EvidenceStore kind plus structured metadata/explicit aliases."""
+
+    aliases_by_id: Dict[str, list[str]] = {}
+    for alias, evidence_id in evidence.aliases().items():
+        aliases_by_id.setdefault(evidence_id, []).append(alias)
+    excluded = set(excluded_ids)
+    normalised_terms = [_semantic_token(term) for term in terms]
+    scored: list[tuple[int, str, EvidenceRecord]] = []
+    for record in evidence.records():
+        if record.evidence_id in excluded or record.kind not in set(kinds):
+            continue
+        aliases = [
+            _semantic_token(alias)
+            for alias in aliases_by_id.get(record.evidence_id, [])
+        ]
+        metadata_blob = _semantic_token(
+            json.dumps(record.metadata or {}, sort_keys=True, default=str)
+        )
+        score = 0
+        for term in normalised_terms:
+            if any(alias == term for alias in aliases):
+                score += 20
+            elif any(term in alias for alias in aliases):
+                score += 8
+            if term in metadata_blob:
+                score += 12
+        if score:
+            scored.append((score, record.evidence_id, record))
+    if not scored:
+        return None
+    return max(scored, key=lambda item: (item[0], item[1]))[2]
+
+
+def _semantic_token(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(value or "").lower()).strip("_")
 
 
 def _wrap(text: str, *, width: int) -> str:

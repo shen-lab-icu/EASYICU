@@ -1263,6 +1263,8 @@ def test_audit_publication_exports_accepts_legacy_contract_and_output_dir_call(t
 
 
 def test_publication_figure_skill_renders_from_registered_association_table(ra, tmp_path: Path):
+    from easyicu.research_agent.discovery_package import _figure_inventory
+
     run_dir = tmp_path / "run"
     source = tmp_path / "primary_association.csv"
     pd.DataFrame({
@@ -1321,6 +1323,10 @@ def test_publication_figure_skill_renders_from_registered_association_table(ra, 
     assert evidence.get("publication_figure_contract") is not None
     assert evidence.get("publication_figure_skill_summary") is not None
     assert (run_dir / "publication_figures" / "easyicu_publication_figure.svg").exists()
+    inventory = _figure_inventory(run_dir)
+    assert len(inventory) == 1
+    assert inventory[0].contract_registered is True
+    assert inventory[0].provenance_valid is True
 
 
 def test_association_forest_axis_metadata_tracks_effect_measure(ra):
