@@ -16,6 +16,7 @@ from easyicu.concept import catalog as concept_catalog
 from easyicu.webserver import dataio
 from easyicu.webserver import sources as source_store
 from easyicu.webserver.patient_drilldown import eligibility as _eligibility
+from easyicu.webserver.patient_drilldown import navigation as _navigation
 
 _eligibility_flow_payload = _eligibility._eligibility_flow_payload
 _first_int = _eligibility._first_int
@@ -25,6 +26,7 @@ _target_clinical_flow_preset = _eligibility._target_clinical_flow_preset
 _target_clinical_flow_label = _eligibility._target_clinical_flow_label
 _target_clinical_flow_note = _eligibility._target_clinical_flow_note
 _int_or_none = _eligibility._int_or_none
+_entity_ref = _navigation.entity_ref
 
 _MAX_ENTITIES = 5
 _MAX_REVIEW_ENTITIES = 500
@@ -162,6 +164,190 @@ def patient_review_sources(body: Dict[str, Any] | None = None) -> Dict[str, Any]
     }
 
 
+def patient_review_entity_page(body: Dict[str, Any]) -> Dict[str, Any]:
+    """Return one bounded page of pseudonymous entity navigation options."""
+    source, desc = _resolve_registered_source(body)
+    path = Path(str(desc.get("path") or source.get("path") or "")).expanduser()
+    item = _entity_index_item(desc)
+    total_entities = _entity_index_total(desc, item)
+    request = _navigation.entity_page_request(body, total_entities)
+    rows = _read_entity_index_rows(
+        path,
+        item,
+        offset=int(request["offset"]),
+        nrows=int(request["page_size"]),
+    )
+    if total_entities and not rows:
+        raise PatientReviewError({"error": "entity_page_unavailable"})
+    navigation = _navigation.entity_navigation_payload(
+        path,
+        [(ordinal, entity_id) for ordinal, entity_id, _row in rows],
+        total_entities=total_entities,
+        page=int(request["page"]),
+        page_size=int(request["page_size"]),
+        page_count=int(request["page_count"]),
+        selected_ref=str(body.get("selected_ref") or "") or None,
+        selected_ordinal=_strict_positive_int(body.get("selected_ordinal")),
+        randomized=bool(request["randomized"]),
+    )
+    return {
+        "ok": True,
+        "mode": "real",
+        "demo": False,
+        "source": _source_provenance(source, desc),
+        "navigation": navigation,
+        "privacy": {
+            "direct_identifiers_returned": False,
+            "raw_rows_returned": False,
+            "max_entity_page_size": _navigation.MAX_ENTITY_PAGE_SIZE,
+            "payload_scope": "bounded_pseudonymous_entity_navigation_page",
+        },
+    }
+
+
+def patient_review_entity(body: Dict[str, Any]) -> Dict[str, Any]:
+    """Return one verified pseudonymous entity plus a five-entity comparison."""
+    source, desc = _resolve_registered_source(body)
+    path = Path(str(desc.get("path") or source.get("path") or "")).expanduser()
+    item = _entity_index_item(desc)
+    total_entities = _entity_index_total(desc, item)
+    ordinal = _strict_positive_int(body.get("entity_ordinal"))
+    requested_ref = str(body.get("entity_ref") or "").strip()
+    if ordinal is None or ordinal > total_entities or not requested_ref:
+        raise PatientReviewError({"error": "entity_ref_and_ordinal_required"})
+    selected_rows = _read_entity_index_rows(
+        path,
+        item,
+        offset=ordinal - 1,
+        nrows=1,
+        include_demographics=True,
+    )
+    if not selected_rows:
+        raise PatientReviewError({"error": "unknown_entity_ordinal"})
+    selected_ordinal, selected_id, selected_row = selected_rows[0]
+    expected_ref = _entity_ref(path, selected_id)
+    if selected_ordinal != ordinal or expected_ref != requested_ref:
+        raise PatientReviewError({"error": "entity_ref_ordinal_mismatch"})
+
+    comparison_rows = _read_entity_index_rows(
+        path,
+        item,
+        offset=0,
+        nrows=_MAX_ENTITIES,
+        include_demographics=True,
+    )
+    if all(row[1] != selected_id for row in comparison_rows):
+        comparison_rows = comparison_rows[: max(0, _MAX_ENTITIES - 1)] + [
+            (selected_ordinal, selected_id, selected_row)
+        ]
+    comparison_ids = [row[1] for row in comparison_rows]
+    entity_set = set(comparison_ids)
+    outcome = _read_module_frame(path, desc, "outcome", entity_set)
+    sepsis = _read_module_frame(path, desc, "sepsis3_sofa2", entity_set)
+    sofa2 = _read_module_frame(path, desc, "sofa2_score", entity_set)
+    vitals = _read_module_frame(path, desc, "vitals", entity_set)
+    review_frames = _read_review_frames(path, desc, entity_set)
+    death_by_entity = dataio._stay_bool(outcome, "death", missing_false=True)
+    los_by_entity = dataio._stay_numeric(outcome, "los_icu", "median")
+    sofa_by_entity = dataio._stay_numeric(sofa2, "sofa2", "max")
+    sepsis_by_entity = dataio._stay_bool(
+        sepsis, "sep3_sofa2", missing_false=True
+    )
+    for entity_id in comparison_ids:
+        if outcome is not None and not outcome.empty:
+            death_by_entity.setdefault(entity_id, False)
+        if sepsis is not None and not sepsis.empty:
+            sepsis_by_entity.setdefault(entity_id, False)
+    entities = [
+        _entity_option(path, entity_id, row_ordinal, death_by_entity, sofa_by_entity)
+        for row_ordinal, entity_id, _row in comparison_rows
+    ]
+    selected = _selected_payload(
+        path=path,
+        entity_id=selected_id,
+        ordinal=selected_ordinal,
+        row=selected_row,
+        death_by_entity=death_by_entity,
+        los_by_entity=los_by_entity,
+        sofa_by_entity=sofa_by_entity,
+        sepsis_by_entity=sepsis_by_entity,
+        vitals=vitals,
+    )
+    time_lanes = _time_lane_payloads(review_frames, selected_id)
+    detail_quality = _quality_metrics_payload(review_frames, entity_set)
+    trajectory_review = _trajectory_review_payload(
+        time_lanes,
+        selected,
+        entities,
+        detail_quality,
+        review_frames,
+        path,
+        comparison_ids,
+    )
+    return {
+        "ok": True,
+        "mode": "real",
+        "demo": False,
+        "source": _source_provenance(source, desc),
+        "selected": selected,
+        "entities": entities,
+        "time_lanes": time_lanes,
+        "trajectory_review": trajectory_review,
+        "patient_overview": _patient_overview_payload(
+            selected, entities, time_lanes, detail_quality
+        ),
+        "privacy": {
+            "direct_identifiers_returned": False,
+            "raw_rows_returned": False,
+            "max_comparison_entities": _MAX_ENTITIES,
+            "max_points_per_signal": _MAX_SIGNAL_POINTS,
+            "payload_scope": "one_verified_pseudonymous_entity_plus_bounded_comparison",
+        },
+    }
+
+
+def patient_review_table_preview(body: Dict[str, Any]) -> Dict[str, Any]:
+    """Return exactly one bounded module table page without recomputing drilldown."""
+    source, desc = _resolve_registered_source(body)
+    path = Path(str(desc.get("path") or source.get("path") or "")).expanduser()
+    table_paging = _table_preview_paging(body)
+    module = str(table_paging.get("module") or "")
+    if not module:
+        raise PatientReviewError({"error": "table_module_required"})
+    profiles = _module_profiles(desc, [], set())
+    previews = _table_preview_payloads(
+        path,
+        desc,
+        profiles,
+        table_paging,
+        module,
+    )
+    if not previews:
+        raise PatientReviewError(
+            {"error": "unknown_table_module", "module": module}
+        )
+    preview = previews[0]
+    if preview.get("error_code"):
+        raise PatientReviewError(
+            {"error": preview["error_code"], "module": module}
+        )
+    return {
+        "ok": True,
+        "mode": "real",
+        "demo": False,
+        "source": _source_provenance(source, desc),
+        "module_preview": preview,
+        "privacy": {
+            "direct_identifiers_returned": False,
+            "raw_source_rows_returned": False,
+            "bounded_pseudonymous_preview_rows_returned": True,
+            "max_table_page_size": _MAX_TABLE_PAGE_SIZE,
+            "max_table_preview_columns": _MAX_TABLE_PREVIEW_COLUMNS,
+            "payload_scope": "one_bounded_pseudonymous_module_table_page",
+        },
+    }
+
+
 def patient_review_drilldown(body: Dict[str, Any]) -> Dict[str, Any]:
     """Return a real, bounded Patient Review payload for one registered export."""
     source, desc = _resolve_registered_source(body)
@@ -219,8 +405,12 @@ def patient_review_drilldown(body: Dict[str, Any]) -> Dict[str, Any]:
             sepsis_by_entity_all.setdefault(entity_id, False)
 
     requested_ref = str(body.get("entity_ref") or body.get("selected_ref") or "")
-    ref_to_id = {_entity_ref(path, entity_id): entity_id for entity_id in entity_ids}
+    ref_to_id = {
+        _entity_ref(path, entity_id): entity_id for entity_id in review_entity_ids
+    }
     selected_id = ref_to_id.get(requested_ref) if requested_ref else None
+    if requested_ref and selected_id is None:
+        raise PatientReviewError({"error": "unknown_bounded_entity_ref"})
     if selected_id is None:
         selected_id = entity_ids[0]
 
@@ -281,6 +471,25 @@ def patient_review_drilldown(body: Dict[str, Any]) -> Dict[str, Any]:
             list((sepsis_by_entity_all or sepsis_by_entity).values())
         ),
     }
+    navigation_request = _navigation.entity_page_request(body, len(entity_ids))
+    navigation_offset = int(navigation_request["offset"])
+    navigation_ids = entity_ids[
+        navigation_offset : navigation_offset + int(navigation_request["page_size"])
+    ]
+    entity_navigation = _navigation.entity_navigation_payload(
+        path,
+        [
+            (navigation_offset + index, entity_id)
+            for index, entity_id in enumerate(navigation_ids, start=1)
+        ],
+        total_entities=len(entity_ids),
+        page=int(navigation_request["page"]),
+        page_size=int(navigation_request["page_size"]),
+        page_count=int(navigation_request["page_count"]),
+        selected_ref=_entity_ref(path, selected_id),
+        selected_ordinal=entity_ids.index(selected_id) + 1,
+        randomized=bool(navigation_request["randomized"]),
+    )
     eligibility_flow = _eligibility_flow_payload(path, desc, summary)
     module_profiles = _module_profiles(desc, review_frames, entity_set)
     time_lanes = _time_lane_payloads(review_frames, selected_id)
@@ -317,6 +526,7 @@ def patient_review_drilldown(body: Dict[str, Any]) -> Dict[str, Any]:
             "raw_source_rows_returned": False,
             "direct_identifiers_returned": False,
             "max_entity_options": _MAX_ENTITIES,
+            "max_entity_page_size": _navigation.MAX_ENTITY_PAGE_SIZE,
             "max_points_per_signal": _MAX_SIGNAL_POINTS,
             "max_table_preview_rows": _MAX_TABLE_PREVIEW_ROWS,
             "max_table_preview_columns": _MAX_TABLE_PREVIEW_COLUMNS,
@@ -331,6 +541,7 @@ def patient_review_drilldown(body: Dict[str, Any]) -> Dict[str, Any]:
         "eligibility_flow": eligibility_flow,
         "module_profiles": module_profiles,
         "entities": entities,
+        "entity_navigation": entity_navigation,
         "selected": selected,
         "time_lanes": time_lanes,
         "quality": quality,
@@ -424,6 +635,78 @@ def _fallback_entity_frame(path: Path, desc: Dict[str, Any]) -> Any:
     if not file_meta:
         return None
     return _read_selected_columns(path / str(file_meta.get("file") or ""), ["stay_id"])
+
+
+def _entity_index_item(desc: Dict[str, Any]) -> Dict[str, Any]:
+    """Resolve a stable one-row-per-entity navigation table."""
+    item = next(
+        (
+            row
+            for row in desc.get("files") or []
+            if row.get("module") == "demographics"
+            and "stay_id" in (row.get("columns") or [])
+        ),
+        None,
+    )
+    if not item:
+        raise PatientReviewError({"error": "stable_entity_index_unavailable"})
+    return item
+
+
+def _entity_index_total(desc: Dict[str, Any], item: Dict[str, Any]) -> int:
+    total = int(
+        (desc.get("summary") or {}).get("stays") or item.get("rows") or 0
+    )
+    if total <= 0:
+        raise PatientReviewError({"error": "no_entity_denominator"})
+    return total
+
+
+def _read_entity_index_rows(
+    path: Path,
+    item: Dict[str, Any],
+    *,
+    offset: int,
+    nrows: int,
+    include_demographics: bool = False,
+) -> List[Tuple[int, str, Any]]:
+    columns = ["stay_id"]
+    if include_demographics:
+        columns.extend(
+            column
+            for column in ("age", "sex")
+            if column in (item.get("columns") or [])
+        )
+    try:
+        frame = _read_table_preview(
+            path / str(item.get("file") or ""),
+            columns,
+            nrows,
+            offset,
+        )
+    except Exception as exc:
+        raise PatientReviewError({"error": "entity_index_read_failed"}) from exc
+    if frame is None or getattr(frame, "empty", True):
+        return []
+    rows: List[Tuple[int, str, Any]] = []
+    seen: set[str] = set()
+    for position, (_index, row) in enumerate(frame.iterrows(), start=1):
+        entity_id = dataio._norm_id(row.get("stay_id"))
+        if not entity_id or entity_id in seen:
+            raise PatientReviewError({"error": "unstable_entity_index"})
+        seen.add(entity_id)
+        rows.append((offset + position, entity_id, row))
+    return rows
+
+
+def _strict_positive_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
 
 
 def _read_selected_columns(
@@ -1026,9 +1309,24 @@ def _data_table_review_payload(
                     for feature in (row.get("preview_features") or [])[:6]
                 ],
                 "status": _module_review_status(coverage, feature_count_row),
+                "review_status": (
+                    "computed" if row.get("entities") is not None else "inventory_only"
+                ),
+                "coverage_basis": (
+                    "bounded_review_entity_intersection"
+                    if row.get("entities") is not None
+                    else "not_computed"
+                ),
+                "preview_status": "available_on_demand",
             }
         )
     requested_module = str(table_paging.get("module") or "")
+    if requested_module and not any(
+        row.get("module") == requested_module for row in modules
+    ):
+        raise PatientReviewError(
+            {"error": "unknown_table_module", "module": requested_module}
+        )
     default_module = (
         requested_module
         if requested_module
@@ -1062,7 +1360,7 @@ def _data_table_review_payload(
         "table_previews": _table_preview_payloads(
             path, desc, module_profiles, table_paging, default_module
         ),
-        "payload_scope": "old_data_tables_semantics_with_bounded_pseudonymous_table_previews",
+        "payload_scope": "module_inventory_plus_one_bounded_pseudonymous_preview",
     }
 
 
@@ -1081,6 +1379,8 @@ def _table_preview_payloads(
         if not module or module in seen:
             continue
         seen.add(module)
+        if default_module and module != default_module:
+            continue
         if len(previews) >= _MAX_TABLE_PREVIEW_MODULES:
             break
         columns = [str(col) for col in (item.get("columns") or [])]
@@ -1135,14 +1435,15 @@ def _table_preview_payloads(
                 page_size,
                 offset,
             )
-        except Exception as exc:
+        except Exception:
             previews.append(
                 {
                     **base,
                     "status": "unavailable",
                     "rows": [],
                     "row_count": 0,
-                    "reason": str(exc)[:160],
+                    "reason": "Bounded table preview could not be read.",
+                    "error_code": "bounded_table_preview_read_failed",
                 }
             )
             continue
@@ -1551,7 +1852,12 @@ def _patient_overview_payload(
                 }
                 for item in entities
             ],
-            "actions": ["first", "previous", "next", "last", "random"],
+            "actions": [
+                "previous_group",
+                "next_group",
+                "random_group",
+                "select_entity",
+            ],
         },
         "dashboard": {
             "mode": "Dashboard",
@@ -1765,6 +2071,9 @@ def _patient_summary_cards(selected: Dict[str, Any]) -> List[Dict[str, Any]]:
     demo = selected.get("demographics") or {}
     scores = selected.get("scores") or {}
     outcomes = selected.get("outcomes") or {}
+    los_value = _display_value(
+        dataio._num(outcomes.get("icu_los_days")), decimals=1
+    )
     return [
         {
             "label": "Age / sex",
@@ -1792,7 +2101,7 @@ def _patient_summary_cards(selected: Dict[str, Any]) -> List[Dict[str, Any]]:
         },
         {
             "label": "ICU LOS",
-            "value": f"{_display_value(dataio._num(outcomes.get('icu_los_days')), decimals=1)} d",
+            "value": f"{los_value} d" if los_value != "unknown" else los_value,
             "tone": "neutral",
         },
     ]
@@ -2151,11 +2460,6 @@ def _source_provenance(source: Dict[str, Any], desc: Dict[str, Any]) -> Dict[str
     }
 
 
-def _entity_ref(path: Path, entity_id: str) -> str:
-    token = f"{path.resolve()}::{entity_id}"
-    return "ent_" + hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
-
-
 def _norm_path(raw: str) -> str:
     path = Path(raw).expanduser()
     try:
@@ -2175,4 +2479,11 @@ class PatientReviewError(Exception):
         self.detail = detail
 
 
-__all__ = ["PatientReviewError", "patient_review_drilldown", "patient_review_sources"]
+__all__ = [
+    "PatientReviewError",
+    "patient_review_drilldown",
+    "patient_review_entity",
+    "patient_review_entity_page",
+    "patient_review_sources",
+    "patient_review_table_preview",
+]

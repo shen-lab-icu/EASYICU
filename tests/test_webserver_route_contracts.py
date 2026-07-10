@@ -142,6 +142,13 @@ EXPECTED_REVIEW_ROUTES = [
         "/api/patient-review/drilldown",
         "patient_review_drilldown",
     ),
+    ("POST", "/api/patient-review/entities", "patient_review_entities"),
+    ("POST", "/api/patient-review/entity", "patient_review_entity"),
+    (
+        "POST",
+        "/api/patient-review/table-preview",
+        "patient_review_table_preview",
+    ),
     ("POST", "/api/patient-review/sources", "patient_review_sources"),
     ("POST", "/api/cohort-review/summary", "cohort_review_summary"),
     ("POST", "/api/crossdb-review/summary", "crossdb_review_summary"),

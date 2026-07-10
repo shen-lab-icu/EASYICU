@@ -2173,7 +2173,7 @@ def test_patient_review_drilldown_uses_active_source_with_bounded_table_previews
     assert payload["privacy"]["max_table_page_size"] == 100
     assert (
         payload["data_tables"]["payload_scope"]
-        == "old_data_tables_semantics_with_bounded_pseudonymous_table_previews"
+        == "module_inventory_plus_one_bounded_pseudonymous_preview"
     )
     assert (
         payload["data_tables"]["detail_gate"]["title"] == "Bounded local table previews"
@@ -2204,22 +2204,8 @@ def test_patient_review_drilldown_uses_active_source_with_bounded_table_previews
     )
     assert table_previews["demographics"]["rows"][0]["entity"].startswith("ent_")
     assert table_previews["demographics"]["rows"][0]["age"] == 50
-    assert table_previews["vitals"]["display_columns"] == [
-        "entity",
-        "charttime",
-        "hr",
-        "map",
-        "spo2",
-        "temp",
-    ]
-    vitals_labels = {
-        row["column"]: row for row in table_previews["vitals"]["display_column_labels"]
-    }
-    assert vitals_labels["charttime"]["label_zh"] == "记录时间"
-    assert vitals_labels["hr"]["label_en"] == "Heart Rate"
-    assert vitals_labels["hr"]["label_zh"] == "心率"
-    assert table_previews["vitals"]["rows"][0]["hr"] == 90
-    assert table_previews["vitals"]["pagination"] == {
+    assert set(table_previews) == {"demographics"}
+    assert table_previews["demographics"]["pagination"] == {
         "page": 1,
         "page_size": 24,
         "page_count": 1,
@@ -2229,7 +2215,7 @@ def test_patient_review_drilldown_uses_active_source_with_bounded_table_previews
         "has_previous": False,
         "has_next": False,
     }
-    assert table_previews["vitals"]["truncated_rows"] is False
+    assert table_previews["demographics"]["truncated_rows"] is False
     assert (
         payload["trajectory_review"]["payload_scope"]
         == "feature_matrix_semantics_bounded"
@@ -2246,11 +2232,10 @@ def test_patient_review_drilldown_uses_active_source_with_bounded_table_previews
         == "old_patient_overview_semantics_pseudonymous"
     )
     assert payload["patient_overview"]["navigator"]["actions"] == [
-        "first",
-        "previous",
-        "next",
-        "last",
-        "random",
+        "previous_group",
+        "next_group",
+        "random_group",
+        "select_entity",
     ]
     assert (
         payload["patient_overview"]["category_view"]["sections"][0]["title"]
