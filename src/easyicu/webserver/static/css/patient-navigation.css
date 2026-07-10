@@ -1,0 +1,55 @@
+/* Patient Review entity-navigation owner. */
+.pt-entity-nav{
+  border:1px solid var(--hair);
+  border-radius:var(--r-2);
+  background:var(--surface);
+  padding:11px 12px;
+  display:grid;
+  grid-template-columns:minmax(200px, 280px) minmax(0, 1fr);
+  gap:12px;
+  align-items:center;
+}
+.pt-entity-current{
+  margin-top:4px;
+  color:var(--ink-2);
+  font-size:12px;
+  font-weight:600;
+}
+.pt-entity-detail{
+  margin-top:3px;
+  font-size:11.5px;
+  line-height:1.35;
+  color:var(--ink-4);
+}
+.pt-entity-status{
+  margin-top:5px;
+  color:var(--accent-ink);
+  font-size:11px;
+}
+.pt-entity-status.bad{ color:var(--bad); }
+.pt-entity-browser{
+  display:grid;
+  gap:8px;
+  min-width:0;
+}
+.pt-entity-pager{
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  flex-wrap:wrap;
+  gap:6px;
+  color:var(--ink-4);
+  font-size:11px;
+}
+.pt-entity-chiprow{
+  display:flex;
+  flex-wrap:wrap;
+  justify-content:flex-end;
+  gap:6px;
+  min-width:0;
+}
+@media (max-width:980px){
+  .pt-entity-nav{ grid-template-columns:1fr; }
+  .pt-entity-pager,
+  .pt-entity-chiprow{ justify-content:flex-start; }
+}

@@ -93,9 +93,6 @@
   /* view state for the interactive viz screens */
   let patientView = 'idle';   // idle | loading | loaded
   let patientTab = 'tables';
-  let patientTableModule = null;
-  let patientTablePage = 1;
-  let patientTablePageSize = 24;
   let patientSeriesMode = 'lanes';
   let crossView = 'idle';     // idle | loading | loaded
   let crossDensityModule = 'all';
@@ -397,14 +394,15 @@
     return Array.isArray(tables.table_previews) ? tables.table_previews : [];
   }
   function activePatientTablePreview(payload) {
+    const owner = window.EU_PATIENT_REVIEW && window.EU_PATIENT_REVIEW.tables;
+    if (owner && typeof owner.activePreview === 'function') {
+      return owner.activePreview(payload || patientDrilldown());
+    }
     const previews = patientTablePreviews(payload);
     if (!previews.length) return null;
     const tables = (payload || patientDrilldown() || {}).data_tables || {};
     const fallback = (tables.module_picker || {}).default_module || (previews[0] && previews[0].module);
-    if (!patientTableModule || !previews.some(row => row.module === patientTableModule)) {
-      patientTableModule = fallback;
-    }
-    return previews.find(row => row.module === patientTableModule) || previews[0] || null;
+    return previews.find(row => row.module === fallback) || previews[0] || null;
   }
   function fmtCell(v) {
     if (v == null || v === '') return '—';
@@ -600,21 +598,16 @@
   }
 
   function patientEntityNavigator(drill, selected, opts = {}) {
-    const entities = Array.isArray(drill && drill.entities) ? drill.entities : [];
-    if (!entities.length) return '';
-    const selectedRef = selected && selected.ref;
-    const title = opts.title || t('Case navigator', '病例导航');
-    const detail = opts.detail || t('Switch entity once; tables, trends, overview, and quality keep the same pseudonymous case context.', '切换一次实体后，数据表、趋势、概览和质量页都会使用同一个去标识病例上下文。');
-    return `
-      <div class="pt-entity-nav mt-16">
-        <div>
-          <div class="eyebrow">${esc(title)}</div>
-          <div class="pt-entity-detail">${esc(detail)}</div>
-        </div>
-        <div class="pt-entity-chiprow">
-          ${entities.map(item => `<button type="button" class="chip ${item.ref === selectedRef ? 'solid' : ''}" data-patient-entity="${esc(item.ref)}" style="${item.ref === selectedRef ? 'border-color:var(--ink);color:var(--ink);' : ''}">${esc(item.label || item.ref)}</button>`).join('')}
-        </div>
-      </div>`;
+    const owner = window.EU_PATIENT_REVIEW && window.EU_PATIENT_REVIEW.navigation;
+    if (owner && typeof owner.render === 'function') {
+      return owner.render({
+        drill,
+        selected,
+        opts,
+        helpers: { t, esc, fmtInt, icon },
+      });
+    }
+    return '';
   }
   function patientMatrixAudit(drill, lanesOverride = null) {
     const review = drill ? (drill.trajectory_review || {}) : {};
@@ -1200,12 +1193,19 @@
     const body = {};
     body.source_path = active;
     if (entityRef) body.entity_ref = entityRef;
-    if (patientTableModule) body.table_module = patientTableModule;
-    body.table_page = patientTablePage;
-    body.table_page_size = patientTablePageSize;
+    const tableOwner = window.EU_PATIENT_REVIEW && window.EU_PATIENT_REVIEW.tables;
+    const tableState = tableOwner && typeof tableOwner.snapshot === 'function'
+      ? tableOwner.snapshot(patientDrilldown())
+      : {};
+    if (tableState.module) body.table_module = tableState.module;
+    body.table_page = 1;
+    body.table_page_size = tableState.pageSize || 24;
     window.EU_API.loadPatientReviewDrilldown(body).then(payload => {
       window.EU_PATIENT_DRILLDOWN = payload;
       window.EU_VIZ_WORKSPACE = patientWorkspaceFromDrilldown(payload);
+      const reviewOwner = window.EU_PATIENT_REVIEW || {};
+      if (reviewOwner.navigation && reviewOwner.navigation.prime) reviewOwner.navigation.prime(payload);
+      if (reviewOwner.tables && reviewOwner.tables.prime) reviewOwner.tables.prime(payload);
       vizErr = null;
       window.EU_HASWORK = true;
       done && done(true);
@@ -1555,6 +1555,7 @@
   };
   window.__euVizResetForDataMode = function () {
     teardownCrossRawES({ forget: true });
+    resetPatientBrowseOwners();
     patientView = 'idle';
     crossView = 'idle';
     crossRegisteredLoading = false;
@@ -2076,19 +2077,21 @@
       const detailGate = dt.detail_gate || {};
       const picker = dt.module_picker || {};
       const modules = drill.module_profiles || [];
-      const previews = patientTablePreviews(drill);
       const activePreview = activePatientTablePreview(drill);
+      const tableOwner = window.EU_PATIENT_REVIEW && window.EU_PATIENT_REVIEW.tables;
+      const tableState = tableOwner && typeof tableOwner.snapshot === 'function'
+        ? tableOwner.snapshot(drill)
+        : { module: activePreview && activePreview.module, page: 1, pageSize: 24 };
       const previewColumns = activePreview && Array.isArray(activePreview.display_columns) ? activePreview.display_columns : [];
       const previewRows = activePreview && Array.isArray(activePreview.rows) ? activePreview.rows : [];
       const previewPage = (activePreview && activePreview.pagination) || {};
-      const page = Number(previewPage.page || activePreview && activePreview.page || patientTablePage || 1);
+      const page = Number(previewPage.page || activePreview && activePreview.page || tableState.page || 1);
       const pageCount = Number(previewPage.page_count || activePreview && activePreview.page_count || 1);
       const rowStart = Number(previewPage.row_start || activePreview && activePreview.row_start || 0);
       const rowEnd = Number(previewPage.row_end || activePreview && activePreview.row_end || 0);
       const hasPrevious = Boolean(previewPage.has_previous || activePreview && activePreview.has_previous);
       const hasNext = Boolean(previewPage.has_next || activePreview && activePreview.has_next);
-      patientTablePage = page;
-      patientTablePageSize = Number(previewPage.page_size || activePreview && activePreview.page_size || patientTablePageSize || 24);
+      const pageSize = Number(previewPage.page_size || activePreview && activePreview.page_size || tableState.pageSize || 24);
       const basisScope = drill.demo ? 'catalog-seeded demo aggregate' : 'demographics aggregate';
       const rows = [
         ['Entities', fmtInt(s.entities), drill.demo ? 'seeded demo denominator' : 'cohort denominator from active export'],
@@ -2099,7 +2102,7 @@
         ['Sepsis-3 positive', fmtPct(s.sepsis_pct), drill.demo ? 'catalog-seeded demo event' : 'event aggregate'],
       ];
       const reviewModules = (dt.modules && dt.modules.length ? dt.modules : modules).slice(0, drill.demo ? 32 : 64);
-      const activeModule = reviewModules.find(m => m.module === picker.default_module) || reviewModules[0] || {};
+      const activeModule = reviewModules.find(m => m.module === tableState.module) || reviewModules[0] || {};
       const previewFeatures = activeModule.preview_features || [];
       const workspaceCopy = drill.demo
         ? t('catalog-shaped seeded demo: module counts and feature names come from the EasyICU concept catalog; seeded values are UI preview only.', '目录形演示：模块数量和特征名来自 EasyICU 概念目录，数值只是界面预览。')
@@ -2119,14 +2122,23 @@
         <div class="body"><span class="t">${t('Table preview', '表格预览')}</span> <span class="d" style="display:inline;">— ${drill.demo ? t('Seeded demo rows for UI preview.', '演示行仅用于界面预览。') : t('Capped local rows from the active export; identifiers are replaced by pseudonymous entity tokens.', '来自当前本地导出的有界行预览；标识符已替换为去标识化实体 token。')}</span></div>
       </div>
       ${patientEligibilityFlow(drill.eligibility_flow)}
-      ${previews.length ? `
+      ${reviewModules.length ? `
       <div class="row wrap gap-6 mt-12" data-pt-table-picker>
-        ${previews.map(p => `<button type="button" class="chip ${activePreview && p.module === activePreview.module ? 'solid' : ''}" data-pt-table-module="${esc(p.module)}" style="${activePreview && p.module === activePreview.module ? 'border-color:var(--ink);color:var(--ink);' : ''}">${esc(patientModuleLabel(p))} <span class="mono" style="font-size:10.5px;color:var(--ink-4);">${fmtInt(p.rows_total)} ${t('rows', '行')}</span></button>`).join('')}
+        ${reviewModules.map(module => {
+          const active = module.module === tableState.module;
+          const status = tableOwner && typeof tableOwner.moduleStatus === 'function'
+            ? tableOwner.moduleStatus(module, activePreview, { t })
+            : (module.review_status === 'inventory_only'
+              ? t('available · load', '可用 · 按需加载')
+              : t('reviewed', '已审阅'));
+          return `<button type="button" class="chip ${active ? 'solid' : ''}" data-pt-table-module="${esc(module.module)}" aria-pressed="${active ? 'true' : 'false'}">${esc(patientModuleLabel(module))} <span class="mono" style="font-size:10.5px;color:var(--ink-4);">${fmtInt(module.rows)} ${t('rows', '行')} · ${status}</span></button>`;
+        }).join('')}
       </div>
+      ${tableOwner && tableOwner.statusHtml ? tableOwner.statusHtml({ t, esc, icon }) : ''}
       <div class="patient-table-frame mt-12">
         <div class="patient-id-note">${drill.demo ? t('Demo entity tokens are seeded UI references.', '演示实体 token 是种子界面引用。') : t('Entity tokens are local pseudonymous references. Direct clinical identifiers stay on disk.', '实体 token 是本地伪匿名引用；直接临床标识符保留在磁盘上。')}</div>
         <div class="patient-table-scroll" data-patient-table-preview style="--pt-cols:${Math.max(6, previewColumns.length)};">
-        <table class="eu-table patient-preview-table">
+        <table class="eu-table patient-preview-table" aria-label="${esc(`${patientModuleLabel(activeModule)} ${t('bounded table preview', '有界表格预览')}`)}">
           <thead><tr>${previewColumns.map(c => `<th${c === 'entity' ? ' class="patient-entity-col"' : ' class="num"'}>${esc(patientColumnLabel(c, activePreview))}</th>`).join('')}</tr></thead>
           <tbody>
             ${previewRows.length ? previewRows.map(r => `<tr>${previewColumns.map(c => `<td class="${c === 'entity' ? 'key mono patient-entity-token' : 'num'}">${esc(fmtCell(r[c]))}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${Math.max(1, previewColumns.length)}" class="muted">${esc(activePreview && activePreview.reason ? activePreview.reason : t('No preview rows available for this module.', '这个模块没有可预览行。'))}</td></tr>`}
@@ -2134,7 +2146,7 @@
         </table>
         </div>
       </div>
-      <div class="patient-table-pager mt-8">
+      <div class="patient-table-pager mt-8" role="group" aria-label="${esc(t('Table page controls', '表格分页控件'))}">
         <button type="button" class="btn sm" data-pt-page-prev ${hasPrevious ? '' : 'disabled'}>${icon('arrow-left', 13)} ${t('Previous', '上一页')}</button>
         <div class="patient-page-readout">
           <span class="mono">${esc(activePreview && activePreview.module || '')}</span>
@@ -2143,7 +2155,7 @@
         </div>
         <label class="patient-page-size">${t('Rows', '行数')}
           <select data-pt-page-size>
-            ${[24, 50, 100].map(n => `<option value="${n}" ${Number(patientTablePageSize) === n ? 'selected' : ''}>${n}</option>`).join('')}
+            ${[24, 50, 100].map(n => `<option value="${n}" ${pageSize === n ? 'selected' : ''}>${n}</option>`).join('')}
           </select>
         </label>
         <button type="button" class="btn sm" data-pt-page-next ${hasNext ? '' : 'disabled'}>${t('Next', '下一页')} ${icon('arrow', 13)}</button>
@@ -2563,45 +2575,28 @@
       case 'quality': return ptQuality();
     }
   }
-  function refreshPatientTablePage() {
-    if (window.EU_DATA !== 'real') {
-      repaintScreen('patient');
-      return;
-    }
-    patientView = 'loading';
-    repaintScreen('patient');
-    loadRealPatient(ok => { patientView = ok ? 'loaded' : 'idle'; repaintScreen('patient'); });
+  function patientBrowseConfig() {
+    return {
+      drill: patientDrilldown,
+      sourcePath: registryActivePath,
+      repaint: () => repaintScreen('patient'),
+      selectDemo(ref) {
+        const payload = buildDemoPatientDrilldown(ref);
+        window.EU_PATIENT_DRILLDOWN = payload;
+        window.EU_VIZ_WORKSPACE = patientWorkspaceFromDrilldown(payload);
+        patientView = 'loaded';
+        repaintScreen('patient');
+      },
+    };
+  }
+  function resetPatientBrowseOwners() {
+    const owner = window.EU_PATIENT_REVIEW || {};
+    if (owner.navigation && owner.navigation.reset) owner.navigation.reset();
+    if (owner.tables && owner.tables.reset) owner.tables.reset();
   }
   function bindPatientTableControls(root) {
-    root.querySelectorAll('[data-pt-table-module]').forEach(b => b.addEventListener('click', e => {
-      e.preventDefault();
-      const nextModule = b.dataset.ptTableModule || null;
-      if (nextModule === patientTableModule) return;
-      patientTableModule = nextModule;
-      patientTablePage = 1;
-      refreshPatientTablePage();
-    }));
-    const prev = root.querySelector('[data-pt-page-prev]');
-    if (prev) prev.addEventListener('click', e => {
-      e.preventDefault();
-      if (prev.disabled || patientTablePage <= 1) return;
-      patientTablePage = Math.max(1, patientTablePage - 1);
-      refreshPatientTablePage();
-    });
-    const next = root.querySelector('[data-pt-page-next]');
-    if (next) next.addEventListener('click', e => {
-      e.preventDefault();
-      if (next.disabled) return;
-      patientTablePage += 1;
-      refreshPatientTablePage();
-    });
-    const pageSize = root.querySelector('[data-pt-page-size]');
-    if (pageSize) pageSize.addEventListener('change', () => {
-      const parsed = Number(pageSize.value);
-      patientTablePageSize = [24, 50, 100].includes(parsed) ? parsed : 24;
-      patientTablePage = 1;
-      refreshPatientTablePage();
-    });
+    const owner = window.EU_PATIENT_REVIEW && window.EU_PATIENT_REVIEW.tables;
+    if (owner && typeof owner.bind === 'function') owner.bind(root, patientBrowseConfig());
   }
   function bindPatientSeriesControls(root) {
     root.querySelectorAll('[data-patient-series-mode]').forEach(b => b.addEventListener('click', e => {
@@ -2621,21 +2616,8 @@
     }));
   }
   function bindPatientEntitySelection(root) {
-    root.querySelectorAll('[data-patient-entity]').forEach(b => b.addEventListener('click', () => {
-      const ref = b.dataset.patientEntity;
-      if (!ref) return;
-      if (window.EU_DATA !== 'real') {
-        const payload = buildDemoPatientDrilldown(ref);
-        window.EU_PATIENT_DRILLDOWN = payload;
-        window.EU_VIZ_WORKSPACE = patientWorkspaceFromDrilldown(payload);
-        patientView = 'loaded';
-        repaintScreen('patient');
-        return;
-      }
-      patientView = 'loading';
-      repaintScreen('patient');
-      loadRealPatient(ok => { patientView = ok ? 'loaded' : 'idle'; repaintScreen('patient'); }, ref);
-    }));
+    const owner = window.EU_PATIENT_REVIEW && window.EU_PATIENT_REVIEW.navigation;
+    if (owner && typeof owner.bind === 'function') owner.bind(root, patientBrowseConfig());
   }
 
   S.patient = {
@@ -2765,7 +2747,7 @@
       }));
       root.querySelectorAll('[data-gen]').forEach(b => b.addEventListener('click', () => {
         if (patientView === 'loading') return;
-        patientTablePage = 1;
+        resetPatientBrowseOwners();
         patientView = 'loading';
         repaintScreen('patient');
         if (window.EU_DATA === 'real') {
@@ -2783,11 +2765,11 @@
         }
       }));
       root.querySelectorAll('[data-viz-reset]').forEach(b => b.addEventListener('click', () => {
-        patientView = 'idle'; patientTablePage = 1; window.EU_VIZ_WORKSPACE = null; window.EU_PATIENT_DRILLDOWN = null; repaintScreen('patient');
+        patientView = 'idle'; resetPatientBrowseOwners(); window.EU_VIZ_WORKSPACE = null; window.EU_PATIENT_DRILLDOWN = null; repaintScreen('patient');
       }));
       root.querySelectorAll('[data-patient-use-real]').forEach(b => b.addEventListener('click', () => {
         patientView = 'idle';
-        patientTablePage = 1;
+        resetPatientBrowseOwners();
         window.EU_DATA = 'real';
         window.EU_VIZ_WORKSPACE = null;
         window.EU_PATIENT_DRILLDOWN = null;

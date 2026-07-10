@@ -119,7 +119,7 @@ def test_native_shell_language_icon_is_stateful() -> None:
     assert "window.EU_LANG = val;" not in settings_js
     assert "window.EU_API.saveSetting('data_mode', m)" in i18n_js
     assert "js/i18n.js?v=20260626-language-refresh-dock" in index_html
-    assert "js/api.js?v=20260702-zotero-simple" in index_html
+    assert "js/api.js?v=20260710-patient-browse" in index_html
 
 
 def test_native_mobile_page_guide_fab_does_not_cover_bottom_nav() -> None:
@@ -380,7 +380,7 @@ def test_native_page_guide_uses_backend_page_guide_contract() -> None:
     assert "sendCopilotMessage" not in dock_js
     assert "runCopilotAction" not in dock_js
     assert "Page guide backend unavailable, using local fallback" in dock_js
-    assert "js/api.js?v=20260702-zotero-simple" in index_html
+    assert "js/api.js?v=20260710-patient-browse" in index_html
     assert "js/copilot-dock.js?v=20260707-logic" in index_html
 
 
@@ -531,7 +531,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
 
     assert "css/guided.css?v=20260707-design" in index_html
     assert "css/guided-idea-plan.css?v=20260627-ideas-feasibility-plan" in index_html
-    assert "js/api.js?v=20260702-zotero-simple" in index_html
+    assert "js/api.js?v=20260710-patient-browse" in index_html
     assert (
         "js/screens-guided-projects.js?v=20260626-guided-projects-split" in index_html
     )
@@ -2207,7 +2207,7 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".cov-badge.derived" in deepdive_css
     assert ".cov-badge.unaudited" in deepdive_css
     assert "data-catalog.js?v=20260625-stage93" in index_html
-    assert "api.js?v=20260702-zotero-simple" in index_html
+    assert "api.js?v=20260710-patient-browse" in index_html
     assert "screens-dict.js?v=20260707-logic" in index_html
     assert "deepdive.css?v=20260625-stage85" in index_html
 
@@ -2453,7 +2453,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert ".gdf-memory" in guided_css
     assert ".gdf-card" in guided_css
     assert ".gd-handoff-ready" in guided_css
-    assert "api.js?v=20260702-zotero-simple" in index_html
+    assert "api.js?v=20260710-patient-browse" in index_html
     assert "screens-guided-projects.js?v=20260626-guided-projects-split" in index_html
     assert (
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
@@ -2497,12 +2497,16 @@ def test_native_agent_run_controls_are_reconnectable_and_cancelable() -> None:
 
 def test_native_patient_source_radios_are_real_controls() -> None:
     viz_js = _static_js("screens-viz.js")
+    patient_navigation_js = _static_js("screens-viz-patient-navigation.js")
+    patient_tables_js = _static_js("screens-viz-patient-tables.js")
     patient_series_js = _static_js("screens-viz-patient-series.js")
     patient_overview_js = _static_js("screens-viz-patient-overview.js")
     api_js = _static_js("api.js")
     i18n_js = _static_js("i18n.js")
     pages_css = _static_css("pages.css")
     patient_css = _static_css("patient.css")
+    patient_navigation_css = _static_css("patient-navigation.css")
+    patient_tables_css = _static_css("patient-tables.css")
     patient_series_css = _static_css("patient-series.css")
     index_html = _static_html("index.html")
 
@@ -2512,6 +2516,12 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert "Demo data" in viz_js
     assert "loadPatientReviewSources" in api_js
     assert "/api/patient-review/sources" in api_js
+    assert "loadPatientReviewEntities" in api_js
+    assert "/api/patient-review/entities" in api_js
+    assert "loadPatientReviewEntity" in api_js
+    assert "/api/patient-review/entity" in api_js
+    assert "loadPatientReviewTablePreview" in api_js
+    assert "/api/patient-review/table-preview" in api_js
     assert "loadPatientSources" in viz_js
     assert "Ready to load local export" in viz_js
     assert "No registered export is active" in viz_js
@@ -2530,8 +2540,12 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert "data-pt-page-prev" in viz_js
     assert "data-pt-page-next" in viz_js
     assert "data-pt-page-size" in viz_js
-    assert "table_page" in viz_js
-    assert "table_page_size" in viz_js
+    assert "table_page" in patient_tables_js
+    assert "table_page_size" in patient_tables_js
+    assert "loadPatientReviewTablePreview" in patient_tables_js
+    assert "loadPatientReviewTablePreview" not in viz_js
+    assert "loadPatientReviewEntity" in patient_navigation_js
+    assert "loadPatientReviewEntity" not in viz_js
     assert "Pseudonymous entity" in viz_js
     assert "伪匿名实体" in viz_js
     assert "display_column_labels" in viz_js
@@ -2611,9 +2625,15 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert "patient-flow-diagram" in viz_js
     assert "patient-flow-node" in viz_js
     assert "patient-flow-side-link" in viz_js
-    assert ".patient-table-scroll" in pages_css
-    assert ".patient-preview-table" in pages_css
-    assert ".patient-table-pager" in pages_css
+    assert ".patient-table-scroll" in patient_tables_css
+    assert ".patient-preview-table" in patient_tables_css
+    assert ".patient-table-pager" in patient_tables_css
+    assert ".patient-table-scroll" not in pages_css
+    assert ".patient-preview-table" not in pages_css
+    assert ".patient-table-pager" not in pages_css
+    assert ".pt-entity-nav" in patient_navigation_css
+    assert ".pt-entity-nav" not in patient_css
+    assert ".pt-entity-nav" not in pages_css
     assert ".patient-flow-card" in patient_css
     assert ".patient-flow-diagram" in patient_css
     assert ".patient-flow-node.has-next::after" in patient_css
@@ -2627,12 +2647,25 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert ".pt-module-ledger-card" in patient_css
     assert ".patient-flow-card" not in pages_css
     assert ".patient-flow-card" not in _static_css("cohort.css")
-    assert "css/pages.css?v=20260626-patient-table-pagination" in index_html
-    assert "css/patient.css?v=20260707-design" in index_html
+    assert "css/pages.css?v=20260710-patient-owner-split" in index_html
+    assert "css/patient-navigation.css?v=20260710-bounded-pages" in index_html
+    assert "css/patient-tables.css?v=20260710-lazy-pages" in index_html
+    assert "css/patient.css?v=20260710-owner-split" in index_html
     assert "css/patient-series.css?v=20260630-patient-old-series2" in index_html
     assert "js/screens-viz-demo.js?v=20260630-patient-demo-audit" in index_html
     assert "js/screens-viz-patient-series.js?v=20260707-logic" in index_html
+    assert (
+        "js/screens-viz-patient-navigation.js?v=20260710-bounded-pages"
+        in index_html
+    )
+    assert "js/screens-viz-patient-tables.js?v=20260710-lazy-pages" in index_html
     assert "js/screens-viz-patient-overview.js?v=20260710-review-scope" in index_html
+    assert index_html.index("js/screens-viz-patient-navigation.js?") < index_html.index(
+        "js/screens-viz.js?"
+    )
+    assert index_html.index("js/screens-viz-patient-tables.js?") < index_html.index(
+        "js/screens-viz.js?"
+    )
     assert "js/screens-viz.js?v=20260710-real-qa3" in index_html
     assert "bounded browser review', '浏览器有界审阅" in viz_js
     assert "function buildDemoPatientDrilldown" in viz_js
