@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import shutil
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
 
 def _is_python_executable(command: str) -> bool:
@@ -21,6 +24,7 @@ def test_runner_records_real_duration(ra, tmp_path: Path):
         workdir=tmp_path / "run",
         cohort_parquet=cohort_path,
         timeout_seconds=10,
+        allow_unsafe_host_fallback=True,
     )
     result = runner.run(
         step_id="duration_probe",
@@ -42,6 +46,7 @@ def test_code_runner_exposes_run_level_artifact_env(ra, tmp_path: Path):
         workdir=run_dir,
         cohort_parquet=cohort_path,
         timeout_seconds=10,
+        allow_unsafe_host_fallback=True,
     )
     result = runner.run(
         step_id="env_probe",
@@ -77,6 +82,171 @@ def test_runner_build_command_defaults_to_network_isolation(ra, tmp_path: Path):
     assert "demo.py" in joined
     if "sandbox-exec" in joined:
         assert "deny network" in joined
+        assert "(allow file-read*)" not in joined
+        assert "(allow file-write*)" not in joined
+        assert '(subpath "/opt/homebrew")' not in joined
+        assert '(subpath "/usr/local")' not in joined
+        step_root = runner.workdir / "steps" / "probe"
+        profile = runner._macos_sandbox_profile(script_path=step_root / "analysis.py")
+        assert f'(allow file-write* (subpath "{step_root}"))' in profile
+        assert f'(allow file-write* (subpath "{runner.workdir}"))' not in profile
+
+
+def test_code_runner_scrubs_secrets_and_reports_filesystem_degradation(
+    ra, tmp_path: Path, monkeypatch
+):
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)
+    outside = tmp_path / "outside-secret.txt"
+    outside.write_text("file-secret", encoding="utf-8")
+    monkeypatch.setenv("OPENAI_API_KEY", "environment-secret")
+
+    runner = ra.CodeRunner(
+        workdir=tmp_path / "run",
+        cohort_parquet=cohort_path,
+        timeout_seconds=10,
+    )
+    result = runner.run(
+        step_id="secret_probe",
+        code=(
+            "import json, os\n"
+            "from pathlib import Path\n"
+            f"outside = Path({str(outside)!r})\n"
+            "try:\n"
+            "    outside_value = outside.read_text()\n"
+            "except Exception:\n"
+            "    outside_value = None\n"
+            "payload = {\n"
+            "    'api_key': os.environ.get('OPENAI_API_KEY'),\n"
+            "    'outside_value': outside_value,\n"
+            "}\n"
+            "Path(os.environ['STEP_OUT_DIR'], 'probe.json').write_text(json.dumps(payload))\n"
+        ),
+    )
+
+    if result.effective_isolation == "blocked_fail_closed":
+        assert result.returncode == 126
+        assert not (result.out_dir / "probe.json").exists()
+        return
+    assert result.succeeded
+    payload = json.loads((result.out_dir / "probe.json").read_text(encoding="utf-8"))
+    assert payload["api_key"] is None
+    assert result.isolation_degraded is False
+    assert result.effective_isolation == "macos_sandbox_exec"
+    assert payload["outside_value"] is None
+
+
+def test_code_runner_default_does_not_retry_failed_sandbox_on_host(
+    ra, tmp_path: Path, monkeypatch
+):
+    import easyicu.research_agent.runner as runner_mod
+
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)
+    calls: list[list[str]] = []
+
+    def _fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        return SimpleNamespace(stdout="", stderr="", returncode=-6)
+
+    runner = ra.CodeRunner(workdir=tmp_path / "run", cohort_parquet=cohort_path)
+    monkeypatch.setattr(
+        runner,
+        "build_command",
+        lambda *, script_path: [
+            "sandbox-exec",
+            "-p",
+            "(deny default)",
+            "python",
+            str(script_path),
+        ],
+    )
+    monkeypatch.setattr(runner_mod.sys, "platform", "darwin")
+    monkeypatch.setattr(runner_mod.subprocess, "run", _fake_run)
+
+    result = runner.run(step_id="sandbox_abort", code="print('must not retry')\n")
+
+    assert result.returncode == -6
+    assert len(calls) == 1
+    assert result.effective_isolation == "macos_sandbox_exec"
+    assert result.isolation_degraded is False
+    assert "fail-closed policy" in result.stderr
+
+
+def test_code_runner_default_blocks_direct_host_execution(
+    ra, tmp_path: Path, monkeypatch
+):
+    import easyicu.research_agent.runner as runner_mod
+
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)
+    runner = ra.CodeRunner(workdir=tmp_path / "run", cohort_parquet=cohort_path)
+    monkeypatch.setattr(
+        runner,
+        "build_command",
+        lambda *, script_path: [runner.python_executable, str(script_path)],
+    )
+    monkeypatch.setattr(
+        runner_mod.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("generated code must not run on host"),
+    )
+
+    result = runner.run(step_id="blocked_host", code="print('must not run')\n")
+
+    assert result.returncode == 126
+    assert result.effective_isolation == "blocked_fail_closed"
+    assert result.isolation_degraded is False
+
+
+@pytest.mark.skipif(
+    sys.platform != "darwin" or shutil.which("sandbox-exec") is None,
+    reason="requires the macOS sandbox-exec backend",
+)
+def test_macos_sandbox_imports_pandas_and_easyicu_but_confines_files(
+    ra, tmp_path: Path
+):
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret", encoding="utf-8")
+    run_dir = tmp_path / "run"
+    evidence_dir = run_dir / "evidence"
+    evidence_dir.mkdir(parents=True)
+    protected = evidence_dir / "protected.txt"
+    protected.write_text("original", encoding="utf-8")
+    runner = ra.CodeRunner(workdir=run_dir, cohort_parquet=cohort_path)
+
+    result = runner.run(
+        step_id="real_import_confinement",
+        code=(
+            "import json, os\n"
+            "from pathlib import Path\n"
+            "import pandas\n"
+            "import easyicu\n"
+            f"outside = Path({str(outside)!r})\n"
+            f"protected = Path({str(protected)!r})\n"
+            "def attempt(action):\n"
+            "    try:\n"
+            "        return action()\n"
+            "    except Exception:\n"
+            "        return None\n"
+            "payload = {\n"
+            "  'pandas': pandas.__version__,\n"
+            "  'outside': attempt(outside.read_text),\n"
+            "  'protected_write': attempt(lambda: protected.write_text('tampered')),\n"
+            "}\n"
+            "Path(os.environ['STEP_OUT_DIR'], 'probe.json').write_text(json.dumps(payload))\n"
+        ),
+    )
+
+    assert result.succeeded, result.stderr
+    assert result.effective_isolation == "macos_sandbox_exec"
+    payload = json.loads((result.out_dir / "probe.json").read_text(encoding="utf-8"))
+    assert payload["pandas"]
+    assert payload["outside"] is None
+    assert payload["protected_write"] is None
+    assert protected.read_text(encoding="utf-8") == "original"
 
 
 def test_pipeline_runner_receives_target_outcome_env(ra, tmp_path: Path):
@@ -203,6 +373,7 @@ def test_runner_retries_without_unshare_when_linux_namespace_is_unavailable(
         workdir=tmp_path / "run",
         cohort_parquet=cohort_path,
         timeout_seconds=10,
+        allow_unsafe_host_fallback=True,
     )
 
     calls: list[list[str]] = []
@@ -267,6 +438,7 @@ def test_runner_forces_single_thread_env_for_sandboxed_numeric_stacks(
         workdir=tmp_path / "run",
         cohort_parquet=cohort_path,
         timeout_seconds=10,
+        allow_unsafe_host_fallback=True,
     )
     result = runner.run(step_id="thread_env", code="print('ok')\n")
 
@@ -291,6 +463,7 @@ def test_runner_retries_without_macos_sandbox_when_openmp_shm_is_blocked(
         workdir=tmp_path / "run",
         cohort_parquet=cohort_path,
         timeout_seconds=10,
+        allow_unsafe_host_fallback=True,
     )
 
     calls: list[list[str]] = []
@@ -347,6 +520,7 @@ def test_runner_retries_without_macos_sandbox_when_profile_apply_is_denied(
         workdir=tmp_path / "run",
         cohort_parquet=cohort_path,
         timeout_seconds=10,
+        allow_unsafe_host_fallback=True,
     )
 
     calls: list[list[str]] = []
@@ -406,6 +580,7 @@ def test_runner_retries_without_macos_sandbox_when_stdio_is_blocked(
         workdir=tmp_path / "run",
         cohort_parquet=cohort_path,
         timeout_seconds=10,
+        allow_unsafe_host_fallback=True,
     )
 
     calls: list[list[str]] = []

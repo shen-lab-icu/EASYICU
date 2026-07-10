@@ -276,7 +276,7 @@ from .llm import (
 )
 from .memory import RunMemory
 from .prompts import PROMPT_PACK_VERSION, prompt_pack_files
-from .runner import CodeRunner, DockerRunner, RunResult
+from .runner import CodeRunner, DockerRunner, RunResult, select_safe_runner_kind
 from .schema import (
     AgentRuntimeState,
     AnalysisManifest,
@@ -500,7 +500,7 @@ class ResearchAgentPipeline:
         experience_bank_path: Optional[Union[str, Path]] = None,
         experience_bank_top_k: int = 5,
         experience_bank_min_similarity: float = 0.2,
-        runner_kind: str = "subprocess",
+        runner_kind: str = "auto",
         runner_image: Optional[str] = None,
         runner_network: str = "none",
         runner_factory: Optional[Callable[..., Any]] = None,
@@ -724,24 +724,27 @@ class ResearchAgentPipeline:
         )
         self._experience_bank_top_k = max(0, int(experience_bank_top_k))
         self._experience_bank_min_similarity = float(experience_bank_min_similarity)
-        # T3.1 — runner backend selection. ``subprocess`` keeps the
-        # existing behaviour; ``docker`` swaps in :class:`DockerRunner`
+        # T3.1 — runner backend selection. ``auto`` prefers a probed Docker
+        # image and uses macOS sandbox-exec only when Docker is unavailable;
+        # ``docker`` explicitly selects :class:`DockerRunner`
         # which mounts the cohort read-only inside a container with
         # ``--network none`` by default. Users with their own sandbox
         # (e.g. OpenHands) can pass an arbitrary ``runner_factory``
         # that accepts ``workdir=, cohort_parquet=, timeout_seconds=``
         # and returns a runner with a ``run(step_id, code)`` method.
-        kind = (runner_kind or "subprocess").lower()
+        kind = (runner_kind or "auto").lower()
         if runner_factory is not None:
             self._runner_kind = "custom"
-        elif kind in {"subprocess", "host", "default"}:
+        elif kind in {"auto", "default"}:
+            self._runner_kind = "auto"
+        elif kind in {"subprocess", "host"}:
             self._runner_kind = "subprocess"
         elif kind in {"docker", "container", "openhands"}:
             self._runner_kind = "docker"
         else:
             raise ValueError(
                 f"Unknown runner_kind {runner_kind!r}; "
-                "expected 'subprocess', 'docker', or pass a runner_factory."
+                "expected 'auto', 'subprocess', 'docker', or pass a runner_factory."
             )
         self._runner_image = runner_image
         self._runner_network = runner_network
@@ -802,7 +805,13 @@ class ResearchAgentPipeline:
                 extra_env=extra_env,
                 **runner_kwargs,
             )
-        if self._runner_kind == "docker":
+        runner_kind = self._runner_kind
+        if runner_kind == "auto":
+            runner_kind = select_safe_runner_kind(
+                image=self._runner_image,
+                docker_executable=runner_kwargs.get("docker_executable"),
+            )
+        if runner_kind == "docker":
             return DockerRunner(
                 workdir=run_dir,
                 cohort_parquet=cohort_path,

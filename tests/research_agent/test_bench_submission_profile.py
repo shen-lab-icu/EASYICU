@@ -58,8 +58,8 @@ def test_submission_profile_requires_aware_only_arm() -> None:
 
 
 def test_submission_profile_requires_docker_runner() -> None:
-    # No profile: host subprocess stays the default.
-    assert _enforce_submission_profile_runner(None, profile=None) == "subprocess"
+    # No profile: capability-probed safe auto-selection is the default.
+    assert _enforce_submission_profile_runner(None, profile=None) == "auto"
     # Profile + no explicit runner defaults to the required docker runner.
     assert _enforce_submission_profile_runner(
         None, profile=CANONICAL_PROFILE

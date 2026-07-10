@@ -14,7 +14,9 @@ import re
 
 
 def _mod():
-    return importlib.import_module("easyicu.research_agent.method_capabilities")
+    module = importlib.import_module("easyicu.research_agent.method_capabilities")
+    module.set_runtime_capability_snapshot_provider(None)
+    return module
 
 
 def test_capability_block_lists_baseline_and_forbids_unlisted(ra):
@@ -39,8 +41,22 @@ def test_available_advanced_packages_appear_in_block(ra):
             assert pkg.fallback in block
         else:
             assert pkg.import_name in block  # named in the "NOT available" line
-    # In this dev environment shap/lifelines/xgboost are installed.
-    assert {"lifelines", "shap", "xgboost"} <= available
+    # Host installations may omit the optional methods extra; the prompt must
+    # truthfully report that state rather than assuming this dev environment.
+    assert available <= {p.import_name for p in mc.CURATED_METHOD_PACKAGES}
+
+
+def test_explicit_runtime_snapshot_overrides_host_packages(ra, monkeypatch):
+    mc = _mod()
+    monkeypatch.setattr(mc, "_importable", lambda _name: True)
+
+    block = mc.coder_method_capability_block(
+        snapshot={*mc.BASELINE_PACKAGES, "seaborn", "lifelines"}
+    )
+
+    assert "* lifelines" in block
+    assert "* shap" not in block
+    assert "* xgboost" not in block
 
 
 def test_curated_packages_are_declared_in_pyproject_methods_extra(ra):
@@ -54,9 +70,9 @@ def test_curated_packages_are_declared_in_pyproject_methods_extra(ra):
     assert block, "pyproject must declare a [methods] optional-dependencies extra"
     declared = block.group(1).lower()
     for pkg in mc.CURATED_METHOD_PACKAGES:
-        assert pkg.pip_name.lower() in declared, (
-            f"{pkg.pip_name} is curated but not declared in the methods extra"
-        )
+        assert (
+            pkg.pip_name.lower() in declared
+        ), f"{pkg.pip_name} is curated but not declared in the methods extra"
     # And the methods extra must be wired into the aggregate 'all' extra.
     all_block = re.search(r"\nall\s*=\s*\[(.*?)\]", pyproject, re.S)
     assert all_block and "methods" in all_block.group(1)
@@ -71,3 +87,33 @@ def test_coder_prompt_embeds_capability_block(ra):
     assert hasattr(agents, "coder_method_capability_block")
     block = mc.coder_method_capability_block()
     assert "AVAILABLE ANALYTICAL LIBRARIES" in block
+
+
+def test_reference_docker_image_matches_advertised_capabilities(ra):
+    mc = _mod()
+    repo_root = pathlib.Path(__file__).resolve().parents[2]
+    dockerfile = (
+        (
+            repo_root
+            / "src"
+            / "easyicu"
+            / "research_agent"
+            / "runner_image"
+            / "Dockerfile"
+        )
+        .read_text(encoding="utf-8")
+        .lower()
+    )
+    pip_names = {
+        "sklearn": "scikit-learn",
+        **{name: name for name in mc.BASELINE_PACKAGES if name != "sklearn"},
+        **{name: name for name in mc.OPTIONAL_BASELINE_PACKAGES},
+    }
+    for package in mc.CURATED_METHOD_PACKAGES:
+        pip_names[package.import_name] = package.pip_name
+
+    for import_name, pip_name in pip_names.items():
+        assert (
+            pip_name.lower() in dockerfile
+        ), f"{import_name} is advertised but {pip_name} is absent from Dockerfile"
+    assert "pip install --no-cache-dir --no-deps /opt/easyicu" in dockerfile

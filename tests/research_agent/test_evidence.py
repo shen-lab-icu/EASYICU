@@ -10,13 +10,16 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 
 def test_register_file_creates_index_and_hash(ra, tmp_path: Path):
     src = tmp_path / "src.csv"
     src.write_text("a,b\n1,2\n", encoding="utf-8")
     store = ra.EvidenceStore(root=tmp_path)
     rec = store.register_file(
-        kind="table", description="a tiny csv",
+        kind="table",
+        description="a tiny csv",
         source_path=src,
     )
     assert rec.sha256 and len(rec.sha256) == 64
@@ -30,7 +33,8 @@ def test_alias_resolves_via_filename_stem(ra, tmp_path: Path):
     src.write_text("a,b\n1,2\n", encoding="utf-8")
     store = ra.EvidenceStore(root=tmp_path)
     rec = store.register_file(
-        kind="table", description="t1",
+        kind="table",
+        description="t1",
         source_path=src,
     )
     via_alias = store.get("table_one")
@@ -57,11 +61,13 @@ def test_unique_hash_suffixed_evidence_resolves_by_stable_prefix(ra, tmp_path: P
 
 def test_explicit_aliases(ra, tmp_path: Path):
     src = tmp_path / "step_summary.json"
-    src.write_text("{\"x\":1}", encoding="utf-8")
+    src.write_text('{"x":1}', encoding="utf-8")
     store = ra.EvidenceStore(root=tmp_path)
     rec = store.register_file(
-        kind="statistic", description="summary",
-        source_path=src, aliases=["outcome_rate", "outcome_incidence"],
+        kind="statistic",
+        description="summary",
+        source_path=src,
+        aliases=["outcome_rate", "outcome_incidence"],
     )
     for name in ("outcome_rate", "outcome_incidence"):
         got = store.get(name)
@@ -69,8 +75,12 @@ def test_explicit_aliases(ra, tmp_path: Path):
 
 
 def test_first_write_wins_on_alias_collision(ra, tmp_path: Path):
-    a = tmp_path / "table_one.csv"; a.write_text("a\n1\n")
-    b = tmp_path / "redo" ; b.mkdir(); b = b / "table_one.csv"; b.write_text("a\n2\n")
+    a = tmp_path / "table_one.csv"
+    a.write_text("a\n1\n")
+    b = tmp_path / "redo"
+    b.mkdir()
+    b = b / "table_one.csv"
+    b.write_text("a\n2\n")
     store = ra.EvidenceStore(root=tmp_path)
     first = store.register_file(kind="table", description="first", source_path=a)
     second = store.register_file(kind="table", description="second", source_path=b)
@@ -169,7 +179,9 @@ def test_bind_manuscript_supports_comma_separated_placeholders(ra, tmp_path: Pat
     assert "evidence missing" not in bound
 
 
-def test_bind_manuscript_strips_repeated_evidence_prefix_in_comma_items(ra, tmp_path: Path):
+def test_bind_manuscript_strips_repeated_evidence_prefix_in_comma_items(
+    ra, tmp_path: Path
+):
     first = tmp_path / "cluster_characteristics.csv"
     second = tmp_path / "cluster_mortality.csv"
     first.write_text("cluster,n\n0,10\n", encoding="utf-8")
@@ -197,7 +209,9 @@ def test_bind_manuscript_strips_repeated_evidence_prefix_in_comma_items(ra, tmp_
     assert "evidence missing" not in bound
 
 
-def test_register_text_alias_survives_evidence_id_with_double_underscore(ra, tmp_path: Path):
+def test_register_text_alias_survives_evidence_id_with_double_underscore(
+    ra, tmp_path: Path
+):
     store = ra.EvidenceStore(root=tmp_path)
     rec = store.register_text(
         kind="log",
@@ -218,8 +232,9 @@ def test_resolvable_names_includes_aliases_and_ids(ra, tmp_path: Path):
     src = tmp_path / "missingness.csv"
     src.write_text("a,b\n1,2\n", encoding="utf-8")
     store = ra.EvidenceStore(root=tmp_path)
-    rec = store.register_file(kind="table", description="m", source_path=src,
-                              aliases=["my_alias"])
+    rec = store.register_file(
+        kind="table", description="m", source_path=src, aliases=["my_alias"]
+    )
     names = set(store.resolvable_names())
     assert rec.evidence_id in names
     assert "missingness" in names
@@ -247,7 +262,9 @@ def test_evidence_id_is_stable_for_same_content(ra, tmp_path: Path):
     other_dir.mkdir()
     same = other_dir / "stable.csv"
     same.write_text("a\n1\n", encoding="utf-8")
-    second = store.register_file(kind="table", description="stable copy", source_path=same)
+    second = store.register_file(
+        kind="table", description="stable copy", source_path=same
+    )
     assert first.evidence_id == second.evidence_id
 
 
@@ -280,7 +297,9 @@ def test_bind_manuscript_verbose_mode_keeps_warning_caveat_visible(ra, tmp_path:
     assert "(warning: see manifest)" in bound
 
 
-def test_enforce_evidence_bound_scaffold_filters_unsupported_result_sentences(ra, tmp_path: Path):
+def test_enforce_evidence_bound_scaffold_filters_unsupported_result_sentences(
+    ra, tmp_path: Path
+):
     store = ra.EvidenceStore(root=tmp_path)
     scaffold = (
         "# Results\n\n"
@@ -311,7 +330,81 @@ def test_enforce_evidence_bound_scaffold_filters_bold_section_result_sentences(
     assert "**Background:**" not in filtered
     assert "**Discussion:**" not in filtered
     assert any(
-        "missingness and component-completeness artefacts" in item
-        for item in removed
+        "missingness and component-completeness artefacts" in item for item in removed
     )
     assert any("consistent with the observed association" in item for item in removed)
+
+
+@pytest.mark.parametrize(
+    ("evidence_id", "filename"),
+    [
+        ("../../escaped", "artifact.txt"),
+        ("/tmp/escaped", "artifact.txt"),
+        ("safe_id", "../../escaped.txt"),
+        ("safe_id", "/tmp/escaped.txt"),
+    ],
+)
+def test_evidence_registration_rejects_path_escape(
+    ra,
+    tmp_path: Path,
+    evidence_id: str,
+    filename: str,
+):
+    store = ra.EvidenceStore(root=tmp_path / "run")
+
+    with pytest.raises(ValueError, match="single safe path component"):
+        store.register_text(
+            kind="log",
+            description="escape probe",
+            text="probe",
+            filename=filename,
+            evidence_id=evidence_id,
+        )
+
+    assert not (tmp_path / "escaped.txt").exists()
+
+
+def test_evidence_store_rejects_evidence_directory_symlink_escape(ra, tmp_path: Path):
+    run_dir = tmp_path / "run"
+    outside = tmp_path / "outside"
+    run_dir.mkdir()
+    outside.mkdir()
+    (run_dir / "evidence").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="symbolic link|escapes the store root"):
+        ra.EvidenceStore(root=run_dir)
+
+
+@pytest.mark.parametrize("operation", ["text", "file", "save"])
+def test_evidence_store_revalidates_directory_after_initialisation(
+    ra, tmp_path: Path, operation: str
+):
+    run_dir = tmp_path / "run"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    store = ra.EvidenceStore(root=run_dir)
+    store.dir.rmdir()
+    store.dir.symlink_to(outside, target_is_directory=True)
+    source = tmp_path / "source.txt"
+    source.write_text("source", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="symbolic link|escapes the store root"):
+        if operation == "text":
+            store.register_text(
+                kind="log",
+                description="replacement probe",
+                text="must stay inside run root",
+                filename="probe.txt",
+                evidence_id="replacement_probe",
+            )
+        elif operation == "file":
+            store.register_file(
+                kind="log",
+                description="replacement probe",
+                source_path=source,
+                evidence_id="replacement_probe",
+            )
+        else:
+            store._save()
+
+    assert list(outside.iterdir()) == []

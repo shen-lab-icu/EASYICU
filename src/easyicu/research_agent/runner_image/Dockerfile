@@ -44,17 +44,34 @@ RUN apt-get update \
         libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Pin the analysis-time scientific Python stack. These cover every
-# import the mock and real-LLM code paths emit (pandas, numpy, scipy,
-# statsmodels, matplotlib, pyarrow). Keep this list in sync with the
-# `runner` runtime contract documented in `runner.py`.
+# Install the complete capability set advertised by method_capabilities.py.
+# The image is network-disabled at execution time, so a package advertised to
+# the coder must already be importable here. Keep this list aligned with the
+# project core dependencies plus the ``methods`` extra.
 RUN pip install --no-cache-dir \
         "numpy>=1.26,<3" \
         "pandas>=2.0,<3" \
-        "pyarrow>=14,<22" \
+        "pyarrow>=23,<24" \
         "scipy>=1.11,<2" \
         "statsmodels>=0.14,<1" \
-        "matplotlib>=3.7,<4"
+        "matplotlib>=3.7,<4" \
+        "seaborn>=0.12,<1" \
+        "scikit-learn>=1.3,<2" \
+        "lifelines>=0.27,<1" \
+        "shap>=0.44,<1" \
+        "xgboost>=2.0,<4" \
+        "pydantic>=2,<3" \
+        "pyyaml>=6,<7" \
+        "requests>=2.28,<3" \
+        "tqdm>=4.65,<5" \
+        "duckdb>=0.9,<2"
+
+# Generated analysis imports EasyICU's publication-figure and audit helpers.
+# Install the repository package itself without resolving dependencies again;
+# the complete runtime set is pinned above and is captured by DockerRunner.
+COPY pyproject.toml README.md /opt/easyicu/
+COPY src/easyicu /opt/easyicu/src/easyicu
+RUN pip install --no-cache-dir --no-deps /opt/easyicu
 
 # Non-root user so `--user=$(id -u):$(id -g)` works out of the box and
 # the script cannot accidentally `chown` host-mounted files to root.
