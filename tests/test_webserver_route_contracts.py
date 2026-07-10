@@ -21,6 +21,7 @@ from easyicu.webserver.routes.jobs import submission_router as job_submission_ro
 from easyicu.webserver.routes.local_data import router as local_data_router
 from easyicu.webserver.routes.page_guide import router as page_guide_router
 from easyicu.webserver.routes.reviews import router as reviews_router
+from easyicu.webserver.routes.study_contexts import router as study_contexts_router
 from easyicu.webserver.routes.system import router as system_router
 from easyicu.webserver.routes.workspaces import router as workspaces_router
 
@@ -125,6 +126,14 @@ EXPECTED_WORKSPACE_ROUTES = [
     ("POST", "/api/workspaces/register", "post_workspaces_register"),
     ("POST", "/api/workspaces/rename", "post_workspaces_rename"),
     ("POST", "/api/workspaces/remove", "post_workspaces_remove"),
+]
+
+EXPECTED_STUDY_CONTEXT_ROUTES = [
+    ("GET", "/api/study-contexts/active", "get_active_study_context"),
+    ("GET", "/api/study-contexts", "get_study_contexts"),
+    ("POST", "/api/study-contexts", "post_study_context"),
+    ("POST", "/api/study-contexts/handoff", "post_study_context_handoff"),
+    ("GET", "/api/study-contexts/{context_id}", "get_study_context"),
 ]
 
 EXPECTED_REVIEW_ROUTES = [
@@ -324,6 +333,10 @@ def test_workspace_route_method_path_and_operation_name_snapshot() -> None:
     _assert_router_contract(workspaces_router, EXPECTED_WORKSPACE_ROUTES)
 
 
+def test_study_context_route_method_path_and_operation_name_snapshot() -> None:
+    _assert_router_contract(study_contexts_router, EXPECTED_STUDY_CONTEXT_ROUTES)
+
+
 def test_review_route_method_path_and_operation_name_snapshot() -> None:
     _assert_router_contract(reviews_router, EXPECTED_REVIEW_ROUTES)
 
@@ -373,6 +386,9 @@ def test_route_owner_boundaries() -> None:
     )
     jobs_source = (package_root / "routes" / "jobs.py").read_text(encoding="utf-8")
     agent_source = (package_root / "routes" / "agent.py").read_text(encoding="utf-8")
+    study_context_source = (package_root / "routes" / "study_contexts.py").read_text(
+        encoding="utf-8"
+    )
 
     assert "/api/guided/" not in app_source
     assert "/api/copilot/" not in app_source
@@ -382,6 +398,7 @@ def test_route_owner_boundaries() -> None:
     assert "/api/data/" not in app_source
     assert "/api/workspace/" not in app_source
     assert "/api/workspaces/" not in app_source
+    assert "/api/study-contexts" not in app_source
     assert "/api/patient-review/" not in app_source
     assert "/api/cohort-review/" not in app_source
     assert "/api/crossdb-review/" not in app_source
@@ -411,6 +428,8 @@ def test_route_owner_boundaries() -> None:
     assert "/api/workspaces/" not in local_data_source
     assert "/api/workspaces/" in workspaces_source
     assert "/api/workspace/" not in workspaces_source
+    assert "/api/study-contexts" in study_context_source
+    assert "/api/jobs/" not in study_context_source
     assert "/api/jobs/" not in local_data_source
     assert "/api/jobs/" not in workspaces_source
     assert "-review/" not in local_data_source
@@ -452,6 +471,7 @@ def test_route_owner_boundaries() -> None:
     assert "easyicu.webserver.app" not in extraction_source
     assert "easyicu.webserver.app" not in jobs_source
     assert "easyicu.webserver.app" not in agent_source
+    assert "easyicu.webserver.app" not in study_context_source
 
 
 def test_patient_review_eligibility_owner_boundary() -> None:
@@ -488,6 +508,7 @@ def test_root_static_mount_stays_last() -> None:
         < _router_registration_index(reviews_router)
         < _router_registration_index(extraction_router)
         < _router_registration_index(workspaces_router)
+        < _router_registration_index(study_contexts_router)
         < _router_registration_index(job_submission_router)
         < _router_registration_index(agent_control_router)
         < _router_registration_index(guided_router)
