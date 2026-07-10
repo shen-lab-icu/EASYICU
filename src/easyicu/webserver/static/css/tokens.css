@@ -13,8 +13,8 @@
   --rail: #FCFCFA;                /* sidebar bg */
   --ink: #0E1116;                 /* primary text */
   --ink-2: #2E3338;               /* secondary */
-  --ink-3: #6B7280;               /* tertiary, captions */
-  --ink-4: #9CA3AF;               /* muted, placeholders */
+  --ink-3: #56606C;               /* tertiary, captions · AA on surface-2 */
+  --ink-4: #667085;               /* muted, placeholders · AA on surface-2 */
   --hair: #E7E5DF;                /* hairline borders */
   --hair-2: #DCDAD2;              /* heavier border */
   --hair-3: #C8C6BD;              /* divider on emphasis */
