@@ -9,8 +9,13 @@
   const SOURCE_ID_RE = /^[a-z0-9_-]+(?:,[a-z0-9_-]+)*$/;
   let stream = null;
   let activeJobId = '';
+  let cancelFenceJobId = '';
+  let lastSeq = -1;
+  let reconnectAttempt = 0;
+  let reconnectTimer = null;
   let restoreAttempted = false;
   let completion = null;
+  const RECONNECT_DELAYS_MS = [500, 1000, 2000, 5000];
 
   function host() {
     return window.EU_CROSSDB_JOB_HOST || null;
@@ -73,6 +78,20 @@
     stream = null;
   }
 
+  function clearReconnectTimer() {
+    if (reconnectTimer != null && typeof window.clearTimeout === 'function') {
+      window.clearTimeout(reconnectTimer);
+    }
+    reconnectTimer = null;
+  }
+
+  function maxEventSeq(events) {
+    return (Array.isArray(events) ? events : []).reduce((maximum, event) => {
+      const seq = Number(event && event.seq);
+      return Number.isInteger(seq) ? Math.max(maximum, seq) : maximum;
+    }, -1);
+  }
+
   function stillCurrent(meta) {
     const stored = readStored();
     return !!(stored && stored.job_id === meta.job_id && stored.raw_root === meta.raw_root && stored.source_identity === meta.source_identity);
@@ -80,11 +99,13 @@
 
   function latestProgress(events) {
     const rows = Array.isArray(events) ? events : [];
+    let progress = null;
     for (let index = rows.length - 1; index >= 0; index -= 1) {
       const event = rows[index] || {};
-      if (event.type === 'progress' || event.type === 'cancel_requested') return event;
+      if (event.type === 'cancel_requested') return event;
+      if (!progress && event.type === 'progress') progress = event;
     }
-    return null;
+    return progress;
   }
 
   function finish(meta, status, result, error) {
@@ -95,7 +116,9 @@
       return false;
     }
     closeStream();
+    clearReconnectTimer();
     activeJobId = '';
+    if (cancelFenceJobId === meta.job_id) cancelFenceJobId = '';
     const applied = typeof target.onTerminal === 'function'
       ? target.onTerminal(meta, { id: meta.job_id, kind: JOB_KIND, status, result: result || null, error: error || null })
       : true;
@@ -107,16 +130,28 @@
   }
 
   function applyEvent(meta, event) {
-    if (!event || activeJobId !== meta.job_id || !stillCurrent(meta)) return;
+    if (!event || activeJobId !== meta.job_id || !stillCurrent(meta)) return false;
+    const seq = Number(event.seq);
+    if (Number.isInteger(seq)) {
+      if (seq <= lastSeq) return false;
+      lastSeq = seq;
+    }
     const target = host();
-    if (!target) return;
+    if (!target) return false;
+    if (event.type === 'progress' && cancelFenceJobId === meta.job_id) {
+      return false;
+    }
     if (event.type === 'progress' && typeof target.onProgress === 'function') {
       target.onProgress(meta, event);
+      return true;
     } else if (event.type === 'cancel_requested' && typeof target.onCancelRequested === 'function') {
+      cancelFenceJobId = meta.job_id;
       target.onCancelRequested(meta, event);
+      return true;
     } else if (event.type === 'end') {
-      finish(meta, event.status, event.result, event.error);
+      return finish(meta, event.status, event.result, event.error);
     }
+    return false;
   }
 
   function openStream(meta) {
@@ -130,19 +165,35 @@
       return false;
     }
     activeJobId = meta.job_id;
+    if (cancelFenceJobId && cancelFenceJobId !== meta.job_id) cancelFenceJobId = '';
     const current = new window.EventSource('/api/jobs/' + encodeURIComponent(meta.job_id) + '/events');
     stream = current;
     current.onmessage = event => {
+      if (stream !== current) return;
       let payload;
       try { payload = JSON.parse(event.data); } catch (error) { return; }
-      applyEvent(meta, payload);
+      if (applyEvent(meta, payload)) reconnectAttempt = 0;
     };
     current.onerror = () => {
       if (stream !== current) return;
       closeStream();
-      probe(meta, true);
+      scheduleProbe(meta);
     };
     return true;
+  }
+
+  function scheduleProbe(meta) {
+    clearReconnectTimer();
+    const delay = RECONNECT_DELAYS_MS[Math.min(reconnectAttempt, RECONNECT_DELAYS_MS.length - 1)];
+    reconnectAttempt += 1;
+    if (typeof window.setTimeout !== 'function') {
+      probe(meta, true);
+      return;
+    }
+    reconnectTimer = window.setTimeout(() => {
+      reconnectTimer = null;
+      return probe(meta, true);
+    }, delay);
   }
 
   async function probe(meta, reconnecting) {
@@ -177,7 +228,10 @@
       return false;
     }
     if (snapshot.status === 'running') {
-      if (typeof target.onRunning === 'function') target.onRunning(meta, latestProgress(snapshot.events));
+      const progress = latestProgress(snapshot.events);
+      lastSeq = Math.max(lastSeq, maxEventSeq(snapshot.events));
+      if (progress && progress.type === 'cancel_requested') cancelFenceJobId = meta.job_id;
+      if (typeof target.onRunning === 'function') target.onRunning(meta, progress, snapshot.events || []);
       openStream(meta);
       return true;
     }
@@ -195,6 +249,8 @@
     const target = host();
     if (!meta || !target || (typeof target.canRestore === 'function' && !target.canRestore())) return Promise.resolve(false);
     restoreAttempted = true;
+    reconnectAttempt = 0;
+    lastSeq = -1;
     if (typeof target.acceptResume === 'function' && !target.acceptResume(meta)) {
       disconnect({ forget: true });
       return Promise.resolve(false);
@@ -235,7 +291,11 @@
   function disconnect(options) {
     const opts = options || {};
     closeStream();
+    clearReconnectTimer();
     activeJobId = '';
+    cancelFenceJobId = '';
+    lastSeq = -1;
+    reconnectAttempt = 0;
     completion = null;
     if (opts.forget) removeStored();
   }

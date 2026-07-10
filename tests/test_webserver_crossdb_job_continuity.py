@@ -31,7 +31,7 @@ def test_crossdb_raw_job_continuity_has_one_explicit_owner() -> None:
     owner = _read("js/screens-viz-crossdb-job-continuity.js")
     index = _read("index.html")
 
-    owner_src = "js/screens-viz-crossdb-job-continuity.js?v=20260710-job-resume"
+    owner_src = "js/screens-viz-crossdb-job-continuity.js?v=20260710-cancel-fence"
     assert owner_src in index
     assert index.index("js/screens-viz.js?") < index.index(owner_src)
     assert index.index(owner_src) < index.index("js/screens-viz-crossdb-source.js?")
@@ -46,6 +46,9 @@ def test_crossdb_raw_job_continuity_has_one_explicit_owner() -> None:
         "snapshot.status === 'done'",
         "snapshot.status === 'failed'",
         "snapshot.status === 'cancelled'",
+        "cancelFenceJobId",
+        "RECONNECT_DELAYS_MS",
+        "maxEventSeq",
         "HTTP\\s+404",
     ):
         assert marker in owner
@@ -111,4 +114,9 @@ def test_crossdb_raw_job_continuity_executes_lifecycle_contract() -> None:
         "terminal_statuses": 3,
         "missing_cleared": True,
         "root_guard": True,
+        "late_progress_blocked": True,
+        "stale_stream_blocked": True,
+        "replay_watermark": True,
+        "reconnect_backoff": True,
+        "same_job_stale_stream": True,
     }

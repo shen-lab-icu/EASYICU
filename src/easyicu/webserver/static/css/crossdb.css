@@ -209,6 +209,58 @@
   .xdb-density-cat{ grid-template-columns:minmax(60px,96px) minmax(80px,1fr) 58px; }
   .xdb-density-svg{ height:118px; }
 }
+
+/* ---------- Cross-DB raw job progress + cooperative cancellation ---------- */
+.crossdb-progress-card{ overflow:hidden; }
+.crossdb-progress-title{ font-size:12.75px; font-weight:650; color:var(--ink); }
+.crossdb-progress-meta{ margin-top:2px; font-size:10.5px; color:var(--ink-4); }
+.crossdb-progress-count{ flex:none; font-size:11px; color:var(--ink-3); }
+.crossdb-progress-bar{
+  display:block;
+  width:100%;
+  height:8px;
+  margin:12px 0 8px;
+  border:0;
+  border-radius:999px;
+  overflow:hidden;
+  accent-color:var(--accent);
+}
+.crossdb-progress-detail{ min-height:18px; margin-top:8px; font-size:12px; color:var(--ink-3); }
+.crossdb-progress-error .d{ margin:0; font-size:11px; }
+.crossdb-progress-databases{
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:8px;
+  margin:14px 0 0;
+  padding:0;
+  list-style:none;
+}
+.crossdb-progress-db{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  gap:2px 8px;
+  min-width:0;
+  padding:9px 10px;
+  border:1px solid var(--hair);
+  border-radius:var(--r-2);
+  background:var(--surface-2);
+}
+.crossdb-progress-db-name{ min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11.5px; font-weight:650; color:var(--ink-2); }
+.crossdb-progress-db-chunk{ font-size:10px; color:var(--ink-4); }
+.crossdb-progress-db-status{ grid-column:1 / -1; font-size:10.5px; color:var(--ink-4); }
+.crossdb-progress-db.is-loading{ border-color:var(--accent-border); background:color-mix(in srgb,var(--accent-soft) 42%,var(--surface)); }
+.crossdb-progress-db.is-loading .crossdb-progress-db-status{ color:var(--accent-ink); }
+.crossdb-progress-db.is-complete{ background:color-mix(in srgb,var(--ok-soft) 46%,var(--surface)); }
+.crossdb-progress-db.is-complete .crossdb-progress-db-status{ color:var(--ok); }
+.crossdb-progress-db.is-empty .crossdb-progress-db-status,
+.crossdb-progress-db.is-stopping .crossdb-progress-db-status{ color:var(--warn); }
+@media (max-width:900px){
+  .crossdb-progress-databases{ grid-template-columns:repeat(2,minmax(0,1fr)); }
+}
+@media (max-width:620px){
+  .crossdb-progress-databases{ grid-template-columns:1fr; }
+}
+
 /* Keep the final raw-run action clear of the persistent Page guide launcher. */
 .crossdb-run-strip{
   margin-bottom: 84px;

@@ -13,7 +13,8 @@
     return Array.from(new Set((Array.isArray(paths) ? paths : []).map(path => String(path || '').trim()).filter(Boolean)));
   }
 
-  function render() {
+  function render(options) {
+    const registryHtml = String(options && options.registryHtml || '');
     const count = registeredPaths().length;
     const ready = count >= 2;
     const sourceLabel = count === 1
@@ -32,15 +33,16 @@
             <div>
               <div class="eyebrow">${text('Source A', '来源 A')}</div>
               <div class="panel-title mt-4">${text('Registered EasyICU exports', '已注册的 EasyICU 导出')}</div>
-              <div class="panel-sub mt-4">${text('Compare the aggregate summaries of at least two exports already selected in the source rail. This path does not scan raw database folders.', '对比来源栏中已选择的至少两个导出的聚合摘要；此路径不会扫描原始数据库文件夹。')}</div>
+              <div class="panel-sub mt-4">${text('Select at least two prepared exports below, then compare their bounded aggregate summaries. This path does not scan raw database folders.', '请在下方选择至少两个已准备的导出，再对比其有界聚合摘要；此路径不会扫描原始数据库文件夹。')}</div>
             </div>
             <span class="pill ${ready ? 'ok' : 'warn'}">${sourceLabel}</span>
           </div>
+          ${registryHtml}
           <div class="row gap-8 mt-14" style="align-items:center;flex-wrap:wrap;">
             <button class="btn primary" type="button" data-crossdb-run-registered ${ready ? '' : 'aria-disabled="true"'}>${text('Run registered exports', '运行已注册导出')}</button>
             ${ready
               ? `<span class="panel-sub">${text('Ready for aggregate-only comparison.', '已可运行仅聚合对比。')}</span>`
-              : `<span class="panel-sub">${text('Add and select at least two EasyICU exports from the source rail on the left.', '请从左侧来源栏添加并选择至少两个 EasyICU 导出。')}</span>`}
+              : `<span class="panel-sub">${text('Add and select at least two EasyICU exports below.', '请在下方添加并选择至少两个 EasyICU 导出。')}</span>`}
           </div>
         </div>
         <div class="sec-stack"><div class="lbl">${text('Or · Source B · Raw ICU database root', '或者 · 来源 B · 原始 ICU 数据库根目录')}</div></div>

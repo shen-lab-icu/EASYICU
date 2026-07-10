@@ -39,8 +39,9 @@ function fakeButton(disabled) {
 const owner = global.EU_CROSSDB_SOURCE_CHOICE;
 assert(owner);
 
-const readyHtml = owner.render();
+const readyHtml = owner.render({ registryHtml: '<div data-test-registry>picker</div>' });
 assert.match(readyHtml, /2 selected exports/);
+assert.match(readyHtml, /data-test-registry/);
 assert.match(readyHtml, /data-crossdb-run-registered/);
 assert.doesNotMatch(readyHtml, /data-crossdb-run-registered aria-disabled="true"/);
 const loadingHtml = owner.renderLoading();
@@ -59,7 +60,7 @@ paths = ['/exports/mimic-iv'];
 const blockedHtml = owner.render();
 assert.match(blockedHtml, /1 selected export/);
 assert.match(blockedHtml, /data-crossdb-run-registered aria-disabled="true"/);
-assert.match(blockedHtml, /source rail on the left/);
+assert.match(blockedHtml, /exports below/);
 
 const blockedButton = fakeButton(true);
 owner.wire({ querySelectorAll: () => [blockedButton] });
