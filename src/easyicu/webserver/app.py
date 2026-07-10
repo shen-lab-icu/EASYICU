@@ -11,33 +11,33 @@ frontend and the first real read-only endpoint, ``/api/catalog``.
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import ipaddress
 import json
 import os
 from pathlib import Path
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from easyicu.webserver import agent_runs
 from easyicu.webserver import capabilities
-from easyicu.webserver import crossdb_review
 from easyicu.webserver import dataio
 from easyicu.webserver import provider_adapter
 from easyicu.webserver import settings as settings_store
 from easyicu.webserver import science_workbench
 from easyicu.webserver import sources as source_store
-from easyicu.webserver.jobs import MANAGER, JobCapacityError
 from easyicu.webserver.host_security import AllowedHostsMiddleware
 from easyicu.webserver.routes.copilot import router as copilot_router
 from easyicu.webserver.routes.extraction import router as extraction_router
 from easyicu.webserver.routes.guided import router as guided_router
 from easyicu.webserver.routes.ideas import router as ideas_router
+from easyicu.webserver.routes.jobs import lifecycle_router as job_lifecycle_router
+from easyicu.webserver.routes.jobs import submission_router as job_submission_router
+from easyicu.webserver.routes.jobs import submit_job as _submit_job
 from easyicu.webserver.routes.local_data import router as local_data_router
 from easyicu.webserver.routes.page_guide import router as page_guide_router
 from easyicu.webserver.routes.request_parsing import body_bool as _body_bool
@@ -86,21 +86,6 @@ def _is_local_web_client(request: Request) -> bool:
     )
 
 
-def _submit_job(kind: str, runner: Any):
-    try:
-        return MANAGER.submit(kind, runner)
-    except JobCapacityError as exc:
-        raise HTTPException(
-            status_code=429,
-            detail={
-                "error": "job_capacity_exceeded",
-                "running": exc.running,
-                "max_running": exc.max_running,
-                "reason": "Wait for a running local job to finish before retrying.",
-            },
-        ) from exc
-
-
 @app.middleware("http")
 async def local_clients_only(request: Request, call_next):
     """Keep filesystem and job APIs local until the product has remote auth."""
@@ -129,80 +114,7 @@ app.include_router(extraction_router)
 
 
 app.include_router(workspaces_router)
-
-
-@app.post("/api/jobs/convert")
-def jobs_convert(body: Dict[str, Any]) -> dict:
-    """Start a raw->Parquet conversion as a background job. Returns ``{job_id}``;
-    progress streams from ``/api/jobs/{id}/events``."""
-    path = str(body.get("path", ""))
-    database = str(body.get("database") or "")
-    if not path or not database:
-        raise HTTPException(status_code=400, detail="path and database are required")
-    job = _submit_job("convert", dataio.make_convert_runner(path, database))
-    return {"job_id": job.id, "kind": job.kind, "status": job.status}
-
-
-@app.post("/api/jobs/extract")
-def jobs_extract(body: Dict[str, Any]) -> dict:
-    """Start a feature-module extraction/export as a background job. Returns
-    ``{job_id}``; progress streams from ``/api/jobs/{id}/events``."""
-    path = str(body.get("path", ""))
-    database = str(body.get("database") or "")
-    if not path or not database:
-        raise HTTPException(status_code=400, detail="path and database are required")
-    settings = settings_store.load_settings()
-    out_dir = body.get("out_dir") or settings.get("export_dir")
-    export_runner = dataio.make_export_runner(
-        data_path=path,
-        database=database,
-        modules=body.get("modules"),
-        concepts=body.get("concepts"),
-        export_format=str(body.get("format") or "csv"),
-        merge=_body_bool(body, "merge"),
-        out_dir=out_dir,
-        create_run_subdir=True,
-        max_patients=body.get("max_patients"),
-        cohort=body.get("cohort"),
-        include_feature_definitions=_body_bool(
-            body, "include_feature_definitions", True
-        ),
-    )
-
-    def runner(job: Any) -> dict:
-        result = export_runner(job)
-        out_path = str((result or {}).get("out_dir") or "")
-        if out_path and result.get("manifest") and not result.get("cancelled_at"):
-            registry = source_store.register_source(
-                out_path,
-                label=body.get("label"),
-                active=True,
-                crossdb=True,
-            )
-            result["registered_source"] = {
-                "ok": bool(registry.get("ok")),
-                "active_path": registry.get("active_path"),
-                "source_count": len(registry.get("sources") or []),
-            }
-        return result
-
-    job = _submit_job("extract", runner)
-    return {"job_id": job.id, "kind": job.kind, "status": job.status}
-
-
-@app.post("/api/jobs/crossdb-raw-distribution")
-def jobs_crossdb_raw_distribution(body: Dict[str, Any]) -> dict:
-    """Start a raw local Cross-DB density aggregation job.
-
-    Full raw-database density comparisons can span several ICU databases and
-    many concepts, so the native UI runs them through the same local job/SSE
-    model as extraction instead of a foreground request.
-    """
-    job = _submit_job(
-        "crossdb-raw-distribution",
-        crossdb_review.make_crossdb_raw_distribution_runner(body),
-    )
-    return {"job_id": job.id, "kind": job.kind, "status": job.status}
+app.include_router(job_submission_router)
 
 
 @app.post("/api/jobs/agent-run")
@@ -534,49 +446,7 @@ def post_agent_run_download_bundle(body: Dict[str, Any]) -> Response:
     )
 
 
-@app.get("/api/jobs/{job_id}")
-def jobs_get(job_id: str) -> dict:
-    """Full snapshot of a job (events history + terminal state) for reconnect."""
-    job = MANAGER.get(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="unknown job")
-    return job.snapshot()
-
-
-@app.post("/api/jobs/{job_id}/cancel")
-def jobs_cancel(job_id: str, body: Optional[Dict[str, Any]] = None) -> dict:
-    """Request cooperative cancellation for a running local job."""
-    job = MANAGER.get(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="unknown job")
-    reason = str((body or {}).get("reason") or "user_requested")
-    requested = job.request_cancel(reason=reason)
-    snap = job.snapshot()
-    snap["cancel_request_accepted"] = requested
-    return snap
-
-
-@app.get("/api/jobs/{job_id}/events")
-async def jobs_events(job_id: str) -> StreamingResponse:
-    """Server-Sent Events: replay the job's event history, then tail live events
-    until the job reaches a terminal status."""
-    job = MANAGER.get(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="unknown job")
-
-    async def gen():
-        sent = 0
-        while True:
-            # Flush any events not yet streamed (covers both replay and live).
-            while sent < len(job.events):
-                ev = job.events[sent]
-                sent += 1
-                yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
-            if job.status != "running":
-                break
-            await asyncio.sleep(0.15)
-
-    return StreamingResponse(gen(), media_type="text/event-stream")
+app.include_router(job_lifecycle_router)
 
 
 # Static frontend last, mounted at root, with HTML serving so "/" -> index.html.

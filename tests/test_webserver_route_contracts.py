@@ -12,6 +12,8 @@ from easyicu.webserver.routes.copilot import router as copilot_router
 from easyicu.webserver.routes.extraction import router as extraction_router
 from easyicu.webserver.routes.guided import router as guided_router
 from easyicu.webserver.routes.ideas import router as ideas_router
+from easyicu.webserver.routes.jobs import lifecycle_router as job_lifecycle_router
+from easyicu.webserver.routes.jobs import submission_router as job_submission_router
 from easyicu.webserver.routes.local_data import router as local_data_router
 from easyicu.webserver.routes.page_guide import router as page_guide_router
 from easyicu.webserver.routes.reviews import router as reviews_router
@@ -160,6 +162,22 @@ EXPECTED_EXTRACTION_ROUTES = [
     ),
 ]
 
+EXPECTED_JOB_SUBMISSION_ROUTES = [
+    ("POST", "/api/jobs/convert", "jobs_convert"),
+    ("POST", "/api/jobs/extract", "jobs_extract"),
+    (
+        "POST",
+        "/api/jobs/crossdb-raw-distribution",
+        "jobs_crossdb_raw_distribution",
+    ),
+]
+
+EXPECTED_JOB_LIFECYCLE_ROUTES = [
+    ("GET", "/api/jobs/{job_id}", "jobs_get"),
+    ("POST", "/api/jobs/{job_id}/cancel", "jobs_cancel"),
+    ("GET", "/api/jobs/{job_id}/events", "jobs_events"),
+]
+
 
 def _router_routes(router) -> list[APIRoute]:
     return [route for route in router.routes if isinstance(route, APIRoute)]
@@ -274,6 +292,14 @@ def test_extraction_route_method_path_and_operation_name_snapshot() -> None:
     _assert_router_contract(extraction_router, EXPECTED_EXTRACTION_ROUTES)
 
 
+def test_job_submission_route_method_path_and_operation_name_snapshot() -> None:
+    _assert_router_contract(job_submission_router, EXPECTED_JOB_SUBMISSION_ROUTES)
+
+
+def test_job_lifecycle_route_method_path_and_operation_name_snapshot() -> None:
+    _assert_router_contract(job_lifecycle_router, EXPECTED_JOB_LIFECYCLE_ROUTES)
+
+
 def test_route_owner_boundaries() -> None:
     package_root = Path(__file__).parents[1] / "src" / "easyicu" / "webserver"
     app_source = (package_root / "app.py").read_text(encoding="utf-8")
@@ -297,6 +323,7 @@ def test_route_owner_boundaries() -> None:
     extraction_source = (package_root / "routes" / "extraction.py").read_text(
         encoding="utf-8"
     )
+    jobs_source = (package_root / "routes" / "jobs.py").read_text(encoding="utf-8")
 
     assert "/api/guided/" not in app_source
     assert "/api/copilot/" not in app_source
@@ -310,6 +337,10 @@ def test_route_owner_boundaries() -> None:
     assert "/api/cohort-review/" not in app_source
     assert "/api/crossdb-review/" not in app_source
     assert "/api/extraction/" not in app_source
+    assert '"/api/jobs/convert"' not in app_source
+    assert '"/api/jobs/extract"' not in app_source
+    assert '"/api/jobs/crossdb-raw-distribution"' not in app_source
+    assert '"/api/jobs/{job_id}' not in app_source
     assert "/api/guided/" in guided_source
     assert "/api/copilot/" not in guided_source
     assert "/api/page-guide/" not in guided_source
@@ -343,6 +374,13 @@ def test_route_owner_boundaries() -> None:
     assert "-review/" not in extraction_source
     assert "/api/workspaces/" not in extraction_source
     assert "/api/jobs/" not in extraction_source
+    assert '"/api/jobs/convert"' in jobs_source
+    assert '"/api/jobs/extract"' in jobs_source
+    assert '"/api/jobs/crossdb-raw-distribution"' in jobs_source
+    assert '"/api/jobs/{job_id}' in jobs_source
+    assert '"/api/jobs/agent-run"' not in jobs_source
+    assert "/api/agent-runs/" not in jobs_source
+    assert "job_store.MANAGER" in jobs_source
     assert "_pubmed_connector_gate" not in app_source
     assert "_pubmed_connector_gate" in ideas_source
     assert "easyicu.webserver.app" not in guided_source
@@ -353,15 +391,11 @@ def test_route_owner_boundaries() -> None:
     assert "easyicu.webserver.app" not in workspaces_source
     assert "easyicu.webserver.app" not in reviews_source
     assert "easyicu.webserver.app" not in extraction_source
+    assert "easyicu.webserver.app" not in jobs_source
 
 
 def test_root_static_mount_stays_last() -> None:
     static_mount = app.routes[-1]
-    jobs_convert_index = next(
-        index
-        for index, route in enumerate(app.routes)
-        if getattr(route, "path", None) == "/api/jobs/convert"
-    )
     agent_history_index = next(
         index
         for index, route in enumerate(app.routes)
@@ -379,13 +413,14 @@ def test_root_static_mount_stays_last() -> None:
         < _router_registration_index(reviews_router)
         < _router_registration_index(extraction_router)
         < _router_registration_index(workspaces_router)
-        < jobs_convert_index
+        < _router_registration_index(job_submission_router)
         < agent_history_index
         < _router_registration_index(guided_router)
         < _router_registration_index(copilot_router)
         < _router_registration_index(page_guide_router)
         < _router_registration_index(ideas_router)
         < artifact_index
+        < _router_registration_index(job_lifecycle_router)
         < len(app.routes) - 1
     )
     assert isinstance(static_mount, Mount)
