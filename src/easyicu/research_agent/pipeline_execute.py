@@ -84,6 +84,7 @@ from .deterministic_sensitivity import (
     cohort_definition_sensitivity_comparison_code,
 )
 from .deterministic_causal import causal_primary_analysis_code
+from .deterministic_clustering import trajectory_clustering_analysis_code
 from .deterministic_ordinal import ordinal_dose_response_analysis_code
 from .deterministic_missingness import missingness_measurement_audit_code
 from .deterministic_survival import survival_primary_analysis_code
@@ -770,6 +771,63 @@ def _ordinal_dose_response_step_matches(
     # runner (the head "cohort_definition_sensitivity" has no ordinal token). For
     # a non-hybrid method, ``head`` == ``method``.
     return _method_has_ordinal_primary_token(head)
+
+
+# --- Trajectory-clustering (phenotyping) routing ----------------------------
+# A phenotyping / trajectory-clustering PRIMARY step is claimed by the
+# deterministic clustering runner (the k-class solution + certified tables) so it
+# does not churn through the flaky LLM coder. Extracted as a MODULE-LEVEL pure
+# predicate (like the ordinal one) so the routing is unit-testable without a full
+# bench. Case-neutral: the controlled ``method`` first, then general clustering /
+# phenotyping vocabulary; a primary EFFECT step is excluded because the runner
+# emits no OR/HR/AUROC.
+_TRAJECTORY_CLUSTERING_METHODS = frozenset(
+    {
+        "trajectory_clustering",
+        "trajectory_feature_clustering",
+        "clustering",
+        "kmeans_clustering",
+        "phenotyping",
+        "phenotype_clustering",
+        "unsupervised_clustering",
+        "latent_class",
+        "cluster_analysis",
+    }
+)
+_CLUSTERING_SIGNAL_TOKENS = (
+    "cluster",
+    "phenotype",
+    "subphenotype",
+    "unsupervised",
+    "latent class",
+    "kmeans",
+    "k-means",
+)
+_CLUSTERING_EFFECT_EXCLUSION_TOKENS = (
+    "odds ratio",
+    "hazard ratio",
+    "auroc",
+    "c-statistic",
+    "c-index",
+    "propensity",
+    "cox",
+)
+
+
+def _trajectory_clustering_step_matches(method: str, blob: str) -> bool:
+    """Pure routing test: is this a PRIMARY phenotyping / trajectory-clustering step?
+
+    The caller supplies lowercased strings and has already excluded figure steps.
+    An explicit controlled ``method`` wins outright; otherwise a clustering /
+    phenotyping signal is required, and a primary EFFECT step (which mentions an
+    OR/HR/AUROC estimand the clustering runner cannot produce) is excluded so the
+    runner never hijacks a real effect step and blocks it.
+    """
+    if method in _TRAJECTORY_CLUSTERING_METHODS:
+        return True
+    if any(tok in blob for tok in _CLUSTERING_EFFECT_EXCLUSION_TOKENS):
+        return False
+    return any(tok in blob for tok in _CLUSTERING_SIGNAL_TOKENS)
 
 
 def _primary_runner_core_estimate_present(
@@ -2403,6 +2461,62 @@ else:
             )
             return missingness_measurement_audit_code()
 
+        def _trajectory_clustering_preflight_supported() -> bool:
+            """True for the PRIMARY phenotyping / trajectory-clustering step.
+
+            The deterministic clustering runner owns the k-class solution (features
+            over OBSERVED trajectory windows, silhouette-selected k, seed-stability,
+            descriptive outcome-by-cluster) so the phenotype partition does not vary
+            run-to-run through the flaky LLM coder (which reliably churned on the
+            multi-step feature-engineering + model-selection code). It must NOT claim
+            a figure step nor a primary EFFECT step (the runner emits no OR/HR/AUROC;
+            outcome-by-cluster is descriptive with adjusted_effect=None). Trigger is
+            case-neutral: the controlled ``method`` first, then clustering /
+            phenotyping vocabulary. The runner itself blocks with a specific reason
+            when no trajectory columns resolve, so a mis-fire degrades to a clean
+            blocked step rather than a fabricated partition.
+            """
+            if _step_expects_figure(step):
+                return False
+            blob = " ".join(
+                [
+                    str(step.step_id or ""),
+                    str(step.intent or ""),
+                    " ".join(str(x or "") for x in (step.expected_outputs or [])),
+                ]
+            ).lower()
+            return _trajectory_clustering_step_matches(
+                str(step.method or "").lower(), blob
+            )
+
+        def _deterministic_trajectory_clustering_code(
+            reason: str,
+            *,
+            preflight: bool = False,
+        ) -> Optional[str]:
+            nonlocal deterministic_fallback_used
+            if (
+                deterministic_fallback_used
+                or not pipeline._enable_deterministic_runner_repair
+                or (preflight and not _trajectory_clustering_preflight_supported())
+            ):
+                return None
+            if not _trajectory_clustering_preflight_supported():
+                return None
+            deterministic_fallback_used = True
+            step_record["deterministic_code_fallback"] = reason
+            step_record["deterministic_standard_analysis"] = "trajectory_clustering"
+            emit_progress(
+                "coder",
+                f"Using deterministic trajectory-clustering runner for {step.step_id}.",
+                run_id=run_id,
+                step_id=step.step_id,
+                current_step=step_current,
+                total_steps=total_steps,
+                fallback_reason=reason,
+            )
+            return trajectory_clustering_analysis_code()
+
         def _deterministic_cohort_definition_overlap_code(
             reason: str,
             *,
@@ -2561,6 +2675,30 @@ else:
                         severity="info",
                         message=(
                             "Using deterministic missingness/measurement audit runner "
+                            f"before requesting new coder code for step {step.step_id}."
+                        ),
+                        detail={"step_id": step.step_id},
+                    )
+                )
+        elif (
+            _preflight_clustering_code := _deterministic_trajectory_clustering_code(
+                "trajectory_clustering_preflight", preflight=True
+            )
+        ) is not None:
+            # The PRIMARY phenotyping partition runs deterministically (features
+            # over OBSERVED trajectory windows, silhouette-selected k, seed
+            # stability, descriptive outcome-by-cluster) so the cluster solution
+            # does not vary run-to-run through the flaky LLM coder. The runner
+            # emits cluster_characteristics + clustering_metrics, so the phenotype
+            # figure step then renders from those certified tables.
+            code = _preflight_clustering_code
+            with shared_lock:
+                findings.append(
+                    ValidationFinding(
+                        validator="coder",
+                        severity="info",
+                        message=(
+                            "Using deterministic trajectory-clustering runner "
                             f"before requesting new coder code for step {step.step_id}."
                         ),
                         detail={"step_id": step.step_id},

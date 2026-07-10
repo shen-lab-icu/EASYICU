@@ -20,6 +20,8 @@ _Generated from `easyicu.research_agent.capability_registry`. Do not edit by han
 | --- | --- | --- |
 | `cohort_definition_overlap` | Overlap / concordance of alternative cohort definitions. | Blocks with a reason when no alternative definition is registered. |
 | `cohort_definition_sensitivity` | Re-fit the primary estimand under alternative cohort definitions. | Degrades to a CLEAN skip (status=skipped, not_applicable) when no alternative_cohort_attrition.csv exists upstream — it does NOT block (this removed the H2 'produce the missing file' replan loop). |
+| `missingness_measurement_audit` | Per-concept measured-vs-missing counts + structural-vs-measurement split for a missingness / measurement-process audit step (never imputes). | Blocks with a reason when no <concept>_measured columns resolve. Owns the audit so the LLM coder no longer times out on it (~27.6 min then fail); the figure step renders via the data_quality->missingness renderer. |
+| `trajectory_clustering` | Deterministic phenotyping partition: features over OBSERVED trajectory windows (never zero-imputed), silhouette-selected k, seed-stability, and a DESCRIPTIVE outcome-by-cluster contrast (adjusted_effect=None). | Blocks with a specific reason when no trajectory columns resolve — never fabricates a partition. Supports the phenotyping figure (cluster_characteristics + clustering_metrics) without binding a scalar primary estimand, so phenotyping stays LLM-coded-primary for the report layer's no-deterministic-primary waiver. |
 
 ## Known unsupported estimands (explicit boundaries)
 
@@ -36,3 +38,4 @@ What happens when no valid runner or data contract exists — the pipeline fails
 - **3. No deterministic runner for the family** — The LLM coder generates the analysis; code_repair applies deterministic post-failure repairs (KeyError strip, missing-helper restore, ...).
 - **4. Output / validity gates (fail-closed)** — execution_complete (any failed step -> False); evidence_complete (STRICT: unbound citations blocked); numeric_verified (value-level provenance: hallucinated numbers blocked); analysis_validated (plausibility + survival-estimand + figure-credit + headline==primary-estimand gates); replan_budget (runaway loop -> advisory if converged-clean with a bound deterministic primary, else demote).
 - **5. Verdict** — The status ladder (publication_ready > manuscript_ready > analysis_only > diagnostic_only) and the scorecard tristate (gate_reportable / analysis_only / diagnostic_only) floor to diagnostic_only whenever a gate fails, with the specific reason surfaced. INVARIANT: a capability gap is always reported, never silently filled with a fabricated result.
+
