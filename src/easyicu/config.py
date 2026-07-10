@@ -15,6 +15,11 @@ import json
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator
 
+from .databases.profiles import (
+    DATABASE_ID_CONFIG as DATABASE_ID_CONFIG,
+    DatabaseProfileMetadata,
+)
+
 class IdentifierConfig(BaseModel):
     """Describe one identifier system (e.g. patient, admission, icu stay)."""
 
@@ -126,6 +131,7 @@ class DataSourceConfig(BaseModel):
 
     name: str
     class_prefix: List[str] = Field(default_factory=list, alias="class_prefix")
+    profile: Optional[DatabaseProfileMetadata] = None
     id_configs: Dict[str, IdentifierConfig] = Field(default_factory=dict)
     tables: Dict[str, TableConfig] = Field(default_factory=dict)
     extra: Dict[str, object] = Field(default_factory=dict)
@@ -153,7 +159,14 @@ class DataSourceConfig(BaseModel):
         transformed["tables"] = tables
 
         # Extract extra fields
-        known = {"name", "class_prefix", "id_cfg", "tables", "id_configs"}
+        known = {
+            "name",
+            "class_prefix",
+            "profile",
+            "id_cfg",
+            "tables",
+            "id_configs",
+        }
         extra = {k: v for k, v in values.items() if k not in known}
         transformed["extra"] = extra
         
