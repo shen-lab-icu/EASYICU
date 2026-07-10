@@ -40,9 +40,11 @@ from easyicu.webserver.host_security import AllowedHostsMiddleware
 from easyicu.webserver.routes.copilot import router as copilot_router
 from easyicu.webserver.routes.guided import router as guided_router
 from easyicu.webserver.routes.ideas import router as ideas_router
+from easyicu.webserver.routes.local_data import router as local_data_router
 from easyicu.webserver.routes.page_guide import router as page_guide_router
 from easyicu.webserver.routes.request_parsing import body_bool as _body_bool
 from easyicu.webserver.routes.system import router as system_router
+from easyicu.webserver.routes.workspaces import router as workspaces_router
 
 STATIC_DIR = Path(__file__).with_name("static")
 
@@ -122,39 +124,7 @@ async def no_store_native_ui_assets(request: Request, call_next):
 
 
 app.include_router(system_router)
-
-
-@app.get("/api/fs/list")
-def fs_list(path: str | None = None) -> dict:
-    """Server-side directory listing for the data-folder picker (local-first)."""
-    return dataio.list_dir(path)
-
-
-@app.post("/api/fs/mkdir")
-def fs_mkdir(body: Dict[str, Any]) -> dict:
-    """Create a local directory for picker destinations."""
-    result = dataio.create_dir(body.get("path"))
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result)
-    return result
-
-
-@app.post("/api/data/scan")
-def data_scan(body: Dict[str, Any]) -> dict:
-    """Inspect a folder: detect database, layout, and extraction readiness."""
-    return dataio.scan_path(str(body.get("path", "")), body.get("source"))
-
-
-@app.post("/api/workspace/summary")
-def workspace_summary(body: Dict[str, Any]) -> dict:
-    """Summarise an EasyICU export folder for Patient/Cohort review screens."""
-    path = str(body.get("path", ""))
-    if not path:
-        raise HTTPException(status_code=400, detail="path is required")
-    result = dataio.summarize_export_workspace(path)
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result)
-    return result
+app.include_router(local_data_router)
 
 
 @app.post("/api/patient-review/drilldown")
@@ -238,70 +208,7 @@ def extraction_filter_preview(body: Dict[str, Any]) -> dict:
     return result
 
 
-@app.post("/api/workspaces/crossdb-summary")
-def workspaces_crossdb_summary(body: Dict[str, Any]) -> dict:
-    """Summarise two or more local EasyICU exports for Cross-DB preview."""
-    paths = body.get("paths")
-    if not isinstance(paths, list):
-        raise HTTPException(status_code=400, detail="paths must be a list")
-    result = dataio.summarize_crossdb_workspaces([str(p) for p in paths])
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result)
-    return result
-
-
-@app.get("/api/workspaces/registry")
-def workspaces_registry() -> dict:
-    """Local export-source registry shared by Review, Cross-DB, Agent, Copilot."""
-    return source_store.load_registry()
-
-
-@app.post("/api/workspaces/registry")
-def post_workspaces_registry(patch: Dict[str, Any]) -> dict:
-    """Merge-update local export-source registry selections."""
-    return source_store.save_registry(patch)
-
-
-@app.post("/api/workspaces/register")
-def post_workspaces_register(body: Dict[str, Any]) -> dict:
-    """Validate and register one local EasyICU export folder."""
-    path = str(body.get("path", ""))
-    if not path:
-        raise HTTPException(status_code=400, detail="path is required")
-    result = source_store.register_source(
-        path,
-        label=body.get("label"),
-        active=_body_bool(body, "active", True),
-        crossdb=_body_bool(body, "crossdb", True),
-    )
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result)
-    return result
-
-
-@app.post("/api/workspaces/rename")
-def post_workspaces_rename(body: Dict[str, Any]) -> dict:
-    """Rename one registered local export source in registry metadata only."""
-    path = str(body.get("path", ""))
-    label = str(body.get("label", ""))
-    if not path:
-        raise HTTPException(status_code=400, detail="path is required")
-    result = source_store.rename_source(path, label)
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result)
-    return result
-
-
-@app.post("/api/workspaces/remove")
-def post_workspaces_remove(body: Dict[str, Any]) -> dict:
-    """Unregister one source. This never deletes export files from disk."""
-    path = str(body.get("path", ""))
-    if not path:
-        raise HTTPException(status_code=400, detail="path is required")
-    result = source_store.remove_source(path)
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result)
-    return result
+app.include_router(workspaces_router)
 
 
 @app.post("/api/jobs/convert")
