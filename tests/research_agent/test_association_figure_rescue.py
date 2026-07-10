@@ -182,18 +182,22 @@ def test_upstream_family_routes_token_free_primary_figure(tmp_path: Path):
     assert rid is not None  # association forest renderer claimed + drew it
 
 
-def test_upstream_family_fallback_ignores_descriptive_parent(tmp_path: Path):
-    # Anti-regression: baseline/descriptive figures must NOT be claimed by the
-    # deterministic renderer via the parent-family fallback (they have no result
-    # renderer and would emit an empty figure). Only RESULT families are mapped,
-    # so a 'descriptive' parent leaves the figure on its existing (LLM) path.
+def test_descriptive_parent_supported_but_guarded_against_empty_figure(tmp_path: Path):
+    # A descriptive/table-one renderer now EXISTS (deterministic descriptive
+    # bundle), so a 'descriptive' parent is recognised by the family map. The old
+    # "no empty figure" safety is preserved by the renderer's STRICT guard: with no
+    # genuine table-one output present, routed_rescue returns None and the figure
+    # falls through to its existing path rather than being force-drawn empty.
     step_id = "03_baseline_context_figure"
     _write_parent_summary(tmp_path, "03_baseline_context", "descriptive")
     assert _resolve_upstream_analysis_family(tmp_path, step_id) == "descriptive"
     assert (
-        deterministic_figure_family_supported_for_upstream(tmp_path, step_id) is False
+        deterministic_figure_family_supported_for_upstream(tmp_path, step_id) is True
     )
-    # No parent summary at all -> also False (no crash).
+    # No table-one output under the parent -> the strict guard declines (None).
+    out = tmp_path / "steps" / step_id / "outputs"
+    assert routed_rescue(run_dir=tmp_path, current_step_id=step_id, out_dir=out) is None
+    # No parent summary at all -> also unsupported (no crash).
     assert (
         deterministic_figure_family_supported_for_upstream(tmp_path, "99_x_figure")
         is False

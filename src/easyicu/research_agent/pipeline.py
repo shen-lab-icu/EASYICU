@@ -3882,6 +3882,493 @@ def _render_missingness_publication_bundle_from_prior_outputs(
     return "missingness_publication_bundle_from_parent_outputs_v1"
 
 
+def _render_phenotype_publication_bundle_from_prior_outputs(
+    *,
+    run_dir: Path,
+    current_step_id: str,
+    out_dir: Path,
+) -> Optional[str]:
+    """Deterministically rebuild a phenotyping (clustering) figure from the
+    ``trajectory_clustering`` runner's certified tables.
+
+    Reads ``outcome_by_cluster.csv`` (the descriptive outcome contrast, which
+    carries ``ci_low``/``ci_high`` -- validator-checked value columns) as the
+    primary traceable source, falling back to ``cluster_sizes.csv``. Renders a
+    two-panel figure (cluster sizes + descriptive outcome-by-cluster with CIs) and
+    emits a validator-conformant ``*_source_data.csv`` traced positionally via
+    ``source_row_index`` (like the prediction/association renderers). Returns
+    ``None`` when no cluster table with >= 2 clusters is found, so a run that never
+    produced a partition falls through cleanly rather than emitting an empty
+    figure. Descriptive by construction -- no OR/HR is drawn or claimed.
+    """
+
+    steps_dir = run_dir / "steps"
+    if not steps_dir.exists():
+        return None
+    parent_step_id = current_step_id.removesuffix("_figure")
+    candidate_paths: List[Path] = []
+    if parent_step_id and parent_step_id != current_step_id:
+        parent_outputs = steps_dir / parent_step_id / "outputs"
+        if parent_outputs.exists():
+            candidate_paths.extend(sorted(parent_outputs.glob("*.csv")))
+    for step_dir in sorted(steps_dir.iterdir()):
+        if not step_dir.is_dir() or step_dir.name == current_step_id:
+            continue
+        text = step_dir.name.lower()
+        if not any(
+            token in text
+            for token in ("cluster", "phenotype", "subphenotype", "trajectory")
+        ):
+            continue
+        outputs_dir = step_dir / "outputs"
+        if outputs_dir.exists():
+            candidate_paths.extend(sorted(outputs_dir.glob("*.csv")))
+
+    def _first_col(frame: pd.DataFrame, names: Sequence[str]) -> Optional[str]:
+        for name in names:
+            if name in frame.columns:
+                return name
+        return None
+
+    # Prefer the outcome-by-cluster table (traceable ci_low/ci_high); else sizes.
+    outcome: Optional[tuple[Path, pd.DataFrame]] = None
+    sizes: Optional[tuple[Path, pd.DataFrame]] = None
+    for csv_path in candidate_paths:
+        name = csv_path.name.lower()
+        try:
+            frame = pd.read_csv(csv_path)
+        except Exception:
+            continue
+        cluster_col = _first_col(frame, ("cluster", "cluster_id", "phenotype", "label"))
+        if cluster_col is None:
+            continue
+        if outcome is None and "outcome_by_cluster" in name:
+            outcome = (csv_path, frame)
+        if sizes is None and ("cluster_sizes" in name or "size" in frame.columns or "n" in frame.columns):
+            sizes = (csv_path, frame)
+    primary = outcome or sizes
+    if primary is None:
+        return None
+    table_path, frame = primary
+    cluster_col = _first_col(frame, ("cluster", "cluster_id", "phenotype", "label"))
+    if cluster_col is None or frame[cluster_col].nunique() < 2:
+        return None
+
+    # Positional trace: keep the ORIGINAL row order so source_row_index maps 1:1
+    # into the upstream table the validator re-reads.
+    plot_df = frame.reset_index(drop=True)
+    plot_df.insert(0, "source_row_index", plot_df.index.astype(int))
+    n_col = _first_col(plot_df, ("n", "n_stays", "cluster_size", "size", "count"))
+    rate_col = _first_col(plot_df, ("mortality_rate", "outcome_rate", "event_rate", "rate"))
+    ci_low_col = _first_col(plot_df, ("ci_low", "ci_lower", "lower"))
+    ci_high_col = _first_col(plot_df, ("ci_high", "ci_upper", "upper"))
+
+    clusters = plot_df[cluster_col].astype(str)
+    source_payload: Dict[str, Any] = {
+        "source_row_index": plot_df["source_row_index"].astype(int),
+        # The cluster label is carried under a NON-key column name so the validator
+        # traces POSITIONALLY (source_row_index) and value-checks ci_low/ci_high,
+        # rather than joining on a key column that is either unshared or non-unique.
+        "cluster_label": clusters,
+        "source_table": table_path.name,
+        "source_transform": "phenotype_cluster_outcome_summary_v1",
+    }
+    if n_col is not None:
+        source_payload["n"] = pd.to_numeric(plot_df[n_col], errors="coerce")
+    if rate_col is not None:
+        source_payload["mortality_rate"] = pd.to_numeric(plot_df[rate_col], errors="coerce")
+    if ci_low_col is not None:
+        source_payload["ci_low"] = pd.to_numeric(plot_df[ci_low_col], errors="coerce")
+    if ci_high_col is not None:
+        source_payload["ci_high"] = pd.to_numeric(plot_df[ci_high_col], errors="coerce")
+    source_data = pd.DataFrame(source_payload)
+    if source_data.empty:
+        return None
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    source_data.to_csv(out_dir / "phenotype_cluster_panel_source_data.csv", index=False)
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    from easyicu.research_agent.publication_figures import (
+        add_panel_label,
+        apply_publication_style,
+        make_figure_contract,
+        save_publication_figure,
+    )
+
+    palette = apply_publication_style()
+    labels = [f"C{c}" for c in clusters.tolist()]
+    x = list(range(len(labels)))
+    has_outcome = rate_col is not None
+    ncols = 2 if (n_col is not None and has_outcome) else 1
+    fig = plt.figure(figsize=(183 / 25.4, 92 / 25.4), constrained_layout=False)
+    grid = fig.add_gridspec(
+        1, ncols, left=0.12, right=0.97, top=0.88, bottom=0.18, wspace=0.42
+    )
+    col = 0
+    if n_col is not None:
+        ax_size = fig.add_subplot(grid[0, col])
+        sizes_v = pd.to_numeric(plot_df[n_col], errors="coerce").fillna(0).to_numpy()
+        ax_size.bar(x, sizes_v, color=palette.get("blue", "#0F4D92"), width=0.62)
+        ax_size.set_xticks(x, labels, fontsize=6.2)
+        ax_size.set_ylabel("Cluster size (n)")
+        ax_size.set_title("Cluster sizes", loc="left", pad=4)
+        add_panel_label(ax_size, "A", x=-0.12)
+        col += 1
+    if has_outcome:
+        ax_out = fig.add_subplot(grid[0, col])
+        rate = pd.to_numeric(plot_df[rate_col], errors="coerce").fillna(0).to_numpy()
+        # Scale a 0-1 proportion to percent for display; leave an already-percent
+        # column untouched.
+        scale = 100.0 if float(np.nanmax(rate)) <= 1.0 else 1.0
+        rate_pct = rate * scale
+        yerr = None
+        if ci_low_col is not None and ci_high_col is not None:
+            lo = pd.to_numeric(plot_df[ci_low_col], errors="coerce").fillna(0).to_numpy() * scale
+            hi = pd.to_numeric(plot_df[ci_high_col], errors="coerce").fillna(0).to_numpy() * scale
+            yerr = np.vstack([np.clip(rate_pct - lo, 0, None), np.clip(hi - rate_pct, 0, None)])
+        ax_out.bar(
+            x, rate_pct, yerr=yerr, color=palette.get("red", "#B2182B"),
+            width=0.62, capsize=3,
+        )
+        ax_out.set_xticks(x, labels, fontsize=6.2)
+        ax_out.set_ylabel("Outcome rate (%)")
+        ax_out.set_title("Outcome by cluster (descriptive)", loc="left", pad=4)
+        add_panel_label(ax_out, "B" if n_col is not None else "A", x=-0.12)
+
+    contract = make_figure_contract(
+        figure_id="phenotype_cluster_panel",
+        core_claim=(
+            "Discovered phenotype clusters are shown by size and a DESCRIPTIVE "
+            "outcome-by-cluster comparison, rendered directly from the registered "
+            "clustering runner tables (no causal claim)."
+        ),
+        panels=[
+            {
+                "panel_id": "A",
+                "title": "Cluster sizes",
+                "role": "phenotype_structure",
+                "claim": "Cluster sizes come directly from the clustering runner.",
+                "evidence_ids": ["trajectory_clustering"],
+            },
+            {
+                "panel_id": "B",
+                "title": "Outcome by cluster",
+                "role": "phenotype_outcome",
+                "claim": (
+                    "Outcome rates and confidence intervals are copied from the "
+                    "runner's descriptive outcome_by_cluster table; comparison is "
+                    "descriptive, explicitly not causal."
+                ),
+                "evidence_ids": ["trajectory_clustering"],
+            },
+        ],
+        source_data=["trajectory_clustering"],
+        statistics_note=(
+            "Generated deterministically from the registered clustering runner "
+            "tables; outcome-by-cluster is descriptive (no adjusted effect)."
+        ),
+    )
+    outputs = save_publication_figure(
+        fig, out_dir / "phenotype_cluster_panel", contract=contract, dpi=300
+    )
+    plt.close(fig)
+
+    step_summary_path = out_dir / "step_summary.json"
+    existing_summary: Dict[str, Any] = {}
+    if step_summary_path.exists():
+        try:
+            loaded = json.loads(step_summary_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                existing_summary = loaded
+        except Exception:
+            existing_summary = {}
+    existing_summary.update(
+        {
+            "step_id": current_step_id,
+            "method": "deterministic_phenotype_publication_figure_repair",
+            "rendering_only": True,
+            "source_step_id": parent_step_id,
+            "source_cluster_table": str(table_path),
+            "source_data_csv": str(out_dir / "phenotype_cluster_panel_source_data.csv"),
+            "n_clusters_plotted": int(frame[cluster_col].nunique()),
+            "figure_files": [
+                path.name for key, path in outputs.items() if key != "contract"
+            ],
+            "figure_path": "phenotype_cluster_panel.png",
+        }
+    )
+    step_summary_path.write_text(
+        json.dumps(existing_summary, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
+    return "phenotype_publication_bundle_from_parent_outputs_v1"
+
+
+# Descriptive "table one" / baseline-characteristics signature. Historically the
+# deterministic figure path deliberately EXCLUDED descriptive figures so an empty
+# renderer would not claim an association forest. This renderer reverses that only
+# for a table that is UNAMBIGUOUSLY a table-one summary (variable + row-type +
+# per-group median/percentage cells) and returns None otherwise, so a result table
+# still falls through to its own renderer / the coder.
+_TABLE_ONE_ROWTYPE_COLS = ("row_type", "summary_type", "variable_class")
+_TABLE_ONE_VALUE_TOKENS = ("median", "mean", "percentage", "count", "q25", "q75")
+_RESULT_TABLE_COLS = (
+    "odds_ratio",
+    "hazard_ratio",
+    "risk_ratio",
+    "estimate",
+    "point_estimate",
+    "coef",
+    "auroc",
+)
+
+
+def _render_descriptive_publication_bundle_from_prior_outputs(
+    *,
+    run_dir: Path,
+    current_step_id: str,
+    out_dir: Path,
+) -> Optional[str]:
+    """Deterministically rebuild a descriptive baseline / table-one figure.
+
+    Fires ONLY for a genuine table-one summary (a ``variable`` key column, a
+    row-type column, and per-group median/percentage cells) and returns ``None``
+    for anything else -- an association/result table (has an odds_ratio/estimate
+    column) is left to its own renderer, and a run without a descriptive table
+    falls through cleanly. Renders continuous (median) and categorical (percent)
+    baseline summaries and emits a validator-conformant ``*_source_data.csv``
+    traced positionally via ``source_row_index`` into the parent table.
+    """
+
+    steps_dir = run_dir / "steps"
+    if not steps_dir.exists():
+        return None
+    parent_step_id = current_step_id.removesuffix("_figure")
+    candidate_paths: List[Path] = []
+    if parent_step_id and parent_step_id != current_step_id:
+        parent_outputs = steps_dir / parent_step_id / "outputs"
+        if parent_outputs.exists():
+            candidate_paths.extend(sorted(parent_outputs.glob("*.csv")))
+    for step_dir in sorted(steps_dir.iterdir()):
+        if not step_dir.is_dir() or step_dir.name == current_step_id:
+            continue
+        text = step_dir.name.lower()
+        if not any(
+            token in text
+            for token in ("baseline", "table_one", "table1", "descriptive", "characteristic")
+        ):
+            continue
+        outputs_dir = step_dir / "outputs"
+        if outputs_dir.exists():
+            candidate_paths.extend(sorted(outputs_dir.glob("*.csv")))
+
+    def _first_col(frame: pd.DataFrame, names: Sequence[str]) -> Optional[str]:
+        for name in names:
+            if name in frame.columns:
+                return name
+        return None
+
+    def _is_table_one(frame: pd.DataFrame) -> bool:
+        cols = {str(c).lower() for c in frame.columns}
+        if "variable" not in cols:
+            return False
+        # A result/effect table is NOT a table one.
+        if any(c in cols for c in _RESULT_TABLE_COLS):
+            return False
+        if not any(c in cols for c in _TABLE_ONE_ROWTYPE_COLS):
+            return False
+        return any(any(tok in c for c in cols) for tok in _TABLE_ONE_VALUE_TOKENS)
+
+    parent: Optional[tuple[Path, pd.DataFrame]] = None
+    for csv_path in candidate_paths:
+        name = csv_path.name.lower()
+        try:
+            frame = pd.read_csv(csv_path)
+        except Exception:
+            continue
+        if not _is_table_one(frame):
+            continue
+        parent = (csv_path, frame)
+        if "table_one" in name or "baseline" in name or "characteristic" in name:
+            break
+    if parent is None:
+        return None
+
+    table_path, frame = parent
+    frame = frame.reset_index(drop=True)
+    row_type_col = _first_col(frame, _TABLE_ONE_ROWTYPE_COLS)
+    label_col = _first_col(frame, ("label", "variable"))
+    category_col = _first_col(frame, ("category",))
+    median_col = _first_col(frame, ("overall_median", "median"))
+    pct_col = _first_col(frame, ("overall_percentage", "percentage"))
+    if label_col is None or (median_col is None and pct_col is None):
+        return None
+
+    # Positional trace: keep original row order; source_row_index maps 1:1 into the
+    # upstream table the validator re-reads.
+    rows: List[Dict[str, Any]] = []
+    for idx, row in frame.iterrows():
+        rtype = str(row.get(row_type_col, "") if row_type_col else "").lower()
+        label = str(row.get(label_col, "")).strip()
+        cat = str(row.get(category_col, "")).strip() if category_col else ""
+        median_v = (
+            pd.to_numeric(pd.Series([row.get(median_col)]), errors="coerce").iloc[0]
+            if median_col
+            else float("nan")
+        )
+        pct_v = (
+            pd.to_numeric(pd.Series([row.get(pct_col)]), errors="coerce").iloc[0]
+            if pct_col
+            else float("nan")
+        )
+        is_cont = ("continuous" in rtype) or (pd.notna(median_v) and pd.isna(pct_v))
+        display = label if not cat or cat.lower() == "nan" else f"{label} ({cat})"
+        rows.append(
+            {
+                # ``variable``/``category`` are _KEY_COLUMNS and non-unique in a
+                # table one (e.g. sex -> Female + Male); carrying them under NON-key
+                # names forces the validator to trace POSITIONALLY via
+                # source_row_index rather than an ambiguous named-key join that
+                # false-flags disagreement.
+                "source_row_index": int(idx),
+                "variable_name": str(row.get("variable", label)),
+                "row_category": cat,
+                "display_label": display,
+                "is_continuous": bool(is_cont),
+                "overall_median": float(median_v) if pd.notna(median_v) else float("nan"),
+                "overall_percentage": float(pct_v) if pd.notna(pct_v) else float("nan"),
+                "source_table": table_path.name,
+                "source_transform": "table_one_baseline_summary_v1",
+            }
+        )
+    source_data = pd.DataFrame(rows)
+    cont_rows = source_data[
+        source_data["is_continuous"] & source_data["overall_median"].notna()
+    ].head(12)
+    cat_rows = source_data[
+        (~source_data["is_continuous"]) & source_data["overall_percentage"].notna()
+    ].head(12)
+    if cont_rows.empty and cat_rows.empty:
+        return None
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    keep = pd.concat([cont_rows, cat_rows]).sort_values("source_row_index")
+    keep.to_csv(out_dir / "baseline_table_one_source_data.csv", index=False)
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from easyicu.research_agent.publication_figures import (
+        add_panel_label,
+        apply_publication_style,
+        make_figure_contract,
+        save_publication_figure,
+    )
+
+    palette = apply_publication_style()
+    ncols = int(not cont_rows.empty) + int(not cat_rows.empty)
+    fig = plt.figure(figsize=(183 / 25.4, 104 / 25.4), constrained_layout=False)
+    grid = fig.add_gridspec(
+        1, max(1, ncols), left=0.30, right=0.97, top=0.88, bottom=0.14, wspace=0.55
+    )
+    col = 0
+    if not cont_rows.empty:
+        ax = fig.add_subplot(grid[0, col])
+        y = list(range(len(cont_rows)))
+        ax.barh(
+            y, cont_rows["overall_median"].to_numpy(),
+            color=palette.get("blue", "#0F4D92"), height=0.6,
+        )
+        ax.set_yticks(y)
+        ax.set_yticklabels([_short_figure_label(v, limit=28) for v in cont_rows["display_label"]])
+        ax.invert_yaxis()
+        ax.set_xlabel("Median (overall)")
+        ax.set_title("Continuous characteristics", loc="left", pad=4)
+        add_panel_label(ax, "A", x=0.0, y=1.06)
+        col += 1
+    if not cat_rows.empty:
+        ax = fig.add_subplot(grid[0, col])
+        y = list(range(len(cat_rows)))
+        ax.barh(
+            y, cat_rows["overall_percentage"].clip(0, 100).to_numpy(),
+            color=palette.get("green", "#2E7D32"), height=0.6,
+        )
+        ax.set_yticks(y)
+        ax.set_yticklabels([_short_figure_label(v, limit=28) for v in cat_rows["display_label"]])
+        ax.invert_yaxis()
+        ax.set_xlim(0, 100)
+        ax.set_xlabel("Percentage (overall)")
+        ax.set_title("Categorical characteristics", loc="left", pad=4)
+        add_panel_label(ax, "B" if not cont_rows.empty else "A", x=0.0, y=1.06)
+
+    contract = make_figure_contract(
+        figure_id="baseline_table_one",
+        core_claim=(
+            "Baseline cohort characteristics are shown directly from the "
+            "registered descriptive table-one summary."
+        ),
+        panels=[
+            {
+                "panel_id": "A",
+                "title": "Baseline characteristics",
+                "role": "descriptive",
+                "claim": (
+                    "Median and percentage summaries are copied from the parent "
+                    "table-one; no effect is estimated."
+                ),
+                "evidence_ids": ["table_one"],
+            }
+        ],
+        source_data=["table_one"],
+        statistics_note=(
+            "Generated deterministically from the registered parent-step "
+            "table-one; descriptive only (no adjusted effect)."
+        ),
+    )
+    outputs = save_publication_figure(
+        fig, out_dir / "baseline_table_one", contract=contract, dpi=300
+    )
+    plt.close(fig)
+
+    step_summary_path = out_dir / "step_summary.json"
+    existing_summary: Dict[str, Any] = {}
+    if step_summary_path.exists():
+        try:
+            loaded = json.loads(step_summary_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                existing_summary = loaded
+        except Exception:
+            existing_summary = {}
+    existing_summary.update(
+        {
+            "step_id": current_step_id,
+            "method": "deterministic_descriptive_publication_figure_repair",
+            "rendering_only": True,
+            "source_step_id": parent_step_id,
+            "source_table_one": str(table_path),
+            "source_data_csv": str(out_dir / "baseline_table_one_source_data.csv"),
+            "n_rows_plotted": int(len(keep)),
+            "figure_files": [
+                path.name for key, path in outputs.items() if key != "contract"
+            ],
+            "figure_path": "baseline_table_one.png",
+        }
+    )
+    step_summary_path.write_text(
+        json.dumps(existing_summary, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
+    return "descriptive_publication_bundle_from_parent_outputs_v1"
+
+
 def _iter_prior_output_tables(
     *,
     run_dir: Path,
@@ -5112,6 +5599,14 @@ _DETERMINISTIC_FIGURE_TOKEN_GROUPS: tuple[tuple[str, ...], ...] = (
     ("primary_result", "primary_results", "main_result", "main_results"),
     ("missingness", "measurement", "data_quality", "quality"),
     ("survival", "kaplan", "hazard_ratio", "time_to_event"),
+    # Phenotyping / clustering: distinct enough not to steal an association or
+    # survival figure step. The renderer's own guard returns None for a non-cluster
+    # table, and the branch keeps the parent-family renderer as a fallback.
+    ("phenotype", "subphenotype", "cluster", "clustering", "silhouette", "trajectory"),
+    # Descriptive baseline / table-one. Kept OFF the generic path historically; the
+    # renderer fires only for a genuine table-one summary (guard returns None for a
+    # result table) and the branch falls back to the parent-family renderer.
+    ("table_one", "table1", "baseline", "descriptive", "characteristic"),
 )
 
 
@@ -5140,6 +5635,11 @@ _UPSTREAM_FAMILY_TO_RENDERER_KEY: dict[str, str] = {
     "missingness": "missingness",
     "measurement": "missingness",
     "data_quality": "missingness",
+    "phenotyping": "phenotype",
+    "clustering": "phenotype",
+    "descriptive": "descriptive",
+    "table_one": "descriptive",
+    "baseline": "descriptive",
 }
 
 
@@ -5177,6 +5677,8 @@ def _renderer_for_upstream_family(family: Optional[str]):
         "sensitivity": _render_sensitivity_publication_bundle_from_prior_outputs,
         "cohort": _render_cohort_overlap_publication_bundle_from_prior_outputs,
         "missingness": _render_missingness_publication_bundle_from_prior_outputs,
+        "phenotype": _render_phenotype_publication_bundle_from_prior_outputs,
+        "descriptive": _render_descriptive_publication_bundle_from_prior_outputs,
     }.get(key)
 
 
@@ -5226,6 +5728,8 @@ def _render_publication_bundle_from_prior_outputs_for_step(
         primary_result_tokens,
         missingness_tokens,
         survival_tokens,
+        phenotype_tokens,
+        descriptive_tokens,
     ) = _DETERMINISTIC_FIGURE_TOKEN_GROUPS
 
     # The survival family renderer lives in figures/survival.py; import it here
@@ -5233,6 +5737,14 @@ def _render_publication_bundle_from_prior_outputs_for_step(
     from .figures.survival import (
         render_survival_bundle_from_prior_outputs as _render_survival_bundle,
     )
+
+    # Parent-family renderer (used as the else branch AND as a fallback for the
+    # strict phenotype/descriptive renderers when their guard returns None, so a
+    # mis-routed step still reaches the correct renderer rather than the coder).
+    _upstream_renderer = _renderer_for_upstream_family(
+        _resolve_upstream_analysis_family(run_dir, current_step_id)
+    )
+    _upstream_fallback = (_upstream_renderer,) if _upstream_renderer is not None else ()
 
     if any(token in step_id_text for token in sensitivity_tokens) and any(
         token in step_id_text for token in cohort_tokens
@@ -5269,6 +5781,20 @@ def _render_publication_bundle_from_prior_outputs_for_step(
         renderers = (_render_missingness_publication_bundle_from_prior_outputs,)
     elif any(token in full_text for token in missingness_tokens):
         renderers = (_render_missingness_publication_bundle_from_prior_outputs,)
+    elif any(token in full_text for token in phenotype_tokens):
+        # Phenotyping / clustering figure; the runner-table renderer with the
+        # parent-family renderer as a strict-guard fallback.
+        renderers = (
+            _render_phenotype_publication_bundle_from_prior_outputs,
+            *_upstream_fallback,
+        )
+    elif any(token in full_text for token in descriptive_tokens):
+        # Descriptive baseline / table-one figure; strict table-one guard, with the
+        # parent-family renderer as a fallback for a mis-matched (e.g. result) table.
+        renderers = (
+            _render_descriptive_publication_bundle_from_prior_outputs,
+            *_upstream_fallback,
+        )
     else:
         # Structural fallback: no family token in the (stochastically named) step
         # id/text — route by the parent analysis step's PROVEN analysis_family
@@ -5276,12 +5802,9 @@ def _render_publication_bundle_from_prior_outputs_for_step(
         # planner-chosen id carries no family token, e.g.
         # ``05_primary_stage_outcome_analysis_figure`` whose parent produced a
         # canonical association forest (dose_response.csv).
-        upstream_renderer = _renderer_for_upstream_family(
-            _resolve_upstream_analysis_family(run_dir, current_step_id)
-        )
-        if upstream_renderer is None:
+        if _upstream_renderer is None:
             return None
-        renderers = (upstream_renderer,)
+        renderers = (_upstream_renderer,)
 
     for renderer in renderers:
         repair_id = renderer(
