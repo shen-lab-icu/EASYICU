@@ -85,6 +85,7 @@ from .deterministic_sensitivity import (
 )
 from .deterministic_causal import causal_primary_analysis_code
 from .deterministic_ordinal import ordinal_dose_response_analysis_code
+from .deterministic_missingness import missingness_measurement_audit_code
 from .deterministic_survival import survival_primary_analysis_code
 from .estimators import fit_robustness_rows_from_records
 from .llm import MockLLMClient
@@ -2325,6 +2326,83 @@ else:
             )
             return ordinal_dose_response_analysis_code()
 
+        def _missingness_audit_preflight_supported() -> bool:
+            """True for a missingness / measurement-process AUDIT step.
+
+            The audit is a pure per-concept count (measured vs missing fraction +
+            structural-vs-measurement split); the LLM coder reliably exhausted its
+            retry budget on it (~27.6 min then fail). The deterministic runner owns
+            it so the audit never blocks the run. It must NOT claim a figure step
+            nor a primary result step that merely mentions missingness. Trigger is
+            case-neutral (the controlled ``method`` first, then audit vocabulary).
+            """
+            if _step_expects_figure(step):
+                return False
+            method = str(step.method or "").lower()
+            if method in (
+                "missingness_audit",
+                "missingness",
+                "measurement_audit",
+                "data_quality_audit",
+                "data_quality",
+            ):
+                return True
+            blob = " ".join(
+                [
+                    str(step.step_id or ""),
+                    str(step.intent or ""),
+                    " ".join(str(x or "") for x in (step.expected_outputs or [])),
+                ]
+            ).lower()
+            # A primary result step can mention "missingness" in its intent; the
+            # audit runner emits no OR/HR, so it must not claim such a step.
+            if any(
+                t in blob
+                for t in (
+                    "odds ratio",
+                    "hazard ratio",
+                    "primary_adjusted",
+                    "adjusted association",
+                    "cox",
+                    "auroc",
+                    "propensity",
+                )
+            ):
+                return False
+            has_audit = any(
+                t in blob for t in ("missingness", "measurement", "data quality", "data_quality")
+            )
+            is_audit = any(t in blob for t in ("audit", "quality", "assessment", "process"))
+            return has_audit and is_audit
+
+        def _deterministic_missingness_audit_code(
+            reason: str,
+            *,
+            preflight: bool = False,
+        ) -> Optional[str]:
+            nonlocal deterministic_fallback_used
+            if (
+                deterministic_fallback_used
+                or not pipeline._enable_deterministic_runner_repair
+                or (preflight and not _missingness_audit_preflight_supported())
+            ):
+                return None
+            if not _missingness_audit_preflight_supported():
+                return None
+            deterministic_fallback_used = True
+            step_record["deterministic_code_fallback"] = reason
+            step_record["deterministic_standard_analysis"] = "missingness_measurement_audit"
+            emit_progress(
+                "coder",
+                f"Using deterministic missingness/measurement audit runner for {step.step_id}.",
+                run_id=run_id,
+                step_id=step.step_id,
+                current_step=step_current,
+                total_steps=total_steps,
+                fallback_reason=reason,
+            )
+            return missingness_measurement_audit_code()
+
         def _deterministic_cohort_definition_overlap_code(
             reason: str,
             *,
@@ -2460,6 +2538,29 @@ else:
                         severity="info",
                         message=(
                             "Using deterministic ordinal dose-response runner "
+                            f"before requesting new coder code for step {step.step_id}."
+                        ),
+                        detail={"step_id": step.step_id},
+                    )
+                )
+        elif (
+            _preflight_missingness_code := _deterministic_missingness_audit_code(
+                "missingness_audit_preflight", preflight=True
+            )
+        ) is not None:
+            # The missingness/measurement audit is a deterministic per-concept
+            # count; the LLM coder reliably timed out on it (~27.6 min then fail,
+            # blocking the run). The runner produces the audit table + a
+            # data_quality step_summary, so the figure step then renders via the
+            # parent-family fallback (data_quality -> missingness renderer).
+            code = _preflight_missingness_code
+            with shared_lock:
+                findings.append(
+                    ValidationFinding(
+                        validator="coder",
+                        severity="info",
+                        message=(
+                            "Using deterministic missingness/measurement audit runner "
                             f"before requesting new coder code for step {step.step_id}."
                         ),
                         detail={"step_id": step.step_id},
