@@ -55,9 +55,10 @@ from easyicu.research_agent.evidence import (  # noqa: E402
     EvidenceStore,
     sha256_of_file,
 )
-from easyicu.research_agent.llm import (  # noqa: E402
-    OpenAIClient,
-    openrouter_reasoning_extra_body,
+from easyicu.research_agent.llm import OpenAIClient  # noqa: E402
+from easyicu.research_agent.providers import (  # noqa: E402
+    ProviderConfigurationError,
+    build_provider_client,
 )
 
 
@@ -535,65 +536,19 @@ def _register_story_figure_provenance(
     return records
 
 
-def _local_openai_base_url(base_url: Optional[str]) -> bool:
-    from urllib.parse import urlsplit
-    import ipaddress
-
-    try:
-        parsed = urlsplit(str(base_url or ""))
-    except ValueError:
-        return False
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        return False
-    hostname = parsed.hostname.rstrip(".").lower()
-    if hostname == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(hostname).is_loopback
-    except ValueError:
-        return False
-
-
 def _build_data_foundation_llm(*, provider: str, model: str, request_timeout: float):
     """Use the same explicit provider contract for acquisition and benchmark."""
 
-    if provider == "openrouter":
-        key = os.environ.get("OPENROUTER_API_KEY")
-        if not key:
-            raise SystemExit("OPENROUTER_API_KEY is required for --provider openrouter")
-        kwargs: Dict[str, Any] = {
-            "model": model,
-            "api_key": key,
-            "base_url": os.environ.get(
-                "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
-            ),
-            "request_timeout": float(request_timeout),
-            "extra_headers": {
-                "HTTP-Referer": "https://github.com/shen-lab-icu/easyicu",
-                "X-Title": "EasyICU discovery-to-manuscript",
-            },
-        }
-        extra_body = openrouter_reasoning_extra_body(model)
-        if extra_body is not None:
-            kwargs["extra_body"] = extra_body
-        return OpenAIClient(**kwargs)
-    if provider == "openai":
-        key = os.environ.get("OPENAI_API_KEY")
-        base_url = os.environ.get("OPENAI_BASE_URL")
-        if not key and not _local_openai_base_url(base_url):
-            raise SystemExit("OPENAI_API_KEY is required for --provider openai")
-        kwargs = {"model": model, "request_timeout": float(request_timeout)}
-        if _local_openai_base_url(base_url):
-            # OpenAIClient also falls back to OPENROUTER_API_KEY internally.
-            # An explicit dummy value guarantees that neither paid-provider
-            # credential is forwarded to a loopback-compatible endpoint.
-            kwargs["api_key"] = "easyicu-local-noauth"
-        elif key:
-            kwargs["api_key"] = key
-        if base_url:
-            kwargs["base_url"] = base_url
-        return OpenAIClient(**kwargs)
-    raise SystemExit(f"Unsupported provider: {provider}")
+    try:
+        return build_provider_client(
+            provider=provider,
+            model=model,
+            request_timeout=request_timeout,
+            title="EasyICU discovery-to-manuscript",
+            client_cls=OpenAIClient,
+        )
+    except ProviderConfigurationError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 def _write_ehrflowbench_row(
