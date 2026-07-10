@@ -43,7 +43,9 @@ import json
 import logging
 import os
 import re
+import secrets
 import shutil
+import stat
 import tempfile
 import threading
 from dataclasses import asdict, dataclass, field
@@ -54,7 +56,39 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from .schema import EvidenceRecord
 
 
-def _atomic_write_bytes(path: Path, payload: bytes) -> None:
+def _validated_directory_fd(path: Path, *, expected_root: Path) -> int:
+    """Open ``path`` without following symlinks and anchor it under root."""
+
+    if path.is_symlink():
+        raise ValueError("evidence directory must not be a symbolic link")
+    try:
+        resolved = path.resolve(strict=True)
+        resolved.relative_to(expected_root.resolve(strict=True))
+    except (FileNotFoundError, ValueError) as exc:
+        raise ValueError("evidence directory escapes the store root") from exc
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    try:
+        path_stat = os.stat(path, follow_symlinks=False)
+        fd_stat = os.fstat(fd)
+        if (
+            not stat.S_ISDIR(path_stat.st_mode)
+            or path_stat.st_dev != fd_stat.st_dev
+            or path_stat.st_ino != fd_stat.st_ino
+        ):
+            raise ValueError("evidence directory changed during validation")
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _atomic_write_bytes(
+    path: Path,
+    payload: bytes,
+    *,
+    expected_root: Optional[Path] = None,
+) -> None:
     """Write ``payload`` to ``path`` atomically (temp file + fsync + os.replace).
 
     The evidence index and content-addressed blobs are the manuscript's
@@ -62,6 +96,42 @@ def _atomic_write_bytes(path: Path, payload: bytes) -> None:
     fail the SHA-256 verification / leave the index unreadable. os.replace is
     atomic on POSIX, so a reader sees either the old or the new complete file.
     """
+    if expected_root is not None and os.name == "posix":
+        parent_fd = _validated_directory_fd(path.parent, expected_root=expected_root)
+        target_name = _path_component(path.name, label="evidence filename")
+        tmp_name = f".{target_name}.{secrets.token_hex(8)}.tmp"
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        fd: Optional[int] = None
+        try:
+            fd = os.open(tmp_name, flags, 0o600, dir_fd=parent_fd)
+            with os.fdopen(fd, "wb") as handle:
+                fd = None
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(
+                tmp_name,
+                target_name,
+                src_dir_fd=parent_fd,
+                dst_dir_fd=parent_fd,
+            )
+            os.fsync(parent_fd)
+            current = os.stat(path.parent, follow_symlinks=False)
+            opened = os.fstat(parent_fd)
+            if current.st_dev != opened.st_dev or current.st_ino != opened.st_ino:
+                raise ValueError("evidence directory changed during atomic write")
+        except BaseException:
+            if fd is not None:
+                os.close(fd)
+            try:
+                os.unlink(tmp_name, dir_fd=parent_fd)
+            except OSError:
+                pass
+            raise
+        finally:
+            os.close(parent_fd)
+        return
+
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(
         dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
@@ -80,9 +150,80 @@ def _atomic_write_bytes(path: Path, payload: bytes) -> None:
         raise
 
 
-def _atomic_write_text(path: Path, text: str, *, encoding: str = "utf-8") -> None:
+def _atomic_write_text(
+    path: Path,
+    text: str,
+    *,
+    encoding: str = "utf-8",
+    expected_root: Optional[Path] = None,
+) -> None:
     """Atomic text write; see :func:`_atomic_write_bytes`."""
-    _atomic_write_bytes(path, text.encode(encoding))
+    _atomic_write_bytes(path, text.encode(encoding), expected_root=expected_root)
+
+
+def _atomic_copy_file(source: Path, target: Path, *, expected_root: Path) -> None:
+    """Stream-copy into an anchored directory and atomically publish it."""
+
+    if os.name != "posix":
+        _atomic_write_bytes(target, source.read_bytes(), expected_root=expected_root)
+        return
+    parent_fd = _validated_directory_fd(target.parent, expected_root=expected_root)
+    target_name = _path_component(target.name, label="evidence filename")
+    tmp_name = f".{target_name}.{secrets.token_hex(8)}.tmp"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    fd: Optional[int] = None
+    try:
+        fd = os.open(tmp_name, flags, 0o600, dir_fd=parent_fd)
+        with source.open("rb") as source_handle, os.fdopen(fd, "wb") as target_handle:
+            fd = None
+            shutil.copyfileobj(source_handle, target_handle, length=1024 * 1024)
+            target_handle.flush()
+            os.fsync(target_handle.fileno())
+        os.replace(
+            tmp_name,
+            target_name,
+            src_dir_fd=parent_fd,
+            dst_dir_fd=parent_fd,
+        )
+        os.fsync(parent_fd)
+        current = os.stat(target.parent, follow_symlinks=False)
+        opened = os.fstat(parent_fd)
+        if current.st_dev != opened.st_dev or current.st_ino != opened.st_ino:
+            raise ValueError("evidence directory changed during atomic copy")
+    except BaseException:
+        if fd is not None:
+            os.close(fd)
+        try:
+            os.unlink(tmp_name, dir_fd=parent_fd)
+        except OSError:
+            pass
+        raise
+    finally:
+        os.close(parent_fd)
+
+
+def _path_component(value: str, *, label: str) -> str:
+    """Return one safe filename component or fail closed.
+
+    Evidence ids and caller-supplied filenames are combined into an on-disk
+    filename.  They must therefore never carry an absolute path, a separator,
+    or a dot-directory component.  Keeping this check here protects every
+    EvidenceStore caller, including MCP and future integrations.
+    """
+
+    text = str(value or "")
+    if (
+        not text
+        or text in {".", ".."}
+        or "\x00" in text
+        or "/" in text
+        or "\\" in text
+        or Path(text).is_absolute()
+        or Path(text).name != text
+    ):
+        raise ValueError(f"{label} must be a single safe path component")
+    return text
+
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +256,9 @@ class EvidenceEnforcementError(RuntimeError):
     in audit logs without re-parsing the message string.
     """
 
-    def __init__(self, message: str, *, detail: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(
+        self, message: str, *, detail: Optional[Dict[str, Any]] = None
+    ) -> None:
         super().__init__(message)
         self.detail: Dict[str, Any] = dict(detail or {})
 
@@ -153,12 +296,18 @@ def _quarantine_corrupt_index(path: Path, exc: Exception, kind: str) -> None:
     except OSError as rename_err:
         logger.warning(
             "evidence %s at %s is corrupt (%s); also failed to back up: %s",
-            kind, path, exc, rename_err,
+            kind,
+            path,
+            exc,
+            rename_err,
         )
         return
     logger.warning(
         "evidence %s at %s is corrupt (%s); moved to %s and starting fresh",
-        kind, path, exc, backup,
+        kind,
+        path,
+        exc,
+        backup,
     )
 
 
@@ -182,9 +331,7 @@ def _quarantine_corrupt_index(path: Path, exc: Exception, kind: str) -> None:
 # manuscript click-traceable to its producing code line.
 
 
-_NUMERIC_LEAF_RE = re.compile(
-    r"^[-+]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?$"
-)
+_NUMERIC_LEAF_RE = re.compile(r"^[-+]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?$")
 # Numbers embedded in manuscript prose. The manuscript layer only
 # binds numbers that *look like* result quantities: decimal-bearing
 # (1.42 / 0.003 / 12.5%), comma-grouped thousands (1,234), exponent
@@ -194,22 +341,22 @@ _NUMERIC_LEAF_RE = re.compile(
 # (Section 4). When a manuscript truly needs to cite a two-digit count
 # it should embed it inside an explicit evidence placeholder.
 _NUMERIC_IN_PROSE_RE = re.compile(
-    r"(?<![A-Za-z_\d.])"                         # avoid mid-identifier digits
+    r"(?<![A-Za-z_\d.])"  # avoid mid-identifier digits
     r"(?P<value>"
-    r"(?:"                                       # --- general numeric form ---
+    r"(?:"  # --- general numeric form ---
     r"[-+]?"
     r"(?:"
-    r"\d{1,3}(?:,\d{3})+(?:\.\d+)?"              # comma-grouped (with optional fraction)
+    r"\d{1,3}(?:,\d{3})+(?:\.\d+)?"  # comma-grouped (with optional fraction)
     r"|"
-    r"\d+\.\d+(?:[eE][-+]?\d+)?"                 # decimal (with optional exponent)
+    r"\d+\.\d+(?:[eE][-+]?\d+)?"  # decimal (with optional exponent)
     r"|"
-    r"\d+[eE][-+]?\d+"                           # bare exponent
+    r"\d+[eE][-+]?\d+"  # bare exponent
     r"|"
-    r"\d{3,}"                                    # ≥3-digit integer
+    r"\d{3,}"  # ≥3-digit integer
     r")"
-    r"%?"                                        # optional percent suffix
+    r"%?"  # optional percent suffix
     r")"
-    r"|"                                         # --- short percent form ---
+    r"|"  # --- short percent form ---
     # A bare 1-2 digit integer is normally rejected (it collides with
     # SOFA-2, "Section 4", "n=42", ...), but a trailing percent sign
     # disambiguates it as a data value (mortality 23%, 8% decline), so it
@@ -218,7 +365,7 @@ _NUMERIC_IN_PROSE_RE = re.compile(
     # are labels, not claims.
     r"\d{1,2}%(?!\s*(?:CI\b|confidence|credible))"
     r")"
-    r"(?![A-Za-z_\d]|\.\d)"                       # not followed by identifier / decimal continuation
+    r"(?![A-Za-z_\d]|\.\d)"  # not followed by identifier / decimal continuation
 )
 
 
@@ -379,9 +526,7 @@ def _evaluate_derived_formula(
     try:
         tree = ast.parse(formula, mode="eval")
     except SyntaxError as exc:
-        raise DerivedFormulaError(
-            f"derived-formula syntax error: {exc.msg}"
-        ) from exc
+        raise DerivedFormulaError(f"derived-formula syntax error: {exc.msg}") from exc
 
     _ALLOWED_BINOPS = (
         ast.Add,
@@ -437,7 +582,7 @@ def _evaluate_derived_formula(
                         raise DerivedFormulaError("derived-formula division by zero")
                     return lhs / rhs
                 if isinstance(node.op, ast.Pow):
-                    return lhs ** rhs
+                    return lhs**rhs
             except OverflowError as exc:
                 # Python raises OverflowError on float ** float when the
                 # result would exceed float range; we surface this as a
@@ -539,9 +684,7 @@ def _decimal_places(value_str: str) -> int:
     return len(frac)
 
 
-def _walk_numeric_leaves(
-    obj: Any, prefix: str = ""
-) -> List[Tuple[str, str, float]]:
+def _walk_numeric_leaves(obj: Any, prefix: str = "") -> List[Tuple[str, str, float]]:
     """Yield ``(dotted_path, literal_str, canonical_float)`` for every
     numeric leaf in a nested dict/list. Strings that happen to parse as
     numbers are also captured because runners frequently emit
@@ -594,9 +737,10 @@ class EvidenceStore:
         *,
         enforcement_mode: Optional[str | EvidenceEnforcementMode] = None,
     ) -> None:
-        self.root = Path(root)
+        self.root = Path(root).expanduser().resolve()
         self.dir = self.root / "evidence"
         self.dir.mkdir(parents=True, exist_ok=True)
+        self._validated_evidence_dir()
         self.index_path = self.dir / "evidence_index.json"
         self.aliases_path = self.dir / "evidence_aliases.json"
         self.numeric_claims_path = self.dir / "numeric_claims.json"
@@ -616,6 +760,22 @@ class EvidenceStore:
     # ------------------------------------------------------------------
     # Persistence
     # ------------------------------------------------------------------
+
+    def _validated_evidence_dir(self) -> Path:
+        """Re-prove the mutable on-disk directory before every write."""
+
+        if self.dir.is_symlink():
+            raise ValueError("evidence directory must not be a symbolic link")
+        try:
+            resolved = self.dir.resolve(strict=True)
+            resolved.relative_to(self.root)
+        except (FileNotFoundError, ValueError) as exc:
+            raise ValueError("evidence directory escapes the store root") from exc
+        if resolved != self.dir:
+            raise ValueError("evidence directory must use its canonical path")
+        if not self.dir.is_dir():
+            raise ValueError("evidence path must remain a directory")
+        return self.dir
 
     def _load_records(self) -> List[EvidenceRecord]:
         if not self.index_path.exists():
@@ -639,7 +799,8 @@ class EvidenceStore:
             return {str(k): str(v) for k, v in data.items()}
         logger.warning(
             "evidence aliases at %s is not a JSON object (got %s); ignoring",
-            self.aliases_path, type(data).__name__,
+            self.aliases_path,
+            type(data).__name__,
         )
         _quarantine_corrupt_index(
             self.aliases_path,
@@ -661,6 +822,7 @@ class EvidenceStore:
             return []
 
     def _save(self) -> None:
+        self._validated_evidence_dir()
         _atomic_write_text(
             self.index_path,
             json.dumps(
@@ -669,10 +831,12 @@ class EvidenceStore:
                 ensure_ascii=False,
                 default=str,
             ),
+            expected_root=self.root,
         )
         _atomic_write_text(
             self.aliases_path,
             json.dumps(self._aliases, indent=2, ensure_ascii=False, sort_keys=True),
+            expected_root=self.root,
         )
         _atomic_write_text(
             self.numeric_claims_path,
@@ -681,6 +845,7 @@ class EvidenceStore:
                 indent=2,
                 ensure_ascii=False,
             ),
+            expected_root=self.root,
         )
 
     def _add_alias(self, alias: str, evidence_id: str) -> None:
@@ -705,9 +870,26 @@ class EvidenceStore:
         return None
 
     def _make_id(self, prefix: str, digest: str) -> str:
-        return f"{prefix}_{digest[:8]}"
+        return _path_component(f"{prefix}_{digest[:8]}", label="evidence_id")
+
+    def _target_path(self, *, evidence_id: str, filename: str) -> Path:
+        """Build an evidence target and prove it remains under ``evidence/``."""
+
+        safe_id = _path_component(evidence_id, label="evidence_id")
+        safe_filename = _path_component(filename, label="filename")
+        base = self._validated_evidence_dir()
+        target = base / f"{safe_id}__{safe_filename}"
+        if target.is_symlink():
+            raise ValueError("evidence target must not be a symbolic link")
+        resolved = target.resolve(strict=False)
+        try:
+            resolved.relative_to(base)
+        except ValueError as exc:
+            raise ValueError("evidence target escapes the evidence directory") from exc
+        return target
 
     def _next_versioned_id(self, evidence_id: str) -> str:
+        evidence_id = _path_component(evidence_id, label="evidence_id")
         suffix_n = 2
         while self._record_by_id(f"{evidence_id}_v{suffix_n}") is not None:
             suffix_n += 1
@@ -752,6 +934,12 @@ class EvidenceStore:
           as-is) and the existing record is returned unchanged. Use
           this when the first-registered content is authoritative.
         """
+        evidence_id = _path_component(evidence_id, label="evidence_id")
+        base = self._validated_evidence_dir()
+        try:
+            target.resolve(strict=False).relative_to(base)
+        except ValueError as exc:
+            raise ValueError("evidence target escapes the evidence directory") from exc
         if on_sha_change not in {"raise", "new_id", "keep_existing"}:
             raise ValueError(
                 f"Unknown on_sha_change mode: {on_sha_change!r}. "
@@ -784,7 +972,10 @@ class EvidenceStore:
                         producer=producer,
                         generation_mode=generation_mode,
                         prompt_pack_version=prompt_pack_version,
-                        metadata={**dict(metadata or {}), "resume_supersedes": evidence_id},
+                        metadata={
+                            **dict(metadata or {}),
+                            "resume_supersedes": evidence_id,
+                        },
                         created_at=datetime.now(timezone.utc),
                     )
                     self._records.append(record)
@@ -872,9 +1063,12 @@ class EvidenceStore:
                 target_eid = self._next_versioned_id(eid)
                 target_metadata.setdefault("resume_supersedes", eid)
                 target_on_sha_change = "raise"
-            target = self.dir / f"{target_eid}__{source_path.name}"
+            target = self._target_path(
+                evidence_id=target_eid,
+                filename=source_path.name,
+            )
             if target.resolve() != source_path.resolve():
-                shutil.copy2(source_path, target)
+                _atomic_copy_file(source_path, target, expected_root=self.root)
             digest = sha256_of_file(target)
             return self._register_target(
                 evidence_id=target_eid,
@@ -929,8 +1123,11 @@ class EvidenceStore:
                 target_eid = self._next_versioned_id(eid)
                 target_metadata.setdefault("resume_supersedes", eid)
                 target_on_sha_change = "raise"
-            target = self.dir / f"{target_eid}__{filename}"
-            _atomic_write_bytes(target, payload)
+            target = self._target_path(
+                evidence_id=target_eid,
+                filename=filename,
+            )
+            _atomic_write_bytes(target, payload, expected_root=self.root)
             return self._register_target(
                 evidence_id=target_eid,
                 kind=kind,
@@ -1197,7 +1394,9 @@ class EvidenceStore:
                 f"identifier not starting with underscore"
             )
         if not isinstance(formula, str) or not formula.strip():
-            raise DerivedFormulaError("derived-claim formula must be a non-empty string")
+            raise DerivedFormulaError(
+                "derived-claim formula must be a non-empty string"
+            )
         if not isinstance(explanation, str) or not explanation.strip():
             raise DerivedFormulaError(
                 "derived-claim explanation must be a non-empty string "
@@ -1207,7 +1406,9 @@ class EvidenceStore:
         result = _evaluate_derived_formula(formula, sources=source_values)
         # Use the same value/canonical pair shape as register_numeric_claim
         # so downstream tooling does not need to special-case derived.
-        literal = f"{result:.6g}" if not float(result).is_integer() else str(int(result))
+        literal = (
+            f"{result:.6g}" if not float(result).is_integer() else str(int(result))
+        )
         with self._lock:
             for claim in self._numeric_claims:
                 if (
@@ -1291,9 +1492,7 @@ class EvidenceStore:
         for idx, entry in enumerate(entries):
             try:
                 if not isinstance(entry, dict):
-                    raise DerivedFormulaError(
-                        f"derived_claims[{idx}] is not a dict"
-                    )
+                    raise DerivedFormulaError(f"derived_claims[{idx}] is not a dict")
                 name = entry.get("name")
                 formula = entry.get("formula")
                 explanation = entry.get("explanation", "")
@@ -1336,7 +1535,9 @@ class EvidenceStore:
             except DerivedFormulaError as exc:
                 errors.append(
                     {
-                        "name": str(entry.get("name") if isinstance(entry, dict) else f"#{idx}"),
+                        "name": str(
+                            entry.get("name") if isinstance(entry, dict) else f"#{idx}"
+                        ),
                         "message": str(exc),
                     }
                 )
@@ -1394,7 +1595,9 @@ class EvidenceStore:
                     rel = abs(candidate - canonical) / abs(candidate)
                 else:
                     rel = 0.0 if abs(canonical) <= 1e-12 else float("inf")
-                abs_window = max(display_abs_tol, window * max(abs(candidate), abs(canonical)))
+                abs_window = max(
+                    display_abs_tol, window * max(abs(candidate), abs(canonical))
+                )
                 if rel <= window or abs(candidate - canonical) <= abs_window:
                     return claim
         return None

@@ -32,8 +32,11 @@ from __future__ import annotations
 
 import argparse
 import http.server
+import ipaddress
 import json
+import os
 import queue
+import secrets
 import sys
 import urllib.parse
 import uuid
@@ -46,21 +49,167 @@ from .concept_availability import (
 )
 from .context import build_research_context
 from .evidence import EvidenceStore
+from .llm import OpenAIClient, openrouter_reasoning_extra_body
 from .pipeline import ResearchAgentPipeline
 from .skills import list_skills
 from .audits.validators import CohortAuditor, ConceptUsageAuditor
 
-
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_INFO = {"name": "easyicu-research-agent", "version": "0.1.0"}
+MCP_BEARER_TOKEN_ENV = "EASYICU_MCP_BEARER_TOKEN"
+DEFAULT_HTTP_MAX_BODY_BYTES = 1024 * 1024
+
+
+def _local_openai_base_url(base_url: Optional[str]) -> bool:
+    """Return True only for a parsed loopback HTTP(S) endpoint."""
+
+    try:
+        parsed = urllib.parse.urlsplit(str(base_url or ""))
+    except ValueError:
+        return False
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return False
+    hostname = parsed.hostname.rstrip(".").lower()
+    if hostname == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
+def _build_run_llm(args: Dict[str, Any]):
+    """Build the explicitly requested MCP run client or return an error payload."""
+
+    provider = str(args.pop("provider", "openai") or "openai").strip().lower()
+    model = str(args.pop("model", "") or "").strip()
+    base_url_arg = args.pop("base_url", None)
+    request_timeout = float(args.pop("request_timeout", 120.0))
+    if not model:
+        return None, {
+            "error": (
+                "configuration_error: research_agent.run requires an explicit "
+                "model and configured provider credentials"
+            ),
+            "error_code": "llm_configuration_required",
+        }
+    if provider == "openrouter":
+        if base_url_arg is not None:
+            return None, {
+                "error": (
+                    "configuration_error: provider=openrouter does not accept a "
+                    "per-call base_url; configure OPENROUTER_BASE_URL on the server"
+                ),
+                "error_code": "llm_configuration_invalid",
+            }
+        api_key = os.environ.get("OPENROUTER_API_KEY")
+        if not api_key:
+            return None, {
+                "error": (
+                    "configuration_error: OPENROUTER_API_KEY is required for "
+                    "provider=openrouter"
+                ),
+                "error_code": "llm_configuration_required",
+            }
+        base_url = str(
+            base_url_arg
+            or os.environ.get("OPENROUTER_BASE_URL")
+            or "https://openrouter.ai/api/v1"
+        )
+        kwargs: Dict[str, Any] = {
+            "model": model,
+            "api_key": api_key,
+            "base_url": base_url,
+            "request_timeout": request_timeout,
+            "extra_headers": {
+                "HTTP-Referer": "https://github.com/shen-lab-icu/easyicu",
+                "X-Title": "EasyICU research-agent MCP",
+            },
+        }
+        extra_body = openrouter_reasoning_extra_body(model)
+        if extra_body is not None:
+            kwargs["extra_body"] = extra_body
+        return OpenAIClient(**kwargs), None
+    if provider == "openai":
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if base_url_arg is not None and not _local_openai_base_url(str(base_url_arg)):
+            return None, {
+                "error": (
+                    "configuration_error: a per-call base_url is permitted only "
+                    "for a parsed loopback HTTP(S) endpoint"
+                ),
+                "error_code": "llm_configuration_invalid",
+            }
+        base_url = str(base_url_arg or os.environ.get("OPENAI_BASE_URL") or "")
+        if not api_key and not _local_openai_base_url(base_url):
+            return None, {
+                "error": (
+                    "configuration_error: OPENAI_API_KEY is required for "
+                    "provider=openai unless base_url is a local OpenAI-compatible server"
+                ),
+                "error_code": "llm_configuration_required",
+            }
+        kwargs = {"model": model, "request_timeout": request_timeout}
+        if _local_openai_base_url(base_url):
+            # OpenAIClient otherwise falls back to OPENAI_API_KEY and then
+            # OPENROUTER_API_KEY internally.  Supplying a dummy credential is
+            # deliberate: a loopback-compatible endpoint must never receive a
+            # paid provider secret, regardless of whether the URL came from
+            # this request or the server environment.
+            kwargs["api_key"] = "easyicu-local-noauth"
+        elif api_key:
+            kwargs["api_key"] = api_key
+        if base_url:
+            kwargs["base_url"] = base_url
+        return OpenAIClient(**kwargs), None
+    return None, {
+        "error": f"configuration_error: unsupported provider {provider!r}",
+        "error_code": "llm_configuration_required",
+    }
+
+
+def _safe_run_id(value: Any) -> str:
+    run_id = str(value or "")
+    if (
+        not run_id
+        or run_id in {".", ".."}
+        or "\x00" in run_id
+        or "/" in run_id
+        or "\\" in run_id
+        or Path(run_id).is_absolute()
+        or Path(run_id).name != run_id
+    ):
+        raise ValueError("run_id must be a single safe path component")
+    return run_id
 
 
 def _tool_run(args: Dict[str, Any]) -> Dict[str, Any]:
     workdir = args.pop("workdir", "./research_output")
-    pipeline = ResearchAgentPipeline(workdir=workdir)
     cohort = args.pop("cohort_path", None)
     if cohort is None:
         return {"error": "cohort_path is required"}
+    try:
+        llm, config_error = _build_run_llm(args)
+    except Exception as exc:
+        return {
+            "error": (
+                "configuration_error: could not construct the requested LLM "
+                f"client: {type(exc).__name__}: {exc}"
+            ),
+            "error_code": "llm_configuration_invalid",
+        }
+    if config_error is not None:
+        return config_error
+    try:
+        pipeline = ResearchAgentPipeline(workdir=workdir, llm=llm)
+    except Exception as exc:
+        return {
+            "error": (
+                "configuration_error: could not initialise the requested LLM "
+                f"client: {type(exc).__name__}: {exc}"
+            ),
+            "error_code": "llm_configuration_invalid",
+        }
     result = pipeline.run(cohort=cohort, **args)
     return result.model_dump()
 
@@ -82,11 +231,16 @@ def _tool_list_skills(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _tool_read_manifest(args: Dict[str, Any]) -> Dict[str, Any]:
-    workdir = Path(args.get("workdir", "./research_output"))
+    workdir = Path(args.get("workdir", "./research_output")).expanduser().resolve()
     run_id = args.get("run_id")
     if not run_id:
         return {"error": "run_id is required"}
-    path = workdir / run_id / "manifest.json"
+    safe_run_id = _safe_run_id(run_id)
+    path = (workdir / safe_run_id / "manifest.json").resolve()
+    try:
+        path.relative_to(workdir)
+    except ValueError as exc:
+        raise ValueError("manifest path escapes workdir") from exc
     if not path.exists():
         return {"error": f"manifest not found at {path}"}
     return json.loads(path.read_text(encoding="utf-8"))
@@ -417,7 +571,9 @@ def _write_concept_result_if_requested(
     else:
         workdir = Path(args.get("workdir") or "./research_output")
         stem = _safe_filename("_".join(concepts[:6])) or "concepts"
-        base = workdir / "mcp_concept_extracts" / f"{stem}_{uuid.uuid4().hex[:8]}.parquet"
+        base = (
+            workdir / "mcp_concept_extracts" / f"{stem}_{uuid.uuid4().hex[:8]}.parquet"
+        )
 
     if isinstance(result, dict):
         out_dir = base if not base.suffix else base.with_suffix("")
@@ -478,7 +634,9 @@ def _register_concept_outputs_if_requested(
 
 def _write_frame(frame: Any, path: Path) -> None:
     if not hasattr(frame, "to_parquet"):
-        raise TypeError(f"Cannot write non-DataFrame concept result: {type(frame).__name__}")
+        raise TypeError(
+            f"Cannot write non-DataFrame concept result: {type(frame).__name__}"
+        )
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.suffix.lower() == ".csv":
         frame.to_csv(path, index=False)
@@ -530,15 +688,24 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
         "description": "Run an ICU-aware research-agent pipeline against a cohort parquet.",
         "inputSchema": {
             "type": "object",
-            "required": ["question", "cohort_path"],
+            "required": ["question", "cohort_path", "model"],
             "properties": {
                 "question": {"type": "string"},
                 "cohort_path": {"type": "string"},
                 "workdir": {"type": "string"},
+                "provider": {
+                    "type": "string",
+                    "enum": ["openai", "openrouter"],
+                },
+                "model": {"type": "string"},
+                "request_timeout": {"type": "number", "minimum": 1},
                 "cohort_name": {"type": "string"},
                 "database": {"type": "string"},
                 "target_outcome": {"type": "string"},
-                "cross_database_validation": {"type": "array", "items": {"type": "string"}},
+                "cross_database_validation": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
                 "inclusion_criteria": {"type": "array", "items": {"type": "string"}},
                 "exclusion_criteria": {"type": "array", "items": {"type": "string"}},
             },
@@ -823,7 +990,9 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
 ]
 
 
-def dispatch(tool_name: str, arguments: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def dispatch(
+    tool_name: str, arguments: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     """Run a tool by name. Returns either the tool's result dict or an error."""
     arguments = dict(arguments or {})
     fn = TOOLS.get(tool_name)
@@ -844,7 +1013,9 @@ def _response(req_id: Any, result: Dict[str, Any]) -> Dict[str, Any]:
     return {"jsonrpc": "2.0", "id": req_id, "result": result}
 
 
-def _error(req_id: Any, code: int, message: str, data: Optional[Any] = None) -> Dict[str, Any]:
+def _error(
+    req_id: Any, code: int, message: str, data: Optional[Any] = None
+) -> Dict[str, Any]:
     payload: Dict[str, Any] = {
         "jsonrpc": "2.0",
         "id": req_id,
@@ -889,11 +1060,14 @@ def _handle_single_jsonrpc(request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return _response(req_id, result)
 
     if method == "initialize":
-        return _response(req_id, {
-            "protocolVersion": PROTOCOL_VERSION,
-            "capabilities": {"tools": {}},
-            "serverInfo": SERVER_INFO,
-        })
+        return _response(
+            req_id,
+            {
+                "protocolVersion": PROTOCOL_VERSION,
+                "capabilities": {"tools": {}},
+                "serverInfo": SERVER_INFO,
+            },
+        )
 
     if method in {"notifications/initialized", "initialized"}:
         return None if is_notification else _response(req_id, {})
@@ -910,9 +1084,13 @@ def _handle_single_jsonrpc(request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         name = params.get("name")
         arguments = params.get("arguments") or {}
         if not isinstance(name, str) or not name:
-            return _error(req_id, -32602, "Invalid params: tools/call requires string 'name'")
+            return _error(
+                req_id, -32602, "Invalid params: tools/call requires string 'name'"
+            )
         if not isinstance(arguments, dict):
-            return _error(req_id, -32602, "Invalid params: 'arguments' must be an object")
+            return _error(
+                req_id, -32602, "Invalid params: 'arguments' must be an object"
+            )
         return _response(req_id, _tool_result_payload(dispatch(name, arguments)))
 
     # These are optional MCP surfaces. Returning empty lists lets clients
@@ -971,7 +1149,126 @@ class _SSESession:
 _SSE_SESSIONS: Dict[str, _SSESession] = {}
 
 
-def _make_sse_handler() -> type[http.server.BaseHTTPRequestHandler]:
+def _normalise_http_host(value: str) -> Optional[str]:
+    """Return the hostname from an HTTP Host header, or ``None`` if invalid."""
+
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = urllib.parse.urlsplit("//" + raw)
+        if parsed.username is not None or parsed.password is not None:
+            return None
+        _ = parsed.port
+    except ValueError:
+        return None
+    if not parsed.hostname:
+        return None
+    return parsed.hostname.rstrip(".").lower()
+
+
+def _normalise_origin(value: str) -> Optional[str]:
+    """Normalise a browser Origin header without accepting URL decorations."""
+
+    raw = str(value or "").strip()
+    if not raw or raw.lower() == "null":
+        return None
+    try:
+        parsed = urllib.parse.urlsplit(raw)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+        ):
+            return None
+        port = parsed.port
+    except ValueError:
+        return None
+    host = parsed.hostname.rstrip(".").lower()
+    default_port = 80 if parsed.scheme == "http" else 443
+    port_suffix = "" if port in {None, default_port} else f":{port}"
+    if ":" in host:
+        host = f"[{host}]"
+    return f"{parsed.scheme}://{host}{port_suffix}"
+
+
+def _is_loopback_bind_host(host: str) -> bool:
+    hostname = str(host or "").strip().rstrip(".").lower()
+    if hostname == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
+def _default_allowed_hosts(bind_host: str) -> set[str]:
+    hostname = str(bind_host or "").strip().rstrip(".").lower()
+    if _is_loopback_bind_host(hostname):
+        return {"localhost", "127.0.0.1", "::1"}
+    return {hostname} if hostname else set()
+
+
+def _default_allowed_origins(allowed_hosts: set[str], port: int) -> set[str]:
+    origins: set[str] = set()
+    for host in allowed_hosts:
+        rendered = f"[{host}]" if ":" in host else host
+        for scheme in ("http", "https"):
+            default_port = 80 if scheme == "http" else 443
+            suffix = "" if port == default_port else f":{port}"
+            origin = _normalise_origin(f"{scheme}://{rendered}{suffix}")
+            if origin:
+                origins.add(origin)
+    return origins
+
+
+def _validate_sse_server_config(
+    host: str, bearer_token: Optional[str]
+) -> Optional[str]:
+    """Validate bind/auth configuration before opening a listening socket."""
+
+    token = str(bearer_token or "").strip() or None
+    if not _is_loopback_bind_host(host) and token is None:
+        raise ValueError(
+            "non-loopback MCP HTTP binding requires an independent bearer token "
+            f"in {MCP_BEARER_TOKEN_ENV}"
+        )
+    if token is not None:
+        for secret_name in ("OPENAI_API_KEY", "OPENROUTER_API_KEY"):
+            provider_secret = os.environ.get(secret_name)
+            if provider_secret and secrets.compare_digest(token, provider_secret):
+                raise ValueError(f"{MCP_BEARER_TOKEN_ENV} must not reuse {secret_name}")
+    return token
+
+
+def _make_sse_handler(
+    *,
+    bind_host: str = "127.0.0.1",
+    port: int = 8765,
+    bearer_token: Optional[str] = None,
+    allowed_hosts: Optional[List[str]] = None,
+    allowed_origins: Optional[List[str]] = None,
+    max_body_bytes: int = DEFAULT_HTTP_MAX_BODY_BYTES,
+) -> type[http.server.BaseHTTPRequestHandler]:
+    configured_hosts = _default_allowed_hosts(bind_host)
+    for value in allowed_hosts or []:
+        normalised = _normalise_http_host(value)
+        if normalised is None:
+            raise ValueError(f"invalid allowed MCP Host value: {value!r}")
+        configured_hosts.add(normalised)
+    configured_origins = _default_allowed_origins(configured_hosts, int(port))
+    for value in allowed_origins or []:
+        normalised = _normalise_origin(value)
+        if normalised is None:
+            raise ValueError(f"invalid allowed MCP Origin value: {value!r}")
+        configured_origins.add(normalised)
+    if int(max_body_bytes) <= 0:
+        raise ValueError("max_body_bytes must be positive")
+
     class Handler(http.server.BaseHTTPRequestHandler):
         server_version = "EasyICUMCP/0.1"
 
@@ -980,6 +1277,8 @@ def _make_sse_handler() -> type[http.server.BaseHTTPRequestHandler]:
             print(format % args, file=sys.stderr)
 
         def do_GET(self) -> None:  # noqa: N802
+            if not self._request_authorized():
+                return
             parsed = urllib.parse.urlparse(self.path)
             if parsed.path not in {"/sse", "/events"}:
                 self.send_error(404, "not found")
@@ -999,17 +1298,56 @@ def _make_sse_handler() -> type[http.server.BaseHTTPRequestHandler]:
             try:
                 while True:
                     item = session.queue.get()
-                    self._write_sse("message", json.dumps(item, ensure_ascii=False, default=str))
+                    self._write_sse(
+                        "message", json.dumps(item, ensure_ascii=False, default=str)
+                    )
             except (BrokenPipeError, ConnectionError):
                 pass
             finally:
                 _SSE_SESSIONS.pop(session_id, None)
 
         def do_POST(self) -> None:  # noqa: N802
+            if not self._request_authorized():
+                return
             parsed = urllib.parse.urlparse(self.path)
             qs = urllib.parse.parse_qs(parsed.query)
-            length = int(self.headers.get("Content-Length", "0") or "0")
-            body = self.rfile.read(length) if length else b""
+            media_type = self.headers.get("Content-Type", "").split(";", 1)[0]
+            if media_type.strip().lower() != "application/json":
+                self._write_json(
+                    {"error": "Content-Type must be application/json"},
+                    status=415,
+                )
+                return
+            if self.headers.get("Transfer-Encoding"):
+                self._write_json(
+                    {"error": "chunked request bodies are not accepted"},
+                    status=400,
+                )
+                return
+            raw_length = self.headers.get("Content-Length")
+            try:
+                length = int(raw_length) if raw_length is not None else -1
+            except ValueError:
+                length = -1
+            if length < 0:
+                self._write_json(
+                    {"error": "a valid Content-Length header is required"},
+                    status=411,
+                )
+                return
+            if length > int(max_body_bytes):
+                self.close_connection = True
+                self._write_json(
+                    {
+                        "error": (
+                            "request body exceeds the configured MCP HTTP limit "
+                            f"of {int(max_body_bytes)} bytes"
+                        )
+                    },
+                    status=413,
+                )
+                return
+            body = self.rfile.read(length)
             try:
                 req = json.loads(body.decode("utf-8") or "{}")
             except json.JSONDecodeError:
@@ -1034,25 +1372,97 @@ def _make_sse_handler() -> type[http.server.BaseHTTPRequestHandler]:
 
             self.send_error(404, "not found")
 
+        def _request_authorized(self) -> bool:
+            host_header = self.headers.get("Host", "")
+            request_host = _normalise_http_host(host_header)
+            if request_host not in configured_hosts:
+                self._write_json({"error": "invalid Host header"}, status=400)
+                return False
+            try:
+                host_port = urllib.parse.urlsplit("//" + host_header).port
+            except ValueError:
+                host_port = None
+            expected_port = int(port) if int(port) > 0 else int(self.server.server_port)
+            if host_port is not None and host_port != expected_port:
+                self._write_json({"error": "invalid Host port"}, status=400)
+                return False
+
+            if bearer_token is not None:
+                supplied = self.headers.get("Authorization", "")
+                prefix = "Bearer "
+                candidate = (
+                    supplied[len(prefix) :] if supplied.startswith(prefix) else ""
+                )
+                if not candidate or not secrets.compare_digest(candidate, bearer_token):
+                    self._write_json(
+                        {"error": "missing or invalid bearer token"},
+                        status=401,
+                        extra_headers={"WWW-Authenticate": "Bearer"},
+                    )
+                    return False
+
+            # Origin is optional for trusted non-browser MCP clients.  When a
+            # browser sends it, however, it must be a same-origin/default-local
+            # value or an explicitly configured allowlist entry.  No CORS
+            # response headers are emitted, so cross-origin browser reads stay
+            # blocked even after authentication.
+            origin_header = self.headers.get("Origin")
+            if origin_header is not None:
+                origin = _normalise_origin(origin_header)
+                if origin is None or origin not in configured_origins:
+                    self._write_json({"error": "invalid Origin header"}, status=403)
+                    return False
+            return True
+
         def _write_sse(self, event: str, data: str) -> None:
             payload = f"event: {event}\ndata: {data}\n\n".encode("utf-8")
             self.wfile.write(payload)
             self.wfile.flush()
 
-        def _write_json(self, payload: Any, *, status: int = 200) -> None:
+        def _write_json(
+            self,
+            payload: Any,
+            *,
+            status: int = 200,
+            extra_headers: Optional[Dict[str, str]] = None,
+        ) -> None:
             body = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Cache-Control", "no-store")
+            for key, value in (extra_headers or {}).items():
+                self.send_header(key, value)
             self.end_headers()
             self.wfile.write(body)
 
     return Handler
 
 
-def _run_sse(host: str, port: int) -> int:  # pragma: no cover
-    server = http.server.ThreadingHTTPServer((host, port), _make_sse_handler())
-    print(f"easyicu research-agent MCP SSE listening on http://{host}:{port}/sse", file=sys.stderr)
+def _run_sse(
+    host: str,
+    port: int,
+    *,
+    bearer_token: Optional[str] = None,
+    allowed_hosts: Optional[List[str]] = None,
+    allowed_origins: Optional[List[str]] = None,
+    max_body_bytes: int = DEFAULT_HTTP_MAX_BODY_BYTES,
+) -> int:  # pragma: no cover
+    token = _validate_sse_server_config(host, bearer_token)
+    handler = _make_sse_handler(
+        bind_host=host,
+        port=port,
+        bearer_token=token,
+        allowed_hosts=allowed_hosts,
+        allowed_origins=allowed_origins,
+        max_body_bytes=max_body_bytes,
+    )
+    server = http.server.ThreadingHTTPServer((host, port), handler)
+    print(
+        f"easyicu research-agent MCP SSE listening on http://{host}:{port}/sse",
+        file=sys.stderr,
+    )
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -1074,9 +1484,39 @@ def main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover
     parser.add_argument("--transport", choices=["stdio", "sse"], default="stdio")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument(
+        "--allowed-host",
+        action="append",
+        default=[],
+        help=(
+            "Additional exact Host header accepted by the SSE transport. "
+            "Required for practical wildcard/LAN binds."
+        ),
+    )
+    parser.add_argument(
+        "--allowed-origin",
+        action="append",
+        default=[],
+        help="Additional exact browser Origin accepted by the SSE transport.",
+    )
+    parser.add_argument(
+        "--max-request-bytes",
+        type=int,
+        default=DEFAULT_HTTP_MAX_BODY_BYTES,
+    )
     args = parser.parse_args(argv)
     if args.transport == "sse":
-        return _run_sse(args.host, args.port)
+        try:
+            return _run_sse(
+                args.host,
+                args.port,
+                bearer_token=os.environ.get(MCP_BEARER_TOKEN_ENV),
+                allowed_hosts=args.allowed_host,
+                allowed_origins=args.allowed_origin,
+                max_body_bytes=args.max_request_bytes,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
     return _run_stdio()
 
 

@@ -81,6 +81,11 @@ _REQUIRED_KINDS = {"code", "log", "table", "figure", "statistic"}
 _ARM_ORDER = ("naive", "aware")
 _ARM_LABELS = {"naive": "Naive", "aware": "ICU-aware"}
 _DEFAULT_SUBMISSION_PROFILE_REF = "npj_dm/20260611"
+_TRAJECTORY_ENV_KEYS = (
+    "TRAJECTORY_PARQUET",
+    "EASYICU_TRAJECTORY_PARQUET",
+    "COHORT_TRAJECTORY_PARQUET",
+)
 
 
 def _local_openai_base_url(base_url: Optional[str]) -> bool:
@@ -768,7 +773,12 @@ def _run_one_arm(
     # The provided cohort is already materialised; let the planner reference any
     # of its columns in a CTAS predicate without tripping the static dictionary
     # check ("unknown concept_id: <derived column>").
-    register_cohort_concept_ids(list(getattr(cohort, "columns", [])))
+    register_cohort_concept_ids(
+        list(
+            getattr(item, "cohort_columns", None)
+            or getattr(cohort, "columns", [])
+        )
+    )
 
     workdir.mkdir(parents=True, exist_ok=True)
     # Force the kind-matched reporting checklist(s) so the EMITTED file matches
@@ -1459,14 +1469,15 @@ def _enforce_submission_profile_runner(
     Paper-facing submission profiles require a containerised runner so
     agent-generated code executes under ``docker run --network none``
     with a read-only cohort mount, never on the host subprocess. With no
-    profile, the host ``subprocess`` runner stays the default. The
+    profile, ``auto`` probes Docker first and may use macOS sandbox-exec. The
     ``--allow-host-runner`` escape hatch exists for offline development
     and is never valid for an archival/canonical batch.
     """
+    requested = (runner or "auto").lower()
     if profile is None:
-        return (runner or "subprocess").lower()
+        return requested
     required = (profile.requires_runner or "docker").lower()
-    resolved = (runner or required).lower()
+    resolved = required if requested == "auto" else requested
     if resolved != required and not allow_host_runner:
         raise SystemExit(
             f"Submission profile '{profile.ref}' is paper-facing and must "
@@ -1828,12 +1839,13 @@ def main() -> int:
     )
     parser.add_argument(
         "--runner",
-        choices=["subprocess", "docker"],
+        choices=["auto", "subprocess", "docker"],
         default=None,
         help=(
             "Code-execution backend for agent-generated scripts. "
-            "'subprocess' runs on the host (default for dev). 'docker' uses "
-            "the network-isolated container runner. A submission profile "
+            "'auto' (default) probes Docker first and otherwise permits only "
+            "macOS sandbox-exec. 'subprocess' is an explicit development "
+            "choice; 'docker' uses the network-isolated container runner. A submission profile "
             "requires 'docker'; omit this flag under --submission-profile to "
             "default to it."
         ),
@@ -2275,6 +2287,32 @@ def _write_stability_report(
     print(f"  -> {base_out_root / 'stability_report.json'}")
 
 
+def _pipeline_options_with_trajectory(
+    pipeline_options: Optional[Dict[str, Any]],
+    *,
+    trajectory_path: Optional[Path],
+) -> Dict[str, Any]:
+    """Pass one declared trajectory through the runner's explicit env surface."""
+
+    options = dict(pipeline_options or {})
+    if trajectory_path is None:
+        return options
+    resolved = Path(trajectory_path).resolve()
+    runner_kwargs = dict(options.get("runner_kwargs") or {})
+    extra_env = dict(runner_kwargs.get("extra_env") or {})
+    for key in _TRAJECTORY_ENV_KEYS:
+        existing = extra_env.get(key)
+        if existing is not None and Path(str(existing)).expanduser().resolve() != resolved:
+            raise ValueError(
+                f"Conflicting {key}: {existing!r} does not match "
+                f"declared trajectory_path {str(resolved)!r}"
+            )
+        extra_env[key] = str(resolved)
+    runner_kwargs["extra_env"] = extra_env
+    options["runner_kwargs"] = runner_kwargs
+    return options
+
+
 def _run_ehrflowbench_jsonl(
     *,
     jsonl_path: Path,
@@ -2363,6 +2401,28 @@ def _run_ehrflowbench_jsonl(
                 }
             )
             continue
+        raw_trajectory_path = row.get("trajectory_path")
+        trajectory_path: Optional[Path] = None
+        if raw_trajectory_path:
+            trajectory_path = Path(str(raw_trajectory_path)).expanduser().resolve()
+            if not trajectory_path.is_file():
+                pending.append(
+                    {
+                        "key": key,
+                        "status": "pending_missing_trajectory",
+                        "trajectory_path": str(trajectory_path),
+                    }
+                )
+                continue
+            if trajectory_path.suffix.lower() not in {".parquet", ".pq"}:
+                pending.append(
+                    {
+                        "key": key,
+                        "status": "unsupported_trajectory_format",
+                        "trajectory_path": str(trajectory_path),
+                    }
+                )
+                continue
         item = SimpleNamespace(
             key=key,
             name=str(row.get("name") or key),
@@ -2379,6 +2439,8 @@ def _run_ehrflowbench_jsonl(
             # internal phenotype core) instead of always assuming an
             # association. Absent -> descriptive_association (back-compat).
             kind=str(row.get("kind") or "descriptive_association"),
+            cohort_size=int(len(cohort)),
+            cohort_columns=list(cohort.columns),
         )
         # Resume support: skip items that already finished cleanly so a quota
         # 502 mid-batch never forces a full redo. An item counts as "done" only
@@ -2393,10 +2455,13 @@ def _run_ehrflowbench_jsonl(
         try:
             score = _run_one_item_from_cohort(
                 item=item,
-                cohort=cohort,
+                cohort=path,
                 out_root=out_root,
                 arms=arms,
-                pipeline_options=pipeline_options,
+                pipeline_options=_pipeline_options_with_trajectory(
+                    pipeline_options,
+                    trajectory_path=trajectory_path,
+                ),
                 provider=provider,
                 model=model,
                 request_timeout=request_timeout,
@@ -2495,7 +2560,7 @@ def _run_one_item_from_cohort(
     if "naive" in selected:
         naive = _run_one_arm(
             item=item,
-            cohort=cohort.copy(),
+            cohort=(cohort if isinstance(cohort, (str, Path)) else cohort.copy()),
             workdir=item_root / "naive",
             disable_icu_context=True,
             label="naive",
@@ -2510,7 +2575,7 @@ def _run_one_item_from_cohort(
     if "aware" in selected:
         aware = _run_one_arm(
             item=item,
-            cohort=cohort.copy(),
+            cohort=(cohort if isinstance(cohort, (str, Path)) else cohort.copy()),
             workdir=item_root / "aware",
             disable_icu_context=False,
             label="aware",
@@ -2522,6 +2587,9 @@ def _run_one_item_from_cohort(
             stop_after_step_id=stop_after_step_id,
             force_writer_probe=force_writer_probe,
         )
+    cohort_size = getattr(item, "cohort_size", None)
+    if cohort_size is None:
+        cohort_size = len(cohort)
     payload = {
         "item_key": item.key,
         "name": item.name,
@@ -2533,7 +2601,7 @@ def _run_one_item_from_cohort(
         "evidence_basis": getattr(item, "evidence_basis", "external_import"),
         "claim_scope": getattr(item, "claim_scope", "external_import_only"),
         "interpretation_note": getattr(item, "interpretation_note", None),
-        "cohort_size": int(len(cohort)),
+        "cohort_size": int(cohort_size),
     }
     if "naive" in selected:
         payload["naive"] = naive

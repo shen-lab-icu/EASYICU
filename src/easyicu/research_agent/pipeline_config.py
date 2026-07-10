@@ -218,7 +218,7 @@ class PipelineConfig:
     experience_bank_min_similarity: float = 0.2
 
     # --- code runner ----------------------------------------------------
-    runner_kind: str = "subprocess"
+    runner_kind: str = "auto"
     runner_image: Optional[str] = None
     runner_network: str = "none"
     runner_factory: Optional[Callable[..., Any]] = None

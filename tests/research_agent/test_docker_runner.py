@@ -20,6 +20,7 @@ mock ``subprocess.run`` and ``shutil.which`` to verify:
 
 from __future__ import annotations
 
+import json
 import shlex
 import subprocess
 from pathlib import Path
@@ -55,6 +56,31 @@ def _install_fake_subprocess(
     def fake_run(cmd, *args, **kwargs):
         if captured is not None:
             captured.append(list(cmd))
+        if len(cmd) >= 3 and cmd[1:3] == ["image", "inspect"]:
+            return _FakeProc(
+                stdout=json.dumps(
+                    {
+                        "Id": "sha256:" + "a" * 64,
+                        "RepoDigests": ["img@sha256:" + "b" * 64],
+                    }
+                )
+            )
+        if "pip" in cmd and "freeze" in cmd:
+            return _FakeProc(
+                stdout=(
+                    "numpy==2.0.0\n"
+                    "pandas==2.2.0\n"
+                    "scipy==1.14.0\n"
+                    "matplotlib==3.9.0\n"
+                    "statsmodels==0.14.0\n"
+                    "scikit-learn==1.5.0\n"
+                    "pyarrow==23.0.0\n"
+                    "seaborn==0.13.0\n"
+                    "lifelines==0.30.0\n"
+                )
+            )
+        if len(cmd) >= 2 and cmd[1] == "pull":
+            return proc
         if raise_timeout:
             raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs.get("timeout", 0))
         # Mimic the side-effect a real container would have so the
@@ -64,11 +90,15 @@ def _install_fake_subprocess(
     # Patch the module-level subprocess (not the global one) so other
     # tests are unaffected.
     import easyicu.research_agent.runner as runner_mod
+
     monkeypatch.setattr(runner_mod.subprocess, "run", fake_run)
 
 
-def _force_docker_present(monkeypatch: pytest.MonkeyPatch, fake_path: str = "/usr/bin/docker") -> None:
+def _force_docker_present(
+    monkeypatch: pytest.MonkeyPatch, fake_path: str = "/usr/bin/docker"
+) -> None:
     import easyicu.research_agent.runner as runner_mod
+
     monkeypatch.setattr(runner_mod.shutil, "which", lambda _name: fake_path)
 
 
@@ -77,16 +107,21 @@ def _force_docker_present(monkeypatch: pytest.MonkeyPatch, fake_path: str = "/us
 # ---------------------------------------------------------------------------
 
 
-def test_missing_docker_binary_raises(ra, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_missing_docker_binary_raises(
+    ra, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     cohort = _make_cohort(tmp_path)
     import easyicu.research_agent.runner as runner_mod
+
     monkeypatch.setattr(runner_mod.shutil, "which", lambda _n: None)
 
     with pytest.raises(FileNotFoundError, match="not found on PATH"):
         ra.DockerRunner(workdir=tmp_path / "run", cohort_parquet=cohort)
 
 
-def test_constructor_resolves_docker_via_which(ra, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_constructor_resolves_docker_via_which(
+    ra, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     cohort = _make_cohort(tmp_path)
     _force_docker_present(monkeypatch, "/opt/local/bin/docker")
     runner = ra.DockerRunner(workdir=tmp_path / "run", cohort_parquet=cohort)
@@ -94,7 +129,9 @@ def test_constructor_resolves_docker_via_which(ra, tmp_path: Path, monkeypatch: 
 
 
 def test_constructor_honours_environment_image(
-    ra, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     cohort = _make_cohort(tmp_path)
     _force_docker_present(monkeypatch)
@@ -109,18 +146,23 @@ def test_constructor_honours_environment_image(
 
 
 def test_build_command_has_safety_knobs(
-    ra, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     cohort = _make_cohort(tmp_path)
     _force_docker_present(monkeypatch)
     runner = ra.DockerRunner(
-        workdir=tmp_path / "run", cohort_parquet=cohort,
+        workdir=tmp_path / "run",
+        cohort_parquet=cohort,
         image="my/image:latest",
     )
     step_dir, script_path, out_dir = runner.prepare_step_dir("step_x")
     script_path.write_text("print('hi')\n", encoding="utf-8")
     cmd = runner.build_command(
-        step_id="step_x", script_path=script_path, out_dir=out_dir,
+        step_id="step_x",
+        script_path=script_path,
+        out_dir=out_dir,
     )
     joined = " ".join(cmd)
 
@@ -129,21 +171,33 @@ def test_build_command_has_safety_knobs(
     assert "--rm" in cmd
     assert "--init" in cmd
     assert "--network=none" in cmd
-    assert "--workdir=/workspace" in cmd
+    assert "--workdir=/easyicu-run/steps/step_x" in cmd
+    assert "--read-only" in cmd
+    assert "--cap-drop=ALL" in cmd
+    assert "--security-opt=no-new-privileges" in cmd
+    if runner.user:
+        assert f"--user={runner.user}" in cmd
     assert "my/image:latest" in cmd
     # Image must appear before "python" trailer.
     assert cmd.index("my/image:latest") < cmd.index("python")
-    # The command end is `python -u /workspace/analysis.py`.
-    assert cmd[-3:] == ["python", "-u", "/workspace/analysis.py"]
+    # The command end runs the script from the mounted run-tree layout.
+    assert cmd[-3:] == [
+        "python",
+        "-u",
+        "/easyicu-run/steps/step_x/analysis.py",
+    ]
     # Cohort mount: read-only, container path /cohort.parquet.
     assert any(
         "type=bind" in s and "readonly" in s and "target=/cohort.parquet" in s
         for s in cmd
     ), f"cohort mount missing in {joined}"
-    # Step dir mount RW at /workspace.
+    # Run root is RO, with only the current step overlaid RW.
+    assert any(
+        "type=bind" in s and "target=/easyicu-run" in s and "readonly" in s for s in cmd
+    ), f"run-root mount missing in {joined}"
     assert any(
         "type=bind" in s
-        and "target=/workspace" in s
+        and "target=/easyicu-run/steps/step_x" in s
         and "readonly" not in s
         for s in cmd
     ), f"step mount missing in {joined}"
@@ -152,12 +206,17 @@ def test_build_command_has_safety_knobs(
     env_pairs = [cmd[i + 1] for i, tok in enumerate(cmd) if tok == "-e"]
     env_dict = dict(p.split("=", 1) for p in env_pairs)
     assert env_dict["COHORT_PARQUET"] == "/cohort.parquet"
-    assert env_dict["STEP_OUT_DIR"] == "/workspace/outputs"
+    assert env_dict["STEP_OUT_DIR"] == "/easyicu-run/steps/step_x/outputs"
+    assert env_dict["EASYICU_RUN_DIR"] == "/easyicu-run"
     assert env_dict["MPLBACKEND"] == "Agg"
+    assert env_dict["HOME"] == "/tmp"
+    assert env_dict["MPLCONFIGDIR"] == "/tmp/matplotlib"
 
 
 def test_build_command_passes_through_advanced_flags(
-    ra, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     cohort = _make_cohort(tmp_path)
     _force_docker_present(monkeypatch)
@@ -178,7 +237,9 @@ def test_build_command_passes_through_advanced_flags(
     step_dir, script_path, out_dir = runner.prepare_step_dir("step_y")
     script_path.write_text("print('hi')\n", encoding="utf-8")
     cmd = runner.build_command(
-        step_id="step_y", script_path=script_path, out_dir=out_dir,
+        step_id="step_y",
+        script_path=script_path,
+        out_dir=out_dir,
     )
     assert "--network=bridge" in cmd
     assert "--cpus=1.5" in cmd
@@ -199,7 +260,9 @@ def test_build_command_passes_through_advanced_flags(
 
 
 def test_run_invokes_subprocess_and_writes_log(
-    ra, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     cohort = _make_cohort(tmp_path)
     _force_docker_present(monkeypatch)
@@ -211,13 +274,22 @@ def test_run_invokes_subprocess_and_writes_log(
     )
 
     runner = ra.DockerRunner(
-        workdir=tmp_path / "run", cohort_parquet=cohort, image="img:0",
+        workdir=tmp_path / "run",
+        cohort_parquet=cohort,
+        image="img:0",
     )
     result = runner.run(step_id="probe", code="print('hi')\n")
 
-    assert len(captured) == 1, "subprocess.run should be called exactly once"
-    cmd = captured[0]
+    assert len(captured) == 3, "inspect, freeze, then docker run are required"
+    assert captured[0][1:3] == ["image", "inspect"]
+    assert "freeze" in captured[1]
+    immutable_id = "sha256:" + "a" * 64
+    assert immutable_id in captured[1]
+    assert "img:0" not in captured[1]
+    cmd = captured[2]
     assert cmd[0] == runner.docker_executable and cmd[1] == "run"
+    assert immutable_id in cmd
+    assert "img:0" not in cmd
 
     assert result.succeeded
     assert result.returncode == 0
@@ -225,19 +297,62 @@ def test_run_invokes_subprocess_and_writes_log(
     log_text = (result.cwd / "run.log").read_text(encoding="utf-8")
     assert "DockerRunner" in log_text
     assert "img:0" in log_text
+    assert "sha256:" in log_text
+    provenance = json.loads(
+        (result.out_dir / "runner_provenance.json").read_text(encoding="utf-8")
+    )
+    assert provenance["image_id"] == "sha256:" + "a" * 64
+    assert "lifelines" in provenance["method_capabilities"]
+    assert "shap" not in provenance["method_capabilities"]
+    assert "numpy==2.0.0" in (
+        result.out_dir / "runner_requirements.lock.txt"
+    ).read_text(encoding="utf-8")
+    import easyicu.research_agent.method_capabilities as method_capabilities
+
+    capability_block = method_capabilities.coder_method_capability_block()
+    method_capabilities.set_runtime_capability_snapshot_provider(None)
+    assert "* lifelines" in capability_block
+    assert "* shap" not in capability_block
     # Script persisted to disk before run.
     assert result.script_path.read_text(encoding="utf-8") == "print('hi')\n"
 
 
+def test_docker_coder_capabilities_use_image_snapshot_before_first_step(
+    ra, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import easyicu.research_agent.method_capabilities as method_capabilities
+
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+    captured: List[List[str]] = []
+    _install_fake_subprocess(monkeypatch, captured=captured)
+    monkeypatch.setattr(method_capabilities, "_importable", lambda _name: True)
+    ra.DockerRunner(workdir=tmp_path / "run", cohort_parquet=cohort, image="img:tag")
+
+    block = method_capabilities.coder_method_capability_block()
+    method_capabilities.set_runtime_capability_snapshot_provider(None)
+
+    assert len(captured) == 2
+    assert captured[0][1:3] == ["image", "inspect"]
+    assert "freeze" in captured[1]
+    assert "sha256:" + "a" * 64 in captured[1]
+    assert "img:tag" not in captured[1]
+    assert "* lifelines" in block
+    assert "* shap" not in block
+
+
 def test_run_handles_timeout(
-    ra, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     cohort = _make_cohort(tmp_path)
     _force_docker_present(monkeypatch)
     _install_fake_subprocess(monkeypatch, raise_timeout=True)
 
     runner = ra.DockerRunner(
-        workdir=tmp_path / "run", cohort_parquet=cohort,
+        workdir=tmp_path / "run",
+        cohort_parquet=cohort,
         timeout_seconds=0.001,
     )
     result = runner.run(step_id="slow", code="print('hi')\n")
@@ -251,7 +366,9 @@ def test_run_handles_timeout(
 
 
 def test_pull_image_invoked_when_requested(
-    ra, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     cohort = _make_cohort(tmp_path)
     _force_docker_present(monkeypatch)
@@ -263,16 +380,19 @@ def test_pull_image_invoked_when_requested(
     )
 
     runner = ra.DockerRunner(
-        workdir=tmp_path / "run", cohort_parquet=cohort,
-        image="img:1", pull_image=True,
+        workdir=tmp_path / "run",
+        cohort_parquet=cohort,
+        image="img:1",
+        pull_image=True,
     )
     runner.run(step_id="s", code="print('x')\n")
 
-    # The first invocation should be `docker pull img:1`.
+    # Pull is followed by image inspection, environment capture, then run.
     assert captured[0][:2] == [runner.docker_executable, "pull"]
     assert captured[0][2] == "img:1"
-    # Then the actual `docker run` call.
-    assert captured[1][:2] == [runner.docker_executable, "run"]
+    assert captured[1][1:3] == ["image", "inspect"]
+    assert "freeze" in captured[2]
+    assert captured[3][:2] == [runner.docker_executable, "run"]
 
 
 # ---------------------------------------------------------------------------
@@ -281,7 +401,9 @@ def test_pull_image_invoked_when_requested(
 
 
 def test_pipeline_runner_kind_docker_constructs_docker_runner(
-    ra, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     cohort_path = _make_cohort(tmp_path)
     _force_docker_present(monkeypatch)
@@ -291,23 +413,37 @@ def test_pipeline_runner_kind_docker_constructs_docker_runner(
         runner_kind="docker",
         runner_image="img:smoke",
     )
-    runner = pipe._build_runner(run_dir=tmp_path / "ra" / "run", cohort_path=cohort_path)
+    runner = pipe._build_runner(
+        run_dir=tmp_path / "ra" / "run", cohort_path=cohort_path
+    )
     assert isinstance(runner, ra.DockerRunner)
     assert runner.image == "img:smoke"
     assert runner.network == "none"
 
 
-def test_pipeline_runner_kind_default_is_subprocess(
-    ra, tmp_path: Path,
+def test_pipeline_runner_kind_default_uses_probed_safe_backend(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
+    import easyicu.research_agent.pipeline as pipeline_mod
+
     cohort_path = _make_cohort(tmp_path)
+    monkeypatch.setattr(
+        pipeline_mod,
+        "select_safe_runner_kind",
+        lambda **_kwargs: "subprocess",
+    )
     pipe = ra.ResearchAgentPipeline(workdir=tmp_path / "ra")
-    runner = pipe._build_runner(run_dir=tmp_path / "ra" / "run", cohort_path=cohort_path)
+    runner = pipe._build_runner(
+        run_dir=tmp_path / "ra" / "run", cohort_path=cohort_path
+    )
     assert isinstance(runner, ra.CodeRunner)
 
 
 def test_pipeline_runner_factory_overrides_kind(
-    ra, tmp_path: Path,
+    ra,
+    tmp_path: Path,
 ):
     cohort_path = _make_cohort(tmp_path)
     seen: Dict[str, Any] = {}
@@ -323,7 +459,9 @@ def test_pipeline_runner_factory_overrides_kind(
         runner_kind="docker",  # ignored when runner_factory is set
         runner_factory=fake_factory,
     )
-    runner = pipe._build_runner(run_dir=tmp_path / "ra" / "run", cohort_path=cohort_path)
+    runner = pipe._build_runner(
+        run_dir=tmp_path / "ra" / "run", cohort_path=cohort_path
+    )
     assert runner == "sentinel-runner"
     assert seen["cohort_parquet"] == cohort_path
 
@@ -331,5 +469,53 @@ def test_pipeline_runner_factory_overrides_kind(
 def test_pipeline_unknown_runner_kind_raises(ra, tmp_path: Path):
     with pytest.raises(ValueError, match="Unknown runner_kind"):
         ra.ResearchAgentPipeline(
-            workdir=tmp_path / "ra", runner_kind="firecracker",
+            workdir=tmp_path / "ra",
+            runner_kind="firecracker",
         )
+
+
+def test_build_command_mounts_explicit_external_path_env_read_only(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    cohort = _make_cohort(tmp_path)
+    trajectory = tmp_path / "external" / "trajectory.parquet"
+    trajectory.parent.mkdir()
+    trajectory.write_bytes(b"trajectory")
+    _force_docker_present(monkeypatch)
+    runner = ra.DockerRunner(
+        workdir=tmp_path / "run",
+        cohort_parquet=cohort,
+        extra_env={"TRAJECTORY_PARQUET": str(trajectory)},
+    )
+    _, script_path, out_dir = runner.prepare_step_dir("trajectory")
+    script_path.write_text("print('ok')\n", encoding="utf-8")
+
+    cmd = runner.build_command(
+        step_id="trajectory", script_path=script_path, out_dir=out_dir
+    )
+    env_pairs = [cmd[i + 1] for i, tok in enumerate(cmd) if tok == "-e"]
+    env_dict = dict(pair.split("=", 1) for pair in env_pairs)
+
+    assert env_dict["TRAJECTORY_PARQUET"].startswith("/easyicu-inputs/")
+    assert str(trajectory) not in env_dict["TRAJECTORY_PARQUET"]
+    assert any(
+        f"source={trajectory}" in token
+        and f"target={env_dict['TRAJECTORY_PARQUET']}" in token
+        and "readonly" in token
+        for token in cmd
+    )
+
+
+def test_docker_runner_rejects_step_id_path_escape(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+    runner = ra.DockerRunner(workdir=tmp_path / "run", cohort_parquet=cohort)
+
+    with pytest.raises(ValueError, match="single safe path component"):
+        runner.run(step_id="../escape", code="print('no')\n")
