@@ -752,12 +752,22 @@ def _paired_numeric_time_values(
         values.append(float(num))
         times.append(_json_cell(raw_time))
     point_count = len(values)
+    sampled = _bounded_signal_indices(point_count)
     return (
-        times[:_MAX_SIGNAL_POINTS],
-        values[:_MAX_SIGNAL_POINTS],
+        [times[index] for index in sampled],
+        [values[index] for index in sampled],
         point_count,
         values,
     )
+
+
+def _bounded_signal_indices(point_count: int) -> List[int]:
+    """Select at most 12 ordered points while preserving the full time window."""
+    if point_count <= _MAX_SIGNAL_POINTS:
+        return list(range(point_count))
+    last = point_count - 1
+    intervals = _MAX_SIGNAL_POINTS - 1
+    return [(index * last) // intervals for index in range(_MAX_SIGNAL_POINTS)]
 
 
 def _time_lane_payloads(
@@ -793,7 +803,7 @@ def _time_lane_payloads(
                     "values": values,
                     "times": times,
                     "point_count": point_count,
-                    "current": values[-1],
+                    "current": all_values[-1],
                     "min": round(min(all_values), 3),
                     "max": round(max(all_values), 3),
                     "mean": round(sum(all_values) / len(all_values), 3),
@@ -1203,34 +1213,31 @@ def _read_table_preview(
 
     suffix = path.suffix.lower()
     if suffix == ".parquet":
-        try:
-            import pyarrow.parquet as pq
+        import pyarrow.parquet as pq
 
-            parquet = pq.ParquetFile(path)
-            remaining_skip = max(0, offset)
-            remaining_take = max(0, nrows)
-            frames = []
-            for batch in parquet.iter_batches(
-                batch_size=max(nrows, min(1024, remaining_skip + remaining_take), 1),
-                columns=columns,
-            ):
-                frame = batch.to_pandas()
-                if remaining_skip >= len(frame):
-                    remaining_skip -= len(frame)
-                    continue
-                if remaining_skip:
-                    frame = frame.iloc[remaining_skip:]
-                    remaining_skip = 0
-                piece = frame.head(remaining_take)
-                frames.append(piece)
-                remaining_take -= len(piece)
-                if remaining_take <= 0:
-                    break
-            if not frames:
-                return pd.DataFrame(columns=columns)
-            return pd.concat(frames, ignore_index=True)
-        except Exception:
-            return pd.read_parquet(path, columns=columns).iloc[offset : offset + nrows]
+        parquet = pq.ParquetFile(path)
+        remaining_skip = max(0, offset)
+        remaining_take = max(0, nrows)
+        frames = []
+        for batch in parquet.iter_batches(
+            batch_size=max(nrows, min(1024, remaining_skip + remaining_take), 1),
+            columns=columns,
+        ):
+            frame = batch.to_pandas()
+            if remaining_skip >= len(frame):
+                remaining_skip -= len(frame)
+                continue
+            if remaining_skip:
+                frame = frame.iloc[remaining_skip:]
+                remaining_skip = 0
+            piece = frame.head(remaining_take)
+            frames.append(piece)
+            remaining_take -= len(piece)
+            if remaining_take <= 0:
+                break
+        if not frames:
+            return pd.DataFrame(columns=columns)
+        return pd.concat(frames, ignore_index=True)
     if suffix == ".xlsx":
         skiprows = range(1, offset + 1) if offset else None
         return pd.read_excel(path, usecols=columns, nrows=nrows, skiprows=skiprows)
@@ -2029,14 +2036,14 @@ def _signals_payload(vitals: Any, entity_id: str) -> List[Dict[str, Any]]:
         if key not in one.columns:
             continue
         values = dataio._numeric_values(one[key])
-        bounded = values[:_MAX_SIGNAL_POINTS]
+        bounded = [values[index] for index in _bounded_signal_indices(len(values))]
         if bounded:
             out.append(
                 {
                     "key": key,
                     "name": name,
                     "unit": unit,
-                    "current": bounded[-1],
+                    "current": values[-1],
                     "values": bounded,
                     "point_count": len(values),
                     "bounded": True,

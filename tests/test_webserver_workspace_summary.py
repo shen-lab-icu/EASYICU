@@ -2330,6 +2330,65 @@ def test_patient_review_multi_entity_traces_keep_times_aligned_after_numeric_fil
     ]
 
 
+def test_patient_review_bounded_signals_span_full_window_and_keep_true_latest(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    export_dir = _write_csv_export(tmp_path / "miiv", database="miiv")
+    observations = 20
+    vitals = pd.DataFrame(
+        {
+            "stay_id": [1] * observations,
+            "charttime": [
+                f"2026-01-01 {hour:02d}:00" for hour in range(observations)
+            ],
+            "hr": list(range(100, 100 + observations)),
+            "map": list(range(60, 60 + observations)),
+            "spo2": [97] * observations,
+            "temp": [37.0] * observations,
+        }
+    )
+    vitals.to_csv(export_dir / "vitals.csv", index=False)
+    manifest_path = export_dir / "_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    for item in manifest["files"]:
+        if item["module"] == "vitals":
+            item["rows"] = observations
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    source_store.register_source(
+        str(export_dir), label="Review fixture", active=True, crossdb=True
+    )
+
+    response = TestClient(app).post("/api/patient-review/drilldown", json={})
+
+    assert response.status_code == 200
+    payload = response.json()
+    selected_hr = next(
+        row for row in payload["selected"]["signals"] if row["key"] == "hr"
+    )
+    lane_hr = next(
+        row
+        for lane in payload["time_lanes"]
+        for row in lane["signals"]
+        if row["feature"] == "hr"
+    )
+    assert selected_hr["point_count"] == observations
+    assert len(selected_hr["values"]) == 12
+    assert selected_hr["values"][0] == 100.0
+    assert selected_hr["values"][-1] == 119.0
+    assert selected_hr["current"] == 119.0
+    assert lane_hr["point_count"] == observations
+    assert len(lane_hr["values"]) == len(lane_hr["times"]) == 12
+    assert lane_hr["times"][0] == "2026-01-01 00:00"
+    assert lane_hr["times"][-1] == "2026-01-01 19:00"
+    assert lane_hr["values"][0] == 100.0
+    assert lane_hr["values"][-1] == 119.0
+    assert lane_hr["current"] == 119.0
+
+
 def test_patient_review_drilldown_renders_manifest_eligibility_flow(
     tmp_path: Path,
     monkeypatch,
@@ -4456,6 +4515,41 @@ def test_crossdb_raw_distribution_fails_closed_until_two_raw_databases(
 
     assert response.status_code == 400
     assert response.json()["detail"]["error"] == "need_two_raw_databases"
+
+
+def test_crossdb_raw_distribution_requires_every_requested_database(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    root = tmp_path / "databases"
+    for folder in ("mimiciv", "eicu", "aumc"):
+        (root / folder).mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(
+        crossdb_review,
+        "_load_raw_feature_data",
+        lambda **_kwargs: {
+            "miiv": pd.DataFrame({"concept": ["hr"], "value": [80]}),
+            "eicu": pd.DataFrame({"concept": ["hr"], "value": [82]}),
+        },
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/crossdb-review/raw-distribution",
+        json={
+            "data_root": str(root),
+            "databases": ["miiv", "eicu", "aumc"],
+            "features": ["hr"],
+        },
+    )
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["error"] == "loaded_fewer_than_requested_raw_databases"
+    assert detail["requested_databases"] == ["miiv", "eicu", "aumc"]
+    assert detail["loaded_databases"] == ["eicu", "miiv"]
+    assert detail["missing_databases"] == ["aumc"]
 
 
 def test_crossdb_review_summary_fails_closed_until_two_registered_sources(

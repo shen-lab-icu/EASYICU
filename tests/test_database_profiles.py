@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Mapping
 from types import SimpleNamespace
 
@@ -220,6 +221,42 @@ def test_load_concepts_explicit_batch_size_uses_mimic_demo_profile(
     )
     assert captured["patient_ids"] == {"icustay_id": [101, 102, 103]}
     assert result["icustay_id"].tolist() == [101, 102, 103]
+
+
+@pytest.mark.parametrize("sampled_patient_ids", [None, []])
+def test_load_concepts_required_bounded_sample_fails_closed(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    sampled_patient_ids,
+) -> None:
+    loader = SimpleNamespace(database="mimic_demo", data_path=tmp_path)
+    monkeypatch.setattr(api, "_get_global_loader", lambda **_kwargs: loader)
+    monkeypatch.setattr(
+        api,
+        "_sample_patient_ids",
+        lambda *_args, **_kwargs: sampled_patient_ids,
+    )
+
+    with pytest.raises(RuntimeError, match="refusing to fall back"):
+        api.load_concepts(
+            "hr",
+            database="mimic_demo",
+            max_patients=2,
+            require_bounded_sample=True,
+        )
+
+
+def test_load_concepts_bounded_flag_preserves_legacy_positional_tail() -> None:
+    parameters = list(inspect.signature(api.load_concepts).parameters)
+
+    assert parameters[parameters.index("max_patients") : parameters.index("kwargs")] == [
+        "max_patients",
+        "limit",
+        "sample_strategy",
+        "batch_size",
+        "memory_efficient",
+        "require_bounded_sample",
+    ]
 
 
 def test_load_concepts_positional_database_guard_resolves_alias_to_key(

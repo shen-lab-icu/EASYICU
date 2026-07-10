@@ -782,6 +782,7 @@ def load_concepts(
     sample_strategy: str = 'random',  # 采样策略: 'random'=seeded 随机(默认,代表性);'sorted'=按ID排序前N个(ricu-parity 用)
     batch_size: Optional[int] = None,  # 🆕 分批处理大小（默认30000，适合12GB内存）
     memory_efficient: bool = False,  # 🆕 内存优化模式（压缩数据类型）
+    require_bounded_sample: bool = False,
     **kwargs,
 ) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
     """
@@ -836,6 +837,8 @@ def load_concepts(
         merge: 是否合并多个概念到一个DataFrame
         verbose: 是否显示详细信息
         max_patients: 自动采样的患者上限
+        require_bounded_sample: 若为 True，则在 max_patients 采样失败时立即报错，
+            不允许回退到全库加载。适用于 Web 等必须硬性有界的调用路径。
         sample_strategy: 取子集时的采样策略。默认 'random'(seeded, 可复现, 代表性);
             ricu fixture parity 需显式传 'sorted'。见 _sample_patient_ids 文档。
         limit: max_patients 的别名
@@ -1010,6 +1013,13 @@ def load_concepts(
     if effective_max_patients is not None and patient_ids is None:
         patient_ids = _sample_patient_ids(loader, effective_max_patients, verbose,
                                           sample_strategy=sample_strategy)
+        if require_bounded_sample and (
+            patient_ids is None or len(patient_ids) == 0
+        ):
+            raise RuntimeError(
+                "Unable to build the required bounded patient sample; refusing "
+                "to fall back to an unbounded database load."
+            )
 
     # 规范化患者ID
     if patient_ids is not None and not isinstance(patient_ids, dict):

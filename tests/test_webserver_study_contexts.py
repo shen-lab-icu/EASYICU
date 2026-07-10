@@ -129,6 +129,47 @@ def test_study_context_api_persists_lists_and_handoffs_metadata(tmp_path: Path) 
     assert not context_store._CONFIG_PATH.with_suffix(".json.tmp").exists()
 
 
+def test_patient_review_scope_metadata_survives_backend_normalization() -> None:
+    response = TestClient(app).post(
+        "/api/study-contexts",
+        json={
+            "id": "study_patient_bounded_review",
+            "question": "Analyze the bounded Patient Review context.",
+            "cohort": {
+                "review": "patient",
+                "entity_count": 94_458,
+                "full_entity_count": 94_458,
+                "review_entities": 500,
+                "review_entity_cap": 500,
+                "review_scope": "browser_bounded_entity_sample",
+                "module_count": 19,
+            },
+            "confirmations": {
+                "patient_review_completed": True,
+                "patient_review_bounded_sample": True,
+                "patient_review_full_entity_set": False,
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    context = response.json()["context"]
+    assert context["cohort"] == {
+        "review": "patient",
+        "entity_count": 94_458,
+        "full_entity_count": 94_458,
+        "review_entities": 500,
+        "review_entity_cap": 500,
+        "review_scope": "browser_bounded_entity_sample",
+        "module_count": 19,
+    }
+    assert context["confirmations"] == {
+        "patient_review_completed": True,
+        "patient_review_bounded_sample": True,
+        "patient_review_full_entity_set": False,
+    }
+
+
 def test_stale_metadata_save_cannot_overwrite_server_owned_job_lifecycle() -> None:
     client = TestClient(app)
     created = client.post(
