@@ -1,8 +1,20 @@
 /* Agent Projects route-owned layout fixes. Do not add cross-route shell rules here. */
 
+/* The horizontal pipe -> vertical-stack switch is a viewport media query
+   (max-width:720px), but the pipe also lives in a narrow detail column when the
+   studies list is open (~578px at a 1180px viewport). There the old `flex:1 1 0;
+   min-width:0` let each of the 5 steps collapse below its label width, so a title
+   like "Evidence check" wrapped one character per line (vertical text). Keep a
+   readable per-step floor and let the pipe scroll inside its own container when
+   the steps genuinely do not fit, instead of crushing the labels. Wide layouts
+   still grow to fill; the <=720px vertical stack (width:100%) still overrides. */
+.ag-pipe{
+  overflow-x: auto;
+}
+
 .ag-pipe .pstep{
-  flex: 1 1 0;
-  min-width: 0;
+  flex: 1 0 auto;
+  min-width: 108px;
 }
 
 .ag-pipe .pmeta{
