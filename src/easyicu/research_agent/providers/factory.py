@@ -188,10 +188,19 @@ def build_provider_client(
         # explicitly opts in (trusted authenticating proxy, e.g. Codex Tools on
         # :8787) AND a real key is present, forward the real key so the proxy
         # accepts the request instead of 401-ing the dummy.
+        #
+        # The opt-in trusts ONE operator-configured endpoint: the SERVER-OWNED
+        # ``OPENAI_BASE_URL``. A per-request ``base_url_override`` is untrusted
+        # (``has_override``) -- it can name ANY loopback port, including a listener
+        # a local caller controls -- so it always receives the dummy key even under
+        # the opt-in. Without this guard the flag (meant to trust one proxy) would
+        # let a request-controlled override steer the paid secret to an
+        # attacker-chosen loopback port and harvest it from the Authorization header.
         if loopback:
+            trusted_loopback = (not has_override) and _loopback_forwards_real_key(env)
             loopback_key = (
                 api_key
-                if (api_key and _loopback_forwards_real_key(env))
+                if (api_key and trusted_loopback)
                 else LOCAL_OPENAI_DUMMY_API_KEY
             )
         else:

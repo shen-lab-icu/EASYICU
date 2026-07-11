@@ -159,6 +159,41 @@ def test_loopback_opt_in_forwards_real_openai_key_to_trusted_proxy(ra, monkeypat
         assert kwargs["api_key"] == "sk-real-proxy-key"
 
 
+def test_loopback_opt_in_does_not_forward_real_key_to_per_request_override(
+    ra, monkeypatch
+):
+    # Regression (security): the opt-in trusts ONE operator-configured proxy
+    # (server-owned OPENAI_BASE_URL). An untrusted per-request ``base_url``
+    # override can name ANY loopback port -- including a listener a local caller
+    # controls -- so it must NEVER receive the real key even with the opt-in set.
+    # Otherwise a local caller could steer the paid secret to a port it owns and
+    # harvest it from the Authorization header.
+    import easyicu.research_agent.mcp_server as mcp
+    from easyicu.research_agent.providers import LOCAL_OPENAI_DUMMY_API_KEY
+
+    constructed: list[dict[str, Any]] = []
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-real-proxy-key")
+    monkeypatch.setenv("EASYICU_TRUST_LOOPBACK_PROXY_KEY", "1")
+    monkeypatch.setattr(
+        mcp, "OpenAIClient", lambda **kwargs: constructed.append(kwargs)
+    )
+
+    client, error = mcp._build_run_llm(
+        {
+            "provider": "openai",
+            "model": "model",
+            # Attacker-chosen loopback port supplied via the per-request override.
+            "base_url": "http://127.0.0.1:9999/v1",
+        }
+    )
+
+    assert error is None
+    assert constructed, "client should still be constructed for a loopback override"
+    assert constructed[0]["base_url"] == "http://127.0.0.1:9999/v1"
+    assert constructed[0]["api_key"] == LOCAL_OPENAI_DUMMY_API_KEY
+    assert constructed[0]["api_key"] != "sk-real-proxy-key"
+
+
 def test_loopback_opt_in_without_key_still_uses_dummy(ra, monkeypatch):
     # Opt-in set but no real key present (true no-auth vLLM): still the dummy,
     # never an empty/None credential.
