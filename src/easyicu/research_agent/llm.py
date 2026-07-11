@@ -367,13 +367,16 @@ class OpenAIClient:
             new_client = OpenAI(**kwargs)
         except Exception:
             return
-        old = self._client
+        # Swap in the fresh client with a plain reference assignment (atomic in
+        # CPython). Do NOT close the old client synchronously: the single
+        # OpenAIClient is shared across the writer's 8-way ThreadPoolExecutor
+        # (agents.py), and a peer thread may be mid-request on the old client.
+        # Closing its httpx pool here tears that in-flight request down -- which
+        # itself surfaces as a "connection reset" that re-enters this same
+        # transient branch and triggers cascading rebuilds across all writers.
+        # The old pool is reclaimed by GC once no thread holds it; rebuilds are
+        # rare and the client is per-run, so the transient leak is bounded.
         self._client = new_client
-        try:  # best-effort close of the stale pool
-            if hasattr(old, "close"):
-                old.close()
-        except Exception:
-            pass
 
     def complete(
         self,
