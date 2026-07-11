@@ -5,7 +5,13 @@
    ============================================================ */
 
 *{ box-sizing: border-box; }
-html, body{ margin: 0; height: 100%; }
+/* Shell owner: clip the page's horizontal axis so an off-canvas fixed drawer
+   (the closed Copilot dock #cpDock, right:0 + translateX(100%)) cannot extend
+   the document scroll width and let the whole body scroll sideways ~71px.
+   `clip` (not `hidden`) keeps overflow-y: visible and creates no scroll
+   container, so the sticky sidebar and vertical scroll are unaffected. In-content
+   wide tables keep their own overflow-x:auto containers. */
+html, body{ margin: 0; height: 100%; overflow-x: clip; }
 body{
   font-family: var(--font-sans), var(--font-cn);
   font-feature-settings: "ss01","cv11","tnum";
