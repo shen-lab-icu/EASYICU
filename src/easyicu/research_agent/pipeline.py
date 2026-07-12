@@ -141,7 +141,12 @@ from .cohort_schema import (
     materialize_locked_analysis_cohort,
     write_locked_cohort_definition,
 )
-from .robustness_panel import ensure_robustness_specs, write_locked_robustness_specs
+from .robustness_panel import (
+    ensure_robustness_specs,
+    load_locked_robustness_specs,
+    robustness_specs_sha,
+    write_locked_robustness_specs,
+)
 from .pipeline_report import (
     execution_gate_status,
     render_report,
@@ -605,6 +610,67 @@ def _next_analysis_plan_revision(
     while evidence.get(f"analysis_plan_revision_{revision}") is not None:
         revision += 1
     return revision
+
+
+def _restore_resume_plan_robustness_lock(
+    *,
+    plan: AnalysisPlan,
+    run_dir: Path,
+    evidence: EvidenceStore,
+    prompt_version: str,
+    llm_signature: str,
+) -> tuple[AnalysisPlan, Optional[Path]]:
+    """Project the verified plan-time robustness lock onto a resume plan.
+
+    A probe-time replanner from older runs could reword or drop robustness
+    specifications after the immutable lock was written. Execution correctly
+    rejects that drift, but resume must load a plan that agrees with the lock.
+    The lock remains the authority: this migration writes a new immutable plan
+    revision and never rewrites the locked specifications.
+    """
+
+    lock_path = Path(run_dir) / "robustness_specs_locked.json"
+    if not lock_path.is_file():
+        return plan, None
+    locked_specs = load_locked_robustness_specs(run_dir)
+    active_specs = list(plan.robustness_specs or [])
+    if robustness_specs_sha(active_specs) == robustness_specs_sha(locked_specs):
+        return plan, None
+
+    revision = _next_analysis_plan_revision(
+        run_dir=run_dir,
+        plan=plan,
+        evidence=evidence,
+    )
+    restored = plan.model_copy(
+        update={
+            "robustness_specs": list(locked_specs),
+            "revision": revision,
+        }
+    )
+    revision_path = run_dir / f"analysis_plan_revision_{revision}.json"
+    if revision_path.exists():
+        raise LegacyResumePlanMigrationError(
+            f"refusing to overwrite existing plan revision {revision_path.name}"
+        )
+    revision_path.write_text(restored.model_dump_json(indent=2), encoding="utf-8")
+    evidence.register_file(
+        kind="log",
+        description=(
+            "Resume migration restoring the immutable plan-time robustness "
+            "specification lock."
+        ),
+        source_path=revision_path,
+        evidence_id=f"analysis_plan_revision_{revision}",
+        producer="planner",
+        generation_mode="system",
+        prompt_pack_version=prompt_version,
+        metadata={
+            "reason": "restore_locked_robustness_specs",
+            "llm_signature": llm_signature,
+        },
+    )
+    return restored, revision_path
 
 
 def _migrate_legacy_resume_model_requirements(
@@ -1957,6 +2023,33 @@ class ResearchAgentPipeline:
                             "plan_path": str(
                                 migrated_plan_path.relative_to(run_dir)
                             ),
+                        },
+                    )
+                )
+            plan, lock_restore_path = _restore_resume_plan_robustness_lock(
+                plan=plan,
+                run_dir=run_dir,
+                evidence=evidence,
+                prompt_version=prompt_version,
+                llm_signature=llm_signature,
+            )
+            if lock_restore_path is not None:
+                migrated_plan_path = lock_restore_path
+                plan_generation_mode = "resumed_planner_migration"
+                findings.append(
+                    ValidationFinding(
+                        validator="robustness_spec_lock",
+                        severity="warning",
+                        message=(
+                            "Resume restored the verified plan-time robustness "
+                            "specifications after an older replan drifted from "
+                            "the immutable lock."
+                        ),
+                        detail={
+                            "plan_path": str(
+                                lock_restore_path.relative_to(run_dir)
+                            ),
+                            "lock_path": "robustness_specs_locked.json",
                         },
                     )
                 )

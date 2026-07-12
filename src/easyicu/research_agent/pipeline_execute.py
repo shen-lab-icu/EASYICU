@@ -155,6 +155,7 @@ from .robustness_panel import (
     assert_robustness_specs_locked,
     build_robustness_panel_from_records,
     robustness_specs_for_execution,
+    robustness_specs_sha,
     write_robustness_panel,
 )
 from .repair_registry import (
@@ -411,6 +412,39 @@ def _successful_step_requests_replan(record: Mapping[str, Any]) -> bool:
         container.get(field) is True
         for container in containers
         for field in _SUCCESS_REPLAN_REQUEST_FIELDS
+    )
+
+
+def _preserve_locked_robustness_specs_after_replan(
+    *,
+    current_plan: AnalysisPlan,
+    revised_plan: AnalysisPlan,
+    run_dir: Path,
+) -> tuple[AnalysisPlan, Optional[ValidationFinding]]:
+    """Keep probe/runtime replans from mutating the plan-time spec lock."""
+
+    locked_specs = robustness_specs_for_execution(
+        run_dir=run_dir,
+        plan=current_plan,
+    )
+    revised_specs = list(revised_plan.robustness_specs or [])
+    if robustness_specs_sha(revised_specs) == robustness_specs_sha(locked_specs):
+        return revised_plan, None
+    preserved = revised_plan.model_copy(
+        update={"robustness_specs": list(locked_specs)}
+    )
+    return preserved, ValidationFinding(
+        validator="replanner",
+        severity="warning",
+        message=(
+            "Replanner attempted to change the immutable plan-time robustness "
+            "specifications; preserved the verified lock and retained only the "
+            "other plan revisions."
+        ),
+        detail={
+            "reason": "preserve_locked_robustness_specs",
+            "locked_spec_ids": [spec.spec_id for spec in locked_specs],
+        },
     )
 
 
@@ -2696,6 +2730,16 @@ def run_execute_phase(
                         detail={"dropped_step_ids": dropped, "cap": cap},
                     )
                 )
+
+        revised, robustness_lock_finding = (
+            _preserve_locked_robustness_specs_after_replan(
+                current_plan=current_plan,
+                revised_plan=revised,
+                run_dir=run_dir,
+            )
+        )
+        if robustness_lock_finding is not None:
+            findings.append(robustness_lock_finding)
 
         # No-op detection on the *substantive* step DAG, not the full
         # model_dump. A verbose replanner can rewrite each step's ``intent``
