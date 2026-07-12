@@ -322,6 +322,30 @@ def test_robustness_runner_matches_separate_structured_comparison():
     )
 
 
+def test_alias_rich_cohort_sensitivity_contract_remains_agent_owned():
+    outputs = [
+        "table:cohort_definition_overlap_attrition",
+        "table:sensitivity_comparison",
+        "table:sensitivity_specification_matrix",
+        "statistic:primary_or",
+        "statistic:complete_case_n",
+        "table:robustness_summary",
+        "log:missingness_strategy_notes",
+    ]
+
+    assert not _robustness_sensitivity_runner_owns_step(
+        "cohort_definition_sensitivity",
+        "07_cohort_definition_sensitivity_comparison",
+        outputs,
+    )
+    assert not _cohort_definition_sensitivity_runner_owns_step(
+        "cohort_definition_sensitivity",
+        "07_cohort_definition_sensitivity_comparison",
+        "Execute locked cohort, missingness, and outcome variants.",
+        outputs,
+    )
+
+
 def test_robustness_runner_rejects_primary_and_figure_owners():
     assert not _robustness_sensitivity_runner_owns_step(
         "logistic_regression",
