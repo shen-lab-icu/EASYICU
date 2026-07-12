@@ -279,7 +279,7 @@ def current_run_evidence_paths(
     return paths
 
 
-def _git_field(args: List[str]) -> Optional[str]:
+def _git_field(args: List[str], *, preserve_empty: bool = False) -> Optional[str]:
     """Run a short read-only git command, returning stripped stdout or None.
 
     Never raises: any failure (git missing, not a repo, timeout) yields
@@ -299,7 +299,10 @@ def _git_field(args: List[str]) -> Optional[str]:
         return None
     if out.returncode != 0:
         return None
-    return (out.stdout or "").strip() or None
+    value = (out.stdout or "").strip()
+    if value or preserve_empty:
+        return value
+    return None
 
 
 def capture_code_version() -> Optional[Dict[str, Any]]:
@@ -314,7 +317,9 @@ def capture_code_version() -> Optional[Dict[str, Any]]:
     sha = _git_field(["rev-parse", "HEAD"])
     branch = _git_field(["rev-parse", "--abbrev-ref", "HEAD"])
     # --porcelain status: any output => working tree has uncommitted changes.
-    status = _git_field(["status", "--porcelain"])
+    # An empty successful porcelain response is authoritative evidence of a
+    # clean checkout, not the same state as git being unavailable.
+    status = _git_field(["status", "--porcelain"], preserve_empty=True)
     dirty = None if status is None else bool(status)
 
     package_version: Optional[str] = None
