@@ -15,12 +15,15 @@ row — so a fabricated ``contrast_id`` must still be flagged.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
 from easyicu.research_agent.audits.validators import FigureSourceDataValidator
+from easyicu.research_agent.schema import AnalysisStep
 
 
 def _write_upstream(tmp_path: Path) -> Path:
@@ -911,6 +914,126 @@ def test_truthful_renamed_value_is_verified_by_row_aligned_vector(tmp_path: Path
     }, res
 
 
+def test_declared_rate_target_cannot_be_laundered_by_sibling_rate(tmp_path: Path):
+    up = tmp_path / "outcome_by_group.csv"
+    pd.DataFrame(
+        {
+            "group": ["low", "mid", "high"],
+            "mortality_rate": [0.10, 0.20, 0.30],
+            "readmission_rate": [0.70, 0.80, 0.90],
+        }
+    ).to_csv(up, index=False)
+    source = pd.DataFrame(
+        {
+            "group": ["low", "mid", "high"],
+            "estimate": [0.70, 0.80, 0.90],
+            "value_type": ["mortality_rate"] * 3,
+            "source_table": [up.name] * 3,
+        }
+    )
+
+    res = FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=source,
+        source_path=tmp_path / "publication_figure_source_data.csv",
+        upstream_path=up,
+    )
+
+    assert res.get("ok") is False, res
+    assert res.get("reason") == "source_values_disagree", res
+    assert res.get("mismatches", [])[0]["upstream_column"] == "mortality_rate"
+
+
+def test_declared_rate_target_accepts_truthful_named_parent_value(tmp_path: Path):
+    up = tmp_path / "outcome_by_group.csv"
+    pd.DataFrame(
+        {
+            "group": ["low", "mid", "high"],
+            "mortality_rate": [0.10, 0.20, 0.30],
+            "readmission_rate": [0.70, 0.80, 0.90],
+        }
+    ).to_csv(up, index=False)
+    source = pd.DataFrame(
+        {
+            "group": ["low", "mid", "high"],
+            "estimate": [0.10, 0.20, 0.30],
+            # Normalisation, rather than a case-specific spelling, binds this
+            # declaration to the upstream mortality_rate column.
+            "value_type": ["mortality rate"] * 3,
+            "source_table": [up.name] * 3,
+        }
+    )
+
+    res = FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=source,
+        source_path=tmp_path / "publication_figure_source_data.csv",
+        upstream_path=up,
+    )
+
+    assert res.get("ok") is True, res
+    assert res.get("verified_value_mappings") == {
+        "estimate": "mortality_rate"
+    }, res
+
+
+def test_renamed_estimate_cannot_match_unrelated_location_summary(
+    tmp_path: Path,
+):
+    up = tmp_path / "outcome_by_stage.csv"
+    pd.DataFrame(
+        {
+            "stage": [0, 1, 2],
+            "mortality_rate": [0.10, 0.20, 0.30],
+            "mean_age": [55.0, 60.0, 65.0],
+            "n": [100, 80, 60],
+        }
+    ).to_csv(up, index=False)
+    source = pd.DataFrame(
+        {
+            "stage": [0, 1, 2],
+            # This vector came from mean_age, not from the claimed outcome.
+            "estimate": [55.0, 60.0, 65.0],
+        }
+    )
+
+    res = FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=source,
+        source_path=tmp_path / "publication_figure_source_data.csv",
+        upstream_path=up,
+    )
+
+    assert res.get("ok") is False, res
+    assert res.get("reason") == "no_verifiable_values", res
+    assert res.get("unverified_source_value_columns") == ["estimate"], res
+
+
+def test_numeric_value_column_with_label_suffix_is_still_verified(
+    tmp_path: Path,
+):
+    up = tmp_path / "outcome_by_stage.csv"
+    pd.DataFrame(
+        {
+            "stage": [0, 1, 2],
+            "estimate_label": [0.10, 0.20, 0.30],
+        }
+    ).to_csv(up, index=False)
+    source = pd.DataFrame(
+        {
+            "stage": [0, 1, 2],
+            "estimate_label": [0.10, 9.90, 0.30],
+        }
+    )
+
+    res = FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=source,
+        source_path=tmp_path / "publication_figure_source_data.csv",
+        upstream_path=up,
+    )
+
+    assert res.get("ok") is False, res
+    assert res.get("reason") == "source_values_disagree", res
+    assert res.get("mismatches", [])[0]["column"] == "estimate_label"
+
+
 def test_cross_name_estimate_cannot_be_laundered_by_equal_count_vector(
     tmp_path: Path,
 ):
@@ -963,6 +1086,102 @@ def test_cross_name_count_alias_can_match_parent_sample_size(tmp_path: Path):
 
     assert res.get("ok") is True, res
     assert res.get("verified_value_mappings") == {"count": "n"}, res
+
+
+def test_unknown_cross_name_numeric_alias_cannot_authenticate_unrelated_vector(
+    tmp_path: Path,
+):
+    up = tmp_path / "outcome_by_group.csv"
+    pd.DataFrame(
+        {
+            "group": ["low", "mid", "high"],
+            "age": [55.0, 60.0, 65.0],
+        }
+    ).to_csv(up, index=False)
+    source = pd.DataFrame(
+        {
+            "group": ["low", "mid", "high"],
+            "display_metric": [55.0, 60.0, 65.0],
+        }
+    )
+
+    res = FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=source,
+        source_path=tmp_path / "publication_figure_source_data.csv",
+        upstream_path=up,
+    )
+
+    assert res.get("ok") is False, res
+    assert res.get("reason") == "no_verifiable_values", res
+    assert res.get("unverified_source_value_columns") == ["display_metric"], res
+
+
+def test_negated_semantic_label_cannot_authorize_location_summary_alias(
+    tmp_path: Path,
+):
+    up = tmp_path / "outcome_by_group.csv"
+    pd.DataFrame(
+        {
+            "group": ["low", "mid", "high"],
+            "mean_age": [55.0, 60.0, 65.0],
+        }
+    ).to_csv(up, index=False)
+    source = pd.DataFrame(
+        {
+            "group": ["low", "mid", "high"],
+            "value_type": ["not_mean", "not_mean", "not_mean"],
+            "estimate": [55.0, 60.0, 65.0],
+        }
+    )
+
+    res = FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=source,
+        source_path=tmp_path / "publication_figure_source_data.csv",
+        upstream_path=up,
+    )
+
+    assert res.get("ok") is False, res
+    assert res.get("reason") == "no_verifiable_values", res
+
+
+def test_errorbar_width_must_be_derived_from_verified_interval(tmp_path: Path):
+    up = tmp_path / "effect_by_group.csv"
+    pd.DataFrame(
+        {
+            "group": ["low", "mid", "high"],
+            "estimate": [1.1, 1.2, 1.3],
+            "ci_low": [1.0, 1.0, 1.1],
+            "ci_high": [1.2, 1.4, 1.5],
+        }
+    ).to_csv(up, index=False)
+    source = pd.DataFrame(
+        {
+            "group": ["low", "mid", "high"],
+            "estimate": [1.1, 1.2, 1.3],
+            "ci_low": [1.0, 1.0, 1.1],
+            "ci_high": [1.2, 1.4, 1.5],
+            "errorbar_width": [99.0, 99.0, 99.0],
+        }
+    )
+
+    forged = FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=source,
+        source_path=tmp_path / "publication_figure_source_data.csv",
+        upstream_path=up,
+    )
+    assert forged.get("ok") is False, forged
+    assert "errorbar_width" in forged.get("unverified_source_value_columns", [])
+
+    source["errorbar_width"] = source["ci_high"] - source["ci_low"]
+    truthful = FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=source,
+        source_path=tmp_path / "publication_figure_source_data.csv",
+        upstream_path=up,
+    )
+    assert truthful.get("ok") is True, truthful
+    assert truthful["verified_value_mappings"]["errorbar_width"] == (
+        "derived:ci_high-ci_low"
+    )
 
 
 def test_percentage_label_cannot_silently_inherit_zero_to_one_rate_scale(
@@ -1097,6 +1316,46 @@ def test_declared_parent_cannot_be_laundered_by_unrelated_table(tmp_path: Path):
     assert candidates and all("declared_parent.csv" in item for item in candidates)
 
 
+def test_duplicate_declared_basename_requires_exact_source_step(tmp_path: Path):
+    parent_out = tmp_path / "steps" / "01_parent" / "outputs"
+    unrelated_out = tmp_path / "steps" / "00_unrelated" / "outputs"
+    figure_out = tmp_path / "steps" / "01_parent_figure" / "outputs"
+    parent_out.mkdir(parents=True)
+    unrelated_out.mkdir(parents=True)
+    figure_out.mkdir(parents=True)
+    shared_name = "outcome_by_group.csv"
+    pd.DataFrame(
+        {"group": ["low", "high"], "mortality_rate": [0.1, 0.2]}
+    ).to_csv(parent_out / shared_name, index=False)
+    pd.DataFrame(
+        {"group": ["low", "high"], "mortality_rate": [0.9, 0.8]}
+    ).to_csv(unrelated_out / shared_name, index=False)
+    pd.DataFrame(
+        {
+            "group": ["low", "high"],
+            "mortality_rate": [0.9, 0.8],
+            "source_table": [shared_name] * 2,
+        }
+    ).to_csv(figure_out / "publication_figure_source_data.csv", index=False)
+
+    findings = FigureSourceDataValidator().audit(
+        step=AnalysisStep(
+            step_id="01_parent_figure",
+            intent="Render the parent results.",
+            method="figure",
+        ),
+        out_dir=figure_out,
+        run_dir=tmp_path,
+        step_summary={},
+    )
+
+    errors = [item for item in findings if item.severity == "error"]
+    assert errors
+    assert errors[0].detail["best_mismatch"]["reason"] == (
+        "ambiguous_declared_source_table_lineage"
+    )
+
+
 def test_shared_numeric_column_flags_opposite_infinities(tmp_path: Path):
     up = tmp_path / "outcome_by_group.csv"
     pd.DataFrame(
@@ -1136,3 +1395,272 @@ def test_numeric_only_shared_column_not_used_as_key(tmp_path: Path):
     )
     assert res.get("ok") is False
     assert res.get("reason") == "no_shared_key", res
+
+
+def _write_authoritative_figure_trace_run(
+    tmp_path: Path,
+) -> tuple[Path, Path, list[dict]]:
+    parent_out = tmp_path / "steps" / "01_parent" / "outputs"
+    parent_out.mkdir(parents=True)
+    parent_path = parent_out / "outcome_by_group.csv"
+    parent_bytes = b"group,mortality_rate\nlow,0.1\nhigh,0.2\n"
+    parent_path.write_bytes(parent_bytes)
+
+    figure_out = tmp_path / "steps" / "01_parent_figure" / "outputs"
+    figure_out.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "group": ["low", "high"],
+            "mortality_rate": [0.1, 0.2],
+            "source_table": [parent_path.name] * 2,
+        }
+    ).to_csv(figure_out / "publication_figure_source_data.csv", index=False)
+
+    digest = hashlib.sha256(parent_bytes).hexdigest()
+    evidence_id = f"table_outcome_by_group_{digest[:8]}"
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir()
+    evidence_path = evidence_dir / f"{evidence_id}__{parent_path.name}"
+    evidence_path.write_bytes(parent_bytes)
+    records = [
+        {
+            "step_id": "01_parent",
+            "status": "ok",
+            "evidence_ids": [evidence_id],
+            "step_summary": {"output_files": [parent_path.name]},
+        }
+    ]
+    manifest = {
+        "per_step_records": records,
+        "evidence": [
+            {
+                "evidence_id": evidence_id,
+                "kind": "table",
+                "relative_path": str(evidence_path.relative_to(tmp_path)),
+                "sha256": digest,
+                "produced_by_step": "01_parent",
+            }
+        ],
+    }
+    (tmp_path / "manifest.json").write_text(
+        json.dumps(manifest), encoding="utf-8"
+    )
+    return parent_path, figure_out, records
+
+
+def test_figure_source_uses_current_hash_verified_parent(tmp_path: Path):
+    _parent_path, figure_out, records = _write_authoritative_figure_trace_run(
+        tmp_path
+    )
+
+    findings = FigureSourceDataValidator().audit(
+        step=AnalysisStep(
+            step_id="01_parent_figure",
+            intent="Render a source-backed figure.",
+            method="figure",
+        ),
+        out_dir=figure_out,
+        run_dir=tmp_path,
+        step_summary={},
+        completed_step_records=records,
+    )
+
+    assert [item for item in findings if item.severity == "error"] == []
+
+
+def test_figure_source_rejects_parent_superseded_by_failure(tmp_path: Path):
+    _parent_path, figure_out, records = _write_authoritative_figure_trace_run(
+        tmp_path
+    )
+    records.append(
+        {
+            "step_id": "01_parent",
+            "status": "contract_failed",
+            "evidence_ids": [],
+            "step_summary": {"status": "contract_failed"},
+        }
+    )
+
+    findings = FigureSourceDataValidator().audit(
+        step=AnalysisStep(
+            step_id="01_parent_figure",
+            intent="Render a source-backed figure.",
+            method="figure",
+        ),
+        out_dir=figure_out,
+        run_dir=tmp_path,
+        step_summary={},
+        completed_step_records=records,
+    )
+
+    errors = [item for item in findings if item.severity == "error"]
+    assert errors
+    assert errors[0].detail["noncurrent_upstream_step_ids"] == ["01_parent"]
+
+
+def test_figure_source_rejects_tampered_parent_after_registration(
+    tmp_path: Path,
+):
+    parent_path, figure_out, records = _write_authoritative_figure_trace_run(
+        tmp_path
+    )
+    parent_path.write_text(
+        "group,mortality_rate\nlow,0.9\nhigh,0.8\n", encoding="utf-8"
+    )
+
+    findings = FigureSourceDataValidator().audit(
+        step=AnalysisStep(
+            step_id="01_parent_figure",
+            intent="Render a source-backed figure.",
+            method="figure",
+        ),
+        out_dir=figure_out,
+        run_dir=tmp_path,
+        step_summary={},
+        completed_step_records=records,
+    )
+
+    errors = [item for item in findings if item.severity == "error"]
+    assert errors
+    assert "hash-verified upstream" in errors[0].message
+
+
+def test_figure_source_rejects_symlinked_parent_output(tmp_path: Path):
+    parent_path, figure_out, records = _write_authoritative_figure_trace_run(
+        tmp_path
+    )
+    target = tmp_path / "symlink_target.csv"
+    target.write_bytes(parent_path.read_bytes())
+    parent_path.unlink()
+    parent_path.symlink_to(target)
+
+    findings = FigureSourceDataValidator().audit(
+        step=AnalysisStep(
+            step_id="01_parent_figure",
+            intent="Render a source-backed figure.",
+            method="figure",
+        ),
+        out_dir=figure_out,
+        run_dir=tmp_path,
+        step_summary={},
+        completed_step_records=records,
+    )
+
+    assert [item for item in findings if item.severity == "error"]
+
+
+def test_figure_source_rejects_upstream_path_traversal(tmp_path: Path):
+    _parent_path, figure_out, records = _write_authoritative_figure_trace_run(
+        tmp_path
+    )
+
+    findings = FigureSourceDataValidator().audit(
+        step=AnalysisStep(
+            step_id="figure_without_inferred_parent",
+            intent="Render a source-backed figure.",
+            method="figure",
+        ),
+        out_dir=figure_out,
+        run_dir=tmp_path,
+        step_summary={"upstream_step_id": "../../outside"},
+        completed_step_records=records,
+    )
+
+    errors = [item for item in findings if item.severity == "error"]
+    assert errors
+    assert errors[0].detail["unsafe_upstream_step_ids"] == ["../../outside"]
+
+
+def test_figure_source_rejects_declared_table_path_traversal(tmp_path: Path):
+    _parent_path, figure_out, records = _write_authoritative_figure_trace_run(
+        tmp_path
+    )
+    source_path = figure_out / "publication_figure_source_data.csv"
+    source = pd.read_csv(source_path)
+    source["source_table"] = "../outcome_by_group.csv"
+    source.to_csv(source_path, index=False)
+
+    findings = FigureSourceDataValidator().audit(
+        step=AnalysisStep(
+            step_id="01_parent_figure",
+            intent="Render a source-backed figure.",
+            method="figure",
+        ),
+        out_dir=figure_out,
+        run_dir=tmp_path,
+        step_summary={},
+        completed_step_records=records,
+    )
+
+    errors = [item for item in findings if item.severity == "error"]
+    assert errors
+    assert errors[0].detail["unsafe_declared_source_tables"] == [
+        "../outcome_by_group.csv"
+    ]
+
+
+def test_figure_source_rejects_missing_upstream_binding(tmp_path: Path):
+    _parent_path, figure_out, records = _write_authoritative_figure_trace_run(
+        tmp_path
+    )
+
+    findings = FigureSourceDataValidator().audit(
+        step=AnalysisStep(
+            step_id="standalone_visual",
+            intent="Render a source-backed figure.",
+            method="figure",
+        ),
+        out_dir=figure_out,
+        run_dir=tmp_path,
+        step_summary={},
+        completed_step_records=records,
+    )
+
+    errors = [item for item in findings if item.severity == "error"]
+    assert errors
+    assert errors[0].detail["reason"] == "missing_upstream_step_binding"
+
+
+@pytest.mark.parametrize("mutation", ["malformed", "empty", "symlink"])
+def test_figure_source_rejects_unverifiable_source_data_file(
+    tmp_path: Path,
+    mutation: str,
+):
+    _parent_path, figure_out, records = _write_authoritative_figure_trace_run(
+        tmp_path
+    )
+    source_path = figure_out / "publication_figure_source_data.csv"
+    if mutation == "malformed":
+        source_path.write_bytes(b'"unterminated')
+    elif mutation == "empty":
+        source_path.write_text("group,mortality_rate,source_table\n", encoding="utf-8")
+    else:
+        outside = tmp_path / "outside_source.csv"
+        outside.write_bytes(source_path.read_bytes())
+        source_path.unlink()
+        try:
+            source_path.symlink_to(outside)
+        except OSError:
+            pytest.skip("symlinks unavailable")
+
+    findings = FigureSourceDataValidator().audit(
+        step=AnalysisStep(
+            step_id="01_parent_figure",
+            intent="Render a source-backed figure.",
+            method="figure",
+        ),
+        out_dir=figure_out,
+        run_dir=tmp_path,
+        step_summary={},
+        completed_step_records=records,
+    )
+
+    errors = [item for item in findings if item.severity == "error"]
+    assert errors, findings
+    reasons = {str(item.detail.get("reason") or "") for item in errors}
+    expected = {
+        "malformed": "source_data_read_failed",
+        "empty": "source_data_empty",
+        "symlink": "unsafe_source_data_path",
+    }[mutation]
+    assert expected in reasons, findings

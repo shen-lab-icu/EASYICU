@@ -26,6 +26,7 @@ manuscript generation; ``warning`` is surfaced but does not block.
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import math
 import re
@@ -54,6 +55,11 @@ from ..schema import (
     VariableRole,
 )
 from ..llm import LLMClient, LLMMessage
+from ..runtime_artifacts import (
+    current_run_evidence_records,
+    current_successful_step_records,
+    verified_run_evidence_path,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -1380,27 +1386,69 @@ class StepSummaryFractionValidator:
     ) -> List[tuple[str, float]]:
         invalid: List[tuple[str, float]] = []
 
+        def normalise_key(value: Any) -> str:
+            return re.sub(
+                r"[^a-z0-9]+", "_", str(value).strip().lower()
+            ).strip("_")
+
+        def is_fraction_field(key: Any) -> bool:
+            """Identify fields whose *value* is contractually a fraction.
+
+            Do not propagate merely because a structural or methodological key
+            contains the substring ``fraction``.  Names such as
+            ``fractional_polynomial_power`` and
+            ``sampling_fraction_denominator`` are not values on a [0, 1]
+            scale.  A mapping directly owned by a true ``*_fraction`` field is
+            still allowed to encode category -> fraction values.
+            """
+
+            name = normalise_key(key)
+            if not name or any(
+                token in name for token in ("pct", "percent", "percentage")
+            ):
+                return False
+            if name.startswith("fractional_") or name == "fractional":
+                return False
+            if name.endswith(("_numerator", "_denominator")):
+                return False
+            if name in {"attributable_fraction", "population_attributable_fraction"}:
+                # These effect measures can legitimately be negative.
+                return False
+            return name == "fraction" or name.endswith("_fraction")
+
+        structural_children = {
+            "count",
+            "denominator",
+            "event_n",
+            "n",
+            "numerator",
+            "sample_size",
+            "total_n",
+        }
+        scalar_value_children = {"estimate", "fraction", "value"}
+
         def visit(
             value: Any,
             path: tuple[str, ...] = (),
             fraction_context: bool = False,
         ) -> None:
             if isinstance(value, dict):
+                normalised_children = {normalise_key(key) for key in value}
+                has_explicit_value_child = bool(
+                    normalised_children & scalar_value_children
+                )
                 for key, child in value.items():
-                    normalised = re.sub(
-                        r"[^a-z0-9]+", "_", str(key).strip().lower()
-                    ).strip("_")
-                    key_is_fraction = (
-                        "fraction" in normalised
-                        and not any(
-                            token in normalised
-                            for token in ("pct", "percent", "percentage")
-                        )
-                    )
+                    normalised = normalise_key(key)
+                    key_is_fraction = is_fraction_field(key)
+                    inherited_context = fraction_context
+                    if inherited_context and has_explicit_value_child:
+                        inherited_context = normalised in scalar_value_children
+                    if inherited_context and normalised in structural_children:
+                        inherited_context = False
                     visit(
                         child,
                         (*path, str(key)),
-                        fraction_context or key_is_fraction,
+                        inherited_context or key_is_fraction,
                     )
                 return
             if isinstance(value, list):
@@ -1627,6 +1675,71 @@ class PrimaryModelContractValidator:
     @staticmethod
     def _normalise(value: Any) -> str:
         return re.sub(r"[^a-z0-9]+", "_", str(value or "").lower()).strip("_")
+
+    @classmethod
+    def _authoritative_completed_records(
+        cls,
+        completed_step_records: Sequence[Dict[str, Any]],
+    ) -> List[Mapping[str, Any]]:
+        """Use current checkpoints when a status-bearing ledger is present.
+
+        Status-less records predate the append-only execution ledger and are
+        retained only as a legacy compatibility path.  In a modern ledger, a
+        later failed checkpoint must revoke an earlier successful summary.
+        """
+
+        records = [
+            record
+            for record in (completed_step_records or [])
+            if isinstance(record, Mapping)
+        ]
+        if not any("status" in record for record in records):
+            return records
+        return list(current_successful_step_records(records))
+
+    @classmethod
+    def _is_closed_planner_owned_step(cls, step: AnalysisStep) -> bool:
+        method = cls._normalise(str(step.method or "").split(" with ", 1)[0])
+        products = set()
+        for output in step.expected_outputs or []:
+            kind, separator, name = str(output or "").partition(":")
+            if separator:
+                products.add((cls._normalise(kind), cls._normalise(name)))
+        return method in cls._CLOSED_EFFECT_METHODS and bool(
+            products & cls._CLOSED_EFFECT_PRODUCTS
+        )
+
+    @classmethod
+    def _method_declares_penalty(
+        cls,
+        contract: Mapping[str, Any],
+        metadata: Optional[Mapping[str, Any]] = None,
+    ) -> bool:
+        values = [
+            contract.get("fit_method"),
+            contract.get("model_family"),
+            contract.get("estimator"),
+        ]
+        if metadata:
+            values.extend(
+                (
+                    metadata.get("fit_method"),
+                    metadata.get("model_family"),
+                    metadata.get("estimator"),
+                )
+            )
+        blob = "_".join(cls._normalise(value) for value in values if value)
+        return any(
+            re.search(pattern, blob)
+            for pattern in (
+                r"(?:^|_)firth(?:_|$)",
+                r"(?:^|_)ridge(?:_|$)",
+                r"(?:^|_)lasso(?:_|$)",
+                r"(?:^|_)elastic_?net(?:_|$)",
+                r"(?:^|_)regulari[sz]ed(?:_|$)",
+                r"(?:^|_)penali[sz]ed(?:_|$)",
+            )
+        )
 
     @classmethod
     def _planned_model_requirement_issues(
@@ -1893,7 +2006,9 @@ class PrimaryModelContractValidator:
     def _latest_planned_adjustment(
         cls, completed_step_records: Sequence[Dict[str, Any]]
     ) -> tuple[List[str], List[str]]:
-        for record in reversed(list(completed_step_records)):
+        for record in reversed(
+            cls._authoritative_completed_records(completed_step_records)
+        ):
             summary = record.get("step_summary")
             if not isinstance(summary, Mapping):
                 continue
@@ -1935,7 +2050,9 @@ class PrimaryModelContractValidator:
                 for child in value:
                     visit(child)
 
-        for record in completed_step_records:
+        for record in cls._authoritative_completed_records(
+            completed_step_records
+        ):
             summary = record.get("step_summary")
             if isinstance(summary, Mapping):
                 visit(summary)
@@ -1999,11 +2116,12 @@ class PrimaryModelContractValidator:
                 for child in value:
                     visit(child)
 
-        for record in completed_step_records:
+        for record in cls._authoritative_completed_records(
+            completed_step_records
+        ):
             summary = record.get("step_summary")
             if isinstance(summary, Mapping):
                 visit(summary)
-        visit(step_summary)
         return list(dict.fromkeys(sources))
 
     @classmethod
@@ -2360,7 +2478,10 @@ class PrimaryModelContractValidator:
         metadata: Mapping[str, Any],
         rows: pd.DataFrame,
     ) -> List[Dict[str, Any]]:
-        if cls._as_bool(contract.get("penalized")) is not True:
+        if (
+            cls._as_bool(contract.get("penalized")) is not True
+            and not cls._method_declares_penalty(contract, metadata)
+        ):
             return []
         model_id = str(contract.get("model_id") or "")
         interval_method = cls._normalise(metadata.get("interval_method"))
@@ -2488,6 +2609,16 @@ class PrimaryModelContractValidator:
         if not self._activates(step, context, step_summary):
             return []
         issues: List[Dict[str, Any]] = []
+        if self._is_closed_planner_owned_step(step) and not (
+            getattr(step, "model_requirements", []) or []
+        ):
+            issues.append(
+                {
+                    "issue": "planned_model_requirements_required",
+                    "method": step.method,
+                    "expected_outputs": list(step.expected_outputs or []),
+                }
+            )
         raw_contracts = step_summary.get("model_contracts")
         if not isinstance(raw_contracts, list) or not raw_contracts:
             issues.append(
@@ -2938,6 +3069,10 @@ class PrimaryModelContractValidator:
             converged = self._as_bool(contract.get("converged"))
             separation = self._as_bool(contract.get("separation_detected"))
             penalized = self._as_bool(contract.get("penalized"))
+            method_declares_penalty = self._method_declares_penalty(
+                contract, metadata
+            )
+            effective_penalized = penalized is True or method_declares_penalty
             reported_n = self._as_nonnegative_int(contract.get("n"))
             reported_events = (
                 self._as_nonnegative_int(contract.get("event_n"))
@@ -2956,7 +3091,15 @@ class PrimaryModelContractValidator:
                     {"model_id": model_id, "issue": "fit_method_required"}
                 )
             fit_method_text = str(contract.get("fit_method") or "").lower()
-            if penalized is True and reported_n and "firth" not in fit_method_text:
+            if method_declares_penalty and penalized is False:
+                issues.append(
+                    {
+                        "model_id": model_id,
+                        "issue": "penalized_method_must_report_penalized_true",
+                        "fit_method": contract.get("fit_method"),
+                    }
+                )
+            if effective_penalized and reported_n and "firth" not in fit_method_text:
                 if "statsmodels" in fit_method_text and any(
                     token in fit_method_text
                     for token in ("regularized", "ridge", "elastic_net")
@@ -3455,7 +3598,7 @@ class CrossStepReconciliationTraceValidator:
 
             if (
                 requested_level is not None
-                or stratum_type in {"sofa_level", "exposure_level", "level"}
+                or stratum_type in {"exposure_level", "level"}
                 or explicit_role_normalised in {
                     "level",
                     "ordinal_level",
@@ -4790,6 +4933,7 @@ class FigureSourceDataValidator:
         "effect_scale",
         "model_id",
         "source_model_id",
+        "source_step_id",
         "exposure_source",
         "exposure_expression",
         "exposure_role",
@@ -4853,6 +4997,7 @@ class FigureSourceDataValidator:
         out_dir: Path,
         run_dir: Path,
         step_summary: Dict[str, Any],
+        completed_step_records: Optional[Sequence[Dict[str, Any]]] = None,
     ) -> List[ValidationFinding]:
         if not self._is_rendering_step(step=step, step_summary=step_summary):
             return []
@@ -4861,21 +5006,92 @@ class FigureSourceDataValidator:
             return []
 
         upstream_step_ids = self._upstream_step_ids(step=step, step_summary=step_summary)
+        unsafe_step_ids = sorted(
+            step_id
+            for step_id in upstream_step_ids
+            if not self._safe_step_id(step_id)
+        )
+        if unsafe_step_ids:
+            return [
+                ValidationFinding(
+                    validator=self.name,
+                    severity="error",
+                    message=(
+                        f"Figure step '{step.step_id}' declared unsafe upstream "
+                        "step identifiers. Upstream lineage must use plain "
+                        "run-local step ids, never paths."
+                    ),
+                    detail={
+                        "step_id": step.step_id,
+                        "unsafe_upstream_step_ids": unsafe_step_ids,
+                    },
+                )
+            ]
         if not upstream_step_ids:
-            return []
+            return [
+                ValidationFinding(
+                    validator=self.name,
+                    severity="error",
+                    message=(
+                        f"Figure step '{step.step_id}' wrote source data without "
+                        "declaring any upstream step. Source-data provenance "
+                        "cannot be verified without an exact run-local parent."
+                    ),
+                    detail={
+                        "step_id": step.step_id,
+                        "source_tables": [path.name for path in source_tables],
+                        "reason": "missing_upstream_step_binding",
+                    },
+                )
+            ]
+        upstream_step_ids = {
+            step_id for step_id in upstream_step_ids if self._safe_step_id(step_id)
+        }
+
+        authoritative_tables = self._authoritative_table_paths(
+            run_dir=run_dir,
+            completed_step_records=completed_step_records,
+        )
+        if completed_step_records is not None:
+            current_parent_ids = {
+                str(record.get("step_id") or "").strip()
+                for record in current_successful_step_records(
+                    completed_step_records
+                )
+            }
+            stale_parent_ids = sorted(upstream_step_ids - current_parent_ids)
+            if stale_parent_ids:
+                return [
+                    ValidationFinding(
+                        validator=self.name,
+                        severity="error",
+                        message=(
+                            f"Figure step '{step.step_id}' cites upstream step(s) "
+                            "whose latest checkpoint is not successful. Historical "
+                            "outputs cannot authenticate a current figure."
+                        ),
+                        detail={
+                            "step_id": step.step_id,
+                            "noncurrent_upstream_step_ids": stale_parent_ids,
+                        },
+                    )
+                ]
         upstream_tables = self._upstream_tables(
             run_dir=run_dir,
             current_out_dir=out_dir,
             upstream_step_ids=upstream_step_ids,
+            authoritative_tables=authoritative_tables,
         )
         if not upstream_tables:
             return [
                 ValidationFinding(
                     validator=self.name,
-                    severity="warning",
+                    severity=(
+                        "error" if authoritative_tables is not None else "warning"
+                    ),
                     message=(
                         f"Figure step '{step.step_id}' wrote source data, but no "
-                        "candidate upstream source table was found for "
+                        "current, hash-verified upstream source table was found for "
                         f"{sorted(upstream_step_ids)}."
                     ),
                     detail={
@@ -4888,19 +5104,109 @@ class FigureSourceDataValidator:
 
         findings: List[ValidationFinding] = []
         for source_path in source_tables:
+            if not self._safe_regular_run_file(source_path, run_dir=run_dir):
+                findings.append(
+                    ValidationFinding(
+                        validator=self.name,
+                        severity="error",
+                        message=(
+                            f"Figure source-data table {source_path.name} is not "
+                            "a regular, non-symlink file contained by this run."
+                        ),
+                        detail={
+                            "step_id": step.step_id,
+                            "source_table": source_path.name,
+                            "reason": "unsafe_source_data_path",
+                        },
+                    )
+                )
+                continue
             try:
                 source_df = pd.read_csv(source_path)
             except Exception as exc:
                 findings.append(
                     ValidationFinding(
                         validator=self.name,
-                        severity="warning",
+                        severity="error",
                         message=f"Could not read figure source-data table {source_path.name}: {exc}",
-                        detail={"source_table": source_path.name},
+                        detail={
+                            "step_id": step.step_id,
+                            "source_table": source_path.name,
+                            "reason": "source_data_read_failed",
+                        },
                     )
                 )
                 continue
             if source_df.empty:
+                findings.append(
+                    ValidationFinding(
+                        validator=self.name,
+                        severity="error",
+                        message=(
+                            f"Figure source-data table {source_path.name} is "
+                            "empty and cannot authenticate a rendered result."
+                        ),
+                        detail={
+                            "step_id": step.step_id,
+                            "source_table": source_path.name,
+                            "reason": "source_data_empty",
+                        },
+                    )
+                )
+                continue
+            unsafe_declared_tables = sorted(
+                {
+                    str(item).strip()
+                    for item in source_df.get(
+                        "source_table", pd.Series(dtype=object)
+                    ).dropna()
+                    if str(item).strip()
+                    and not self._safe_declared_table_name(str(item).strip())
+                }
+            )
+            if unsafe_declared_tables:
+                findings.append(
+                    ValidationFinding(
+                        validator=self.name,
+                        severity="error",
+                        message=(
+                            f"Figure source-data table '{source_path.name}' "
+                            "declares an unsafe source_table path. The claim must "
+                            "be one plain upstream filename."
+                        ),
+                        detail={
+                            "step_id": step.step_id,
+                            "source_table": source_path.name,
+                            "unsafe_declared_source_tables": unsafe_declared_tables,
+                        },
+                    )
+                )
+                continue
+            unsafe_declared_steps = sorted(
+                {
+                    str(item).strip()
+                    for item in source_df.get(
+                        "source_step_id", pd.Series(dtype=object)
+                    ).dropna()
+                    if str(item).strip() and not self._safe_step_id(item)
+                }
+            )
+            if unsafe_declared_steps:
+                findings.append(
+                    ValidationFinding(
+                        validator=self.name,
+                        severity="error",
+                        message=(
+                            f"Figure source-data table '{source_path.name}' "
+                            "declares an unsafe source_step_id."
+                        ),
+                        detail={
+                            "step_id": step.step_id,
+                            "source_table": source_path.name,
+                            "unsafe_declared_source_step_ids": unsafe_declared_steps,
+                        },
+                    )
+                )
                 continue
             findings.extend(
                 self._percentage_count_consistency_findings(
@@ -4933,6 +5239,7 @@ class FigureSourceDataValidator:
                 run_dir=run_dir,
                 source_df=source_df,
                 current_out_dir=out_dir,
+                authoritative_tables=authoritative_tables,
             )
             candidate_tables = list(upstream_tables)
             for path in declared_tables:
@@ -4983,6 +5290,62 @@ class FigureSourceDataValidator:
                         },
                         key=str,
                     )
+                    declared_parent_step: Optional[str] = None
+                    if "source_step_id" in group_df.columns:
+                        declared_step_values = group_df["source_step_id"].map(
+                            lambda item: (
+                                str(item).strip() if pd.notna(item) else ""
+                            )
+                        )
+                        declared_parent_steps = {
+                            item for item in declared_step_values if item
+                        }
+                        if (
+                            len(declared_parent_steps) != 1
+                            or declared_step_values.eq("").any()
+                        ):
+                            comparisons.append(
+                                {
+                                    "ok": False,
+                                    "reason": "ambiguous_declared_source_step",
+                                    "declared_source_table": declared_name,
+                                    "declared_source_step_ids": sorted(
+                                        declared_parent_steps
+                                    ),
+                                    "message": (
+                                        f"declared source table {declared_name} "
+                                        "must identify exactly one source_step_id"
+                                    ),
+                                }
+                            )
+                            continue
+                        declared_parent_step = next(iter(declared_parent_steps))
+                        group_tables = [
+                            path
+                            for path in group_tables
+                            if self._table_step_id(path, run_dir=run_dir)
+                            == declared_parent_step
+                        ]
+                    elif len(group_tables) > 1:
+                        comparisons.append(
+                            {
+                                "ok": False,
+                                "reason": "ambiguous_declared_source_table_lineage",
+                                "declared_source_table": declared_name,
+                                "candidate_source_steps": sorted(
+                                    {
+                                        self._table_step_id(path, run_dir=run_dir)
+                                        for path in group_tables
+                                    }
+                                ),
+                                "message": (
+                                    f"declared source table {declared_name} exists "
+                                    "in multiple upstream steps; source_step_id is "
+                                    "required to bind exact lineage"
+                                ),
+                            }
+                        )
+                        continue
                     ordered_upstream_tables.extend(group_tables)
                     if not group_tables:
                         comparisons.append(
@@ -5399,6 +5762,128 @@ class FigureSourceDataValidator:
                 found.add(step_id[: -len(suffix)])
         return found
 
+    @staticmethod
+    def _safe_step_id(step_id: Any) -> bool:
+        return bool(
+            re.fullmatch(
+                r"[A-Za-z0-9][A-Za-z0-9_.-]*",
+                str(step_id or "").strip(),
+            )
+        )
+
+    @staticmethod
+    def _safe_declared_table_name(value: Any) -> bool:
+        text = str(value or "").strip()
+        return bool(
+            text
+            and text not in {".", ".."}
+            and Path(text).name == text
+            and "/" not in text
+            and "\\" not in text
+        )
+
+    @classmethod
+    def _table_step_id(cls, path: Path, *, run_dir: Path) -> str:
+        try:
+            relative = Path(path).resolve().relative_to(Path(run_dir).resolve())
+        except ValueError:
+            return ""
+        parts = relative.parts
+        if len(parts) < 4 or parts[0] != "steps" or parts[2] != "outputs":
+            return ""
+        return parts[1] if cls._safe_step_id(parts[1]) else ""
+
+    @staticmethod
+    def _safe_regular_run_file(path: Path, *, run_dir: Path) -> bool:
+        """Require a regular, non-symlink file contained by the run root."""
+
+        root = Path(run_dir).resolve()
+        candidate = Path(path)
+        try:
+            resolved = candidate.resolve(strict=True)
+            resolved.relative_to(root)
+            lexical_relative = candidate.absolute().relative_to(root)
+        except (OSError, ValueError):
+            return False
+        if not candidate.is_file() or candidate.is_symlink():
+            return False
+        cursor = root
+        for part in lexical_relative.parts[:-1]:
+            cursor = cursor / part
+            if cursor.is_symlink():
+                return False
+        return True
+
+    @staticmethod
+    def _sha256_file(path: Path) -> str:
+        digest = hashlib.sha256()
+        with Path(path).open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    @classmethod
+    def _authoritative_table_paths(
+        cls,
+        *,
+        run_dir: Path,
+        completed_step_records: Optional[Sequence[Dict[str, Any]]],
+    ) -> Optional[Set[Path]]:
+        """Resolve active table evidence back to immutable step outputs.
+
+        ``None`` is the explicit legacy signal: no modern per-step authority is
+        available, so old run fixtures may use the contained filesystem scan.
+        A modern run returns a set (possibly empty); only current successful,
+        hash-matching table artifacts are then eligible as figure parents.
+        """
+
+        evidence_records = current_run_evidence_records(
+            run_dir,
+            per_step_records=completed_step_records,
+        )
+        if evidence_records is None:
+            return None
+        current_ids = (
+            {
+                str(record.get("step_id") or "").strip()
+                for record in current_successful_step_records(
+                    completed_step_records
+                )
+            }
+            if completed_step_records is not None
+            else None
+        )
+        root = Path(run_dir).resolve()
+        authorised: Set[Path] = set()
+        for record in evidence_records:
+            if str(record.get("kind") or "").strip().lower() != "table":
+                continue
+            step_id = str(record.get("produced_by_step") or "").strip()
+            if (
+                not cls._safe_step_id(step_id)
+                or (current_ids is not None and step_id not in current_ids)
+            ):
+                continue
+            expected_sha = str(record.get("sha256") or "").strip().lower()
+            evidence_path = verified_run_evidence_path(root, record)
+            if evidence_path is None:
+                continue
+            evidence_name = evidence_path.name
+            logical_name = (
+                evidence_name.split("__", 1)[1]
+                if "__" in evidence_name
+                else evidence_name
+            )
+            if not cls._safe_declared_table_name(logical_name):
+                continue
+            output_path = root / "steps" / step_id / "outputs" / logical_name
+            if (
+                cls._safe_regular_run_file(output_path, run_dir=root)
+                and cls._sha256_file(output_path) == expected_sha
+            ):
+                authorised.add(output_path.resolve())
+        return authorised
+
     @classmethod
     def _upstream_tables(
         cls,
@@ -5406,19 +5891,30 @@ class FigureSourceDataValidator:
         run_dir: Path,
         current_out_dir: Path,
         upstream_step_ids: Set[str],
+        authoritative_tables: Optional[Set[Path]] = None,
     ) -> List[Path]:
         tables: List[Path] = []
+        root = Path(run_dir).resolve()
         for step_id in sorted(upstream_step_ids):
+            if not cls._safe_step_id(step_id):
+                continue
             outputs = run_dir / "steps" / step_id / "outputs"
-            if not outputs.exists():
+            if not outputs.exists() or outputs.is_symlink():
                 continue
             for path in sorted(outputs.iterdir()):
-                if not path.is_file():
+                if (
+                    path.suffix.lower() != ".csv"
+                    or not cls._safe_regular_run_file(path, run_dir=root)
+                ):
                     continue
                 if path.parent.resolve() == current_out_dir.resolve():
                     continue
-                if path.suffix.lower() == ".csv":
-                    tables.append(path)
+                if (
+                    authoritative_tables is not None
+                    and path.resolve() not in authoritative_tables
+                ):
+                    continue
+                tables.append(path)
         return tables
 
     @classmethod
@@ -5460,6 +5956,7 @@ class FigureSourceDataValidator:
         run_dir: Path,
         source_df: pd.DataFrame,
         current_out_dir: Path,
+        authoritative_tables: Optional[Set[Path]] = None,
     ) -> List[Path]:
         """Locate the figure's self-declared ``source_table`` parents anywhere.
 
@@ -5479,9 +5976,9 @@ class FigureSourceDataValidator:
         if "source_table" not in source_df.columns:
             return []
         declared_names = {
-            Path(str(item)).name
+            str(item).strip()
             for item in source_df["source_table"].dropna().astype(str)
-            if str(item).strip()
+            if cls._safe_declared_table_name(item)
         }
         if not declared_names:
             return []
@@ -5492,11 +5989,16 @@ class FigureSourceDataValidator:
         resolved: List[Path] = []
         seen: Set[Path] = set()
         for path in sorted(steps_dir.glob("*/outputs/*.csv")):
-            if path.name not in declared_names or not path.is_file():
+            if (
+                path.name not in declared_names
+                or not cls._safe_regular_run_file(path, run_dir=run_dir)
+            ):
                 continue
             if path.parent.resolve() == current_resolved:
                 continue
             rp = path.resolve()
+            if authoritative_tables is not None and rp not in authoritative_tables:
+                continue
             if rp not in seen:
                 seen.add(rp)
                 resolved.append(path)
@@ -5782,7 +6284,7 @@ class FigureSourceDataValidator:
         }
         shared_columns = (set(source.columns) & set(upstream.columns)) - set(key_cols)
         text_name = re.compile(
-            r"(?:^|_)(?:label|name|category|group|stratum|term|id|role|status|"
+            r"(?:^|_)(?:label|name|category|group|stratum|term|id|level|stage|band|role|status|"
             r"method|table|source|description|note)(?:_|$)"
         )
         value_name = re.compile(
@@ -5808,23 +6310,30 @@ class FigureSourceDataValidator:
         def _is_value_column(frame: pd.DataFrame, col: str) -> bool:
             if col in ignored_for_dynamic_numeric or col in cls._TEXT_COLUMNS:
                 return False
-            if text_name.search(str(col).lower()):
-                return False
             raw = frame[col]
             if pd.api.types.is_bool_dtype(raw) or str(col).lower() in {
                 "is_continuous",
                 "treated",
-                "errorbar_width",
             }:
                 return False
             present = raw.notna() & raw.astype(str).str.strip().ne("")
             if not present.any():
                 return False
             parsed = _clean_numeric(raw[present])
+            numeric_evidence = bool(
+                pd.api.types.is_numeric_dtype(raw) or parsed.notna().all()
+            )
+            # Text-like suffixes normally identify labels/roles rather than
+            # values.  A name that also declares a value role (for example a
+            # numeric ``estimate_label``) must not escape verification merely
+            # because it contains ``label``.
+            if text_name.search(str(col).lower()) and not (
+                value_name.search(str(col).lower()) and numeric_evidence
+            ):
+                return False
             return bool(
                 col in cls._NUMERIC_COLUMNS
-                or pd.api.types.is_numeric_dtype(raw)
-                or parsed.notna().all()
+                or numeric_evidence
                 or value_name.search(str(col).lower())
             )
 
@@ -5956,27 +6465,91 @@ class FigureSourceDataValidator:
                 "p" in tokens and bool(tokens & {"val", "value"})
             ):
                 return "p_value"
-            if tokens & {
-                "estimate",
-                "effect",
-                "ratio",
-                "odds",
-                "hazard",
-                "mean",
-                "median",
-                "quantile",
-                "statistic",
-            } or name in {"or", "hr", "rr"}:
-                return "point_estimate"
+            if tokens & {"mean", "median", "quantile"}:
+                return "location_summary"
+            if tokens & {"ratio", "odds", "hazard"} or name in {
+                "or",
+                "hr",
+                "rr",
+            }:
+                return "ratio"
+            if tokens & {"estimate", "effect", "statistic"}:
+                return "generic_estimate"
             if "value" in tokens:
                 return "generic_value"
             return "other_numeric"
 
+        def _structured_source_family(source_name: str) -> str:
+            family = _value_family(source_name)
+            if family != "generic_estimate":
+                return family
+            semantic_values: Set[str] = set()
+            for semantic_col in ("value_type", "estimate_type", "effect_scale"):
+                if semantic_col not in source.columns:
+                    continue
+                semantic_values.update(
+                    cls._normalise(item)
+                    for item in source[semantic_col].dropna().astype(str)
+                    if str(item).strip()
+                )
+            semantic_families: Set[str] = set()
+            if semantic_values & {
+                "distribution",
+                "continuous_distribution",
+                "distribution_mean",
+                "distribution_median",
+                "location_summary",
+                "mean",
+                "median",
+                "quantile",
+            }:
+                semantic_families.add("location_summary")
+            if semantic_values & {
+                "risk",
+                "rate",
+                "probability",
+                "prevalence",
+                "incidence",
+                "absolute_risk",
+                "event_rate",
+                "mortality_rate",
+            }:
+                semantic_families.add("rate")
+            if semantic_values & {
+                "odds",
+                "hazard",
+                "ratio",
+                "association",
+                "effect",
+                "odds_ratio",
+                "hazard_ratio",
+                "risk_ratio",
+                "association_estimate",
+                "effect_estimate",
+                "or",
+                "hr",
+                "rr",
+            }:
+                semantic_families.add("ratio")
+            if len(semantic_families) == 1:
+                return next(iter(semantic_families))
+            return family
+
         def _cross_name_families_compatible(
             source_name: str, upstream_name: str
         ) -> bool:
-            source_family = _value_family(source_name)
+            source_family = _structured_source_family(source_name)
             upstream_family = _value_family(upstream_name)
+            # Unknown/generic numeric names have no semantic contract.  Exact
+            # same-name columns were already handled above; across names, an
+            # equal vector such as ``display_metric`` == ``age`` must not be
+            # treated as proof that the displayed quantity came from the
+            # claimed upstream measure.
+            if source_family in {
+                "generic_value",
+                "other_numeric",
+            } or upstream_family in {"generic_value", "other_numeric"}:
+                return False
             if "count" in {source_family, upstream_family}:
                 return source_family == upstream_family
             # Percent-labelled columns require either a same-family raw vector
@@ -5992,24 +6565,47 @@ class FigureSourceDataValidator:
             }
             if source_family in inferential_specific or upstream_family in inferential_specific:
                 return source_family == upstream_family
-            # Generic point estimates and rate/risk estimates are compatible:
+            # A presentation-neutral estimate may project a rate/risk or ratio
+            # when its complete vector matches.  Location summaries require a
+            # structured source semantic (value_type/estimate_type/effect_scale)
+            # so an unrelated mean-age vector cannot authenticate an outcome
+            # estimate merely because the numbers happen to coincide.
             # e.g. a renderer's ``estimate`` may faithfully project an
-            # upstream ``mortality_rate``. Generic ``value``/continuous names
-            # remain vector-authenticated, but never across count/percent or a
-            # specialised CI/SE/P boundary handled above.
-            return source_family in {
-                "rate",
-                "point_estimate",
-                "generic_value",
-                "other_numeric",
-            } and upstream_family in {
-                "rate",
-                "point_estimate",
-                "generic_value",
-                "other_numeric",
+            # upstream ``mortality_rate``.
+            if source_family == "generic_estimate":
+                return upstream_family in {"rate", "ratio"}
+            return source_family == upstream_family
+
+        def _explicit_semantic_target_columns(source_name: str) -> List[str]:
+            """Resolve a concrete source declaration to its named parent value.
+
+            A declaration such as ``value_type=mortality_rate`` is stronger
+            than the broad ``rate`` family inferred from it. When that exact
+            normalised value column exists upstream, bind to it so a sibling
+            rate/effect column with coincident values cannot authenticate the
+            claim. Generic declarations that do not name an upstream column
+            retain the family-level compatibility path below.
+            """
+
+            declared = {
+                cls._normalise(item)
+                for semantic_col in ("value_type", "estimate_type", "effect_scale")
+                if semantic_col in source.columns
+                for item in source[semantic_col].dropna().astype(str)
+                if str(item).strip()
             }
+            if not declared:
+                return []
+            return sorted(
+                upstream_col
+                for upstream_col in upstream_value_columns
+                if cls._normalise(upstream_col) in declared
+                and _cross_name_families_compatible(source_name, upstream_col)
+            )
 
         verified_value_mappings: Dict[str, str] = {}
+        used_upstream_value_columns: Set[str] = set()
+        ambiguous_value_mappings: Dict[str, List[str]] = {}
         for source_col in sorted(source_value_columns):
             # A same-name value is authoritative: if it disagrees, never search
             # another column for a coincidental numeric match that could launder
@@ -6020,6 +6616,7 @@ class FigureSourceDataValidator:
                 )
                 if verified:
                     verified_value_mappings[source_col] = source_col
+                    used_upstream_value_columns.add(source_col)
                 elif disagrees:
                     idx = int(bad[bad].index[0])
                     abs_tolerance = (
@@ -6049,19 +6646,64 @@ class FigureSourceDataValidator:
                     )
                 continue
 
+            explicit_targets = _explicit_semantic_target_columns(source_col)
+            if explicit_targets:
+                if len(explicit_targets) > 1:
+                    ambiguous_value_mappings[source_col] = explicit_targets
+                    continue
+                target = explicit_targets[0]
+                verified, disagrees, bad, left, right, diff = _numeric_comparison(
+                    source_col, target
+                )
+                if verified:
+                    verified_value_mappings[source_col] = target
+                    used_upstream_value_columns.add(target)
+                elif disagrees:
+                    idx = int(bad[bad].index[0])
+                    mismatches.append(
+                        {
+                            "column": source_col,
+                            "upstream_column": target,
+                            "semantic_binding": True,
+                            "key": _format_key(merged.loc[idx]),
+                            "source": (
+                                None if pd.isna(left.loc[idx]) else float(left.loc[idx])
+                            ),
+                            "upstream": (
+                                None if pd.isna(right.loc[idx]) else float(right.loc[idx])
+                            ),
+                            "abs_diff": (
+                                None if pd.isna(diff.loc[idx]) else float(diff.loc[idx])
+                            ),
+                        }
+                    )
+                # A concrete declaration is binding: never search a sibling
+                # same-family column after its named target disagrees.
+                continue
+
             # Renderers may use a presentation-neutral alias (for example
             # ``ci_low`` for upstream ``or_ci_low``).  Verify renamed values by
             # their complete row-aligned numeric vector and record the mapping;
             # zero comparisons or a partial/mixed match never count as proof.
+            if source_col.startswith("plot_"):
+                continue
+            matching_upstream_columns: List[str] = []
             for upstream_col in sorted(upstream_value_columns):
+                if upstream_col in used_upstream_value_columns:
+                    continue
                 if not _cross_name_families_compatible(source_col, upstream_col):
                     continue
                 verified, _disagrees, _bad, _left, _right, _diff = (
                     _numeric_comparison(source_col, upstream_col)
                 )
                 if verified:
-                    verified_value_mappings[source_col] = upstream_col
-                    break
+                    matching_upstream_columns.append(upstream_col)
+            if len(matching_upstream_columns) == 1:
+                matched = matching_upstream_columns[0]
+                verified_value_mappings[source_col] = matched
+                used_upstream_value_columns.add(matched)
+            elif len(matching_upstream_columns) > 1:
+                ambiguous_value_mappings[source_col] = matching_upstream_columns
 
         def _derived_matches(
             source_col: str,
@@ -6097,19 +6739,43 @@ class FigureSourceDataValidator:
         # from already verified source values.  This preserves honest renderer
         # aliases without allowing an unrelated truthful count to launder a
         # forged estimate.
-        if (
-            "ci_width" in source_value_columns
-            and "ci_low" in verified_value_mappings
-            and "ci_high" in verified_value_mappings
-            and _derived_matches(
-                "ci_width",
-                [
-                    _clean_numeric(_merged_source("ci_high"))
-                    - _clean_numeric(_merged_source("ci_low"))
-                ],
-            )
+        for source_col in sorted(
+            source_value_columns - set(verified_value_mappings)
         ):
-            verified_value_mappings["ci_width"] = "derived:ci_high-ci_low"
+            source_family = _structured_source_family(source_col)
+            for verified_source_col in sorted(verified_value_mappings):
+                verified_family = _structured_source_family(verified_source_col)
+                compatible_alias = source_family == verified_family
+                if source_family == "generic_estimate":
+                    compatible_alias = verified_family in {"rate", "ratio"}
+                if not compatible_alias or source_family in {
+                    "generic_value",
+                    "other_numeric",
+                }:
+                    continue
+                if _derived_matches(
+                    source_col,
+                    [_clean_numeric(_merged_source(verified_source_col))],
+                ):
+                    verified_value_mappings[source_col] = (
+                        f"derived:alias({verified_source_col})"
+                    )
+                    break
+
+        for width_col in ("ci_width", "errorbar_width"):
+            if (
+                width_col in source_value_columns
+                and "ci_low" in verified_value_mappings
+                and "ci_high" in verified_value_mappings
+                and _derived_matches(
+                    width_col,
+                    [
+                        _clean_numeric(_merged_source("ci_high"))
+                        - _clean_numeric(_merged_source("ci_low"))
+                    ],
+                )
+            ):
+                verified_value_mappings[width_col] = "derived:ci_high-ci_low"
 
         # A renderer may make an upstream long table presentation-ready by
         # adding a denominator and percentage. Authenticate that denominator
@@ -6319,6 +6985,7 @@ class FigureSourceDataValidator:
                 "unverified_source_value_columns": unverified_source_columns,
                 "verified_source_value_columns": sorted(verified_value_mappings),
                 "verified_value_mappings": verified_value_mappings,
+                "ambiguous_value_mappings": ambiguous_value_mappings,
                 "message": (
                     f"source rows joined to {upstream_path.name} on {key_label}, "
                     f"but {verification_detail}"

@@ -350,6 +350,35 @@ def test_step_summary_fraction_scale_accepts_fraction_and_percent_units() -> Non
     assert findings == []
 
 
+def test_step_summary_fraction_scale_ignores_method_and_count_fields() -> None:
+    findings = StepSummaryFractionValidator().audit(
+        step=AnalysisStep(step_id="04_model", intent="Fit a flexible model."),
+        step_summary={
+            "fractional_polynomial_power": 2,
+            "sampling_fraction_denominator": 500,
+            "sampling_fraction_numerator": 125,
+            "attributable_fraction": -0.08,
+            "observed_fraction": {
+                "value": 0.25,
+                "numerator": 125,
+                "denominator": 500,
+            },
+        },
+    )
+
+    assert findings == []
+
+
+def test_step_summary_fraction_scale_still_checks_nested_fraction_map() -> None:
+    findings = StepSummaryFractionValidator().audit(
+        step=AnalysisStep(step_id="04_audit", intent="Audit completeness."),
+        step_summary={"observed_fraction": {"lab": 0.4, "vital": 40.0}},
+    )
+
+    assert len(findings) == 1
+    assert findings[0].detail["summary_path"] == "observed_fraction.vital"
+
+
 def test_step_summary_fraction_scale_rejects_fraction_stored_as_percent() -> None:
     findings = StepSummaryFractionValidator().audit(
         step=AnalysisStep(step_id="04_reconciliation", intent="Audit levels."),
@@ -521,7 +550,7 @@ def test_cross_step_reconciliation_trace_normalises_semantic_row_schema(
             {
                 "variable": "sofa2_liver_max",
                 "estimate_type": "outcome_risk",
-                "stratum_type": "sofa_level",
+                "stratum_type": "exposure_level",
                 "stratum": "0",
                 "source_status": "valid observed",
                 "registered_n": np.nan,
@@ -752,7 +781,7 @@ def test_cross_step_reconciliation_trace_normalises_requested_group_schema(
         [
             {
                 "variable": "sofa2_liver_max",
-                "requested_group_type": "sofa_level",
+                "requested_group_type": "exposure_level",
                 "requested_group_value": 0,
                 "requested_estimate_type": "outcome_risk",
                 "registered_supported": False,

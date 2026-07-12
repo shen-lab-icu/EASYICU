@@ -191,6 +191,30 @@ def _contracts_with_requirements() -> tuple[list[dict], list[PlannedModelRequire
     return contracts, requirements
 
 
+def _bind_standard_contracts_to_requirements(
+    contracts: list[dict],
+) -> list[PlannedModelRequirement]:
+    """Add the planner-owned ids/fields used by the standard four-model fixture."""
+
+    canonical_contracts, requirements = _contracts_with_requirements()
+    canonical_by_id = {
+        contract["model_id"]: contract for contract in canonical_contracts
+    }
+    for contract in contracts:
+        canonical = canonical_by_id.get(contract.get("model_id"))
+        if canonical is None:
+            continue
+        for field in (
+            "requirement_id",
+            "outcome",
+            "outcome_type",
+            "method_family",
+            "model_family",
+        ):
+            contract.setdefault(field, canonical[field])
+    return requirements
+
+
 def _write_inputs(tmp_path: Path) -> tuple[Path, Path]:
     cohort = pd.DataFrame(
         {
@@ -262,6 +286,10 @@ def _audit(
     step: AnalysisStep | None = None,
 ) -> list:
     cohort_path, out_dir = _write_inputs(tmp_path)
+    if step is None and contracts is not None:
+        contracts = copy.deepcopy(contracts)
+        requirements = _bind_standard_contracts_to_requirements(contracts)
+        step = _step(model_requirements=requirements)
     summary = {} if contracts is None else {"model_contracts": contracts}
     return PrimaryModelContractValidator().audit(
         step=step or _step(),
@@ -292,6 +320,7 @@ def test_primary_model_contract_legacy_required_model_must_be_fitted(
 ):
     cohort_path, out_dir = _write_inputs(tmp_path)
     contracts = copy.deepcopy(_contracts())
+    requirements = _bind_standard_contracts_to_requirements(contracts)
     contracts[2].update(
         {
             "fit_status": fit_status,
@@ -310,7 +339,7 @@ def test_primary_model_contract_legacy_required_model_must_be_fitted(
     table.to_csv(table_path, index=False)
 
     findings = PrimaryModelContractValidator().audit(
-        step=_step(),
+        step=_step(model_requirements=requirements),
         step_summary={"model_contracts": contracts},
         context=_context(),
         completed_step_records=_prior_records(),
@@ -330,6 +359,7 @@ def test_primary_model_contract_allows_optional_sensitivity_without_fake_rows(
 ):
     cohort_path, out_dir = _write_inputs(tmp_path)
     contracts = copy.deepcopy(_contracts())
+    requirements = _bind_standard_contracts_to_requirements(contracts)
     contracts[1].update(
         {
             "fit_status": fit_status,
@@ -347,7 +377,7 @@ def test_primary_model_contract_allows_optional_sensitivity_without_fake_rows(
     table.to_csv(table_path, index=False)
 
     findings = PrimaryModelContractValidator().audit(
-        step=_step(),
+        step=_step(model_requirements=requirements),
         step_summary={"model_contracts": contracts},
         context=_context(),
         completed_step_records=_prior_records(),
@@ -775,6 +805,55 @@ def test_primary_model_contract_configure_step_is_not_misclassified_as_figure():
     )
 
 
+def test_primary_model_contract_requires_planner_owned_model_roster(
+    tmp_path: Path,
+) -> None:
+    findings = _audit(
+        tmp_path,
+        contracts=_contracts(),
+        step=_step(model_requirements=[]),
+    )
+
+    assert "planned_model_requirements_required" in _issue_types(findings)
+
+
+def test_current_step_summary_cannot_self_authorize_primary_alias() -> None:
+    aliases = PrimaryModelContractValidator._operational_primary_sources(
+        declared_primary="primary_signal",
+        completed_step_records=[],
+        step_summary={
+            "primary_exposure": "primary_signal",
+            "operational_column": "different_signal",
+        },
+    )
+
+    assert aliases == []
+
+
+def test_failed_latest_checkpoint_revokes_old_primary_alias() -> None:
+    aliases = PrimaryModelContractValidator._operational_primary_sources(
+        declared_primary="primary_signal",
+        completed_step_records=[
+            {
+                "step_id": "01_mapping",
+                "status": "ok",
+                "step_summary": {
+                    "primary_exposure": "primary_signal",
+                    "operational_column": "mapped_signal",
+                },
+            },
+            {
+                "step_id": "01_mapping",
+                "status": "contract_failed",
+                "step_summary": {},
+            },
+        ],
+        step_summary={},
+    )
+
+    assert aliases == []
+
+
 def test_planner_model_requirements_activate_without_context_exposure():
     _contracts_payload, requirements = _contracts_with_requirements()
     context = _context().model_copy(update={"primary_exposure": None})
@@ -993,9 +1072,11 @@ def test_primary_model_contract_ignores_non_model_rows_in_wide_figure_data(
         ]
     ).to_csv(out_dir / "figure_source_data.csv", index=False)
 
+    contracts = _contracts()
+    requirements = _bind_standard_contracts_to_requirements(contracts)
     findings = PrimaryModelContractValidator().audit(
-        step=_step(),
-        step_summary={"model_contracts": _contracts()},
+        step=_step(model_requirements=requirements),
+        step_summary={"model_contracts": contracts},
         context=_context(),
         completed_step_records=_prior_records(),
         out_dir=out_dir,
@@ -1152,9 +1233,11 @@ def test_primary_model_contract_allows_explicit_reference_row_without_interval(
     table = pd.concat([table, reference.to_frame().T], ignore_index=True)
     table.to_csv(table_path, index=False)
 
+    contracts = _contracts()
+    requirements = _bind_standard_contracts_to_requirements(contracts)
     findings = PrimaryModelContractValidator().audit(
-        step=_step(),
-        step_summary={"model_contracts": _contracts()},
+        step=_step(model_requirements=requirements),
+        step_summary={"model_contracts": contracts},
         context=_context(),
         completed_step_records=_prior_records(),
         out_dir=out_dir,
@@ -1288,9 +1371,25 @@ def test_primary_model_contract_supports_mixed_binary_and_continuous_outcomes(
     tmp_path: Path,
 ):
     cohort_path, out_dir, contracts = _write_mixed_outcome_inputs(tmp_path)
+    requirements = [
+        PlannedModelRequirement(
+            requirement_id=f"planned_{contract['model_id']}",
+            outcome=contract["outcome"],
+            outcome_type=contract["outcome_type"],
+            method_family=contract["model_family"],
+            exposure_source=contract["exposure_source"],
+            analysis_role=contract["analysis_role"],
+            analysis_set=contract["analysis_set"],
+            required_for_step_success=True,
+        )
+        for contract in contracts
+    ]
+    for contract, requirement in zip(contracts, requirements):
+        contract["requirement_id"] = requirement.requirement_id
+        contract["method_family"] = contract["model_family"]
 
     findings = PrimaryModelContractValidator().audit(
-        step=_step(),
+        step=_step(model_requirements=requirements),
         step_summary={"model_contracts": contracts},
         context=_context(),
         completed_step_records=[],
@@ -1514,6 +1613,23 @@ def test_primary_model_contract_rejects_unreported_or_strong_ridge_penalty(
         _audit(strong_path, contracts=contracts)
     )
     assert "statsmodels_penalty_too_strong_for_separation_fallback" in strong_penalty
+
+
+def test_primary_model_contract_rejects_penalized_method_with_false_flag(
+    tmp_path: Path,
+) -> None:
+    contracts = copy.deepcopy(_contracts())
+    contracts[0].update(
+        {
+            "penalized": False,
+            "fit_method": "statsmodels_regularized_logit",
+        }
+    )
+
+    issues = _issue_types(_audit(tmp_path, contracts=contracts))
+
+    assert "penalized_method_must_report_penalized_true" in issues
+    assert "statsmodels_penalty_strength_not_reported" in issues
 
 
 def test_primary_model_contract_accepts_reported_weak_ridge_penalty(
