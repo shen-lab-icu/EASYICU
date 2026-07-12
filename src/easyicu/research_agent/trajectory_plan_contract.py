@@ -49,58 +49,8 @@ _CHARACTERIZATION_OUTCOME_PRODUCTS = frozenset(
     }
 )
 
-_REPRESENTATION_METHODS = frozenset(
-    {
-        "trajectory_feature_representation",
-        "fixed_window_trajectory_representation",
-        "fixed_anchor_trajectory_representation",
-        "fixed_anchor_missingness_aware_feature_representation",
-        "missingness_aware_trajectory_representation",
-    }
-)
-_CANDIDATE_SELECTION_METHODS = frozenset(
-    {
-        "trajectory_phenotyping",
-        "trajectory_clustering",
-        "trajectory_clustering_analysis",
-        "trajectory_feature_clustering",
-        "kmeans",
-        "k_means",
-        "kmeans_clustering",
-        "k_means_clustering",
-        "phenotyping",
-        "phenotype_clustering",
-        "unsupervised_clustering",
-        "latent_class",
-        "latent_class_analysis",
-        "latent_class_model",
-        "latent_class_trajectory_clustering",
-        "cluster_analysis",
-        "gmm",
-        "gaussian_mixture",
-        "gaussian_mixture_model",
-    }
-)
-_STABILITY_METHODS = frozenset(
-    {
-        "bootstrap_cluster_stability",
-        "cluster_stability",
-        "clustering_stability",
-        "consensus_cluster_stability",
-        "resampling_cluster_stability",
-    }
-)
-_CHARACTERIZATION_METHODS = frozenset(
-    {
-        "descriptive_cluster_characterization",
-        "cluster_characterization",
-        "phenotype_characterization",
-        "trajectory_profile_characterization",
-    }
-)
-
 _FIGURE_KINDS = frozenset({"figure", "plot", "chart", "fig", "heatmap"})
-_ARTIFACT_KINDS = frozenset({"artifact", "dataset"})
+_ARTIFACT_KINDS = frozenset({"artifact", "dataset", "manifest"})
 
 _REPRESENTATION_PRODUCTS = frozenset(
     {
@@ -109,7 +59,6 @@ _REPRESENTATION_PRODUCTS = frozenset(
         ("artifact", "trajectory_representation"),
         ("dataset", "trajectory_features"),
         ("dataset", "trajectory_feature_matrix"),
-        ("manifest", "trajectory_missingness_policy"),
         ("table", "trajectory_membership"),
         ("table", "trajectory_features"),
     }
@@ -177,6 +126,10 @@ def _method_head(value: object) -> str:
     return _normalise_token(value).split("_with_", 1)[0]
 
 
+def _tokens(value: object) -> frozenset[str]:
+    return frozenset(token for token in _normalise_token(value).split("_") if token)
+
+
 def _declared_product(value: object) -> Optional[Tuple[str, str]]:
     text = str(value or "").strip().lower()
     kind, separator, product = text.partition(":")
@@ -199,13 +152,17 @@ def _step_products(step: AnalysisStep) -> frozenset[Tuple[str, str]]:
     )
 
 
-def _step_artifact_inputs(step: AnalysisStep) -> frozenset[str]:
+def _step_typed_inputs(step: AnalysisStep) -> frozenset[Tuple[str, str]]:
     return frozenset(
         product
         for raw in (step.inputs or [])
-        if (parsed := _declared_product(raw)) is not None
-        and parsed[0] in _ARTIFACT_KINDS
-        for product in (parsed[1],)
+        if (product := _declared_product(raw)) is not None
+    )
+
+
+def _step_artifact_inputs(step: AnalysisStep) -> frozenset[str]:
+    return frozenset(
+        product for kind, product in _step_typed_inputs(step) if kind in _ARTIFACT_KINDS
     )
 
 
@@ -215,33 +172,171 @@ def _step_artifact_outputs(step: AnalysisStep) -> frozenset[str]:
     )
 
 
+def _product_tokens(
+    products: frozenset[Tuple[str, str]],
+) -> Tuple[Tuple[str, frozenset[str]], ...]:
+    return tuple((kind, _tokens(product)) for kind, product in products)
+
+
+def _is_window_manifest_product(product: Tuple[str, str]) -> bool:
+    kind, name = product
+    tokens = _tokens(name)
+    return (
+        kind in _ARTIFACT_KINDS
+        and "manifest" in tokens
+        and bool(tokens & {"trajectory", "window", "windows"})
+    )
+
+
+def _has_product_evidence(
+    products: frozenset[Tuple[str, str]],
+    *,
+    required: frozenset[str],
+    any_of: frozenset[str] = frozenset(),
+    kinds: frozenset[str] = frozenset(),
+) -> bool:
+    for kind, tokens in _product_tokens(products):
+        if kinds and kind not in kinds:
+            continue
+        if not required <= tokens:
+            continue
+        if any_of and not (tokens & any_of):
+            continue
+        return True
+    return False
+
+
+def _method_family_evidence(method: str) -> frozenset[str]:
+    """Return bounded method-family evidence from whole normalized tokens.
+
+    Method names remain agent-owned.  The contract recognizes general method
+    families rather than an exact string allowlist, but never treats a raw
+    substring (for example ``cluster`` inside ``clustered``) as ownership.
+    Typed products are still required separately by :func:`_role_qualifies`.
+    """
+
+    tokens = _tokens(method)
+    families: set[str] = set()
+    clustering = bool(tokens & {"cluster", "clustering", "phenotyping", "kmeans"})
+    clustering = clustering or {"k", "means"} <= tokens
+    clustering = clustering or {"latent", "class"} <= tokens
+    clustering = clustering or {"gaussian", "mixture"} <= tokens
+    if "representation" in tokens or (
+        "functional" in tokens and bool(tokens & {"feature", "features", "basis"})
+    ):
+        families.add("representation")
+    if clustering:
+        families.add("candidate_selection")
+    if clustering and bool(tokens & {"stability", "consensus", "bootstrap", "resampling"}):
+        families.add("stability_freeze")
+    if "characterization" in tokens or (
+        "descriptive" in tokens
+        and bool(tokens & {"profile", "profiles", "phenotype", "phenotypes"})
+    ):
+        families.add("characterization")
+    return frozenset(families)
+
+
+def _representation_product_evidence(
+    products: frozenset[Tuple[str, str]],
+) -> bool:
+    if products & _REPRESENTATION_PRODUCTS:
+        return True
+    return _has_product_evidence(
+        products,
+        required=frozenset({"trajectory"}),
+        any_of=frozenset({"representation", "feature", "features", "matrix"}),
+        kinds=frozenset({"artifact", "dataset", "table"}),
+    )
+
+
+def _candidate_product_evidence(
+    products: frozenset[Tuple[str, str]],
+) -> bool:
+    if products & _SELECTION_PRODUCTS and products & _CANDIDATE_SOLUTION_PRODUCTS:
+        return True
+    has_candidate_set = _has_product_evidence(
+        products,
+        required=frozenset({"candidate"}),
+        any_of=frozenset({"model", "models", "fit", "fits", "assignments"}),
+        kinds=frozenset({"artifact", "dataset", "model", "table"}),
+    )
+    has_comparison = _has_product_evidence(
+        products,
+        required=frozenset({"candidate"}),
+        any_of=frozenset({"criterion", "criteria", "selection", "comparison"}),
+        kinds=frozenset({"manifest", "statistic", "table"}),
+    ) or _has_product_evidence(
+        products,
+        required=frozenset({"cluster", "selection"}),
+        kinds=frozenset({"manifest", "statistic", "table"}),
+    )
+    return has_candidate_set and has_comparison
+
+
+def _stability_product_evidence(
+    products: frozenset[Tuple[str, str]],
+) -> bool:
+    has_stability = bool(products & _STABILITY_PRODUCTS) or _has_product_evidence(
+        products,
+        required=frozenset({"stability"}),
+        any_of=frozenset({"cluster", "clustering", "freeze"}),
+        kinds=frozenset({"artifact", "dataset", "manifest", "statistic", "table"}),
+    )
+    has_frozen_assignment = bool(products & _STABILITY_ASSIGNMENT_PRODUCTS) or (
+        _has_product_evidence(
+            products,
+            required=frozenset({"cluster", "assignments"}),
+            kinds=frozenset({"artifact", "dataset", "table"}),
+        )
+        and _has_product_evidence(
+            products,
+            required=frozenset({"stability"}),
+            any_of=frozenset({"freeze", "frozen"}),
+            kinds=frozenset({"artifact", "dataset", "manifest"}),
+        )
+    )
+    return has_stability and has_frozen_assignment
+
+
+def _characterization_product_evidence(
+    products: frozenset[Tuple[str, str]],
+) -> bool:
+    if products & _CHARACTERIZATION_PRODUCTS:
+        return True
+    return _has_product_evidence(
+        products,
+        required=frozenset({"cluster"}),
+        any_of=frozenset(
+            {"characteristic", "characteristics", "profile", "profiles"}
+        ),
+        kinds=frozenset({"artifact", "dataset", "table"}),
+    )
+
+
 def _role_qualifies(
     role: str,
     *,
     method: str,
     products: frozenset[Tuple[str, str]],
 ) -> bool:
-    candidate_or_monolithic = method in _CANDIDATE_SELECTION_METHODS
+    method_families = _method_family_evidence(method)
     if role == "representation":
-        return (method in _REPRESENTATION_METHODS or candidate_or_monolithic) and bool(
-            products & _REPRESENTATION_PRODUCTS
-        )
+        return bool(
+            method_families & {"representation", "candidate_selection"}
+        ) and _representation_product_evidence(products)
     if role == "candidate_selection":
-        return (
-            candidate_or_monolithic
-            and bool(products & _SELECTION_PRODUCTS)
-            and bool(products & _CANDIDATE_SOLUTION_PRODUCTS)
+        return "candidate_selection" in method_families and _candidate_product_evidence(
+            products
         )
     if role == "stability_freeze":
-        return (
-            (method in _STABILITY_METHODS or candidate_or_monolithic)
-            and bool(products & _STABILITY_PRODUCTS)
-            and bool(products & _STABILITY_ASSIGNMENT_PRODUCTS)
-        )
+        return bool(
+            method_families & {"stability_freeze", "candidate_selection"}
+        ) and _stability_product_evidence(products)
     if role == "characterization":
-        return (
-            method in _CHARACTERIZATION_METHODS or candidate_or_monolithic
-        ) and bool(products & _CHARACTERIZATION_PRODUCTS)
+        return bool(
+            method_families & {"characterization", "candidate_selection"}
+        ) and _characterization_product_evidence(products)
     raise ValueError(f"Unknown trajectory role: {role}")
 
 
@@ -442,10 +537,79 @@ def evaluate_trajectory_plan_dag(
             if variable.fixed_window_trajectory is not None
         }
         representation_step = steps[step_index[representation_owner]]
+        window_source_step = representation_step
         selected_by_family: Dict[str, List[Tuple[float, float, str]]] = defaultdict(
             list
         )
-        for input_name in representation_step.inputs or []:
+        direct_window_inputs = [
+            str(input_name)
+            for input_name in (representation_step.inputs or [])
+            if str(input_name) in variables_by_name
+        ]
+        direct_family_counts: Dict[str, int] = defaultdict(int)
+        for input_name in direct_window_inputs:
+            metadata = variables_by_name[input_name].fixed_window_trajectory
+            assert metadata is not None
+            direct_family_counts[metadata.family] += 1
+        if not any(count >= 2 for count in direct_family_counts.values()):
+            typed_inputs = _step_typed_inputs(representation_step)
+            manifest_inputs = sorted(
+                product for product in typed_inputs if _is_window_manifest_product(product)
+            )
+            manifest_producers = sorted(
+                {
+                    producers[0]
+                    for _kind, manifest in manifest_inputs
+                    for producers in (producer_candidates.get(manifest, []),)
+                    if len(producers) == 1
+                }
+            )
+            if not manifest_inputs:
+                findings.append(
+                    _finding(
+                        "trajectory_window_manifest_missing",
+                        "A representation built from an upstream panel must consume "
+                        "a typed trajectory-window manifest from that panel's producer.",
+                        step_id=representation_owner,
+                    )
+                )
+            elif len(manifest_producers) != 1:
+                findings.append(
+                    _finding(
+                        "trajectory_window_manifest_producer_unresolved",
+                        "The consumed trajectory-window manifest must resolve to one "
+                        "upstream producer.",
+                        step_id=representation_owner,
+                        manifest_inputs=[
+                            f"{kind}:{name}" for kind, name in manifest_inputs
+                        ],
+                        producer_step_ids=manifest_producers,
+                    )
+                )
+            else:
+                producer_id = manifest_producers[0]
+                consumed_from_producer = {
+                    name
+                    for kind, name in typed_inputs
+                    if kind in _ARTIFACT_KINDS
+                    and name in artifact_outputs[producer_id]
+                    and not _is_window_manifest_product((kind, name))
+                }
+                if not consumed_from_producer:
+                    findings.append(
+                        _finding(
+                            "trajectory_window_panel_lineage_missing",
+                            "The window manifest and the upstream trajectory panel "
+                            "must share one declared producer and both be consumed by "
+                            "the representation owner.",
+                            step_id=representation_owner,
+                            manifest_producer_step_id=producer_id,
+                        )
+                    )
+                else:
+                    window_source_step = steps[step_index[producer_id]]
+
+        for input_name in window_source_step.inputs or []:
             variable = variables_by_name.get(str(input_name))
             if variable is None or variable.fixed_window_trajectory is None:
                 continue
@@ -467,8 +631,10 @@ def evaluate_trajectory_plan_dag(
                 _finding(
                     "trajectory_window_family_not_resolved",
                     "The representation owner does not select at least two fixed "
-                    "windows from one declared family.",
+                    "windows from one declared family, either directly or through "
+                    "a typed upstream panel manifest.",
                     step_id=representation_owner,
+                    window_source_step_id=window_source_step.step_id,
                     selected_families=sorted(selected_by_family),
                 )
             )
@@ -503,6 +669,7 @@ def evaluate_trajectory_plan_dag(
                         "The representation silently omits available fixed-window "
                         "bins inside one selected family horizon.",
                         step_id=representation_owner,
+                        window_source_step_id=window_source_step.step_id,
                         family=family,
                         horizon_start_hours=horizon_start,
                         horizon_end_hours=horizon_end,
@@ -612,6 +779,50 @@ def augment_trajectory_plan_products(
     ]
 
 
+def trajectory_planner_contract_guide(
+    *,
+    context: ResearchContext,
+    analysis_type: object,
+) -> str:
+    """Return the case-neutral planning schema for trajectory DAGs."""
+
+    if _normalise_token(analysis_type) != "trajectory_clustering" or not any(
+        variable.fixed_window_trajectory is not None
+        for variable in (context.variables or [])
+    ):
+        return ""
+    return (
+        "FIXED-WINDOW TRAJECTORY PLAN CONTRACT (scientific choices remain yours):\n"
+        "Declare four typed roles: representation, candidate selection, "
+        "stability/freeze, and descriptive characterization. They may be four "
+        "steps, one monolithic scientific step, or a hybrid; in particular one "
+        "scientific step may own both candidate selection and stability/freeze. "
+        "Never mix a scientific role with figure outputs. Methods may use any "
+        "accurate method-family name, but role products must use this canonical "
+        "replay schema:\n"
+        "- representation: declare the chosen representation artifact and "
+        "`table:trajectory_membership`;\n"
+        "- candidate selection: declare a candidate fit/assignment artifact and "
+        "`manifest:cluster_selection`;\n"
+        "- stability/freeze: declare the frozen-solution assignment artifact, "
+        "`manifest:trajectory_missingness_policy`, `table:cluster_assignments`, "
+        "`table:cluster_stability`, and "
+        "`table:cluster_stability_assignments`;\n"
+        "- characterization: declare `table:trajectory_profiles` and "
+        "`table:cluster_sizes`, plus `table:outcome_by_cluster` only when an "
+        "outcome description is planned.\n"
+        "Connect separate owners through explicit typed producer/consumer edges. "
+        "If representation reads raw fixed-window columns directly, list them in "
+        "its inputs. If it instead reads an upstream aligned panel, the panel "
+        "producer must list the raw fixed-window columns in its inputs, produce "
+        "both the panel and `manifest:trajectory_window_manifest`, and the "
+        "representation owner must consume both. The manifest records ordered "
+        "source columns with family and window boundaries; it is provenance, not "
+        "permission for the framework to choose a horizon, method, k, threshold, "
+        "or missing-data policy."
+    )
+
+
 def trajectory_role_code_contract(
     *,
     context: ResearchContext,
@@ -623,6 +834,21 @@ def trajectory_role_code_contract(
     products = _step_products(step)
     declarations = {product for _kind, product in products}
     sections: List[str] = []
+    window_manifests = sorted(
+        product for product in products if _is_window_manifest_product(product)
+    )
+    if window_manifests:
+        manifest_names = ", ".join(
+            f"{name}.json" for _kind, name in window_manifests
+        )
+        sections.append(
+            "UPSTREAM WINDOW-PANEL ROLE: write the declared manifest JSON "
+            f"({manifest_names}) with panel_product and families; each family "
+            "entry must contain family, ordered_source_columns, and for every "
+            "source column its exact name, window_start_hours, and "
+            "window_end_hours. Derive these fields from the declared source "
+            "inputs. Do not silently omit an internal available bin."
+        )
     if "trajectory_membership" in declarations:
         sections.append(
             "REPRESENTATION ROLE: write trajectory_membership.csv with the "
@@ -699,5 +925,6 @@ __all__ = [
     "evaluate_trajectory_plan_dag",
     "trajectory_plan_contract_applies",
     "trajectory_plan_dag_findings",
+    "trajectory_planner_contract_guide",
     "trajectory_role_code_contract",
 ]

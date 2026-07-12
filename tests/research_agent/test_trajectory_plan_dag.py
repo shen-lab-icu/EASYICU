@@ -17,6 +17,7 @@ from easyicu.research_agent.trajectory_plan_contract import (
     augment_trajectory_plan_products,
     evaluate_trajectory_plan_dag,
     trajectory_plan_contract_applies,
+    trajectory_planner_contract_guide,
     trajectory_role_code_contract,
 )
 
@@ -161,6 +162,87 @@ def _kinds(evaluation) -> set[str]:
     }
 
 
+def _free_named_split_plan(
+    context: ResearchContext,
+    *,
+    selected_windows: list[str] | None = None,
+) -> AnalysisPlan:
+    windows = selected_windows or [variable.name for variable in context.variables]
+    return AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="trajectory_clustering",
+        steps=[
+            AnalysisStep(
+                step_id="02_panel_preparation",
+                intent="Align the selected repeated measures.",
+                method="fixed_anchor_longitudinal_missingness_audit",
+                inputs=windows,
+                expected_outputs=[
+                    "artifact:aligned_longitudinal_panel",
+                    "artifact:trajectory_feature_manifest",
+                ],
+            ),
+            AnalysisStep(
+                step_id="03_functional_encoding",
+                intent="Build the agent-selected representation.",
+                method="missingness_aware_rank_preserving_functional_representation",
+                inputs=[
+                    "artifact:aligned_longitudinal_panel",
+                    "artifact:trajectory_feature_manifest",
+                ],
+                expected_outputs=[
+                    "artifact:trajectory_representation",
+                    "table:scaling_summary",
+                ],
+            ),
+            AnalysisStep(
+                step_id="04_candidate_models",
+                intent="Compare agent-selected candidate solutions.",
+                method=(
+                    "model_based_latent_class_clustering_with_bic_and_bootstrap_"
+                    "stability"
+                ),
+                inputs=["artifact:trajectory_representation"],
+                expected_outputs=[
+                    "artifact:candidate_cluster_models",
+                    "artifact:candidate_cluster_assignments",
+                    "table:candidate_cluster_criteria",
+                ],
+            ),
+            AnalysisStep(
+                step_id="05_freeze",
+                intent="Refit resamples and freeze the selected solution.",
+                method=(
+                    "model_based_latent_class_clustering_with_bic_and_bootstrap_"
+                    "stability"
+                ),
+                inputs=[
+                    "artifact:trajectory_representation",
+                    "artifact:candidate_cluster_models",
+                ],
+                expected_outputs=[
+                    "artifact:stability_freeze",
+                    "artifact:cluster_assignments",
+                    "table:cluster_stability",
+                ],
+            ),
+            AnalysisStep(
+                step_id="06_describe",
+                intent="Describe the frozen groups.",
+                method="descriptive_cluster_characterization_and_outcome_summary",
+                inputs=[
+                    "artifact:cluster_assignments",
+                    "artifact:aligned_longitudinal_panel",
+                ],
+                expected_outputs=[
+                    "table:cluster_characteristics",
+                    "table:cluster_outcome_summary",
+                ],
+            ),
+        ],
+    )
+
+
 def test_current_h3_shaped_split_dag_is_recognized_without_collapsing_steps():
     context = _context(
         {
@@ -183,6 +265,92 @@ def test_current_h3_shaped_split_dag_is_recognized_without_collapsing_steps():
     }
     assert plan.model_dump(mode="json") == before
     assert "04_candidates_figure" not in evaluation.role_owners.values()
+
+
+def test_free_method_and_product_names_use_method_family_plus_typed_structure():
+    context = _context(
+        {
+            "unseen_organ_a": [(0, 6), (6, 12), (12, 18)],
+            "unseen_organ_b": [(0, 6), (6, 12), (12, 18)],
+        }
+    )
+    plan = _free_named_split_plan(context)
+
+    evaluation = evaluate_trajectory_plan_dag(plan=plan, context=context)
+
+    assert evaluation.findings == ()
+    assert evaluation.role_owners == {
+        "representation": "03_functional_encoding",
+        "candidate_selection": "04_candidate_models",
+        "stability_freeze": "05_freeze",
+        "characterization": "06_describe",
+    }
+
+
+def test_one_scientific_step_may_own_candidate_selection_and_stability():
+    context = _context({"unseen_index": [(0, 4), (4, 8), (8, 12)]})
+    plan = _free_named_split_plan(context)
+    candidate = next(step for step in plan.steps if step.step_id == "04_candidate_models")
+    candidate.intent = "Compare candidates, assess stability, and freeze the solution."
+    candidate.expected_outputs.extend(
+        [
+            "artifact:stability_freeze",
+            "artifact:stable_cluster_assignments",
+            "table:cluster_stability",
+            "table:cluster_assignments",
+        ]
+    )
+    plan.steps = [step for step in plan.steps if step.step_id != "05_freeze"]
+    characterization = next(step for step in plan.steps if step.step_id == "06_describe")
+    characterization.inputs = [
+        "artifact:stable_cluster_assignments",
+        "artifact:aligned_longitudinal_panel",
+    ]
+
+    evaluation = evaluate_trajectory_plan_dag(plan=plan, context=context)
+
+    assert evaluation.findings == ()
+    assert evaluation.role_owners["candidate_selection"] == "04_candidate_models"
+    assert evaluation.role_owners["stability_freeze"] == "04_candidate_models"
+
+
+def test_upstream_panel_manifest_is_required_and_its_raw_windows_are_audited():
+    context = _context({"unseen_index": [(0, 5), (5, 10), (10, 15)]})
+    plan = _free_named_split_plan(
+        context,
+        selected_windows=["unseen_index_h0_5", "unseen_index_h10_15"],
+    )
+
+    evaluation = evaluate_trajectory_plan_dag(plan=plan, context=context)
+
+    gap = next(
+        finding
+        for finding in evaluation.findings
+        if (finding.detail or {}).get("kind") == "trajectory_internal_window_gap"
+    )
+    assert gap.detail["window_source_step_id"] == "02_panel_preparation"
+    assert gap.detail["omitted_columns"] == ["unseen_index_h5_10"]
+
+    representation = next(
+        step for step in plan.steps if step.step_id == "03_functional_encoding"
+    )
+    representation.inputs.remove("artifact:trajectory_feature_manifest")
+    without_manifest = evaluate_trajectory_plan_dag(plan=plan, context=context)
+    assert "trajectory_window_manifest_missing" in _kinds(without_manifest)
+
+
+def test_trajectory_planner_guide_exposes_canonical_roles_without_science_choices():
+    context = _context({"unseen_index": [(2, 7), (7, 13)]})
+
+    guide = trajectory_planner_contract_guide(
+        context=context,
+        analysis_type="trajectory_clustering",
+    )
+
+    assert "one scientific step may own both candidate selection" in guide
+    assert "manifest:trajectory_window_manifest" in guide
+    assert "manifest:cluster_selection" in guide
+    assert "framework to choose a horizon, method, k, threshold" in guide
 
 
 def test_complete_monolithic_agent_step_may_own_all_four_roles():

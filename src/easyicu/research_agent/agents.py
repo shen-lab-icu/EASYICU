@@ -43,7 +43,10 @@ from .analysis_types import (
     planner_analysis_type_guide,
 )
 from .trajectory_contract import trajectory_phenotyping_code_contract
-from .trajectory_plan_contract import trajectory_role_code_contract
+from .trajectory_plan_contract import (
+    trajectory_planner_contract_guide,
+    trajectory_role_code_contract,
+)
 from .method_capabilities import coder_method_capability_block
 from .cohort_schema import ALLOWED_CTAS_AGGREGATIONS, known_concept_ids
 from .icu_rules import (
@@ -424,6 +427,11 @@ def _build_planner_user_prompt(context: ResearchContext) -> str:
         + "\n\n"
         + planner_analysis_type_guide()
         + "\n\n"
+        + trajectory_planner_contract_guide(
+            context=context,
+            analysis_type=infer_analysis_type(context).key,
+        )
+        + "\n\n"
         "OUTPUT FORMAT — VERY IMPORTANT:\n"
         "Return *only* a single JSON object matching the "
         "AnalysisPlan schema. No prose, no markdown headings, no "
@@ -777,6 +785,11 @@ class ReplannerAgent(PlannerAgent):
                     "AnalysisPlan schema. Keep completed steps unchanged and "
                     "revise only the remaining steps when the probe summary or "
                     "completed step outputs justify it.\n\n"
+                    + trajectory_planner_contract_guide(
+                        context=context,
+                        analysis_type=current_plan.analysis_type,
+                    )
+                    + "\n\n"
                     f"CURRENT PLAN:\n{current_plan.model_dump_json(indent=2)}\n\n"
                     f"PROBE SUMMARY:\n{_clip_json(probe_summary or {}, char_budget=_REPLANNER_PROBE_CHAR_BUDGET)}\n\n"
                     f"COMPLETED STEP RECORDS:\n{json.dumps(completed, ensure_ascii=False, default=str)}\n\n"
