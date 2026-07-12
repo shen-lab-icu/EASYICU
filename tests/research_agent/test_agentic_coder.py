@@ -144,6 +144,16 @@ def test_cohort_env_is_passed_through_to_subprocess(ra, monkeypatch):
     assert captured["env"].get("COHORT_PARQUET") == "/tmp/cohort.parquet"
 
 
+def test_agentic_prompt_forbids_undeclared_figures(ra):
+    prompt = AgenticCoderAgent(_FakeCoder(), backend="codex")._build_prompt(
+        _ctx(ra), _step()
+    )
+
+    assert "DECLARED OUTPUT SCOPE (binding)" in prompt
+    assert "declares no figure product" in prompt
+    assert "Do not render, save, or register figures" in prompt
+
+
 def test_compatibility_violation_routes_through_fallback_repair(ra, monkeypatch):
     _make_cli_available(monkeypatch)
 
