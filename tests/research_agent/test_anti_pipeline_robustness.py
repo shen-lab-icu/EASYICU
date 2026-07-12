@@ -91,6 +91,83 @@ def _write_membership_inputs(run_dir):
     return universe_path, cohort_path
 
 
+def _write_valid_executed_results(out_dir):
+    definitions = [
+        ("alt_relaxed_cohort", "cohort", 5, 1.2, "complete_case"),
+        ("alt_complete_case", "missing", 3, 1.3, "complete_case"),
+        ("alt_observed_outcome", "outcome", 3, 1.4, "complete_case"),
+    ]
+    robustness_rows = []
+    model_rows = []
+    coefficient_rows = []
+    for spec_id, axis, n, estimate, analysis_set in definitions:
+        model_id = f"{spec_id}__model"
+        row = {
+            "spec_id": spec_id,
+            "axis": axis,
+            "status": "analyzed",
+            "model_id": model_id,
+            "outcome_concept_id": "death",
+            "model_family": "logistic_regression",
+            "effect_scale": "odds_ratio",
+            "comparison": "stage 3 versus stage 0",
+            "coefficient_term": "stage_3",
+            "analysis_set": analysis_set,
+            "baseline_missing_policy": "drop_missing_baseline",
+            "fit_status": "fitted",
+            "interval_method": "logit_wald_95",
+            "converged": True,
+            "penalized": False,
+            "reportable": True,
+            "n": n,
+            "point_estimate": estimate,
+            "ci_low": estimate - 0.1,
+            "ci_high": estimate + 0.1,
+        }
+        if axis == "missing":
+            row["missing_strategy"] = "complete_case"
+        if axis == "outcome":
+            row["applied_outcome_override"] = {"concept_id": "death"}
+        robustness_rows.append(row)
+        model_rows.append(
+            {
+                "definition_id": spec_id,
+                "model_id": model_id,
+                "outcome": "death",
+                "model_family": "logistic_regression",
+                "effect_scale": "odds_ratio",
+                "analysis_set": analysis_set,
+                "baseline_missing_policy": "drop_missing_baseline",
+                "n": n,
+                "fit_status": "fitted",
+                "converged": True,
+                "penalized": False,
+                "interval_method": "logit_wald_95",
+                "stage3_effect": estimate,
+                "stage3_ci_low": estimate - 0.1,
+                "stage3_ci_high": estimate + 0.1,
+            }
+        )
+        coefficient_rows.append(
+            {
+                "model_id": model_id,
+                "outcome": "death",
+                "model_family": "logistic_regression",
+                "term": "stage_3",
+                "term_role": "exposure",
+                "effect_scale": "odds_ratio",
+                "estimate": estimate,
+                "ci_low": estimate - 0.1,
+                "ci_high": estimate + 0.1,
+            }
+        )
+    pd.DataFrame(model_rows).to_csv(out_dir / "model_fit_summary.csv", index=False)
+    pd.DataFrame(coefficient_rows).to_csv(
+        out_dir / "adjusted_estimates.csv", index=False
+    )
+    return robustness_rows
+
+
 def test_primary_effect_never_parses_english_or_conjunction_from_prose() -> None:
     from easyicu.research_agent.plan_utils import _primary_effect_from_summary
     from easyicu.research_agent.scalar_utils import _first_numeric_effect_from_text
@@ -594,7 +671,7 @@ def test_locked_sensitivity_gate_rejects_reused_primary_membership_under_locked_
     )
 
 
-def test_locked_sensitivity_gate_accepts_declared_specification_csv(tmp_path) -> None:
+def test_locked_sensitivity_declaration_only_does_not_prove_execution(tmp_path) -> None:
     from easyicu.research_agent.pipeline_execute import (
         _cohort_definition_sensitivity_contract_findings,
     )
@@ -643,7 +720,13 @@ def test_locked_sensitivity_gate_accepts_declared_specification_csv(tmp_path) ->
         cohort_path=cohort_path,
     )
 
-    assert findings == []
+    assert any(
+        finding.validator == "robustness_executed_result" for finding in findings
+    )
+    assert not any(
+        finding.validator in {"robustness_spec_lock", "robustness_cohort_membership"}
+        for finding in findings
+    )
 
 
 def test_locked_sensitivity_gate_accepts_typed_overlap_table_names(tmp_path) -> None:
@@ -687,7 +770,8 @@ def test_locked_sensitivity_gate_accepts_typed_overlap_table_names(tmp_path) -> 
             "output_files": {
                 "table:sensitivity_specification_matrix": str(matrix_path),
                 "table:cohort_definition_overlap_attrition": str(overlap_path),
-            }
+            },
+            "robustness_rows": _write_valid_executed_results(out_dir),
         },
         out_dir=out_dir,
         run_dir=run_dir,
@@ -696,6 +780,145 @@ def test_locked_sensitivity_gate_accepts_typed_overlap_table_names(tmp_path) -> 
     )
 
     assert findings == []
+
+
+def test_executed_sensitivity_rejects_wrong_outcome_model(tmp_path) -> None:
+    from easyicu.research_agent.pipeline_execute import (
+        _executed_robustness_result_issues,
+    )
+
+    out_dir = tmp_path / "outputs"
+    out_dir.mkdir()
+    rows = _write_valid_executed_results(out_dir)
+    lock = _locked_specs_payload()
+    outcome_spec = lock["specs"][2]
+    outcome_spec["outcome_override"] = {"concept_id": "los_icu"}
+    rows[2]["applied_outcome_override"] = {"concept_id": "los_icu"}
+
+    issues = _executed_robustness_result_issues(
+        locked_by_id={spec["spec_id"]: spec for spec in lock["specs"]},
+        step_summary={"robustness_rows": rows},
+        out_dir=out_dir,
+        context=None,
+    )
+
+    assert any(issue["issue"] == "executed_outcome_mismatch" for issue in issues)
+
+
+def test_executed_sensitivity_rejects_forged_summary_estimate(tmp_path) -> None:
+    from easyicu.research_agent.pipeline_execute import (
+        _executed_robustness_result_issues,
+    )
+
+    out_dir = tmp_path / "outputs"
+    out_dir.mkdir()
+    rows = _write_valid_executed_results(out_dir)
+    rows[0]["point_estimate"] = 999.0
+    lock = _locked_specs_payload()
+
+    issues = _executed_robustness_result_issues(
+        locked_by_id={spec["spec_id"]: spec for spec in lock["specs"]},
+        step_summary={"robustness_rows": rows},
+        out_dir=out_dir,
+        context=None,
+    )
+
+    assert any(
+        issue["issue"] in {
+            "model_result_value_mismatch",
+            "coefficient_result_value_mismatch",
+        }
+        for issue in issues
+    )
+
+
+def test_executed_sensitivity_rejects_missing_indicator_on_complete_case_model(
+    tmp_path,
+) -> None:
+    from easyicu.research_agent.pipeline_execute import (
+        _executed_robustness_result_issues,
+    )
+
+    out_dir = tmp_path / "outputs"
+    out_dir.mkdir()
+    rows = _write_valid_executed_results(out_dir)
+    lock = _locked_specs_payload()
+    lock["specs"][1]["missing_override"] = {"strategy": "missing_indicator"}
+    rows[1]["missing_strategy"] = "missing_indicator"
+
+    issues = _executed_robustness_result_issues(
+        locked_by_id={spec["spec_id"]: spec for spec in lock["specs"]},
+        step_summary={"robustness_rows": rows},
+        out_dir=out_dir,
+        context=None,
+    )
+
+    assert any(
+        issue["issue"] == "missing_indicator_model_not_used" for issue in issues
+    )
+
+
+def test_penalized_point_only_sensitivity_must_be_nonreportable(tmp_path) -> None:
+    from easyicu.research_agent.pipeline_execute import (
+        _executed_robustness_result_issues,
+    )
+
+    out_dir = tmp_path / "outputs"
+    out_dir.mkdir()
+    rows = _write_valid_executed_results(out_dir)
+    target = rows[0]
+    target.update(
+        {
+            "ci_low": None,
+            "ci_high": None,
+            "penalized": True,
+            "interval_method": "unavailable",
+            "reportable": True,
+        }
+    )
+    model_path = out_dir / "model_fit_summary.csv"
+    models = pd.read_csv(model_path)
+    mask = models["model_id"].eq(target["model_id"])
+    models.loc[mask, ["stage3_ci_low", "stage3_ci_high"]] = pd.NA
+    models.loc[mask, "penalized"] = True
+    models.loc[mask, "interval_method"] = "unavailable"
+    models.to_csv(model_path, index=False)
+    coefficient_path = out_dir / "adjusted_estimates.csv"
+    coefficients = pd.read_csv(coefficient_path)
+    coefficient_mask = coefficients["model_id"].eq(target["model_id"])
+    coefficients.loc[coefficient_mask, ["ci_low", "ci_high"]] = pd.NA
+    coefficients.to_csv(coefficient_path, index=False)
+    lock = _locked_specs_payload()
+    locked_by_id = {spec["spec_id"]: spec for spec in lock["specs"]}
+
+    issues = _executed_robustness_result_issues(
+        locked_by_id=locked_by_id,
+        step_summary={"robustness_rows": rows},
+        out_dir=out_dir,
+        context=None,
+    )
+    assert any(
+        issue["issue"] == "reportable_result_requires_finite_ci"
+        for issue in issues
+    )
+
+    target["reportable"] = False
+    issues = _executed_robustness_result_issues(
+        locked_by_id=locked_by_id,
+        step_summary={"robustness_rows": rows},
+        out_dir=out_dir,
+        context=None,
+    )
+    assert not any(
+        issue["spec_id"] == target["spec_id"]
+        and issue["issue"]
+        in {
+            "reportable_result_requires_finite_ci",
+            "point_only_result_must_be_penalized_nonreportable",
+        }
+        for issue in issues
+        if "spec_id" in issue
+    )
 
 
 def test_sensitivity_figure_step_is_not_subject_to_result_spec_gate(tmp_path) -> None:

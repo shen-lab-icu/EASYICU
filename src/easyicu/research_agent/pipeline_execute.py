@@ -144,6 +144,9 @@ from .pipeline_resume import (
     upsert_step_record,
 )
 from .schema import AnalysisPlan, AnalysisStep, EvidenceRef, ResearchContext
+from .robustness_execution_contract import (
+    _executed_robustness_result_issues,
+)
 from .robustness_panel import (
     RobustnessSpec,
     assert_robustness_specs_locked,
@@ -583,6 +586,12 @@ def _cohort_definition_sensitivity_contract_findings(
         for spec in locked_specs
         if str(spec.get("spec_id") or "").strip()
     }
+    executed_result_issues = _executed_robustness_result_issues(
+        locked_by_id=locked_by_id,
+        step_summary=step_summary,
+        out_dir=out_dir,
+        context=context,
+    )
     reported_rows: List[Dict[str, Any]] = []
     raw_rows = step_summary.get("robustness_rows")
     if raw_rows is None and isinstance(step_summary.get("robustness_panel"), dict):
@@ -614,6 +623,28 @@ def _cohort_definition_sensitivity_contract_findings(
     missing_ids = sorted(locked_ids - reported_ids)
     extra_ids = sorted(reported_ids - locked_ids - {"primary"})
     findings: List[ValidationFinding] = []
+    if executed_result_issues:
+        findings.append(
+            ValidationFinding(
+                validator="robustness_executed_result",
+                severity="error",
+                message=(
+                    "Each locked robustness specification must have exactly one "
+                    "typed executed-result row bound to its fitted model and "
+                    "coefficient evidence. Declaration and membership tables "
+                    "cannot substitute for execution. Issues="
+                    f"{executed_result_issues}."
+                ),
+                detail={
+                    "required_spec_ids": sorted(locked_by_id),
+                    "issues": executed_result_issues,
+                    "point_only_policy": (
+                        "Penalized point-only fits may be executed but must set "
+                        "reportable=false and interval_method=unavailable."
+                    ),
+                },
+            )
+        )
     missing_axis_ids: List[str] = []
     axis_mismatches: List[Dict[str, str]] = []
     for spec_id, spec in locked_by_id.items():
