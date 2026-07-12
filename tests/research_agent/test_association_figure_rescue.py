@@ -1475,6 +1475,112 @@ def test_sensitivity_rescue_writes_multipanel_contract_and_source_data(
     assert not (routed_out / "sensitivity_forest_source_data.csv").exists()
 
 
+def test_sensitivity_rescue_prefers_declared_summary_and_excludes_point_only_rows(
+    tmp_path: Path,
+):
+    parent = (
+        tmp_path
+        / "steps"
+        / "07_cohort_definition_sensitivity_comparison"
+        / "outputs"
+    )
+    parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "spec_id": ["alt_binary", "alt_continuous"],
+            "axis": ["outcome", "outcome"],
+            "effect_scale": ["odds_ratio", "conditional_median_difference"],
+            "point_estimate": [7.8, 1.9],
+            "ci_low": [pd.NA, 1.8],
+            "ci_high": [pd.NA, 2.0],
+            "converged": [False, True],
+            "penalized": [True, False],
+            "reportable": [False, True],
+            "n": [900, 880],
+        }
+    ).to_csv(parent / "robustness_summary.csv", index=False)
+    # This competing model-level table also has the generic estimate schema.
+    # The declared robustness product must retain source ownership.
+    pd.DataFrame(
+        {
+            "spec_id": ["wrong_table"],
+            "effect_scale": ["odds_ratio"],
+            "point_estimate": [9.9],
+            "ci_low": [9.0],
+            "ci_high": [10.8],
+            "converged": [True],
+            "reportable": [True],
+        }
+    ).to_csv(parent / "model_fit_summary.csv", index=False)
+    (parent / "step_summary.json").write_text(
+        json.dumps(
+            {
+                "method": "cohort_definition_sensitivity",
+                "output_files": [
+                    "model_fit_summary.csv",
+                    "robustness_summary.csv",
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    out = (
+        tmp_path
+        / "steps"
+        / "07_cohort_definition_sensitivity_comparison_figure"
+        / "outputs"
+    )
+
+    rid = sensitivity_rescue(
+        run_dir=tmp_path,
+        current_step_id="07_cohort_definition_sensitivity_comparison_figure",
+        out_dir=out,
+    )
+
+    assert rid == "sensitivity_publication_bundle_from_parent_outputs_v2"
+    plotted = pd.read_csv(out / "sensitivity_forest_source_data.csv")
+    assert plotted["spec_id"].tolist() == ["alt_continuous"]
+    assert plotted["source_table"].unique().tolist() == ["robustness_summary.csv"]
+    assert plotted["modeled_analytic_n"].tolist() == [880]
+    excluded = pd.read_csv(out / "sensitivity_estimability_source_data.csv")
+    assert excluded["spec_id"].tolist() == ["alt_binary"]
+    contract = json.loads(
+        (out / "sensitivity_forest.figure_contract.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert contract["panels"][0]["title"] == "Median-difference sensitivity"
+
+
+def test_sensitivity_exact_method_authorizes_only_verified_summary(monkeypatch):
+    import easyicu.research_agent.pipeline as pipeline_module
+
+    monkeypatch.setattr(
+        pipeline_module,
+        "_verified_direct_parent_table_names",
+        lambda run_dir, step_id: {"robustness_summary.csv"},
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "_resolve_upstream_figure_data_family",
+        lambda run_dir, step_id: None,
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "_resolve_upstream_analysis_method",
+        lambda run_dir, step_id: "cohort_definition_sensitivity",
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "_resolve_upstream_analysis_family",
+        lambda run_dir, step_id: "association_study",
+    )
+
+    assert pipeline_module.deterministic_figure_repair_id_for_upstream(
+        Path("/unused"), "07_sensitivity_figure"
+    ) == "sensitivity_publication_bundle_from_parent_outputs_v2"
+
+
 def test_sensitivity_rescue_omits_empty_scale_and_separates_nonindependent_rows(
     tmp_path: Path,
 ):
