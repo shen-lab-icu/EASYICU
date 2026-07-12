@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from easyicu.research_agent.analysis_types import (
     is_concept_set_family,
@@ -251,6 +252,30 @@ def test_causal_disclaimer_and_fixed_followup_endpoint_do_not_choose_science(ra)
         )
         assert ra.infer_analysis_type(ctx).key == "association_study"
         assert infer_study_design_family(ctx) == "association"
+
+
+def test_chinese_negation_and_cluster_nuisance_do_not_hijack_family(ra):
+    from easyicu.research_agent.study_design import infer_study_design_family
+
+    questions = (
+        "采用混合效应回归和医院层面聚类稳健标准误，评估既有轨迹分群与死亡的关联。",
+        "使用混合效应回归识别医院聚类效应，不进行患者表型分群。",
+        "识别医院聚类效应并使用混合效应回归，不做患者表型发现。",
+        "评估暴露与死亡的调整关联，不作因果解释，使用逻辑回归。",
+        "估计固定28天死亡结局的逻辑回归关联，不进行生存分析。",
+    )
+    for question in questions:
+        ctx = ra.ResearchContext(
+            research_question=question,
+            cohort=ra.CohortDescriptor(
+                cohort_name="c", database="synthetic", n_patients=100, n_stays=100
+            ),
+            variables=[],
+            primary_exposure="exposure",
+            target_outcome="death",
+        )
+        assert ra.infer_analysis_type(ctx).key == "association_study", question
+        assert infer_study_design_family(ctx) == "association", question
 
 
 def test_new_idea_mining_families_are_concept_set_shapes() -> None:
@@ -591,6 +616,39 @@ def test_parse_preserves_agent_selected_family_and_rationale(ra):
 
     assert plan.analysis_type == "association_study"
     assert "fixed binary endpoint" in plan.rationale
+
+
+def test_parse_rejects_unknown_analysis_type_instead_of_bypassing_contract(ra):
+    import importlib
+
+    agents = importlib.import_module("easyicu.research_agent.agents")
+    ctx = ra.ResearchContext(
+        research_question="Estimate a time-to-event association.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="c", database="synthetic", n_patients=100, n_stays=100
+        ),
+        variables=[],
+        target_outcome="death",
+    )
+    raw = json.dumps(
+        {
+            "research_question": ctx.research_question,
+            "analysis_type": "survial",
+            "steps": [
+                {
+                    "step_id": "01_model",
+                    "intent": "Fit the declared model.",
+                    "method": "cox_proportional_hazards",
+                    "expected_outputs": ["table:hazard_ratio"],
+                }
+            ],
+        }
+    )
+    planner = agents.PlannerAgent.__new__(agents.PlannerAgent)
+    planner.last_dropped_plan_keys = {"top_level": [], "steps": []}
+
+    with pytest.raises(ValueError, match="Unknown analysis_type"):
+        agents.PlannerAgent._parse(planner, raw, ctx)
 
 
 def test_infer_does_not_misclassify_lab_names_as_multimodal(ra):

@@ -186,9 +186,38 @@ def test_every_generic_repair_entrypoint_crosses_central_authorization_gate() ->
     assert source.count("deterministic_contract_repair(") == 1
     assert source.count("_deterministic_runner_repair(") == 1
     assert source.count("deterministic_concept_audit_repair(") == 1
-    # Six candidate boundaries plus the local helper definition. Case-plugin
-    # candidates share the runner boundary and therefore cannot bypass it.
-    assert source.count("_authorize_automatic_repair(") == 7
+    # Six historical code-candidate boundaries, the rendering-only adapter,
+    # plus the local helper definition. Case-plugin candidates share the runner
+    # boundary and therefore cannot bypass it.
+    assert source.count("_authorize_automatic_repair(") == 8
+    assert "authorizer=lambda repair_id: _automatic_repair_authorized(" in source
+
+
+def test_only_closed_source_figure_renderers_are_structural_and_automatic() -> None:
+    for repair_id in (
+        "ordered_category_distribution_publication_bundle_v1",
+        "cohort_flow_publication_bundle_from_parent_outputs_v1",
+    ):
+        metadata = repair_metadata_for(repair_id)
+        assert metadata.repair_class is RepairClass.STRUCTURAL, repair_id
+        assert automatic_repair_allowed(repair_id), repair_id
+
+    for repair_id in (
+        "publication_figure_renderer_from_parent_outputs_v1",
+        "prediction_publication_bundle_from_parent_outputs_v1",
+        "association_publication_bundle_from_parent_outputs_v2",
+        "association_publication_bundle_from_parent_outputs_v3",
+        "sensitivity_publication_bundle_from_parent_outputs_v2",
+        "survival_publication_bundle_from_parent_outputs_v1",
+        "cohort_overlap_publication_bundle_from_parent_outputs_v1",
+        "missingness_publication_bundle_from_parent_outputs_v1",
+        "phenotype_publication_bundle_from_parent_outputs_v1",
+        "descriptive_publication_bundle_from_parent_outputs_v1",
+        "absolute_risk_publication_bundle_from_parent_outputs_v1",
+    ):
+        metadata = repair_metadata_for(repair_id)
+        assert metadata.repair_class is RepairClass.METHOD_SUBSTITUTION, repair_id
+        assert not automatic_repair_allowed(repair_id), repair_id
 
 
 def test_ledger_records_invariant_status(tmp_path: Path) -> None:

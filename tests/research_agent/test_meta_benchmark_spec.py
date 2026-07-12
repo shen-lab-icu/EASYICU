@@ -139,3 +139,83 @@ def test_includes_an_explicit_unsupported_capability_probe():
     # MG12-style: the benchmark must keep an honest record of a known gap.
     novelty = {n for it in _items() for n in it["novelty"]}
     assert "unsupported_family" in novelty
+
+
+def test_behavior_probe_preserves_agent_method_owner_without_runner_injection():
+    from easyicu.research_agent.pipeline import _enforce_advanced_plan_contract
+    from easyicu.research_agent.schema import (
+        AnalysisPlan,
+        AnalysisStep,
+        CohortDescriptor,
+        ResearchContext,
+    )
+
+    context = ResearchContext(
+        research_question="Estimate a generic time-to-event contrast.",
+        cohort=CohortDescriptor(
+            cohort_name="neutral", database="synthetic", n_patients=100, n_stays=100
+        ),
+        variables=[],
+        target_outcome="event",
+    )
+    plan = AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="survival",
+        steps=[
+            AnalysisStep(
+                step_id="agent_time_to_event_model",
+                intent="Fit the agent-selected time-to-event model.",
+                method="cox_proportional_hazards",
+                expected_outputs=["table:hazard_ratio"],
+            )
+        ],
+    )
+
+    revised, _findings = _enforce_advanced_plan_contract(
+        plan=plan, context=context
+    )
+
+    assert [step.step_id for step in revised.steps] == ["agent_time_to_event_model"]
+    assert revised.steps[0].method == "cox_proportional_hazards"
+
+
+def test_behavior_probe_fails_closed_with_a_structured_owner_reason():
+    from easyicu.research_agent.pipeline import _enforce_advanced_plan_contract
+    from easyicu.research_agent.schema import (
+        AnalysisPlan,
+        AnalysisStep,
+        CohortDescriptor,
+        ResearchContext,
+    )
+
+    context = ResearchContext(
+        research_question="Estimate a generic time-to-event contrast.",
+        cohort=CohortDescriptor(
+            cohort_name="neutral", database="synthetic", n_patients=100, n_stays=100
+        ),
+        variables=[],
+        target_outcome="event",
+    )
+    plan = AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="survival",
+        steps=[
+            AnalysisStep(
+                step_id="agent_non_survival_model",
+                intent="Fit a fixed-endpoint association model.",
+                method="mixed_effects_regression",
+                expected_outputs=["table:association_estimates"],
+            )
+        ],
+    )
+
+    revised, findings = _enforce_advanced_plan_contract(
+        plan=plan, context=context
+    )
+
+    assert revised == plan
+    assert any(
+        finding.detail.get("missing_structured_owner") is True
+        and finding.detail.get("family") == "survival"
+        for finding in findings
+    )

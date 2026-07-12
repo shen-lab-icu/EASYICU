@@ -1910,10 +1910,7 @@ def test_plan_contract_does_not_relabel_covariate_as_primary_bias_audit(ra):
 
 
 def test_survival_analysis_type_drives_km_figure_contract(ra):
-    """A plan stamped analysis_type='survival' must be normalized to a
-    self-contained survival step carrying figure:survival_curves, even with no
-    user_preferences family. Regression: survival studies previously fell
-    through the contract (no survival bucket) and only got the robustness forest."""
+    """A declared Cox owner receives contracts without losing agent ownership."""
     from easyicu.research_agent import pipeline as pipeline_mod
 
     ctx = ra.build_research_context(
@@ -1953,7 +1950,9 @@ def test_survival_analysis_type_drives_km_figure_contract(ra):
     )
 
     assert any(f.detail.get("family") == "survival" for f in findings), findings
-    surv_step = next(s for s in revised.steps if s.step_id == "01_survival_analysis")
+    assert [step.step_id for step in revised.steps] == ["03_cox_model"]
+    surv_step = revised.steps[0]
+    assert surv_step.method == "cox_proportional_hazards"
     assert "figure:survival_curves" in surv_step.expected_outputs
     assert "table:cox_summary" in surv_step.expected_outputs
 
@@ -2020,9 +2019,7 @@ def test_normalise_contract_family_bridges_registry_keys(ra):
 def test_specific_analysis_types_drive_their_own_figure_contract(
     ra, analysis_type, question, step_intent, method, figure_tag
 ):
-    """Each specific, non-heuristic-reachable family must normalize to its own
-    canonical step carrying its distinctive figure — and must win over the
-    keyword heuristic (e.g. dynamic_prediction over the bare word 'prediction')."""
+    """A family label cannot synthesize a missing scientific method owner."""
     from easyicu.research_agent import pipeline as pipeline_mod
 
     ctx = ra.build_research_context(
@@ -2056,9 +2053,16 @@ def test_specific_analysis_types_drive_their_own_figure_contract(
         plan=plan, context=ctx
     )
 
-    assert any(f.detail.get("family") == analysis_type for f in findings), findings
+    assert revised == plan
+    assert [step.step_id for step in revised.steps] == ["03_step"]
+    assert revised.steps[0].method == method
+    assert any(
+        f.detail.get("family") == analysis_type
+        and f.detail.get("missing_structured_owner") is True
+        for f in findings
+    ), findings
     all_outputs = [o for s in revised.steps for o in s.expected_outputs]
-    assert figure_tag in all_outputs, all_outputs
+    assert figure_tag not in all_outputs, all_outputs
 
 
 def test_pipeline_auto_enables_llm_concept_audit_for_non_mock_llm(ra, tmp_path: Path):
@@ -5574,7 +5578,12 @@ def test_readiness_artifacts_reject_unresolved_manifest_comments(
         ],
     )
     evidence = EvidenceStore(tmp_path)
-    _register_complete_display_suite_for_readiness(evidence, tmp_path)
+    current_evidence = _register_complete_display_suite_for_readiness(
+        evidence,
+        tmp_path,
+        table_step_id="01_table_one",
+        publication_source_step_id="02_model",
+    )
     bound_path = tmp_path / "manuscript_scaffold_bound.md"
     bound_path.write_text(
         _evidence_bound_demo_manuscript() + "\nThe estimate is linked to evidence "
@@ -5589,8 +5598,16 @@ def test_readiness_artifacts_reject_unresolved_manifest_comments(
         plan=plan,
         findings=[],
         per_step_records=[
-            {"step_id": "01_table_one", "status": "ok"},
-            {"step_id": "02_model", "status": "ok"},
+            {
+                "step_id": "01_table_one",
+                "status": "ok",
+                "evidence_ids": current_evidence["01_table_one"],
+            },
+            {
+                "step_id": "02_model",
+                "status": "ok",
+                "evidence_ids": current_evidence["02_model"],
+            },
             {"step_id": "03_sensitivity", "status": "ok"},
         ],
         evidence=evidence,
@@ -5728,23 +5745,47 @@ def _register_publication_bundle_for_readiness(
 
 
 def _write_publication_skill_summary(
-    tmp_path: Path,
+    evidence,
     *,
     version: int,
     audit_findings: list[dict],
 ) -> Path:
-    evidence_dir = tmp_path / "evidence"
-    evidence_dir.mkdir(parents=True, exist_ok=True)
     suffix = "" if version == 1 else f"_v{version}"
-    path = (
-        evidence_dir
-        / f"publication_figure_skill_summary{suffix}__publication_figure_skill_summary.json"
+    source_ids = [
+        record.evidence_id
+        for record in evidence.records()
+        if str(record.evidence_id).startswith("publication_figure_source_")
+    ]
+    figure_ids = [
+        record.evidence_id
+        for record in evidence.records()
+        if record.kind == "figure"
+        and str(record.evidence_id).startswith("publication_figure_")
+    ]
+    contract_id = next(
+        (
+            record.evidence_id
+            for record in evidence.records()
+            if str(record.evidence_id).startswith("publication_figure_contract")
+        ),
+        None,
     )
-    path.write_text(
-        json.dumps({"audit_findings": audit_findings}),
-        encoding="utf-8",
+    record = evidence.register_json(
+        kind="log",
+        description="PublicationFigureSkill summary.",
+        payload={
+            "generated": True,
+            "source_evidence_ids": source_ids,
+            "figure_evidence_ids": figure_ids,
+            "contract_evidence_id": contract_id,
+            "audit_findings": audit_findings,
+        },
+        filename="publication_figure_skill_summary.json",
+        evidence_id=f"publication_figure_skill_summary{suffix}",
+        producer="PublicationFigureSkill",
+        generation_mode="deterministic_figure_skill",
     )
-    return path
+    return evidence.root / record.relative_path
 
 
 def _register_complete_display_suite_for_readiness(
@@ -6730,7 +6771,7 @@ def test_readiness_supersedes_stale_publication_figure_contract_quality_error(
         publication_source_step_id="02_model",
     )
     _write_publication_skill_summary(
-        tmp_path,
+        evidence,
         version=2,
         audit_findings=[
             {
@@ -6821,8 +6862,13 @@ def test_author_review_note_marks_superseded_publication_export_error_nonblockin
         ],
     )
     evidence = EvidenceStore(tmp_path)
-    _register_complete_display_suite_for_readiness(evidence, tmp_path)
-    _write_publication_skill_summary(tmp_path, version=2, audit_findings=[])
+    current_evidence = _register_complete_display_suite_for_readiness(
+        evidence,
+        tmp_path,
+        table_step_id="01_table_one",
+        publication_source_step_id="02_model",
+    )
+    _write_publication_skill_summary(evidence, version=2, audit_findings=[])
     stale_error = ValidationFinding(
         validator="publication_figure_export",
         severity="error",
@@ -6839,8 +6885,16 @@ def test_author_review_note_marks_superseded_publication_export_error_nonblockin
         plan=plan,
         findings=[stale_error],
         per_step_records=[
-            {"step_id": "01_table_one", "status": "ok"},
-            {"step_id": "02_model", "status": "ok"},
+            {
+                "step_id": "01_table_one",
+                "status": "ok",
+                "evidence_ids": current_evidence["01_table_one"],
+            },
+            {
+                "step_id": "02_model",
+                "status": "ok",
+                "evidence_ids": current_evidence["02_model"],
+            },
             {"step_id": "03_sensitivity", "status": "ok"},
         ],
         evidence=evidence,
@@ -6909,7 +6963,7 @@ def test_readiness_keeps_current_publication_figure_export_error_active(
         ),
     }
     _write_publication_skill_summary(
-        tmp_path,
+        evidence,
         version=2,
         audit_findings=[current_error],
     )
@@ -9625,6 +9679,39 @@ def test_advanced_plan_contract_preserves_explicit_kmeans_method(ra):
     assert [step.step_id for step in revised.steps] == ["05_kmeans_phenotyping"]
     assert revised.steps[0].method == "kmeans_clustering"
     assert "statistic:silhouette_score" in revised.steps[0].expected_outputs
+
+
+def test_clustering_contract_does_not_invent_mortality_characterization(ra):
+    from easyicu.research_agent.pipeline import _enforce_advanced_plan_contract
+
+    context = ra.ResearchContext(
+        research_question="Discover longitudinal phenotypes without outcome analysis.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="cohort", database="synthetic", n_patients=20, n_stays=20
+        ),
+        variables=[],
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="trajectory_clustering",
+        steps=[
+            ra.AnalysisStep(
+                step_id="05_gmm_phenotyping",
+                intent="Discover trajectory phenotypes with a Gaussian mixture model.",
+                method="gaussian_mixture_model",
+                expected_outputs=[
+                    "table:cluster_assignments",
+                    "statistic:cluster_count",
+                ],
+            )
+        ],
+    )
+
+    revised, _findings = _enforce_advanced_plan_contract(plan=plan, context=context)
+
+    outputs = revised.steps[0].expected_outputs
+    assert "table:cluster_mortality" not in outputs
+    assert "table:outcome_by_cluster" not in outputs
 
 
 def test_advanced_plan_contract_leaves_pure_association_family_alone(ra):

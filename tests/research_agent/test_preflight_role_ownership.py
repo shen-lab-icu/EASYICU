@@ -10,11 +10,14 @@ from easyicu.research_agent.pipeline_execute import (
     _absolute_risk_context_runner_owns_step,
     _cohort_definition_overlap_runner_owns_step,
     _cohort_definition_sensitivity_runner_owns_step,
+    _detached_figure_repair_binding,
     _is_terminal_publication_figure_repair_step,
     _primary_cohort_flow_runner_owns_step,
     _repair_publication_figure_in_staging,
     _robustness_sensitivity_runner_owns_step,
     _simple_missingness_audit_runner_owns_step,
+    _step_has_figure_only_output_contract,
+    _terminal_publication_repair_replan_skip_detail,
 )
 
 
@@ -37,6 +40,7 @@ def test_failed_staged_figure_repair_preserves_agent_exports(tmp_path: Path):
         run_dir=tmp_path,
         current_step_id="05_result_figure",
         out_dir=out_dir,
+        authorizer=lambda _repair_id: True,
         renderer=_declines,
     )
 
@@ -66,6 +70,7 @@ def test_successful_staged_figure_repair_replaces_bundle_and_rewrites_paths(
         run_dir=tmp_path,
         current_step_id="05_result_figure",
         out_dir=out_dir,
+        authorizer=lambda _repair_id: True,
         renderer=_renders,
     )
 
@@ -74,6 +79,30 @@ def test_successful_staged_figure_repair_replaces_bundle_and_rewrites_paths(
     assert (out_dir / "publication_figure.png").read_bytes() == b"new"
     summary = json.loads((out_dir / "step_summary.json").read_text(encoding="utf-8"))
     assert summary["figure_path"] == str(out_dir / "publication_figure.png")
+
+
+def test_staged_figure_repair_needs_authorization_before_install(tmp_path: Path):
+    out_dir = tmp_path / "steps" / "05_result_figure" / "outputs"
+    out_dir.mkdir(parents=True)
+    sentinel = out_dir / "agent_figure.png"
+    sentinel.write_bytes(b"agent")
+
+    def _renders(**kwargs):
+        staging = Path(kwargs["out_dir"])
+        (staging / "publication_figure.png").write_bytes(b"generated")
+        return "unreviewed_figure_transform_v1"
+
+    repaired = _repair_publication_figure_in_staging(
+        run_dir=tmp_path,
+        current_step_id="05_result_figure",
+        out_dir=out_dir,
+        renderer=_renders,
+        authorizer=lambda _repair_id: False,
+    )
+
+    assert repaired is None
+    assert sentinel.read_bytes() == b"agent"
+    assert not (out_dir / "publication_figure.png").exists()
 
 
 def test_locked_primary_cohort_flow_is_owned_by_deterministic_runner():
@@ -100,6 +129,12 @@ def test_cohort_flow_output_name_must_match_the_closed_contract():
         "01_primary_cohort_flow",
         "Build prediction features after cohort setup.",
         ["table:cohort_flow_prediction_features"],
+    )
+    assert not _primary_cohort_flow_runner_owns_step(
+        "cohort_definition",
+        "01_primary_cohort_flow",
+        "Define the cohort.",
+        ["table:cohort_flow", "patient_level_dataset.parquet"],
     )
 
 
@@ -186,6 +221,12 @@ def test_missingness_output_name_must_match_the_closed_contract():
         "Fit an imputation model.",
         ["table:missingness_imputation_model"],
     )
+    assert not _simple_missingness_audit_runner_owns_step(
+        "missingness_audit",
+        "02_missingness",
+        "Audit missingness.",
+        ["table:missingness_audit", "representation_gap_notes.csv"],
+    )
 
 
 def test_cohort_attrition_owner_is_not_claimed_by_downstream_comparator():
@@ -238,6 +279,16 @@ def test_absolute_risk_runner_rejects_figure_and_primary_effect_contracts():
             "log:representation_gap_notes",
         ],
     )
+    assert not _absolute_risk_context_runner_owns_step(
+        "absolute_risk_context",
+        "06_context_with_foreign_product",
+        ["table:absolute_risk", "table:subgroup_interactions"],
+    )
+    assert not _absolute_risk_context_runner_owns_step(
+        "absolute_risk_context",
+        "06_context_with_bare_foreign_product",
+        ["table:absolute_risk", "negative_control_outcomes.csv"],
+    )
 
 
 def test_robustness_runner_matches_separate_structured_comparison():
@@ -287,6 +338,16 @@ def test_robustness_runner_rejects_primary_and_figure_owners():
         "08_forecast",
         ["table:sensitivity_grid_forecast"],
     )
+    assert not _robustness_sensitivity_runner_owns_step(
+        "prespecified_robustness",
+        "08_mixed_contract",
+        ["table:robustness_matrix", "table:negative_control_outcomes"],
+    )
+    assert not _robustness_sensitivity_runner_owns_step(
+        "prespecified_robustness",
+        "08_bare_mixed_contract",
+        ["table:robustness_matrix", "negative_control_outcomes.csv"],
+    )
 
 
 def test_primary_estimands_and_cohort_selection_are_not_preflight_dispatched():
@@ -325,3 +386,197 @@ def test_terminal_rendering_skip_requires_exact_method_and_figure_only_outputs()
         }
     )
     assert not _is_terminal_publication_figure_repair_step(scientific_repair)
+
+
+def test_publication_renderer_cannot_preflight_or_replace_mixed_scientific_contract():
+    from easyicu.research_agent.schema import AnalysisStep
+
+    figure_only = AnalysisStep(
+        step_id="02_model_figure",
+        intent="Render the registered model result.",
+        method="publication_figure_generation",
+        expected_outputs=["figure:publication_figure"],
+    )
+    mixed = figure_only.model_copy(
+        update={
+            "expected_outputs": [
+                "table:primary_association",
+                "figure:publication_figure",
+            ]
+        }
+    )
+
+    assert _step_has_figure_only_output_contract(figure_only)
+    assert not _step_has_figure_only_output_contract(mixed)
+    production_source = inspect.getsource(pipeline_execute.run_execute_phase)
+    assert "if not _step_has_figure_only_output_contract(step):" in production_source
+    assert "and _step_has_figure_only_output_contract(step)" in production_source
+
+
+def test_figure_like_product_names_do_not_launder_typed_scientific_outputs():
+    from easyicu.research_agent.schema import AnalysisStep
+
+    base = AnalysisStep(
+        step_id="02_model_figure",
+        intent="Render the registered model result.",
+        method="publication_figure_generation",
+        expected_outputs=["figure:publication_figure"],
+    )
+    for scientific_output in (
+        "table:figure_model_estimates",
+        "model:forest_plot_model",
+        "statistic:chart_effect_estimate",
+    ):
+        mixed = base.model_copy(
+            update={
+                "expected_outputs": [
+                    "figure:publication_figure",
+                    scientific_output,
+                ]
+            }
+        )
+        assert not _step_has_figure_only_output_contract(mixed), scientific_output
+
+
+def test_terminal_repair_skip_uses_latest_status_for_each_step(tmp_path: Path):
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    model = AnalysisStep(
+        step_id="01_model",
+        intent="Fit the agent-selected primary model.",
+        method="agent_selected_model",
+        expected_outputs=["table:primary_estimate"],
+    )
+    rendering = AnalysisStep(
+        step_id="01_model_figure",
+        intent="Render the registered parent result.",
+        method="rendering_only_repair_from_primary_results",
+        expected_outputs=["figure:publication_figure"],
+    )
+    outputs = tmp_path / "steps" / model.step_id / "outputs"
+    outputs.mkdir(parents=True)
+    (outputs / "publication_figure.png").write_bytes(b"old")
+    (outputs / "publication_figure.figure_contract.json").write_text(
+        json.dumps(
+            {
+                "panels": [
+                    {"role": "descriptive_result"},
+                    {"role": "primary_estimand"},
+                ],
+                "export_formats": ["png"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    plan = AnalysisPlan(
+        research_question="A neutral primary analysis.",
+        steps=[model, rendering],
+    )
+
+    detail = _terminal_publication_repair_replan_skip_detail(
+        plan=plan,
+        completed_records=[
+            {"step_id": model.step_id, "status": "ok"},
+            {"step_id": model.step_id, "status": "contract_failed"},
+        ],
+        run_dir=tmp_path,
+    )
+
+    assert detail is None
+
+
+def test_detached_repair_binding_comes_from_plan_and_current_outer_ledger():
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    source = AnalysisStep(
+        step_id="01_model",
+        intent="Fit the agent-selected model.",
+        method="agent_selected_model",
+        expected_outputs=["table:primary_estimate"],
+    )
+    target = AnalysisStep(
+        step_id="01_model_figure",
+        intent="Render the model result.",
+        method="publication_figure_generation",
+        expected_outputs=["figure:publication_figure"],
+    )
+    repair = AnalysisStep(
+        step_id="09_detached_figure_repair",
+        intent="Render registered results only.",
+        inputs=[target.step_id],
+        method="rendering_only_repair_from_primary_results",
+        expected_outputs=["figure:publication_figure"],
+    )
+    plan = AnalysisPlan(
+        research_question="A neutral source-backed result.",
+        steps=[source, target, repair],
+    )
+    records = [
+        {"step_id": source.step_id, "status": "ok", "evidence_ids": ["ev_source"]},
+        {"step_id": target.step_id, "status": "execution_failed"},
+    ]
+
+    assert _detached_figure_repair_binding(
+        step=repair, plan=plan, completed_records=records
+    ) == (target.step_id, source.step_id, ["ev_source"])
+    # A later failed source checkpoint supersedes its historical success.
+    assert (
+        _detached_figure_repair_binding(
+            step=repair,
+            plan=plan,
+            completed_records=[
+                *records,
+                {"step_id": source.step_id, "status": "contract_failed"},
+            ],
+        )
+        is None
+    )
+
+    production_source = inspect.getsource(pipeline_execute.run_execute_phase)
+    assert 'step_record["repair_target_step_id"]' in production_source
+    assert "inputs=repair_source_evidence_ids or None" in production_source
+    assert '"source_evidence_ids": list(repair_source_evidence_ids)' in production_source
+
+
+def test_detached_render_repair_cannot_bind_nonfigure_science_target() -> None:
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    source = AnalysisStep(
+        step_id="01_source",
+        intent="Create the exposure table.",
+        method="descriptive",
+        expected_outputs=["table:exposure"],
+    )
+    model = AnalysisStep(
+        step_id="02_primary_model",
+        intent="Fit using the exposure declared by step '01_source'.",
+        method="mixed_effects_regression",
+        expected_outputs=["table:association_estimates"],
+    )
+    repair = AnalysisStep(
+        step_id="09_detached_figure_repair",
+        intent="Render registered results only.",
+        inputs=[model.step_id],
+        method="rendering_only_repair_from_primary_results",
+        expected_outputs=["figure:publication_figure"],
+    )
+    plan = AnalysisPlan(
+        research_question="A neutral source-backed result.",
+        steps=[source, model, repair],
+    )
+
+    assert (
+        _detached_figure_repair_binding(
+            step=repair,
+            plan=plan,
+            completed_records=[
+                {
+                    "step_id": source.step_id,
+                    "status": "ok",
+                    "evidence_ids": ["ev_source"],
+                },
+                {"step_id": model.step_id, "status": "contract_failed"},
+            ],
+        )
+        is None
+    )

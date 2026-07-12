@@ -158,6 +158,66 @@ def test_association_plan_validator_flags_single_display_plan(ra, tmp_path: Path
     assert any("too narrow" in f.message for f in findings)
 
 
+def test_display_coverage_requires_exact_structured_product_not_decoy(ra):
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+    from easyicu.research_agent.study_design import (
+        _module_covered,
+        _structured_plan_declarations,
+        build_study_design_brief,
+    )
+
+    context = _context(
+        ra,
+        "Estimate an adjusted association and report the analytic cohort.",
+        exposure="x",
+    )
+    brief = build_study_design_brief(context)
+    cohort_module = next(
+        module for module in brief.display_modules if module.module_id == "cohort_flow"
+    )
+    decoy = AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            AnalysisStep(
+                step_id="01_decoy",
+                intent="A different product whose prose mentions flow.",
+                method="not_a_cohort_flow",
+                expected_outputs=["table:cohort_flow_prediction_features"],
+            )
+        ],
+    )
+    truthful = decoy.model_copy(
+        update={
+            "steps": [
+                decoy.steps[0].model_copy(
+                    update={
+                        "method": "cohort_definition",
+                        "expected_outputs": ["table:cohort_flow"],
+                    }
+                )
+            ]
+        }
+    )
+
+    _decoy_methods, decoy_outputs = _structured_plan_declarations(decoy)
+    _truthful_methods, truthful_outputs = _structured_plan_declarations(truthful)
+    assert not _module_covered(cohort_module, decoy_outputs)
+    assert _module_covered(cohort_module, truthful_outputs)
+
+    for wrong_output in ("log:cohort_flow", "test:cohort_flow", "cohort_flow"):
+        wrong_kind = truthful.model_copy(
+            update={
+                "steps": [
+                    truthful.steps[0].model_copy(
+                        update={"expected_outputs": [wrong_output]}
+                    )
+                ]
+            }
+        )
+        _methods, outputs = _structured_plan_declarations(wrong_kind)
+        assert not _module_covered(cohort_module, outputs), wrong_output
+
+
 def test_article_contract_flags_and_can_augment_narrow_association_plan(ra):
     from easyicu.research_agent.article_contract import (
         augment_plan_for_article_contract,
@@ -204,6 +264,91 @@ def test_article_contract_flags_and_can_augment_narrow_association_plan(ra):
     assert len(augmented.steps) > len(narrow.steps)
     covered = roles_covered_by_plan(augmented, contract)
     assert set(contract.required_roles) <= covered
+
+
+def test_article_contract_ignores_role_words_in_step_prose_and_wrong_kinds(ra):
+    from easyicu.research_agent.article_contract import (
+        build_article_analysis_contract,
+        roles_covered_by_plan,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    context = _context(
+        ra,
+        "Estimate an adjusted association and report the analytic cohort.",
+        exposure="x",
+    )
+    contract = build_article_analysis_contract(context)
+    decoy = AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            AnalysisStep(
+                step_id="cohort_flow_and_table_one_decoy",
+                intent=(
+                    "This note mentions cohort flow, Table 1, missingness, "
+                    "robustness, and a forest plot without producing them."
+                ),
+                method="narrative_note",
+                expected_outputs=["log:cohort_flow", "test:forest_plot"],
+            )
+        ],
+    )
+
+    covered = roles_covered_by_plan(decoy, contract)
+
+    assert "cohort_accounting" not in covered
+    assert "baseline_context" not in covered
+    assert "primary_estimand" not in covered
+
+
+def test_nonprimary_output_prefixes_do_not_satisfy_primary_estimand_role(ra):
+    from easyicu.research_agent.article_contract import (
+        build_article_analysis_contract,
+        roles_covered_by_plan,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    context = _context(
+        ra,
+        "Estimate an adjusted association and report the analytic cohort.",
+        exposure="x",
+    )
+    contract = build_article_analysis_contract(context)
+    for prefix in ("secondary", "supporting", "alternative"):
+        decoy = AnalysisPlan(
+            research_question=context.research_question,
+            steps=[
+                AnalysisStep(
+                    step_id=f"{prefix}_effect",
+                    intent=f"Report a {prefix} effect only.",
+                    method="descriptive",
+                    expected_outputs=[f"table:{prefix}_adjusted_effect_table"],
+                )
+            ],
+        )
+        assert "primary_estimand" not in roles_covered_by_plan(decoy, contract), prefix
+
+
+def test_unmapped_family_negations_do_not_trigger_second_keyword_router(ra):
+    from easyicu.research_agent.analysis_types import infer_analysis_type
+    from easyicu.research_agent.study_design import infer_study_design_family
+
+    examples = (
+        (
+            "Evaluate a dynamic treatment policy using reinforcement learning; "
+            "avoid causal interpretation.",
+            "reinforcement_learning",
+        ),
+        (
+            "Fuse clinical notes and waveforms into a multimodal representation; "
+            "do not perform survival analysis.",
+            "multimodal",
+        ),
+    )
+    for question, expected_analysis_type in examples:
+        context = _context(ra, question, exposure="x")
+        assert infer_analysis_type(context).key == expected_analysis_type
+        assert infer_study_design_family(context) == "descriptive"
 
 
 def test_association_plan_validator_accepts_article_level_display_suite(ra):

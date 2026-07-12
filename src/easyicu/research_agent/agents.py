@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .analysis_types import (
+    canonical_analysis_family,
     infer_analysis_type,
     locked_analysis_type_guide,
     planner_analysis_type_guide,
@@ -586,10 +587,21 @@ class PlannerAgent:
         plan = AnalysisPlan.model_validate(data)
         # Family inference is a planner hint, not execution authority. Preserve
         # a valid agent-selected family (and its rationale); only fill the field
-        # when the agent omitted it. Downstream contract checks may surface a
-        # mismatch for critic/replanner review, but never rewrite the science.
-        if not str(plan.analysis_type or "").strip():
+        # when the agent omitted it. A non-empty declaration is nevertheless a
+        # closed execution contract: typos/novel labels must trigger the
+        # structured retry loop instead of bypassing family-specific checks.
+        declared_family = str(plan.analysis_type or "").strip()
+        if not declared_family:
             plan.analysis_type = infer_analysis_type(context).key
+        else:
+            canonical_family = canonical_analysis_family(declared_family)
+            if canonical_family is None:
+                raise ValueError(
+                    "Unknown analysis_type declaration "
+                    f"{declared_family!r}; choose a key from the analysis-type "
+                    "catalog instead of inventing or misspelling a family"
+                )
+            plan.analysis_type = canonical_family
         return plan
 
 

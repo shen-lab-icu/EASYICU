@@ -844,7 +844,6 @@ def _enforce_advanced_plan_contract(
             "statistic:silhouette_score",
             "statistic:cluster_count",
             "table:cluster_characteristics",
-            "table:cluster_mortality",
             "figure:clustering_visualization",
             "log:clustering_algorithm_details",
             "manifest:clustering_methodology",
@@ -1182,9 +1181,12 @@ def _output_declares_figure(output: str) -> bool:
     token = str(output or "").strip().lower()
     if not token:
         return False
-    kind, separator, _name = token.partition(":")
-    if separator and kind.strip() in _FIGURE_OUTPUT_KINDS:
-        return True
+    kind, separator, name = token.partition(":")
+    if separator:
+        # A typed declaration's artifact kind is authoritative.  Do not let a
+        # table/model product such as ``table:figure_summary`` become a figure
+        # merely because its product name contains a presentation word.
+        return kind.strip() in _FIGURE_OUTPUT_KINDS and bool(name.strip())
     if token.endswith(_FIGURE_FILE_SUFFIXES):
         return True
     words = set(filter(None, re.split(r"[^a-z0-9]+", token)))

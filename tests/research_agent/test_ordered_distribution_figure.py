@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from easyicu.research_agent.audits.validators import (
 from easyicu.research_agent.figures.ordered_distribution import (
     render_ordered_distribution_bundle_from_prior_outputs,
 )
+from easyicu.research_agent.evidence import EvidenceStore
 from easyicu.research_agent.pipeline import (
     _render_publication_bundle_from_prior_outputs_for_step,
     _resolve_upstream_figure_data_family,
@@ -80,6 +82,46 @@ def _write_generic_parent(run_dir: Path) -> Path:
                 "primary_exposure": "severity_band",
                 "n_analysis_cohort": locked_n,
                 "valid_observed_n": observed_n,
+            }
+        ),
+        encoding="utf-8",
+    )
+    evidence = EvidenceStore(run_dir)
+    table_record = evidence.register_file(
+        kind="table",
+        description="Ordered category distribution source.",
+        source_path=parent / "severity_distribution.csv",
+        evidence_id="ordered_distribution_table",
+        produced_by_step=PARENT_STEP,
+        producer="coder",
+        generation_mode="llm",
+    )
+    summary_record = evidence.register_file(
+        kind="statistic",
+        description="Ordered category distribution summary.",
+        source_path=parent / "step_summary.json",
+        evidence_id="ordered_distribution_summary",
+        produced_by_step=PARENT_STEP,
+        producer="runner",
+        generation_mode="llm",
+    )
+    (run_dir / "manifest_partial.json").write_text(
+        json.dumps(
+            {
+                "per_step_records": [
+                    {
+                        "step_id": PARENT_STEP,
+                        "status": "ok",
+                        "evidence_ids": [
+                            table_record.evidence_id,
+                            summary_record.evidence_id,
+                        ],
+                        "step_summary_evidence_id": summary_record.evidence_id,
+                    }
+                ],
+                "evidence": [
+                    record.model_dump(mode="json") for record in evidence.records()
+                ],
             }
         ),
         encoding="utf-8",
@@ -224,6 +266,17 @@ def test_exact_method_adapter_supports_pre_contract_runs(tmp_path: Path) -> None
     summary.pop("figure_data_family")
     summary["method"] = "ordinal_exposure_derivation_and_quality_control"
     summary_path.write_text(json.dumps(summary), encoding="utf-8")
+    manifest_path = tmp_path / "manifest_partial.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    summary_evidence = next(
+        item
+        for item in manifest["evidence"]
+        if item["evidence_id"] == "ordered_distribution_summary"
+    )
+    summary_copy = tmp_path / summary_evidence["relative_path"]
+    summary_copy.write_bytes(summary_path.read_bytes())
+    summary_evidence["sha256"] = hashlib.sha256(summary_path.read_bytes()).hexdigest()
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     assert deterministic_figure_family_supported_for_upstream(tmp_path, FIGURE_STEP)
     out = tmp_path / "steps" / FIGURE_STEP / "outputs"

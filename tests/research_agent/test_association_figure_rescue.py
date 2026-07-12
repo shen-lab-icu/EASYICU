@@ -171,7 +171,9 @@ def test_missingness_router_uses_manifest_method_and_standard_count_schema(
     figure_step_id = "03_missingness_audit_figure"
     out = tmp_path / "steps" / figure_step_id / "outputs"
 
-    assert deterministic_figure_family_supported_for_upstream(
+    # The legacy router remains unit-testable, but missingness table selection
+    # is heuristic and therefore cannot preflight-replace the coder.
+    assert not deterministic_figure_family_supported_for_upstream(
         tmp_path, figure_step_id
     )
     repair_id = routed_rescue(
@@ -484,9 +486,11 @@ def test_upstream_family_routes_token_free_primary_figure(tmp_path: Path):
         }
     ).to_csv(parent / "dose_response.csv", index=False)
 
-    # ... but the parent-family fallback recognises + routes it.
+    # The legacy router can still be called explicitly, but an association
+    # family alone is not sufficient automatic-repair authority because the
+    # renderer may have multiple effect tables/models to choose from.
     assert _resolve_upstream_analysis_family(tmp_path, step_id) == "association"
-    assert deterministic_figure_family_supported_for_upstream(tmp_path, step_id) is True
+    assert deterministic_figure_family_supported_for_upstream(tmp_path, step_id) is False
 
     out = tmp_path / "steps" / step_id / "outputs"
     rid = routed_rescue(run_dir=tmp_path, current_step_id=step_id, out_dir=out)
@@ -514,17 +518,12 @@ def test_structural_parent_family_outranks_ambiguous_figure_name(tmp_path: Path)
 
 
 def test_descriptive_parent_supported_but_guarded_against_empty_figure(tmp_path: Path):
-    # A descriptive/table-one renderer now EXISTS (deterministic descriptive
-    # bundle), so a 'descriptive' parent is recognised by the family map. The old
-    # "no empty figure" safety is preserved by the renderer's STRICT guard: with no
-    # genuine table-one output present, routed_rescue returns None and the figure
-    # falls through to its existing path rather than being force-drawn empty.
+    # A descriptive/table-one renderer exists for explicit/manual use, but a
+    # family label alone cannot authorize automatic table selection.
     step_id = "03_baseline_context_figure"
     _write_parent_summary(tmp_path, "03_baseline_context", "descriptive")
     assert _resolve_upstream_analysis_family(tmp_path, step_id) == "descriptive"
-    assert (
-        deterministic_figure_family_supported_for_upstream(tmp_path, step_id) is True
-    )
+    assert not deterministic_figure_family_supported_for_upstream(tmp_path, step_id)
     # No table-one output under the parent -> the strict guard declines (None).
     out = tmp_path / "steps" / step_id / "outputs"
     assert routed_rescue(run_dir=tmp_path, current_step_id=step_id, out_dir=out) is None

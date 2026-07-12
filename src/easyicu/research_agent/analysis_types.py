@@ -585,6 +585,25 @@ def normalize_analysis_family(value: Optional[str]) -> str:
     return _FAMILY_ALIASES.get(key, "association_study")
 
 
+def canonical_analysis_family(value: Optional[str]) -> Optional[str]:
+    """Resolve a declared family without the legacy association fallback.
+
+    Display and discovery callers intentionally use
+    :func:`normalize_analysis_family`, whose historical default is
+    ``association_study``.  A planner declaration is an execution contract,
+    though, so an unknown label must remain unknown and trigger structured
+    retry instead of silently changing the scientific family.
+    """
+
+    key = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+    if not key:
+        return None
+    if key in _REGISTRY:
+        return key
+    canonical = _FAMILY_ALIASES.get(key)
+    return canonical if canonical in _REGISTRY else None
+
+
 def is_concept_set_family(value: Optional[str]) -> bool:
     """Whether a family is shaped as a concept SET, not a predictor->outcome pair."""
     return normalize_analysis_family(value) in CONCEPT_SET_FAMILIES
@@ -654,6 +673,15 @@ _CLUSTERING_NUISANCE_PATTERNS = (
         r"centre|center)|correlation)\b",
         flags=re.IGNORECASE,
     ),
+    re.compile(r"聚类\s*稳健\s*(?:标准误|方差|s\.?e\.?)?", flags=re.IGNORECASE),
+    re.compile(
+        r"(?:医院|中心|站点|机构|病区|患者)\s*层面(?:的)?\s*聚类",
+        flags=re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:混合效应|广义估计方程|gee).{0,32}(?:聚类|组内相关)",
+        flags=re.IGNORECASE,
+    ),
 )
 
 
@@ -710,8 +738,37 @@ def strong_trajectory_clustering_framing(text: str) -> bool:
         r"(?:classes|groups|clusters|phenotypes)\b",
         normalised,
     ) is not None
-    chinese_discovery = "聚类" in normalised and any(
-        token in normalised for token in ("识别", "发现", "表型", "轨迹", "分群")
+    chinese_discovery_disclaimer = re.search(
+        r"(?:不|无需|避免)(?:进行|作|做|开展|采用|使用)?"
+        r"[^，。；;]{0,12}(?:患者)?(?:表型|亚型|轨迹|患者群)"
+        r"[^，。；;]{0,8}(?:聚类|分群|识别|发现)?"
+        r"|(?:不|无需|避免)(?:进行|作|做|开展)?"
+        r"[^，。；;]{0,8}(?:聚类|分群)"
+        r"[^，。；;]{0,8}(?:患者)?(?:表型|亚型|轨迹|患者群)",
+        normalised,
+    ) is not None
+    chinese_action_target = re.search(
+        r"(?:识别|发现|构建|拟合|学习|划分)"
+        r"[^，。；;]{0,12}(?:患者)?(?:表型|亚型|轨迹|患者群)"
+        r"[^，。；;]{0,6}(?:聚类|分群)?"
+        r"|(?:患者)?(?:表型|亚型|轨迹|患者群)"
+        r"[^，。；;]{0,8}(?:聚类|分群|识别|发现|构建)",
+        normalised,
+    ) is not None
+    chinese_named_grouping = re.search(
+        r"(?:患者)?(?:表型|亚型|轨迹)[^，。；;]{0,4}(?:聚类|分群)",
+        normalised,
+    ) is not None
+    chinese_discovery = bool(
+        not chinese_discovery_disclaimer
+        and (chinese_action_target or chinese_named_grouping)
+    )
+    chinese_explicit_discovery = bool(
+        chinese_discovery
+        and re.search(
+            r"(?:识别|发现|构建|拟合|学习|划分)",
+            normalised,
+        )
     )
     has_nuisance = any(
         pattern.search(normalised) is not None
@@ -744,7 +801,10 @@ def strong_trajectory_clustering_framing(text: str) -> bool:
         # otherwise useful discovery regexes.  In a nuisance-variance context,
         # require an unambiguous phenotype-discovery action plus an explicit
         # unsupervised procedure before allowing the family switch.
-        return bool(explicit_procedure and explicit_discovery_target)
+        return bool(
+            (explicit_procedure and explicit_discovery_target)
+            or chinese_explicit_discovery
+        )
     return bool(english_discovery or chinese_discovery)
 
 
@@ -866,10 +926,12 @@ def infer_analysis_type(
     causal_disclaimer = re.search(
         r"\b(?:do\s+not|don't|not|avoid|without)\b.{0,40}\bcausal(?:ity|ly)?\b"
         r"|\bcausal\s+(?:claim|conclusion|interpretation)\b.{0,24}\b"
-        r"(?:not|unsupported|avoid)\b",
+        r"(?:not|unsupported|avoid)\b"
+        r"|(?:不(?:作|做|进行|用于|支持|解释为?)|避免|无意).{0,24}因果"
+        r"|因果.{0,16}(?:不成立|不支持|不解释)",
         text,
     ) is not None
-    strong_causal_framing = any(
+    explicit_causal_method_framing = any(
         _keyword_present(text, term)
         for term in (
             "treatment effect",
@@ -886,12 +948,23 @@ def infer_analysis_type(
             "confounding by indication",
             "indication bias",
             "适应证混杂",
-            "因果",
             "倾向评分",
             "逆概率加权",
         )
-    ) or (_keyword_present(text, "causal") and not causal_disclaimer)
-    strong_survival_framing = any(
+    )
+    strong_causal_framing = explicit_causal_method_framing or (
+        not causal_disclaimer
+        and any(_keyword_present(text, term) for term in ("causal", "因果"))
+    )
+    survival_disclaimer = re.search(
+        r"\b(?:do\s+not|don't|not|avoid|without)\b.{0,40}"
+        r"\b(?:survival|time[-\s]+to[-\s]+event|cox|kaplan)\b"
+        r"|(?:不(?:作|做|进行|采用|使用)|避免|无需).{0,20}"
+        r"(?:生存分析|时间到事件|cox|kaplan)",
+        text,
+        flags=re.IGNORECASE,
+    ) is not None
+    strong_survival_framing = (not survival_disclaimer) and any(
         _keyword_present(text, term)
         for term in (
             "survival",
@@ -1126,6 +1199,9 @@ def analysis_type_catalog_markdown() -> str:
 
 __all__ = [
     "AnalysisTypeSpec",
+    "canonical_analysis_family",
+    "normalize_analysis_family",
+    "is_concept_set_family",
     "list_analysis_types",
     "get_analysis_type",
     "infer_analysis_type",
