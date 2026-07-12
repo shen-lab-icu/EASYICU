@@ -879,7 +879,13 @@ def _legacy_unscoped_finding_owner_step_id(
         for step in (plan.steps or [])
         if str(step.step_id or "")
         and _normalised_method_head(step.method) in owner_methods
-        and not _has_figure_only_output_contract(step)
+        # Mirror the source validator's ownership predicate: it never runs on
+        # a step that declares any figure product, including mixed
+        # table+figure contracts.
+        and not any(
+            _output_declares_figure(str(output or ""))
+            for output in (step.expected_outputs or [])
+        )
     }
     if len(candidates) != 1:
         return None

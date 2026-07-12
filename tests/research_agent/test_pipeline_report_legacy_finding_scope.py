@@ -83,6 +83,31 @@ def test_legacy_owner_inference_fails_closed_when_result_owner_is_ambiguous() ->
     assert superseded == []
 
 
+def test_mixed_table_and_figure_step_is_not_a_legacy_result_owner() -> None:
+    plan = AnalysisPlan(
+        research_question="Test mixed ownership.",
+        steps=[
+            AnalysisStep(
+                step_id="07_mixed_sensitivity",
+                intent="Produce a mixed robustness bundle.",
+                method="cohort_definition_sensitivity",
+                expected_outputs=[
+                    "table:robustness_summary",
+                    "figure:robustness_plot",
+                ],
+            )
+        ],
+    )
+
+    assert (
+        _legacy_unscoped_finding_owner_step_id(
+            _legacy_membership_error(),
+            plan=plan,
+        )
+        is None
+    )
+
+
 def test_legacy_unscoped_finding_stays_active_until_owner_succeeds() -> None:
     plan = _robustness_plan()
     finding = _legacy_membership_error()

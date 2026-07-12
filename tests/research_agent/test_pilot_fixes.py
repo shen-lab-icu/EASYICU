@@ -72,6 +72,30 @@ def test_dedupe_findings_preserves_order(ra):
     assert [f.message for f in out] == ["first", "second"]
 
 
+def test_dedupe_findings_keeps_different_step_owners_separate(ra):
+    from easyicu.research_agent.audits.validators import dedupe_findings
+    schema = ra.schema
+    raw = [
+        schema.ValidationFinding(
+            validator="v",
+            severity="error",
+            message="same contract failure",
+            detail={"step_id": "step_a"},
+        ),
+        schema.ValidationFinding(
+            validator="v",
+            severity="error",
+            message="same contract failure",
+            detail={"step_id": "step_b"},
+        ),
+    ]
+
+    out = dedupe_findings(raw)
+
+    assert len(out) == 2
+    assert [finding.detail["step_id"] for finding in out] == ["step_a", "step_b"]
+
+
 # -------------------------- E2: claim cap --------------------------
 
 def test_register_step_summary_numerics_respects_max_leaves(ra, tmp_path: Path):
