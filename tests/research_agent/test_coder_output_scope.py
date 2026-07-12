@@ -56,3 +56,29 @@ def test_coder_prompt_allows_only_declared_figure_products(ra):
     prompt = llm.messages[-1].content
     assert "Figure rendering is allowed only for the explicitly declared" in prompt
     assert "declares no figure product" not in prompt
+
+
+def test_runtime_only_builds_visualization_request_for_figure_step(ra):
+    context = _context(ra)
+    supervisor = ra.RuntimeSupervisor()
+    state = supervisor.bootstrap_state(run_id="run", context=context)
+    table_step = ra.AnalysisStep(
+        step_id="summary",
+        intent="Compute a summary table.",
+        expected_outputs=["table:summary"],
+    )
+    figure_step = ra.AnalysisStep(
+        step_id="render",
+        intent="Render the summary.",
+        expected_outputs=["figure:summary"],
+    )
+
+    table_state = supervisor.prepare_step_state(
+        state=state, context=context, step=table_step, evidence_refs=[]
+    )
+    figure_state = supervisor.prepare_step_state(
+        state=state, context=context, step=figure_step, evidence_refs=[]
+    )
+
+    assert table_state.visualization_request is None
+    assert figure_state.visualization_request is not None
