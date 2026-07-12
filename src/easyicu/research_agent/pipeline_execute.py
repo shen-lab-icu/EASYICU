@@ -384,6 +384,36 @@ def _actionable_validator_messages(
     ]
 
 
+_SUCCESS_REPLAN_REQUEST_FIELDS = (
+    "replan_requested",
+    "plan_revision_requested",
+)
+
+
+def _successful_step_requests_replan(record: Mapping[str, Any]) -> bool:
+    """Return whether a clean agent step explicitly requests plan adaptation.
+
+    The deterministic probe already receives one automatic replan and failed
+    model steps have their own bounded directed-replan path. Calling the LLM
+    replanner after every ordinary successful step adds latency and usually
+    produces a no-op. Preserve adaptive agent behavior through exact boolean
+    declarations in either the outer record or ``step_summary``; strings and
+    other truthy values are intentionally not accepted.
+    """
+
+    if str(record.get("status") or "") != "ok":
+        return False
+    containers: List[Mapping[str, Any]] = [record]
+    summary = record.get("step_summary")
+    if isinstance(summary, Mapping):
+        containers.append(summary)
+    return any(
+        container.get(field) is True
+        for container in containers
+        for field in _SUCCESS_REPLAN_REQUEST_FIELDS
+    )
+
+
 def _step_status_from_contract_findings(
     *,
     contract_findings: Sequence[ValidationFinding],
@@ -6431,6 +6461,7 @@ else:
             if (
                 pipeline._enable_replanning
                 and record.get("status") == "ok"
+                and _successful_step_requests_replan(record)
                 and remaining_steps
             ):
                 plan = _maybe_replan(
