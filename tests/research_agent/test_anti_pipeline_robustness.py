@@ -710,6 +710,11 @@ def test_locked_sensitivity_gate_blocks_missing_extra_ids_and_wrong_universe(
     errors = [finding for finding in findings if finding.severity == "error"]
 
     assert errors
+    assert all(
+        finding.detail.get("step_id")
+        == "07_cohort_definition_sensitivity_comparison"
+        for finding in errors
+    )
     coverage = next(
         finding for finding in errors if finding.validator == "robustness_spec_lock"
     )
