@@ -102,7 +102,11 @@ ROBUSTNESS_EXECUTION_CONTRACT_GUIDANCE = (
     + ". n is the analytic fitted-model N, never a cohort-membership or "
     "retained-row count. ci_low and ci_high may both be null only for a "
     "penalized, non-reportable point-only fit with "
-    "interval_method='unavailable'. For an outcome-axis spec, "
+    "interval_method='unavailable'. status must be one of analyzed, executed, "
+    "estimated, fitted, or ok; fit_status separately records whether the model "
+    "was fitted. A reportable row requires verified convergence and a finite "
+    "interval. An honestly downgraded penalized point-only row may set "
+    "converged=false only when reportable=false. For an outcome-axis spec, "
     "applied_outcome_override must exactly equal the locked outcome_override. "
     "For a missing-axis spec, missing_strategy must exactly equal the locked "
     "missing_override.strategy. For a cohort-axis spec, report universe_n, "
@@ -117,7 +121,10 @@ ROBUSTNESS_EXECUTION_CONTRACT_GUIDANCE = (
     + ". The robustness row, model row, and exposure coefficient row must "
     "agree exactly on identifiers, outcome, model family, effect scale, term, "
     "analytic n, point estimate, interval, fit status, and penalty/convergence "
-    "metadata. Specification or membership declarations are not execution "
+    "metadata. A missing-indicator specification must include a coefficient "
+    "row whose term_role is missingness, availability, source_status, or "
+    "measurement_status (legacy term names containing 'missing' remain "
+    "accepted). Specification or membership declarations are not execution "
     "evidence."
 )
 
@@ -166,6 +173,7 @@ def _unique_structured_csv(
     out_dir: Path,
     required_columns: set[str],
     required_any_columns: Optional[set[str]] = None,
+    unique_key_columns: Optional[Tuple[str, ...]] = None,
 ) -> Tuple[Optional[Any], List[str]]:
     """Load one unambiguous result table by schema, never by case tokens."""
 
@@ -187,6 +195,19 @@ def _unique_structured_csv(
             not required_any_columns or bool(required_any_columns.intersection(columns))
         ):
             candidates.append((resolved, frame))
+    if len(candidates) > 1 and unique_key_columns:
+        unique_candidates = []
+        for path, frame in candidates:
+            available_keys = [
+                column for column in unique_key_columns if column in frame.columns
+            ]
+            if available_keys and not frame.duplicated(available_keys).any():
+                unique_candidates.append((path, frame))
+        if unique_candidates:
+            # A long coefficient table often carries model-level metadata on
+            # every coefficient row.  Prefer the sole one-row-per-model table,
+            # but retain fail-closed ambiguity when several such tables exist.
+            candidates = unique_candidates
     if len(candidates) != 1:
         return None, [
             "structured_table_ambiguous"
@@ -227,6 +248,7 @@ def _executed_robustness_result_issues(
         out_dir=out_dir,
         required_columns=set(ROBUSTNESS_MODEL_RESULT_REQUIRED_COLUMNS),
         required_any_columns=set(ROBUSTNESS_MODEL_RESULT_IDENTIFIER_COLUMNS),
+        unique_key_columns=("model_id",),
     )
     coefficient_frame, coefficient_table_errors = _unique_structured_csv(
         out_dir=out_dir,
@@ -309,6 +331,7 @@ def _executed_robustness_result_issues(
             "analyzed",
             "executed",
             "estimated",
+            "fitted",
             "ok",
         }:
             issues.append(
@@ -399,15 +422,22 @@ def _executed_robustness_result_issues(
         low = _finite_result_number(row.get("ci_low"))
         high = _finite_result_number(row.get("ci_high"))
         interval_method = _normalise_result_token(row.get("interval_method"))
-        if converged is not True or _normalise_result_token(row.get("fit_status")) != "fitted":
+        if _normalise_result_token(row.get("fit_status")) != "fitted":
             issues.append(
-                {"spec_id": spec_id, "issue": "executed_model_not_fitted_converged"}
+                {"spec_id": spec_id, "issue": "executed_model_not_fitted"}
             )
         finite_interval = low is not None and high is not None and low <= high
         point_only = low is None and high is None
         if reportable is True and not finite_interval:
             issues.append(
                 {"spec_id": spec_id, "issue": "reportable_result_requires_finite_ci"}
+            )
+        if reportable is True and converged is not True:
+            issues.append(
+                {
+                    "spec_id": spec_id,
+                    "issue": "reportable_result_requires_verified_convergence",
+                }
             )
         if point_only and not (
             penalized is True and interval_method == "unavailable" and reportable is False
@@ -555,10 +585,27 @@ def _executed_robustness_result_issues(
         if axis == "missing" and _normalise_result_token(
             (spec.get("missing_override") or {}).get("strategy")
         ) == "missing_indicator":
-            model_terms = coefficient_frame[
+            model_coefficients = coefficient_frame[
                 coefficient_frame["model_id"].astype(str).eq(model_id)
-            ]["term"].astype(str)
-            if not model_terms.str.lower().str.contains("missing", regex=False).any():
+            ].copy()
+            model_terms = model_coefficients["term"].astype(str)
+            structured_roles = {
+                "missingness",
+                "missing_indicator",
+                "availability",
+                "source_status",
+                "measurement_status",
+            }
+            has_structured_indicator = (
+                "term_role" in model_coefficients.columns
+                and model_coefficients["term_role"]
+                .map(_normalise_result_token)
+                .isin(structured_roles)
+                .any()
+            )
+            if not has_structured_indicator and not model_terms.str.lower().str.contains(
+                "missing", regex=False
+            ).any():
                 issues.append(
                     {"spec_id": spec_id, "issue": "missing_indicator_term_absent"}
                 )
