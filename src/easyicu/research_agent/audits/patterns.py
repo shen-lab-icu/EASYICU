@@ -48,6 +48,11 @@ from ..schema import (
     ValidationFinding,
     VariableRole,
 )
+from ..trajectory_contract import (
+    is_continuous_trajectory_representation,
+    selected_trajectory_variables,
+    trajectory_script_findings,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -290,7 +295,7 @@ def _ordinal_columns_in(
         if v.role in {
             VariableRole.ORDINAL_SCORE,
             VariableRole.COMPOSITE_SCORE,
-        }:
+        } and not is_continuous_trajectory_representation(v):
             out.append(c)
     return out
 
@@ -398,12 +403,30 @@ class AnalysisPatternAuditor:
             if step is not None
             else []
         )
+        findings.extend(
+            trajectory_script_findings(
+                context=context,
+                step=step,
+                script_text=script_text,
+            )
+        )
 
         # ------------------------------------------------------------
         # 1) Distance-based estimators on ordinal / composite scores
         # ------------------------------------------------------------
         if inspection.distance_estimators:
             ordinal_referenced = _ordinal_columns_in(alias_map.keys(), var_by_name)
+            ordinal_referenced.extend(
+                variable.name
+                for variable in selected_trajectory_variables(
+                    context=context,
+                    script_text=script_text,
+                    step=step,
+                )
+                if variable.role
+                in {VariableRole.ORDINAL_SCORE, VariableRole.COMPOSITE_SCORE}
+                and not is_continuous_trajectory_representation(variable)
+            )
             # Also scan column literals inside the script.
             for lit in inspection.string_lits:
                 if lit in var_by_name:
@@ -411,7 +434,7 @@ class AnalysisPatternAuditor:
                     if v.role in {
                         VariableRole.ORDINAL_SCORE,
                         VariableRole.COMPOSITE_SCORE,
-                    }:
+                    } and not is_continuous_trajectory_representation(v):
                         ordinal_referenced.append(lit)
             ordinal_set = sorted(set(ordinal_referenced))
             for est_name, _node in inspection.distance_estimators:

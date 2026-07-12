@@ -42,6 +42,7 @@ from .analysis_types import (
     locked_analysis_type_guide,
     planner_analysis_type_guide,
 )
+from .trajectory_contract import trajectory_phenotyping_code_contract
 from .method_capabilities import coder_method_capability_block
 from .cohort_schema import ALLOWED_CTAS_AGGREGATIONS, known_concept_ids
 from .icu_rules import (
@@ -170,10 +171,20 @@ def _format_variable(v: ConceptDescriptor) -> str:
     rng = f" range={v.valid_range}" if v.valid_range else ""
     unit = f" unit={v.unit}" if v.unit else ""
     obs = _format_observed_domain(v.observed_domain)
+    trajectory = ""
+    if v.fixed_window_trajectory is not None:
+        metadata = v.fixed_window_trajectory
+        trajectory = (
+            f" trajectory_family={metadata.family}"
+            f" time_bin=[{metadata.window_start_hours:g},{metadata.window_end_hours:g})h"
+            f" source_scale={metadata.source_scale}"
+            f" representation={metadata.representation_kind}"
+            f" anchor={metadata.anchor or 'unspecified_agent_must_declare'}"
+        )
     return (
         f"- {v.name} | role={v.role.value} dtype={v.dtype}{unit}{rng}{obs}"
         f" agg_default={_ctas_aggregation_hint(v.aggregation_default)}"
-        f"{miss}{pit}"
+        f"{trajectory}{miss}{pit}"
     )
 
 
@@ -1347,6 +1358,10 @@ class CoderAgent:
                     f"{json.dumps([item.model_dump(mode='json') for item in step.model_requirements], ensure_ascii=False)}\n"
                     f"Method: {step.method or '(unspecified — choose conservatively)'}\n\n"
                     + coder_method_capability_block()
+                    + trajectory_phenotyping_code_contract(
+                        context=context,
+                        step=step,
+                    )
                     + "\n\n"
                     "OUTPUT FORMAT — VERY IMPORTANT:\n"
                     "Return *only* a complete, runnable Python script. A "
@@ -1375,7 +1390,7 @@ class CoderAgent:
         # post-hoc validator can record the issue in the audit trail.
         self.last_compatibility_repair_attempts = 0
         for attempt in range(1, _MAX_PRE_EXEC_COMPATIBILITY_REPAIRS + 1):
-            violations = detect_forbidden_pattern_usage(code, context)
+            violations = detect_forbidden_pattern_usage(code, context, step)
             self.last_compatibility_violations = violations
             if not violations:
                 break
@@ -1424,6 +1439,11 @@ class CoderAgent:
                     "Model requirements: "
                     f"{json.dumps([item.model_dump(mode='json') for item in step.model_requirements], ensure_ascii=False)}\n"
                     f"Method: {step.method or '(unspecified)'}\n\n"
+                    + trajectory_phenotyping_code_contract(
+                        context=context,
+                        step=step,
+                    )
+                    + "\n\n"
                     "The previous script failed at execution time. Return "
                     "only a complete replacement Python script that follows "
                     "the original code contract and writes the same expected "

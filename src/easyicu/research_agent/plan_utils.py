@@ -32,6 +32,8 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from pydantic import ValidationError
+
 from .icu_rules import (
     detect_outcome_as_predictor,
     detect_overadjustment,
@@ -51,9 +53,14 @@ from .scalar_utils import (
 from .schema import (
     AnalysisPlan,
     AnalysisStep,
+    ClusterSelectionManifest,
     ResearchContext,
     ValidationFinding,
     VariableRole,
+)
+from .trajectory_contract import (
+    TRAJECTORY_PHENOTYPING_REQUIRED_OUTPUTS,
+    trajectory_phenotyping_contract_applies,
 )
 
 
@@ -391,7 +398,14 @@ _CLUSTERING_CONTRACT_OUTPUTS = frozenset(
         "cluster_count",
         "cluster_sizes",
         "cluster_stability",
+        "cluster_stability_assignments",
+        "cluster_selection",
+        "cluster_selection_criterion",
         "trajectory_features",
+        "trajectory_profiles",
+        "trajectory_membership",
+        "trajectory_missingness_policy",
+        "cohort_flow",
         "clustering_methodology",
         "clustering_visualization",
     }
@@ -841,13 +855,22 @@ def _enforce_advanced_plan_contract(
         ]
     elif family == "clustering":
         required_outputs = [
-            "statistic:silhouette_score",
             "statistic:cluster_count",
+            "manifest:cluster_selection",
             "table:cluster_characteristics",
             "figure:clustering_visualization",
             "log:clustering_algorithm_details",
             "manifest:clustering_methodology",
         ]
+        if any(
+            trajectory_phenotyping_contract_applies(context=context, step=step)
+            for step in (plan.steps or [])
+        ):
+            required_outputs.extend(
+                item
+                for item in TRAJECTORY_PHENOTYPING_REQUIRED_OUTPUTS
+                if item not in required_outputs
+            )
     elif family == "survival":
         required_outputs = [
             "statistic:hazard_ratio",
@@ -2094,11 +2117,7 @@ def _prediction_calibration_from_completed_records(
     return None
 
 
-_CLUSTER_SCALAR_KEYS = (
-    "silhouette_score",
-    "statistic:silhouette_score",
-    "silhouette",
-    "statistic:silhouette",
+_CLUSTER_COUNT_SCALAR_KEYS = (
     "n_clusters",
     "statistic:n_clusters",
     "cluster_count",
@@ -2106,22 +2125,142 @@ _CLUSTER_SCALAR_KEYS = (
 )
 
 
-def _clustering_metric_from_completed_records(
+def _cluster_count_from_summary(payload: Mapping[str, Any]) -> Optional[float]:
+    value = _first_present_scalar(dict(payload), _CLUSTER_COUNT_SCALAR_KEYS)
+    numeric = _finite_float(value)
+    if numeric is None or numeric < 1 or not numeric.is_integer():
+        return None
+    return numeric
+
+
+def _cluster_selection_evidence_key(
+    payload: Mapping[str, Any],
+    *,
+    cluster_count: Optional[float] = None,
+) -> Tuple[Optional[str], bool]:
+    """Return a typed selection manifest or substantive stability mapping.
+
+    Bare strings and paths are declarations, not evidence, and intentionally do
+    not satisfy the scientific step contract.  The boolean return value marks
+    an explicitly declared but invalid/contradictory selection manifest; callers
+    must fail closed instead of laundering it through stability or sibling
+    fallback evidence.
+    """
+
+    def valid_stability(value: Any) -> bool:
+        if not isinstance(value, Mapping):
+            return False
+        if cluster_count is None:
+            return False
+        selected_n_clusters = value.get("selected_n_clusters")
+        try:
+            selected_valid = (
+                int(selected_n_clusters) >= 1
+                and float(selected_n_clusters).is_integer()
+                and int(selected_n_clusters) == int(cluster_count)
+            )
+        except (TypeError, ValueError):
+            selected_valid = False
+        if not selected_valid:
+            return False
+        n_resamples = value.get("n_resamples")
+        try:
+            n_valid = int(n_resamples) >= 2 and float(n_resamples).is_integer()
+        except (TypeError, ValueError):
+            n_valid = False
+        if not n_valid:
+            resamples = value.get("resamples")
+            n_valid = isinstance(resamples, list) and len(resamples) >= 2
+        metric_keys = {
+            "adjusted_rand_index",
+            "mean_adjusted_rand_index",
+            "stability_score",
+            "mean_jaccard",
+        }
+        has_metric = any(
+            str(key).strip().lower().rsplit(".", 1)[-1] in metric_keys
+            and _finite_float(child) is not None
+            for key, child in _flatten_scalar_dict(value).items()
+        )
+        return n_valid and has_metric
+
+    def valid_selection(value: Any) -> bool:
+        try:
+            manifest = ClusterSelectionManifest.model_validate(value)
+        except ValidationError:
+            return False
+        if cluster_count is not None and manifest.selected_n_clusters != int(
+            cluster_count
+        ):
+            return False
+        selected_value = next(
+            item.criterion_value
+            for item in manifest.candidates
+            if item.n_clusters == manifest.selected_n_clusters
+        )
+        candidate_values = [item.criterion_value for item in manifest.candidates]
+        if manifest.selection_rule == "minimum":
+            return math.isclose(
+                selected_value,
+                min(candidate_values),
+                rel_tol=1e-12,
+                abs_tol=1e-12,
+            )
+        if manifest.selection_rule == "maximum":
+            return math.isclose(
+                selected_value,
+                max(candidate_values),
+                rel_tol=1e-12,
+                abs_tol=1e-12,
+            )
+        return True
+
+    explicit_manifests: List[Tuple[str, Any]] = []
+    stability_alternatives: List[Tuple[str, Any]] = []
+
+    def collect(value: Any, path: str = "") -> None:
+        if isinstance(value, Mapping):
+            for key, child in value.items():
+                key_text = str(key).strip().lower()
+                child_path = f"{path}.{key_text}" if path else key_text
+                if key_text in {"cluster_selection", "cluster_selection_manifest"}:
+                    explicit_manifests.append((child_path, child))
+                if key_text in {"cluster_stability", "stability_evidence"}:
+                    stability_alternatives.append((child_path, child))
+                collect(child, child_path)
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                collect(child, f"{path}[{index}]")
+
+    collect(payload)
+    if explicit_manifests:
+        # An explicit manifest is authoritative.  If any declared copy is
+        # malformed or contradicts cluster_count, neither a stability mapping in
+        # the same summary nor a completed sibling may rescue it.
+        if any(not valid_selection(value) for _, value in explicit_manifests):
+            return None, True
+        return explicit_manifests[0][0], False
+    for path, value in stability_alternatives:
+        if valid_stability(value):
+            return path, False
+    return None, False
+
+
+def _clustering_evidence_from_completed_records(
     completed_step_records: Optional[Sequence[Dict[str, Any]]],
     *,
     current_step_id: str,
-) -> Optional[Tuple[str, float]]:
-    """Find an auditable cluster metric in a *sibling* completed step's summary.
+) -> Tuple[Optional[Tuple[str, float, str]], bool]:
+    """Find count plus native selection evidence in a completed sibling step.
 
     Clustering analog of :func:`_prediction_auroc_from_completed_records`. A
-    feature-freeze / figure / rendering step often does not fit clusters itself
-    (it may emit null silhouette/cluster_count placeholders), but the genuine
-    clustering estimate is produced and bound (``statistic:silhouette_score``,
-    ``statistic:cluster_count``) by the dedicated clustering step. When that is
-    so, the clustering requirement is satisfied by the sibling step, not missing.
+    feature-freeze / figure / rendering step often does not fit clusters
+    itself. The genuine clustering step may satisfy the contract with its
+    agent-selected native criterion (for example BIC, ICL, gap statistic,
+    silhouette, or resampling stability); no one metric family is privileged.
     """
     if not completed_step_records:
-        return None
+        return None, False
     for record in completed_step_records:
         if not isinstance(record, dict):
             continue
@@ -2133,14 +2272,16 @@ def _clustering_metric_from_completed_records(
         step_summary = record.get("step_summary")
         if not isinstance(step_summary, dict):
             continue
-        value = _first_present_scalar(step_summary, _CLUSTER_SCALAR_KEYS)
-        if value is None:
-            value = _first_numeric_scalar_with_key_fragment(
-                step_summary, ("silhouette", "cluster_count", "n_clusters")
-            )
-        if value is not None:
-            return source_step_id, value
-    return None
+        count = _cluster_count_from_summary(step_summary)
+        selection_key, explicit_manifest_invalid = _cluster_selection_evidence_key(
+            step_summary,
+            cluster_count=count,
+        )
+        if explicit_manifest_invalid:
+            return None, True
+        if count is not None and selection_key is not None:
+            return (source_step_id, count, selection_key), False
+    return None, False
 
 
 _EXPOSURE_PREDICTOR_KEYS = (
@@ -3417,33 +3558,40 @@ def _step_contract_findings(
         expected_outputs=step.expected_outputs or [],
     )
     if clustering_required:
-        cluster_value = _first_present_scalar(step_summary, _CLUSTER_SCALAR_KEYS)
-        if cluster_value is None:
-            cluster_value = _first_numeric_scalar_with_key_fragment(
-                step_summary,
-                ("silhouette", "cluster_count", "n_clusters"),
-            )
-        if cluster_value is None:
+        cluster_count = _cluster_count_from_summary(step_summary)
+        selection_key, explicit_manifest_invalid = _cluster_selection_evidence_key(
+            step_summary,
+            cluster_count=cluster_count,
+        )
+        if (
+            not explicit_manifest_invalid
+            and (cluster_count is None or selection_key is None)
+        ):
             # The clustering estimate may have been produced and bound by a
             # dedicated sibling clustering step that this (figure/rendering or
             # feature-prep) step does not re-register under a recognised key;
-            # mirror the AUROC/calibration cross-step fallback so a key-naming
-            # mismatch between two steps does not fail the run when the metric
-            # is genuinely auditable elsewhere.
-            cluster_fallback = _clustering_metric_from_completed_records(
-                completed_step_records,
-                current_step_id=str(step.step_id or ""),
+            # require both selected cluster count and the agent's native
+            # selection/stability evidence from the same successful owner.
+            cluster_fallback, sibling_manifest_invalid = (
+                _clustering_evidence_from_completed_records(
+                    completed_step_records,
+                    current_step_id=str(step.step_id or ""),
+                )
             )
-            if cluster_fallback is not None:
-                source_step_id, _source_cluster = cluster_fallback
-                cluster_value = _source_cluster
+            if sibling_manifest_invalid:
+                explicit_manifest_invalid = True
+            elif cluster_fallback is not None:
+                source_step_id, source_count, source_selection_key = cluster_fallback
+                cluster_count = source_count
+                selection_key = source_selection_key
                 findings.append(
                     ValidationFinding(
                         validator="step_contract",
                         severity="warning",
                         message=(
                             f"Step {step.step_id} did not record its own "
-                            f"silhouette/cluster-count metric, but the requirement "
+                            f"cluster count and native selection/stability evidence, "
+                            f"but the requirement "
                             f"was satisfied by successful step {source_step_id}."
                         ),
                         detail={
@@ -3454,13 +3602,24 @@ def _step_contract_findings(
                         },
                     )
                 )
-        if cluster_value is None:
+        if cluster_count is None or selection_key is None:
+            missing = []
+            if cluster_count is None:
+                missing.extend(("n_clusters", "cluster_count"))
+            if selection_key is None:
+                missing.extend(
+                    (
+                        "cluster_selection",
+                        "cluster_stability",
+                    )
+                )
             _append_missing(
                 (
                     f"Step {step.step_id} was expected to report a clustering summary, "
-                    "but no cluster metric or cluster count was recorded."
+                    "but it did not record both the selected cluster count and an "
+                    "agent-declared native selection/stability criterion."
                 ),
-                ("silhouette_score", "silhouette", "n_clusters", "cluster_count"),
+                tuple(missing),
             )
 
     # Enforce figure_required when:
@@ -3686,19 +3845,25 @@ def _step_contract_repair_guidance(
     )
     if clustering_required:
         guidance.append(
-            "This clustering step must write machine-readable clustering metrics "
-            "in step_summary.json. Use keys such as `silhouette_score` or "
-            "`statistic:silhouette_score`, plus `cluster_count` or "
-            "`statistic:cluster_count`."
+            "This clustering step must write the selected `cluster_count` (or "
+            "`n_clusters`) and its agent-declared native selection/stability "
+            "evidence in step_summary.json. Record a full `cluster_selection` "
+            "mapping (criterion, rule/direction, selected k, and at least two "
+            "finite candidate values), or a substantive `cluster_stability` "
+            "mapping with at least two resamples and a finite stability metric. "
+            "A bare criterion string or artifact path does not satisfy this gate. "
+            "Use the method-appropriate evidence (for example BIC/AIC/ICL, gap "
+            "statistic, resampling stability, or silhouette when appropriate)."
         )
         guidance.append(
             "Keep clustering self-contained: create labels, cluster characteristics, "
-            "post-hoc mortality by cluster, method metadata, and the clustering "
-            "figure inside this script. Do not rely on labels saved by another step."
+            "method/selection metadata, and the clustering figure inside this "
+            "script. Add descriptive outcomes only when the plan declares them; "
+            "do not rely on labels saved by another step."
         )
         guidance.append(
-            "Also save table artefacts named `cluster_characteristics.csv` and "
-            "`cluster_mortality.csv` when feasible so manuscript evidence aliases bind."
+            "Also save a table artefact named `cluster_characteristics.csv` and "
+            "the declared cluster-selection manifest so manuscript evidence aliases bind."
         )
     if "figure:" in expected:
         guidance.append(
