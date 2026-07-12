@@ -157,7 +157,7 @@ def test_cluster_robust_association_does_not_receive_clustering_contract(tmp_pat
     assert "clustering_performance" not in aliases
 
 
-def test_real_clustering_contract_still_requires_a_cluster_metric():
+def test_real_clustering_contract_requires_count_and_native_selection_evidence():
     step = AnalysisStep(
         step_id="05_trajectory_phenotyping",
         intent="Discover trajectory phenotypes with KMeans.",
@@ -165,8 +165,23 @@ def test_real_clustering_contract_still_requires_a_cluster_metric():
         expected_outputs=[
             "table:cluster_assignments",
             "table:cluster_characteristics",
-            "statistic:silhouette_score",
+            "statistic:cluster_count",
+            "manifest:cluster_selection",
         ],
     )
     findings = _step_contract_findings(step=step, step_summary={"status": "ok"})
     assert any("clustering summary" in item.message for item in findings)
+
+    findings = _step_contract_findings(
+        step=step,
+        step_summary={
+            "status": "ok",
+            "cluster_count": 3,
+            "cluster_stability": {
+                "selected_n_clusters": 3,
+                "n_resamples": 2,
+                "mean_adjusted_rand_index": 0.81,
+            },
+        },
+    )
+    assert not any("clustering summary" in item.message for item in findings)

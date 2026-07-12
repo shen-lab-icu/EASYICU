@@ -43,6 +43,7 @@ from .temporal_semantics import (
     ICUEpisodeResolver,
     TemporalAlignmentEngine,
 )
+from .trajectory_contract import infer_fixed_window_trajectory_metadata
 
 
 # ---------------------------------------------------------------------------
@@ -498,6 +499,16 @@ def _describe_column(
         note = missingness_test_meta.get("note")
         if note:
             miss.notes = str(note)
+    fixed_window_trajectory = infer_fixed_window_trajectory_metadata(
+        column_name=col,
+        values=series,
+        source_scale=hint.kind.value,
+    )
+    if fixed_window_trajectory is not None and temporal_resolution is None:
+        temporal_resolution = (
+            f"fixed {fixed_window_trajectory.window_width_hours:g}-hour windows "
+            "on a relative time axis"
+        )
 
     return ConceptDescriptor(
         name=col,
@@ -517,6 +528,7 @@ def _describe_column(
         item_ids=item_ids,
         unit_normalization=unit_normalization,
         temporal_resolution=temporal_resolution,
+        fixed_window_trajectory=fixed_window_trajectory,
         pitfalls=list(hint.pitfalls),
         clinical_caveats=clinical_caveats or list(hint.pitfalls),
         missingness_semantics=missingness_semantics,

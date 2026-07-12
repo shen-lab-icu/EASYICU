@@ -4169,6 +4169,17 @@ def test_step_contract_findings_accepts_prefixed_clustering_metrics(ra):
         step_summary={
             "statistic:silhouette_score": 0.46,
             "statistic:cluster_count": 2,
+            "cluster_selection": {
+                "criterion": "silhouette_score",
+                "selection_rule": "maximum",
+                "direction": "maximize",
+                "selected_n_clusters": 2,
+                "candidates": [
+                    {"n_clusters": 1, "criterion_value": 0.0},
+                    {"n_clusters": 2, "criterion_value": 0.46},
+                ],
+                "rationale": "Maximum among evaluated candidates.",
+            },
         },
     )
 
@@ -8372,18 +8383,19 @@ def test_step_contract_repair_guidance_for_clustering_contract(ra):
         intent="Cluster shock physiology.",
         method="kmeans_clustering",
         expected_outputs=[
-            "statistic:silhouette_score",
+            "statistic:cluster_count",
+            "manifest:cluster_selection",
             "table:cluster_characteristics",
         ],
     )
 
     guidance = _step_contract_repair_guidance(
         step=step,
-        step_summary={"error": "silhouette_score missing"},
+        step_summary={"error": "cluster selection evidence missing"},
         code="labels = kmeans.fit_predict(X)",
     )
 
-    assert "silhouette_score" in guidance
+    assert "full `cluster_selection`" in guidance
     assert "cluster_characteristics.csv" in guidance
     assert "self-contained" in guidance
 
@@ -9678,7 +9690,8 @@ def test_advanced_plan_contract_preserves_explicit_kmeans_method(ra):
 
     assert [step.step_id for step in revised.steps] == ["05_kmeans_phenotyping"]
     assert revised.steps[0].method == "kmeans_clustering"
-    assert "statistic:silhouette_score" in revised.steps[0].expected_outputs
+    assert "manifest:cluster_selection" in revised.steps[0].expected_outputs
+    assert "statistic:silhouette_score" not in revised.steps[0].expected_outputs
 
 
 def test_clustering_contract_does_not_invent_mortality_characterization(ra):

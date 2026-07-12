@@ -66,6 +66,7 @@ from ..runtime_artifacts import (
     current_successful_step_records,
     verified_run_evidence_path,
 )
+from ..trajectory_contract import trajectory_phenotyping_artifact_findings
 
 
 # ---------------------------------------------------------------------------
@@ -4673,6 +4674,15 @@ class StatisticalValidator:
         # independently replayed from the locked cohort before publication.
         findings.extend(
             ordered_stratified_numeric_findings(
+                cohort_path=cohort_path,
+                step=step,
+                out_dir=out_dir,
+                step_summary=step_summary,
+            )
+        )
+        findings.extend(
+            trajectory_phenotyping_artifact_findings(
+                context=context,
                 cohort_path=cohort_path,
                 step=step,
                 out_dir=out_dir,
