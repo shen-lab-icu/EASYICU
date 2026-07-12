@@ -55,6 +55,12 @@ from ..schema import (
     VariableRole,
 )
 from ..llm import LLMClient, LLMMessage
+from .outcome_semantics import (
+    _finding_claims_mortality_horizon_mismatch,
+    _script_copies_named_full_stay_window,
+    _script_has_conflicting_mortality_semantics,
+    _script_uses_bound_outcome,
+)
 from ..runtime_artifacts import (
     current_run_evidence_records,
     current_successful_step_records,
@@ -774,6 +780,7 @@ class LLMConceptAuditor:
                 "pitfalls": v.pitfalls,
                 "clinical_caveats": v.clinical_caveats,
                 "cross_database_notes": v.cross_database_notes,
+                "analysis_window": v.analysis_window,
                 "missingness": (
                     v.missingness.model_dump(mode="json")
                     if v.missingness is not None else None
@@ -806,6 +813,14 @@ class LLMConceptAuditor:
             "the variable metadata to ICU mortality, hospital mortality or a "
             "fixed follow-up horizon, do not raise an error unless the script "
             "contradicts that binding or mixes incompatible outcome definitions.\n\n"
+            "A named `full_stay` window is an administrative analysis span: it "
+            "starts at ICU admission and ends at discharge, with `end_hours` "
+            "serving only as an upper safety cap (the default cap is 720 hours). "
+            "Copying that planner-locked window into provenance does not turn a "
+            "metadata-bound ICU/hospital mortality flag into 30-day mortality. "
+            "Call it a fixed-horizon outcome only when the script actually labels "
+            "or constructs 28/30-day mortality, uses another mortality column, or "
+            "derives the event from event-time/follow-up data.\n\n"
             "Return JSON only: "
             '{"findings":[{"severity":"info|warning|error",'
             '"message":"short finding","detail":{"optional":"context"}}]}. '
@@ -813,6 +828,13 @@ class LLMConceptAuditor:
             f"Step: {step.step_id if step else '(unknown)'}\n"
             f"Step intent: {step.intent if step else '(unknown)'}\n"
             f"Target outcome: {context.target_outcome}\n"
+            "Named time windows:\n"
+            + json.dumps(
+                [window.model_dump(mode="json") for window in context.time_windows],
+                ensure_ascii=False,
+                default=str,
+            )
+            + "\n"
             "Variables:\n"
             + json.dumps(variables, ensure_ascii=False, default=str)
             + "\n\nScript:\n"
@@ -905,6 +927,8 @@ def _downgrade_metadata_supported_outcome_findings(
     descriptor = context.variable(outcome)
     if descriptor is None or not descriptor.source_concept:
         return list(findings)
+    if str(getattr(descriptor.role, "value", descriptor.role)) != "outcome":
+        return list(findings)
     source = descriptor.source_concept.lower()
     if source not in {
         "icu_mortality",
@@ -914,45 +938,21 @@ def _downgrade_metadata_supported_outcome_findings(
     }:
         return list(findings)
 
-    code = (script_text or "").lower()
-    contradictory_tokens_by_source = {
-        "icu_mortality": (
-            "hospital_death",
-            "death_hosp",
-            "hospital_mortality",
-            "hospital mortality",
-            "in-hospital mortality",
-            "28-day mortality",
-            "30-day mortality",
-        ),
-        "hospital_mortality": (
-            "death_icu",
-            "icu_mortality",
-            "icu mortality",
-            "28-day mortality",
-            "30-day mortality",
-        ),
-        "mortality_28d": (
-            "death_icu",
-            "icu_mortality",
-            "icu mortality",
-            "hospital_death",
-            "hospital_mortality",
-            "hospital mortality",
-            "30-day mortality",
-        ),
-        "mortality_30d": (
-            "death_icu",
-            "icu_mortality",
-            "icu mortality",
-            "hospital_death",
-            "hospital_mortality",
-            "hospital mortality",
-            "28-day mortality",
-        ),
-    }
-    if any(token in code for token in contradictory_tokens_by_source[source]):
+    if not _script_uses_bound_outcome(script_text=script_text, outcome=outcome):
         return list(findings)
+    if _script_has_conflicting_mortality_semantics(
+        script_text=script_text,
+        outcome=outcome,
+        source=source,
+    ):
+        return list(findings)
+    copies_full_stay = source in {"icu_mortality", "hospital_mortality"} and (
+        _script_copies_named_full_stay_window(
+            context=context,
+            script_text=script_text,
+            outcome=outcome,
+        )
+    )
 
     ambiguity_tokens = (
         "icu vs hospital mortality confusion",
@@ -972,14 +972,26 @@ def _downgrade_metadata_supported_outcome_findings(
                     json.dumps(finding.detail or {}, ensure_ascii=False, default=str),
                 ]
             ).lower()
-            if any(token in text for token in ambiguity_tokens):
+            ambiguity = any(token in text for token in ambiguity_tokens)
+            horizon_mismatch = (
+                copies_full_stay
+                and _finding_claims_mortality_horizon_mismatch(text)
+            )
+            if ambiguity or horizon_mismatch:
                 detail = dict(finding.detail or {})
                 detail.setdefault(
                     "downgraded_reason",
                     (
                         f"Target outcome '{outcome}' is bound to "
                         f"{descriptor.source_concept} in ResearchContext and "
-                        "the script does not reference a conflicting mortality definition."
+                        + (
+                            "the script only copies the named full_stay "
+                            "administrative window without constructing a "
+                            "fixed-horizon mortality endpoint."
+                            if horizon_mismatch
+                            else "the script does not reference a conflicting "
+                            "mortality definition."
+                        )
                     ),
                 )
                 downgraded.append(
