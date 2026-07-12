@@ -78,6 +78,7 @@ from .audits.validators import (
     StatisticalGuard,
     StatisticalValidator,
     StepSummaryFractionValidator,
+    _downgrade_metadata_supported_outcome_findings,
 )
 from .code_repair import (
     _deterministic_runner_repair,
@@ -145,6 +146,8 @@ from .pipeline_resume import (
 )
 from .schema import AnalysisPlan, AnalysisStep, EvidenceRef, ResearchContext
 from .robustness_execution_contract import (
+    ROBUSTNESS_COHORT_MEMBERSHIP_ALIASES,
+    ROBUSTNESS_EXECUTION_CONTRACT_GUIDANCE,
     _executed_robustness_result_issues,
 )
 from .robustness_panel import (
@@ -217,6 +220,71 @@ def _python_repair_is_materially_changed(before: str, after: str) -> bool:
     if before_semantic is not None and before_semantic == after_semantic:
         return False
     return True
+
+
+def _quarantined_errors_superseded_by_current_policy(
+    *,
+    prior_errors: Sequence[ValidationFinding],
+    current_findings: Sequence[ValidationFinding],
+    context: ResearchContext,
+    script_text: str,
+    quarantined_script_sha256: str,
+) -> Optional[Tuple[List[ValidationFinding], List[Dict[str, Any]]]]:
+    """Prove that stored errors were retired by a deterministic policy change.
+
+    Absence of a finding from a new optional LLM audit is not evidence that an
+    old quarantine is stale. The only no-code-change exit is to replay the
+    current metadata-supported outcome reclassifier over every stored error,
+    while the complete current audit independently has no errors.
+    """
+
+    if hashlib.sha256(script_text.encode("utf-8")).hexdigest() != str(
+        quarantined_script_sha256 or ""
+    ):
+        return None
+    if not prior_errors or any(
+        finding.severity == "error" for finding in current_findings
+    ):
+        return None
+    if any(finding.severity != "error" for finding in prior_errors):
+        return None
+    reclassified = _downgrade_metadata_supported_outcome_findings(
+        findings=prior_errors,
+        context=context,
+        script_text=script_text,
+    )
+    if len(reclassified) != len(prior_errors):
+        return None
+
+    provenance: List[Dict[str, Any]] = []
+    for prior, current in zip(prior_errors, reclassified):
+        prior_detail = dict(prior.detail or {})
+        current_detail = dict(current.detail or {})
+        reason = current_detail.get("downgraded_reason")
+        same_finding = (
+            current.validator == prior.validator
+            and current.message == prior.message
+            and current.evidence_ids == prior.evidence_ids
+            and all(current_detail.get(key) == value for key, value in prior_detail.items())
+        )
+        if (
+            not same_finding
+            or "downgraded_reason" in prior_detail
+            or current.severity != "warning"
+            or not isinstance(reason, str)
+            or not reason.strip()
+        ):
+            return None
+        provenance.append(
+            {
+                "validator": prior.validator,
+                "message": prior.message,
+                "prior_severity": prior.severity,
+                "reclassified_severity": current.severity,
+                "downgraded_reason": reason.strip(),
+            }
+        )
+    return reclassified, provenance
 
 
 def _repair_publication_figure_in_staging(
@@ -435,6 +503,8 @@ def _coder_context_with_locked_robustness_specs(
         "rows outside the locked analysis cohort must be materialised from "
         "os.environ['EASYICU_UNIVERSE_PARQUET']; COHORT_PARQUET is the locked "
         "analysis cohort."
+        "\n\n"
+        + ROBUSTNESS_EXECUTION_CONTRACT_GUIDANCE
     )
     prior_notes = str(context.notes or "").strip()
     enriched_notes = f"{prior_notes}\n\n{attachment}" if prior_notes else attachment
@@ -736,28 +806,7 @@ def _cohort_definition_sensitivity_contract_findings(
             for row in replay_rows
             if str(row.get("spec_id") or "")
         }
-        aliases = {
-            "universe_n": ("universe_n",),
-            "variant_membership_n": (
-                "variant_membership_n",
-                "retained_n",
-                "cohort_n",
-                "membership_n",
-            ),
-            "inflow_n": (
-                "inflow_n",
-                "entered_n",
-                "entering_relative_to_primary_n",
-                "enter_n",
-            ),
-            "outflow_n": (
-                "outflow_n",
-                "left_primary_n",
-                "leaving_relative_to_primary_n",
-                "leave_n",
-            ),
-            "overlap_n": ("overlap_n", "overlap_with_primary_n"),
-        }
+        aliases = ROBUSTNESS_COHORT_MEMBERSHIP_ALIASES
         for spec in cohort_specs:
             spec_id = spec.spec_id
             expected = replay_by_id.get(spec_id) or {}
@@ -2961,6 +3010,7 @@ def run_execute_phase(
         quarantined_repair_materially_changed = False
         quarantined_repair_succeeded = False
         quarantine_superseded_by_fallback = False
+        quarantine_policy_superseded = False
         pending_quarantined_errors: List[ValidationFinding] = []
         preexecution_runner_repair_name: Optional[str] = None
         step_current = step_order.get(step.step_id, 0) + 1
@@ -3636,6 +3686,10 @@ else:
         def _concept_findings_for_code(script_text: str) -> List[ValidationFinding]:
             """Run the single pre-execution concept gate for one code digest."""
 
+            nonlocal quarantined_draft_active
+            nonlocal quarantine_policy_superseded
+            nonlocal pending_quarantined_errors
+
             code_findings = usage_auditor.audit(
                 context=context,
                 script_text=script_text,
@@ -3648,17 +3702,6 @@ else:
                     step=step,
                 )
             )
-            if pending_quarantined_errors:
-                existing_keys = {
-                    (finding.validator, finding.severity, finding.message)
-                    for finding in code_findings
-                }
-                code_findings.extend(
-                    finding
-                    for finding in pending_quarantined_errors
-                    if (finding.validator, finding.severity, finding.message)
-                    not in existing_keys
-                )
             try:
                 if pipeline._enable_llm_concept_audit and deterministic_fallback_used:
                     code_findings.append(
@@ -3708,6 +3751,56 @@ else:
                     except Exception:
                         pass
                 raise
+            if pending_quarantined_errors:
+                supersession = _quarantined_errors_superseded_by_current_policy(
+                    prior_errors=pending_quarantined_errors,
+                    current_findings=code_findings,
+                    context=context,
+                    script_text=script_text,
+                    quarantined_script_sha256=str(
+                        step_record.get("quarantined_draft_sha256") or ""
+                    ),
+                )
+                if supersession is not None:
+                    reclassified_findings, provenance = supersession
+                    existing_keys = {
+                        (finding.validator, finding.severity, finding.message)
+                        for finding in code_findings
+                    }
+                    code_findings.extend(
+                        finding
+                        for finding in reclassified_findings
+                        if (finding.validator, finding.severity, finding.message)
+                        not in existing_keys
+                    )
+                    quarantine_policy_superseded = True
+                    quarantined_draft_active = False
+                    pending_quarantined_errors = []
+                    step_record["quarantine_policy_superseded"] = True
+                    step_record["quarantine_policy_superseded_findings"] = provenance
+                    emit_progress(
+                        "audit",
+                        (
+                            "Retiring stored concept errors under the current "
+                            f"deterministic validator policy for {step.step_id}."
+                        ),
+                        status="warning",
+                        run_id=run_id,
+                        step_id=step.step_id,
+                        current_step=step_current,
+                        total_steps=total_steps,
+                    )
+                else:
+                    existing_keys = {
+                        (finding.validator, finding.severity, finding.message)
+                        for finding in code_findings
+                    }
+                    code_findings.extend(
+                        finding
+                        for finding in pending_quarantined_errors
+                        if (finding.validator, finding.severity, finding.message)
+                        not in existing_keys
+                    )
             return code_findings
 
         concept_repair_attempts = 0
@@ -4177,7 +4270,7 @@ else:
             )
             return step_record
 
-        if quarantined_repair_succeeded:
+        if quarantined_repair_succeeded or quarantine_policy_superseded:
             try:
                 clear_quarantined_concept_draft(
                     run_dir=run_dir,
@@ -4185,12 +4278,16 @@ else:
                 )
                 step_record["quarantined_requires_repair"] = False
                 step_record["quarantine_retired"] = True
+                if quarantine_policy_superseded:
+                    step_record["quarantine_retired_by"] = (
+                        "deterministic_validator_policy_supersession"
+                    )
             except ValueError as exc:
                 cleanup_finding = ValidationFinding(
                     validator="resume",
                     severity="error",
                     message=(
-                        "Concept-approved repair could not retire its stale "
+                        "Concept-approved code could not retire its stale "
                         f"quarantine safely for step {step.step_id}: {exc}"
                     ),
                     detail={"step_id": step.step_id},
@@ -4425,6 +4522,10 @@ else:
                         "quarantined_draft_sha256"
                     ),
                     "quarantined_repair_succeeded": quarantined_repair_succeeded,
+                    "quarantine_policy_superseded": quarantine_policy_superseded,
+                    "quarantine_policy_superseded_findings": step_record.get(
+                        "quarantine_policy_superseded_findings"
+                    ),
                     "llm_signature": llm_signature,
                 },
             )
