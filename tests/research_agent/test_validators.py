@@ -2155,6 +2155,9 @@ def test_llm_concept_auditor_prompt_includes_outcome_semantics(ra):
     prompt = auditor._prompt(context=ctx, script_text="print('hello')", step=None)
     assert "icu_mortality" in prompt
     assert "explicitly treated as ICU mortality" in prompt
+    assert "named `full_stay` window is an administrative analysis span" in prompt
+    assert "does not turn" in prompt
+    assert "Named time windows:" in prompt
 
 
 def test_llm_concept_auditor_checks_summary_source_status_bypasses(ra):
@@ -2328,6 +2331,100 @@ def test_llm_concept_auditor_preserves_error_for_conflicting_outcome_label(ra):
     findings = ra.LLMConceptAuditor(_ConfusionLLM()).audit(
         context=ctx,
         script_text="ax.set_title('Adjusted association with hospital mortality')",
+        step=None,
+    )
+
+    assert len(findings) == 1
+    assert findings[0].severity == "error"
+
+
+class _HorizonMismatchLLM:
+    def complete(self, messages, *, max_tokens=1024, temperature=0.0):
+        return """
+        {
+          "findings": [
+            {
+              "severity": "error",
+              "message": "The fixed-window death alternative is incompatible with the bound hospital-mortality outcome.",
+              "detail": {
+                "context": "The script copies a 0–720 hour window but consumes the hospital mortality flag without deriving 30-day mortality from event time."
+              }
+            }
+          ]
+        }
+        """
+
+
+def _hospital_mortality_context(ra):
+    return ra.build_research_context(
+        research_question="Is an early exposure associated with in-hospital mortality?",
+        cohort=pd.DataFrame(
+            {
+                "stay_id": [1, 2, 3],
+                "exposure": [0.0, 1.0, 2.0],
+                "death": [0, 1, 0],
+            }
+        ),
+        cohort_name="c",
+        database="synthetic",
+        target_outcome="death",
+    )
+
+
+def _full_stay_hospital_mortality_script(extra: str = "") -> str:
+    return (
+        "OUTCOME_OVERRIDE = {\n"
+        "    'concept_id': 'death',\n"
+        "    'time_window': {\n"
+        "        'anchor': 'icu_admit',\n"
+        "        'start_offset_hours': 0.0,\n"
+        "        'end_offset_hours': 720.0,\n"
+        "    },\n"
+        "    'aggregation': 'first',\n"
+        "    'op': '==',\n"
+        "    'value': 1,\n"
+        "}\n"
+        "y = df['death']\n"
+        "model.fit(x, y)\n"
+        + extra
+    )
+
+
+def test_llm_concept_auditor_downgrades_named_full_stay_horizon_false_positive(
+    ra,
+) -> None:
+    findings = ra.LLMConceptAuditor(_HorizonMismatchLLM()).audit(
+        context=_hospital_mortality_context(ra),
+        script_text=_full_stay_hospital_mortality_script(),
+        step=None,
+    )
+
+    assert len(findings) == 1
+    assert findings[0].severity == "warning"
+    assert "full_stay administrative window" in findings[0].detail[
+        "downgraded_reason"
+    ]
+
+
+@pytest.mark.parametrize(
+    "conflicting_code",
+    [
+        "label = 'ICU mortality'\n",
+        "label = '28-day mortality'\n",
+        "label = '30-day mortality'\n",
+        "label = 'fixed-horizon mortality'\n",
+        "alternate = df['death_30d']\n",
+        "columns = ['death_30d']\nalternate = df[columns]\n",
+        "derived = df['death_time'].le(720)\n",
+        "derived = (df['death'] == 1) & (df['los_icu'] <= 30)\n",
+    ],
+)
+def test_llm_concept_auditor_preserves_horizon_error_for_real_conflicts(
+    ra, conflicting_code
+) -> None:
+    findings = ra.LLMConceptAuditor(_HorizonMismatchLLM()).audit(
+        context=_hospital_mortality_context(ra),
+        script_text=_full_stay_hospital_mortality_script(conflicting_code),
         step=None,
     )
 
