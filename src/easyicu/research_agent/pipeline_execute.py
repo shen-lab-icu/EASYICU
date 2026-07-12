@@ -534,7 +534,19 @@ def _sensitivity_csv_rows(paths: Sequence[Path]) -> List[Dict[str, str]]:
     for path in paths:
         try:
             with path.open("r", encoding="utf-8", newline="") as handle:
-                rows.extend(dict(row) for row in csv.DictReader(handle))
+                for raw_row in csv.DictReader(handle):
+                    row = dict(raw_row)
+                    # ``definition_id`` is the natural identifier in cohort
+                    # overlap/attrition tables, while the locked robustness
+                    # contract calls the same key ``spec_id``.  Normalize the
+                    # typed table role here; values are still checked against
+                    # the digest-bound lock and deterministic membership
+                    # replay below, so this cannot authorize an invented id.
+                    if not str(row.get("spec_id") or "").strip() and str(
+                        row.get("definition_id") or ""
+                    ).strip():
+                        row["spec_id"] = row["definition_id"]
+                    rows.append(row)
         except (OSError, csv.Error):
             continue
     return rows
@@ -703,11 +715,13 @@ def _cohort_definition_sensitivity_contract_findings(
             ),
             "inflow_n": (
                 "inflow_n",
+                "entered_n",
                 "entering_relative_to_primary_n",
                 "enter_n",
             ),
             "outflow_n": (
                 "outflow_n",
+                "left_primary_n",
                 "leaving_relative_to_primary_n",
                 "leave_n",
             ),
