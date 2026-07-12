@@ -43,6 +43,10 @@ def _no_error(findings) -> bool:
 def _write_phenotype_parent(run_dir: Path, parent_id: str = "05_trajectory_clustering"):
     out = run_dir / "steps" / parent_id / "outputs"
     out.mkdir(parents=True, exist_ok=True)
+    (out / "step_summary.json").write_text(
+        '{"status":"ok","analysis_family":"phenotyping"}',
+        encoding="utf-8",
+    )
     pd.DataFrame(
         {
             "cluster": [0, 1, 2],
@@ -144,6 +148,10 @@ def test_phenotype_rescue_blocks_without_two_clusters(tmp_path: Path):
 def _write_table_one_parent(run_dir: Path, parent_id: str = "03_baseline_table_and_absolute_risk"):
     out = run_dir / "steps" / parent_id / "outputs"
     out.mkdir(parents=True, exist_ok=True)
+    (out / "step_summary.json").write_text(
+        '{"status":"ok","analysis_family":"descriptive"}',
+        encoding="utf-8",
+    )
     # Mirrors the real E1 table_one.csv columns (continuous + categorical rows).
     pd.DataFrame(
         {
@@ -220,9 +228,11 @@ def test_descriptive_rescue_returns_none_for_a_result_table(tmp_path: Path):
 # --------------------------------------------------------------------------- #
 
 
-def test_router_claims_phenotype_and_table_one_figure_steps(tmp_path: Path):
-    assert deterministic_figure_family_supported("05_trajectory_clustering_figure")
-    assert deterministic_figure_family_supported("03_baseline_table_and_absolute_risk_figure")
+def test_router_claims_structured_phenotype_and_table_one_parents(tmp_path: Path):
+    assert not deterministic_figure_family_supported("05_trajectory_clustering_figure")
+    assert not deterministic_figure_family_supported(
+        "03_baseline_table_and_absolute_risk_figure"
+    )
 
     _write_phenotype_parent(tmp_path)
     pheno_out = tmp_path / "steps" / "05_trajectory_clustering_figure" / "outputs"
@@ -249,12 +259,22 @@ def test_router_claims_phenotype_and_table_one_figure_steps(tmp_path: Path):
     )
 
 
+def test_cluster_robust_figure_name_is_not_phenotype_routing_evidence():
+    assert not deterministic_figure_family_supported(
+        "05_cluster_robust_model_figure"
+    )
+
+
 def test_router_does_not_steal_association_or_survival_figure(tmp_path: Path):
     # An association forest / survival figure step must keep routing to its own
     # renderer even though the new phenotype/descriptive branches now exist. These
     # token checks run BEFORE phenotype/descriptive in the chain.
     parent = tmp_path / "steps" / "06_primary_association_model" / "outputs"
     parent.mkdir(parents=True, exist_ok=True)
+    (parent / "step_summary.json").write_text(
+        '{"status":"ok","analysis_family":"association"}',
+        encoding="utf-8",
+    )
     pd.DataFrame(
         {
             "level": ["<2", ">=4"],

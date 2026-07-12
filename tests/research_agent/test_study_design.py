@@ -240,7 +240,11 @@ def test_association_plan_validator_accepts_article_level_display_suite(ra):
                 step_id="03_primary",
                 intent="Fit adjusted association model and report odds ratio.",
                 method="adjusted logistic regression",
-                expected_outputs=["table:primary_adjusted_effect_estimate"],
+                expected_outputs=[
+                    "table:primary_adjusted_effect_estimate",
+                    "statistic:exposure_prevalence",
+                    "table:absolute_outcome_risk_by_exposure",
+                ],
             ),
             AnalysisStep(
                 step_id="04_missingness",
@@ -283,7 +287,10 @@ def test_prediction_plan_validator_accepts_multi_module_prediction_suite(ra):
             AnalysisStep(
                 step_id="01_flow",
                 intent="Define modelling cohort denominator and train-test validation split.",
-                expected_outputs=["table:modelling_cohort_flow"],
+                expected_outputs=[
+                    "table:modelling_cohort_flow",
+                    "table:validation_split",
+                ],
             ),
             AnalysisStep(
                 step_id="02_baseline",

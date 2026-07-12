@@ -205,6 +205,29 @@ def test_coderagent_repair_rejects_non_script_output():
         )
 
 
+def test_coderagent_repair_allows_only_contract_named_method_modules():
+    llm = _ScriptedLLM([_CLEAN_SCRIPT])
+    agent = CoderAgent(llm)
+
+    agent.repair(
+        context=_ordinal_context(),
+        step=AnalysisStep(
+            step_id="01_ordered",
+            intent="summarise outcomes across ordered groups",
+            method="ordinal_stratified_descriptive_analysis",
+        ),
+        code=_BAD_SCRIPT,
+        run_log="contract failed",
+        attempt=1,
+    )
+
+    repair_prompt = llm.calls[0][-1].content
+    assert "easyicu.research_agent.methods.*" in repair_prompt
+    assert "only those exact modules and symbols are allowed" in repair_prompt
+    assert "All other `easyicu.*` imports" in repair_prompt
+    assert "undocumented project-local modules remain forbidden" in repair_prompt
+
+
 def test_coderagent_run_no_repair_when_first_attempt_is_clean():
     llm = _ScriptedLLM([_CLEAN_SCRIPT])
     agent = CoderAgent(llm)

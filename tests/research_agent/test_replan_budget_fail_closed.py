@@ -284,7 +284,7 @@ def test_no_cap_hit_never_demotes():
     )
 
 
-def test_primary_estimate_bound_true_for_deterministic_iptw():
+def test_legacy_deterministic_iptw_marker_does_not_claim_primary_ownership():
     recs = [
         {
             "step_id": "04_causal_effect_estimation",
@@ -297,7 +297,7 @@ def test_primary_estimate_bound_true_for_deterministic_iptw():
             },
         }
     ]
-    assert _deterministic_primary_estimate_bound(recs) is True
+    assert _deterministic_primary_estimate_bound(recs) is False
 
 
 def test_primary_estimate_bound_false_for_llm_coded_estimate():
@@ -328,10 +328,9 @@ def test_primary_estimate_bound_false_when_runner_blocked():
     assert _deterministic_primary_estimate_bound(recs) is False
 
 
-def test_primary_estimate_bound_true_for_deterministic_ordinal():
-    # E3 dose-response: the ordinal runner's trend OR is a bound deterministic
-    # primary estimate, so a churny-but-converged E3 run is treated the same as
-    # H2 (cap advisory, not a demotion).
+def test_legacy_deterministic_ordinal_marker_does_not_claim_primary_ownership():
+    # Legacy records remain readable, but a retired runner marker cannot regain
+    # ownership of a scientific estimand.
     recs = [
         {
             "step_id": "02_dose_response",
@@ -344,23 +343,20 @@ def test_primary_estimate_bound_true_for_deterministic_ordinal():
             },
         }
     ]
-    assert _deterministic_primary_estimate_bound(recs) is True
+    assert _deterministic_primary_estimate_bound(recs) is False
 
 
 # ---------------------------------------------------------------------------
-# 5. No-deterministic-primary families (2026-07-07, M3 subphenotype)
+# 5. Agent-owned primary families
 #
-# Phenotyping / descriptive / prediction are LLM-coded-primary BY DESIGN, so they
-# can never bind a deterministic primary. A converged, fully-validated run in
-# such a family must not be demoted purely for hitting the cap -- but the waiver
-# must NOT rescue a run that actually failed to validate, nor help a
-# deterministic-primary family (which would mask a routing bug).
+# Primary scientific analyses are agent-owned. A converged, fully validated run
+# must not be demoted purely because no deterministic runner can bind its
+# estimand, while genuine validation failures still demote.
 # ---------------------------------------------------------------------------
 
 
 def test_cap_advisory_for_converged_no_primary_family():
-    # Exact M3 phenotyping shape: no deterministic primary expected, everything
-    # else clean, cap hit -> advisory, NOT a demotion.
+    # No deterministic primary is expected; all other gates are clean.
     assert (
         _replan_budget_demotes(
             hit=True,
@@ -390,9 +386,8 @@ def test_cap_still_demotes_no_primary_family_with_base_errors():
     )
 
 
-def test_no_primary_waiver_does_not_help_a_deterministic_family():
-    # A deterministic-primary family (flag False) with no bound primary still
-    # demotes -- this is the guard that keeps an E3-style routing miss visible.
+def test_unknown_family_without_agent_owned_waiver_stays_fail_closed():
+    # If family inference fails, the conservative default remains fail closed.
     assert _replan_budget_demotes(
         hit=True,
         execution_complete=True,

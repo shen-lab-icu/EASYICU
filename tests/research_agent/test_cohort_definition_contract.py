@@ -22,11 +22,25 @@ from easyicu.research_agent.plan_utils import (
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
 
-def _plan(cohort: CohortDefinition, *, step_intent: str, step_id: str) -> AnalysisPlan:
+def _plan(
+    cohort: CohortDefinition,
+    *,
+    step_intent: str,
+    step_id: str,
+    method: str = "descriptive",
+    expected_outputs: list[str] | None = None,
+) -> AnalysisPlan:
     return AnalysisPlan(
         research_question="q",
         cohort=cohort,
-        steps=[AnalysisStep(step_id=step_id, intent=step_intent)],
+        steps=[
+            AnalysisStep(
+                step_id=step_id,
+                intent=step_intent,
+                method=method,
+                expected_outputs=expected_outputs or [],
+            )
+        ],
     )
 
 
@@ -35,6 +49,8 @@ def test_empty_cohort_with_cohort_step_is_error():
         CohortDefinition(name="primary"),  # no predicates
         step_id="01_cohort_definition",
         step_intent="Define the adult ICU cohort with LoS >= 1 day.",
+        method="cohort_definition",
+        expected_outputs=["table:cohort_flow"],
     )
     assert _plan_expects_analysis_cohort(plan)
     assert _cohort_definition_is_empty(plan)
@@ -67,6 +83,21 @@ def test_no_cohort_step_does_not_require_structured_cohort():
         CohortDefinition(name="primary"),
         step_id="01_describe_universe",
         step_intent="Describe all ICU stays in the export.",
+    )
+    assert not _plan_expects_analysis_cohort(plan)
+    assert _cohort_definition_contract_findings(plan) == []
+
+
+def test_treatment_eligibility_bias_prose_is_not_a_cohort_owner():
+    plan = _plan(
+        CohortDefinition(name="primary"),
+        step_id="05_primary_effect",
+        step_intent=(
+            "Estimate the adjusted effect and address treatment eligibility bias "
+            "with inverse-probability weighting."
+        ),
+        method="iptw",
+        expected_outputs=["statistic:adjusted_effect"],
     )
     assert not _plan_expects_analysis_cohort(plan)
     assert _cohort_definition_contract_findings(plan) == []

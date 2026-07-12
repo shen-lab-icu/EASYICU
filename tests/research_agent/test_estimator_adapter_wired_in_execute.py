@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 
-def test_adapter_autofits_rows_from_locked_specs_without_coder_payload(tmp_path) -> None:
+def test_opt_in_adapter_primary_cannot_enter_final_panel(tmp_path) -> None:
     from easyicu.research_agent.cohort_schema import (
         CohortDefinition,
         ConceptPredicate,
@@ -97,6 +97,7 @@ def test_adapter_autofits_rows_from_locked_specs_without_coder_payload(tmp_path)
         primary_cohort=primary,
         cohort_path=cohort_path,
         context=context,
+        allow_implicit_cohort_refit=True,
     )
     panel = build_robustness_panel_from_records(
         specs=specs,
@@ -105,6 +106,7 @@ def test_adapter_autofits_rows_from_locked_specs_without_coder_payload(tmp_path)
     )
 
     assert any("cohort parquet" in warning for warning in warnings)
-    assert {row.spec_id for row in panel.rows} == {"primary", "alt_sofa_positive"}
-    assert sum(row.converged for row in panel.rows) >= 2
+    assert {row.spec_id for row in rows} == {"primary", "alt_sofa_positive"}
+    assert {row.spec_id for row in panel.rows} == {"alt_sofa_positive"}
+    assert sum(row.converged for row in panel.rows) >= 1
     assert all(row.point_estimate is not None for row in panel.rows)

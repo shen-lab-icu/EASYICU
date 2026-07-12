@@ -62,10 +62,13 @@ def test_bh_empty(ra):
 class _EvRec:
     """Minimal evidence-record stand-in for the extractor."""
 
-    def __init__(self, *, evidence_id, kind, relative_path):
+    def __init__(
+        self, *, evidence_id, kind, relative_path, produced_by_step=None
+    ):
         self.evidence_id = evidence_id
         self.kind = kind
         self.relative_path = relative_path
+        self.produced_by_step = produced_by_step
 
 
 def _write_csv(path: Path, rows, header):
@@ -84,11 +87,11 @@ def test_extract_pvalues_from_column(ra, tmp_path):
     _write_csv(
         csv_path,
         rows=[
-            ["sofa2", 1.23, 0.03],
-            ["age", 1.05, 0.001],
-            ["sex_M", 0.95, 0.9],
+            ["sofa2 vs reference", 1.23, 0.03],
+            ["age-group comparison", 1.05, 0.001],
+            ["sex comparison", 0.95, 0.9],
         ],
-        header=["term", "or", "p_value"],
+        header=["comparison", "statistic", "p_value"],
     )
     recs = [_EvRec(evidence_id="primary_association", kind="table", relative_path="primary.csv")]
     report = ra.build_multiple_testing_report(
@@ -103,6 +106,75 @@ def test_extract_pvalues_from_column(ra, tmp_path):
     assert summary["n_significant_raw"] == 2
     assert summary["n_significant_bh"] == 2
     assert summary["n_significant_bonferroni"] == 1  # only 0.001*3 <= 0.05
+    assert summary["n_families"] == 1
+    assert report.records[0].family_source == "source-local"
+
+
+def test_pvalue_column_matching_is_exact_not_substring(ra):
+    from easyicu.research_agent.methods.multiple_testing import _is_pvalue_column
+
+    assert _is_pvalue_column("p_value") is True
+    assert _is_pvalue_column("P-Value") is True
+    assert _is_pvalue_column("raw_p") is True
+    assert _is_pvalue_column("primary_p_value") is True
+    assert _is_pvalue_column("group_value") is False
+    assert _is_pvalue_column("p_value_bounded") is False
+    assert _is_pvalue_column("adjusted_p") is False
+
+
+def test_primary_p_value_exact_field_remains_backward_compatible(ra, tmp_path):
+    run_dir = tmp_path / "run"
+    evidence_dir = run_dir / "evidence"
+    evidence_dir.mkdir(parents=True)
+    (evidence_dir / "step_summary.json").write_text(
+        json.dumps(
+            {
+                "primary_predictor": "exposure",
+                "outcome": "death",
+                "primary_p_value": 0.01,
+                "p_value_bounded": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = ra.build_multiple_testing_report(
+        evidence_records=[
+            _EvRec(
+                evidence_id="step_summary",
+                kind="statistic",
+                relative_path="step_summary.json",
+            )
+        ],
+        run_dir=run_dir,
+    )
+
+    assert report.n_tests == 1
+    assert report.records[0].column == "primary_p_value"
+    assert report.records[0].p_value == pytest.approx(0.01)
+
+
+def test_group_value_and_pvalue_bounded_are_never_tests(ra, tmp_path):
+    run_dir = tmp_path / "run"
+    (run_dir / "evidence").mkdir(parents=True)
+    csv_path = run_dir / "evidence" / "trend.csv"
+    _write_csv(
+        csv_path,
+        rows=[
+            ["mortality", 0, True, 0.01],
+            ["length of stay", 1, False, 0.20],
+        ],
+        header=["comparison", "group_value", "p_value_bounded", "p_value"],
+    )
+    report = ra.build_multiple_testing_report(
+        evidence_records=[
+            _EvRec(evidence_id="trend", kind="table", relative_path="trend.csv")
+        ],
+        run_dir=run_dir,
+    )
+
+    assert report.n_tests == 2
+    assert {record.column for record in report.records} == {"p_value"}
 
 
 def test_extract_skips_out_of_range_pvalues(ra, tmp_path):
@@ -134,10 +206,26 @@ def test_extract_from_json_recurses(ra, tmp_path):
     json_path.write_text(
         json.dumps(
             {
-                "primary": {"estimate": 1.2, "p_value": 0.004},
+                "primary": {
+                    "test_id": "primary_test",
+                    "outcome": "death",
+                    "family_id": "planned_tests",
+                    "estimate": 1.2,
+                    "p_value": 0.004,
+                },
                 "secondary": [
-                    {"term": "age", "p_value": 0.33},
-                    {"term": "sex", "p_value": 0.78},
+                    {
+                        "test_id": "age_test",
+                        "outcome": "death",
+                        "family_id": "planned_tests",
+                        "p_value": 0.33,
+                    },
+                    {
+                        "test_id": "sex_test",
+                        "outcome": "death",
+                        "family_id": "planned_tests",
+                        "p_value": 0.78,
+                    },
                 ],
             }
         )
@@ -149,6 +237,341 @@ def test_extract_from_json_recurses(ra, tmp_path):
     assert report.n_tests == 3
     pvals = sorted(r.p_value for r in report.records)
     assert pvals == pytest.approx([0.004, 0.33, 0.78])
+
+
+def test_structured_coefficients_exclude_nuisance_and_sensitivity_rows(ra, tmp_path):
+    run_dir = tmp_path / "run"
+    (run_dir / "evidence").mkdir(parents=True)
+    csv_path = run_dir / "evidence" / "coefficients.csv"
+    _write_csv(
+        csv_path,
+        rows=[
+            ["model_a", "const", "intercept", "primary", "planned_effects", 0.8],
+            ["model_a", "age", "adjustment", "primary", "planned_effects", 0.04],
+            ["model_a", "available", "availability", "primary", "planned_effects", 0.03],
+            ["model_a", "offset", "nuisance", "primary", "planned_effects", 0.02],
+            ["model_a", "exposure", "exposure", "primary", "planned_effects", 0.01],
+            ["model_a", "interaction", "contrast", "primary", "planned_effects", 0.04],
+            ["model_a", "exposure", "exposure", "sensitivity", "planned_effects", 0.005],
+        ],
+        header=[
+            "model_id",
+            "term",
+            "term_role",
+            "analysis_role",
+            "hypothesis_family_id",
+            "p_value",
+        ],
+    )
+    report = ra.build_multiple_testing_report(
+        evidence_records=[
+            _EvRec(
+                evidence_id="coefficients",
+                kind="table",
+                relative_path="coefficients.csv",
+            )
+        ],
+        run_dir=run_dir,
+    )
+
+    assert report.n_tests == 2
+    assert {record.label for record in report.records} == {"exposure", "interaction"}
+    assert {record.family_id for record in report.records} == {"declared:planned_effects"}
+    assert report.bh_adjusted == pytest.approx([0.02, 0.04])
+
+
+def test_untyped_structured_coefficient_dump_is_omitted(ra, tmp_path):
+    run_dir = tmp_path / "run"
+    (run_dir / "evidence").mkdir(parents=True)
+    csv_path = run_dir / "evidence" / "coefficients.csv"
+    _write_csv(
+        csv_path,
+        rows=[
+            ["model_a", "exposure", "exposure", 1.4, 0.01],
+            ["model_a", "age", "adjustment", 1.1, 0.02],
+        ],
+        header=["model_id", "term", "term_role", "estimate", "p_value"],
+    )
+    report = ra.build_multiple_testing_report(
+        evidence_records=[
+            _EvRec(
+                evidence_id="coefficients",
+                kind="table",
+                relative_path="coefficients.csv",
+            )
+        ],
+        run_dir=run_dir,
+    )
+
+    assert report.n_tests == 0
+    assert any("structured coefficient table" in note for note in report.notes)
+
+
+@pytest.mark.parametrize("term_column", ["variable", "predictor"])
+def test_untyped_coefficient_alias_dump_is_omitted(ra, tmp_path, term_column):
+    run_dir = tmp_path / "run"
+    (run_dir / "evidence").mkdir(parents=True)
+    csv_path = run_dir / "evidence" / "coefficients.csv"
+    _write_csv(
+        csv_path,
+        rows=[
+            ["model_a", "Intercept", 0.1, 0.9],
+            ["model_a", "age", 0.2, 0.01],
+            ["model_a", "exposure", 0.3, 0.02],
+        ],
+        header=["model_id", term_column, "coefficient", "p_value"],
+    )
+
+    report = ra.build_multiple_testing_report(
+        evidence_records=[
+            _EvRec(
+                evidence_id="coefficients",
+                kind="table",
+                relative_path="coefficients.csv",
+            )
+        ],
+        run_dir=run_dir,
+    )
+
+    assert report.n_tests == 0
+    assert any("structured coefficient table" in note for note in report.notes)
+
+
+def test_explicit_hypothesis_families_are_corrected_separately(ra, tmp_path):
+    run_dir = tmp_path / "run"
+    (run_dir / "evidence").mkdir(parents=True)
+    csv_path = run_dir / "evidence" / "planned_tests.csv"
+    _write_csv(
+        csv_path,
+        rows=[
+            ["a1", "family_a", 0.01],
+            ["a2", "family_a", 0.04],
+            ["b1", "family_b", 0.03],
+        ],
+        header=["comparison", "hypothesis_family_id", "p_value"],
+    )
+    report = ra.build_multiple_testing_report(
+        evidence_records=[
+            _EvRec(
+                evidence_id="planned_tests",
+                kind="table",
+                relative_path="planned_tests.csv",
+            )
+        ],
+        run_dir=run_dir,
+    )
+
+    adjusted = {
+        record.label: value
+        for record, value in zip(report.records, report.bh_adjusted)
+    }
+    assert report.summary()["n_families"] == 2
+    assert adjusted == pytest.approx({"a1": 0.02, "a2": 0.04, "b1": 0.03})
+
+    markdown_path = report.write_markdown(tmp_path / "multiple_testing.md")
+    markdown = markdown_path.read_text(encoding="utf-8")
+    assert "single run-wide family" not in markdown
+    assert "independently within declared or source-local" in markdown
+
+
+def test_explicit_family_id_is_authoritative_across_models(ra, tmp_path):
+    run_dir = tmp_path / "run"
+    (run_dir / "evidence").mkdir(parents=True)
+    csv_path = run_dir / "evidence" / "planned_tests.csv"
+    _write_csv(
+        csv_path,
+        rows=[
+            ["h1", "model_a", "planned_joint_family", 0.01],
+            ["h2", "model_b", "planned_joint_family", 0.04],
+        ],
+        header=["hypothesis_id", "model_id", "hypothesis_family_id", "p_value"],
+    )
+
+    report = ra.build_multiple_testing_report(
+        evidence_records=[
+            _EvRec(
+                evidence_id="planned_tests",
+                kind="table",
+                relative_path="planned_tests.csv",
+            )
+        ],
+        run_dir=run_dir,
+    )
+
+    assert report.family_ids == ["declared:planned_joint_family"]
+    assert report.bh_adjusted == pytest.approx([0.02, 0.04])
+
+
+def test_csv_and_json_duplicate_statistics_are_counted_once(ra, tmp_path):
+    run_dir = tmp_path / "run"
+    evidence_dir = run_dir / "evidence"
+    evidence_dir.mkdir(parents=True)
+    _write_csv(
+        evidence_dir / "trend.csv",
+        rows=[
+            ["death", "cochran_armitage", "ordered_trends", 0.01],
+            ["los_icu", "jonckheere_terpstra", "ordered_trends", 0.02],
+        ],
+        header=["outcome", "test_id", "family_id", "p_value"],
+    )
+    (evidence_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "trend_results": [
+                    {
+                        "outcome": "death",
+                        "test_id": "cochran_armitage",
+                        "family_id": "ordered_trends",
+                        "p_value": 0.01,
+                        "p_value_bounded": False,
+                    },
+                    {
+                        "outcome": "los_icu",
+                        "test_id": "jonckheere_terpstra",
+                        "family_id": "ordered_trends",
+                        "p_value": 0.02,
+                        "p_value_bounded": False,
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    report = ra.build_multiple_testing_report(
+        evidence_records=[
+            _EvRec(evidence_id="trend", kind="table", relative_path="trend.csv"),
+            _EvRec(
+                evidence_id="summary",
+                kind="statistic",
+                relative_path="summary.json",
+            ),
+        ],
+        run_dir=run_dir,
+    )
+
+    assert report.n_tests == 2
+    assert report.bh_adjusted == pytest.approx([0.02, 0.02])
+    assert any("Collapsed 2 duplicate" in note for note in report.notes)
+
+
+def test_resume_report_is_not_reingested_and_duplicate_evidence_is_deduped(
+    ra, tmp_path
+):
+    run_dir = tmp_path / "run"
+    evidence_dir = run_dir / "evidence"
+    evidence_dir.mkdir(parents=True)
+    _write_csv(
+        evidence_dir / "tests.csv",
+        rows=[["primary comparison", "primary_family", 0.01]],
+        header=["comparison", "family_id", "p_value"],
+    )
+    _write_csv(
+        evidence_dir / "multiple_testing_report.csv",
+        rows=[["primary comparison", 0.01]],
+        header=["label", "p_raw"],
+    )
+    source = _EvRec(evidence_id="tests", kind="table", relative_path="tests.csv")
+    report = ra.build_multiple_testing_report(
+        evidence_records=[
+            source,
+            source,
+            _EvRec(
+                evidence_id="multiple_testing_report",
+                kind="statistic",
+                relative_path="multiple_testing_report.csv",
+            ),
+        ],
+        run_dir=run_dir,
+    )
+
+    assert report.n_tests == 1
+    assert report.records[0].p_value == 0.01
+    assert any("Collapsed 1 duplicate" in note for note in report.notes)
+
+
+def test_resume_uses_only_latest_step_evidence_and_versions_o22_report(ra, tmp_path):
+    from easyicu.research_agent.pipeline_package import (
+        _active_step_evidence_ids,
+        _register_multiple_testing_outputs,
+    )
+
+    run_dir = tmp_path / "run"
+    evidence_dir = run_dir / "evidence"
+    evidence_dir.mkdir(parents=True)
+    for name, p_value in (("old.csv", 0.01), ("new.csv", 0.03)):
+        _write_csv(
+            evidence_dir / name,
+            rows=[["primary", "planned_family", p_value]],
+            header=["hypothesis_id", "family_id", "p_value"],
+        )
+    records = [
+        _EvRec(
+            evidence_id="old_result",
+            kind="table",
+            relative_path="old.csv",
+            produced_by_step="06_model",
+        ),
+        _EvRec(
+            evidence_id="new_result",
+            kind="table",
+            relative_path="new.csv",
+            produced_by_step="06_model",
+        ),
+    ]
+    active_ids = _active_step_evidence_ids(
+        [
+            {
+                "step_id": "06_model",
+                "status": "ok",
+                "evidence_ids": ["old_result"],
+            },
+            {
+                "step_id": "06_model",
+                "status": "ok",
+                "evidence_ids": ["new_result"],
+            },
+        ]
+    )
+    report = ra.build_multiple_testing_report(
+        evidence_records=records,
+        run_dir=run_dir,
+        active_evidence_ids=active_ids,
+    )
+
+    assert report.n_tests == 1
+    assert report.records[0].evidence_id == "new_result"
+    assert report.records[0].p_value == pytest.approx(0.03)
+
+    store = ra.EvidenceStore(run_dir)
+    csv_path = run_dir / "multiple_testing_report.csv"
+    markdown_path = run_dir / "multiple_testing_report.md"
+    report.write_csv(csv_path)
+    report.write_markdown(markdown_path)
+    first_csv_id, first_md_id = _register_multiple_testing_outputs(
+        evidence=store,
+        csv_path=csv_path,
+        markdown_path=markdown_path,
+    )
+    csv_path.write_text(csv_path.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    markdown_path.write_text(
+        markdown_path.read_text(encoding="utf-8") + "\n", encoding="utf-8"
+    )
+    resumed_csv_id, resumed_md_id = _register_multiple_testing_outputs(
+        evidence=store,
+        csv_path=csv_path,
+        markdown_path=markdown_path,
+    )
+
+    assert first_csv_id == "multiple_testing_report"
+    assert first_md_id == "multiple_testing_summary"
+    assert resumed_csv_id == "multiple_testing_report_v2"
+    assert resumed_md_id == "multiple_testing_summary_v2"
+    resumed_csv_record = store.get(resumed_csv_id)
+    resumed_md_record = store.get(resumed_md_id)
+    assert resumed_csv_record is not None
+    assert resumed_md_record is not None
+    assert (run_dir / resumed_csv_record.relative_path).read_bytes() == csv_path.read_bytes()
+    assert (run_dir / resumed_md_record.relative_path).read_bytes() == markdown_path.read_bytes()
 
 
 def test_no_pvalues_produces_note(ra, tmp_path):
@@ -197,11 +620,12 @@ def test_pipeline_writes_multiple_testing_report_by_default(
     assert "multiple_testing_report" in ev_ids
     assert "multiple_testing_summary" in ev_ids
 
-    # At least one finding from the multiple_testing validator should be
-    # emitted (info or warning) because the association-analysis skill runs a
-    # logistic regression with a reported p-value.
+    # O22 always records that the audit ran. If the mock emits only an untyped
+    # coefficient dump, the finding truthfully reports zero defensibly scoped
+    # tests instead of inventing a run-wide family.
     mt_findings = [f for f in manifest["findings"] if f["validator"] == "multiple_testing"]
     assert len(mt_findings) >= 1
+    assert mt_findings[-1]["detail"]["n_tests"] >= 0
 
 
 def test_pipeline_multiple_testing_can_be_disabled(ra, synthetic_cohort, tmp_path):

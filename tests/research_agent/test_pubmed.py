@@ -347,6 +347,49 @@ def test_hypothesis_blueprint_agent_uses_literature_and_domain_gates(ra):
     assert "recommended_step_skeleton" in prompt
 
 
+def test_blueprint_and_agent_context_honor_explicit_primary_exposure(ra):
+    schema = ra.schema
+    ctx = schema.ResearchContext(
+        research_question=(
+            "Compare a laboratory signal and an ordinal organ score with mortality."
+        ),
+        cohort=schema.CohortDescriptor(
+            cohort_name="c",
+            database="synthetic",
+            n_patients=10,
+            n_stays=10,
+        ),
+        variables=[
+            schema.ConceptDescriptor(
+                name="organ_score",
+                role="ordinal_score",
+                dtype="int64",
+                is_ordinal=True,
+            ),
+            schema.ConceptDescriptor(
+                name="lab_max",
+                role="lab",
+                dtype="float64",
+            ),
+            schema.ConceptDescriptor(
+                name="death",
+                role="outcome",
+                dtype="int64",
+            ),
+        ],
+        target_outcome="death",
+        primary_exposure="lab",
+    )
+
+    from easyicu.research_agent.agents import _format_context
+    from easyicu.research_agent.literature import _pick_blueprint_predictor
+
+    assert _pick_blueprint_predictor(ctx) == "lab"
+    rendered = _format_context(ctx)
+    assert "Primary exposure/predictor: lab" in rendered
+    assert "authoritative" in rendered
+
+
 def test_hypothesis_blueprint_adds_deterministic_cross_db_steps(ra, monkeypatch):
     schema = ra.schema
     ctx = schema.ResearchContext(

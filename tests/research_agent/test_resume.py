@@ -421,10 +421,11 @@ def test_resume_from_completed_step_can_stop_after_that_step(
     )
 
 
-def test_resume_from_step_reuses_prior_code_when_coder_fails(
-    ra, tmp_path: Path
+@pytest.mark.parametrize("reuse_step_code", [False, True])
+def test_resume_from_step_reuses_prior_code(
+    ra, tmp_path: Path, monkeypatch, reuse_step_code: bool
 ):
-    """An explicit step resume may reuse prior code evidence if coder is down."""
+    """Resume reuses valid prior code only on failure or explicit opt-in."""
 
     class SingleStepLLM:
         name = "single-step-llm"
@@ -484,9 +485,13 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     class FailingCoderLLM(SingleStepLLM):
         name = "failing-coder-llm"
 
+        def __init__(self):
+            self.coder_calls = 0
+
         def complete(self, messages, *, max_tokens=2048, temperature=0.2):
             user = next((m.content for m in reversed(messages) if m.role == "user"), "")
             if "WRITE THE PYTHON CODE" in user.upper():
+                self.coder_calls += 1
                 raise RuntimeError("simulated coder outage")
             return super().complete(
                 messages,
@@ -561,9 +566,13 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         encoding="utf-8",
     )
 
+    monkeypatch.delenv("EASYICU_RESUME_REUSE_STEP_CODE", raising=False)
+    if reuse_step_code:
+        monkeypatch.setenv("EASYICU_RESUME_REUSE_STEP_CODE", "1")
+    second_llm = FailingCoderLLM()
     second_pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
-        llm=FailingCoderLLM(),
+        llm=second_llm,
         enable_literature=False,
         enable_visual_qa=False,
         enable_latex=False,
@@ -580,6 +589,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         stop_after_analysis=True,
     )
     assert second.run_id == first.run_id
+    assert second_llm.coder_calls == (0 if reuse_step_code else 1)
 
     partial = json.loads(
         (Path(second.workdir) / "manifest_partial.json").read_text(encoding="utf-8")
@@ -593,6 +603,32 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     assert records[-1]["generation_mode"] == "resumed_code_reuse"
     assert records[-1]["resumed_code_evidence_id"]
     assert records[-1]["resumed_code_evidence_id"] != "code_bad"
+    source_code_record = next(
+        record
+        for record in partial["evidence"]
+        if record.get("evidence_id") == records[-1]["resumed_code_evidence_id"]
+    )
+    assert records[-1]["resumed_from_generation_mode"] == source_code_record[
+        "generation_mode"
+    ]
+    final_code_records = [
+        record
+        for record in partial["evidence"]
+        if record.get("kind") == "code"
+        and record.get("produced_by_step") == "04_primary_association"
+        and record.get("generation_mode") == "resumed_code_reuse"
+    ]
+    assert final_code_records
+    assert final_code_records[-1]["evidence_id"].endswith(
+        "_resumed_code_reuse"
+    )
+    assert final_code_records[-1]["description"].startswith(
+        "Reused prior agent-generated analysis script"
+    )
+    assert final_code_records[-1]["metadata"]["resumed_code_evidence_id"]
+    assert final_code_records[-1]["metadata"][
+        "resumed_from_generation_mode"
+    ] == source_code_record["generation_mode"]
     assert not any(
         "stale pre-resume" in finding.get("message", "")
         for finding in partial["findings"]
@@ -600,7 +636,351 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     assert any(
         finding.get("validator") == "coder"
         and "reused prior agent-generated code" in finding.get("message", "")
+        and "source mode:" in finding.get("message", "")
         for finding in partial["findings"]
+    )
+    coder_messages = [
+        finding.get("message", "")
+        for finding in partial["findings"]
+        if finding.get("validator") == "coder"
+    ]
+    if reuse_step_code:
+        assert any("before requesting a new coder script" in m for m in coder_messages)
+    else:
+        assert any("Coder agent failed" in m for m in coder_messages)
+
+
+def test_concept_repair_failure_resumes_quarantined_draft_fail_closed(
+    ra, tmp_path: Path, monkeypatch
+):
+    """A rejected draft is repaired on resume, never reused as executable code."""
+
+    from easyicu.research_agent.audits.validators import LLMConceptAuditor
+    from easyicu.research_agent.contracts import ValidationFinding
+
+    audit_state = {"emit_error": True, "reject_marker": None}
+    persisted_message = "Displayed percentage is not reconciled to its denominator."
+
+    def fake_audit(self, *, context, script_text, step):
+        del self, context
+        reject_marker = audit_state["reject_marker"]
+        if not audit_state["emit_error"] and not (
+            reject_marker and reject_marker in script_text
+        ):
+            return []
+        return [
+            ValidationFinding(
+                validator="llm_concept_auditor",
+                severity="error",
+                message=persisted_message,
+                detail={"step_id": step.step_id},
+            )
+        ]
+
+    monkeypatch.setattr(LLMConceptAuditor, "audit", fake_audit)
+
+    draft_code = """
+import json
+import os
+import pandas as pd
+
+df = pd.read_parquet(os.environ["COHORT_PARQUET"])
+out = os.environ["STEP_OUT_DIR"]
+summary = {"n": int(len(df)), "draft_marker": True}
+pd.DataFrame([summary]).to_csv(os.path.join(out, "cohort_summary.csv"), index=False)
+with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
+    json.dump(summary, f)
+"""
+    repaired_code = draft_code.replace(
+        '"draft_marker": True', '"status": "ok", "repaired_marker": True'
+    )
+
+    class QuarantineLLM:
+        name = "quarantine-resume-llm"
+
+        def __init__(self, *, repair_succeeds: bool, repair_code: str | None = None):
+            self.repair_succeeds = repair_succeeds
+            self.repair_code = repair_code
+            self.write_calls = 0
+            self.repair_calls = 0
+            self.repair_prompts = []
+
+        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
+            del max_tokens, temperature
+            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
+            upper = user.upper()
+            if "ICU-AWARE RESEARCH PLAN" in upper:
+                return json.dumps(
+                    {
+                        "research_question": "Summarize the ICU cohort.",
+                        "steps": [
+                            {
+                                "step_id": "01_summary",
+                                "intent": "Produce a descriptive cohort summary.",
+                                "inputs": ["stay_id"],
+                                "expected_outputs": ["table:cohort_summary"],
+                                "method": "descriptive_summary",
+                                "icu_rule_refs": [],
+                            }
+                        ],
+                        "rationale": "single-step quarantine resume test",
+                    }
+                )
+            if "REPAIR THE PYTHON CODE" in upper:
+                self.repair_calls += 1
+                self.repair_prompts.append(user)
+                if not self.repair_succeeds:
+                    raise RuntimeError("simulated repair quota exhaustion")
+                return self.repair_code or repaired_code
+            if "WRITE THE PYTHON CODE" in upper:
+                self.write_calls += 1
+                return draft_code
+            if "INTERPRET THE RESULTS" in upper:
+                return "The cohort summary is available {evidence:cohort_summary}."
+            if "MANUSCRIPT SCAFFOLD" in upper:
+                return "# Title\n\n## Results\n\nSummary {evidence:cohort_summary}."
+            return "{}"
+
+    cohort = pd.DataFrame({"stay_id": [1, 2, 3], "death": [0, 1, 0]})
+    first_llm = QuarantineLLM(repair_succeeds=False)
+    first_pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=first_llm,
+        enable_literature=False,
+        enable_visual_qa=False,
+        enable_latex=False,
+        enable_llm_concept_audit=True,
+        enable_deterministic_code_fallback=False,
+        enable_deterministic_runner_repair=False,
+    )
+    first = first_pipeline.run(
+        question="Summarize the ICU cohort.",
+        cohort=cohort,
+        cohort_name="quarantine_resume_test",
+        database="synthetic",
+        target_outcome="death",
+        stop_after_step_id="01_summary",
+        stop_after_analysis=True,
+    )
+    run_dir = Path(first.workdir)
+    first_partial = json.loads(
+        (run_dir / "manifest_partial.json").read_text(encoding="utf-8")
+    )
+    first_record = next(
+        record
+        for record in first_partial["per_step_records"]
+        if record.get("step_id") == "01_summary"
+    )
+    assert first_record["status"] == "repair_failed"
+    assert first_llm.write_calls == 1
+    assert first_llm.repair_calls == 1
+    assert not (run_dir / "steps" / "01_summary" / "analysis.py").exists()
+    assert (run_dir / "steps" / "01_summary" / ".quarantine").is_dir()
+    assert not any(
+        record.get("kind") == "code"
+        and record.get("produced_by_step") == "01_summary"
+        for record in first_partial["evidence"]
+    )
+
+    # Simulate a nondeterministic auditor forgetting its prior error. The saved
+    # error must still force REPAIR, and another outage must still not execute.
+    audit_state["emit_error"] = False
+    second_llm = QuarantineLLM(repair_succeeds=False)
+    second_pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=second_llm,
+        enable_literature=False,
+        enable_visual_qa=False,
+        enable_latex=False,
+        enable_llm_concept_audit=True,
+        enable_deterministic_code_fallback=False,
+        enable_deterministic_runner_repair=False,
+    )
+    second_pipeline.run(
+        question="Summarize the ICU cohort.",
+        cohort=cohort,
+        cohort_name="quarantine_resume_test",
+        database="synthetic",
+        target_outcome="death",
+        resume_run_id=first.run_id,
+        resume_from_step_id="01_summary",
+        stop_after_step_id="01_summary",
+        stop_after_analysis=True,
+    )
+    assert second_llm.write_calls == 0
+    assert second_llm.repair_calls == 1
+    assert persisted_message in second_llm.repair_prompts[-1]
+    assert not (run_dir / "steps" / "01_summary" / "analysis.py").exists()
+    assert (run_dir / "steps" / "01_summary" / ".quarantine").is_dir()
+
+    # A hosted model can return the same program with only a comment/whitespace
+    # change while claiming it repaired the error. That must remain quarantined
+    # and must never reach the runner, even when the live auditor forgets the
+    # original nondeterministic finding.
+    noop_llm = QuarantineLLM(
+        repair_succeeds=True,
+        repair_code=(
+            draft_code
+            + "\n# claimed repair, no semantic change\npass\n'claimed repair'\n"
+        ),
+    )
+    noop_pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=noop_llm,
+        enable_literature=False,
+        enable_visual_qa=False,
+        enable_latex=False,
+        enable_llm_concept_audit=True,
+        enable_deterministic_code_fallback=False,
+        enable_deterministic_runner_repair=False,
+    )
+    noop_pipeline.run(
+        question="Summarize the ICU cohort.",
+        cohort=cohort,
+        cohort_name="quarantine_resume_test",
+        database="synthetic",
+        target_outcome="death",
+        resume_run_id=first.run_id,
+        resume_from_step_id="01_summary",
+        stop_after_step_id="01_summary",
+        stop_after_analysis=True,
+    )
+    noop_partial = json.loads(
+        (run_dir / "manifest_partial.json").read_text(encoding="utf-8")
+    )
+    noop_record = next(
+        record
+        for record in noop_partial["per_step_records"]
+        if record.get("step_id") == "01_summary"
+    )
+    assert noop_llm.write_calls == 0
+    assert noop_llm.repair_calls == 3
+    assert noop_record["status"] == "blocked_by_concept_audit"
+    assert noop_record["quarantined_repair_succeeded"] is False
+    assert noop_record["quarantined_repair_noop_count"] == 3
+    assert not (run_dir / "steps" / "01_summary" / "analysis.py").exists()
+    assert (run_dir / "steps" / "01_summary" / ".quarantine").is_dir()
+
+    # A material but still-invalid partial repair is the next resume candidate,
+    # not the older pre-repair draft. It remains quarantined and unexecuted.
+    partial_code = draft_code.replace("draft_marker", "partial_marker")
+    audit_state["reject_marker"] = "partial_marker"
+    partial_llm = QuarantineLLM(
+        repair_succeeds=True,
+        repair_code=partial_code,
+    )
+    partial_pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=partial_llm,
+        enable_literature=False,
+        enable_visual_qa=False,
+        enable_latex=False,
+        enable_llm_concept_audit=True,
+        enable_deterministic_code_fallback=False,
+        enable_deterministic_runner_repair=False,
+    )
+    partial_pipeline.run(
+        question="Summarize the ICU cohort.",
+        cohort=cohort,
+        cohort_name="quarantine_resume_test",
+        database="synthetic",
+        target_outcome="death",
+        resume_run_id=first.run_id,
+        resume_from_step_id="01_summary",
+        stop_after_step_id="01_summary",
+        stop_after_analysis=True,
+    )
+    from easyicu.research_agent.pipeline_resume import (
+        load_quarantined_concept_draft,
+    )
+
+    latest_draft = load_quarantined_concept_draft(
+        run_dir=run_dir, step_id="01_summary"
+    )
+    assert latest_draft is not None
+    assert "partial_marker" in latest_draft.code
+    assert "draft_marker" not in latest_draft.code
+    assert not (run_dir / "steps" / "01_summary" / "analysis.py").exists()
+
+    audit_state["reject_marker"] = None
+
+    # Once a materially changed repair passes the complete concept loop, the
+    # stale draft is retired before the runner is entered. Thus even a later
+    # runtime/contract failure cannot make the old draft outrank newer evidence.
+    from easyicu.research_agent.runner import CodeRunner
+
+    original_run = CodeRunner.run
+    quarantine_absent_at_runner = []
+
+    def run_after_quarantine_retired(self, *, step_id, code):
+        quarantine_absent_at_runner.append(
+            not (run_dir / "steps" / step_id / ".quarantine").exists()
+        )
+        return original_run(self, step_id=step_id, code=code)
+
+    monkeypatch.setattr(CodeRunner, "run", run_after_quarantine_retired)
+    final_llm = QuarantineLLM(repair_succeeds=True)
+    final_pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=final_llm,
+        enable_literature=False,
+        enable_visual_qa=False,
+        enable_latex=False,
+        enable_llm_concept_audit=True,
+        enable_deterministic_code_fallback=False,
+        enable_deterministic_runner_repair=False,
+        runner_kind="subprocess",
+    )
+    final_pipeline.run(
+        question="Summarize the ICU cohort.",
+        cohort=cohort,
+        cohort_name="quarantine_resume_test",
+        database="synthetic",
+        target_outcome="death",
+        resume_run_id=first.run_id,
+        resume_from_step_id="01_summary",
+        stop_after_step_id="01_summary",
+        stop_after_analysis=True,
+    )
+    final_partial = json.loads(
+        (run_dir / "manifest_partial.json").read_text(encoding="utf-8")
+    )
+    final_record = next(
+        record
+        for record in final_partial["per_step_records"]
+        if record.get("step_id") == "01_summary"
+    )
+    assert final_llm.write_calls == 0
+    assert final_llm.repair_calls == 1
+    assert quarantine_absent_at_runner == [True]
+    assert final_record["status"] == "ok"
+    assert final_record["generation_mode"] == "repaired"
+    assert final_record["resumed_quarantined_draft"] is True
+    assert final_record["quarantined_repair_succeeded"] is True
+    assert final_record["quarantined_requires_repair"] is False
+    assert final_record["quarantine_retired"] is True
+    assert not (run_dir / "steps" / "01_summary" / ".quarantine").exists()
+
+
+@pytest.mark.parametrize(
+    "after",
+    [
+        "import os\nvalue = 1\n",
+        "import os\nvalue = 1\n# claimed repair\n",
+        "import os\nvalue = 1\npass\n",
+        "import os\nvalue = 1\n'claimed repair'\n",
+    ],
+)
+def test_quarantined_repair_materiality_rejects_inert_edits(after: str) -> None:
+    from easyicu.research_agent.pipeline_execute import (
+        _python_repair_is_materially_changed,
+    )
+
+    before = "import os\nvalue = 1\n"
+
+    assert not _python_repair_is_materially_changed(before, after)
+    assert _python_repair_is_materially_changed(
+        before, "import os\nvalue = 2\n"
     )
 
 

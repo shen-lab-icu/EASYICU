@@ -227,6 +227,7 @@ def test_each_spec_produces_panel_row() -> None:
     records = [
         {
             "step_id": "01_model",
+            "status": "ok",
             "step_summary_evidence_id": "stat_model",
             "step_summary": {
                 "primary_or": 1.4,
@@ -295,6 +296,7 @@ def test_panel_primary_row_comes_from_step_validated_primary_not_refit() -> None
     records = [
         {
             "step_id": "01_primary_model",
+            "status": "ok",
             "step_summary_evidence_id": "stat_primary_model",
             "step_summary": {
                 "primary_predictor": "lactate",
@@ -327,6 +329,7 @@ def test_panel_primary_row_comes_from_step_validated_primary_not_refit() -> None
         data=data,
         exposure="lactate",
         outcome="death",
+        allow_implicit_cohort_refit=True,
     )
 
     primary = next(r for r in rows if r.spec_id == PRIMARY_SPEC_ID)
@@ -369,6 +372,7 @@ def test_primary_row_prefers_final_repaired_effect_over_synthesis_collision() ->
     records = [
         {
             "step_id": "04_final_evidence_synthesis",
+            "status": "ok",
             "step_summary_evidence_id": "stat_synthesis",
             "step_summary": {
                 "primary_or": 1.3460230881055546,
@@ -383,6 +387,7 @@ def test_primary_row_prefers_final_repaired_effect_over_synthesis_collision() ->
         },
         {
             "step_id": "05_contract_repair_and_association_addendum",
+            "status": "ok",
             "step_summary_evidence_id": "stat_repaired_primary",
             "step_summary": {
                 "primary_or": 1.3460230881055546,
@@ -424,6 +429,7 @@ def test_primary_row_prefers_nested_frozen_primary_reconciliation() -> None:
     records = [
         {
             "step_id": "04_primary_adjusted_association_model",
+            "status": "ok",
             "step_summary_evidence_id": "stat_offprotocol_primary",
             "step_summary": {
                 "primary_predictor": "sepsis3",
@@ -435,6 +441,7 @@ def test_primary_row_prefers_nested_frozen_primary_reconciliation() -> None:
         },
         {
             "step_id": "05_cohort_definition_sensitivity_comparison",
+            "status": "ok",
             "step_summary_evidence_id": "stat_reconciled_primary",
             "step_summary": {
                 "primary_predictor": "sepsis3",
@@ -504,6 +511,7 @@ def test_robustness_variants_adjust_for_primary_covariates(tmp_path: Path) -> No
     records = [
         {
             "step_id": "03_primary_model",
+            "status": "ok",
             "step_summary_evidence_id": "stat_primary_model",
             "step_summary": {
                 "primary_predictor": "lactate",
@@ -522,6 +530,7 @@ def test_robustness_variants_adjust_for_primary_covariates(tmp_path: Path) -> No
         exposure="lactate",
         outcome="death",
         run_dir=tmp_path,
+        allow_implicit_cohort_refit=True,
     )
 
     assert any("adjusted for" in w and "age" in w for w in warnings)
@@ -555,6 +564,7 @@ def test_effect_summary_terms_are_not_recovered_as_primary_covariates(
     records = [
         {
             "step_id": "05_contract_repair",
+            "status": "ok",
             "step_summary": {
                 "primary_or": 1.346,
                 "primary_or_ci_low": 1.33,
@@ -587,6 +597,7 @@ def test_non_convergence_does_not_abort() -> None:
         per_step_records=[
             {
                 "step_id": "01_model",
+                "status": "ok",
                 "step_summary": {
                     "primary_or": 1.4,
                     "primary_ci_low": 1.1,

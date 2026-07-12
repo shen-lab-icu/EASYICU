@@ -16,6 +16,7 @@ still "found" an estimand. The METHOD family is the discriminator.
 from __future__ import annotations
 
 from easyicu.research_agent.plan_utils import (
+    _cap_plan_preserving_figure_steps,
     _preserve_primary_estimand_step_after_replan,
     _step_is_primary_estimand_model,
 )
@@ -23,7 +24,21 @@ from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
 
 def _step(step_id: str, method: str | None) -> AnalysisStep:
-    return AnalysisStep(step_id=step_id, intent=step_id.replace("_", " "), method=method)
+    expected_outputs = []
+    method_text = str(method or "").lower()
+    if step_id.endswith("_figure"):
+        expected_outputs = ["figure:primary_result"]
+    elif any(
+        token in method_text
+        for token in ("logistic", "cox", "iptw", "causal_primary")
+    ):
+        expected_outputs = ["statistic:primary_estimate"]
+    return AnalysisStep(
+        step_id=step_id,
+        intent=step_id.replace("_", " "),
+        method=method,
+        expected_outputs=expected_outputs,
+    )
 
 
 def _m1_rev6() -> AnalysisPlan:
@@ -81,6 +96,69 @@ def test_predicate_keys_on_method_not_id_tokens():
     )
 
 
+def test_method_rider_cannot_hide_a_primary_effect_owner():
+    step = AnalysisStep(
+        step_id="05_primary_association",
+        intent="Estimate the association with hospital-clustered standard errors.",
+        method="mixed_effects_regression_with_cohort_robust_se",
+        expected_outputs=["table:association_estimates"],
+    )
+    assert _step_is_primary_estimand_model(step)
+
+    current = AnalysisPlan(research_question="q", steps=[step])
+    revised = AnalysisPlan(research_question="q", steps=[])
+    preserved, findings = _preserve_primary_estimand_step_after_replan(
+        current=current,
+        revised=revised,
+    )
+    assert [item.step_id for item in preserved.steps] == [step.step_id]
+    assert findings and findings[0].detail["preserved_step_ids"] == [step.step_id]
+
+
+def test_propensity_preparation_is_not_a_primary_estimand_owner():
+    prep = AnalysisStep(
+        step_id="02_propensity_scores",
+        intent="Estimate propensity scores for the planned weighting model.",
+        method="propensity_score_estimation",
+        expected_outputs=["table:propensity_scores"],
+    )
+    assert not _step_is_primary_estimand_model(prep)
+
+
+def test_propensity_prep_cannot_hide_dropped_iptw_estimand():
+    current = AnalysisPlan(
+        research_question="causal contrast",
+        steps=[
+            AnalysisStep(
+                step_id="02_propensity_scores",
+                intent="Prepare propensity scores.",
+                method="propensity_score_estimation",
+                expected_outputs=["table:propensity_scores"],
+            ),
+            AnalysisStep(
+                step_id="03_iptw_effect",
+                intent="Estimate the prespecified weighted effect.",
+                method="iptw",
+                expected_outputs=["statistic:adjusted_effect"],
+            ),
+        ],
+    )
+    revised = current.model_copy(update={"steps": [current.steps[0]]})
+
+    preserved, findings = _preserve_primary_estimand_step_after_replan(
+        current=current,
+        revised=revised,
+    )
+
+    assert [step.step_id for step in preserved.steps] == [
+        "02_propensity_scores",
+        "03_iptw_effect",
+    ]
+    assert findings and findings[0].detail["preserved_step_ids"] == [
+        "03_iptw_effect"
+    ]
+
+
 def test_dropped_estimand_is_reattached():
     preserved, findings = _preserve_primary_estimand_step_after_replan(
         current=_m1_rev6(), revised=_m1_rev7()
@@ -133,3 +211,49 @@ def test_noop_when_current_had_no_estimand():
     )
     assert [s.step_id for s in preserved.steps] == [s.step_id for s in descriptive_only.steps]
     assert findings == []
+
+
+def test_primary_estimand_survives_preserve_then_plan_cap():
+    """The cap must not undo the primary-preservation guard."""
+
+    current = AnalysisPlan(
+        research_question="Generic ICU association study",
+        steps=[
+            _step("01_cohort", "cohort_definition"),
+            AnalysisStep(
+                step_id="02_table_one",
+                intent="Baseline characteristics",
+                method="descriptive",
+                expected_outputs=["table:table_one"],
+            ),
+            _step("03_missingness", "data_quality_audit"),
+            _step("04_absolute_risk", "descriptive_context"),
+            _step("05_primary_adjusted_model", "logistic_regression"),
+            _step("06_sensitivity", "sensitivity_analysis"),
+        ],
+    )
+    revised = AnalysisPlan(
+        research_question=current.research_question,
+        steps=[
+            _step("00_probe", "data_probe"),
+            _step("01_cohort", "cohort_definition"),
+            _step("02_reconciliation", "data_quality_reconciliation"),
+            _step("03_repair", "evidence_repair"),
+            *current.steps[1:],
+            _step("04_repair_figure", "figure"),
+            _step("05_primary_adjusted_model_figure", "figure"),
+        ],
+    )
+
+    preserved, findings = _preserve_primary_estimand_step_after_replan(
+        current=current,
+        revised=revised,
+    )
+    assert findings == []  # raw revision still contains the genuine model
+
+    capped, _ = _cap_plan_preserving_figure_steps(plan=preserved, cap=8)
+    step_ids = [step.step_id for step in capped.steps]
+
+    assert len(step_ids) == 8
+    assert "02_table_one" in step_ids
+    assert "05_primary_adjusted_model" in step_ids

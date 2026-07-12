@@ -1,15 +1,26 @@
 from __future__ import annotations
 
 import ast
+import hashlib
+import json
+import os
 from pathlib import Path
 
 import pytest
 
+import easyicu.research_agent.pipeline_resume as pipeline_resume
 from easyicu.research_agent.pipeline_resume import (
     ResumeController,
+    clear_quarantined_concept_draft,
+    load_quarantined_concept_draft,
+    store_quarantined_concept_draft,
     upsert_step_record,
 )
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _plan() -> AnalysisPlan:
@@ -170,12 +181,16 @@ def test_resume_controller_reuses_latest_valid_code_evidence(tmp_path: Path):
                 "kind": "code",
                 "produced_by_step": "02_model",
                 "relative_path": "evidence/good.py",
+                "sha256": _sha256(good_path),
+                "generation_mode": "llm",
             },
             {
                 "evidence_id": "code_bad",
                 "kind": "code",
                 "produced_by_step": "02_model",
                 "relative_path": "evidence/bad.py",
+                "sha256": _sha256(bad_path),
+                "generation_mode": "llm",
             },
         ]
     }
@@ -191,6 +206,215 @@ def test_resume_controller_reuses_latest_valid_code_evidence(tmp_path: Path):
     assert record["evidence_id"] == "code_good"
 
 
+def test_resume_controller_reads_newer_repair_code_from_evidence_index(
+    tmp_path: Path,
+) -> None:
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir()
+    old_path = evidence_dir / "old.py"
+    new_path = evidence_dir / "new.py"
+    old_path.write_text(
+        "import os\nprint('old', os.environ['COHORT_PARQUET'])\n",
+        encoding="utf-8",
+    )
+    new_path.write_text(
+        "import os\nprint('new repair', os.environ['COHORT_PARQUET'])\n",
+        encoding="utf-8",
+    )
+    old = {
+        "evidence_id": "code_old",
+        "kind": "code",
+        "produced_by_step": "02_model",
+        "relative_path": "evidence/old.py",
+        "sha256": _sha256(old_path),
+        "generation_mode": "llm",
+    }
+    new = {
+        "evidence_id": "code_new_repair",
+        "kind": "code",
+        "produced_by_step": "02_model",
+        "relative_path": "evidence/new.py",
+        "sha256": _sha256(new_path),
+        "generation_mode": "repaired",
+    }
+    (evidence_dir / "evidence_index.json").write_text(
+        json.dumps([old, new]),
+        encoding="utf-8",
+    )
+
+    code, record = ResumeController(
+        plan=_plan(),
+        run_dir=tmp_path,
+        resume_state={"evidence": [old]},
+        resume_from_step_id="02_model",
+    ).prior_code_for_step("02_model")
+
+    assert "new repair" in code
+    assert record["evidence_id"] == "code_new_repair"
+
+
+def test_quarantined_concept_draft_is_isolated_and_digest_checked(
+    tmp_path: Path,
+) -> None:
+    finding = {
+        "validator": "llm_concept_auditor",
+        "severity": "error",
+        "message": "The plotted percentage does not reconcile to its denominator.",
+        "detail": {"step_id": "02_model"},
+    }
+    draft = store_quarantined_concept_draft(
+        run_dir=tmp_path,
+        step_id="02_model",
+        code="import os\nprint(os.environ['COHORT_PARQUET'])\n",
+        findings=[finding],
+    )
+
+    controller = ResumeController(
+        plan=_plan(),
+        run_dir=tmp_path,
+        resume_state={"evidence": []},
+        resume_from_step_id="02_model",
+    )
+    assert controller.prior_code_for_step("02_model") is None
+    loaded = controller.quarantined_concept_draft_for_step("02_model")
+    assert loaded == draft
+    assert loaded.findings[0]["message"] == finding["message"]
+    assert not (tmp_path / "evidence").exists()
+
+    code_path = tmp_path / loaded.relative_path
+    code_path.write_text("import os\nprint('tampered')\n", encoding="utf-8")
+    assert load_quarantined_concept_draft(
+        run_dir=tmp_path,
+        step_id="02_model",
+    ) is None
+
+    clear_quarantined_concept_draft(run_dir=tmp_path, step_id="02_model")
+    assert not code_path.parent.exists()
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks unavailable")
+@pytest.mark.parametrize(
+    "symlink_component",
+    ["steps", "step", "quarantine", "code", "metadata"],
+)
+def test_quarantine_store_rejects_symlinked_path_components(
+    tmp_path: Path, symlink_component: str
+) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "sentinel.txt"
+    sentinel.write_text("keep", encoding="utf-8")
+    steps = tmp_path / "run" / "steps"
+    step_dir = steps / "02_model"
+    quarantine_dir = step_dir / ".quarantine"
+    if symlink_component == "steps":
+        steps.parent.mkdir(parents=True)
+        steps.symlink_to(outside, target_is_directory=True)
+    elif symlink_component == "step":
+        steps.mkdir(parents=True)
+        step_dir.symlink_to(outside, target_is_directory=True)
+    elif symlink_component == "quarantine":
+        step_dir.mkdir(parents=True)
+        quarantine_dir.symlink_to(outside, target_is_directory=True)
+    else:
+        quarantine_dir.mkdir(parents=True)
+        target = outside / f"{symlink_component}.txt"
+        target.write_text("keep target", encoding="utf-8")
+        name = "concept_draft.py" if symlink_component == "code" else "concept_draft.json"
+        (quarantine_dir / name).symlink_to(target)
+
+    with pytest.raises(ValueError, match="symbolic link"):
+        store_quarantined_concept_draft(
+            run_dir=tmp_path / "run",
+            step_id="02_model",
+            code="import os\nprint(os.environ['COHORT_PARQUET'])\n",
+            findings=[{"severity": "error", "message": "blocked"}],
+        )
+
+    assert load_quarantined_concept_draft(
+        run_dir=tmp_path / "run", step_id="02_model"
+    ) is None
+    assert sentinel.read_text(encoding="utf-8") == "keep"
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks unavailable")
+@pytest.mark.parametrize(
+    "symlink_component", ["steps", "step", "quarantine", "code", "metadata"]
+)
+def test_quarantine_clear_rejects_symlinked_path_without_deleting_outside(
+    tmp_path: Path, symlink_component: str
+) -> None:
+    run_dir = tmp_path / "run"
+    steps = run_dir / "steps"
+    step_dir = steps / "02_model"
+    quarantine_dir = step_dir / ".quarantine"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "sentinel.txt"
+    sentinel.write_text("keep", encoding="utf-8")
+    if symlink_component == "steps":
+        steps.parent.mkdir(parents=True)
+        steps.symlink_to(outside, target_is_directory=True)
+    elif symlink_component == "step":
+        steps.mkdir(parents=True)
+        step_dir.symlink_to(outside, target_is_directory=True)
+    elif symlink_component == "quarantine":
+        steps.mkdir(parents=True)
+        step_dir.mkdir()
+        quarantine_dir.symlink_to(outside, target_is_directory=True)
+    else:
+        quarantine_dir.mkdir(parents=True)
+        target = outside / f"{symlink_component}.txt"
+        target.write_text("keep target", encoding="utf-8")
+        name = (
+            "concept_draft.py"
+            if symlink_component == "code"
+            else "concept_draft.json"
+        )
+        (quarantine_dir / name).symlink_to(target)
+
+    with pytest.raises(ValueError, match="symbolic link"):
+        clear_quarantined_concept_draft(run_dir=run_dir, step_id="02_model")
+
+    assert sentinel.read_text(encoding="utf-8") == "keep"
+    assert outside.is_dir()
+
+
+def test_quarantine_clear_does_not_silently_ignore_removal_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    draft = store_quarantined_concept_draft(
+        run_dir=tmp_path,
+        step_id="02_model",
+        code="import os\nprint(os.environ['COHORT_PARQUET'])\n",
+        findings=[
+            {"validator": "llm_concept_auditor", "severity": "error", "message": "blocked"}
+        ],
+    )
+
+    def fail_remove(_path):
+        raise OSError("simulated permission failure")
+
+    monkeypatch.setattr(pipeline_resume.shutil, "rmtree", fail_remove)
+    with pytest.raises(ValueError, match="could not be removed safely"):
+        clear_quarantined_concept_draft(run_dir=tmp_path, step_id="02_model")
+
+    assert (tmp_path / draft.relative_path).is_file()
+
+
+@pytest.mark.parametrize("step_id", ["", "..", "../escape", "a/b", "a\\b"])
+def test_quarantined_concept_draft_rejects_unsafe_step_id(
+    tmp_path: Path, step_id: str
+) -> None:
+    with pytest.raises(ValueError, match="safe path component"):
+        store_quarantined_concept_draft(
+            run_dir=tmp_path,
+            step_id=step_id,
+            code="import os\n",
+            findings=[{"severity": "error", "message": "blocked"}],
+        )
+
+
 def test_resume_controller_rejects_code_evidence_outside_run_dir(tmp_path: Path):
     outside = tmp_path / "outside.py"
     outside.write_text("import os\nprint(os.environ['COHORT_PARQUET'])\n")
@@ -201,12 +425,16 @@ def test_resume_controller_rejects_code_evidence_outside_run_dir(tmp_path: Path)
                 "kind": "code",
                 "produced_by_step": "02_model",
                 "relative_path": "../outside.py",
+                "sha256": _sha256(outside),
+                "generation_mode": "llm",
             },
             {
                 "evidence_id": "code_absolute",
                 "kind": "code",
                 "produced_by_step": "02_model",
                 "relative_path": str(outside),
+                "sha256": _sha256(outside),
+                "generation_mode": "llm",
             },
         ]
     }
@@ -219,6 +447,149 @@ def test_resume_controller_rejects_code_evidence_outside_run_dir(tmp_path: Path)
     ).prior_code_for_step("02_model")
 
     assert reused is None
+
+
+def test_resume_controller_rejects_tampered_or_non_evidence_code(tmp_path: Path):
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir()
+    code_path = evidence_dir / "analysis.py"
+    code_path.write_text("import os\nprint('original')\n", encoding="utf-8")
+    original_sha256 = _sha256(code_path)
+    code_path.write_text("import os\nprint('tampered but valid')\n", encoding="utf-8")
+    outside_evidence = tmp_path / "ordinary.py"
+    outside_evidence.write_text("import os\nprint('ordinary')\n", encoding="utf-8")
+    state = {
+        "evidence": [
+            {
+                "evidence_id": "code_outside_evidence",
+                "kind": "code",
+                "produced_by_step": "02_model",
+                "relative_path": "ordinary.py",
+                "sha256": _sha256(outside_evidence),
+                "generation_mode": "llm",
+            },
+            {
+                "evidence_id": "code_tampered",
+                "kind": "code",
+                "produced_by_step": "02_model",
+                "relative_path": "evidence/analysis.py",
+                "sha256": original_sha256,
+                "generation_mode": "llm",
+            },
+        ]
+    }
+
+    assert (
+        ResumeController(
+            plan=_plan(),
+            run_dir=tmp_path,
+            resume_state=state,
+            resume_from_step_id="02_model",
+        ).prior_code_for_step("02_model")
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "generation_mode",
+    ["fallback", "system", "deterministic_fallback", "deterministic_probe", ""],
+)
+def test_resume_controller_rejects_non_agent_code_generation_modes(
+    tmp_path: Path, generation_mode: str
+) -> None:
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir()
+    code_path = evidence_dir / "analysis.py"
+    code_path.write_text("import os\nprint('not agent code')\n", encoding="utf-8")
+    state = {
+        "evidence": [
+            {
+                "evidence_id": "code_non_agent",
+                "kind": "code",
+                "produced_by_step": "02_model",
+                "relative_path": "evidence/analysis.py",
+                "sha256": _sha256(code_path),
+                "generation_mode": generation_mode,
+            }
+        ]
+    }
+
+    assert (
+        ResumeController(
+            plan=_plan(),
+            run_dir=tmp_path,
+            resume_state=state,
+            resume_from_step_id="02_model",
+        ).prior_code_for_step("02_model")
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "resumed_from_generation_mode",
+    [None, "", "fallback", "system", "deterministic_fallback", "resumed_code_reuse"],
+)
+def test_resume_controller_rejects_reused_code_without_root_agent_origin(
+    tmp_path: Path, resumed_from_generation_mode: str | None
+) -> None:
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir()
+    code_path = evidence_dir / "analysis.py"
+    code_path.write_text("import os\nprint('reused code')\n", encoding="utf-8")
+    metadata = {}
+    if resumed_from_generation_mode is not None:
+        metadata["resumed_from_generation_mode"] = resumed_from_generation_mode
+    state = {
+        "evidence": [
+            {
+                "evidence_id": "code_reused_untrusted_origin",
+                "kind": "code",
+                "produced_by_step": "02_model",
+                "relative_path": "evidence/analysis.py",
+                "sha256": _sha256(code_path),
+                "generation_mode": "resumed_code_reuse",
+                "metadata": metadata,
+            }
+        ]
+    }
+
+    assert (
+        ResumeController(
+            plan=_plan(),
+            run_dir=tmp_path,
+            resume_state=state,
+            resume_from_step_id="02_model",
+        ).prior_code_for_step("02_model")
+        is None
+    )
+
+
+def test_resume_controller_accepts_reused_code_with_root_agent_origin(
+    tmp_path: Path,
+) -> None:
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir()
+    code_path = evidence_dir / "analysis.py"
+    code_path.write_text("import os\nprint('reused repair')\n", encoding="utf-8")
+    record = {
+        "evidence_id": "code_reused_repaired_origin",
+        "kind": "code",
+        "produced_by_step": "02_model",
+        "relative_path": "evidence/analysis.py",
+        "sha256": _sha256(code_path),
+        "generation_mode": "resumed_code_reuse",
+        "metadata": {"resumed_from_generation_mode": "repaired"},
+    }
+
+    reused = ResumeController(
+        plan=_plan(),
+        run_dir=tmp_path,
+        resume_state={"evidence": [record]},
+        resume_from_step_id="02_model",
+    ).prior_code_for_step("02_model")
+
+    assert reused is not None
+    assert reused[1]["evidence_id"] == record["evidence_id"]
 
 
 def test_resume_controller_remaining_steps_respects_stop_point(tmp_path: Path):

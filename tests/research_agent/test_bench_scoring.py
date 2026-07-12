@@ -299,6 +299,195 @@ def test_score_arm_reports_active_errors_separately_from_historical_errors(tmp_p
     assert score["n_historical_errors"] == 1
 
 
+def test_score_arm_uses_only_latest_successful_step_records_and_active_evidence(
+    tmp_path: Path,
+) -> None:
+    from types import SimpleNamespace
+
+    from tools.run_research_agent_bench import _score_arm
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_panel(run_dir, 9.9)
+    stale_dir = run_dir / "steps" / "99_stale_downstream" / "outputs"
+    stale_dir.mkdir(parents=True)
+    (stale_dir / "step_summary.json").write_text(
+        json.dumps(
+            {
+                "method": "filesystem stale workflow",
+                "primary_or": 8.8,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run_active_view",
+                "findings": [],
+                "readiness": {
+                    "numeric_error_count": 0,
+                    "evidence_error_count": 0,
+                    "analysis_error_count": 0,
+                },
+                "per_step_records": [
+                    {
+                        "step_id": "01_superseded",
+                        "status": "ok",
+                        "step_summary": {
+                            "method": "superseded workflow",
+                            "primary_or": 7.7,
+                        },
+                        "evidence_ids": [
+                            "stale_figure",
+                            "stale_log",
+                            "stale_statistic",
+                        ],
+                    },
+                    {
+                        "step_id": "01_superseded",
+                        "status": "contract_failed",
+                        "step_summary": {
+                            "status": "ok",
+                            "method": "nested status must not reactivate",
+                            "primary_or": 6.6,
+                        },
+                        "evidence_ids": ["stale_table"],
+                    },
+                    {
+                        "step_id": "02_active",
+                        "status": "ok",
+                        "step_summary": {
+                            "method": "logistic_regression",
+                            "title": "active workflow",
+                            "primary_or": 1.25,
+                        },
+                        "evidence_ids": ["active_code", "active_table"],
+                    },
+                ],
+                "evidence": [
+                    {
+                        "evidence_id": "stale_figure",
+                        "kind": "figure",
+                        "description": "stale artifact",
+                    },
+                    {
+                        "evidence_id": "stale_log",
+                        "kind": "log",
+                        "description": "stale artifact",
+                    },
+                    {
+                        "evidence_id": "stale_statistic",
+                        "kind": "statistic",
+                        "description": "stale artifact",
+                    },
+                    {
+                        "evidence_id": "stale_table",
+                        "kind": "table",
+                        "description": "stale artifact",
+                    },
+                    {
+                        "evidence_id": "active_code",
+                        "kind": "code",
+                        "description": "active script",
+                    },
+                    {
+                        "evidence_id": "active_table",
+                        "kind": "table",
+                        "description": "active artifact",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    item = SimpleNamespace(
+        key="active_demo",
+        research_question="Is sofa2 associated with mortality?",
+        primary_predictor="sofa2",
+        target_outcome="death",
+        expected_or_direction=1,
+        expected_finding_substrings=[],
+        expected_step_substrings=[
+            "active workflow",
+            "superseded workflow",
+            "filesystem stale workflow",
+            "nested status must not reactivate",
+        ],
+        expected_artifact_substrings=["active artifact", "stale artifact"],
+    )
+
+    score = _score_arm(run_dir=run_dir, item=item, label="aware")
+
+    assert score["primary_or"] == 1.25
+    assert score["workflow_hits"] == {
+        "active workflow": True,
+        "superseded workflow": False,
+        "filesystem stale workflow": False,
+        "nested status must not reactivate": False,
+    }
+    assert score["artifact_hits"] == {
+        "active artifact": True,
+        "stale artifact": False,
+    }
+    assert score["evidence_count"] == 2
+    assert score["evidence_kinds"] == {
+        "kinds_seen": ["code", "table"],
+        "kinds_missing": ["figure", "log", "statistic"],
+        "complete": False,
+    }
+
+
+def test_score_arm_legacy_manifest_keeps_filesystem_and_manifest_fallback(
+    tmp_path: Path,
+) -> None:
+    from types import SimpleNamespace
+
+    from tools.run_research_agent_bench import _score_arm
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_panel(run_dir, 1.4)
+    _write_summary(run_dir, {"title": "legacy workflow"})
+    evidence = [
+        {
+            "evidence_id": f"legacy_{kind}",
+            "kind": kind,
+            "description": "legacy artifact",
+        }
+        for kind in ("code", "log", "table", "figure", "statistic")
+    ]
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run_legacy",
+                "findings": [],
+                "readiness": {},
+                "evidence": evidence,
+            }
+        ),
+        encoding="utf-8",
+    )
+    item = SimpleNamespace(
+        key="legacy_demo",
+        research_question="Is sofa2 associated with mortality?",
+        primary_predictor="sofa2",
+        target_outcome="death",
+        expected_or_direction=1,
+        expected_finding_substrings=[],
+        expected_step_substrings=["legacy workflow"],
+        expected_artifact_substrings=["legacy artifact"],
+    )
+
+    score = _score_arm(run_dir=run_dir, item=item, label="aware")
+
+    assert score["primary_or"] == 1.4
+    assert score["workflow_hits"] == {"legacy workflow": True}
+    assert score["artifact_hits"] == {"legacy artifact": True}
+    assert score["evidence_count"] == 5
+    assert score["evidence_kinds"]["complete"] is True
+
+
 def _write_run_status(run_dir: Path, status: str) -> None:
     (run_dir / "run_status.json").write_text(
         json.dumps({"status": status, "gates": {}}), encoding="utf-8"

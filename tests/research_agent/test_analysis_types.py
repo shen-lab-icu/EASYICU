@@ -65,6 +65,46 @@ def test_bare_word_model_does_not_force_prediction(ra):
     assert str(infer_study_design_family(ctx)) == "association"
 
 
+def test_primary_cohort_workflow_boilerplate_does_not_override_scientific_family(ra):
+    """One required cohort definition plus data QC is workflow, not sensitivity."""
+
+    from easyicu.research_agent.study_design import infer_study_design_family
+
+    ctx = ra.ResearchContext(
+        research_question=(
+            "Characterise the dose-response gradient of an ordered first-24h "
+            "organ-dysfunction stage against mortality. Define one adult analysis "
+            "cohort and state explicit inclusion criteria and exclusion criteria. "
+            "Assess data quality and missingness before the outcome analysis."
+        ),
+        cohort=ra.CohortDescriptor(
+            cohort_name="c", database="synthetic", n_patients=10, n_stays=10
+        ),
+        variables=[],
+        primary_exposure="ordered_stage",
+        target_outcome="death",
+    )
+
+    assert ra.infer_analysis_type(ctx).key == "association_study"
+    assert str(infer_study_design_family(ctx)) == "association"
+
+
+def test_alternative_eligibility_comparison_remains_cohort_sensitivity(ra):
+    ctx = ra.ResearchContext(
+        research_question=(
+            "Compare the primary cohort definition with alternative eligibility "
+            "criteria and report movement across definitions as a sensitivity analysis."
+        ),
+        cohort=ra.CohortDescriptor(
+            cohort_name="c", database="synthetic", n_patients=10, n_stays=10
+        ),
+        variables=[],
+        primary_exposure="exposure",
+        target_outcome="death",
+    )
+    assert ra.infer_analysis_type(ctx).key == "cohort_definition_sensitivity"
+
+
 def test_disclaimed_causal_does_not_hijack_trajectory_clustering(ra):
     """A latent-class trajectory-clustering question that disclaims causality must
     route to trajectory_clustering, not causal_inference.
@@ -111,6 +151,106 @@ def test_disclaimed_causal_does_not_hijack_trajectory_clustering(ra):
         "IPTW with cluster-robust standard errors."
     )
     assert ra.infer_analysis_type(_ctx(crobust)).key == "causal_inference"
+
+
+def test_existing_cluster_membership_remains_an_association_exposure(ra):
+    from easyicu.research_agent.study_design import infer_study_design_family
+
+    for membership in (
+        "a previously assigned subphenotype",
+        "existing latent class membership",
+    ):
+        ctx = ra.ResearchContext(
+            research_question=(
+                f"Estimate the association between {membership} and mortality "
+                "using mixed-effects regression with cluster-robust standard errors."
+            ),
+            cohort=ra.CohortDescriptor(
+                cohort_name="c", database="synthetic", n_patients=100, n_stays=100
+            ),
+            variables=[],
+            primary_exposure="assigned_group",
+            target_outcome="death",
+        )
+        assert ra.infer_analysis_type(ctx).key == "association_study"
+        assert infer_study_design_family(ctx) == "association"
+
+
+def test_clustering_variance_language_for_patients_is_not_phenotype_discovery(ra):
+    from easyicu.research_agent.analysis_types import (
+        strong_trajectory_clustering_framing,
+    )
+    from easyicu.research_agent.study_design import infer_study_design_family
+
+    questions = (
+        "Fit mixed effects with site-level clustering for patients and report "
+        "the adjusted odds ratio.",
+        "Use cluster-robust standard errors for longitudinal patient records "
+        "when estimating the mortality association.",
+        "Fit a mixed-effects model to account for clustering of patients "
+        "within hospitals and report the adjusted odds ratio.",
+        "Use GEE to account for clustering among patients within hospitals "
+        "when estimating the mortality association.",
+    )
+    for question in questions:
+        ctx = ra.ResearchContext(
+            research_question=question,
+            cohort=ra.CohortDescriptor(
+                cohort_name="c", database="synthetic", n_patients=100, n_stays=100
+            ),
+            variables=[],
+            primary_exposure="exposure",
+            target_outcome="death",
+        )
+        assert not strong_trajectory_clustering_framing(question)
+        assert ra.infer_analysis_type(ctx).key == "association_study"
+        assert infer_study_design_family(ctx) == "association"
+
+
+def test_gaussian_mixture_phenotype_discovery_is_clustering(ra):
+    from easyicu.research_agent.analysis_types import (
+        strong_trajectory_clustering_framing,
+    )
+    from easyicu.research_agent.study_design import infer_study_design_family
+
+    question = (
+        "Discover longitudinal patient phenotypes using a Gaussian mixture "
+        "model, select the class count, and report cluster stability."
+    )
+    ctx = ra.ResearchContext(
+        research_question=question,
+        cohort=ra.CohortDescriptor(
+            cohort_name="c", database="synthetic", n_patients=100, n_stays=100
+        ),
+        variables=[],
+        target_outcome="death",
+    )
+
+    assert strong_trajectory_clustering_framing(question)
+    assert ra.infer_analysis_type(ctx).key == "trajectory_clustering"
+    assert infer_study_design_family(ctx) == "phenotyping"
+
+
+def test_causal_disclaimer_and_fixed_followup_endpoint_do_not_choose_science(ra):
+    from easyicu.research_agent.study_design import infer_study_design_family
+
+    questions = (
+        "Estimate the adjusted association between exposure and mortality; do "
+        "not make a causal claim.",
+        "Assess binary 28-day mortality at follow-up using logistic regression.",
+    )
+    for question in questions:
+        ctx = ra.ResearchContext(
+            research_question=question,
+            cohort=ra.CohortDescriptor(
+                cohort_name="c", database="synthetic", n_patients=100, n_stays=100
+            ),
+            variables=[],
+            primary_exposure="exposure",
+            target_outcome="death",
+        )
+        assert ra.infer_analysis_type(ctx).key == "association_study"
+        assert infer_study_design_family(ctx) == "association"
 
 
 def test_new_idea_mining_families_are_concept_set_shapes() -> None:
@@ -222,13 +362,11 @@ def test_mock_planner_emits_prediction_analysis_and_publication_for_prediction_q
 
     plan = json.loads(Path(result.plan_path).read_text(encoding="utf-8"))
     step_ids = [step["step_id"] for step in plan["steps"]]
-    # The planner emits ``04_prediction_model_analysis`` +
-    # ``05_publication_figure_generation``, then the pipeline normalises
-    # them to the canonical ``01_model_training`` step and splits the
-    # figure outputs into ``01_model_training_figure`` (see
-    # ``_normalise_plan_for_family`` and ``_split_table_and_figure_outputs_in_plan``).
-    assert "01_model_training" in step_ids, step_ids
-    assert "01_model_training_figure" in step_ids, step_ids
+    # The agent-selected prediction step identity is preserved; deterministic
+    # plan handling may add product contracts but must not collapse the plan into
+    # a benchmark-shaped canonical mega-step.
+    assert "04_prediction_model_analysis" in step_ids, step_ids
+    assert "04_prediction_model_analysis_figure" in step_ids, step_ids
     assert "04_primary_association" not in step_ids
 
 
@@ -272,11 +410,10 @@ def test_reused_mock_pipeline_refreshes_context_between_prediction_and_clusterin
     first_step_ids = [step["step_id"] for step in first_plan["steps"]]
     second_step_ids = [step["step_id"] for step in second_plan["steps"]]
 
-    # Post-normalisation canonical step ids: prediction collapses to
-    # ``01_model_training`` and clustering collapses to
-    # ``01_phenotype_trajectory_clustering`` (see ``_normalise_plan_for_family``).
-    assert "01_model_training" in first_step_ids, first_step_ids
-    assert "01_phenotype_trajectory_clustering" in second_step_ids, second_step_ids
+    # Reusing one pipeline refreshes the context while preserving each agent's
+    # method-specific step identity rather than forcing canonical mega-steps.
+    assert "04_prediction_model_analysis" in first_step_ids, first_step_ids
+    assert "04_trajectory_clustering_analysis" in second_step_ids, second_step_ids
 
 
 def test_mock_planner_routes_survival_question_to_protocol_and_saves_user_preferences(
@@ -314,27 +451,23 @@ def test_mock_planner_routes_survival_question_to_protocol_and_saves_user_prefer
     )
     step_ids = [step["step_id"] for step in plan["steps"]]
 
-    # The advanced-plan contract now normalizes a survival question into a
-    # self-contained canonical survival step carrying the KM/Cox figure
-    # contract (replacing the mock planner's bare 04_survival_protocol). The
-    # figure output is then split into a dedicated sibling figure step, so the
-    # contract surfaces as 01_survival_analysis(+_figure) rather than a bare
-    # association plan.
-    assert "01_survival_analysis" in step_ids, step_ids
+    # The mock agent chose a protocol-only survival plan. The framework may
+    # review that choice, but it must not invent a Cox estimand or rewrite the
+    # agent plan into a canonical method-shaped mega-step.
+    assert plan["analysis_type"] == "survival"
+    protocol = next(
+        step for step in plan["steps"] if step["step_id"] == "04_survival_protocol"
+    )
+    assert protocol["method"] == "survival_protocol"
+    assert protocol["expected_outputs"] == ["log:survival_protocol"]
+    assert "01_survival_analysis" not in step_ids, step_ids
     assert "04_primary_association" not in step_ids
-    all_outputs = [
-        output for step in plan["steps"] for output in step["expected_outputs"]
-    ]
-    assert "figure:survival_curves" in all_outputs, step_ids
-    assert "table:cox_summary" in all_outputs
     assert ctx["user_preferences"]["inferred_analysis_family"] == "survival"
     assert "Kaplan-Meier" in (ctx["user_preferences"]["must_have_outputs"] or "")
 
 
-def test_planner_prompt_locks_inferred_family(ra):
-    """The planner prompt must name the single inferred family for THIS study,
-    not only present the generic catalog (regression: pilot plans came back
-    with analysis_type=None and every question collapsed to logistic)."""
+def test_planner_prompt_suggests_inferred_family(ra):
+    """The planner sees a focused suggestion plus the full catalog."""
     import importlib
 
     agents = importlib.import_module("easyicu.research_agent.agents")
@@ -366,18 +499,18 @@ def test_planner_prompt_locks_inferred_family(ra):
     }
     for question, expected_family in cases.items():
         prompt = agents._build_planner_user_prompt(_ctx(question))
-        assert "LOCKED ANALYSIS FAMILY FOR THIS STUDY" in prompt
-        locked_line = next(
-            line for line in prompt.splitlines() if "LOCKED ANALYSIS FAMILY" in line
+        assert "INFERRED ANALYSIS FAMILY SUGGESTION" in prompt
+        suggested_line = next(
+            line
+            for line in prompt.splitlines()
+            if "INFERRED ANALYSIS FAMILY SUGGESTION" in line
         )
-        assert expected_family in locked_line, (question, locked_line)
+        assert expected_family in suggested_line, (question, suggested_line)
         # The full catalog still follows as reference.
         assert "ANALYSIS-TYPE CATALOG" in prompt
 
 
-def test_parse_stamps_analysis_type_onto_plan(ra):
-    """PlannerAgent._parse must stamp the deterministically inferred family
-    onto the plan so downstream method/figure routing has a non-None signal."""
+def test_parse_fills_inferred_analysis_type_only_when_agent_omits_it(ra):
     import importlib
     import json
 
@@ -415,6 +548,49 @@ def test_parse_stamps_analysis_type_onto_plan(ra):
     planner.last_dropped_plan_keys = {"top_level": [], "steps": []}
     plan = agents.PlannerAgent._parse(planner, valid_plan, ctx)
     assert plan.analysis_type == "survival", plan.analysis_type
+
+
+def test_parse_preserves_agent_selected_family_and_rationale(ra):
+    import importlib
+
+    agents = importlib.import_module("easyicu.research_agent.agents")
+    ctx = ra.ResearchContext(
+        research_question=(
+            "Estimate a binary mortality association at 28 days after follow-up "
+            "using logistic regression."
+        ),
+        cohort=ra.CohortDescriptor(
+            cohort_name="c", database="miiv", n_patients=200, n_stays=200
+        ),
+        variables=[],
+        target_outcome="death",
+        primary_exposure="exposure",
+    )
+    raw = json.dumps(
+        {
+            "research_question": ctx.research_question,
+            "analysis_type": "association_study",
+            "steps": [
+                {
+                    "step_id": "01_association",
+                    "intent": "Fit the prespecified logistic association.",
+                    "method": "logistic_regression",
+                    "expected_outputs": ["table:association_estimates"],
+                }
+            ],
+            "rationale": (
+                "The outcome is a fixed binary endpoint; follow-up describes "
+                "ascertainment and does not imply a time-to-event estimand."
+            ),
+        }
+    )
+    planner = agents.PlannerAgent.__new__(agents.PlannerAgent)
+    planner.last_dropped_plan_keys = {"top_level": [], "steps": []}
+
+    plan = agents.PlannerAgent._parse(planner, raw, ctx)
+
+    assert plan.analysis_type == "association_study"
+    assert "fixed binary endpoint" in plan.rationale
 
 
 def test_infer_does_not_misclassify_lab_names_as_multimodal(ra):

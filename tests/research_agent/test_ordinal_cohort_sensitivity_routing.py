@@ -79,10 +79,8 @@ def test_real_cohort_sensitivity_step_matches_by_method():
     )
 
 
-def test_cohort_sensitivity_matches_by_alternative_eligibility_phrase():
-    # even without the method key, the "alternative eligibility" phrase is a
-    # genuine definition-comparison signal
-    assert _is_cohort_definition_sensitivity_step(
+def test_alternative_eligibility_phrase_without_structure_is_not_claimed():
+    assert not _is_cohort_definition_sensitivity_step(
         "association",
         "07_robustness",
         "Compare outcomes across alternative eligibility windows.",
@@ -90,8 +88,8 @@ def test_cohort_sensitivity_matches_by_alternative_eligibility_phrase():
     )
 
 
-def test_cohort_sensitivity_matches_by_output_table_token():
-    assert _is_cohort_definition_sensitivity_step(
+def test_cohort_sensitivity_outputs_without_method_owner_are_not_claimed():
+    assert not _is_cohort_definition_sensitivity_step(
         "association",
         "07_robustness",
         "Robustness comparison.",
@@ -125,13 +123,13 @@ def test_plain_cohort_definition_step_is_not_a_sensitivity_step():
 # --- the ordinal matcher still recognises the primary step ------------------
 
 
-def test_ordinal_matcher_claims_primary_dose_response_step():
+def test_ordinal_matcher_requires_a_closed_primary_product():
     blob, expected_blob = _blob(
         "04_primary_stage_outcome_gradient",
         _E3_PRIMARY_INTENT,
         _E3_PRIMARY_OUTPUTS,
     )
-    assert _ordinal_dose_response_step_matches(
+    assert not _ordinal_dose_response_step_matches(
         "descriptive_plus_association", blob, expected_blob
     )
 
@@ -147,10 +145,20 @@ def test_ordinal_matcher_rejects_plain_association_without_dose_signal():
     assert not _ordinal_dose_response_step_matches("association", blob, expected_blob)
 
 
-def test_routing_precedence_primary_ordinal_beats_cohort_sensitivity():
-    """The end-to-end invariant: for the E3 primary step the ordinal runner
-    wins (matcher True) and the cohort-sensitivity runner declines (discriminator
-    False); for the E3 sensitivity step the reverse holds."""
+def test_ordinal_matcher_rejects_stage_workflow_prose_and_generic_trend_method():
+    assert not _ordinal_dose_response_step_matches(
+        "mixed_effects_regression",
+        "report records per stage of cohort construction",
+        "table:cohort_flow",
+    )
+    assert not _ordinal_dose_response_step_matches(
+        "trend_analysis",
+        "summarize temporal records",
+        "table:descriptive_summary",
+    )
+
+
+def test_legacy_science_helpers_do_not_claim_an_unclosed_primary_step():
     blob, expected_blob = _blob(
         "04_primary_stage_outcome_gradient",
         _E3_PRIMARY_INTENT,
@@ -165,7 +173,7 @@ def test_routing_precedence_primary_ordinal_beats_cohort_sensitivity():
         _E3_PRIMARY_INTENT,
         _E3_PRIMARY_OUTPUTS,
     )
-    assert primary_is_ordinal and not primary_is_cohort_sens
+    assert not primary_is_ordinal and not primary_is_cohort_sens
 
     sens_is_cohort = _is_cohort_definition_sensitivity_step(
         "cohort_definition_sensitivity",
@@ -208,7 +216,7 @@ def test_hybrid_association_with_cohort_sensitivity_is_not_a_definition_step():
     )
 
 
-def test_hybrid_association_with_cohort_sensitivity_matches_ordinal():
+def test_hybrid_association_without_closed_ordinal_product_is_not_claimed():
     # head = "association" (in the ordinal primary set) + a dose-response signal
     # present -> the ordinal runner owns the primary part
     blob, expected_blob = _blob(
@@ -217,7 +225,7 @@ def test_hybrid_association_with_cohort_sensitivity_matches_ordinal():
         "mortality and compare across sensitivity specifications.",
         _E3_MERGED_OUTPUTS,
     )
-    assert _ordinal_dose_response_step_matches(
+    assert not _ordinal_dose_response_step_matches(
         "association_with_cohort_sensitivity", blob, expected_blob
     )
 
@@ -259,10 +267,8 @@ def test_sensitivity_comparison_grid_output_no_longer_over_claims():
     )
 
 
-def test_sensitivity_grid_output_still_signals_definition_comparison():
-    # the retained, more specific "sensitivity_grid" token still catches a genuine
-    # definition-comparison step that lacks the method/id signal
-    assert _is_cohort_definition_sensitivity_step(
+def test_sensitivity_grid_without_exact_method_does_not_signal_ownership():
+    assert not _is_cohort_definition_sensitivity_step(
         "robustness_analysis",
         "06_robustness",
         "Compare results across specifications.",

@@ -42,6 +42,145 @@ def test_run_execute_phase_is_exported():
     assert callable(run_execute_phase)
 
 
+def test_critic_messages_exclude_info_but_keep_warnings_and_errors():
+    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.pipeline_execute import (
+        _actionable_validator_messages,
+    )
+
+    messages = _actionable_validator_messages(
+        [
+            ValidationFinding(
+                validator="audit",
+                severity="info",
+                message="Informational provenance note.",
+            ),
+            ValidationFinding(
+                validator="audit",
+                severity="warning",
+                message="Review this warning.",
+            ),
+            ValidationFinding(
+                validator="audit",
+                severity="error",
+                message="Repair this error.",
+            ),
+        ]
+    )
+
+    assert messages == ["Review this warning.", "Repair this error."]
+
+
+def test_required_model_contract_error_fail_closes_outer_step_and_run():
+    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.pipeline_execute import (
+        _step_status_from_contract_findings,
+    )
+    from easyicu.research_agent.pipeline_report import execution_gate_status
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    contract_findings = [
+        ValidationFinding(
+            validator="primary_model_contract",
+            severity="error",
+            message="A planner-required secondary model was not fitted.",
+            detail={"issue": "required_model_not_fitted"},
+        )
+    ]
+    status = _step_status_from_contract_findings(
+        contract_findings=contract_findings,
+        figure_source_findings=[],
+        stat_findings=[],
+    )
+    plan = AnalysisPlan(
+        research_question="Test a planner-owned model obligation.",
+        steps=[
+            AnalysisStep(
+                step_id="01_models",
+                intent="Fit the planned models.",
+            )
+        ],
+    )
+
+    assert status == "contract_failed"
+    gate = execution_gate_status(
+        plan=plan,
+        per_step_records=[{"step_id": "01_models", "status": status}],
+    )
+    assert gate["execution_complete"] is False
+    assert gate["failed_steps"] == [
+        {"step_id": "01_models", "status": "contract_failed"}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("step_id", "intent"),
+    [
+        (
+            "04_publication_figure_interpretation",
+            "Interpret the downstream publication figure for the manuscript.",
+        ),
+        (
+            "04_primary_model",
+            "Estimate the association used in a publication-ready figure.",
+        ),
+    ],
+)
+def test_publication_figure_gate_ignores_name_only_mentions(step_id, intent):
+    from easyicu.research_agent.pipeline_execute import (
+        _step_requires_publication_figure_exports,
+    )
+    from easyicu.research_agent.schema import AnalysisStep
+
+    step = AnalysisStep(
+        step_id=step_id,
+        intent=intent,
+        method="mixed_effects_regression",
+        expected_outputs=["table:association_estimates"],
+    )
+
+    assert _step_requires_publication_figure_exports(step) is False
+
+
+@pytest.mark.parametrize(
+    ("method", "expected_outputs"),
+    [
+        ("publication_figure_generation", ["log:rendering_process"]),
+        ("visualization", ["log:rendering_process"]),
+        ("mixed_effects_regression", ["figure:association_forest_plot"]),
+    ],
+)
+def test_publication_figure_gate_accepts_structural_figure_contracts(
+    method, expected_outputs
+):
+    from easyicu.research_agent.pipeline_execute import (
+        _step_requires_publication_figure_exports,
+    )
+    from easyicu.research_agent.schema import AnalysisStep
+
+    step = AnalysisStep(
+        step_id="04_results_publication_figure",
+        intent="Render the requested publication figure.",
+        method=method,
+        expected_outputs=expected_outputs,
+    )
+
+    assert _step_requires_publication_figure_exports(step) is True
+
+
+def test_execute_phase_mandatory_publication_gate_uses_structural_predicate():
+    from easyicu.research_agent.pipeline_execute import run_execute_phase
+
+    source = inspect.getsource(run_execute_phase)
+    gate_start = source.index("publication_step =")
+    gate_end = source.index("figure_role =", gate_start)
+    gate_source = source[gate_start:gate_end]
+
+    assert "_step_requires_publication_figure_exports" in gate_source
+    assert "step.step_id" not in gate_source
+    assert "step.intent" not in gate_source
+
+
 def test_run_execute_phase_signature_is_stable():
     """Lock the keyword-argument contract pipeline.py relies on.
 
@@ -124,6 +263,33 @@ def test_run_execute_phase_does_not_mutate_pipeline_state():
     )
 
 
+def test_execute_phase_preserves_repair_provenance_across_concept_and_runtime():
+    """Every LLM mutation must outrank pure resume/runner provenance labels."""
+    from easyicu.research_agent import pipeline_execute
+
+    source = inspect.getsource(pipeline_execute.run_execute_phase)
+
+    # Concept, visual, contract, and runtime repairs each mark the same lineage
+    # flag immediately after a successful coder.repair call.
+    assert source.count("llm_repair_used = True") == 4
+    assert "concept_repair_used=concept_repair_used" in source
+    assert "llm_repair_used=llm_repair_used" in source
+    # A repaired resumed script must receive a fresh analyzer interpretation;
+    # only genuinely unchanged reuse and deterministic fallback skip it.
+    assert 'final_generation_mode in {"resumed_code_reuse", "fallback"}' in source
+
+
+def test_execute_phase_routes_figure_contracts_through_early_repair_loop():
+    from easyicu.research_agent import pipeline_execute
+
+    source = inspect.getsource(pipeline_execute.run_execute_phase)
+    early_gate = source.index("early_contract_errors = [")
+    before_early_gate = source[:early_gate]
+
+    assert "figure_contract_validator.audit(" in before_early_gate
+    assert "figure_source_validator.audit(" in before_early_gate
+
+
 def test_plan_and_execute_result_dataclass_shapes_match_contracts_module():
     """Pin the two dataclasses that flow through run_execute_phase.
 
@@ -174,8 +340,7 @@ def test_plan_and_execute_result_dataclass_shapes_match_contracts_module():
     }
     missing = required_plan_fields - plan_fields
     assert not missing, (
-        f"_PlanPhaseResult is missing fields {missing} consumed by "
-        "run_execute_phase."
+        f"_PlanPhaseResult is missing fields {missing} consumed by run_execute_phase."
     )
 
     exec_fields = {f.name for f in fields(_ExecutePhaseResult)}

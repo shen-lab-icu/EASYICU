@@ -333,6 +333,62 @@ def test_binary_summary_repair_is_family_gated():
     )
 
 
+def test_adjusted_association_models_ordinal_failure_is_not_replaced_by_fallback():
+    """Primary science stays agent-owned when an ordinal adjusted model fails.
+
+    This mirrors the Step06 failure shape: the agent planned
+    ``adjusted_association_models`` with an ordinal exposure, emitted an honest
+    non-fit contract, and left the primary estimate null.  Mechanical repair may
+    not append a different per-unit GLM or otherwise choose a replacement
+    estimand; the existing coder-repair / fail-closed path owns the outcome.
+    """
+
+    code = """
+import statsmodels.api as sm
+
+analysis_method = "adjusted_association_models"
+predictor_col = "sofa2_admission"
+outcome_col = "death"
+model_df = df[[outcome_col, predictor_col, "age"]].dropna().copy()
+y = model_df[outcome_col].astype(float)
+X = sm.add_constant(model_df[[predictor_col, "age"]].astype(float))
+result = sm.GLM(y, X, family=sm.families.Binomial()).fit()
+"""
+    step_summary = {
+        "analysis_method": "adjusted_association_models",
+        "primary_predictor": "sofa2_admission",
+        "primary_or": None,
+        "primary_ci_low": None,
+        "primary_ci_high": None,
+        "model_contracts": [
+            {
+                "model_id": "mortality_complete_case",
+                "analysis_role": "primary",
+                "status": "not_fitted",
+                "fit_failure_reason": "zero-event ordinal cell",
+            }
+        ],
+        "skipped": [{"reason": "model_fit_error", "error": "perfect separation"}],
+    }
+
+    assert (
+        _deterministic_summary_repair(
+            code=code,
+            step_summary=step_summary,
+            analysis_family="association",
+        )
+        is None
+    )
+    assert (
+        _deterministic_runner_repair(
+            code=code,
+            run_log="contract failed: required adjusted association model not fitted",
+            analysis_family="association",
+        )
+        is None
+    )
+
+
 # ---------------------------------------------------------------------------
 # _strip_columns_from_list_literals
 # ---------------------------------------------------------------------------
@@ -546,14 +602,13 @@ def test_outcome_incidence_repair_rejects_non_binary_outcome(
 
 
 # ---------------------------------------------------------------------------
-# deterministic_concept_audit_repair — Tier-A mechanical fix in the static
-# concept-audit gate. Pinned because it must stay impartial: it may only
-# rewrite an anti-pattern the auditor *objectively named*, and must leave
-# defensible analytical choices (and count columns) untouched.
+# deterministic_concept_audit_repair — compatibility no-op. Concept findings
+# route to agent repair/fail-closed handling because changing missing-data
+# strategy is a scientific choice, even when the original strategy is invalid.
 # ---------------------------------------------------------------------------
 
 
-def test_concept_repair_rewrites_flagged_zero_impute_to_complete_case():
+def test_concept_repair_does_not_choose_complete_case_for_zero_imputation():
     code = (
         'mi_df = analysis_df.copy()\n'
         'mi_df["lact"] = mi_df["lact"].fillna(0)\n'
@@ -562,10 +617,8 @@ def test_concept_repair_rewrites_flagged_zero_impute_to_complete_case():
     out, names = deterministic_concept_audit_repair(
         code, ["Imputed missing lactate values with 0"]
     )
-    assert names == ["zero_impute_to_complete_case_v1"]
-    assert ".fillna(0)" not in out  # no executable zero-impute remains
-    assert 'dropna(subset=["lact"])' in out
-    assert "dropna(subset=[primary_predictor])" in out
+    assert names == []
+    assert out == code
 
 
 def test_concept_repair_no_op_when_auditor_did_not_flag_zero_impute():
@@ -591,7 +644,8 @@ def test_concept_repair_preserves_zero_on_count_columns():
 def test_concept_repair_is_idempotent():
     code = 'df["lact"] = df["lact"].fillna(0)\n'
     once, names1 = deterministic_concept_audit_repair(code, ["fillna(0) on lactate"])
-    assert names1
+    assert names1 == []
+    assert once == code
     twice, names2 = deterministic_concept_audit_repair(once, ["fillna(0) on lactate"])
     assert names2 == []
     assert twice == once

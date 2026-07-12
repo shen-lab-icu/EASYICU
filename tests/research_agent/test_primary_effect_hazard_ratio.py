@@ -33,6 +33,7 @@ def _survival_records():
     return [
         {
             "step_id": "01_survival_analysis",
+            "status": "ok",
             "step_summary_evidence_id": "cox_primary",
             "step_summary": {
                 "analysis_family": "time_to_event",
@@ -86,11 +87,13 @@ def test_extractor_recognizes_scale_neutral_adjusted_effect_over_probe():
     records = [
         {
             "step_id": "00_probe",
+            "status": "ok",
             "step_summary_evidence_id": "probe_stat",
             "step_summary": {"estimate": 28.0},
         },
         {
             "step_id": "01_causal_effect_estimation",
+            "status": "ok",
             "step_summary_evidence_id": "causal_stat",
             "step_summary": {
                 "primary_predictor": "early_vasopressor_any_24h",
@@ -121,6 +124,7 @@ def test_extractor_recognizes_adjusted_effect_scale_from_iptw_runner():
     records = [
         {
             "step_id": "04_causal_effect_estimation",
+            "status": "ok",
             "step_summary_evidence_id": "causal_stat",
             "deterministic_standard_analysis": "causal_primary_iptw",
             "step_summary": {
@@ -147,6 +151,7 @@ def test_extractor_keeps_odds_ratio_backward_compatible():
     records = [
         {
             "step_id": "01_causal_effect_estimation",
+            "status": "ok",
             "step_summary": {
                 "primary_predictor": "vaso",
                 "odds_ratio": 2.8,
@@ -160,6 +165,43 @@ def test_extractor_keeps_odds_ratio_backward_compatible():
     assert payload is not None
     assert round(payload["primary_or"], 2) == 2.8
     assert payload["effect_measure"] == "OR"
+
+
+def test_extractor_uses_primary_model_contract_for_predictor_and_sample_size():
+    records = [
+        {
+            "step_id": "05_primary_association",
+            "status": "ok",
+            "step_summary": {
+                "primary_or": 1.93,
+                "primary_ci_low": 1.86,
+                "primary_ci_high": 2.00,
+                "primary_model_id": "lab_source_aware_full",
+                "model_contracts": [
+                    {
+                        "model_id": "lab_source_aware_full",
+                        "exposure_source": "lab_max",
+                        "exposure_role": "primary",
+                        "analysis_role": "primary",
+                        "n": 94_458,
+                    },
+                    {
+                        "model_id": "lab_complete_case",
+                        "exposure_source": "lab_max",
+                        "exposure_role": "primary",
+                        "analysis_role": "sensitivity",
+                        "n": 41_209,
+                    },
+                ],
+            },
+        }
+    ]
+
+    payload = _extract_primary_effect_payload_from_records(records)
+
+    assert payload is not None
+    assert payload["predictor"] == "lab_max"
+    assert payload["sample_size"] == 94_458
 
 
 # --- primary row + measure helper ------------------------------------------
@@ -190,12 +232,14 @@ def test_hazard_ratio_primary_skips_logistic_variants():
     records.append(
         {
             "step_id": "03_robustness",
+            "status": "ok",
             "step_summary": {
                 "estimator_adapter": {
                     "data": df.to_dict("records"),
                     "exposure": "x",
                     "outcome": "y",
                     "estimator_kind": "logistic",
+                    "missing_strategy": "complete_case",
                 }
             },
         }
@@ -203,6 +247,7 @@ def test_hazard_ratio_primary_skips_logistic_variants():
     rows, warnings = fit_robustness_rows_from_records(
         specs=default_robustness_specs(),
         per_step_records=records,
+        allow_implicit_cohort_refit=True,
     )
     assert len(rows) == 1, "an HR primary must not be joined by OR refit variants"
     assert rows[0].spec_id == "primary"
@@ -215,6 +260,7 @@ def test_odds_ratio_primary_still_fits_variants():
     records = [
         {
             "step_id": "01_model",
+            "status": "ok",
             "step_summary": {
                 "primary_predictor": "x",
                 "odds_ratio": 1.8,
@@ -226,6 +272,7 @@ def test_odds_ratio_primary_still_fits_variants():
                     "exposure": "x",
                     "outcome": "y",
                     "estimator_kind": "logistic",
+                    "missing_strategy": "complete_case",
                 },
             },
         }
@@ -233,6 +280,7 @@ def test_odds_ratio_primary_still_fits_variants():
     rows, warnings = fit_robustness_rows_from_records(
         specs=default_robustness_specs(),
         per_step_records=records,
+        allow_implicit_cohort_refit=True,
     )
     assert len(rows) > 1, "an OR primary must still get its robustness variants"
     assert not any("skipped logistic robustness variants" in w for w in warnings)

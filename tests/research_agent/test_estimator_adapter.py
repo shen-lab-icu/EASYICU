@@ -21,8 +21,14 @@ def _adapter_records(df: pd.DataFrame):
     return [
         {
             "step_id": "01_model",
+            "status": "ok",
             "step_summary_evidence_id": "stat_model",
             "step_summary": {
+                "primary_predictor": "x",
+                "primary_or": 1.8,
+                "primary_ci_low": 1.5,
+                "primary_ci_high": 2.1,
+                "n_total": int(len(df)),
                 "estimator_adapter": {
                     "data": df.to_dict("records"),
                     "exposure": "x",
@@ -96,6 +102,7 @@ def test_adapter_builds_full_eight_row_panel_and_registers_claims(ra, tmp_path) 
     rows, warnings = fit_robustness_rows_from_records(
         specs=specs,
         per_step_records=records,
+        allow_implicit_cohort_refit=True,
     )
     panel = build_robustness_panel_from_records(
         specs=specs,
@@ -122,9 +129,12 @@ def test_adapter_builds_full_eight_row_panel_and_registers_claims(ra, tmp_path) 
     assert f"row_{specs[0].spec_id}_point_estimate" not in claim_fields
 
 
-def test_adapter_rows_override_coder_rows_with_warning() -> None:
+def test_step_owned_rows_prevent_adapter_refit_with_warning() -> None:
     from easyicu.research_agent.estimators import fit_robustness_rows_from_records
-    from easyicu.research_agent.robustness_panel import default_robustness_specs
+    from easyicu.research_agent.robustness_panel import (
+        build_robustness_panel_from_records,
+        default_robustness_specs,
+    )
 
     specs = default_robustness_specs()
     records = _adapter_records(_synthetic_binary_frame(n=500))
@@ -144,21 +154,27 @@ def test_adapter_rows_override_coder_rows_with_warning() -> None:
     rows, warnings = fit_robustness_rows_from_records(
         specs=specs,
         per_step_records=records,
+        allow_implicit_cohort_refit=True,
+    )
+    panel = build_robustness_panel_from_records(
+        specs=specs,
+        per_step_records=records,
+        adapter_rows=rows,
     )
 
     assert any(specs[0].spec_id in warning for warning in warnings)
-    adapter_row = next(row for row in rows if row.spec_id == specs[0].spec_id)
-    assert adapter_row.point_estimate != 99.0
+    assert all(row.spec_id != specs[0].spec_id for row in rows)
+    owned_row = next(row for row in panel.rows if row.spec_id == specs[0].spec_id)
+    assert owned_row.point_estimate == 99.0
 
 
 # ---------------------------------------------------------------------------
-# Numerical robustness: a rank-deficient design (constant / collinear columns)
-# must not dead-end the fit with "Singular matrix". Mirrors the E1 run15 failure
-# where a missing-indicator was constant after imputation alongside its variable.
+# A rank-deficient locked design must fail closed rather than silently dropping
+# declared variables and changing the adjustment set.
 # ---------------------------------------------------------------------------
 
 
-def test_fit_estimator_drops_collinear_and_converges():
+def test_fit_estimator_blocks_rank_deficient_locked_design():
     from easyicu.research_agent.estimators import fit_estimator
 
     rng = np.random.default_rng(0)
@@ -187,11 +203,28 @@ def test_fit_estimator_drops_collinear_and_converges():
     assert raised, "design should be singular for a plain fit"
 
     result = fit_estimator(cohort=None, X=X, y=pd.Series(y), kind="logistic")
-    assert result.converged is True
-    assert result.point_estimate is not None and np.isfinite(result.point_estimate)
-    assert result.ci_low is not None and result.ci_high is not None
-    # The exposure coefficient survives; the degenerate columns are dropped.
+    assert result.converged is False
+    assert result.point_estimate is None
+    assert "refusing to drop declared predictors" in result.notes
     assert "lact_measured" in result.notes and "age_dup" in result.notes
+
+
+def test_fit_estimator_preserves_rows_after_filtered_nonconsecutive_index():
+    from easyicu.research_agent.estimators import fit_estimator
+
+    rng = np.random.default_rng(20260711)
+    n = 240
+    x = rng.normal(size=n)
+    probability = 1 / (1 + np.exp(-(-0.4 + 0.8 * x)))
+    y = (rng.random(n) < probability).astype(int)
+    retained_index = np.arange(n) * 3 + 7
+    X = pd.DataFrame({"x": x}, index=retained_index)
+    outcome = pd.Series(y, index=retained_index)
+
+    result = fit_estimator(cohort=None, X=X, y=outcome, kind="logistic")
+
+    assert result.converged is True
+    assert result.n == n
 
 
 def test_robust_design_keeps_exposure_and_const():
