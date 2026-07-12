@@ -22,6 +22,11 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence
 
 from .cohort_schema import CohortDefinition, coerce_cohort_definition
+from .lock_authority import (
+    LockAuthorityError,
+    assert_lock_matches_evidence_anchor,
+    rehydrate_timestamp_only_legacy_lock,
+)
 
 RobustnessAxis = Literal["cohort", "missing", "outcome"]
 
@@ -30,14 +35,6 @@ MIN_AXIS_COUNTS: Dict[str, int] = {"cohort": 3, "missing": 2, "outcome": 2}
 PRIMARY_SPEC_ID = "primary"
 LOCK_FILENAME = "robustness_specs_locked.json"
 PANEL_FILENAME = "robustness_panel.json"
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _assert_lock_matches_evidence_anchor(*, run_dir: Path, lock_path: Path) -> bool:
@@ -50,51 +47,15 @@ def _assert_lock_matches_evidence_anchor(*, run_dir: Path, lock_path: Path) -> b
     recomputing ``spec_sha256`` inside the same mutable JSON file.
     """
 
-    run_root = Path(run_dir).resolve()
-    index_path = run_root / "evidence" / "evidence_index.json"
-    if not index_path.exists():
-        return False
-    if index_path.is_symlink() or not index_path.is_file():
-        raise RobustnessPlanError(
-            "robustness specification evidence index is not a regular file"
-        )
     try:
-        raw_records = json.loads(index_path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        raise RobustnessPlanError(
-            f"robustness specification evidence index is unreadable: {exc}"
-        ) from exc
-    if not isinstance(raw_records, list):
-        raise RobustnessPlanError(
-            "robustness specification evidence index has an invalid payload"
+        return assert_lock_matches_evidence_anchor(
+            run_dir=run_dir,
+            lock_path=lock_path,
+            evidence_id="robustness_specs_locked",
+            label="robustness specification lock",
         )
-    anchors = [
-        record
-        for record in raw_records
-        if isinstance(record, dict)
-        and str(record.get("evidence_id") or "") == "robustness_specs_locked"
-    ]
-    if len(anchors) != 1:
-        raise RobustnessPlanError(
-            "robustness specification lock has no unique plan-time evidence anchor"
-        )
-
-    # Lazy import avoids the schema -> robustness_panel -> runtime_artifacts
-    # import cycle during model initialisation.
-    from .runtime_artifacts import verified_run_evidence_path
-
-    anchor_path = verified_run_evidence_path(run_root, anchors[0])
-    if anchor_path is None:
-        raise RobustnessPlanError(
-            "robustness specification evidence anchor is missing or stale"
-        )
-    expected_sha = str(anchors[0].get("sha256") or "").strip().lower()
-    observed_sha = _sha256_file(lock_path)
-    if observed_sha != expected_sha:
-        raise RobustnessPlanError(
-            "robustness specification lock differs from its plan-time evidence anchor"
-        )
-    return True
+    except LockAuthorityError as exc:
+        raise RobustnessPlanError(str(exc)) from exc
 
 
 def _successful_step_records(
@@ -348,6 +309,33 @@ def write_locked_robustness_specs(
     specs = list(getattr(plan, "robustness_specs", []) or [])
     path = run_dir / LOCK_FILENAME
     if path.exists():
+        try:
+            repair = rehydrate_timestamp_only_legacy_lock(
+                run_dir=run_dir,
+                lock_path=path,
+                evidence_id="robustness_specs_locked",
+                label="robustness specification lock",
+            )
+        except LockAuthorityError as exc:
+            raise RobustnessPlanError(str(exc)) from exc
+        if repair is not None and evidence.get(
+            "robustness_lock_resume_rehydration"
+        ) is None:
+            evidence.register_json(
+                kind="log",
+                description=(
+                    "Resume compatibility repair: restored the robustness lock "
+                    "from its verified plan-time evidence anchor after a legacy "
+                    "timestamp-only rewrite."
+                ),
+                payload=repair,
+                filename="robustness_lock_resume_rehydration.json",
+                evidence_id="robustness_lock_resume_rehydration",
+                producer="planner",
+                generation_mode="system",
+                prompt_pack_version=prompt_pack_version,
+                metadata={"llm_signature": llm_signature},
+            )
         locked_specs = load_locked_robustness_specs(run_dir)
         validate_robustness_specs(locked_specs)
         if specs and robustness_specs_sha(specs) != robustness_specs_sha(
