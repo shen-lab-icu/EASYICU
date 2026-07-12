@@ -93,3 +93,63 @@ def test_representation_audits_and_source_companions_remain_allowed():
     )
 
     assert not any(finding.severity == "error" for finding in findings)
+
+
+def _candidate_step() -> AnalysisStep:
+    return AnalysisStep(
+        step_id="candidate_selection",
+        intent="Compare agent-selected candidate cluster solutions.",
+        method="model_based_latent_class_clustering",
+        expected_outputs=[
+            "artifact:candidate_cluster_models",
+            "manifest:cluster_selection",
+        ],
+    )
+
+
+def test_candidate_role_rejects_explicit_failed_selection_payload():
+    findings = declared_product_contract_findings(
+        step=_candidate_step(),
+        step_summary={
+            "status": "ok",
+            "cluster_selection": {
+                "criterion": "bic",
+                "selection_rule": "minimum",
+                "direction": "minimize",
+                "selected_n_clusters": None,
+                "candidates": [],
+                "rationale": "Candidate fitting failed.",
+            },
+        },
+        effect_method_authorized=False,
+    )
+
+    assert any(
+        finding.detail.get("kind") == "trajectory_candidate_selection_invalid"
+        for finding in findings
+    )
+
+
+def test_candidate_role_accepts_replayable_agent_selection():
+    selection = {
+        "criterion": "bic",
+        "selection_rule": "minimum",
+        "direction": "minimize",
+        "selected_n_clusters": 3,
+        "candidates": [
+            {"n_clusters": 2, "criterion_value": 120.0},
+            {"n_clusters": 3, "criterion_value": 100.0},
+        ],
+        "rationale": "Selected the finite minimum BIC.",
+    }
+    findings = declared_product_contract_findings(
+        step=_candidate_step(),
+        step_summary={
+            "status": "ok",
+            "cluster_selection": selection,
+            "n_clusters": 3,
+        },
+        effect_method_authorized=False,
+    )
+
+    assert not any(finding.severity == "error" for finding in findings)
