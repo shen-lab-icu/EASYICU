@@ -282,6 +282,41 @@ def test_executed_sensitivity_rejects_ambiguous_model_result_tables(
     assert unavailable["detail"][0] == "structured_table_ambiguous"
 
 
+def test_long_coefficient_table_with_model_metadata_is_not_a_second_model_table(
+    tmp_path,
+) -> None:
+    from easyicu.research_agent.pipeline_execute import (
+        _executed_robustness_result_issues,
+    )
+
+    out_dir = tmp_path / "outputs"
+    out_dir.mkdir()
+    rows = _write_valid_executed_results(out_dir, identifier_column="spec_id")
+    coefficient_path = out_dir / "adjusted_estimates.csv"
+    coefficients = pd.read_csv(coefficient_path)
+    spec_by_model = {row["model_id"]: row["spec_id"] for row in rows}
+    coefficients["spec_id"] = coefficients["model_id"].map(spec_by_model)
+    # Add a second coefficient per model.  Model metadata may legitimately be
+    # repeated on a long coefficient table, but that must not make it a second
+    # model-result table.
+    coefficients = pd.concat([coefficients, coefficients], ignore_index=True)
+    coefficients.loc[len(rows) :, "term"] = "adjustment_term"
+    coefficients.loc[len(rows) :, "term_role"] = "adjustment"
+    coefficients.to_csv(coefficient_path, index=False)
+    lock = _locked_specs_payload()
+
+    issues = _executed_robustness_result_issues(
+        locked_by_id={spec["spec_id"]: spec for spec in lock["specs"]},
+        step_summary={"robustness_rows": rows},
+        out_dir=out_dir,
+        context=None,
+    )
+
+    assert not any(
+        issue["issue"] == "model_result_table_unavailable" for issue in issues
+    )
+
+
 def test_primary_effect_never_parses_english_or_conjunction_from_prose() -> None:
     from easyicu.research_agent.plan_utils import _primary_effect_from_summary
     from easyicu.research_agent.scalar_utils import _first_numeric_effect_from_text
@@ -972,6 +1007,59 @@ def test_executed_sensitivity_rejects_missing_indicator_on_complete_case_model(
     )
 
 
+def test_missing_indicator_accepts_structured_availability_term_role(tmp_path) -> None:
+    from easyicu.research_agent.pipeline_execute import (
+        _executed_robustness_result_issues,
+    )
+
+    out_dir = tmp_path / "outputs"
+    out_dir.mkdir()
+    rows = _write_valid_executed_results(out_dir)
+    lock = _locked_specs_payload()
+    lock["specs"][1]["missing_override"] = {"strategy": "missing_indicator"}
+    target = rows[1]
+    target.update(
+        {
+            "missing_strategy": "missing_indicator",
+            "analysis_set": "source_aware",
+            "baseline_missing_policy": "explicit_missing_category",
+        }
+    )
+    model_path = out_dir / "model_fit_summary.csv"
+    models = pd.read_csv(model_path)
+    model_mask = models["model_id"].eq(target["model_id"])
+    models.loc[model_mask, "analysis_set"] = "source_aware"
+    models.loc[model_mask, "baseline_missing_policy"] = (
+        "explicit_missing_category"
+    )
+    models.to_csv(model_path, index=False)
+    coefficient_path = out_dir / "adjusted_estimates.csv"
+    coefficients = pd.read_csv(coefficient_path)
+    availability_row = coefficients[
+        coefficients["model_id"].eq(target["model_id"])
+    ].iloc[0].copy()
+    availability_row["term"] = "source_not_observed"
+    availability_row["term_role"] = "availability"
+    coefficients = pd.concat(
+        [coefficients, pd.DataFrame([availability_row])], ignore_index=True
+    )
+    coefficients.to_csv(coefficient_path, index=False)
+
+    issues = _executed_robustness_result_issues(
+        locked_by_id={spec["spec_id"]: spec for spec in lock["specs"]},
+        step_summary={"robustness_rows": rows},
+        out_dir=out_dir,
+        context=None,
+    )
+
+    assert not any(
+        issue.get("spec_id") == target["spec_id"]
+        and issue["issue"]
+        in {"missing_indicator_model_not_used", "missing_indicator_term_absent"}
+        for issue in issues
+    )
+
+
 def test_penalized_point_only_sensitivity_must_be_nonreportable(tmp_path) -> None:
     from easyicu.research_agent.pipeline_execute import (
         _executed_robustness_result_issues,
@@ -983,8 +1071,10 @@ def test_penalized_point_only_sensitivity_must_be_nonreportable(tmp_path) -> Non
     target = rows[0]
     target.update(
         {
+            "status": "fitted",
             "ci_low": None,
             "ci_high": None,
+            "converged": False,
             "penalized": True,
             "interval_method": "unavailable",
             "reportable": True,
@@ -994,6 +1084,7 @@ def test_penalized_point_only_sensitivity_must_be_nonreportable(tmp_path) -> Non
     models = pd.read_csv(model_path)
     mask = models["model_id"].eq(target["model_id"])
     models.loc[mask, ["stage3_ci_low", "stage3_ci_high"]] = pd.NA
+    models.loc[mask, "converged"] = False
     models.loc[mask, "penalized"] = True
     models.loc[mask, "interval_method"] = "unavailable"
     models.to_csv(model_path, index=False)
@@ -1015,6 +1106,10 @@ def test_penalized_point_only_sensitivity_must_be_nonreportable(tmp_path) -> Non
         issue["issue"] == "reportable_result_requires_finite_ci"
         for issue in issues
     )
+    assert any(
+        issue["issue"] == "reportable_result_requires_verified_convergence"
+        for issue in issues
+    )
 
     target["reportable"] = False
     issues = _executed_robustness_result_issues(
@@ -1028,7 +1123,10 @@ def test_penalized_point_only_sensitivity_must_be_nonreportable(tmp_path) -> Non
         and issue["issue"]
         in {
             "reportable_result_requires_finite_ci",
+            "reportable_result_requires_verified_convergence",
             "point_only_result_must_be_penalized_nonreportable",
+            "executed_result_status_invalid",
+            "executed_model_not_fitted",
         }
         for issue in issues
         if "spec_id" in issue
