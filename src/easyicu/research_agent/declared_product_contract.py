@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 from .schema import AnalysisStep, ValidationFinding
+from .trajectory_plan_contract import trajectory_role_scope_summary_findings
 
 
 _FIGURE_KINDS = frozenset({"figure", "plot", "chart", "fig", "heatmap"})
@@ -356,6 +357,12 @@ def declared_product_contract_findings(
     }
     registered, figure_paths = _registered_products(step_summary, out_dir=out_dir)
     findings: list[ValidationFinding] = []
+    findings.extend(
+        trajectory_role_scope_summary_findings(
+            step=step,
+            step_summary=step_summary,
+        )
+    )
 
     # Older direct unit fixtures predate ``output_files`` and validate only
     # their own numeric payload.  A real execution supplies ``out_dir`` and is

@@ -12,6 +12,7 @@ from __future__ import annotations
 import re
 from collections import defaultdict, deque
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .schema import AnalysisPlan, AnalysisStep, ResearchContext, ValidationFinding
@@ -338,6 +339,118 @@ def _role_qualifies(
             method_families & {"characterization", "candidate_selection"}
         ) and _characterization_product_evidence(products)
     raise ValueError(f"Unknown trajectory role: {role}")
+
+
+def trajectory_step_roles(step: AnalysisStep) -> frozenset[str]:
+    """Return scientific roles proven by method-family + typed products."""
+
+    method = _method_head(step.method)
+    products = _step_products(step)
+    return frozenset(
+        role
+        for role in _ROLE_ORDER
+        if _role_qualifies(role, method=method, products=products)
+    )
+
+
+def _trajectory_output_role(name: object) -> Optional[str]:
+    """Classify only closed trajectory product names, never prose substrings."""
+
+    tokens = _tokens(Path(str(name or "")).stem)
+    if not tokens:
+        return None
+    if "trajectory" in tokens and bool(
+        tokens & {"representation", "membership", "feature", "features"}
+    ):
+        return "representation"
+    if "candidate" in tokens and bool(
+        tokens & {"cluster", "clustering", "fit", "fits", "model", "models"}
+    ):
+        return "candidate_selection"
+    if {"cluster", "selection"} <= tokens:
+        return "candidate_selection"
+    if "stability" in tokens and bool(tokens & {"cluster", "clustering"}):
+        return "stability_freeze"
+    if {"cluster", "assignments"} <= tokens or {
+        "trajectory",
+        "missingness",
+        "policy",
+    } <= tokens:
+        return "stability_freeze"
+    if "cluster" in tokens and bool(
+        tokens
+        & {
+            "profile",
+            "profiles",
+            "characteristic",
+            "characteristics",
+            "outcome",
+            "outcomes",
+            "mortality",
+            "sizes",
+        }
+    ):
+        return "characterization"
+    if {"trajectory", "profiles"} <= tokens or {"outcome", "cluster"} <= tokens:
+        return "characterization"
+    return None
+
+
+def trajectory_role_scope_summary_findings(
+    *,
+    step: AnalysisStep,
+    step_summary: Mapping[str, object],
+) -> List[ValidationFinding]:
+    """Fail closed when one role writes another role's scientific products."""
+
+    owned_roles = trajectory_step_roles(step)
+    if not owned_roles:
+        return []
+    produced_by_role: Dict[str, set[str]] = defaultdict(set)
+
+    def collect(node: object) -> None:
+        if isinstance(node, Mapping):
+            for raw_key, child in node.items():
+                role = _trajectory_output_role(raw_key)
+                if role is not None:
+                    produced_by_role[role].add(str(raw_key))
+                collect(child)
+        elif isinstance(node, (list, tuple, set)):
+            for child in node:
+                collect(child)
+        elif isinstance(node, str):
+            role = _trajectory_output_role(node)
+            if role is not None:
+                produced_by_role[role].add(node)
+
+    for key in ("outputs", "output_files", "diagnostic_files"):
+        container = step_summary.get(key)
+        if container is not None:
+            collect(container)
+    unauthorized = {
+        role: sorted(values)
+        for role, values in sorted(produced_by_role.items())
+        if role not in owned_roles
+    }
+    if not unauthorized:
+        return []
+    return [
+        ValidationFinding(
+            validator="trajectory_role_scope",
+            severity="error",
+            message=(
+                f"Step {step.step_id} produced scientific products owned by a "
+                "different trajectory DAG role. Keep representation, candidate "
+                "selection, stability/freeze, and characterization boundaries explicit."
+            ),
+            detail={
+                "kind": "trajectory_role_product_out_of_scope",
+                "step_id": step.step_id,
+                "owned_roles": sorted(owned_roles),
+                "unauthorized_products_by_role": unauthorized,
+            },
+        )
+    ]
 
 
 def trajectory_plan_contract_applies(
@@ -859,7 +972,9 @@ def trajectory_role_code_contract(
             "min_observed_windows, profile_columns, "
             "profile_summary_statistic (mean or median), time_axis='relative_hours', "
             "anchor, anchor_provenance, anchor_source, and trailing_na_policy. "
-            "Do not impute unobserved trajectory cells with zero."
+            "Do not impute unobserved trajectory cells with zero. This role only "
+            "builds the representation: do not fit clusters, select k, freeze "
+            "assignments, characterize profiles, or analyze outcomes here."
         )
     if "cluster_selection" in declarations:
         sections.append(
@@ -927,4 +1042,6 @@ __all__ = [
     "trajectory_plan_dag_findings",
     "trajectory_planner_contract_guide",
     "trajectory_role_code_contract",
+    "trajectory_role_scope_summary_findings",
+    "trajectory_step_roles",
 ]

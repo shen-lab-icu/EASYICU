@@ -53,6 +53,7 @@ from .trajectory_contract import (
     selected_trajectory_variables,
     trajectory_zero_imputation_detected,
 )
+from .trajectory_plan_contract import trajectory_step_roles
 
 
 # ---------------------------------------------------------------------------
@@ -363,7 +364,7 @@ def detect_forbidden_pattern_usage(
     responsible for deciding whether to repair, fail-closed or
     proceed.
     """
-    if not code or not context.variables:
+    if not code:
         return []
     code_lower = code.lower()
     violations: List[Dict[str, object]] = []
@@ -418,6 +419,52 @@ def detect_forbidden_pattern_usage(
                 ),
             }
         )
+    if step is not None:
+        roles = trajectory_step_roles(step)
+        downstream_roles = roles & {
+            "candidate_selection",
+            "stability_freeze",
+        }
+        if "representation" in roles and not downstream_roles:
+            role_patterns = [
+                pattern
+                for pattern in (
+                    "kmeans",
+                    "minibatchkmeans",
+                    "gaussianmixture",
+                    "agglomerativeclustering",
+                    "dbscan",
+                    "hdbscan",
+                    "fit_predict",
+                    "cluster_selection",
+                    "cluster_stability",
+                    "cluster_assignments",
+                    "cluster_profile",
+                    "cluster_outcome",
+                    "outcome_by_cluster",
+                )
+                if re.search(
+                    rf"(?<![a-z0-9]){re.escape(pattern)}(?![a-z0-9])",
+                    code_lower,
+                )
+            ]
+            if role_patterns:
+                violations.append(
+                    {
+                        "variable": step.step_id,
+                        "kind": "trajectory_role_scope",
+                        "matched_patterns": sorted(set(role_patterns)),
+                        "preferred": (
+                            "representation_artifact_only",
+                            "trajectory_membership",
+                        ),
+                        "rationale": (
+                            "The representation owner may transform and audit "
+                            "features, but cluster fitting/selection/stability and "
+                            "characterization belong to downstream agent-planned roles."
+                        ),
+                    }
+                )
     return violations
 
 
