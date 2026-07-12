@@ -75,6 +75,50 @@ def test_classify_unknown_falls_back_to_dtype(ra):
     assert h_dt.kind == VariableKind.TIMESTAMP
 
 
+def test_companion_audit_columns_override_base_concept_prefix_metadata(ra):
+    """Counts/status flags are provenance, never disguised physiology.
+
+    The examples intentionally span a lab, vital sign, and ordinal score and do
+    not use the development case's focal variable.  This catches the generic
+    prefix-inheritance bug rather than pinning one benchmark spelling.
+    """
+
+    icu = ra.ICU_RULES
+    count_columns = ("creat_n", "bili_n_24h")
+    status_columns = ("hr_measured", "sofa2_measurement_flag")
+
+    for column in count_columns:
+        hint = icu.classify_variable(column, "int64", sample_values=[0, 2, 5])
+        assert hint.role.value == "meta", column
+        assert hint.kind == ra.VariableKind.COUNT, column
+        assert hint.unit is None, column
+        assert hint.valid_range is None, column
+        assert hint.is_ordinal is False, column
+        assert hint.ordinal_levels is None, column
+        assert "provenance" in " ".join(hint.pitfalls).lower(), column
+
+    for column in status_columns:
+        hint = icu.classify_variable(column, "int64", sample_values=[0, 1, 1])
+        assert hint.role.value == "meta", column
+        assert hint.kind == ra.VariableKind.BINARY, column
+        assert hint.unit is None, column
+        assert hint.valid_range == (0.0, 1.0), column
+        assert hint.is_ordinal is False, column
+        assert hint.ordinal_levels is None, column
+        assert "status" in " ".join(hint.pitfalls).lower(), column
+
+    # Real value columns must retain the base concept's curated semantics.
+    assert icu.classify_variable("creat_max", "float64").unit == "mg/dL"
+    score = icu.classify_variable("sofa2_max", "int64")
+    assert score.kind == ra.VariableKind.ORDINAL
+    assert score.is_ordinal is True
+    unrelated_flag = icu.classify_variable(
+        "resource_flag", "int64", sample_values=[0, 1]
+    )
+    assert unrelated_flag.role.value == "other"
+    assert unrelated_flag.kind == ra.VariableKind.BINARY
+
+
 def test_aggregation_rule_matrix(ra):
     """Every (role, kind) pair returns at least one allowed aggregation,
     and forbidden ops never sneak in for ordinal/identifier kinds."""
