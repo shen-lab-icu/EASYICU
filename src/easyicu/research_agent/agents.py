@@ -1220,12 +1220,18 @@ class RuntimeSupervisor:
             step=step,
             evidence_refs=evidence_refs,
         )
-        visualization_request = self.visualization.build_request(
-            context=context,
-            semantics=state.semantics or self.clinical_semantics.run(context=context),
-            step=step,
-            evidence_refs=evidence_refs,
-        )
+        visualization_request = None
+        if any(
+            str(item or "").strip().lower().startswith("figure:")
+            for item in step.expected_outputs
+        ):
+            visualization_request = self.visualization.build_request(
+                context=context,
+                semantics=state.semantics
+                or self.clinical_semantics.run(context=context),
+                step=step,
+                evidence_refs=evidence_refs,
+            )
         return state.model_copy(
             update={
                 "current_step": step,
