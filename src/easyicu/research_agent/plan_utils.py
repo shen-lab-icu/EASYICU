@@ -62,6 +62,7 @@ from .trajectory_contract import (
     TRAJECTORY_PHENOTYPING_REQUIRED_OUTPUTS,
     trajectory_phenotyping_contract_applies,
 )
+from .trajectory_plan_contract import trajectory_plan_contract_applies
 
 
 def _problematic_metric_keys(
@@ -805,6 +806,19 @@ def _enforce_advanced_plan_contract(
     context: ResearchContext,
 ) -> tuple[AnalysisPlan, List[ValidationFinding]]:
     """Constrain advanced plan shape while leaving analysis code to the agent."""
+
+    # Fixed-window trajectory plans have a role/DAG contract that supports
+    # legitimate agent decomposition. The generic clustering normalizer assumes
+    # one method owner and would push all products into that step, recreating a
+    # mega-pipeline. Leave this family to the dedicated role normalizer.
+    if trajectory_plan_contract_applies(
+        plan=plan,
+        context=context,
+    ) and not any(
+        trajectory_phenotyping_contract_applies(context=context, step=step)
+        for step in (plan.steps or [])
+    ):
+        return plan, []
 
     # Priority: explicit user-declared family > authoritative stamped
     # plan.analysis_type (specific, non-heuristic-reachable families only) >

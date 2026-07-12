@@ -147,6 +147,10 @@ from .robustness_panel import (
     robustness_specs_sha,
     write_locked_robustness_specs,
 )
+from .trajectory_plan_contract import (
+    augment_trajectory_plan_products,
+    trajectory_plan_dag_findings,
+)
 from .pipeline_report import (
     execution_gate_status,
     render_report,
@@ -2210,6 +2214,30 @@ class ResearchAgentPipeline:
             cap = self._max_total_steps
             plan, cap_findings = _cap_plan_preserving_figure_steps(plan=plan, cap=cap)
             findings.extend(cap_findings)
+            plan, trajectory_product_findings = augment_trajectory_plan_products(
+                plan=plan,
+                context=context,
+            )
+            findings.extend(trajectory_product_findings)
+            # The probe-aware replanner receives these structural issues before
+            # execution. Keep the initial snapshot advisory so a successfully
+            # repaired plan is not blocked by its superseded pre-probe shape.
+            findings.extend(
+                finding.model_copy(
+                    update={
+                        "validator": "plan_contract_pending",
+                        "severity": "warning",
+                        "detail": {
+                            **dict(finding.detail or {}),
+                            "pending_probe_replan": True,
+                        },
+                    }
+                )
+                for finding in trajectory_plan_dag_findings(
+                    plan=plan,
+                    context=context,
+                )
+            )
             plan = ensure_cohort_definition(plan)
             plan = ensure_robustness_specs(plan)
             # Final gate: if the plan implies a cohort but still has no
