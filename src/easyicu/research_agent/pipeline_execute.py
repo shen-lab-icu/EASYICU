@@ -170,7 +170,11 @@ from .repair_registry import (
     RepairObservedState,
     automatic_repair_allowed,
 )
-from .runtime_artifacts import current_step_records, current_successful_step_records
+from .runtime_artifacts import (
+    current_step_records,
+    current_successful_step_records,
+    verified_run_evidence_path,
+)
 from .scalar_utils import _expected_numeric_annotations_for_step
 from .side_findings import SideFinding
 from .skills import ClinicalSkill
@@ -184,6 +188,223 @@ from .viability import (
 from .visual_qa import VLMVisualQAAdapter, VisualQAAuditor
 
 logger = logging.getLogger(__name__)
+
+
+class _EvidenceLineageResolutionError(RuntimeError):
+    """A typed plan input could not be bound to current verified evidence."""
+
+    def __init__(self, failures: Sequence[Mapping[str, Any]]) -> None:
+        self.failures = [dict(failure) for failure in failures]
+        super().__init__(
+            "; ".join(
+                f"{failure.get('input')}: {failure.get('reason')}"
+                for failure in self.failures
+            )
+        )
+
+
+def _typed_artifact_name(value: Any) -> Optional[str]:
+    """Return the normalized logical name for an ``artifact:`` contract."""
+
+    kind, separator, product = str(value or "").strip().partition(":")
+    if not separator or kind.strip().lower() != "artifact":
+        return None
+    name = product.strip().lower().rsplit("/", 1)[-1]
+    name = re.sub(r"\.(?:csv|json|parquet|feather|tsv)$", "", name)
+    return name or None
+
+
+def _evidence_record_field(record: Any, name: str) -> Any:
+    if isinstance(record, Mapping):
+        return record.get(name)
+    return getattr(record, name, None)
+
+
+def _registered_source_name(record: Any, verified_path: Path) -> Optional[str]:
+    """Recover the registered source name from ``<evidence_id>__<filename>``."""
+
+    evidence_id = str(_evidence_record_field(record, "evidence_id") or "")
+    prefix = f"{evidence_id}__"
+    if not evidence_id or not verified_path.name.startswith(prefix):
+        return None
+    return verified_path.name[len(prefix) :] or None
+
+
+def _declared_typed_artifact_paths(
+    step_summary: Any,
+    *,
+    artifact_name: str,
+) -> Tuple[bool, List[str]]:
+    """Return exact typed file mappings declared by the producer summary."""
+
+    if not isinstance(step_summary, Mapping):
+        return False, []
+    declared = False
+    paths: List[str] = []
+    for container_name in ("output_files", "outputs"):
+        container = step_summary.get(container_name)
+        if not isinstance(container, Mapping):
+            continue
+        for typed_key, value in container.items():
+            if _typed_artifact_name(typed_key) != artifact_name:
+                continue
+            declared = True
+            if isinstance(value, str) and value.strip():
+                paths.append(value.strip())
+            elif isinstance(value, (list, tuple)):
+                paths.extend(
+                    str(item).strip()
+                    for item in value
+                    if isinstance(item, str) and item.strip()
+                )
+    return declared, list(dict.fromkeys(paths))
+
+
+def _resolve_typed_artifact_evidence(
+    *,
+    input_name: str,
+    plan: AnalysisPlan,
+    evidence_records: Sequence[Any],
+    per_step_records: Sequence[Mapping[str, Any]],
+    run_dir: Path,
+) -> Tuple[Optional[EvidenceRef], Optional[Dict[str, Any]]]:
+    """Resolve one typed artifact through the current execution authority.
+
+    The plan declaration identifies the producer; the latest outer step record
+    authorizes its evidence ids.  Basename aliases are deliberately excluded:
+    they are first-write-wins and can still point at a superseded resume
+    artifact.  Every candidate must instead be owned by the successful current
+    producer and pass the registered path/SHA check.
+    """
+
+    artifact_name = _typed_artifact_name(input_name)
+    if artifact_name is None:
+        return None, {"input": str(input_name), "reason": "invalid_artifact_input"}
+
+    producer_ids = {
+        str(step.step_id)
+        for step in plan.steps
+        if any(
+            _typed_artifact_name(output) == artifact_name
+            for output in (step.expected_outputs or [])
+        )
+    }
+    if not producer_ids:
+        return None, {
+            "input": str(input_name),
+            "artifact": artifact_name,
+            "reason": "producer_not_declared",
+        }
+    if len(producer_ids) != 1:
+        return None, {
+            "input": str(input_name),
+            "artifact": artifact_name,
+            "reason": "ambiguous_producer",
+            "producer_step_ids": sorted(producer_ids),
+        }
+
+    producer_id = next(iter(producer_ids))
+    latest_by_step = {
+        str(record.get("step_id") or ""): record
+        for record in current_step_records(per_step_records)
+    }
+    producer_record = latest_by_step.get(producer_id)
+    producer_status = str((producer_record or {}).get("status") or "").lower()
+    if producer_status != "ok":
+        return None, {
+            "input": str(input_name),
+            "artifact": artifact_name,
+            "reason": "producer_not_successful",
+            "producer_step_id": producer_id,
+            "producer_status": producer_status or "missing",
+        }
+
+    active_ids = {
+        str(evidence_id)
+        for evidence_id in (producer_record or {}).get("evidence_ids", [])
+        if str(evidence_id).strip()
+    }
+    typed_mapping_declared, declared_paths = _declared_typed_artifact_paths(
+        (producer_record or {}).get("step_summary"),
+        artifact_name=artifact_name,
+    )
+    if typed_mapping_declared and not declared_paths:
+        return None, {
+            "input": str(input_name),
+            "artifact": artifact_name,
+            "reason": "typed_mapping_not_verified",
+            "producer_step_id": producer_id,
+        }
+    if len(declared_paths) > 1:
+        return None, {
+            "input": str(input_name),
+            "artifact": artifact_name,
+            "reason": "ambiguous_typed_mapping",
+            "producer_step_id": producer_id,
+            "declared_paths": declared_paths,
+        }
+    declared_filename = Path(declared_paths[0]).name if declared_paths else None
+
+    candidates: List[Tuple[Any, Path]] = []
+    matching_current_ids: List[str] = []
+    for record in evidence_records:
+        evidence_id = str(_evidence_record_field(record, "evidence_id") or "")
+        if (
+            evidence_id not in active_ids
+            or str(_evidence_record_field(record, "produced_by_step") or "")
+            != producer_id
+        ):
+            continue
+        verified_path = verified_run_evidence_path(run_dir, record)
+        if verified_path is None:
+            continue
+        source_name = _registered_source_name(record, verified_path)
+        if source_name is None:
+            continue
+        if declared_filename is not None:
+            matches_product = source_name == declared_filename
+        else:
+            matches_product = Path(source_name).stem.strip().lower() == artifact_name
+        if not matches_product:
+            continue
+        matching_current_ids.append(evidence_id)
+        candidates.append((record, verified_path))
+
+    if not candidates:
+        return None, {
+            "input": str(input_name),
+            "artifact": artifact_name,
+            "reason": (
+                "typed_mapping_not_verified"
+                if declared_filename is not None
+                else "no_verified_current_artifact"
+            ),
+            "producer_step_id": producer_id,
+            **(
+                {"declared_path": declared_paths[0]}
+                if declared_filename is not None
+                else {}
+            ),
+        }
+    if len(candidates) != 1:
+        return None, {
+            "input": str(input_name),
+            "artifact": artifact_name,
+            "reason": "ambiguous_current_artifact",
+            "producer_step_id": producer_id,
+            "evidence_ids": sorted(matching_current_ids),
+        }
+
+    record, _ = candidates[0]
+    return (
+        EvidenceRef(
+            evidence_id=str(_evidence_record_field(record, "evidence_id") or ""),
+            kind=_evidence_record_field(record, "kind"),
+            description=_evidence_record_field(record, "description"),
+            relative_path=_evidence_record_field(record, "relative_path"),
+        ),
+        None,
+    )
 
 
 class _InertPythonNodeStripper(ast.NodeTransformer):
@@ -3096,23 +3317,48 @@ def run_execute_phase(
                 metadata=metadata,
             )
 
-    def _evidence_refs_for_names(names: Sequence[str]) -> List[EvidenceRef]:
+    def _evidence_refs_for_names(
+        names: Sequence[str],
+    ) -> Tuple[List[EvidenceRef], List[str]]:
         refs: List[EvidenceRef] = []
+        typed_evidence_ids: List[str] = []
         seen: set[str] = set()
+        failures: List[Dict[str, Any]] = []
         for name in names:
-            rec = evidence.get(str(name))
-            if rec is None or rec.evidence_id in seen:
-                continue
-            refs.append(
-                EvidenceRef(
-                    evidence_id=rec.evidence_id,
-                    kind=rec.kind,
-                    description=rec.description,
-                    relative_path=rec.relative_path,
+            value = str(name)
+            if _typed_artifact_name(value) is not None:
+                with shared_lock:
+                    records_snapshot = list(per_step_records)
+                ref, failure = _resolve_typed_artifact_evidence(
+                    input_name=value,
+                    plan=plan,
+                    evidence_records=evidence.records(),
+                    per_step_records=records_snapshot,
+                    run_dir=run_dir,
                 )
-            )
-            seen.add(rec.evidence_id)
-        return refs
+                if failure is not None:
+                    failures.append(failure)
+                    continue
+                if ref is not None and ref.evidence_id not in seen:
+                    refs.append(ref)
+                    seen.add(ref.evidence_id)
+                    typed_evidence_ids.append(ref.evidence_id)
+                continue
+
+            rec = evidence.get(value)
+            if rec is not None and rec.evidence_id not in seen:
+                refs.append(
+                    EvidenceRef(
+                        evidence_id=rec.evidence_id,
+                        kind=rec.kind,
+                        description=rec.description,
+                        relative_path=rec.relative_path,
+                    )
+                )
+                seen.add(rec.evidence_id)
+        if failures:
+            raise _EvidenceLineageResolutionError(failures)
+        return refs, typed_evidence_ids
 
     def _validator_messages(
         *finding_groups: Sequence[ValidationFinding],
@@ -3205,7 +3451,43 @@ def run_execute_phase(
             current_step=step_current,
             total_steps=total_steps,
         )
-        existing_refs = _evidence_refs_for_names(step.inputs)
+        try:
+            existing_refs, resolved_input_evidence_ids = _evidence_refs_for_names(
+                step.inputs
+            )
+        except _EvidenceLineageResolutionError as exc:
+            step_record.update(
+                {
+                    "status": "blocked_dependency_evidence",
+                    "diagnostic_only": True,
+                    "generation_mode": "system",
+                    "evidence_lineage_failures": exc.failures,
+                }
+            )
+            lineage_finding = ValidationFinding(
+                validator="typed_artifact_evidence_lineage",
+                severity="error",
+                message=(
+                    f"Step {step.step_id} was blocked because one or more typed "
+                    "artifact inputs lack a unique, current, digest-verified "
+                    "producer output."
+                ),
+                detail={"step_id": step.step_id, "failures": exc.failures},
+            )
+            with shared_lock:
+                findings.append(lineage_finding)
+                per_step_records.append(step_record)
+                _flush_partial_manifest()
+            emit_progress(
+                "audit",
+                f"Blocked {step.step_id}; typed artifact evidence is unresolved.",
+                status="error",
+                run_id=run_id,
+                step_id=step.step_id,
+                current_step=step_current,
+                total_steps=total_steps,
+            )
+            return step_record
         local_runtime_state = supervisor.prepare_step_state(
             state=runtime_state,
             context=context,
@@ -4637,6 +4919,7 @@ else:
                 description=script_description,
                 source_path=run_result.script_path,
                 produced_by_step=step.step_id,
+                inputs=resolved_input_evidence_ids or None,
                 evidence_id=script_evidence_id,
                 producer="coder",
                 generation_mode=current_generation_mode,
@@ -4947,6 +5230,7 @@ else:
                     step=step,
                     step_summary=visual_step_summary,
                     completed_step_records=completed_records_snapshot,
+                    out_dir=run_result.out_dir,
                 )
                 early_contract_findings += (
                     _cohort_definition_sensitivity_contract_findings(
@@ -5675,6 +5959,12 @@ else:
                 encoding="utf-8",
             )
 
+        lineage_input_evidence_ids = list(
+            dict.fromkeys(
+                [*resolved_input_evidence_ids, *repair_source_evidence_ids]
+            )
+        )
+
         run_result.artefacts = sorted(
             p for p in run_result.out_dir.iterdir() if p.is_file()
         )
@@ -5722,7 +6012,7 @@ else:
                     description=f"Machine-readable summary for step {step.step_id}.",
                     source_path=art,
                     produced_by_step=step.step_id,
-                    inputs=repair_source_evidence_ids or None,
+                    inputs=lineage_input_evidence_ids or None,
                     script_evidence_id=script_record.evidence_id,
                     aliases=step_aliases,
                     producer="runner",
@@ -5741,7 +6031,7 @@ else:
                     description=f"Table {art.stem} from step {step.step_id}.",
                     source_path=art,
                     produced_by_step=step.step_id,
-                    inputs=repair_source_evidence_ids or None,
+                    inputs=lineage_input_evidence_ids or None,
                     script_evidence_id=script_record.evidence_id,
                     aliases=step_aliases,
                     producer="runner",
@@ -5764,7 +6054,7 @@ else:
                     description=f"Figure {art.stem} from step {step.step_id}.",
                     source_path=art,
                     produced_by_step=step.step_id,
-                    inputs=repair_source_evidence_ids or None,
+                    inputs=lineage_input_evidence_ids or None,
                     script_evidence_id=script_record.evidence_id,
                     aliases=step_aliases,
                     producer="runner",
@@ -5782,7 +6072,7 @@ else:
                     description=f"Auxiliary artefact {art.name}.",
                     source_path=art,
                     produced_by_step=step.step_id,
-                    inputs=repair_source_evidence_ids or None,
+                    inputs=lineage_input_evidence_ids or None,
                     script_evidence_id=script_record.evidence_id,
                     aliases=step_aliases,
                     producer="runner",
@@ -5886,7 +6176,7 @@ else:
                 ),
                 source_path=auto_contract_path,
                 produced_by_step=step.step_id,
-                inputs=repair_source_evidence_ids or None,
+                inputs=lineage_input_evidence_ids or None,
                 script_evidence_id=script_record.evidence_id,
                 aliases=_semantic_aliases_for(step, auto_contract_path),
                 producer="runner",
@@ -5928,6 +6218,7 @@ else:
             step=step,
             step_summary=step_summary,
             completed_step_records=completed_records_snapshot,
+            out_dir=run_result.out_dir,
         )
         contract_findings.extend(
             _cohort_definition_sensitivity_contract_findings(
@@ -6105,6 +6396,7 @@ else:
                     step=step,
                     step_summary=step_summary,
                     completed_step_records=completed_records_snapshot,
+                    out_dir=run_result.out_dir,
                 )
                 contract_findings.extend(
                     _cohort_definition_sensitivity_contract_findings(
@@ -6239,7 +6531,7 @@ else:
             if side_findings:
                 step_record["side_findings"] = side_findings
         step_record["step_summary"] = step_summary
-        evidence_refs_for_step = _evidence_refs_for_names(evidence_ids_for_step)
+        evidence_refs_for_step, _ = _evidence_refs_for_names(evidence_ids_for_step)
         validator_messages = _validator_messages(
             usage_findings,
             stat_findings,
@@ -6436,6 +6728,11 @@ else:
             executed_step_ids=set(resumed_step_ids),
         )
     )
+    has_typed_artifact_dependencies = any(
+        _typed_artifact_name(input_name) is not None
+        for step in steps_to_run
+        for input_name in (step.inputs or [])
+    )
     for skipped_step_id in sorted(resumed_step_ids):
         emit_progress(
             "resume",
@@ -6455,11 +6752,23 @@ else:
                 ),
             )
         )
+    elif has_typed_artifact_dependencies and pipeline._max_concurrent_steps > 1:
+        findings.append(
+            ValidationFinding(
+                validator="typed_artifact_evidence_lineage",
+                severity="info",
+                message=(
+                    "Typed artifact dependencies are present, so step execution "
+                    "was forced to plan order before resolving producer evidence."
+                ),
+            )
+        )
 
     if (
         pipeline._max_concurrent_steps <= 1
         or len(steps_to_run) <= 1
         or pipeline._enable_replanning
+        or has_typed_artifact_dependencies
         or requested_stop_after_step_id is not None
     ):
 
