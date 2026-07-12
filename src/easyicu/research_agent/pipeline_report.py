@@ -830,6 +830,62 @@ def _step_id_referenced_in_finding(finding: ValidationFinding) -> Optional[str]:
     return None
 
 
+_LEGACY_UNSCOPED_STEP_VALIDATOR_METHODS: Dict[str, frozenset[str]] = {
+    # These validators are emitted exclusively by the exact, non-figure
+    # cohort-definition-sensitivity result contract.  Older checkpoints did
+    # not include ``detail.step_id``; retain this closed migration registry so
+    # a repaired step can supersede those historical findings without turning
+    # unrelated run-level robustness warnings into step-owned state.
+    "robustness_spec_lock": frozenset({"cohort_definition_sensitivity"}),
+    "robustness_executed_result": frozenset({"cohort_definition_sensitivity"}),
+    "robustness_cohort_membership": frozenset(
+        {"cohort_definition_sensitivity"}
+    ),
+}
+
+
+def _normalised_method_head(method: Any) -> str:
+    """Return the exact scientific owner from ``<head>_with_<rider>``."""
+
+    normalized = re.sub(
+        r"[^a-z0-9]+", "_", str(method or "").strip().lower()
+    ).strip("_")
+    return normalized.split("_with_", 1)[0]
+
+
+def _legacy_unscoped_finding_owner_step_id(
+    finding: ValidationFinding,
+    *,
+    plan: Optional[AnalysisPlan],
+) -> Optional[str]:
+    """Resolve a legacy unscoped finding only when ownership is unambiguous.
+
+    Modern step validators write ``detail.step_id`` directly.  This helper is
+    deliberately a closed migration path for old persisted checkpoints: the
+    validator must have one registered exact method owner and the current plan
+    must contain exactly one matching non-figure result step.  Zero or multiple
+    candidates remain active (fail closed).
+    """
+
+    if plan is None or _step_id_referenced_in_finding(finding):
+        return None
+    owner_methods = _LEGACY_UNSCOPED_STEP_VALIDATOR_METHODS.get(
+        str(finding.validator or "")
+    )
+    if not owner_methods:
+        return None
+    candidates = {
+        str(step.step_id)
+        for step in (plan.steps or [])
+        if str(step.step_id or "")
+        and _normalised_method_head(step.method) in owner_methods
+        and not _has_figure_only_output_contract(step)
+    }
+    if len(candidates) != 1:
+        return None
+    return next(iter(candidates))
+
+
 def _successful_step_ids(per_step_records: Sequence[Dict[str, Any]]) -> set:
     """Step ids whose FINAL recorded status was ``"ok"``.
 
@@ -1495,6 +1551,7 @@ def _partition_findings_by_supersession(
     findings: Sequence[ValidationFinding],
     *,
     success_step_ids: set,
+    plan: Optional[AnalysisPlan] = None,
     known_step_ids: Optional[set] = None,
     gate_state: Optional[Dict[str, bool]] = None,
     latest_publication_audit: Optional[Dict[str, Any]] = None,
@@ -1524,6 +1581,10 @@ def _partition_findings_by_supersession(
        errors. This keeps repaired figure exports from being blocked
        by stale resume-era QA findings while preserving the historical
        finding in the audit trail.
+    5. A legacy persisted finding lacks a step id, but its validator belongs to
+       the closed migration registry and the current plan has exactly one
+       matching non-figure owner step.  It is then treated exactly like an
+       explicitly scoped finding.  Ambiguous ownership remains active.
 
     The classification is purely deterministic — same inputs always
     yield the same partition. The superseded set is returned
@@ -1534,7 +1595,9 @@ def _partition_findings_by_supersession(
     active: List[ValidationFinding] = []
     superseded: List[ValidationFinding] = []
     for f in findings:
-        sid = _step_id_referenced_in_finding(f)
+        sid = _step_id_referenced_in_finding(f) or (
+            _legacy_unscoped_finding_owner_step_id(f, plan=plan)
+        )
         if sid:
             if sid in success_step_ids:
                 superseded.append(f)
@@ -1704,6 +1767,7 @@ def _compute_readiness_gates(
     active_findings, superseded_findings = _partition_findings_by_supersession(
         findings,
         success_step_ids=success_step_ids,
+        plan=plan,
         known_step_ids=known_step_ids,
         gate_state=current_gate_state,
         latest_publication_audit=latest_publication_audit,

@@ -639,6 +639,11 @@ def _cohort_definition_sensitivity_contract_findings(
 
     if not _is_cohort_definition_sensitivity_result_step(step):
         return []
+    # Findings emitted here belong to one exact planner step.  Keep that
+    # ownership machine-readable so a successful retry/resume can supersede an
+    # older failure without parsing prose or treating the whole robustness
+    # subsystem as one global gate.
+    step_detail = {"step_id": str(step.step_id)}
     try:
         locked_specs = _read_locked_robustness_spec_dicts(run_dir)
     except Exception as exc:
@@ -647,7 +652,10 @@ def _cohort_definition_sensitivity_contract_findings(
                 validator="robustness_spec_lock",
                 severity="error",
                 message=f"Locked robustness definitions are unavailable: {exc}",
-                detail={"lock_path": str(Path(run_dir) / "robustness_specs_locked.json")},
+                detail={
+                    **step_detail,
+                    "lock_path": str(Path(run_dir) / "robustness_specs_locked.json"),
+                },
             )
         ]
 
@@ -706,6 +714,7 @@ def _cohort_definition_sensitivity_contract_findings(
                     f"{executed_result_issues}."
                 ),
                 detail={
+                    **step_detail,
                     "required_spec_ids": sorted(locked_by_id),
                     "issues": executed_result_issues,
                     "point_only_policy": (
@@ -754,6 +763,7 @@ def _cohort_definition_sensitivity_contract_findings(
                     )
                 ),
                 detail={
+                    **step_detail,
                     "locked_spec_ids": sorted(locked_ids),
                     "reported_spec_ids": sorted(reported_ids),
                     "missing_spec_ids": missing_ids,
@@ -794,6 +804,7 @@ def _cohort_definition_sensitivity_contract_findings(
                     severity="error",
                     message=f"Could not replay locked cohort memberships: {exc}",
                     detail={
+                        **step_detail,
                         "universe_path": str(universe_path),
                         "cohort_path": str(cohort_path) if cohort_path else None,
                     },
@@ -883,6 +894,7 @@ def _cohort_definition_sensitivity_contract_findings(
                         f"Issues={membership_issues}."
                     ),
                     detail={
+                        **step_detail,
                         "universe_path": str(universe_path),
                         "cohort_path": str(cohort_path),
                         "cohort_spec_ids": sorted(spec.spec_id for spec in cohort_specs),
