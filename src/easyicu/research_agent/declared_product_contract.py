@@ -18,7 +18,10 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 from .schema import AnalysisStep, ValidationFinding
-from .trajectory_plan_contract import trajectory_role_scope_summary_findings
+from .trajectory_plan_contract import (
+    trajectory_role_result_findings,
+    trajectory_role_scope_summary_findings,
+)
 
 
 _FIGURE_KINDS = frozenset({"figure", "plot", "chart", "fig", "heatmap"})
@@ -359,6 +362,12 @@ def declared_product_contract_findings(
     findings: list[ValidationFinding] = []
     findings.extend(
         trajectory_role_scope_summary_findings(
+            step=step,
+            step_summary=step_summary,
+        )
+    )
+    findings.extend(
+        trajectory_role_result_findings(
             step=step,
             step_summary=step_summary,
         )

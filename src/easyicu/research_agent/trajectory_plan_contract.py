@@ -9,13 +9,20 @@ clustering method, cluster count, eligibility threshold, or scientific runner.
 
 from __future__ import annotations
 
+import math
 import re
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
-from .schema import AnalysisPlan, AnalysisStep, ResearchContext, ValidationFinding
+from .schema import (
+    AnalysisPlan,
+    AnalysisStep,
+    ClusterSelectionManifest,
+    ResearchContext,
+    ValidationFinding,
+)
 
 
 _ROLE_ORDER = (
@@ -448,6 +455,88 @@ def trajectory_role_scope_summary_findings(
                 "step_id": step.step_id,
                 "owned_roles": sorted(owned_roles),
                 "unauthorized_products_by_role": unauthorized,
+            },
+        )
+    ]
+
+
+def trajectory_role_result_findings(
+    *,
+    step: AnalysisStep,
+    step_summary: Mapping[str, object],
+) -> List[ValidationFinding]:
+    """Validate role-local replay metadata without choosing the science."""
+
+    roles = trajectory_step_roles(step)
+    if "candidate_selection" not in roles:
+        return []
+    raw_selection = step_summary.get("cluster_selection")
+    try:
+        selection = ClusterSelectionManifest.model_validate(raw_selection)
+    except Exception as exc:
+        return [
+            ValidationFinding(
+                validator="trajectory_role_result",
+                severity="error",
+                message=(
+                    f"Step {step.step_id} did not produce a valid typed cluster "
+                    "selection with at least two finite candidates and one selected k."
+                ),
+                detail={
+                    "kind": "trajectory_candidate_selection_invalid",
+                    "step_id": step.step_id,
+                    "validation_error": str(exc),
+                },
+            )
+        ]
+
+    selected_value = next(
+        item.criterion_value
+        for item in selection.candidates
+        if item.n_clusters == selection.selected_n_clusters
+    )
+    candidate_values = [item.criterion_value for item in selection.candidates]
+    issues: List[str] = []
+    if selection.selection_rule == "minimum" and not math.isclose(
+        selected_value,
+        min(candidate_values),
+        rel_tol=1e-12,
+        abs_tol=1e-12,
+    ):
+        issues.append("minimum rule did not select the finite minimum")
+    if selection.selection_rule == "maximum" and not math.isclose(
+        selected_value,
+        max(candidate_values),
+        rel_tol=1e-12,
+        abs_tol=1e-12,
+    ):
+        issues.append("maximum rule did not select the finite maximum")
+    for count_key in ("n_clusters", "cluster_count"):
+        raw_count = step_summary.get(count_key)
+        if raw_count is None:
+            continue
+        try:
+            reported_count = int(raw_count)
+        except (TypeError, ValueError):
+            issues.append(f"{count_key} is not an integer")
+            continue
+        if reported_count != selection.selected_n_clusters:
+            issues.append(f"{count_key} differs from selected_n_clusters")
+    if not issues:
+        return []
+    return [
+        ValidationFinding(
+            validator="trajectory_role_result",
+            severity="error",
+            message=(
+                f"Step {step.step_id} cluster-selection metadata does not replay "
+                "the agent-declared selection rule."
+            ),
+            detail={
+                "kind": "trajectory_candidate_selection_replay_mismatch",
+                "step_id": step.step_id,
+                "issues": issues,
+                "selection": selection.model_dump(mode="json"),
             },
         )
     ]
@@ -1042,6 +1131,7 @@ __all__ = [
     "trajectory_plan_dag_findings",
     "trajectory_planner_contract_guide",
     "trajectory_role_code_contract",
+    "trajectory_role_result_findings",
     "trajectory_role_scope_summary_findings",
     "trajectory_step_roles",
 ]
