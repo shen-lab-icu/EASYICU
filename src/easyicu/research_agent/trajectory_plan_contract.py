@@ -1067,7 +1067,11 @@ def trajectory_role_code_contract(
         )
     if "cluster_selection" in declarations:
         sections.append(
-            "CANDIDATE-SELECTION ROLE: write cluster_selection.json using the "
+            "CANDIDATE-SELECTION ROLE: consume the declared upstream trajectory "
+            "representation artifact as the clustering model matrix; do not "
+            "reconstruct trajectory features from COHORT_PARQUET (the locked "
+            "cohort may be used only for identifier reconciliation or audits). "
+            "Write cluster_selection.json using the "
             "typed candidate schema: criterion, selection_rule (minimum or "
             "maximum), direction (minimize or maximize), "
             "selected_n_clusters, at least two finite candidates with "
