@@ -677,6 +677,63 @@ def _restore_resume_plan_robustness_lock(
     return restored, revision_path
 
 
+def _migrate_resume_trajectory_products(
+    *,
+    plan: AnalysisPlan,
+    context: ResearchContext,
+    run_dir: Path,
+    evidence: EvidenceStore,
+    prompt_version: str,
+    llm_signature: str,
+) -> tuple[AnalysisPlan, Optional[Path], List[ValidationFinding]]:
+    """Apply schema-only trajectory products to a reused legacy plan.
+
+    Resume normally skips plan-shaping transforms to preserve step identities.
+    Canonical trajectory products are the safe exception: augmentation changes
+    neither step ids/order nor any scientific method, input, horizon, threshold,
+    or cluster choice. Older checkpoints may predate the role recognizer, so
+    treating their saved plan as already normalized silently removes the replay
+    contracts from resumed execution.
+    """
+
+    augmented, augmentation_findings = augment_trajectory_plan_products(
+        plan=plan,
+        context=context,
+    )
+    if augmented == plan:
+        return plan, None, augmentation_findings
+
+    revision = _next_analysis_plan_revision(
+        run_dir=run_dir,
+        plan=plan,
+        evidence=evidence,
+    )
+    augmented = augmented.model_copy(update={"revision": revision})
+    revision_path = run_dir / f"analysis_plan_revision_{revision}.json"
+    if revision_path.exists():
+        raise LegacyResumePlanMigrationError(
+            f"refusing to overwrite existing plan revision {revision_path.name}"
+        )
+    revision_path.write_text(augmented.model_dump_json(indent=2), encoding="utf-8")
+    evidence.register_file(
+        kind="log",
+        description=(
+            "Resume migration adding canonical trajectory replay products to "
+            "the existing agent-owned role DAG."
+        ),
+        source_path=revision_path,
+        evidence_id=f"analysis_plan_revision_{revision}",
+        producer="planner",
+        generation_mode="system",
+        prompt_pack_version=prompt_version,
+        metadata={
+            "reason": "resume_trajectory_schema_products",
+            "llm_signature": llm_signature,
+        },
+    )
+    return augmented, revision_path, augmentation_findings
+
+
 def _migrate_legacy_resume_model_requirements(
     *,
     plan: AnalysisPlan,
@@ -2054,6 +2111,37 @@ class ResearchAgentPipeline:
                                 lock_restore_path.relative_to(run_dir)
                             ),
                             "lock_path": "robustness_specs_locked.json",
+                        },
+                    )
+                )
+            plan, trajectory_migration_path, trajectory_migration_findings = (
+                _migrate_resume_trajectory_products(
+                    plan=plan,
+                    context=agent_context,
+                    run_dir=run_dir,
+                    evidence=evidence,
+                    prompt_version=prompt_version,
+                    llm_signature=llm_signature,
+                )
+            )
+            findings.extend(trajectory_migration_findings)
+            if trajectory_migration_path is not None:
+                migrated_plan_path = trajectory_migration_path
+                plan_generation_mode = "resumed_planner_migration"
+                findings.append(
+                    ValidationFinding(
+                        validator="plan_contract",
+                        severity="warning",
+                        message=(
+                            "Resume migrated an older trajectory plan to the "
+                            "canonical replay-product schema without changing "
+                            "scientific ownership or step identities."
+                        ),
+                        detail={
+                            "kind": "resume_trajectory_schema_migration",
+                            "plan_path": str(
+                                trajectory_migration_path.relative_to(run_dir)
+                            ),
                         },
                     )
                 )
