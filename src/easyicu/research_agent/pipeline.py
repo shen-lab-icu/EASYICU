@@ -47,6 +47,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 import pandas as pd
+from pydantic import BaseModel, ConfigDict, Field
 
 logger = logging.getLogger(__name__)
 
@@ -271,6 +272,7 @@ from .literature import (
 )
 from .llm import (
     LLMClient,
+    LLMMessage,
     LLMRouter,
     MockLLMClient,
     llm_is_mockish,
@@ -298,9 +300,12 @@ from .schema import (
     TimeWindow,
     ValidationFinding,
     VariableRole,
+    ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES,
+    ADJUSTED_ASSOCIATION_CONTINUOUS_METHOD_FAMILIES,
     PLANNED_MODEL_REQUIREMENTS_OUTPUT,
     PLANNED_MODEL_REQUIREMENTS_OUTPUT_KIND,
     PLANNED_MODEL_REQUIREMENTS_STEP_METHOD,
+    PlannedModelRequirement,
 )
 from .study_design import (
     build_study_design_brief,
@@ -518,53 +523,72 @@ def _legacy_resume_model_roster_targets(
     )
 
 
-def _assert_legacy_resume_roster_revision_is_scoped(
+class _LegacyModelRosterStepPacket(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    step_id: str = Field(min_length=1)
+    model_requirements: List[PlannedModelRequirement] = Field(min_length=1)
+
+
+class _LegacyModelRosterPacket(BaseModel):
+    """Planner-owned roster patch with no surface for broader plan edits."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    steps: List[_LegacyModelRosterStepPacket] = Field(min_length=1)
+
+
+def _parse_legacy_model_roster_packet(
+    raw: str,
     *,
-    original: AnalysisPlan,
-    revised: AnalysisPlan,
     target_step_ids: tuple[str, ...],
-) -> None:
-    """Reject every replanner change except target ``model_requirements``."""
-
-    original_payload = original.model_dump(mode="json")
-    revised_payload = revised.model_dump(mode="json")
-    for payload in (original_payload, revised_payload):
-        payload.pop("steps", None)
-        payload.pop("revision", None)
-    if revised_payload != original_payload:
-        raise LegacyResumePlanMigrationError(
-            "legacy resume migration changed a non-step AnalysisPlan field"
+) -> _LegacyModelRosterPacket:
+    packet = _LegacyModelRosterPacket.model_validate(json.loads(raw.strip()))
+    returned_step_ids = [step.step_id for step in packet.steps]
+    if returned_step_ids != list(target_step_ids):
+        raise ValueError(
+            "roster packet steps must exactly match the ordered target ids: "
+            f"expected={list(target_step_ids)!r}, returned={returned_step_ids!r}"
         )
-
-    original_ids = [step.step_id for step in original.steps]
-    revised_ids = [step.step_id for step in revised.steps]
-    if revised_ids != original_ids:
-        raise LegacyResumePlanMigrationError(
-            "legacy resume migration changed step identity, order, or count"
+    for step in packet.steps:
+        requirement_ids = [
+            requirement.requirement_id
+            for requirement in step.model_requirements
+        ]
+        if len(requirement_ids) != len(set(requirement_ids)):
+            raise ValueError(
+                f"duplicate requirement_id in roster packet for {step.step_id!r}"
+            )
+        primary_count = sum(
+            requirement.analysis_role == "primary"
+            for requirement in step.model_requirements
         )
+        if primary_count != 1:
+            raise ValueError(
+                "each target step roster must contain exactly one "
+                "analysis_role='primary'; the Planner chooses which requirement "
+                f"is primary (step={step.step_id!r}, returned={primary_count})"
+            )
+    return packet
 
-    targets = set(target_step_ids)
-    for original_step, revised_step in zip(original.steps, revised.steps):
-        original_step_payload = original_step.model_dump(mode="json")
-        revised_step_payload = revised_step.model_dump(mode="json")
-        original_requirements = original_step_payload.pop("model_requirements", [])
-        revised_requirements = revised_step_payload.pop("model_requirements", [])
-        if revised_step_payload != original_step_payload:
-            raise LegacyResumePlanMigrationError(
-                "legacy resume migration changed a non-model_requirements field "
-                f"on step {original_step.step_id!r}"
-            )
-        if original_step.step_id in targets:
-            if original_requirements or not revised_requirements:
-                raise LegacyResumePlanMigrationError(
-                    "legacy resume migration did not populate the required typed "
-                    f"model roster for step {original_step.step_id!r}"
-                )
-        elif revised_requirements != original_requirements:
-            raise LegacyResumePlanMigrationError(
-                "legacy resume migration changed model_requirements outside its "
-                f"target set on step {original_step.step_id!r}"
-            )
+
+def _project_legacy_model_roster_packet(
+    *,
+    plan: AnalysisPlan,
+    packet: _LegacyModelRosterPacket,
+) -> AnalysisPlan:
+    """Project only validated roster values onto an otherwise frozen plan."""
+
+    rosters = {
+        step.step_id: [requirement.model_dump(mode="json") for requirement in step.model_requirements]
+        for step in packet.steps
+    }
+    payload = plan.model_dump(mode="json")
+    for step_payload in payload["steps"]:
+        step_id = str(step_payload.get("step_id") or "")
+        if step_id in rosters:
+            step_payload["model_requirements"] = rosters[step_id]
+    return AnalysisPlan.model_validate(payload)
 
 
 def _next_analysis_plan_revision(
@@ -599,9 +623,9 @@ def _migrate_legacy_resume_model_requirements(
 
     The framework identifies only the schema surface that requires migration.
     It never derives an outcome, exposure, analysis role, analysis set, or model
-    family from prose. Those scientific commitments must come back from the
-    :class:`ReplannerAgent`, and a field-for-field scope check rejects any other
-    plan change before a revision is written or registered.
+    family from prose. Those scientific commitments must come back in a small,
+    strictly typed PlannerAgent packet. The framework projects only that roster
+    onto the frozen plan before a revision is written or registered.
     """
 
     completed_records = _resume_completed_records_for_plan_migration(
@@ -619,44 +643,117 @@ def _migrate_legacy_resume_model_requirements(
     if not target_step_ids:
         return plan, None, ()
 
-    directive = (
-        "LEGACY SCHEMA MIGRATION ONLY. Populate the typed `model_requirements` "
-        "roster for each listed remaining step, using your scientific judgment "
-        "from the unchanged ResearchContext and current plan: "
-        f"{json.dumps(list(target_step_ids), ensure_ascii=False)}. Do not change "
-        "research_question, analysis_type, cohort, robustness_specs, rationale, "
-        "step order, step ids, intent, inputs, expected_outputs, method, "
-        "icu_rule_refs, completed steps, or any non-target model_requirements. "
-        "Do not add a default model: if the existing evidence is insufficient "
-        "to choose the typed roster, the migration must fail closed."
+    target_steps = [
+        {
+            "step_id": step.step_id,
+            "intent": step.intent,
+            "method": step.method,
+            "inputs": list(step.inputs),
+            "expected_outputs": list(step.expected_outputs),
+            "icu_rule_refs": list(step.icu_rule_refs),
+        }
+        for step in plan.steps
+        if step.step_id in set(target_step_ids)
+    ]
+    required_fields = [
+        "requirement_id",
+        "outcome",
+        "outcome_type",
+        "method_family",
+        "exposure_source",
+        "analysis_role",
+        "analysis_set",
+        "required_for_step_success",
+    ]
+    format_reminder = (
+        "Return exactly {\"steps\": [{\"step_id\": <target id>, "
+        "\"model_requirements\": [<one or more complete requirement objects>]}]}. "
+        f"Every requirement object must contain all fields {required_fields!r}. "
+        "Allowed outcome_type: binary, continuous. Allowed analysis_role: "
+        "primary, secondary, sensitivity. Allowed analysis_set: source_aware, "
+        "complete_case. Primary/secondary requirements must set "
+        "required_for_step_success=true; only sensitivity may be false. Each "
+        "target step must contain exactly one analysis_role=primary; the Planner "
+        "chooses which requirement is primary and labels all others secondary "
+        "or sensitivity."
     )
-    probe_summary = next(
-        (
-            record.get("step_summary")
-            for record in reversed(completed_records)
-            if record.get("step_id") == "00_probe"
-            and isinstance(record.get("step_summary"), dict)
+    plan_payload = plan.model_dump(mode="json")
+    plan_level_commitments = {
+        key: plan_payload.get(key)
+        for key in (
+            "research_question",
+            "analysis_type",
+            "rationale",
+            "cohort",
+            "robustness_specs",
+        )
+    }
+    messages = [
+        LLMMessage(
+            role="system",
+            content=(
+                "You are the PlannerAgent's typed legacy-plan migration worker. "
+                "Choose the scientific model roster; the framework will only "
+                "validate and project it. Return JSON only. Never rewrite the "
+                "AnalysisPlan and never invent a default model when the supplied "
+                "plan and ResearchContext do not justify one."
+            ),
         ),
-        None,
-    )
+        LLMMessage(
+            role="user",
+            content=(
+                "Populate model_requirements for every target step. Each roster "
+                "entry is a complete PlannedModelRequirement. Choose outcome, "
+                "exposure_source, method_family, role, and analysis set from the "
+                "unchanged scientific commitments below. Emit a separate "
+                "requirement for every adjusted outcome/model pre-specified in "
+                "the target step intent; ResearchContext.target_outcome is not "
+                "an exhaustive roster and must not cause an intent-committed "
+                "secondary outcome/model to be omitted. The Planner decides the "
+                "roster count and contents; the framework does not infer either "
+                "from prose. For each target step, choose exactly one roster "
+                "entry as analysis_role=primary and label the other entries "
+                "secondary or sensitivity. Binary method_family "
+                f"must be one of {sorted(ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES)!r}; "
+                "continuous method_family must be one of "
+                f"{sorted(ADJUSTED_ASSOCIATION_CONTINUOUS_METHOD_FAMILIES)!r}. "
+                "Do not return plan fields, prose, or requirements for any other "
+                "step.\n\n"
+                f"REQUIRED JSON SHAPE:\n{format_reminder}\n\n"
+                "TARGET STEPS (verbatim from the saved planner plan):\n"
+                f"{json.dumps(target_steps, indent=2, ensure_ascii=False)}\n\n"
+                "READ-ONLY PLAN-LEVEL COMMITMENTS (context only; do not return "
+                "these fields):\n"
+                f"{json.dumps(plan_level_commitments, indent=2, ensure_ascii=False)}\n\n"
+                "RESEARCH CONTEXT:\n"
+                f"{context.model_dump_json(indent=2)}"
+            ),
+        ),
+    ]
     try:
-        revised = ReplannerAgent(role_resolver("planner")).run(
-            context=context,
-            current_plan=plan,
-            probe_summary=probe_summary,
-            completed_step_records=completed_records,
-            directive=directive,
+        from .structured_retry import call_llm_with_structured_retry
+
+        packet = call_llm_with_structured_retry(
+            role_resolver("planner"),
+            messages,
+            parser=lambda raw: _parse_legacy_model_roster_packet(
+                raw,
+                target_step_ids=target_step_ids,
+            ),
+            role="legacy_model_roster_migration",
+            max_retries=2,
+            max_tokens=4096,
+            temperature=0.1,
+            format_reminder=format_reminder,
         )
     except Exception as exc:
         raise LegacyResumePlanMigrationError(
             "planner LLM failed while migrating legacy model_requirements; "
             "resume stopped without a default model"
         ) from exc
-
-    _assert_legacy_resume_roster_revision_is_scoped(
-        original=plan,
-        revised=revised,
-        target_step_ids=target_step_ids,
+    revised = _project_legacy_model_roster_packet(
+        plan=plan,
+        packet=packet,
     )
     revision = _next_analysis_plan_revision(
         run_dir=run_dir,
@@ -677,7 +774,7 @@ def _migrate_legacy_resume_model_requirements(
         ),
         source_path=revision_path,
         evidence_id=f"analysis_plan_revision_{revision}",
-        producer="replanner",
+        producer="planner",
         generation_mode="llm",
         prompt_pack_version=prompt_version,
         metadata={
@@ -1846,7 +1943,7 @@ class ResearchAgentPipeline:
                 )
             )
             if migrated_plan_path is not None:
-                plan_generation_mode = "resumed_replanner_migration"
+                plan_generation_mode = "resumed_planner_migration"
                 findings.append(
                     ValidationFinding(
                         validator="planner_schema_migration",

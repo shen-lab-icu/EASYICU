@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
-import easyicu.research_agent.pipeline as pipeline_module
 from easyicu.research_agent.context import build_research_context
 from easyicu.research_agent.evidence import EvidenceStore
 from easyicu.research_agent.pipeline import (
@@ -40,8 +40,11 @@ def _legacy_plan() -> AnalysisPlan:
             ),
             AnalysisStep(
                 step_id="02_remaining_closed",
-                intent="Fit the planner-selected adjusted association models.",
-                inputs=["exposure", "endpoint"],
+                intent=(
+                    "Fit separate planner-selected adjusted models for the "
+                    "binary endpoint and continuous length outcome."
+                ),
+                inputs=["exposure", "endpoint", "length_outcome"],
                 expected_outputs=[
                     "table:adjusted_association_estimates",
                     "table:analytic_population",
@@ -72,21 +75,23 @@ def _planner_requirement() -> PlannedModelRequirement:
         outcome_type="binary",
         method_family="statsmodels_glm_binomial",
         exposure_source="agent_selected_transform",
-        analysis_role="secondary",
+        analysis_role="primary",
         analysis_set="complete_case",
         required_for_step_success=True,
     )
 
 
-def _plan_with_target_roster(plan: AnalysisPlan) -> AnalysisPlan:
-    steps = []
-    for step in plan.steps:
-        if step.step_id == "02_remaining_closed":
-            step = step.model_copy(
-                update={"model_requirements": [_planner_requirement()]}
-            )
-        steps.append(step)
-    return plan.model_copy(update={"steps": steps, "revision": plan.revision + 1})
+def _continuous_planner_requirement() -> PlannedModelRequirement:
+    return PlannedModelRequirement(
+        requirement_id="planner_selected_continuous_outcome",
+        outcome="length_outcome",
+        outcome_type="continuous",
+        method_family="median_quantile_regression",
+        exposure_source="agent_selected_transform",
+        analysis_role="secondary",
+        analysis_set="complete_case",
+        required_for_step_success=True,
+    )
 
 
 def _evidence_with_base_plan(run_dir: Path, plan: AnalysisPlan) -> EvidenceStore:
@@ -104,12 +109,49 @@ def _evidence_with_base_plan(run_dir: Path, plan: AnalysisPlan) -> EvidenceStore
     return evidence
 
 
-def test_resume_migration_uses_replanner_roster_and_registers_revision(
+def _context(tmp_path: Path, plan: AnalysisPlan):
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4],
+            "exposure": [0.1, 0.4, 0.8, 1.2],
+            "endpoint": [0, 1, 0, 1],
+            "length_outcome": [1.5, 2.0, 3.25, 5.0],
+            "baseline": [50, 61, 72, 83],
+        }
+    ).to_parquet(cohort_path, index=False)
+    return build_research_context(
+        research_question=plan.research_question,
+        cohort=cohort_path,
+        cohort_name="migration_packet_test",
+        database="synthetic",
+        target_outcome="endpoint",
+        primary_exposure="exposure",
+    )
+
+
+def _valid_packet_json() -> str:
+    return json.dumps(
+        {
+            "steps": [
+                {
+                    "step_id": "02_remaining_closed",
+                    "model_requirements": [
+                        _planner_requirement().model_dump(mode="json"),
+                        _continuous_planner_requirement().model_dump(mode="json"),
+                    ],
+                }
+            ]
+        }
+    )
+
+
+def test_resume_migration_uses_planner_packet_and_registers_revision(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     plan = _legacy_plan()
     evidence = _evidence_with_base_plan(tmp_path, plan)
+    context = _context(tmp_path, plan)
     base_bytes = (tmp_path / "analysis_plan.json").read_bytes()
     resume_state = {
         "plan_path": "analysis_plan.json",
@@ -120,47 +162,69 @@ def test_resume_migration_uses_replanner_roster_and_registers_revision(
     }
     calls = []
 
-    class StubReplanner:
-        def __init__(self, llm) -> None:
-            calls.append(("client", llm))
+    class PacketLLM:
+        name = "packet-llm"
 
-        def run(self, **kwargs):
-            calls.append(("run", kwargs))
-            assert [
-                record["step_id"]
-                for record in kwargs["completed_step_records"]
-            ] == ["01_completed_description"]
-            assert "02_remaining_closed" in kwargs["directive"]
-            return _plan_with_target_roster(kwargs["current_plan"])
+        def complete(self, messages, *, max_tokens=4096, temperature=0.1):
+            calls.append((messages, max_tokens, temperature))
+            return _valid_packet_json()
 
-    monkeypatch.setattr(pipeline_module, "ReplannerAgent", StubReplanner)
     roles = []
 
     revised, revision_path, target_ids = _migrate_legacy_resume_model_requirements(
         plan=plan,
-        context=object(),  # The stub stands in for the planner LLM boundary.
+        context=context,
         run_dir=tmp_path,
         resume_state=resume_state,
         resume_from_step_id="02_remaining_closed",
-        role_resolver=lambda role: roles.append(role) or "planner-client",
+        role_resolver=lambda role: roles.append(role) or PacketLLM(),
         evidence=evidence,
         prompt_version="test-pack",
         llm_signature="test-planner",
     )
 
     assert roles == ["planner"]
-    assert len(calls) == 2
+    assert len(calls) == 1
+    prompt = "\n".join(message.content for message in calls[0][0])
+    assert "02_remaining_closed" in prompt
+    assert "binary endpoint and continuous length outcome" in prompt
+    assert '"inputs": [' in prompt
+    assert '"expected_outputs": [' in prompt
+    assert '"icu_rule_refs": [' in prompt
+    assert "requirement_id" in prompt
+    assert "outcome_type" in prompt
+    assert "analysis_role" in prompt
+    assert "analysis_set" in prompt
+    assert "primary, secondary, sensitivity" in prompt
+    assert "source_aware, complete_case" in prompt
+    assert "every adjusted outcome/model pre-specified" in prompt
+    assert "target_outcome is not an exhaustive roster" in prompt
+    assert "secondary outcome/model to be omitted" in prompt
+    assert "exactly one analysis_role=primary" in prompt
+    assert "Planner chooses which requirement is primary" in prompt
+    assert "READ-ONLY PLAN-LEVEL COMMITMENTS" in prompt
+    for field in (
+        "research_question",
+        "analysis_type",
+        "rationale",
+        "cohort",
+        "robustness_specs",
+    ):
+        assert f'"{field}"' in prompt
     assert target_ids == ("02_remaining_closed",)
     assert revision_path == tmp_path / "analysis_plan_revision_2.json"
     assert revision_path.exists()
     assert (tmp_path / "analysis_plan.json").read_bytes() == base_bytes
-    assert revised.steps[1].model_requirements == [_planner_requirement()]
+    assert revised.steps[1].model_requirements == [
+        _planner_requirement(),
+        _continuous_planner_requirement(),
+    ]
     assert not revised.steps[2].model_requirements
     assert not revised.steps[3].model_requirements
 
     revision_evidence = evidence.get("analysis_plan_revision_2")
     assert revision_evidence is not None
-    assert revision_evidence.producer == "replanner"
+    assert revision_evidence.producer == "planner"
     assert revision_evidence.generation_mode == "llm"
     assert revision_evidence.metadata["reason"] == (
         "legacy_missing_model_requirements"
@@ -223,36 +287,43 @@ def test_resume_loader_ignores_mutable_live_plan_and_unregistered_revision(
     )
 
 
-def test_resume_migration_real_replanner_parser_preserves_plan_shape(
+def test_resume_migration_retries_real_incomplete_requirement_shape(
     tmp_path: Path,
 ) -> None:
     plan = _legacy_plan()
     evidence = _evidence_with_base_plan(tmp_path, plan)
-    cohort_path = tmp_path / "cohort.parquet"
-    pd.DataFrame(
-        {
-            "stay_id": [1, 2, 3, 4],
-            "exposure": [0.1, 0.4, 0.8, 1.2],
-            "endpoint": [0, 1, 0, 1],
-            "baseline": [50, 61, 72, 83],
-        }
-    ).to_parquet(cohort_path, index=False)
-    context = build_research_context(
-        research_question=plan.research_question,
-        cohort=cohort_path,
-        cohort_name="migration_parser_test",
-        database="synthetic",
-        target_outcome="endpoint",
-        primary_exposure="exposure",
-    )
+    context = _context(tmp_path, plan)
     llm_calls = []
 
-    class PlanJSONLLM:
-        name = "plan-json-llm"
+    class IncompleteThenValidPacketLLM:
+        name = "incomplete-then-valid-packet-llm"
 
         def complete(self, messages, *, max_tokens=4096, temperature=0.1):
             llm_calls.append((messages, max_tokens, temperature))
-            return _plan_with_target_roster(plan).model_dump_json(indent=2)
+            if len(llm_calls) == 1:
+                # Exact real failure shape: outcome/outcome_type/analysis_set
+                # absent and analysis_role is a prose label, not the enum.
+                return json.dumps(
+                    {
+                        "steps": [
+                            {
+                                "step_id": "02_remaining_closed",
+                                "model_requirements": [
+                                    {
+                                        "requirement_id": "incomplete_secondary",
+                                        "method_family": "logistic_regression",
+                                        "exposure_source": "exposure",
+                                        "analysis_role": (
+                                            "secondary_adjusted_association"
+                                        ),
+                                        "required_for_step_success": True,
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                )
+            return _valid_packet_json()
 
     revised, revision_path, target_ids = _migrate_legacy_resume_model_requirements(
         plan=plan,
@@ -264,13 +335,20 @@ def test_resume_migration_real_replanner_parser_preserves_plan_shape(
             ]
         },
         resume_from_step_id=None,
-        role_resolver=lambda role: PlanJSONLLM() if role == "planner" else None,
+        role_resolver=lambda role: (
+            IncompleteThenValidPacketLLM() if role == "planner" else None
+        ),
         evidence=evidence,
         prompt_version="test-pack",
         llm_signature="test-planner",
     )
 
-    assert len(llm_calls) == 1
+    assert len(llm_calls) == 2
+    retry_prompt = "\n".join(message.content for message in llm_calls[1][0])
+    assert "secondary_adjusted_association" in retry_prompt
+    assert "outcome" in retry_prompt
+    assert "outcome_type" in retry_prompt
+    assert "analysis_set" in retry_prompt
     assert revision_path == tmp_path / "analysis_plan_revision_2.json"
     assert target_ids == ("02_remaining_closed",)
     assert revised.analysis_type == plan.analysis_type
@@ -279,23 +357,73 @@ def test_resume_migration_real_replanner_parser_preserves_plan_shape(
     assert revised.robustness_specs == plan.robustness_specs
     for original_step, revised_step in zip(plan.steps, revised.steps):
         if original_step.step_id == "02_remaining_closed":
-            assert revised_step.model_requirements == [_planner_requirement()]
+            assert revised_step.model_requirements == [
+                _planner_requirement(),
+                _continuous_planner_requirement(),
+            ]
             revised_step = revised_step.model_copy(update={"model_requirements": []})
         assert revised_step == original_step
 
 
-def test_resume_migration_does_not_touch_completed_or_nonclosed_steps(
+@pytest.mark.parametrize("invalid_primary_count", [0, 2])
+def test_resume_migration_retries_zero_or_multiple_primary_roles(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    invalid_primary_count: int,
 ) -> None:
     plan = _legacy_plan()
     evidence = _evidence_with_base_plan(tmp_path, plan)
+    context = _context(tmp_path, plan)
+    calls = []
 
-    class ForbiddenReplanner:
-        def __init__(self, _llm) -> None:
-            raise AssertionError("completed/non-closed steps must not invoke the LLM")
+    class InvalidThenValidPrimaryPacketLLM:
+        name = "invalid-then-valid-primary-packet-llm"
 
-    monkeypatch.setattr(pipeline_module, "ReplannerAgent", ForbiddenReplanner)
+        def complete(self, messages, *, max_tokens=4096, temperature=0.1):
+            calls.append(messages)
+            if len(calls) == 1:
+                payload = json.loads(_valid_packet_json())
+                roles = (
+                    ["secondary", "secondary"]
+                    if invalid_primary_count == 0
+                    else ["primary", "primary"]
+                )
+                for requirement, role in zip(
+                    payload["steps"][0]["model_requirements"],
+                    roles,
+                ):
+                    requirement["analysis_role"] = role
+                return json.dumps(payload)
+            return _valid_packet_json()
+
+    revised, revision_path, _target_ids = (
+        _migrate_legacy_resume_model_requirements(
+            plan=plan,
+            context=context,
+            run_dir=tmp_path,
+            resume_state={"per_step_records": []},
+            resume_from_step_id=None,
+            role_resolver=lambda _role: InvalidThenValidPrimaryPacketLLM(),
+            evidence=evidence,
+            prompt_version="test-pack",
+            llm_signature="test-planner",
+        )
+    )
+
+    assert len(calls) == 2
+    retry_prompt = "\n".join(message.content for message in calls[1])
+    assert "exactly one analysis_role='primary'" in retry_prompt
+    assert revision_path is not None
+    assert [
+        requirement.analysis_role
+        for requirement in revised.steps[1].model_requirements
+    ] == ["primary", "secondary"]
+
+
+def test_resume_migration_does_not_touch_completed_or_nonclosed_steps(
+    tmp_path: Path,
+) -> None:
+    plan = _legacy_plan()
+    evidence = _evidence_with_base_plan(tmp_path, plan)
     unchanged, revision_path, target_ids = _migrate_legacy_resume_model_requirements(
         plan=plan,
         context=object(),
@@ -306,7 +434,9 @@ def test_resume_migration_does_not_touch_completed_or_nonclosed_steps(
             ]
         },
         resume_from_step_id=None,
-        role_resolver=lambda _role: object(),
+        role_resolver=lambda _role: (_ for _ in ()).throw(
+            AssertionError("completed/non-closed steps must not invoke the LLM")
+        ),
         evidence=evidence,
         prompt_version="test-pack",
         llm_signature="test-planner",
@@ -318,35 +448,32 @@ def test_resume_migration_does_not_touch_completed_or_nonclosed_steps(
     assert not list(tmp_path.glob("analysis_plan_revision_*.json"))
 
 
-@pytest.mark.parametrize("mutation", ["target_intent", "completed_roster"])
-def test_resume_migration_rejects_out_of_scope_replanner_changes(
+@pytest.mark.parametrize("extra_location", ["packet", "step"])
+def test_resume_migration_packet_rejects_out_of_scope_fields(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    mutation: str,
+    extra_location: str,
 ) -> None:
     plan = _legacy_plan()
     evidence = _evidence_with_base_plan(tmp_path, plan)
+    context = _context(tmp_path, plan)
+    calls = []
 
-    class DriftingReplanner:
-        def __init__(self, _llm) -> None:
-            pass
+    class OutOfScopePacketLLM:
+        name = "out-of-scope-packet-llm"
 
-        def run(self, **kwargs):
-            revised = _plan_with_target_roster(kwargs["current_plan"])
-            steps = list(revised.steps)
-            if mutation == "target_intent":
-                steps[1] = steps[1].model_copy(update={"intent": "Changed intent."})
+        def complete(self, messages, *, max_tokens=4096, temperature=0.1):
+            calls.append(messages)
+            payload = json.loads(_valid_packet_json())
+            if extra_location == "packet":
+                payload["research_question"] = "Attempted plan rewrite."
             else:
-                steps[0] = steps[0].model_copy(
-                    update={"model_requirements": [_planner_requirement()]}
-                )
-            return revised.model_copy(update={"steps": steps})
+                payload["steps"][0]["intent"] = "Attempted step rewrite."
+            return json.dumps(payload)
 
-    monkeypatch.setattr(pipeline_module, "ReplannerAgent", DriftingReplanner)
     with pytest.raises(LegacyResumePlanMigrationError):
         _migrate_legacy_resume_model_requirements(
             plan=plan,
-            context=object(),
+            context=context,
             run_dir=tmp_path,
             resume_state={
                 "per_step_records": [
@@ -354,49 +481,49 @@ def test_resume_migration_rejects_out_of_scope_replanner_changes(
                 ]
             },
             resume_from_step_id=None,
-            role_resolver=lambda _role: object(),
+            role_resolver=lambda _role: OutOfScopePacketLLM(),
             evidence=evidence,
             prompt_version="test-pack",
             llm_signature="test-planner",
         )
 
+    assert len(calls) == 3
     assert not list(tmp_path.glob("analysis_plan_revision_*.json"))
     assert evidence.get("analysis_plan_revision_2") is None
 
 
 def test_resume_migration_llm_failure_has_no_default_model_fallback(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     plan = _legacy_plan()
     evidence = _evidence_with_base_plan(tmp_path, plan)
+    context = _context(tmp_path, plan)
     calls = []
 
-    class FailingReplanner:
-        def __init__(self, llm) -> None:
-            calls.append(llm)
+    class FailingPacketLLM:
+        name = "failing-packet-llm"
 
-        def run(self, **_kwargs):
+        def complete(self, messages, *, max_tokens=4096, temperature=0.1):
+            calls.append(messages)
             raise RuntimeError("planner unavailable")
 
-    monkeypatch.setattr(pipeline_module, "ReplannerAgent", FailingReplanner)
     with pytest.raises(
         LegacyResumePlanMigrationError,
         match="stopped without a default model",
     ):
         _migrate_legacy_resume_model_requirements(
             plan=plan,
-            context=object(),
+            context=context,
             run_dir=tmp_path,
             resume_state={"per_step_records": []},
             resume_from_step_id=None,
-            role_resolver=lambda _role: "real-planner-client",
+            role_resolver=lambda _role: FailingPacketLLM(),
             evidence=evidence,
             prompt_version="test-pack",
             llm_signature="test-planner",
         )
 
-    assert calls == ["real-planner-client"]
+    assert len(calls) == 1
     assert all(not step.model_requirements for step in plan.steps)
     assert not list(tmp_path.glob("analysis_plan_revision_*.json"))
     assert evidence.get("analysis_plan_revision_2") is None
