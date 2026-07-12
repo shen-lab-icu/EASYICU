@@ -4985,6 +4985,10 @@ else:
                                 )
                             )
                             step_record["status"] = "repair_failed"
+                            step_record["contract_findings"] = [
+                                f.model_dump() for f in early_contract_findings
+                            ]
+                            step_record["step_summary"] = visual_step_summary
                             per_step_records.append(step_record)
                             _flush_partial_manifest()
                         emit_progress(

@@ -53,11 +53,13 @@ class _VisualGovernanceLLM:
         *,
         initial_code: str,
         contract_code: str | None = None,
+        contract_error: Exception | None = None,
         visual_code: str | None = None,
         visual_error: Exception | None = None,
     ) -> None:
         self.initial_code = initial_code
         self.contract_code = contract_code
+        self.contract_error = contract_error
         self.visual_code = visual_code
         self.visual_error = visual_error
         self.contract_repairs = 0
@@ -96,6 +98,8 @@ class _VisualGovernanceLLM:
                 assert self.visual_code is not None
                 return self.visual_code
             self.contract_repairs += 1
+            if self.contract_error is not None:
+                raise self.contract_error
             assert self.contract_code is not None
             return self.contract_code
         if "INTERPRET THE RESULTS" in upper:
@@ -252,6 +256,48 @@ def test_contract_budget_does_not_consume_visual_layout_budget(
     assert record["contract_repair_attempts"] == 1
     assert record["visual_repair_attempts"] == 1
     assert record["code_repair_attempts"] == 2
+
+
+def test_contract_repair_provider_failure_preserves_contract_observability(
+    ra, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A provider outage must not hide the contract that triggered repair."""
+
+    _ignore_figure_provenance_gates(monkeypatch)
+    from easyicu.research_agent import pipeline_execute
+
+    finding = ValidationFinding(
+        validator="step_contract",
+        severity="error",
+        message="Controlled contract repair is required.",
+        detail={"missing": ["table:summary"]},
+    )
+    monkeypatch.setattr(
+        pipeline_execute,
+        "_step_contract_findings",
+        lambda **kwargs: [finding],
+    )
+    llm = _VisualGovernanceLLM(
+        initial_code=_script(svg=_svg(overlap=False), include_table=False),
+        contract_error=RuntimeError("provider returned HTTP 502"),
+    )
+
+    result = _run(ra, tmp_path, llm)
+    partial = json.loads(
+        (Path(result.workdir) / "manifest_partial.json").read_text(encoding="utf-8")
+    )
+    record = _record(result)
+
+    assert llm.contract_repairs == 1
+    assert record["status"] == "repair_failed"
+    assert record["step_summary"] == {"status": "ok", "contract_ok": False}
+    assert record["contract_findings"] == [finding.model_dump()]
+    assert any(
+        item["validator"] == "coder"
+        and item["severity"] == "error"
+        and "HTTP 502" in item["message"]
+        for item in partial["findings"]
+    )
 
 
 def test_cosmetic_visual_repair_provider_failure_keeps_outputs(
