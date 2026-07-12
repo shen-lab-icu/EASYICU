@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -137,3 +139,58 @@ def test_current_artifact_authority_uses_latest_outer_step_status():
         "run_context",
         "keep",
     }
+
+
+def test_current_evidence_requires_its_own_current_producer_binding():
+    from easyicu.research_agent.runtime_artifacts import current_evidence_records
+
+    records = [
+        {
+            "step_id": "01_current",
+            "status": "ok",
+            "evidence_ids": ["cross_owned"],
+        },
+        {
+            "step_id": "02_failed",
+            "status": "contract_failed",
+            "evidence_ids": [],
+        },
+    ]
+    evidence = [
+        {
+            "evidence_id": "cross_owned",
+            "produced_by_step": "02_failed",
+        }
+    ]
+
+    assert current_evidence_records(evidence, records) == []
+
+
+def test_newer_final_manifest_supersedes_stale_partial_authority(tmp_path: Path):
+    from easyicu.research_agent.runtime_artifacts import load_run_artifact_authority
+
+    partial = tmp_path / "manifest_partial.json"
+    final = tmp_path / "manifest.json"
+    partial.write_text(
+        json.dumps(
+            {"per_step_records": [{"step_id": "01_model", "status": "ok"}]}
+        ),
+        encoding="utf-8",
+    )
+    final.write_text(
+        json.dumps(
+            {
+                "per_step_records": [
+                    {"step_id": "01_model", "status": "contract_failed"}
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    os.utime(partial, ns=(1_000_000_000, 1_000_000_000))
+    os.utime(final, ns=(2_000_000_000, 2_000_000_000))
+
+    authority = load_run_artifact_authority(tmp_path)
+
+    assert authority is not None
+    assert authority["per_step_records"][-1]["status"] == "contract_failed"

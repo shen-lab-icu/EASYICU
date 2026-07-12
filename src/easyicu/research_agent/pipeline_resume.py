@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import tempfile
 from dataclasses import dataclass
@@ -12,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .contracts import ValidationFinding
+from .runtime_artifacts import current_step_records, verified_run_evidence_path
 from .schema import AnalysisPlan, AnalysisStep
 
 
@@ -333,11 +335,15 @@ class ResumeController:
             )
 
     def _apply(self) -> ResumeApplication:
-        prior_records = [
+        prior_history = [
             rec
             for rec in (self.resume_state or {}).get("per_step_records", []) or []
             if isinstance(rec, dict) and rec.get("step_id")
         ]
+        # The checkpoint ledger is append-only, but resume authority is not:
+        # only the newest outer record for a step may be reused.  In
+        # particular, an old ``ok`` must not survive a later contract failure.
+        prior_records = [dict(rec) for rec in current_step_records(prior_history)]
         prior_ok_step_ids = {
             str(rec["step_id"]) for rec in prior_records if rec.get("status") == "ok"
         }
@@ -373,8 +379,7 @@ class ResumeController:
             if finding.validator == "cohort_auditor":
                 continue
             if finding.validator == "runner":
-                msg = finding.message or ""
-                if any(step_id in msg for step_id in prior_ok_step_ids):
+                if self._finding_mentions_step(finding, prior_ok_step_ids):
                     continue
             findings.append(finding)
 
@@ -414,7 +419,14 @@ class ResumeController:
         if detail.get("step_id") in step_ids:
             return True
         haystack = f"{finding.validator} {finding.message} {detail!r}"
-        return any(step_id in haystack for step_id in step_ids)
+        return any(
+            re.search(
+                rf"(?<![A-Za-z0-9_.-]){re.escape(step_id)}(?![A-Za-z0-9_.-])",
+                haystack,
+            )
+            is not None
+            for step_id in step_ids
+        )
 
     def prior_code_for_step(
         self,
@@ -480,15 +492,11 @@ class ResumeController:
             relative_path = str(payload.get("relative_path") or "")
             if not relative_path:
                 continue
-            source_path = _resolve_resume_evidence_path(self.run_dir, relative_path)
+            source_path = verified_run_evidence_path(self.run_dir, payload)
             if source_path is None:
-                continue
-            if not source_path.is_file():
                 continue
             try:
                 raw_code = source_path.read_bytes()
-                if hashlib.sha256(raw_code).hexdigest() != expected_sha256:
-                    continue
                 prior_code = raw_code.decode("utf-8")
             except (OSError, UnicodeDecodeError):
                 continue

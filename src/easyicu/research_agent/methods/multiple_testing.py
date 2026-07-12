@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from ..runtime_artifacts import verified_run_evidence_path
+
 
 # Exact, normalised names for an *unadjusted* p-value.  Substring matching is
 # intentionally forbidden: ``group_value`` contains ``p_val`` and
@@ -788,13 +790,7 @@ def _iter_pvalue_sources(
         rel_path = getattr(rec, "relative_path", None)
         if not rel_path:
             continue
-        # Evidence relative paths are stored relative to the evidence
-        # directory (``evidence/``), which lives inside the run dir.
-        candidates = [
-            run_dir / "evidence" / rel_path,
-            run_dir / rel_path,
-        ]
-        abs_path = next((c for c in candidates if c.exists()), None)
+        abs_path = verified_run_evidence_path(run_dir, rec)
         if abs_path is None:
             continue
         yield abs_path, evidence_id, str(rel_path)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import stat
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
@@ -12,6 +13,70 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .architecture import SystemLayer
 from .schema import AnalysisPlan, ResearchContext, ValidationFinding
+
+
+def _record_field(record: Any, name: str) -> Any:
+    if isinstance(record, Mapping):
+        return record.get(name)
+    return getattr(record, name, None)
+
+
+def verified_run_evidence_path(
+    run_dir: str | Path,
+    record: Any,
+) -> Optional[Path]:
+    """Return the digest-verified evidence file for ``record``.
+
+    Evidence metadata is untrusted input at every reader boundary.  A record is
+    therefore usable only when its path is relative to the run's canonical
+    ``evidence`` directory, no path component is a symbolic link, the target is
+    a regular file, and its bytes still match the registered SHA-256 digest.
+    ``None`` is the fail-closed result for malformed, stale, or escaped records.
+    """
+
+    relative_text = str(_record_field(record, "relative_path") or "").strip()
+    expected_digest = str(_record_field(record, "sha256") or "").strip().lower()
+    relative = Path(relative_text)
+    if (
+        not relative_text
+        or "\x00" in relative_text
+        or relative.is_absolute()
+        or any(part in {"", ".", ".."} for part in relative.parts)
+        or len(expected_digest) != 64
+        or any(char not in "0123456789abcdef" for char in expected_digest)
+    ):
+        return None
+
+    run_root = Path(run_dir).expanduser().resolve()
+    evidence_root = run_root / "evidence"
+    try:
+        if evidence_root.is_symlink() or not evidence_root.is_dir():
+            return None
+        evidence_root_resolved = evidence_root.resolve(strict=True)
+    except OSError:
+        return None
+
+    parts = relative.parts
+    if parts and parts[0] == "evidence":
+        parts = parts[1:]
+    if not parts:
+        return None
+    candidate = evidence_root.joinpath(*parts)
+    current = evidence_root
+    try:
+        for part in parts:
+            current = current / part
+            if current.is_symlink():
+                return None
+        resolved = candidate.resolve(strict=True)
+        resolved.relative_to(evidence_root_resolved)
+        if not stat.S_ISREG(candidate.stat(follow_symlinks=False).st_mode):
+            return None
+        if _sha256_of_file(candidate) != expected_digest:
+            return None
+    except (FileNotFoundError, OSError, ValueError):
+        return None
+    return candidate
 
 
 def current_step_records(
@@ -85,7 +150,15 @@ def current_evidence_records(
 
     if per_step_records is None:
         return list(evidence_records)
-    active_ids = active_step_evidence_ids(per_step_records)
+    active_ids_by_step = {
+        str(record.get("step_id") or "").strip(): {
+            str(evidence_id)
+            for evidence_id in (record.get("evidence_ids") or [])
+            if str(evidence_id).strip()
+        }
+        for record in current_successful_step_records(per_step_records)
+        if str(record.get("step_id") or "").strip()
+    }
     current: List[Any] = []
     for record in evidence_records:
         if isinstance(record, Mapping):
@@ -94,9 +167,9 @@ def current_evidence_records(
         else:
             produced_by_step = getattr(record, "produced_by_step", None)
             evidence_id = getattr(record, "evidence_id", None)
-        if (
-            not str(produced_by_step or "").strip()
-            or str(evidence_id or "") in active_ids
+        producer = str(produced_by_step or "").strip()
+        if not producer or str(evidence_id or "") in active_ids_by_step.get(
+            producer, set()
         ):
             current.append(record)
     return current
@@ -107,8 +180,9 @@ def load_run_artifact_authority(
 ) -> Optional[Dict[str, Any]]:
     """Load the newest checkpoint that declares a per-step execution ledger.
 
-    ``manifest_partial.json`` is preferred because a resumed run can update it
-    before a new final manifest is written.  A mapping that explicitly contains
+    The most recently modified valid manifest wins; a live resumed partial can
+    therefore supersede an older final manifest, while a stale partial cannot
+    mask a later final failure.  A mapping that explicitly contains
     ``per_step_records`` is modern authority even when that field is empty or
     malformed; callers must not fall back to append-only step directories in
     that case.  ``None`` therefore means *legacy, no ledger field anywhere*, not
@@ -116,15 +190,23 @@ def load_run_artifact_authority(
     """
 
     root = Path(run_dir)
+    candidates: List[tuple[int, int, Dict[str, Any]]] = []
     for name in ("manifest_partial.json", "manifest.json"):
         path = root / name
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
+            modified_ns = path.stat().st_mtime_ns
         except (OSError, ValueError, TypeError):
             continue
         if isinstance(payload, dict) and "per_step_records" in payload:
-            return payload
-    return None
+            # Prefer the actually newest durable checkpoint.  Partial wins only
+            # on a timestamp tie, preserving the live-resume convention without
+            # letting a stale partial mask a later final failure.
+            partial_tiebreak = 1 if name == "manifest_partial.json" else 0
+            candidates.append((modified_ns, partial_tiebreak, payload))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: (item[0], item[1]))[2]
 
 
 def current_run_evidence_records(
@@ -182,7 +264,6 @@ def current_run_evidence_paths(
         if evidence_ids is not None
         else None
     )
-    root = Path(run_dir).resolve()
     paths: List[Path] = []
     seen: set[Path] = set()
     for record in records:
@@ -191,15 +272,8 @@ def current_run_evidence_paths(
             and str(record.get("evidence_id") or "") not in allowed_ids
         ):
             continue
-        relative_path = str(record.get("relative_path") or "").strip()
-        if not relative_path:
-            continue
-        path = (root / relative_path).resolve()
-        try:
-            path.relative_to(root)
-        except ValueError:
-            continue
-        if path.is_file() and path not in seen:
+        path = verified_run_evidence_path(run_dir, record)
+        if path is not None and path not in seen:
             seen.add(path)
             paths.append(path)
     return paths
@@ -539,6 +613,7 @@ __all__ = [
     "current_successful_step_ids",
     "active_step_evidence_ids",
     "current_evidence_records",
+    "verified_run_evidence_path",
     "load_run_artifact_authority",
     "current_run_evidence_records",
     "current_run_evidence_paths",

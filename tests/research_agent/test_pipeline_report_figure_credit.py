@@ -10,16 +10,28 @@ and, crucially, its guardrails against over-crediting.
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from easyicu.research_agent.pipeline_report import execution_gate_status
 
 
 def _plan(*step_ids: str):
-    return SimpleNamespace(steps=[SimpleNamespace(step_id=s) for s in step_ids])
+    return SimpleNamespace(
+        steps=[
+            SimpleNamespace(
+                step_id=s,
+                intent="",
+                method="visualization",
+                expected_outputs=["figure:publication_figure"],
+            )
+            for s in step_ids
+        ]
+    )
 
 
 def _write_repair(
@@ -35,7 +47,7 @@ def _write_repair(
     out.mkdir(parents=True, exist_ok=True)
     summary = {
         "step_id": repair_step_id,
-        "parent_step": parent_step,
+        "source_step_id": parent_step,
         "status": status,
         "rendering_only": rendering_only,
         "figure_paths": {"png": str(out / "fig.png")} if with_figure else {},
@@ -47,6 +59,8 @@ def _write_repair(
         "step_id": repair_step_id,
         "status": status,
         "step_summary": summary,
+        "repair_target_step_id": f"{parent_step}_figure",
+        "source_evidence_ids": [f"source_{parent_step}"],
     }
 
 
@@ -60,6 +74,64 @@ def _write_modern_authority(
         json.dumps({"per_step_records": records, "evidence": evidence}),
         encoding="utf-8",
     )
+
+
+def _records_with_current_source(fig: str, repair: dict) -> list[dict]:
+    source_step_id = str(repair["step_summary"]["source_step_id"])
+    return [
+        {
+            "step_id": source_step_id,
+            "status": "ok",
+            "evidence_ids": list(repair["source_evidence_ids"]),
+        },
+        {"step_id": fig, "status": "execution_failed"},
+        repair,
+    ]
+
+
+def _write_digest_bound_authority(
+    run_dir: Path,
+    *,
+    fig: str,
+    repair: dict,
+) -> tuple[list[dict], Path]:
+    source_step_id = str(repair["step_summary"]["source_step_id"])
+    source_id = repair["source_evidence_ids"][0]
+    evidence_dir = run_dir / "evidence"
+    evidence_dir.mkdir(exist_ok=True)
+    source_path = evidence_dir / f"{source_id}__source.csv"
+    source_path.write_text("term,estimate\nexposure,1.2\n", encoding="utf-8")
+    source_digest = hashlib.sha256(source_path.read_bytes()).hexdigest()
+
+    output = run_dir / "steps" / repair["step_id"] / "outputs" / "fig.png"
+    figure_id = "figure_fig_current"
+    figure_path = evidence_dir / f"{figure_id}__fig.png"
+    figure_path.write_bytes(output.read_bytes())
+    figure_digest = hashlib.sha256(figure_path.read_bytes()).hexdigest()
+    repair["evidence_ids"] = [figure_id]
+    records = _records_with_current_source(fig, repair)
+    _write_modern_authority(
+        run_dir,
+        records=records,
+        evidence=[
+            {
+                "evidence_id": source_id,
+                "kind": "table",
+                "produced_by_step": source_step_id,
+                "relative_path": str(source_path.relative_to(run_dir)),
+                "sha256": source_digest,
+            },
+            {
+                "evidence_id": figure_id,
+                "kind": "figure",
+                "produced_by_step": repair["step_id"],
+                "relative_path": str(figure_path.relative_to(run_dir)),
+                "sha256": figure_digest,
+                "inputs": [source_id],
+            },
+        ],
+    )
+    return records, source_path
 
 
 def test_failed_figure_is_credited_when_repair_rendered_it(tmp_path: Path):
@@ -76,7 +148,12 @@ def test_failed_figure_is_credited_when_repair_rendered_it(tmp_path: Path):
     assert legacy["execution_complete"] is False
     assert legacy["failed_steps"] == [{"step_id": fig, "status": "execution_failed"}]
 
-    # with run_dir the repaired figure is credited
+    # With current digest-bound source + figure authority, the repair is credited.
+    records, _source_path = _write_digest_bound_authority(
+        tmp_path,
+        fig=fig,
+        repair=repair,
+    )
     credited = execution_gate_status(
         plan=_plan(fig), per_step_records=records, run_dir=tmp_path
     )
@@ -91,10 +168,15 @@ def test_basename_relative_repair_export_is_resolved_from_its_outputs_dir(
     fig = "01_flow_figure"
     repair = _write_repair(tmp_path, "03c1_flow_figure_repair", "01_flow")
     repair["step_summary"]["figure_paths"] = {"png": "fig.png"}
+    records, _source_path = _write_digest_bound_authority(
+        tmp_path,
+        fig=fig,
+        repair=repair,
+    )
 
     gate = execution_gate_status(
         plan=_plan(fig),
-        per_step_records=[{"step_id": fig, "status": "execution_failed"}, repair],
+        per_step_records=records,
         run_dir=tmp_path,
     )
 
@@ -172,7 +254,7 @@ def test_modern_manifest_requires_active_figure_evidence_binding(tmp_path: Path)
     fig = "01_flow_figure"
     repair = _write_repair(tmp_path, "03c1_flow_figure_repair", "01_flow")
     repair["step_summary"]["figure_paths"] = {"png": "fig.png"}
-    records = [{"step_id": fig, "status": "execution_failed"}, repair]
+    records = _records_with_current_source(fig, repair)
     _write_modern_authority(tmp_path, records=records, evidence=[])
 
     gate = execution_gate_status(
@@ -186,32 +268,10 @@ def test_modern_manifest_credits_digest_bound_current_figure(tmp_path: Path):
     fig = "01_flow_figure"
     repair = _write_repair(tmp_path, "03c1_flow_figure_repair", "01_flow")
     repair["step_summary"]["figure_paths"] = {"png": "fig.png"}
-    output = (
-        tmp_path
-        / "steps"
-        / "03c1_flow_figure_repair"
-        / "outputs"
-        / "fig.png"
-    )
-    digest = hashlib.sha256(output.read_bytes()).hexdigest()
-    evidence_id = "figure_fig_current"
-    evidence_path = tmp_path / "evidence" / f"{evidence_id}__fig.png"
-    evidence_path.parent.mkdir()
-    evidence_path.write_bytes(output.read_bytes())
-    repair["evidence_ids"] = [evidence_id]
-    records = [{"step_id": fig, "status": "execution_failed"}, repair]
-    _write_modern_authority(
+    records, _source_path = _write_digest_bound_authority(
         tmp_path,
-        records=records,
-        evidence=[
-            {
-                "evidence_id": evidence_id,
-                "kind": "figure",
-                "produced_by_step": repair["step_id"],
-                "relative_path": str(evidence_path.relative_to(tmp_path)),
-                "sha256": digest,
-            }
-        ],
+        fig=fig,
+        repair=repair,
     )
 
     gate = execution_gate_status(
@@ -219,6 +279,79 @@ def test_modern_manifest_credits_digest_bound_current_figure(tmp_path: Path):
     )
 
     assert gate["execution_complete"] is True
+
+
+@pytest.mark.parametrize(
+    "expected_output",
+    ["table:association_estimates", "table:publication_figure_summary"],
+)
+def test_render_repair_cannot_credit_failed_nonfigure_science_step(
+    tmp_path: Path,
+    expected_output: str,
+) -> None:
+    target_step_id = "02_primary_model"
+    source_step_id = "01_source"
+    repair = _write_repair(
+        tmp_path,
+        "09_detached_figure_repair",
+        source_step_id,
+    )
+    repair["repair_target_step_id"] = target_step_id
+    records, _source_path = _write_digest_bound_authority(
+        tmp_path,
+        fig=target_step_id,
+        repair=repair,
+    )
+    plan = SimpleNamespace(
+        steps=[
+            SimpleNamespace(
+                step_id=source_step_id,
+                intent="Create the exposure table.",
+                method="descriptive",
+                expected_outputs=["table:exposure"],
+            ),
+            SimpleNamespace(
+                step_id=target_step_id,
+                intent=(
+                    "Fit the primary model using the exposure declared by step "
+                    f"'{source_step_id}'."
+                ),
+                method="mixed_effects_regression",
+                expected_outputs=[expected_output],
+            ),
+        ]
+    )
+
+    gate = execution_gate_status(
+        plan=plan,
+        per_step_records=records,
+        run_dir=tmp_path,
+    )
+
+    assert gate["execution_complete"] is False
+    assert gate["failed_steps"] == [
+        {"step_id": target_step_id, "status": "execution_failed"}
+    ]
+
+
+def test_modern_manifest_rejects_repair_when_source_evidence_is_tampered(
+    tmp_path: Path,
+):
+    fig = "01_flow_figure"
+    repair = _write_repair(tmp_path, "03c1_flow_figure_repair", "01_flow")
+    repair["step_summary"]["figure_paths"] = {"png": "fig.png"}
+    records, source_path = _write_digest_bound_authority(
+        tmp_path,
+        fig=fig,
+        repair=repair,
+    )
+    source_path.write_text("term,estimate\nexposure,9.9\n", encoding="utf-8")
+
+    gate = execution_gate_status(
+        plan=_plan(fig), per_step_records=records, run_dir=tmp_path
+    )
+
+    assert gate["execution_complete"] is False
 
 
 def test_modern_manifest_rejects_same_step_file_with_stale_digest(tmp_path: Path):
@@ -231,7 +364,7 @@ def test_modern_manifest_rejects_same_step_file_with_stale_digest(tmp_path: Path
     evidence_path.write_bytes(b"new current figure")
     digest = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
     repair["evidence_ids"] = [evidence_id]
-    records = [{"step_id": fig, "status": "execution_failed"}, repair]
+    records = _records_with_current_source(fig, repair)
     _write_modern_authority(
         tmp_path,
         records=records,
@@ -242,6 +375,7 @@ def test_modern_manifest_rejects_same_step_file_with_stale_digest(tmp_path: Path
                 "produced_by_step": repair["step_id"],
                 "relative_path": str(evidence_path.relative_to(tmp_path)),
                 "sha256": digest,
+                "inputs": list(repair["source_evidence_ids"]),
             }
         ],
     )
@@ -335,6 +469,20 @@ def test_parent_mismatch_does_not_credit_wrong_figure(tmp_path: Path):
     assert gate["failed_steps"] == [
         {"step_id": failed, "status": "execution_failed"}
     ]
+
+
+def test_renderer_self_report_cannot_claim_unledgered_target(tmp_path: Path):
+    fig = "01_flow_figure"
+    repair = _write_repair(tmp_path, "09_unrelated_renderer", "01_flow")
+    repair.pop("repair_target_step_id")
+
+    gate = execution_gate_status(
+        plan=_plan(fig),
+        per_step_records=[{"step_id": fig, "status": "execution_failed"}, repair],
+        run_dir=tmp_path,
+    )
+
+    assert gate["execution_complete"] is False
 
 
 def test_non_rendering_only_repair_does_not_credit(tmp_path: Path):
