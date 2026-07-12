@@ -58,6 +58,7 @@ def _unique_structured_csv(
     *,
     out_dir: Path,
     required_columns: set[str],
+    required_any_columns: Optional[set[str]] = None,
 ) -> Tuple[Optional[Any], List[str]]:
     """Load one unambiguous result table by schema, never by case tokens."""
 
@@ -74,7 +75,10 @@ def _unique_structured_csv(
             frame = pd.read_csv(resolved)
         except Exception:
             continue
-        if required_columns.issubset(set(str(column) for column in frame.columns)):
+        columns = set(str(column) for column in frame.columns)
+        if required_columns.issubset(columns) and (
+            not required_any_columns or bool(required_any_columns.intersection(columns))
+        ):
             candidates.append((resolved, frame))
     if len(candidates) != 1:
         return None, [
@@ -115,7 +119,6 @@ def _executed_robustness_result_issues(
     model_frame, model_table_errors = _unique_structured_csv(
         out_dir=out_dir,
         required_columns={
-            "definition_id",
             "model_id",
             "outcome",
             "model_family",
@@ -126,6 +129,7 @@ def _executed_robustness_result_issues(
             "penalized",
             "interval_method",
         },
+        required_any_columns={"definition_id", "spec_id"},
     )
     coefficient_frame, coefficient_table_errors = _unique_structured_csv(
         out_dir=out_dir,
@@ -345,9 +349,11 @@ def _executed_robustness_result_issues(
         model_rows = model_frame[
             model_frame["model_id"].astype(str).eq(model_id)
         ].copy()
-        if "definition_id" in model_rows.columns:
+        for identifier_column in ("definition_id", "spec_id"):
+            if identifier_column not in model_rows.columns:
+                continue
             model_rows = model_rows[
-                model_rows["definition_id"].astype(str).eq(spec_id)
+                model_rows[identifier_column].astype(str).eq(spec_id)
             ]
         if len(model_rows) != 1:
             issues.append(

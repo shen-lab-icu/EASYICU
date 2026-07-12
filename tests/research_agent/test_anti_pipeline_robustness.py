@@ -91,7 +91,7 @@ def _write_membership_inputs(run_dir):
     return universe_path, cohort_path
 
 
-def _write_valid_executed_results(out_dir):
+def _write_valid_executed_results(out_dir, *, identifier_column="definition_id"):
     definitions = [
         ("alt_relaxed_cohort", "cohort", 5, 1.2, "complete_case"),
         ("alt_complete_case", "missing", 3, 1.3, "complete_case"),
@@ -131,7 +131,7 @@ def _write_valid_executed_results(out_dir):
         robustness_rows.append(row)
         model_rows.append(
             {
-                "definition_id": spec_id,
+                identifier_column: spec_id,
                 "model_id": model_id,
                 "outcome": "death",
                 "model_family": "logistic_regression",
@@ -166,6 +166,120 @@ def _write_valid_executed_results(out_dir):
         out_dir / "adjusted_estimates.csv", index=False
     )
     return robustness_rows
+
+
+@pytest.mark.parametrize("identifier_column", ["definition_id", "spec_id"])
+def test_executed_sensitivity_accepts_model_spec_identifier_alias(
+    tmp_path, identifier_column
+) -> None:
+    from easyicu.research_agent.pipeline_execute import (
+        _executed_robustness_result_issues,
+    )
+
+    out_dir = tmp_path / "outputs"
+    out_dir.mkdir()
+    rows = _write_valid_executed_results(
+        out_dir, identifier_column=identifier_column
+    )
+    lock = _locked_specs_payload()
+
+    issues = _executed_robustness_result_issues(
+        locked_by_id={spec["spec_id"]: spec for spec in lock["specs"]},
+        step_summary={"robustness_rows": rows},
+        out_dir=out_dir,
+        context=None,
+    )
+
+    assert issues == []
+
+
+def test_executed_sensitivity_rejects_conflicting_model_identifier_aliases(
+    tmp_path,
+) -> None:
+    from easyicu.research_agent.pipeline_execute import (
+        _executed_robustness_result_issues,
+    )
+
+    out_dir = tmp_path / "outputs"
+    out_dir.mkdir()
+    rows = _write_valid_executed_results(out_dir)
+    model_path = out_dir / "model_fit_summary.csv"
+    models = pd.read_csv(model_path)
+    models["spec_id"] = models["definition_id"]
+    models.loc[0, "spec_id"] = "different_locked_spec"
+    models.to_csv(model_path, index=False)
+    lock = _locked_specs_payload()
+
+    issues = _executed_robustness_result_issues(
+        locked_by_id={spec["spec_id"]: spec for spec in lock["specs"]},
+        step_summary={"robustness_rows": rows},
+        out_dir=out_dir,
+        context=None,
+    )
+
+    assert any(
+        issue["spec_id"] == rows[0]["spec_id"]
+        and issue["issue"] == "model_contract_row_count"
+        for issue in issues
+        if "spec_id" in issue
+    )
+
+
+def test_executed_sensitivity_rejects_duplicate_model_rows(tmp_path) -> None:
+    from easyicu.research_agent.pipeline_execute import (
+        _executed_robustness_result_issues,
+    )
+
+    out_dir = tmp_path / "outputs"
+    out_dir.mkdir()
+    rows = _write_valid_executed_results(out_dir, identifier_column="spec_id")
+    model_path = out_dir / "model_fit_summary.csv"
+    models = pd.read_csv(model_path)
+    models = pd.concat([models, models.iloc[[0]]], ignore_index=True)
+    models.to_csv(model_path, index=False)
+    lock = _locked_specs_payload()
+
+    issues = _executed_robustness_result_issues(
+        locked_by_id={spec["spec_id"]: spec for spec in lock["specs"]},
+        step_summary={"robustness_rows": rows},
+        out_dir=out_dir,
+        context=None,
+    )
+
+    assert any(
+        issue["spec_id"] == rows[0]["spec_id"]
+        and issue["issue"] == "model_contract_row_count"
+        and issue["observed"] == 2
+        for issue in issues
+        if "spec_id" in issue
+    )
+
+
+def test_executed_sensitivity_rejects_ambiguous_model_result_tables(
+    tmp_path,
+) -> None:
+    from easyicu.research_agent.pipeline_execute import (
+        _executed_robustness_result_issues,
+    )
+
+    out_dir = tmp_path / "outputs"
+    out_dir.mkdir()
+    rows = _write_valid_executed_results(out_dir, identifier_column="spec_id")
+    models = pd.read_csv(out_dir / "model_fit_summary.csv")
+    models.to_csv(out_dir / "second_model_result_table.csv", index=False)
+    lock = _locked_specs_payload()
+
+    issues = _executed_robustness_result_issues(
+        locked_by_id={spec["spec_id"]: spec for spec in lock["specs"]},
+        step_summary={"robustness_rows": rows},
+        out_dir=out_dir,
+        context=None,
+    )
+
+    unavailable = next(
+        issue for issue in issues if issue["issue"] == "model_result_table_unavailable"
+    )
+    assert unavailable["detail"][0] == "structured_table_ambiguous"
 
 
 def test_primary_effect_never_parses_english_or_conjunction_from_prose() -> None:
