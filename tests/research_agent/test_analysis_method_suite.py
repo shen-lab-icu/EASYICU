@@ -140,8 +140,9 @@ def test_competing_risks_stays_a_declared_planned_boundary():
 
 
 def test_trajectory_is_present_and_not_mislabelled_lcga():
-    # WS3: the deterministic trajectory path is trajectory-FEATURE clustering and
-    # must NOT be labelled LCGA; LCGA/GBTM is a separate PLANNED method.
+    # Trajectory-feature clustering is an agent-owned scientific choice and must
+    # NOT be labelled LCGA; LCGA/GBTM is a separate PLANNED method.  The
+    # deterministic phenotype component is rendering-only.
     pheno = ams.get_suite("phenotyping")
     assert pheno is not None
     keys = {m.key for m in pheno.methods}
@@ -149,6 +150,10 @@ def test_trajectory_is_present_and_not_mislabelled_lcga():
     assert "lcga_gbtm" in keys
     traj = next(m for m in pheno.methods if m.key == "trajectory_feature_clustering")
     assert "lcga" not in traj.name.lower(), "feature clustering must not be called LCGA"
+    assert traj.implementation == "llm_coded"
+    assert traj.runner == "phenotyping"
+    assert "agent owns" in traj.notes.lower()
+    assert "only renders" in traj.notes.lower()
     lcga = next(m for m in pheno.methods if m.key == "lcga_gbtm")
     assert lcga.tier == "planned" and lcga.implementation == "planned"
 

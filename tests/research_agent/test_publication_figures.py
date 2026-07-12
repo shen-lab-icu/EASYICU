@@ -596,6 +596,146 @@ def test_publication_figure_skill_prefers_primary_bundle_over_sensitivity(
     assert promoted_contract["panels"][1]["metadata"]["chart_type"] == "forest"
 
 
+def test_publication_figure_skill_resolves_contract_source_from_parent_step(
+    ra,
+    tmp_path: Path,
+):
+    from PIL import Image
+
+    run_dir = tmp_path / "run"
+    evidence = ra.EvidenceStore(run_dir)
+    parent_outputs = run_dir / "steps" / "05_primary_model" / "outputs"
+    parent_outputs.mkdir(parents=True, exist_ok=True)
+    shared_source = parent_outputs / "shared_source.csv"
+    shared_source.write_text(
+        "term,odds_ratio,ci_low,ci_high\nexposure,1.8,1.6,2.0\n",
+        encoding="utf-8",
+    )
+    evidence.register_file(
+        kind="table",
+        description="Parent analysis source table.",
+        source_path=shared_source,
+        evidence_id="table_shared_source",
+        produced_by_step="05_primary_model",
+        producer="runner",
+        generation_mode="fallback",
+    )
+
+    child_step = "05_primary_model_figure"
+    outputs = run_dir / "steps" / child_step / "outputs"
+    outputs.mkdir(parents=True, exist_ok=True)
+    svg = outputs / "publication_figure.svg"
+    svg.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="140">'
+        '<rect width="240" height="140" fill="white"/>'
+        '<text x="16" y="32">Primary article figure</text>'
+        "</svg>",
+        encoding="utf-8",
+    )
+    png = outputs / "publication_figure.png"
+    Image.new("RGB", (240, 140), "white").save(png)
+    contract = make_figure_contract(
+        figure_id="publication_figure",
+        core_claim="Absolute risk, adjusted association, robustness, and missingness are shown.",
+        panels=[
+            {
+                "panel_id": "A",
+                "title": "Absolute risk",
+                "role": "descriptive_result",
+                "chart_type": "event_rate_panel",
+                "claim": "Absolute risk is shown.",
+                "evidence_ids": [shared_source.name],
+            },
+            {
+                "panel_id": "B",
+                "title": "Adjusted association",
+                "role": "primary_estimand",
+                "chart_type": "forest",
+                "claim": "The primary adjusted estimate is shown.",
+                "evidence_ids": [shared_source.name],
+            },
+            {
+                "panel_id": "C",
+                "title": "Robustness",
+                "role": "robustness",
+                "chart_type": "dot_interval",
+                "claim": "A sensitivity estimate is shown.",
+                "evidence_ids": [shared_source.name],
+            },
+            {
+                "panel_id": "D",
+                "title": "Missingness",
+                "role": "data_quality",
+                "chart_type": "availability_panel",
+                "claim": "Measurement availability is shown.",
+                "evidence_ids": [shared_source.name],
+            },
+        ],
+        source_data=[shared_source.name],
+    )
+    contract_path = outputs / "publication_figure.figure_contract.json"
+    contract_path.write_text(contract.to_json(indent=2), encoding="utf-8")
+    metadata = {"figure_role": "publication_figure", "step_id": child_step}
+    for path, kind, evidence_id in (
+        (svg, "figure", "figure_child_svg"),
+        (png, "figure", "figure_child_png"),
+        (contract_path, "log", "log_child_contract"),
+    ):
+        evidence.register_file(
+            kind=kind,
+            description="Child publication bundle.",
+            source_path=path,
+            evidence_id=evidence_id,
+            produced_by_step=child_step,
+            producer="runner",
+            generation_mode="fallback",
+            metadata=metadata,
+        )
+
+    context = ra.ResearchContext(
+        research_question="Is the exposure associated with mortality?",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_patients=100,
+            n_stays=100,
+        ),
+        variables=[],
+        primary_exposure="exposure",
+        target_outcome="death",
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            ra.AnalysisStep(
+                step_id=child_step,
+                intent="Render the primary manuscript figure.",
+                expected_outputs=["figure:publication_figure"],
+            )
+        ],
+    )
+
+    result = ra.PublicationFigureSkill().run(
+        context=context,
+        plan=plan,
+        evidence=evidence,
+        run_dir=run_dir,
+        prompt_pack_version="test",
+    )
+
+    assert result.generated is True
+    summary = json.loads(
+        (
+            run_dir
+            / "evidence"
+            / "publication_figure_skill_summary__publication_figure_skill_summary.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert summary["generation_mode"] == "promoted_step_publication_figure"
+    assert summary["promoted_from_step_id"] == child_step
+    assert "table_shared_source" in summary["source_evidence_ids"]
+
+
 def test_publication_figure_skill_rebuilds_sparse_primary_bundle_when_source_tables_exist(
     ra,
     tmp_path: Path,

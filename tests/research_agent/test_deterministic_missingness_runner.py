@@ -10,8 +10,9 @@ the dominant coder round-trip.
 
 The tests exec the runner's code string against synthetic cohorts (no real data),
 asserting: it uses the ``<concept>_measured`` indicator as the authoritative
-measurement signal, never imputes, distinguishes structural-no-source from
-measurement missingness, and blocks gracefully on an empty cohort.
+measurement signal, narrowly distinguishes a complete binary event-status flag
+from measurement availability, never imputes, distinguishes structural-no-source
+from measurement missingness, and blocks gracefully on an empty cohort.
 """
 
 from __future__ import annotations
@@ -28,10 +29,34 @@ from easyicu.research_agent.deterministic_missingness import (
 )
 
 
-def _exec_runner(run_dir: Path, cohort: pd.DataFrame, context: dict):
+def _exec_runner(
+    run_dir: Path,
+    cohort: pd.DataFrame,
+    context: dict,
+    *,
+    requested_inputs: list[str] | None = None,
+):
     out_dir = run_dir / "steps" / "02_missingness_measurement_audit" / "outputs"
     out_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "research_context.json").write_text(json.dumps(context), encoding="utf-8")
+    if requested_inputs is not None:
+        (run_dir / "analysis_plan.json").write_text(
+            json.dumps(
+                {
+                    "steps": [
+                        {
+                            "step_id": "02_missingness_measurement_audit",
+                            "inputs": requested_inputs,
+                            "expected_outputs": [
+                                "table:missingness_measurement_audit",
+                                "table:analytic_denominators",
+                            ],
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
     cohort_path = run_dir / "cohort_analysis.parquet"
     cohort.to_parquet(cohort_path, index=False)
 
@@ -135,6 +160,145 @@ def test_never_imputes_partial_concept(tmp_path: Path):
     assert bili["measured_one_n"] == 3
     assert bili["value_missing_n"] == 2
     assert bili["value_missing_pct"] == 40.0
+
+
+def test_complete_binary_event_flag_is_not_misread_as_measurement_missingness(
+    tmp_path: Path,
+):
+    cohort = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4, 5],
+            "age": [60, 61, 62, 63, 64],
+            "sex": ["F", "M", "F", "M", "F"],
+            "death": [0, 1, 0, 0, 1],
+            "rrt_first": [0, 0, 1, 0, 1],
+            "rrt_measured": [0, 0, 1, 0, 1],
+            "rrt_n": [0, 0, 1, 0, 2],
+        }
+    )
+    summary, out_dir = _exec_runner(
+        tmp_path,
+        cohort,
+        {},
+        requested_inputs=["rrt_first", "rrt_measured"],
+    )
+
+    audit = pd.read_csv(out_dir / "missingness_measurement_audit.csv")
+    rrt = audit[audit["concept"] == "rrt"].iloc[0]
+    assert summary["n_binary_event_status"] == 1
+    assert rrt["indicator_semantics"] == "binary_event_presence"
+    assert rrt["missingness_kind"] == "binary_event_status_complete"
+    assert rrt["raw_indicator_one_n"] == 2
+    assert rrt["event_count_column"] == "rrt_n"
+    assert rrt["measured_one_n"] == 5
+    assert rrt["value_missing_n"] == 0
+    assert rrt["value_present_but_measured_zero_n"] == 0
+
+
+def test_binary_value_flag_without_event_count_remains_a_conflict(tmp_path: Path):
+    cohort = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4],
+            "age": [60, 61, 62, 63],
+            "sex": ["F", "M", "F", "M"],
+            "death": [0, 1, 0, 0],
+            "screen_first": [0, 1, 0, 1],
+            "screen_measured": [0, 1, 0, 1],
+        }
+    )
+    _summary, out_dir = _exec_runner(tmp_path, cohort, {})
+    audit = pd.read_csv(out_dir / "missingness_measurement_audit.csv")
+    screen = audit[audit["concept"] == "screen"].iloc[0]
+    assert screen["indicator_semantics"] == "measurement_availability"
+    assert screen["missingness_kind"] == "measurement_flag_conflict"
+    assert screen["measured_one_n"] == 2
+    assert screen["value_present_but_measured_zero_n"] == 2
+
+
+def test_family_aggregate_and_declared_analytic_denominator(tmp_path: Path):
+    cohort = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4, 5],
+            "age": [60, 61, 62, 63, 64],
+            "sex": ["F", "M", "F", "M", "F"],
+            "death": [0, 1, 0, 0, 1],
+            "aki_stage_first": [0, 0, 1, 1, 2],
+            "aki_stage_max": [0, 1, 2, np.nan, 3],
+            "aki_stage_measured": [1, 1, 1, 0, 1],
+            "crea_first": [0.8, 1.1, np.nan, 2.0, 0.9],
+            "crea_measured": [1, 1, 0, 1, 1],
+        }
+    )
+    summary, out_dir = _exec_runner(
+        tmp_path,
+        cohort,
+        {},
+        requested_inputs=[
+            "aki_stage_max",
+            "aki_stage_measured",
+            "crea_first",
+            "crea_measured",
+            "age",
+            "sex",
+            "death",
+        ],
+    )
+
+    audit = pd.read_csv(out_dir / "missingness_measurement_audit.csv")
+    stage = audit[audit["concept"] == "aki_stage"].iloc[0]
+    crea = audit[audit["concept"] == "crea"].iloc[0]
+    assert stage["value_column"] == "aki_stage_max"
+    assert crea["value_column"] == "crea_first"
+    assert stage["raw_value_missing_n"] == 1
+    assert stage["measured_but_value_missing_n"] == 0
+    assert {"age", "sex", "death"} <= set(audit["concept"])
+
+    denominators = pd.read_csv(out_dir / "analytic_denominators.csv")
+    complete = denominators[
+        denominators["analysis_set"] == "all_requested_inputs"
+    ].iloc[0]
+    assert complete["n_total"] == 5
+    assert complete["n_complete"] == 3
+    assert complete["n_excluded_missing"] == 2
+    assert summary["all_requested_inputs_complete_n"] == 3
+    assert summary["missing_declared_inputs"] == []
+
+
+def test_declared_inputs_scope_audit_instead_of_scanning_unrelated_wide_columns(
+    tmp_path: Path,
+):
+    cohort = _cohort(n=20, seed=7)
+    cohort["sofa_liver"] = np.arange(20, dtype=float)
+    cohort["sofa_liver_measured"] = 1
+    summary, out_dir = _exec_runner(
+        tmp_path,
+        cohort,
+        {},
+        requested_inputs=["lactate", "lactate_measured", "age", "death"],
+    )
+    audit = pd.read_csv(out_dir / "missingness_measurement_audit.csv")
+    assert summary["n_concepts_audited"] == 3
+    assert set(audit["concept"]) == {"lactate", "age", "death"}
+    assert "sofa_liver" not in set(audit["concept"])
+
+
+def test_missing_declared_input_blocks_joint_denominator(tmp_path: Path):
+    cohort = _cohort(n=20, seed=3)
+    summary, out_dir = _exec_runner(
+        tmp_path,
+        cohort,
+        {},
+        requested_inputs=["lactate", "column_not_in_cohort"],
+    )
+    assert summary["status"] == "blocked"
+    assert summary["all_requested_inputs_complete_n"] is None
+    assert summary["missing_declared_inputs"] == ["column_not_in_cohort"]
+
+    denominators = pd.read_csv(out_dir / "analytic_denominators.csv")
+    joint = denominators[
+        denominators["analysis_set"] == "all_requested_inputs"
+    ].iloc[0]
+    assert pd.isna(joint["n_complete"])
 
 
 def test_blocks_on_empty_cohort(tmp_path: Path):

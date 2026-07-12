@@ -17,6 +17,7 @@ METHOD_MODULES = (
     "missing",
     "missing_data",
     "multiple_testing",
+    "ordered_trends",
     "ph_schoenfeld",
     "rmst",
     "sensitivity",

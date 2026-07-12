@@ -69,7 +69,7 @@ def test_replanner_grown_cohort_step_with_empty_definition_is_flagged(
                             ),
                             inputs=[],
                             expected_outputs=["table:analysis_cohort"],
-                            method="descriptive",
+                            method="cohort_definition",
                         ),
                     )
                 revised = current.model_copy(

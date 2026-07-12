@@ -14,8 +14,1072 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from easyicu.research_agent.audits.validators import FigureSourceDataValidator
+from easyicu.research_agent.audits.validators import (
+    CrossStepCohortLockValidator,
+    CrossStepReconciliationTraceValidator,
+    CrossStepRegisteredOutputValidator,
+    CrossStepSourceStatusValidator,
+    FigureSourceDataValidator,
+    StepSummaryFractionValidator,
+)
 from easyicu.research_agent.schema import AnalysisStep
+
+
+def _prior_source_status_record(*, valid_n: int = 41_210, total_n: int = 94_458):
+    return {
+        "step_id": "02_exposure_and_missingness_audit",
+        "step_summary": {
+            "missingness": {
+                "source_status_counts": {
+                    "adult_analytic_cohort": {
+                        "lab_max": {
+                            "valid_observed_level_or_value": valid_n,
+                            "no_recorded_source_or_observation": total_n - valid_n,
+                            "measured_or_observed_source_with_summary_missing": 0,
+                            "contradictory_or_invalid_source_summary": 0,
+                        }
+                    }
+                }
+            }
+        },
+    }
+
+
+def _current_table_one_status(*, valid_n: int, total_n: int = 94_458):
+    return {
+        "measurement_status": {
+            "source_summary": "lab_max",
+            "counts": [
+                {"category": "Observed valid", "count": valid_n},
+                {"category": "No source", "count": total_n - valid_n},
+                {"category": "Measured but summary missing", "count": 0},
+                {"category": "Invalid summary", "count": 0},
+                {"category": "Contradictory status", "count": 0},
+            ],
+        }
+    }
+
+
+def _prior_cohort_record(
+    *, cohort_n: int = 94_458, step_id: str = "04_absolute_risk_context"
+):
+    return {
+        "step_id": step_id,
+        "status": "ok",
+        "step_summary": {"status": "completed", "n_total": cohort_n},
+    }
+
+
+def test_cross_step_cohort_lock_blocks_fixed_cohort_drift() -> None:
+    findings = CrossStepCohortLockValidator().audit(
+        step=AnalysisStep(
+            step_id="04_absolute_risk_context_reconciliation",
+            intent="Keep the completed cohort, outcome, and window fixed.",
+        ),
+        step_summary={"n_universe": 94_458, "n_final_cohort": 74_829},
+        completed_step_records=[_prior_cohort_record()],
+    )
+
+    assert len(findings) == 1
+    assert findings[0].severity == "error"
+    assert findings[0].validator == "cross_step_cohort_lock"
+    assert findings[0].detail["reported_cohort_n"] == 74_829
+    assert findings[0].detail["expected_cohort_n"] == 94_458
+    assert findings[0].detail["reported_summary_path"] == "n_final_cohort"
+
+
+def test_cross_step_cohort_lock_accepts_unchanged_cohort() -> None:
+    findings = CrossStepCohortLockValidator().audit(
+        step=AnalysisStep(
+            step_id="04_reconciliation",
+            intent="Keep the completed cohort fixed while reconciling the table.",
+        ),
+        step_summary={"n_final_cohort": 94_458},
+        completed_step_records=[_prior_cohort_record()],
+    )
+
+    assert findings == []
+
+
+def test_cross_step_cohort_lock_accepts_nested_final_rows_schema() -> None:
+    findings = CrossStepCohortLockValidator().audit(
+        step=AnalysisStep(
+            step_id="04_reconciliation",
+            intent="Keep the completed cohort fixed while reconciling the table.",
+        ),
+        step_summary={"cohort": {"n_input_rows": 94_458, "n_final_rows": 94_458}},
+        completed_step_records=[_prior_cohort_record()],
+    )
+
+    assert findings == []
+
+
+def test_cross_step_cohort_lock_accepts_locked_cohort_output_schema() -> None:
+    findings = CrossStepCohortLockValidator().audit(
+        step=AnalysisStep(
+            step_id="04_reconciliation",
+            intent="Keep the completed cohort fixed while reconciling the table.",
+        ),
+        step_summary={"locked_cohort": {"n_input": 94_458, "n_output": 94_458}},
+        completed_step_records=[_prior_cohort_record()],
+    )
+
+    assert findings == []
+
+
+def test_cross_step_cohort_lock_accepts_cohort_count_final_schema() -> None:
+    findings = CrossStepCohortLockValidator().audit(
+        step=AnalysisStep(
+            step_id="04_reconciliation",
+            intent="Keep the completed cohort fixed while reconciling the table.",
+        ),
+        step_summary={"cohort_count_final": 94_458},
+        completed_step_records=[_prior_cohort_record()],
+    )
+
+    assert findings == []
+
+
+def test_cross_step_cohort_lock_accepts_final_cohort_n_schema() -> None:
+    findings = CrossStepCohortLockValidator().audit(
+        step=AnalysisStep(
+            step_id="04_reconciliation",
+            intent="Keep the completed cohort fixed while reconciling the table.",
+        ),
+        step_summary={"final_cohort_n": 94_458},
+        completed_step_records=[_prior_cohort_record()],
+    )
+
+    assert findings == []
+
+
+def test_cross_step_cohort_lock_requires_explicit_lock_intent() -> None:
+    findings = CrossStepCohortLockValidator().audit(
+        step=AnalysisStep(
+            step_id="04_descriptive",
+            intent="Describe absolute risks in the available analysis rows.",
+        ),
+        step_summary={"n_final_cohort": 74_829},
+        completed_step_records=[_prior_cohort_record()],
+    )
+
+    assert findings == []
+
+
+def test_cross_step_cohort_lock_skips_explicit_alternative_cohort() -> None:
+    findings = CrossStepCohortLockValidator().audit(
+        step=AnalysisStep(
+            step_id="06_cohort_definition_sensitivity",
+            intent="Compare an alternative cohort definition using LOS eligibility.",
+            method="cohort_definition_sensitivity",
+        ),
+        step_summary={"n_final_cohort": 74_829},
+        completed_step_records=[_prior_cohort_record()],
+    )
+
+    assert findings == []
+
+
+def test_cross_step_cohort_lock_uses_latest_successful_analysis_lock() -> None:
+    failed = _prior_cohort_record(
+        cohort_n=74_829, step_id="04_failed_reconciliation"
+    )
+    failed["status"] = "contract_failed"
+    figure = _prior_cohort_record(cohort_n=3, step_id="04_absolute_risk_figure")
+    figure["step_summary"]["rendering_only"] = True
+
+    findings = CrossStepCohortLockValidator().audit(
+        step=AnalysisStep(
+            step_id="05_reconciliation",
+            intent="Preserve the analytic cohort unchanged.",
+        ),
+        step_summary={"n_final_cohort": 94_457},
+        completed_step_records=[_prior_cohort_record(), failed, figure],
+    )
+
+    assert len(findings) == 1
+    assert findings[0].detail["expected_cohort_n"] == 94_458
+    assert findings[0].detail["expected_from_step"] == "04_absolute_risk_context"
+
+
+def test_cross_step_cohort_lock_requires_current_machine_readable_count() -> None:
+    findings = CrossStepCohortLockValidator().audit(
+        step=AnalysisStep(
+            step_id="04_reconciliation",
+            intent="Keep the completed cohort fixed.",
+        ),
+        step_summary={"n_universe": 94_458},
+        completed_step_records=[_prior_cohort_record()],
+    )
+
+    assert len(findings) == 1
+    assert findings[0].detail["reported_summary_path"] is None
+    assert findings[0].detail["expected_cohort_n"] == 94_458
+
+
+def test_cross_step_cohort_lock_skips_rendering_only_figure_step() -> None:
+    findings = CrossStepCohortLockValidator().audit(
+        step=AnalysisStep(
+            step_id="05_primary_association_figure",
+            intent=(
+                "Render the registered parent outputs; do not redefine the cohort, "
+                "exposure, outcome, or model."
+            ),
+        ),
+        step_summary={
+            "rendering_only": True,
+            "figure_files": ["publication_figure.png", "publication_figure.svg"],
+            "source_step_id": "05_primary_association",
+        },
+        completed_step_records=[_prior_cohort_record()],
+    )
+
+    assert findings == []
+
+
+def _prior_registered_table_record():
+    return {
+        "step_id": "04_absolute_risk_context",
+        "status": "ok",
+        "evidence_ids": ["table_exposure_outcome_summary_8368e5ab"],
+        "step_summary": {
+            "status": "ok",
+            "output_files": {
+                "exposure_outcome_summary": "exposure_outcome_summary.csv"
+            },
+        },
+    }
+
+
+def test_cross_step_registered_output_blocks_false_unavailable_gap() -> None:
+    findings = CrossStepRegisteredOutputValidator().audit(
+        step=AnalysisStep(
+            step_id="04_reconciliation",
+            intent="Audit the registered outputs of the prior risk step.",
+        ),
+        step_summary={
+            "registered_output": {
+                "upstream_step": "04_absolute_risk_context",
+                "source_table_available": False,
+                "source_table_path": None,
+            }
+        },
+        completed_step_records=[_prior_registered_table_record()],
+    )
+
+    assert len(findings) == 1
+    assert findings[0].severity == "error"
+    assert findings[0].validator == "cross_step_registered_output"
+    assert findings[0].detail["upstream_step"] == "04_absolute_risk_context"
+    assert "exposure_outcome_summary.csv" in findings[0].detail[
+        "registered_table_artifacts"
+    ]
+
+
+def test_cross_step_registered_output_accepts_readable_parent_table() -> None:
+    findings = CrossStepRegisteredOutputValidator().audit(
+        step=AnalysisStep(
+            step_id="04_reconciliation",
+            intent="Audit the registered outputs of the prior risk step.",
+        ),
+        step_summary={
+            "registered_output": {
+                "upstream_step": "04_absolute_risk_context",
+                "source_table_available": True,
+                "source_table_path": "exposure_outcome_summary.csv",
+            }
+        },
+        completed_step_records=[_prior_registered_table_record()],
+    )
+
+    assert findings == []
+
+
+def test_cross_step_registered_output_allows_genuine_missing_parent_table() -> None:
+    prior = _prior_registered_table_record()
+    prior["evidence_ids"] = ["statistic_step_summary_12345678"]
+    prior["step_summary"].pop("output_files")
+
+    findings = CrossStepRegisteredOutputValidator().audit(
+        step=AnalysisStep(
+            step_id="04_reconciliation",
+            intent="Audit the registered outputs of the prior risk step.",
+        ),
+        step_summary={
+            "registered_output": {
+                "upstream_step": "04_absolute_risk_context",
+                "source_table_available": False,
+            }
+        },
+        completed_step_records=[prior],
+    )
+
+    assert findings == []
+
+
+def test_step_summary_fraction_scale_rejects_percentage_in_fraction_field() -> None:
+    findings = StepSummaryFractionValidator().audit(
+        step=AnalysisStep(step_id="04_reconciliation", intent="Audit missingness."),
+        step_summary={
+            "missingness": {
+                "missing_fraction": {"lab_max": 56.372144},
+                "missing_pct": {"lab_max": 56.372144},
+            }
+        },
+    )
+
+    assert len(findings) == 1
+    assert findings[0].validator == "step_summary_fraction_scale"
+    assert findings[0].detail["summary_path"] == (
+        "missingness.missing_fraction.lab_max"
+    )
+    assert findings[0].detail["reported_value"] == 56.372144
+
+
+def test_step_summary_fraction_scale_accepts_fraction_and_percent_units() -> None:
+    findings = StepSummaryFractionValidator().audit(
+        step=AnalysisStep(step_id="04_reconciliation", intent="Audit missingness."),
+        step_summary={
+            "missingness": {
+                "missing_fraction": {"lab_max": 0.56372144},
+                "missing_pct": {"lab_max": 56.372144},
+            }
+        },
+    )
+
+    assert findings == []
+
+
+def test_step_summary_fraction_scale_rejects_fraction_stored_as_percent() -> None:
+    findings = StepSummaryFractionValidator().audit(
+        step=AnalysisStep(step_id="04_reconciliation", intent="Audit levels."),
+        step_summary={
+            "valid_level_distribution_percent": {"0": 0.7, "1": 0.3},
+            "valid_level_distribution_percent_pct": {"0": 70.0, "1": 30.0},
+        },
+    )
+
+    assert len(findings) == 1
+    assert "Rename the first field to *_fraction" in findings[0].message
+    assert findings[0].detail["summary_path"] == (
+        "valid_level_distribution_percent"
+    )
+
+
+def _write_reconciliation_trace_fixture(
+    tmp_path: Path, *, correct: bool
+) -> tuple[dict, Path]:
+    parent = pd.DataFrame(
+        [
+            {
+                "exposure": "sofa2_liver_max",
+                "group_type": "exposure_level",
+                "group_value": 0,
+                "estimate_type": "outcome_risk",
+                "n": 10,
+                "event_n": 2,
+                "outcome_risk": 0.2,
+            },
+            {
+                "exposure": "sofa2_liver_max",
+                "group_type": "source_state",
+                "group_value": "observed",
+                "estimate_type": "outcome_risk",
+                "n": 10,
+                "event_n": 2,
+                "outcome_risk": 0.2,
+            },
+            {
+                "exposure": "bili_max",
+                "group_type": "continuous_summary",
+                "group_value": "observed",
+                "estimate_type": "continuous_distribution",
+                "n": 10,
+                "event_n": np.nan,
+                "outcome_risk": np.nan,
+                "median": 0.7,
+                "q25": 0.4,
+                "q75": 1.4,
+            },
+        ]
+    )
+    parent_path = tmp_path / "parent.csv"
+    parent.to_csv(parent_path, index=False)
+
+    reconciliation = pd.DataFrame(
+        [
+            {
+                "source_variable": "sofa2_liver_max",
+                "requested_stratum": "0",
+                "requested_role": "required_valid_ordinal_level",
+                "registered_output_status": "row_supported",
+                "registered_n": 10 if correct else 100,
+                "registered_event_n": 2 if correct else 20,
+                "registered_risk": 0.2 if correct else 0.1,
+                "registered_n_field": "n" if correct else "n_denominator",
+                "registered_event_n_field": (
+                    "event_n" if correct else "n_positive"
+                ),
+                "registered_risk_field": "outcome_risk" if correct else "estimate",
+            },
+            {
+                "source_variable": "sofa2_liver_max",
+                "requested_stratum": "valid observed",
+                "requested_role": "required_source_status",
+                "registered_output_status": (
+                    "row_supported" if correct else "row_not_supported"
+                ),
+                "registered_n": 10 if correct else np.nan,
+                "registered_event_n": 2 if correct else np.nan,
+                "registered_risk": 0.2 if correct else np.nan,
+                "registered_n_field": "n" if correct else np.nan,
+                "registered_event_n_field": "event_n" if correct else np.nan,
+                "registered_risk_field": "outcome_risk" if correct else np.nan,
+            },
+            {
+                "source_variable": "bili_max",
+                "requested_stratum": "valid_observed_continuous",
+                "requested_role": "required_continuous_representation",
+                "registered_output_status": "row_supported",
+                "registered_n": 10,
+                "registered_risk": np.nan if correct else 0.2,
+                "registered_n_field": "n",
+                "registered_risk_field": np.nan,
+                "registered_median": 0.7,
+                "registered_q25": 0.4,
+                "registered_q75": 1.4,
+                "registered_median_field": "median",
+                "registered_q25_field": "q25",
+                "registered_q75_field": "q75",
+            },
+        ]
+    )
+    reconciliation.to_csv(
+        tmp_path / "absolute_risk_representation_reconciliation.csv", index=False
+    )
+    pd.DataFrame(
+        [
+            {
+                "row_type": "source_status",
+                "status": "no source",
+                "percentage_of_valid_observed": np.nan if correct else 1.2,
+                "percentage_of_valid_observed_pct": np.nan if correct else 120.0,
+            }
+        ]
+    ).to_csv(tmp_path / "reconciled_absolute_risk.csv", index=False)
+    summary = {
+        "registered_upstream_output": {
+            "upstream_step": "04_absolute_risk_context",
+            "selected_path": str(parent_path),
+        },
+        "output_files": ["absolute_risk_representation_reconciliation.csv"],
+    }
+    return summary, tmp_path
+
+
+def test_cross_step_reconciliation_trace_rejects_wrong_parent_rows(
+    tmp_path: Path,
+) -> None:
+    summary, out_dir = _write_reconciliation_trace_fixture(tmp_path, correct=False)
+
+    findings = CrossStepReconciliationTraceValidator().audit(
+        step=AnalysisStep(step_id="04_reconciliation", intent="Reconcile parent."),
+        step_summary=summary,
+        out_dir=out_dir,
+    )
+
+    assert len(findings) == 1
+    issue_types = {item["issue"] for item in findings[0].detail["issues"]}
+    assert "registered_n_mismatch" in issue_types
+    assert "registered_event_n_mismatch" in issue_types
+    assert "registered_risk_mismatch" in issue_types
+    assert "supported_parent_row_reported_missing" in issue_types
+    assert "continuous_distribution_has_false_risk" in issue_types
+    assert "source_status_percentage_field_not_applicable" in issue_types
+
+
+def test_cross_step_reconciliation_trace_accepts_exact_parent_rows(
+    tmp_path: Path,
+) -> None:
+    summary, out_dir = _write_reconciliation_trace_fixture(tmp_path, correct=True)
+
+    findings = CrossStepReconciliationTraceValidator().audit(
+        step=AnalysisStep(step_id="04_reconciliation", intent="Reconcile parent."),
+        step_summary=summary,
+        out_dir=out_dir,
+    )
+
+    assert findings == []
+
+
+def test_cross_step_reconciliation_trace_normalises_semantic_row_schema(
+    tmp_path: Path,
+) -> None:
+    summary, out_dir = _write_reconciliation_trace_fixture(tmp_path, correct=True)
+    pd.DataFrame(
+        [
+            {
+                "variable": "sofa2_liver_max",
+                "estimate_type": "outcome_risk",
+                "stratum_type": "sofa_level",
+                "stratum": "0",
+                "source_status": "valid observed",
+                "registered_n": np.nan,
+                "registered_outcome_risk": np.nan,
+                "registered_n_field": np.nan,
+                "registered_outcome_risk_field": np.nan,
+                "row_supported": False,
+            },
+            {
+                "variable": "sofa2_liver_max",
+                "estimate_type": "outcome_risk",
+                "stratum_type": "source_status",
+                "stratum": "valid observed",
+                "source_status": "valid observed",
+                "registered_n": np.nan,
+                "registered_outcome_risk": np.nan,
+                "registered_n_field": np.nan,
+                "registered_outcome_risk_field": np.nan,
+                "row_supported": False,
+            },
+            {
+                "variable": "bili_max",
+                "estimate_type": "distribution",
+                "stratum_type": "distribution",
+                "stratum": "valid observed",
+                "source_status": "valid observed",
+                "registered_n": np.nan,
+                "registered_outcome_risk": np.nan,
+                "registered_n_field": np.nan,
+                "registered_outcome_risk_field": np.nan,
+                "row_supported": False,
+            },
+        ]
+    ).to_csv(
+        out_dir / "absolute_risk_representation_reconciliation.csv", index=False
+    )
+
+    findings = CrossStepReconciliationTraceValidator().audit(
+        step=AnalysisStep(step_id="04_reconciliation", intent="Reconcile parent."),
+        step_summary=summary,
+        out_dir=out_dir,
+    )
+
+    assert len(findings) == 1
+    issues = findings[0].detail["issues"]
+    assert sum(
+        item["issue"] == "supported_parent_row_reported_missing" for item in issues
+    ) == 3
+
+
+def test_cross_step_reconciliation_trace_normalises_requested_estimate_schema(
+    tmp_path: Path,
+) -> None:
+    summary, out_dir = _write_reconciliation_trace_fixture(tmp_path, correct=True)
+    parent_path = summary["registered_upstream_output"]["selected_path"]
+    summary = {
+        "registered_upstream": {
+            "requested_step": "04_absolute_risk_context",
+            "path": parent_path,
+        },
+        "output_files": ["absolute_risk_representation_reconciliation.csv"],
+    }
+    pd.DataFrame(
+        [
+            {
+                "variable": "sofa2_liver_max",
+                "requested_estimate_type": "outcome_risk",
+                "requested_stratum": "level_0",
+                "requested_source_status": "valid observed",
+                "requested_level": 0,
+                "registered_supported": False,
+                "registered_n": np.nan,
+                "registered_outcome_risk": np.nan,
+                "registered_selected_fields": np.nan,
+            },
+            {
+                "variable": "sofa2_liver_max",
+                "requested_estimate_type": "outcome_risk",
+                "requested_stratum": "valid observed",
+                "requested_source_status": "valid observed",
+                "requested_level": np.nan,
+                "registered_supported": False,
+                "registered_n": np.nan,
+                "registered_outcome_risk": np.nan,
+                "registered_selected_fields": np.nan,
+            },
+            {
+                "variable": "bili_max",
+                "requested_estimate_type": "distribution",
+                "requested_stratum": "valid observed",
+                "requested_source_status": "valid observed",
+                "requested_level": np.nan,
+                "registered_supported": False,
+                "registered_n": np.nan,
+                "registered_outcome_risk": np.nan,
+                "registered_selected_fields": np.nan,
+            },
+        ]
+    ).to_csv(
+        out_dir / "absolute_risk_representation_reconciliation.csv", index=False
+    )
+
+    findings = CrossStepReconciliationTraceValidator().audit(
+        step=AnalysisStep(step_id="04_reconciliation", intent="Reconcile parent."),
+        step_summary=summary,
+        out_dir=out_dir,
+    )
+
+    assert len(findings) == 1
+    issues = findings[0].detail["issues"]
+    assert sum(
+        item["issue"] == "supported_parent_row_reported_missing" for item in issues
+    ) == 3
+
+
+def test_cross_step_reconciliation_trace_accepts_generic_registered_table_path(
+    tmp_path: Path,
+) -> None:
+    summary, out_dir = _write_reconciliation_trace_fixture(tmp_path, correct=True)
+    parent_path = summary["registered_upstream_output"]["selected_path"]
+    summary = {
+        "registered_upstream": {
+            "upstream_step": "04_absolute_risk_context",
+            "registered_table_path": parent_path,
+        },
+        "output_files": ["absolute_risk_representation_reconciliation.csv"],
+    }
+    pd.DataFrame(
+        [
+            {
+                "variable": "sofa2_liver_max",
+                "row_type": "level",
+                "estimate_type": "outcome_risk",
+                "stratum": "level_0",
+                "level": 0,
+                "source_status": "valid observed",
+                "registered_supported": False,
+                "row_supported": False,
+                "registered_n": np.nan,
+                "registered_outcome_risk": np.nan,
+            }
+        ]
+    ).to_csv(
+        out_dir / "absolute_risk_representation_reconciliation.csv", index=False
+    )
+
+    findings = CrossStepReconciliationTraceValidator().audit(
+        step=AnalysisStep(step_id="04_reconciliation", intent="Reconcile parent."),
+        step_summary=summary,
+        out_dir=out_dir,
+    )
+
+    assert len(findings) == 1
+    assert findings[0].detail["issues"][0]["issue"] == (
+        "supported_parent_row_reported_missing"
+    )
+
+
+def test_cross_step_reconciliation_trace_normalises_row_role_schema(
+    tmp_path: Path,
+) -> None:
+    summary, out_dir = _write_reconciliation_trace_fixture(tmp_path, correct=True)
+    pd.DataFrame(
+        [
+            {
+                "variable": "sofa2_liver_max",
+                "row_role": "level",
+                "estimate_type": "outcome_risk",
+                "stratum": "level_0",
+                "source_status": "valid observed",
+                "registered_row_supported": False,
+                "registered_n": np.nan,
+                "registered_event_n": np.nan,
+                "registered_outcome_risk": np.nan,
+            },
+            {
+                "variable": "sofa2_liver_max",
+                "row_role": "source_status",
+                "estimate_type": "outcome_risk",
+                "stratum": "valid observed",
+                "source_status": "valid observed",
+                "registered_row_supported": False,
+                "registered_n": np.nan,
+                "registered_event_n": np.nan,
+                "registered_outcome_risk": np.nan,
+            },
+            {
+                "variable": "bili_max",
+                "row_role": "distribution",
+                "estimate_type": "continuous_distribution",
+                "stratum": "valid observed",
+                "source_status": "valid observed",
+                "registered_row_supported": True,
+                "registered_n": 10,
+                "registered_event_n": np.nan,
+                "registered_outcome_risk": np.nan,
+                "registered_median": 0.7,
+                "registered_q25": 0.4,
+                "registered_q75": 1.4,
+                "registered_selected_fields": (
+                    "estimate_type;exposure;n;median;q25;q75"
+                ),
+            },
+        ]
+    ).to_csv(
+        out_dir / "absolute_risk_representation_reconciliation.csv", index=False
+    )
+
+    findings = CrossStepReconciliationTraceValidator().audit(
+        step=AnalysisStep(step_id="04_reconciliation", intent="Reconcile parent."),
+        step_summary=summary,
+        out_dir=out_dir,
+    )
+
+    assert len(findings) == 1
+    issues = findings[0].detail["issues"]
+    assert sum(
+        item["issue"] == "supported_parent_row_reported_missing"
+        for item in issues
+    ) == 2
+
+
+def test_cross_step_reconciliation_trace_normalises_requested_group_schema(
+    tmp_path: Path,
+) -> None:
+    summary, out_dir = _write_reconciliation_trace_fixture(tmp_path, correct=True)
+    pd.DataFrame(
+        [
+            {
+                "variable": "sofa2_liver_max",
+                "requested_group_type": "sofa_level",
+                "requested_group_value": 0,
+                "requested_estimate_type": "outcome_risk",
+                "registered_supported": False,
+                "registered_n": np.nan,
+                "registered_event_n": np.nan,
+                "registered_outcome_risk": np.nan,
+                "selected_parent_row_fields": np.nan,
+            },
+            {
+                "variable": "sofa2_liver_max",
+                "requested_group_type": "source_status",
+                "requested_group_value": "valid observed",
+                "requested_estimate_type": "outcome_risk",
+                "registered_supported": True,
+                "registered_n": 10,
+                "registered_event_n": 2,
+                "registered_outcome_risk": 0.2,
+                "selected_parent_row_field_names": "n;event_n;outcome_risk",
+            },
+            {
+                "variable": "bili_max",
+                "requested_group_type": "distribution",
+                "requested_group_value": "valid observed",
+                "requested_estimate_type": "continuous_distribution",
+                "registered_supported": True,
+                "registered_n": 10,
+                "registered_event_n": np.nan,
+                "registered_outcome_risk": np.nan,
+                "registered_median": 0.7,
+                "registered_q25": 0.4,
+                "registered_q75": 1.4,
+                "selected_parent_field_names": "n;median;q25;q75",
+            },
+        ]
+    ).to_csv(
+        out_dir / "absolute_risk_representation_reconciliation.csv", index=False
+    )
+
+    findings = CrossStepReconciliationTraceValidator().audit(
+        step=AnalysisStep(step_id="04_reconciliation", intent="Reconcile parent."),
+        step_summary=summary,
+        out_dir=out_dir,
+    )
+
+    assert len(findings) == 1
+    assert findings[0].detail["issues"] == [
+        {
+            "row": "sofa2_liver_max:0",
+            "issue": "supported_parent_row_reported_missing",
+        }
+    ]
+
+
+def test_cross_step_reconciliation_trace_requires_declared_range_rows(
+    tmp_path: Path,
+) -> None:
+    summary, out_dir = _write_reconciliation_trace_fixture(tmp_path, correct=True)
+    summary["bilirubin"] = {
+        "range_flag_counts": {
+            "within_declared_range": 8,
+            "above_declared_range": 2,
+        }
+    }
+    path = out_dir / "absolute_risk_representation_reconciliation.csv"
+
+    missing = CrossStepReconciliationTraceValidator().audit(
+        step=AnalysisStep(step_id="04_reconciliation", intent="Reconcile parent."),
+        step_summary=summary,
+        out_dir=out_dir,
+    )
+
+    assert len(missing) == 1
+    assert {
+        item["row"]
+        for item in missing[0].detail["issues"]
+        if item["issue"] == "missing_declared_range_flag_row"
+    } == {"within_declared_range", "above_declared_range"}
+
+    frame = pd.read_csv(path)
+    frame = pd.concat(
+        [
+            frame,
+            pd.DataFrame(
+                [
+                    {
+                        "source_variable": "bili_max",
+                        "requested_stratum": flag,
+                        "requested_role": "range_flag",
+                        "registered_output_status": "row_not_supported",
+                        "registered_n": np.nan,
+                    }
+                    for flag in ("within_declared_range", "above_declared_range")
+                ]
+            ),
+        ],
+        ignore_index=True,
+    )
+    frame.to_csv(path, index=False)
+
+    present = CrossStepReconciliationTraceValidator().audit(
+        step=AnalysisStep(step_id="04_reconciliation", intent="Reconcile parent."),
+        step_summary=summary,
+        out_dir=out_dir,
+    )
+
+    assert present == []
+
+
+def test_cross_step_reconciliation_trace_fails_closed_on_unknown_schema(
+    tmp_path: Path,
+) -> None:
+    summary, out_dir = _write_reconciliation_trace_fixture(tmp_path, correct=True)
+    pd.DataFrame(
+        [
+            {
+                "variable": "sofa2_liver_max",
+                "row_role": "level",
+                "stratum": "level_0",
+                "parent_trace_available": False,
+                "registered_n": np.nan,
+            }
+        ]
+    ).to_csv(
+        out_dir / "absolute_risk_representation_reconciliation.csv", index=False
+    )
+
+    findings = CrossStepReconciliationTraceValidator().audit(
+        step=AnalysisStep(step_id="04_reconciliation", intent="Reconcile parent."),
+        step_summary=summary,
+        out_dir=out_dir,
+    )
+
+    assert len(findings) == 1
+    assert findings[0].detail["issue"] == "reconciliation_schema_unrecognised"
+
+
+def test_cross_step_source_status_supports_concept_counts_schema() -> None:
+    current = {
+        "source_status_summary": {
+            "lab_max": {
+                "counts": {
+                    "valid observed": 41_210,
+                    "no source": 53_248,
+                    "measured/source present but summary missing": 0,
+                    "contradictory/invalid": 0,
+                },
+                "valid_observed_n": 41_210,
+            }
+        }
+    }
+
+    findings = CrossStepSourceStatusValidator().audit(
+        step=AnalysisStep(step_id="04_reconciliation", intent="Reconcile status."),
+        step_summary=current,
+        completed_step_records=[_prior_source_status_record()],
+    )
+
+    assert findings == []
+
+
+def test_cross_step_source_status_supports_nested_count_detail_schema() -> None:
+    current = {
+        "source_status_counts": {
+            "lab_max": {
+                "valid observed": {"count": 41_210},
+                "no source": {"count": 53_248},
+                "measured/source present but summary missing": {"count": 0},
+                "contradictory/invalid": {"count": 0},
+            }
+        }
+    }
+
+    findings = CrossStepSourceStatusValidator().audit(
+        step=AnalysisStep(step_id="04_reconciliation", intent="Reconcile status."),
+        step_summary=current,
+        completed_step_records=[_prior_source_status_record()],
+    )
+
+    assert findings == []
+
+
+def test_cross_step_source_status_supports_count_map_with_n_schema() -> None:
+    current = {
+        "source_status_count_map": {
+            "lab_max": {
+                "valid observed": {"n": 41_210},
+                "no source": {"n": 53_248},
+                "measured/source present but summary missing": {"n": 0},
+                "contradictory/invalid": {"n": 0},
+            }
+        }
+    }
+
+    findings = CrossStepSourceStatusValidator().audit(
+        step=AnalysisStep(step_id="04_reconciliation", intent="Reconcile status."),
+        step_summary=current,
+        completed_step_records=[_prior_source_status_record()],
+    )
+
+    assert findings == []
+
+
+def test_cross_step_source_status_requires_explicit_zero_categories() -> None:
+    current = {
+        "bilirubin_reconciliation": {
+            "source_columns": ["lab_max", "lab_n", "lab_measured"],
+            "source_status_counts": {
+                "valid-observed": 41_210,
+                "no-source": 53_248,
+            },
+        }
+    }
+
+    findings = CrossStepSourceStatusValidator().audit(
+        step=AnalysisStep(step_id="04_reconciliation", intent="Reconcile status."),
+        step_summary=current,
+        completed_step_records=[_prior_source_status_record()],
+    )
+
+    assert len(findings) == 1
+    assert findings[0].validator == "cross_step_source_status"
+    assert findings[0].detail["missing_status_roles"] == [
+        "contradictory_invalid",
+        "measured_summary_missing",
+    ]
+
+
+def test_cross_step_source_status_accepts_explicit_zero_categories() -> None:
+    current = {
+        "bilirubin_reconciliation": {
+            "source_columns": ["lab_max", "lab_n", "lab_measured"],
+            "source_status_counts": {
+                "valid-observed": 41_210,
+                "no-source": 53_248,
+                "measured-but-summary-missing": 0,
+                "contradictory-or-invalid": 0,
+            },
+        }
+    }
+
+    findings = CrossStepSourceStatusValidator().audit(
+        step=AnalysisStep(step_id="04_reconciliation", intent="Reconcile status."),
+        step_summary=current,
+        completed_step_records=[_prior_source_status_record()],
+    )
+
+    assert findings == []
+
+
+def test_cross_step_source_status_blocks_denominator_drift() -> None:
+    findings = CrossStepSourceStatusValidator().audit(
+        step=AnalysisStep(step_id="03_table_one", intent="Build Table 1"),
+        step_summary=_current_table_one_status(valid_n=2_380),
+        completed_step_records=[_prior_source_status_record()],
+    )
+
+    assert len(findings) == 1
+    assert findings[0].severity == "error"
+    assert findings[0].validator == "cross_step_source_status"
+    assert findings[0].detail["reported_valid_observed_n"] == 2_380
+    assert findings[0].detail["expected_valid_observed_n"] == 41_210
+
+
+def test_cross_step_source_status_accepts_matching_denominator() -> None:
+    findings = CrossStepSourceStatusValidator().audit(
+        step=AnalysisStep(step_id="03_table_one", intent="Build Table 1"),
+        step_summary=_current_table_one_status(valid_n=41_210),
+        completed_step_records=[_prior_source_status_record()],
+    )
+
+    assert findings == []
+
+
+def test_cross_step_source_status_skips_a_different_cohort_total() -> None:
+    findings = CrossStepSourceStatusValidator().audit(
+        step=AnalysisStep(step_id="03_table_one", intent="Build Table 1"),
+        step_summary=_current_table_one_status(valid_n=2_380, total_n=80_000),
+        completed_step_records=[_prior_source_status_record()],
+    )
+
+    assert findings == []
+
+
+def test_cross_step_source_status_uses_latest_successful_lock() -> None:
+    stale = _prior_source_status_record(valid_n=40_000)
+    stale["step_id"] = "01_initial_audit"
+    stale["status"] = "ok"
+    failed = _prior_source_status_record(valid_n=2_380)
+    failed["step_id"] = "02_failed_reconciliation"
+    failed["status"] = "contract_failed"
+    current_lock = _prior_source_status_record(valid_n=41_210)
+    current_lock["step_id"] = "03_locked_reconciliation"
+    current_lock["status"] = "ok"
+
+    findings = CrossStepSourceStatusValidator().audit(
+        step=AnalysisStep(step_id="04_table_one", intent="Build Table 1"),
+        step_summary=_current_table_one_status(valid_n=41_210),
+        completed_step_records=[stale, failed, current_lock],
+    )
+
+    assert findings == []
+
+
+def test_cross_step_source_status_supports_scalar_status_summary_schema() -> None:
+    current = {
+        "bilirubin_definition": {"summary_variable": "lab_max"},
+        "missingness_and_measurement_status": {
+            "bilirubin": {
+                "denominator_n": 94_458,
+                "observed_valid_summary_n": 2_380,
+                "source_absent_n": 53_248,
+                "contradictory_or_invalid_n": 38_830,
+            }
+        },
+    }
+
+    findings = CrossStepSourceStatusValidator().audit(
+        step=AnalysisStep(step_id="03_table_one", intent="Build Table 1"),
+        step_summary=current,
+        completed_step_records=[_prior_source_status_record()],
+    )
+
+    assert len(findings) == 1
+    assert findings[0].detail["summary_path"] == (
+        "missingness_and_measurement_status.bilirubin"
+    )
+    assert findings[0].detail["reported_valid_observed_n"] == 2_380
 
 
 def _ctx_with_sofa(ra) -> "ra.ResearchContext":
@@ -1064,6 +2128,88 @@ def test_llm_concept_auditor_prompt_includes_outcome_semantics(ra):
     assert "explicitly treated as ICU mortality" in prompt
 
 
+def test_llm_concept_auditor_checks_summary_source_status_bypasses(ra):
+    auditor = ra.LLMConceptAuditor(ra.MockLLMClient())
+    ctx = ra.build_research_context(
+        research_question="Summarize an early ICU measurement.",
+        cohort=pd.DataFrame({
+            "stay_id": [1, 2, 3],
+            "marker_first": [1.0, None, 2.0],
+            "marker_n": [1, 0, 1],
+            "marker_measured": [1, 0, 1],
+        }),
+        cohort_name="c",
+        database="synthetic",
+    )
+    prompt = auditor._prompt(context=ctx, script_text="print('hello')", step=None)
+
+    assert "alternate per-stay summaries (first/max/min/mean)" in prompt
+    assert "measured/count/source-status" in prompt
+    assert "consistency checks" in prompt
+
+
+def test_llm_concept_auditor_sees_late_independent_count_qc(ra):
+    auditor = ra.LLMConceptAuditor(ra.MockLLMClient())
+    ctx = ra.build_research_context(
+        research_question="Audit an ordered early ICU exposure.",
+        cohort=pd.DataFrame({
+            "stay_id": [1, 2, 3],
+            "stage_max": [0, 1, 2],
+            "stage_n": [1, 1, 1],
+            "stage_measured": [1, 1, 1],
+        }),
+        cohort_name="c",
+        database="synthetic",
+    )
+    late_qc = "count_consistency_status = 'checked'"
+    script = ("# analysis setup\n" * 1000) + late_qc
+    prompt = auditor._prompt(context=ctx, script_text=script, step=None)
+
+    assert late_qc in prompt
+    assert "independent QC fields" in prompt
+    assert "keeps that comparison audit-only" in prompt
+
+
+def test_llm_concept_auditor_samples_head_middle_and_tail_of_long_script(ra):
+    auditor = ra.LLMConceptAuditor(ra.MockLLMClient())
+    ctx = ra.build_research_context(
+        research_question="Audit a long generated ICU analysis script.",
+        cohort=pd.DataFrame({"stay_id": [1], "death": [0]}),
+        cohort_name="c",
+        database="synthetic",
+    )
+    head = "HEAD_SENTINEL\n" + ("h" * 50_000)
+    middle = "MIDDLE_MODEL_SENTINEL\n"
+    tail = ("t" * 50_000) + "\nTAIL_CONTRACT_SENTINEL"
+
+    prompt = auditor._prompt(
+        context=ctx,
+        script_text=head + middle + tail,
+        step=None,
+    )
+
+    assert "HEAD_SENTINEL" in prompt
+    assert "MIDDLE_MODEL_SENTINEL" in prompt
+    assert "TAIL_CONTRACT_SENTINEL" in prompt
+    assert "concept-audit excerpt omitted" in prompt
+
+
+def test_llm_concept_auditor_makes_result_changing_figure_semantics_errors(ra):
+    auditor = ra.LLMConceptAuditor(ra.MockLLMClient())
+    ctx = ra.build_research_context(
+        research_question="Render an ordered exposure distribution.",
+        cohort=pd.DataFrame({"stay_id": [1, 2], "stage_max": [0, 1]}),
+        cohort_name="c",
+        database="synthetic",
+    )
+    prompt = auditor._prompt(context=ctx, script_text="plot(stage_max)", step=None)
+
+    assert "severity='error'" in prompt
+    assert "silently invent numeric zeros" in prompt
+    assert "reconciling them to counts and denominators" in prompt
+    assert "alternate per-stay summary" in prompt
+
+
 def test_llm_concept_auditor_downgrades_nonblocking_outcome_confusion(ra):
     from easyicu.research_agent.audits.validators import parse_llm_concept_audit_response
 
@@ -1169,7 +2315,11 @@ def test_clinical_constraint_validator_warns_on_missing_time_zero(ra, tmp_path: 
             ),
         }
     )
-    step = ra.schema.AnalysisStep(step_id="04_causal_protocol", intent="Target-trial style causal analysis")
+    step = ra.schema.AnalysisStep(
+        step_id="04_causal_protocol",
+        intent="Target-trial style causal analysis",
+        method="target_trial_emulation",
+    )
     out_dir = tmp_path / "out"
     out_dir.mkdir()
     findings = ra.ClinicalConstraintValidator().audit(
@@ -1237,6 +2387,125 @@ def test_clinical_constraint_validator_does_not_flag_association_named_exposure(
         },
     )
     assert not any("immortal time bias" in f.message.lower() for f in findings), findings
+
+
+def test_clinical_constraint_validator_does_not_treat_ordinal_dose_response_as_treatment(
+    ra, tmp_path: Path
+):
+    ctx = _ctx_with_sofa(ra).model_copy(
+        update={
+            "research_question": (
+                "Characterise the dose-response gradient of an ordered organ-"
+                "dysfunction stage against mortality."
+            ),
+            "user_preferences": ra.schema.UserPreferences(),
+        }
+    )
+    step = ra.schema.AnalysisStep(
+        step_id="02_data_quality",
+        intent="Audit missingness and measurement availability before modelling.",
+    )
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    findings = ra.ClinicalConstraintValidator().audit(
+        context=ctx,
+        step=step,
+        out_dir=out_dir,
+        step_summary={"analysis_family": "data_quality"},
+    )
+    assert not any("immortal time bias" in f.message.lower() for f in findings), findings
+
+
+def test_clinical_constraint_validator_does_not_flag_negated_noncausal_association(
+    ra, tmp_path: Path
+):
+    ctx = _ctx_with_sofa(ra).model_copy(
+        update={
+            "research_question": "Is an ordered exposure associated with mortality?",
+            "user_preferences": None,
+        }
+    )
+    step = ra.schema.AnalysisStep(
+        step_id="06_adjusted_association",
+        intent="Estimate supportive adjusted associations.",
+        method="adjusted_association_models",
+    )
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+
+    findings = ra.ClinicalConstraintValidator().audit(
+        context=ctx,
+        step=step,
+        out_dir=out_dir,
+        step_summary={
+            "analysis_family": "association_study",
+            "notes": [
+                "The analysis is observational and supportive, not a causal treatment effect."
+            ],
+        },
+    )
+
+    assert not any("immortal time bias" in f.message.lower() for f in findings)
+
+
+def test_clinical_constraint_validator_does_not_flag_support_step_in_causal_study(
+    ra, tmp_path: Path
+):
+    ctx = _ctx_with_sofa(ra).model_copy(
+        update={
+            "research_question": "Estimate a treatment effect on mortality.",
+            "user_preferences": ra.schema.UserPreferences(
+                inferred_analysis_family="causal_inference"
+            ),
+        }
+    )
+    step = ra.schema.AnalysisStep(
+        step_id="02_baseline_table",
+        intent="Describe baseline characteristics before the causal model.",
+        method="table_one",
+    )
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+
+    findings = ra.ClinicalConstraintValidator().audit(
+        context=ctx,
+        step=step,
+        out_dir=out_dir,
+        step_summary={"analysis_family": "descriptive"},
+    )
+
+    assert not any("immortal time bias" in f.message.lower() for f in findings)
+
+
+def test_clinical_constraint_validator_accepts_causal_step_with_explicit_time_zero(
+    ra, tmp_path: Path
+):
+    ctx = _ctx_with_sofa(ra).model_copy(
+        update={
+            "user_preferences": ra.schema.UserPreferences(
+                inferred_analysis_family="causal_inference",
+                timing_and_design=(
+                    "Eligibility and treatment assignment are aligned at ICU admission time zero."
+                ),
+            )
+        }
+    )
+    step = ra.schema.AnalysisStep(
+        step_id="04_causal_protocol",
+        intent="Estimate the target-trial effect.",
+        method="target_trial_emulation",
+    )
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+
+    findings = ra.ClinicalConstraintValidator().audit(
+        context=ctx,
+        step=step,
+        out_dir=out_dir,
+        step_summary={"analysis_family": "causal_inference"},
+    )
+
+    assert not any("immortal time bias" in f.message.lower() for f in findings)
 
 
 def test_statistical_guard_warns_when_prediction_outputs_lack_split_metadata(ra, tmp_path: Path):
@@ -1312,6 +2581,142 @@ def test_statistical_guard_accepts_v14_cv_prediction_summary(ra, tmp_path: Path)
     assert "held-out performance" not in messages
     assert "train/test split" not in messages
     assert "calibration_slope" not in messages
+
+
+def test_statistical_guard_ignores_empty_p_value_placeholder_column(
+    ra, tmp_path: Path
+):
+    ctx = _ctx_with_sofa(ra).model_copy(
+        update={
+            "user_preferences": ra.schema.UserPreferences(
+                inferred_analysis_family="association"
+            )
+        }
+    )
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"death": [0, 1, 0]}).to_parquet(cohort_path, index=False)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    pd.DataFrame(
+        {
+            "term": ["exposure", "age", "sex"],
+            "p_value": [None, None, None],
+        }
+    ).to_csv(out_dir / "coefficients.csv", index=False)
+
+    findings = ra.StatisticalGuard().audit(
+        context=ctx,
+        cohort_path=cohort_path,
+        step=ra.schema.AnalysisStep(
+            step_id="05_association", intent="association analysis"
+        ),
+        out_dir=out_dir,
+        step_summary={},
+    )
+
+    assert not any("multiple p-values" in finding.message for finding in findings)
+
+
+def test_statistical_guard_warns_for_multiple_finite_unadjusted_p_values(
+    ra, tmp_path: Path
+):
+    ctx = _ctx_with_sofa(ra).model_copy(
+        update={
+            "user_preferences": ra.schema.UserPreferences(
+                inferred_analysis_family="association"
+            )
+        }
+    )
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"death": [0, 1, 0]}).to_parquet(cohort_path, index=False)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    pd.DataFrame(
+        {
+            "term": ["level_1", "level_2", "level_3"],
+            "term_role": ["exposure", "exposure", "exposure"],
+            "analysis_role": ["primary", "primary", "primary"],
+            "hypothesis_family_id": ["prespecified_contrasts"] * 3,
+            "p_value": [0.01, 0.03, None],
+        }
+    ).to_csv(out_dir / "coefficients.csv", index=False)
+
+    findings = ra.StatisticalGuard().audit(
+        context=ctx,
+        cohort_path=cohort_path,
+        step=ra.schema.AnalysisStep(
+            step_id="05_association", intent="association analysis"
+        ),
+        out_dir=out_dir,
+        step_summary={},
+    )
+
+    warning = next(
+        finding for finding in findings if "multiple p-values" in finding.message
+    )
+    assert warning.detail["finite_p_value_count"] == 2
+    assert warning.detail["hypothesis_family_id"] == "prespecified_contrasts"
+
+
+def test_statistical_guard_does_not_warn_for_untyped_coefficient_dump(
+    ra, tmp_path: Path
+):
+    ctx = _ctx_with_sofa(ra)
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"death": [0, 1, 0]}).to_parquet(cohort_path, index=False)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    pd.DataFrame(
+        {
+            "term": ["intercept", "age", "exposure_1", "exposure_2"],
+            "term_role": ["intercept", "adjustment", "exposure", "exposure"],
+            "analysis_role": ["primary", "primary", "primary", "sensitivity"],
+            "p_value": [0.2, 0.03, 0.01, 0.02],
+        }
+    ).to_csv(out_dir / "coefficients.csv", index=False)
+
+    findings = ra.StatisticalGuard().audit(
+        context=ctx,
+        cohort_path=cohort_path,
+        step=ra.schema.AnalysisStep(
+            step_id="05_association", intent="association analysis"
+        ),
+        out_dir=out_dir,
+        step_summary={},
+    )
+
+    assert not any("multiple p-values" in finding.message for finding in findings)
+
+
+def test_statistical_guard_scopes_typed_family_to_primary_result_terms(
+    ra, tmp_path: Path
+):
+    ctx = _ctx_with_sofa(ra)
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"death": [0, 1, 0]}).to_parquet(cohort_path, index=False)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    pd.DataFrame(
+        {
+            "term": ["intercept", "age", "exposure_primary", "exposure_sensitivity"],
+            "term_role": ["intercept", "adjustment", "exposure", "exposure"],
+            "analysis_role": ["primary", "primary", "primary", "sensitivity"],
+            "hypothesis_family_id": ["family_a"] * 4,
+            "p_value": [0.2, 0.03, 0.01, 0.02],
+        }
+    ).to_csv(out_dir / "coefficients.csv", index=False)
+
+    findings = ra.StatisticalGuard().audit(
+        context=ctx,
+        cohort_path=cohort_path,
+        step=ra.schema.AnalysisStep(
+            step_id="05_association", intent="association analysis"
+        ),
+        out_dir=out_dir,
+        step_summary={},
+    )
+
+    assert not any("multiple p-values" in finding.message for finding in findings)
 
 
 # ---------------------------------------------------------------------------

@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import get_args
 
 from easyicu.research_agent.capability_registry import get_capability
-from easyicu.research_agent.pipeline_execute import _PRIMARY_DETERMINISTIC_RUNNERS
 from easyicu.research_agent.study_design_playbook import StudyDesignFamily
 
 _SPEC = (
@@ -75,7 +74,6 @@ def test_ids_are_unique():
 
 def test_enums_are_valid():
     families = set(get_args(StudyDesignFamily))
-    runners = set(_PRIMARY_DETERMINISTIC_RUNNERS) | {None}
     for it in _items():
         assert it["expected_behavior"] in {"bound_result", "fail_closed"}, it["id"]
         assert it["feasibility"] in {
@@ -84,7 +82,10 @@ def test_enums_are_valid():
             "needs_database",
         }, it["id"]
         assert it["analysis_family"] in families, it["id"]
-        assert it["expected_runner"] in runners, it["id"]
+        assert it["expected_runner"] is None, (
+            f"{it['id']} assigns a primary scientific runner; primary methods "
+            "must remain agent-owned"
+        )
         # the family must be documented in the capability registry
         assert get_capability(it["analysis_family"]) is not None, it["id"]
 

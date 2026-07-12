@@ -6,6 +6,7 @@ import math
 def _association_step(ra, step_id: str = "04_adjusted_association"):
     return ra.AnalysisStep(
         step_id=step_id,
+        method="adjusted_logistic_regression",
         intent="Estimate the adjusted association between SOFA-2 and mortality.",
         expected_outputs=[
             "model:logistic_regression_sofa_death",
@@ -165,6 +166,7 @@ def test_table_prevalence_step_does_not_satisfy_later_primary_model(ra):
 def _prediction_figure_step(ra, step_id: str = "01_model_training_figure"):
     return ra.AnalysisStep(
         step_id=step_id,
+        method="prediction_model_evaluation",
         intent="Render discrimination and calibration panels for the mortality model.",
         expected_outputs=[
             "figure:discrimination_calibration",

@@ -475,6 +475,240 @@ print(json.dumps(summary))
     ]
 
 
+def test_pipeline_repairs_cross_step_source_status_denominator_drift(
+    ra, tmp_path: Path
+):
+    """A later Table 1 must preserve a prior explicit source-status lock."""
+
+    def source_lock_script() -> str:
+        return """
+import json
+import os
+import pandas as pd
+
+out = os.environ["STEP_OUT_DIR"]
+pd.DataFrame({"status": ["valid", "no_source"], "n": [3, 2]}).to_csv(
+    os.path.join(out, "source_status_lock.csv"), index=False
+)
+summary = {
+    "missingness": {
+        "source_status_counts": {
+            "adult_analytic_cohort": {
+                "lab_max": {
+                    "valid_observed_level_or_value": 3,
+                    "no_recorded_source_or_observation": 2,
+                    "measured_or_observed_source_with_summary_missing": 0,
+                    "contradictory_or_invalid_source_summary": 0,
+                }
+            }
+        }
+    }
+}
+with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
+    json.dump(summary, f)
+print(json.dumps(summary))
+"""
+
+    def table_one_script(valid_n: int) -> str:
+        return f"""
+import json
+import os
+import pandas as pd
+
+out = os.environ["STEP_OUT_DIR"]
+pd.DataFrame({{"variable": ["lab_max"], "n_nonmissing": [{valid_n}]}}).to_csv(
+    os.path.join(out, "table_one.csv"), index=False
+)
+summary = {{
+    "measurement_status": {{
+        "source_summary": "lab_max",
+        "counts": [
+            {{"category": "Observed valid", "count": {valid_n}}},
+            {{"category": "No source", "count": {5 - valid_n}}},
+            {{"category": "Measured but summary missing", "count": 0}},
+            {{"category": "Invalid summary", "count": 0}},
+            {{"category": "Contradictory status", "count": 0}},
+        ],
+    }}
+}}
+with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
+    json.dump(summary, f)
+print(json.dumps(summary))
+"""
+
+    class CrossStepRepairLLM:
+        name = "cross-step-repair-llm"
+
+        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
+            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
+            upper = user.upper()
+            if "ICU-AWARE RESEARCH PLAN" in upper:
+                return json.dumps(
+                    {
+                        "research_question": "Keep measured lab counts consistent.",
+                        "steps": [
+                            {
+                                "step_id": "01_source_status_audit",
+                                "intent": "Record the source-status denominator lock.",
+                                "inputs": ["lab_max"],
+                                "expected_outputs": [],
+                                "method": "descriptive",
+                                "icu_rule_refs": ["aggregation_rule_for"],
+                            },
+                            {
+                                "step_id": "02_table_one",
+                                "intent": "Build Table 1 without redefining lab validity.",
+                                "inputs": ["lab_max"],
+                                "expected_outputs": ["table:table_one"],
+                                "method": "descriptive",
+                                "icu_rule_refs": ["aggregation_rule_for"],
+                            },
+                        ],
+                        "rationale": "minimal cross-step contract repair test",
+                    }
+                )
+            if "REPAIR THE PYTHON CODE FOR STEP 02_TABLE_ONE" in upper:
+                assert "SOURCE-STATUS DENOMINATOR DRIFT" in upper
+                assert "LOCKED 3" in upper
+                return table_one_script(3)
+            if "WRITE THE PYTHON CODE FOR STEP 01_SOURCE_STATUS_AUDIT" in upper:
+                return source_lock_script()
+            if "WRITE THE PYTHON CODE FOR STEP 02_TABLE_ONE" in upper:
+                return table_one_script(1)
+            if "INTERPRET THE RESULTS" in upper:
+                return "The requested descriptive output was produced."
+            if "MANUSCRIPT SCAFFOLD" in upper:
+                return "# Title\n\n## Results\n\nDescriptive outputs were produced.\n"
+            return "{}"
+
+    cohort = pd.DataFrame(
+        {"lab_max": [1.0, 2.0, 3.0, np.nan, np.nan], "death": [0, 1, 0, 0, 1]}
+    )
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=CrossStepRepairLLM(),
+        enable_literature=False,
+        enable_deterministic_runner_repair=False,
+        max_code_repair_attempts=1,
+    )
+    result = pipeline.run(
+        question="Keep measured lab counts consistent.",
+        cohort=cohort,
+        cohort_name="cross_step_source_status_test",
+        database="synthetic",
+        target_outcome="death",
+    )
+
+    partial = json.loads(
+        (Path(result.workdir) / "manifest_partial.json").read_text(encoding="utf-8")
+    )
+    record = _step_record_by_id(partial["per_step_records"], "02_table_one")
+    assert record["status"] == "ok"
+    assert record["code_repair_attempts"] == 1
+    assert record["step_summary"]["measurement_status"]["counts"][0]["count"] == 3
+    assert not [
+        finding
+        for finding in record["contract_findings"]
+        if finding["severity"] == "error"
+        and finding["validator"] == "cross_step_source_status"
+    ]
+
+
+def test_pipeline_repairs_fixed_cohort_drift_in_current_step(
+    ra, tmp_path: Path
+):
+    """An explicit fixed-cohort promise routes N drift to local code repair."""
+
+    def summary_script(*, cohort_n: int, field: str) -> str:
+        return f"""
+import json
+import os
+
+out = os.environ["STEP_OUT_DIR"]
+summary = {{"status": "completed", "{field}": {cohort_n}}}
+with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
+    json.dump(summary, f)
+print(json.dumps(summary))
+"""
+
+    class FixedCohortRepairLLM:
+        name = "fixed-cohort-repair-llm"
+
+        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
+            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
+            upper = user.upper()
+            if "ICU-AWARE RESEARCH PLAN" in upper:
+                return json.dumps(
+                    {
+                        "research_question": "Keep the analytic cohort fixed.",
+                        "steps": [
+                            {
+                                "step_id": "01_cohort_lock",
+                                "intent": "Record the completed analytic cohort.",
+                                "inputs": ["age"],
+                                "expected_outputs": [],
+                                "method": "descriptive",
+                                "icu_rule_refs": [],
+                            },
+                            {
+                                "step_id": "02_reconcile",
+                                "intent": "Keep the completed cohort fixed while reconciling outputs.",
+                                "inputs": ["age"],
+                                "expected_outputs": [],
+                                "method": "data_quality_audit",
+                                "icu_rule_refs": [],
+                            },
+                        ],
+                        "rationale": "minimal fixed-cohort repair test",
+                    }
+                )
+            if "REPAIR THE PYTHON CODE FOR STEP 02_RECONCILE" in upper:
+                assert "FIXED-COHORT DRIFT" in upper
+                assert "LOCKED 5" in upper
+                return summary_script(cohort_n=5, field="n_final_cohort")
+            if "WRITE THE PYTHON CODE FOR STEP 01_COHORT_LOCK" in upper:
+                return summary_script(cohort_n=5, field="n_total")
+            if "WRITE THE PYTHON CODE FOR STEP 02_RECONCILE" in upper:
+                return summary_script(cohort_n=4, field="n_final_cohort")
+            if "INTERPRET THE RESULTS" in upper:
+                return "The fixed-cohort reconciliation was completed."
+            if "MANUSCRIPT SCAFFOLD" in upper:
+                return "# Title\n\n## Results\n\nThe cohort was retained.\n"
+            return "{}"
+
+    cohort = pd.DataFrame(
+        {"age": [40, 50, 60, 70, 80], "death": [0, 1, 0, 1, 0]}
+    )
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=FixedCohortRepairLLM(),
+        enable_literature=False,
+        enable_deterministic_runner_repair=False,
+        max_code_repair_attempts=1,
+    )
+    result = pipeline.run(
+        question="Keep the analytic cohort fixed.",
+        cohort=cohort,
+        cohort_name="cross_step_cohort_lock_test",
+        database="synthetic",
+        target_outcome="death",
+    )
+
+    partial = json.loads(
+        (Path(result.workdir) / "manifest_partial.json").read_text(encoding="utf-8")
+    )
+    record = _step_record_by_id(partial["per_step_records"], "02_reconcile")
+    assert record["status"] == "ok"
+    assert record["code_repair_attempts"] == 1
+    assert record["step_summary"]["n_final_cohort"] == 5
+    assert not [
+        finding
+        for finding in record["contract_findings"]
+        if finding["severity"] == "error"
+        and finding["validator"] == "cross_step_cohort_lock"
+    ]
+
+
 def test_runtime_crash_after_contract_repair_gets_its_own_repair_budget(
     ra, tmp_path: Path
 ):
@@ -506,7 +740,7 @@ def test_runtime_crash_after_contract_repair_gets_its_own_repair_budget(
                                 "intent": "Estimate the adjusted odds ratio for the exposure.",
                                 "inputs": ["age", "death"],
                                 "expected_outputs": ["statistic:primary_association"],
-                                "method": "logistic",
+                                "method": "logistic_regression",
                                 "icu_rule_refs": ["aggregation_rule_for"],
                             }
                         ],
@@ -598,7 +832,7 @@ def test_runtime_crash_after_contract_repair_gets_its_own_repair_budget(
     assert record.get("runtime_repair_attempts") == 1
 
 
-def test_deterministic_contract_repair_runs_when_llm_repair_budget_is_zero(
+def test_method_substitution_contract_repair_is_blocked_when_budget_is_zero(
     ra,
     tmp_path: Path,
 ):
@@ -709,14 +943,25 @@ print(json.dumps(summary))
     partial = json.loads((run_dir / "manifest_partial.json").read_text("utf-8"))
     record = _step_record_by_id(partial["per_step_records"], "05_primary_association")
     covariates = record["step_summary"]["primary_adjusted_association"]["covariates"]
-    assert record["status"] == "ok"
-    assert record["runner_repair"] == "drop_overadjustment_covariates_v1"
-    assert record["code_repair_attempts"] == 1
-    assert "map_min_per_10mmhg" not in covariates
-    assert "map_min_missing_indicator" not in covariates
-    assert not [
+    assert record["status"] == "contract_failed"
+    assert record.get("runner_repair") is None
+    assert record.get("code_repair_attempts", 0) == 0
+    assert "map_min_per_10mmhg" in covariates
+    assert "map_min_missing_indicator" in covariates
+    assert [
         f for f in record.get("contract_findings", []) if f["severity"] == "error"
     ]
+
+    repair_ledger = json.loads(
+        (run_dir / "repairs_applied.json").read_text(encoding="utf-8")
+    )
+    blocked = [
+        item
+        for item in repair_ledger["repairs"]
+        if item["repair_id"] == "drop_overadjustment_covariates_v1"
+    ]
+    assert blocked
+    assert blocked[-1]["outcome"] == "blocked_by_automatic_repair_policy"
 
 
 def test_figure_step_coder_failure_uses_parent_output_rescue(ra, tmp_path: Path):
@@ -834,9 +1079,11 @@ print(json.dumps(summary))
     assert record["status"] == "ok"
     assert (
         record["deterministic_code_fallback"]
-        == "publication_figure_parent_outputs_preflight"
+        == "publication_figure_coder_failed"
     )
-    assert llm.code_calls == 1
+    # One call creates the parent analysis; at least one later call gives the
+    # agent the figure step before deterministic rendering rescues its outage.
+    assert llm.code_calls >= 2
     assert (out_dir / "publication_figure.png").exists()
     assert (out_dir / "publication_figure.svg").exists()
     assert (out_dir / "publication_figure.figure_contract.json").exists()
@@ -890,6 +1137,45 @@ def test_promote_prior_publication_bundle_copies_real_figure_exports(tmp_path: P
         "publication_figure.svg",
         "publication_figure.tiff",
     ]
+
+
+def test_split_figure_step_never_promotes_an_unrelated_prior_bundle(
+    tmp_path: Path,
+):
+    from easyicu.research_agent.pipeline import _promote_prior_publication_bundle
+
+    run_dir = tmp_path / "run"
+    prior = run_dir / "steps" / "01_cohort_flow_figure" / "outputs"
+    parent = run_dir / "steps" / "04_absolute_risk_context" / "outputs"
+    target = run_dir / "steps" / "04_absolute_risk_context_figure" / "outputs"
+    prior.mkdir(parents=True)
+    parent.mkdir(parents=True)
+    target.mkdir(parents=True)
+    (prior / "publication_figure.png").write_bytes(b"cohort-flow")
+    (prior / "publication_figure.figure_contract.json").write_text(
+        json.dumps(
+            {
+                "figure_id": "publication_figure",
+                "panels": [
+                    {"panel_id": "A", "role": "overview"},
+                    {"panel_id": "B", "role": "audit"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    pd.DataFrame({"estimate_type": ["outcome_risk"]}).to_csv(
+        parent / "exposure_outcome_summary.csv", index=False
+    )
+
+    repair = _promote_prior_publication_bundle(
+        run_dir=run_dir,
+        current_step_id="04_absolute_risk_context_figure",
+        out_dir=target,
+    )
+
+    assert repair is None
+    assert not (target / "publication_figure.png").exists()
 
 
 def test_promote_prior_publication_bundle_filters_roles_for_primary_results(
@@ -3148,6 +3434,233 @@ def test_step_contract_accepts_figure_file_dicts(ra):
     assert not [f for f in findings if f.severity == "error"]
 
 
+def test_step_contract_blocks_unauthorized_cohort_redefinition_in_qc_step(ra):
+    from easyicu.research_agent.pipeline import _step_contract_findings
+
+    step = ra.schema.AnalysisStep(
+        step_id="04_exposure_derivation_qc",
+        intent="Audit the ordered exposure and component consistency.",
+        inputs=["stage_max"],
+        expected_outputs=["table:stage_distribution"],
+        method="ordinal_exposure_derivation_and_quality_control",
+    )
+    findings = _step_contract_findings(
+        step=step,
+        step_summary={
+            "status": "completed",
+            "analysis_family": "cohort_definition_sensitivity",
+            "cohort_definition": {
+                "current_step_is_cohort_definition_sensitivity": True
+            },
+        },
+    )
+    assert any(
+        f.severity == "error"
+        and f.detail.get("kind") == "unauthorized_cohort_redefinition"
+        for f in findings
+    )
+
+
+def test_step_contract_allows_declared_primary_cohort_definition(ra):
+    from easyicu.research_agent.pipeline import _step_contract_findings
+
+    step = ra.schema.AnalysisStep(
+        step_id="01_primary_cohort_flow",
+        intent="Define the analysis cohort and report attrition.",
+        inputs=["age"],
+        expected_outputs=["table:cohort_flow"],
+        method="cohort_definition",
+    )
+    findings = _step_contract_findings(
+        step=step,
+        step_summary={
+            "status": "completed",
+            "analysis_family": "cohort_definition_sensitivity",
+            "n_final_cohort": 100,
+        },
+    )
+    assert not [
+        f
+        for f in findings
+        if f.detail.get("kind") == "unauthorized_cohort_redefinition"
+    ]
+
+
+def test_step_contract_requires_count_flag_consistency_for_component_qc(ra):
+    from easyicu.research_agent.pipeline import _step_contract_findings
+
+    step = ra.schema.AnalysisStep(
+        step_id="04_exposure_derivation_qc",
+        intent="Audit ordered component summaries and source flags.",
+        inputs=["stage_max", "stage_measured"],
+        expected_outputs=["table:stage_component_qc"],
+        method="ordinal_exposure_derivation_and_quality_control",
+    )
+    missing = _step_contract_findings(
+        step=step,
+        step_summary={"status": "completed", "component_qc": {}},
+    )
+    assert any(
+        f.detail.get("kind") == "component_count_consistency_missing"
+        for f in missing
+    )
+
+    checked = _step_contract_findings(
+        step=step,
+        step_summary={
+            "status": "completed",
+            "component_qc": {
+                "count_consistency_status": "checked",
+                "count_columns": ["stage_n"],
+                "count_flag_comparison_n": 100,
+                "count_flag_discordant_n": 0,
+                "count_consistency_by_measured_input": {
+                    "stage_measured": {
+                        "status": "checked",
+                        "count_column": "stage_n",
+                        "comparison_n": 100,
+                        "discordant_n": 0,
+                    }
+                },
+            },
+        },
+    )
+    assert not [
+        f
+        for f in checked
+        if f.detail.get("kind") == "component_count_consistency_missing"
+    ]
+
+
+def test_step_contract_requires_count_scope_for_authoritative_and_components(ra):
+    from easyicu.research_agent.pipeline import _step_contract_findings
+
+    step = ra.schema.AnalysisStep(
+        step_id="04_exposure_derivation_qc",
+        intent="Audit an authoritative ordered stage and its components.",
+        inputs=[
+            "stage_max",
+            "stage_measured",
+            "stage_component_max",
+            "stage_component_measured",
+        ],
+        expected_outputs=["table:stage_component_qc"],
+        method="ordinal_exposure_derivation_and_quality_control",
+    )
+    partial = _step_contract_findings(
+        step=step,
+        step_summary={
+            "status": "completed",
+            "component_qc": {
+                "count_consistency_status": "checked",
+                "count_columns": ["stage_component_n"],
+                "missing_count_columns": [],
+                "count_flag_comparison_n": 100,
+                "count_flag_discordant_n": 0,
+                "count_consistency_by_measured_input": {
+                    "stage_component_measured": {
+                        "status": "checked",
+                        "count_column": "stage_component_n",
+                        "comparison_n": 100,
+                        "discordant_n": 0,
+                    }
+                },
+            },
+        },
+    )
+    assert any(
+        f.detail.get("kind") == "component_count_consistency_scope_incomplete"
+        and f.detail.get("uncovered_count_columns") == ["stage_n"]
+        for f in partial
+    )
+    assert any(
+        f.detail.get("kind") == "component_count_consistency_by_input_invalid"
+        and any(
+            entry.get("measured_input") == "stage_measured"
+            and entry.get("reason") == "missing_entry"
+            for entry in f.detail.get("invalid_entries", [])
+        )
+        for f in partial
+    )
+
+    complete = _step_contract_findings(
+        step=step,
+        step_summary={
+            "status": "completed",
+            "component_qc": {
+                "count_consistency_status": "checked",
+                "count_columns": ["stage_n", "stage_component_n"],
+                "missing_count_columns": [],
+                "count_flag_comparison_n": 200,
+                "count_flag_discordant_n": 0,
+                "count_consistency_by_measured_input": {
+                    "stage_measured": {
+                        "status": "checked",
+                        "count_column": "stage_n",
+                        "comparison_n": 100,
+                        "discordant_n": 0,
+                    },
+                    "stage_component_measured": {
+                        "status": "checked",
+                        "count_column": "stage_component_n",
+                        "comparison_n": 100,
+                        "discordant_n": 0,
+                    },
+                },
+            },
+        },
+    )
+    assert not [
+        f
+        for f in complete
+        if f.detail.get("kind") == "component_count_consistency_scope_incomplete"
+    ]
+    assert not [
+        f
+        for f in complete
+        if f.detail.get("kind") == "component_count_consistency_by_input_invalid"
+    ]
+
+
+def test_step_contract_allows_explicit_unavailable_count_by_measured_input(ra):
+    from easyicu.research_agent.pipeline import _step_contract_findings
+
+    step = ra.schema.AnalysisStep(
+        step_id="04_component_qc",
+        intent="Audit source status.",
+        inputs=["stage_max", "stage_measured"],
+        expected_outputs=["table:component_qc"],
+        method="quality_control",
+    )
+    findings = _step_contract_findings(
+        step=step,
+        step_summary={
+            "status": "completed",
+            "component_qc": {
+                "count_consistency_status": "unavailable",
+                "count_columns": [],
+                "missing_count_columns": ["stage_n"],
+                "count_consistency_by_measured_input": {
+                    "stage_measured": {
+                        "status": "unavailable",
+                        "count_column": "stage_n",
+                        "reason": "missing_count_column",
+                    }
+                },
+            },
+        },
+    )
+    assert not [
+        f
+        for f in findings
+        if f.detail.get("kind")
+        in {
+            "component_count_consistency_scope_incomplete",
+            "component_count_consistency_by_input_invalid",
+        }
+    ]
+
+
 def test_deterministic_runner_repair_restores_primary_predictor_in_logit_design(ra):
     from easyicu.research_agent.pipeline import _deterministic_runner_repair
 
@@ -3236,6 +3749,7 @@ def test_step_contract_findings_flag_missing_primary_association_estimate(ra):
 
     step = ra.AnalysisStep(
         step_id="03_primary_association_model",
+        method="adjusted_logistic_regression",
         intent="Estimate the adjusted association between lactate and mortality.",
         expected_outputs=["statistic:adjusted_or_ci"],
     )
@@ -3262,6 +3776,7 @@ def test_step_contract_findings_accepts_nested_primary_association_estimate(ra):
 
     step = ra.AnalysisStep(
         step_id="03_primary_association_model",
+        method="adjusted_logistic_regression",
         intent="Estimate the adjusted association between lactate and mortality.",
         expected_outputs=["statistic:adjusted_or_ci"],
     )
@@ -3286,6 +3801,7 @@ def test_step_contract_findings_accepts_nested_primary_association_or(ra):
 
     step = ra.AnalysisStep(
         step_id="03_association_model",
+        method="adjusted_logistic_regression",
         intent="Estimate the adjusted association between lactate and mortality.",
         expected_outputs=["statistic:adjusted_or_ci"],
     )
@@ -3310,6 +3826,7 @@ def test_step_contract_findings_accepts_nested_adjusted_sofa_odds_ratio_dict(ra)
 
     step = ra.AnalysisStep(
         step_id="04_association_model",
+        method="adjusted_logistic_regression",
         intent="Estimate adjusted association between admission SOFA-2 and ICU mortality.",
         expected_outputs=["statistic:primary_or", "table:adjusted_odds_ratio_sofa"],
     )
@@ -3341,11 +3858,34 @@ def test_step_contract_findings_accepts_nested_adjusted_sofa_odds_ratio_dict(ra)
     assert findings == []
 
 
+def test_step_contract_rejects_blocked_step_summary(ra):
+    from easyicu.research_agent.pipeline import _step_contract_findings
+
+    findings = _step_contract_findings(
+        step=ra.AnalysisStep(
+            step_id="04_reconciliation",
+            intent="Reconcile registered descriptive evidence.",
+            expected_outputs=["table:reconciliation"],
+        ),
+        step_summary={
+            "status": "blocked",
+            "blocking_reason": "No structured source input was available.",
+        },
+    )
+
+    assert any(
+        finding.severity == "error"
+        and "cannot be recorded as a successful completed step" in finding.message
+        for finding in findings
+    )
+
+
 def test_step_contract_findings_rejects_nested_ci_without_effect_value(ra):
     from easyicu.research_agent.pipeline import _step_contract_findings
 
     step = ra.AnalysisStep(
         step_id="04_association_model",
+        method="adjusted_logistic_regression",
         intent="Estimate adjusted association between admission SOFA-2 and ICU mortality.",
         expected_outputs=["statistic:primary_or", "table:adjusted_odds_ratio_sofa"],
     )
@@ -3374,6 +3914,7 @@ def test_step_contract_findings_accepts_predictor_named_or_key(ra):
 
     step = ra.AnalysisStep(
         step_id="03_association_model",
+        method="adjusted_logistic_regression",
         intent="Fit lactate mortality model.",
         expected_outputs=["odds_ratio", "confidence_interval"],
     )
@@ -3391,6 +3932,7 @@ def test_step_contract_findings_accepts_primary_association_estimate_key(ra):
 
     step = ra.AnalysisStep(
         step_id="02_lactate_map_vaso_mortality_association",
+        method="adjusted_logistic_regression",
         intent="Estimate a lactate/MAP/vasopressor mortality association.",
         expected_outputs=["statistic:primary_association"],
     )
@@ -3437,6 +3979,7 @@ def test_step_contract_findings_does_not_treat_association_calibration_as_predic
 
     step = ra.AnalysisStep(
         step_id="03_association_model",
+        method="adjusted_logistic_regression",
         intent="Estimate adjusted vasopressor association with mortality.",
         expected_outputs=[
             "statistic:adjusted_or_ci",
@@ -3513,6 +4056,7 @@ def test_step_contract_repair_guidance_flags_missing_primary_predictor_in_x(ra):
 
     step = ra.AnalysisStep(
         step_id="04_primary_association_model",
+        method="adjusted_logistic_regression",
         intent="Estimate lactate association.",
         expected_outputs=["statistic:adjusted_or_ci"],
     )
@@ -3538,6 +4082,7 @@ def test_step_contract_findings_accepts_cv_prediction_metrics(ra):
 
     step = ra.AnalysisStep(
         step_id="03_model_training",
+        method="prediction_model_evaluation",
         intent="Train and evaluate mortality prediction model.",
         expected_outputs=["statistic:cv_auroc_mean", "statistic:brier_score"],
     )
@@ -3555,6 +4100,7 @@ def test_step_contract_findings_accepts_suffixed_prediction_metrics(ra):
 
     step = ra.AnalysisStep(
         step_id="03_model_evaluation",
+        method="prediction_model_evaluation",
         intent="Evaluate mortality prediction robustness.",
         expected_outputs=["statistic:auroc", "statistic:brier_score"],
     )
@@ -3572,13 +4118,18 @@ def test_step_contract_findings_accepts_suffixed_prediction_metrics(ra):
     assert findings == []
 
 
-def test_step_contract_findings_requires_metrics_for_prediction_training_intent(ra):
+def test_step_contract_findings_requires_declared_prediction_metrics(ra):
     from easyicu.research_agent.pipeline import _step_contract_findings
 
     step = ra.AnalysisStep(
         step_id="03_model_training",
+        method="prediction_model_evaluation",
         intent="Train a mortality prediction model with 5-fold cross-validation.",
-        expected_outputs=["model:trained_prediction_model"],
+        expected_outputs=[
+            "model:trained_prediction_model",
+            "statistic:auroc",
+            "statistic:brier_score",
+        ],
     )
 
     findings = _step_contract_findings(
@@ -3600,6 +4151,7 @@ def test_step_contract_findings_accepts_prefixed_clustering_metrics(ra):
     step = ra.AnalysisStep(
         step_id="01_trajectory_clustering",
         intent="Cluster shock physiology.",
+        method="kmeans_clustering",
         expected_outputs=[
             "statistic:silhouette_score",
             "statistic:cluster_count",
@@ -3624,6 +4176,7 @@ def test_step_contract_findings_accepts_complete_case_primary_or_alias(ra):
 
     step = ra.AnalysisStep(
         step_id="03_complete_case_robustness",
+        method="logistic_regression",
         intent="Fit robustness logistic regression models.",
         expected_outputs=[
             "statistic:primary_or",
@@ -4115,6 +4668,39 @@ def test_plan_cap_does_not_displace_protected_completed_steps(ra):
         "01_cohort",
         "02_table_one",
     ]
+
+
+def test_plan_cap_makes_room_for_late_primary_anchor_without_exceeding_cap(ra):
+    from easyicu.research_agent.pipeline import _cap_plan_preserving_figure_steps
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    plan = AnalysisPlan(
+        research_question="Generic adjusted ICU association.",
+        steps=[
+            AnalysisStep(
+                step_id=f"{idx:02d}_repair",
+                intent=f"Repair supporting evidence {idx}.",
+                method="evidence_repair",
+            )
+            for idx in range(1, 5)
+        ]
+        + [
+            AnalysisStep(
+                step_id="05_primary_adjusted_model",
+                intent="Fit the primary adjusted model.",
+                method="logistic_regression",
+                expected_outputs=["table:primary_estimate"],
+            )
+        ],
+    )
+
+    capped, findings = _cap_plan_preserving_figure_steps(plan=plan, cap=4)
+    step_ids = [step.step_id for step in capped.steps]
+
+    assert len(step_ids) == 4
+    assert "05_primary_adjusted_model" in step_ids
+    assert findings
+    assert "05_primary_adjusted_model" in findings[0].detail["protected_step_ids"]
 
 
 def test_deterministic_runner_repair_injects_undefined_helper_stub(ra):
@@ -5086,7 +5672,8 @@ def _register_publication_bundle_for_readiness(
     tmp_path: Path,
     *,
     contract: dict,
-) -> None:
+    source_step_id: str | None = None,
+) -> str:
     from easyicu.research_agent.publication_figures import (
         PUBLICATION_FIGURE_SKILL_POLICY_VERSION,
     )
@@ -5102,6 +5689,7 @@ def _register_publication_bundle_for_readiness(
         description="Publication figure source data.",
         source_path=source_path,
         evidence_id="publication_figure_source_data",
+        produced_by_step=source_step_id,
         producer="publication_figure_skill",
         generation_mode="deterministic_figure_skill",
     )
@@ -5136,6 +5724,7 @@ def _register_publication_bundle_for_readiness(
                 **source_metadata,
             },
         )
+    return source_record.evidence_id
 
 
 def _write_publication_skill_summary(
@@ -5161,20 +5750,25 @@ def _write_publication_skill_summary(
 def _register_complete_display_suite_for_readiness(
     evidence,
     tmp_path: Path,
-) -> None:
+    *,
+    table_step_id: str | None = None,
+    publication_source_step_id: str | None = None,
+) -> dict[str, list[str]]:
     table_one_path = tmp_path / "table_one.csv"
     table_one_path.write_text("variable,value\nage,64\n", encoding="utf-8")
-    evidence.register_file(
+    table_record = evidence.register_file(
         kind="table",
         description="Table 1 baseline cohort characteristics.",
         source_path=table_one_path,
         evidence_id="table_table_one",
+        produced_by_step=table_step_id,
         producer="coder",
         generation_mode="llm_code",
     )
-    _register_publication_bundle_for_readiness(
+    publication_source_id = _register_publication_bundle_for_readiness(
         evidence,
         tmp_path,
+        source_step_id=publication_source_step_id,
         contract={
             "figure_id": "easyicu_publication_figure",
             "core_claim": "Absolute risk, primary effect, data quality, and sensitivity audit are shown.",
@@ -5210,6 +5804,14 @@ def _register_complete_display_suite_for_readiness(
             ],
         },
     )
+    bound: dict[str, list[str]] = {}
+    if table_step_id:
+        bound.setdefault(table_step_id, []).append(table_record.evidence_id)
+    if publication_source_step_id:
+        bound.setdefault(publication_source_step_id, []).append(
+            publication_source_id
+        )
+    return bound
 
 
 def test_readiness_publication_ready_requires_article_display_suite(
@@ -6121,7 +6723,12 @@ def test_readiness_supersedes_stale_publication_figure_contract_quality_error(
         ],
     )
     evidence = EvidenceStore(tmp_path)
-    _register_complete_display_suite_for_readiness(evidence, tmp_path)
+    current_evidence = _register_complete_display_suite_for_readiness(
+        evidence,
+        tmp_path,
+        table_step_id="01_table_one",
+        publication_source_step_id="02_model",
+    )
     _write_publication_skill_summary(
         tmp_path,
         version=2,
@@ -6150,8 +6757,16 @@ def test_readiness_supersedes_stale_publication_figure_contract_quality_error(
             )
         ],
         per_step_records=[
-            {"step_id": "01_table_one", "status": "ok"},
-            {"step_id": "02_model", "status": "ok"},
+            {
+                "step_id": "01_table_one",
+                "status": "ok",
+                "evidence_ids": current_evidence["01_table_one"],
+            },
+            {
+                "step_id": "02_model",
+                "status": "ok",
+                "evidence_ids": current_evidence["02_model"],
+            },
             {"step_id": "03_sensitivity", "status": "ok"},
         ],
         evidence=evidence,
@@ -6365,7 +6980,12 @@ def test_readiness_supersedes_stale_strict_writer_error_after_clean_bound_manusc
         ],
     )
     evidence = EvidenceStore(tmp_path)
-    _register_complete_display_suite_for_readiness(evidence, tmp_path)
+    current_evidence = _register_complete_display_suite_for_readiness(
+        evidence,
+        tmp_path,
+        table_step_id="01_table_one",
+        publication_source_step_id="02_model",
+    )
     bound_path = tmp_path / "manuscript_scaffold_bound.md"
     bound_path.write_text(_evidence_bound_demo_manuscript(), encoding="utf-8")
 
@@ -6384,8 +7004,16 @@ def test_readiness_supersedes_stale_strict_writer_error_after_clean_bound_manusc
             )
         ],
         per_step_records=[
-            {"step_id": "01_table_one", "status": "ok"},
-            {"step_id": "02_model", "status": "ok"},
+            {
+                "step_id": "01_table_one",
+                "status": "ok",
+                "evidence_ids": current_evidence["01_table_one"],
+            },
+            {
+                "step_id": "02_model",
+                "status": "ok",
+                "evidence_ids": current_evidence["02_model"],
+            },
             {"step_id": "03_sensitivity", "status": "ok"},
         ],
         evidence=evidence,
@@ -6440,7 +7068,12 @@ def test_readiness_supersedes_stale_numeric_error_after_clean_bound_manuscript(
         ],
     )
     evidence = EvidenceStore(tmp_path)
-    _register_complete_display_suite_for_readiness(evidence, tmp_path)
+    current_evidence = _register_complete_display_suite_for_readiness(
+        evidence,
+        tmp_path,
+        table_step_id="01_table_one",
+        publication_source_step_id="02_model",
+    )
     bound_path = tmp_path / "manuscript_scaffold_bound.md"
     bound_path.write_text(
         "The adjusted association used 10 stays[^claim_1].\n\n"
@@ -6463,8 +7096,16 @@ def test_readiness_supersedes_stale_numeric_error_after_clean_bound_manuscript(
             )
         ],
         per_step_records=[
-            {"step_id": "01_table_one", "status": "ok"},
-            {"step_id": "02_model", "status": "ok"},
+            {
+                "step_id": "01_table_one",
+                "status": "ok",
+                "evidence_ids": current_evidence["01_table_one"],
+            },
+            {
+                "step_id": "02_model",
+                "status": "ok",
+                "evidence_ids": current_evidence["02_model"],
+            },
             {"step_id": "03_sensitivity", "status": "ok"},
         ],
         evidence=evidence,
@@ -6519,7 +7160,12 @@ def test_readiness_supersedes_stale_critic_error_after_passed_current_critique(
         ],
     )
     evidence = EvidenceStore(tmp_path)
-    _register_complete_display_suite_for_readiness(evidence, tmp_path)
+    current_evidence = _register_complete_display_suite_for_readiness(
+        evidence,
+        tmp_path,
+        table_step_id="01_table_one",
+        publication_source_step_id="02_model",
+    )
     bound_path = tmp_path / "manuscript_scaffold_bound.md"
     bound_path.write_text(_evidence_bound_demo_manuscript(), encoding="utf-8")
     (tmp_path / "manuscript_critique.json").write_text(
@@ -6541,8 +7187,16 @@ def test_readiness_supersedes_stale_critic_error_after_passed_current_critique(
             )
         ],
         per_step_records=[
-            {"step_id": "01_table_one", "status": "ok"},
-            {"step_id": "02_model", "status": "ok"},
+            {
+                "step_id": "01_table_one",
+                "status": "ok",
+                "evidence_ids": current_evidence["01_table_one"],
+            },
+            {
+                "step_id": "02_model",
+                "status": "ok",
+                "evidence_ids": current_evidence["02_model"],
+            },
             {"step_id": "03_sensitivity", "status": "ok"},
         ],
         evidence=evidence,
@@ -6593,7 +7247,12 @@ def _readiness_fixture_for_manifest_caveats(ra, tmp_path: Path):
         ],
     )
     evidence = EvidenceStore(tmp_path)
-    _register_complete_display_suite_for_readiness(evidence, tmp_path)
+    current_evidence = _register_complete_display_suite_for_readiness(
+        evidence,
+        tmp_path,
+        table_step_id="01_table_one",
+        publication_source_step_id="02_model",
+    )
     caveat_finding = ValidationFinding(
         validator="evidence_bound_writer",
         severity="error",
@@ -6603,8 +7262,16 @@ def _readiness_fixture_for_manifest_caveats(ra, tmp_path: Path):
         ),
     )
     per_step_records = [
-        {"step_id": "01_table_one", "status": "ok"},
-        {"step_id": "02_model", "status": "ok"},
+        {
+            "step_id": "01_table_one",
+            "status": "ok",
+            "evidence_ids": current_evidence["01_table_one"],
+        },
+        {
+            "step_id": "02_model",
+            "status": "ok",
+            "evidence_ids": current_evidence["02_model"],
+        },
         {"step_id": "03_sensitivity", "status": "ok"},
     ]
     return context, plan, evidence, caveat_finding, per_step_records
@@ -6809,6 +7476,84 @@ def test_publication_bundle_ready_groups_hash_suffixed_exports_under_one_stem(
     assert readiness["publication_ready_stems"] == ["easyicu_publication_figure"]
     assert readiness["publication_figure_contract_ready"] is True
     assert readiness["publication_figure_source_data_ready"] is True
+
+
+def test_publication_bundle_requires_sources_from_current_checkpoint(
+    ra, tmp_path: Path
+):
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.pipeline import _publication_figure_bundle_ready
+    from easyicu.research_agent.publication_figures import (
+        PUBLICATION_FIGURE_SKILL_POLICY_VERSION,
+    )
+
+    evidence = EvidenceStore(tmp_path)
+    source_path = tmp_path / "current_source.csv"
+    source_path.write_text("x,y\n1,2\n", encoding="utf-8")
+    source_record = evidence.register_file(
+        kind="table",
+        description="Current publication source.",
+        source_path=source_path,
+        evidence_id="current_source",
+        produced_by_step="02_model",
+        producer="coder",
+        generation_mode="llm",
+    )
+    metadata = {
+        "figure_skill_policy_version": PUBLICATION_FIGURE_SKILL_POLICY_VERSION,
+        "source_evidence_id": source_record.evidence_id,
+        "source_evidence_ids": [source_record.evidence_id],
+        "source_evidence_sha256": {source_record.evidence_id: source_record.sha256},
+    }
+    contract_path = tmp_path / "easyicu_publication_figure.figure_contract.json"
+    contract_path.write_text("{}", encoding="utf-8")
+    evidence.register_file(
+        kind="log",
+        description="Publication figure contract.",
+        source_path=contract_path,
+        evidence_id="publication_figure_contract",
+        producer="publication_figure_skill",
+        generation_mode="deterministic_figure_skill",
+        metadata=metadata,
+    )
+    for suffix in ("svg", "png"):
+        path = tmp_path / f"easyicu_publication_figure.{suffix}"
+        path.write_text("x", encoding="utf-8")
+        evidence.register_file(
+            kind="figure",
+            description="Publication figure export.",
+            source_path=path,
+            evidence_id=f"publication_figure_{suffix}",
+            producer="publication_figure_skill",
+            generation_mode="deterministic_figure_skill",
+            metadata={"figure_role": "publication_figure", **metadata},
+        )
+
+    current = [
+        {
+            "step_id": "02_model",
+            "status": "ok",
+            "evidence_ids": [source_record.evidence_id],
+        }
+    ]
+    assert _publication_figure_bundle_ready(
+        evidence=evidence,
+        run_dir=tmp_path,
+        per_step_records=current,
+    )["publication_figure_bundle_ready"] is True
+
+    superseded = [
+        *current,
+        {"step_id": "02_model", "status": "contract_failed"},
+    ]
+    stale = _publication_figure_bundle_ready(
+        evidence=evidence,
+        run_dir=tmp_path,
+        per_step_records=superseded,
+    )
+    assert stale["publication_figure_bundle_ready"] is False
+    assert stale["publication_figure_contract_ready"] is False
+    assert stale["publication_ready_stems"] == []
 
 
 def test_publication_bundle_ready_rejects_outdated_figure_policy(ra, tmp_path: Path):
@@ -7476,6 +8221,7 @@ def test_step_contract_repair_guidance_for_prediction_categorical_passthrough(ra
 
     step = ra.AnalysisStep(
         step_id="03_model_training",
+        method="prediction_model_evaluation",
         intent="Train mortality prediction model.",
         expected_outputs=["statistic:auroc", "statistic:brier_score"],
     )
@@ -7570,6 +8316,7 @@ def test_step_contract_repair_guidance_for_clustering_contract(ra):
     step = ra.AnalysisStep(
         step_id="01_trajectory_clustering",
         intent="Cluster shock physiology.",
+        method="kmeans_clustering",
         expected_outputs=[
             "statistic:silhouette_score",
             "table:cluster_characteristics",
@@ -7592,6 +8339,7 @@ def test_semantic_aliases_include_step_id_and_prediction_aliases(ra, tmp_path: P
 
     step = ra.AnalysisStep(
         step_id="01_model_training",
+        method="prediction_model_evaluation",
         intent="Train mortality prediction model.",
         expected_outputs=["statistic:auroc", "statistic:brier_score"],
     )
@@ -7644,6 +8392,7 @@ def test_semantic_aliases_include_clustering_aliases(ra, tmp_path: Path):
     step = ra.AnalysisStep(
         step_id="01_trajectory_clustering",
         intent="Cluster shock physiology.",
+        method="kmeans_clustering",
         expected_outputs=[
             "table:cluster_characteristics",
             "statistic:silhouette_score",
@@ -7740,7 +8489,7 @@ def test_semantic_aliases_bind_report_mortality_rate_to_outcome_rate(
     assert "cohort_summary" in aliases
 
 
-def test_advanced_plan_contract_collapses_prediction_to_one_step(ra):
+def test_advanced_plan_contract_preserves_prediction_evaluation_boundary(ra):
     from easyicu.research_agent.pipeline import _enforce_advanced_plan_contract
     from easyicu.research_agent.schema import UserPreferences
 
@@ -7775,10 +8524,43 @@ def test_advanced_plan_contract_collapses_prediction_to_one_step(ra):
 
     revised, findings = _enforce_advanced_plan_contract(plan=plan, context=ctx)
 
-    assert [step.step_id for step in revised.steps] == ["01_model_training"]
-    assert "statistic:auroc" in revised.steps[0].expected_outputs
-    assert "statistic:brier_score" in revised.steps[0].expected_outputs
+    assert [step.step_id for step in revised.steps] == [
+        "01_train_model",
+        "02_evaluate_auroc",
+    ]
+    assert revised == plan
     assert findings and findings[0].validator == "plan_contract"
+    assert findings[0].detail.get("missing_structured_owner") is True
+
+
+def test_figure_detection_uses_structured_artifacts_and_word_boundaries(ra):
+    from easyicu.research_agent.plan_utils import (
+        _research_question_implies_figure,
+        _step_expects_figure,
+    )
+
+    assert not _step_expects_figure(
+        ra.AnalysisStep(
+            step_id="01_configuration",
+            intent="Configure the model.",
+            method="configure_model",
+            expected_outputs=["table:model_configuration"],
+        )
+    )
+    assert _step_expects_figure(
+        ra.AnalysisStep(
+            step_id="02_results",
+            intent="Render results.",
+            method="visualization",
+            expected_outputs=["figure:primary_results"],
+        )
+    )
+    assert not _research_question_implies_figure(
+        "Configure ordinal exposure categories before fitting the model."
+    )
+    assert _research_question_implies_figure(
+        "Report the result as a figure or a source-backed table."
+    )
 
 
 def test_deterministic_summary_repair_restores_primary_predictor_after_soft_failure(ra):
@@ -8066,7 +8848,7 @@ result = model.fit(disp=0)
     assert 'X_encoded.apply(pd.to_numeric, errors="coerce").astype(float)' in patched
 
 
-def test_deterministic_summary_repair_handles_formula_dummy_name_error(ra):
+def test_formula_dummy_name_error_is_left_to_agent_repair(ra):
     from easyicu.research_agent.pipeline import _deterministic_summary_repair
 
     code = """
@@ -8092,15 +8874,10 @@ except Exception as e:
         },
     )
 
-    assert repaired is not None
-    name, patched = repaired
-    assert name == "formula_dummy_name_fallback_v1"
-    assert "_easyicu_primary_association_fallback_v1" in patched
-    assert '"primary_or"' in patched
-    compile(patched, "<patched>", "exec")
+    assert repaired is None
 
 
-def test_deterministic_summary_repair_adds_ordinal_fallback_for_singular_categorical_score(
+def test_deterministic_summary_repair_leaves_singular_ordinal_model_to_agent(
     ra,
 ):
     from easyicu.research_agent.pipeline import _deterministic_summary_repair
@@ -8162,15 +8939,10 @@ except Exception as exc:
         },
     )
 
-    assert repaired is not None
-    name, patched = repaired
-    assert name == "ordinal_primary_association_fallback_v1"
-    assert "_easyicu_ordinal_primary_association_fallback_v1" in patched
-    assert '"statistic:adjusted_odds_ratio"' in patched
-    compile(patched, "<patched>", "exec")
+    assert repaired is None
 
 
-def test_ordinal_primary_association_fallback_writes_finite_primary_or(
+def test_singular_ordinal_primary_model_does_not_inject_fallback_outputs(
     ra,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -8234,33 +9006,17 @@ with open(os.path.join(os.environ["STEP_OUT_DIR"], "step_summary.json"), "w", en
             },
         },
     )
-    assert repaired is not None
-    _name, patched = repaired
-
-    exec(compile(patched, "<patched>", "exec"), {})
-    summary = json.loads((out_dir / "step_summary.json").read_text(encoding="utf-8"))
-
-    assert summary["primary_association_estimate"]["variable"] == "sofa2_admission"
-    assert summary["primary_or"] > 1
-    assert summary["primary_ci_low"] > 0
-    assert summary["primary_ci_high"] > summary["primary_ci_low"]
-    assert summary["primary_p_value"] is not None
-    assert summary["statistic:adjusted_odds_ratio"] == summary["primary_or"]
-    assert (out_dir / "association_results.csv").exists()
+    assert repaired is None
+    assert not (out_dir / "step_summary.json").exists()
+    assert not (out_dir / "association_results.csv").exists()
 
 
-def test_deterministic_summary_repair_fallback_for_glmresults_mle_retvals_primary_null(
+def test_summary_repair_does_not_substitute_glm_for_mle_retvals_failure(
     ra,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """Regression for AGENT3W: GLMResults has no ``mle_retvals`` attr.
-
-    The generated script catches that AttributeError, records
-    ``primary_odds_ratio=null``, and otherwise exits 0. The deterministic
-    summary repair must not leave this to another LLM repair cycle; it should
-    append the ordinal association fallback and write a finite primary effect.
-    """
+    """A caught GLM API failure must return to agent repair, not a new model."""
     from easyicu.research_agent.pipeline import _deterministic_summary_repair
 
     cohort = pd.DataFrame(
@@ -8321,35 +9077,17 @@ with open(os.path.join(out_dir, "step_summary.json"), "w", encoding="utf-8") as 
         },
     )
 
-    assert repaired is not None
-    name, patched = repaired
-    assert name == "ordinal_primary_association_fallback_v1"
-    assert "_easyicu_ordinal_primary_association_fallback_v1" in patched
-
-    exec(compile(patched, "<patched>", "exec"), {})
-    summary = json.loads((out_dir / "step_summary.json").read_text(encoding="utf-8"))
-
-    assert summary["primary_association_estimate"]["variable"] == "sofa2_admission"
-    assert summary["primary_or"] > 1
-    assert summary["primary_ci_low"] > 0
-    assert summary["primary_ci_high"] > summary["primary_ci_low"]
-    assert summary["primary_p_value"] is not None
-    assert summary["statistic:primary_or"] == summary["primary_or"]
-    assert (out_dir / "association_results.csv").exists()
+    assert repaired is None
+    assert not (out_dir / "step_summary.json").exists()
+    assert not (out_dir / "association_results.csv").exists()
 
 
-def test_deterministic_summary_repair_fallback_for_logit_dtype_primary_or_null(
+def test_summary_repair_does_not_substitute_logit_for_null_primary_or(
     ra,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """Regression for AGENT3Y: Logit dtype failure hidden in a side table.
-
-    The generated script only records ``primary_or=null`` in
-    ``step_summary.json`` while the model-specific error is written into a CSV.
-    The fallback therefore has to rely on the null primary effect, infer the
-    real predictor column from a prose label, and recover a finite association.
-    """
+    """A null Logit result remains an agent-owned repair/fail-closed outcome."""
 
     from easyicu.research_agent.pipeline import _deterministic_summary_repair
 
@@ -8443,21 +9181,9 @@ with open(os.path.join(out_dir, "step_summary.json"), "w", encoding="utf-8") as 
         },
     )
 
-    assert repaired is not None
-    name, patched = repaired
-    assert name == "ordinal_primary_association_fallback_v1"
-    assert "predictor_col = 'sofa2_admission'" in patched
-    assert "outcome_col = 'death'" in patched
-
-    exec(compile(patched, "<patched>", "exec"), {})
-    summary = json.loads((out_dir / "step_summary.json").read_text(encoding="utf-8"))
-
-    assert summary["primary_association_estimate"]["variable"] == "sofa2_admission"
-    assert math.isfinite(summary["primary_or"])
-    assert summary["primary_or"] > 1
-    assert summary["primary_ci_low"] > 0
-    assert summary["primary_ci_high"] > summary["primary_ci_low"]
-    assert summary["primary_p_value"] is not None
+    assert repaired is None
+    assert not (out_dir / "step_summary.json").exists()
+    assert not (out_dir / "logistic_regression_results.csv").exists()
 
 
 def test_deterministic_summary_repair_restores_predictor_in_helper_design(ra):
@@ -8635,6 +9361,7 @@ def test_step_contract_findings_accepts_textual_or_summary(ra):
 
     step = AnalysisStep(
         step_id="04_primary_association_model",
+        method="adjusted_logistic_regression",
         intent="Fit logistic regression for lactate association.",
         expected_outputs=["summary:primary_association"],
     )
@@ -8696,12 +9423,13 @@ def test_advanced_plan_contract_normalizes_robustness_steps(ra):
 
     revised, findings = _enforce_advanced_plan_contract(plan=plan, context=context)
 
-    step_ids = [step.step_id for step in revised.steps]
-    assert step_ids == ["01_missingness", "03_complete_case_robustness"]
-    assert any(
-        "statistic:primary_or" in step.expected_outputs for step in revised.steps
-    )
-    assert findings and findings[0].validator == "plan_contract"
+    assert [step.step_id for step in revised.steps] == [
+        "01_missingness",
+        "03_model_fitting_complete_case",
+        "04_robustness_figure",
+    ]
+    assert revised == plan
+    assert findings[0].detail.get("missing_structured_owner") is True
 
 
 def _survival_plan_with_only_association_steps(AnalysisPlan, AnalysisStep):
@@ -8747,16 +9475,8 @@ def _survival_plan_with_only_association_steps(AnalysisPlan, AnalysisStep):
     )
 
 
-def test_advanced_plan_contract_converts_association_model_for_survival(ra):
-    """A survival question the planner answered with a static OR is corrected.
-
-    Regression for the H1 plan-level homogeneity bug: with the survival family
-    locked (analysis_type='survival') but every step written as an
-    association_study, the contract used to bail (no survival-marker step) and
-    the run reported an odds ratio + forest plot instead of a Cox/KM result.
-    The contract now converts the primary-estimand *model* step (not the cohort
-    or figure steps) into the canonical survival analysis step.
-    """
+def test_advanced_plan_contract_does_not_choose_survival_method_for_agent(ra):
+    """A family mismatch is surfaced without rewriting the agent's science."""
     from easyicu.research_agent.pipeline import _enforce_advanced_plan_contract
     from easyicu.research_agent.schema import (
         AnalysisPlan,
@@ -8778,22 +9498,133 @@ def test_advanced_plan_contract_converts_association_model_for_survival(ra):
 
     revised, findings = _enforce_advanced_plan_contract(plan=plan, context=context)
 
-    converted = [s for s in revised.steps if s.step_id == "01_survival_analysis"]
-    assert converted, "primary-estimand step should convert to 01_survival_analysis"
-    surv = converted[0]
-    assert surv.method == "survival_analysis"
-    assert "table:cox_summary" in surv.expected_outputs
-    assert "table:km_curve" in surv.expected_outputs
-    # The static association output must NOT be carried into the survival step,
-    # or the coder would compute an OR alongside the Cox estimand.
-    assert "table:adjusted_association_estimates" not in surv.expected_outputs
-    # Cohort / table-one steps are preserved; only the model step is converted.
-    kept = [s.step_id for s in revised.steps]
-    assert "01_cohort_timezero_attrition" in kept
-    assert "03_table_one" in kept
-    assert "05_primary_landmark_association_model" not in kept
+    assert revised == plan
     assert findings and findings[0].validator == "plan_contract"
-    assert findings[0].detail.get("converted_from_association") is True
+    assert findings[0].detail.get("missing_structured_owner") is True
+    assert findings[0].detail.get("preserved_step_ids") == [
+        step.step_id for step in plan.steps
+    ]
+
+
+def test_advanced_plan_contract_never_converts_primary_model_cohort(ra):
+    from easyicu.research_agent.pipeline import _enforce_advanced_plan_contract
+
+    context = ra.ResearchContext(
+        research_question="Estimate survival while preserving the planned owners.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="cohort", database="synthetic", n_patients=50, n_stays=50
+        ),
+        variables=[],
+        primary_exposure="exposure",
+        target_outcome="death",
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="survival",
+        steps=[
+            ra.AnalysisStep(
+                step_id="01_primary_model_cohort",
+                intent=(
+                    "Prepare the primary model cohort for survival analysis and "
+                    "report attrition."
+                ),
+                method="cohort_definition",
+                expected_outputs=["table:cohort_attrition"],
+            ),
+            ra.AnalysisStep(
+                step_id="05_primary_association",
+                intent="Estimate the prespecified adjusted association.",
+                method="mixed_effects_regression",
+                expected_outputs=["table:association_estimates"],
+            ),
+        ],
+    )
+
+    revised, findings = _enforce_advanced_plan_contract(plan=plan, context=context)
+
+    assert revised == plan
+    assert [step.method for step in revised.steps] == [
+        "cohort_definition",
+        "mixed_effects_regression",
+    ]
+    assert findings[0].detail.get("missing_structured_owner") is True
+
+
+def test_advanced_plan_contract_preserves_survival_cohort_owner_boundary(ra):
+    from easyicu.research_agent.pipeline import _enforce_advanced_plan_contract
+
+    context = ra.ResearchContext(
+        research_question="Estimate time-to-event survival with Cox regression.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="cohort", database="synthetic", n_patients=20, n_stays=20
+        ),
+        variables=[],
+        primary_exposure="exposure",
+        target_outcome="death",
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="survival",
+        steps=[
+            ra.AnalysisStep(
+                step_id="01_survival_cohort",
+                intent="Define the survival cohort and report attrition.",
+                method="cohort_definition",
+                expected_outputs=["table:cohort_attrition"],
+            ),
+            ra.AnalysisStep(
+                step_id="05_primary_cox",
+                intent="Fit the prespecified Cox proportional-hazards model.",
+                method="cox_proportional_hazards",
+                expected_outputs=["table:hr"],
+            ),
+        ],
+    )
+
+    revised, _findings = _enforce_advanced_plan_contract(plan=plan, context=context)
+
+    assert [step.step_id for step in revised.steps] == [
+        "01_survival_cohort",
+        "05_primary_cox",
+    ]
+    assert revised.steps[0].method == "cohort_definition"
+    assert revised.steps[0].expected_outputs == ["table:cohort_attrition"]
+    assert revised.steps[1].method == "cox_proportional_hazards"
+    assert "table:cox_summary" in revised.steps[1].expected_outputs
+
+
+def test_advanced_plan_contract_preserves_explicit_kmeans_method(ra):
+    from easyicu.research_agent.pipeline import _enforce_advanced_plan_contract
+
+    context = ra.ResearchContext(
+        research_question="Discover longitudinal phenotypes with KMeans clustering.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="cohort", database="synthetic", n_patients=20, n_stays=20
+        ),
+        variables=[],
+        target_outcome="death",
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="trajectory_clustering",
+        steps=[
+            ra.AnalysisStep(
+                step_id="05_kmeans_phenotyping",
+                intent="Discover trajectory phenotypes with KMeans.",
+                method="kmeans_clustering",
+                expected_outputs=[
+                    "table:cluster_assignments",
+                    "table:cluster_characteristics",
+                ],
+            )
+        ],
+    )
+
+    revised, _findings = _enforce_advanced_plan_contract(plan=plan, context=context)
+
+    assert [step.step_id for step in revised.steps] == ["05_kmeans_phenotyping"]
+    assert revised.steps[0].method == "kmeans_clustering"
+    assert "statistic:silhouette_score" in revised.steps[0].expected_outputs
 
 
 def test_advanced_plan_contract_leaves_pure_association_family_alone(ra):
@@ -8843,6 +9674,41 @@ def test_advanced_plan_contract_leaves_pure_association_family_alone(ra):
     assert not any(
         f.detail and f.detail.get("converted_from_association") for f in findings
     )
+
+
+def test_advanced_plan_contract_does_not_rewrite_cluster_robust_association(ra):
+    from easyicu.research_agent.pipeline import _enforce_advanced_plan_contract
+
+    context = ra.ResearchContext(
+        research_question=(
+            "Estimate the mortality association using mixed effects with "
+            "cluster-robust SE and hospital-level clustering."
+        ),
+        cohort=ra.CohortDescriptor(
+            cohort_name="cohort", database="synthetic", n_patients=50, n_stays=50
+        ),
+        variables=[],
+        primary_exposure="exposure",
+        target_outcome="death",
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="association_study",
+        steps=[
+            ra.AnalysisStep(
+                step_id="05_primary_association",
+                intent=context.research_question,
+                method="mixed_effects_regression",
+                expected_outputs=["table:association_estimates"],
+            )
+        ],
+    )
+
+    revised, findings = _enforce_advanced_plan_contract(plan=plan, context=context)
+
+    assert [step.step_id for step in revised.steps] == ["05_primary_association"]
+    assert revised.steps[0].method == "mixed_effects_regression"
+    assert not any(item.detail.get("family") == "clustering" for item in findings)
 
 
 def test_terminal_publication_repair_replan_skip_requires_satisfied_bundle(
@@ -8991,11 +9857,9 @@ def test_advanced_plan_contract_preserves_article_level_robustness_suite(ra):
         "04_robustness_grid",
     ]
     robustness_step = revised.steps[-1]
-    assert "statistic:primary_or" in robustness_step.expected_outputs
-    assert "figure:robustness_plot" in robustness_step.expected_outputs
-    assert findings and findings[0].validator == "plan_contract"
-    assert findings[0].severity == "info"
-    assert findings[0].detail["article_display_roles"]
+    assert robustness_step.expected_outputs == ["figure:robustness_grid"]
+    assert revised == plan
+    assert findings[0].detail.get("missing_structured_owner") is True
 
 
 def test_advanced_plan_contract_normalizes_bias_audit_steps(ra):
@@ -9044,11 +9908,12 @@ def test_advanced_plan_contract_normalizes_bias_audit_steps(ra):
     revised, findings = _enforce_advanced_plan_contract(plan=plan, context=context)
 
     assert [step.step_id for step in revised.steps] == [
-        "02_treatment_exposure_bias_association"
+        "01_cohort_summary",
+        "02_outcome_incidence",
+        "03_missingness_audit",
     ]
-    assert "statistic:primary_or" in revised.steps[0].expected_outputs
-    assert "statistic:selection_bias_warning" in revised.steps[0].expected_outputs
-    assert findings and findings[0].validator == "plan_contract"
+    assert revised == plan
+    assert findings[0].detail.get("missing_structured_owner") is True
 
 
 def test_advanced_plan_contract_does_not_rewrite_component_data_quality_audit(ra):
@@ -9133,10 +9998,12 @@ def test_advanced_plan_contract_infers_robustness_without_user_preferences(ra):
 
     revised, findings = _enforce_advanced_plan_contract(plan=plan, context=context)
 
-    assert [step.step_id for step in revised.steps] == ["03_complete_case_robustness"]
-    assert "statistic:primary_or" in revised.steps[0].expected_outputs
-    assert "statistic:complete_case_n" in revised.steps[0].expected_outputs
-    assert findings and findings[0].validator == "plan_contract"
+    assert [step.step_id for step in revised.steps] == ["01_robustness_analysis"]
+    assert revised.steps[0].expected_outputs == [
+        "table:robustness_summary",
+        "figure:robustness_figure",
+    ]
+    assert findings == []
 
 
 def test_salvage_stdout_json_step_summary(ra, tmp_path: Path):

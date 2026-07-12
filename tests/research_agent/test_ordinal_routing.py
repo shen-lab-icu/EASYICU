@@ -19,8 +19,7 @@ from easyicu.research_agent.pipeline_execute import (
 )
 
 
-def test_matches_e3_association_analysis_with_ordinal_trend_output():
-    # E3's real primary step 05: association_analysis + an ordinal_trend output.
+def test_descriptive_ordinal_trend_output_is_not_a_primary_model_contract():
     assert (
         _matches(
             "association_analysis",
@@ -29,11 +28,11 @@ def test_matches_e3_association_analysis_with_ordinal_trend_output():
             "table:ordinal_trend_tests",
             "stage_stratified_outcomes ordinal_trend_tests adjusted_mortality_trend",
         )
-        is True
+        is False
     )
 
 
-def test_matches_multivariable_association_with_dose_signal():
+def test_narrative_dose_signal_cannot_replace_a_closed_product():
     # E3's real hybridfix bench (2026-07-07): the planner labelled the PRIMARY
     # ordinal step method="multivariable_association" for a "dose-response gradient
     # ... ORDERED categorical exposure" question. The dose signal was present (from
@@ -50,7 +49,7 @@ def test_matches_multivariable_association_with_dose_signal():
             "adjusted_effect_estimates model_population_and_missingness "
             "primary_vs_expanded_adjustment_comparison model_diagnostics",
         )
-        is True
+        is False
     )
 
 
@@ -69,21 +68,23 @@ def test_multivariable_association_without_dose_signal_is_not_hijacked():
     )
 
 
-def test_matches_dose_response_question_with_association_method():
-    # dose-response signal from the question + a primary-estimation method.
+def test_dose_response_question_without_closed_product_is_not_claimed():
     assert (
         _matches(
             "association_analysis",
             "characterise the dose-response gradient of aki stage against mortality",
             "stage_outcomes model_estimates",
         )
-        is True
+        is False
     )
 
 
-def test_matches_explicit_dose_response_method_alone():
-    assert _matches("dose_response", "a primary step", "some_outputs") is True
-    assert _matches("ordinal_logistic_regression", "step", "outs") is True
+def test_explicit_dose_response_method_still_requires_a_closed_product():
+    assert _matches("dose_response", "a primary step", "some_outputs") is False
+    assert _matches("dose_response", "a primary step", "table:dose_response") is True
+    # Ordinal logistic regression can model an ordinal *outcome* and therefore
+    # is not, by itself, evidence of a graded-exposure/dose-response task.
+    assert _matches("ordinal_logistic_regression", "step", "outs") is False
 
 
 def test_matches_declared_per_stage_output_alone():
@@ -137,12 +138,67 @@ def test_narrative_dose_signal_needs_a_primary_estimation_method():
         )
         is False
     )
-    # ...but the same narrative signal WITH an estimation method routes here.
+    # A compatible method still needs a closed ordinal result product.
     assert (
         _matches(
             "association_analysis",
             "define the cohort for the dose-response gradient study",
             "cohort_flow_attrition",
         )
-        is True
+        is False
     )
+    assert _matches(
+        "association_analysis",
+        "define the cohort for the dose-response gradient study",
+        "table:trend_or",
+    )
+
+
+def test_fresh_e3_exposure_qc_is_not_hijacked_as_primary_model():
+    assert not _matches(
+        "ordinal_exposure_derivation_and_quality_control",
+        "04 exposure derivation qc for an ordinal dose-response study",
+        "table:kdigo_stage_distribution table:kdigo_component_qc",
+    )
+
+
+def test_fresh_e3_descriptive_trend_is_not_hijacked_as_primary_model():
+    assert not _matches(
+        "ordinal_stratified_descriptive_analysis",
+        "05 report stage-stratified mortality and an ordinal trend test",
+        "table:stage_stratified_outcomes test:ordinal_trend",
+    )
+
+
+def test_fresh_e3_supportive_adjusted_association_is_not_primary_model():
+    assert not _matches(
+        "adjusted_association_models",
+        "06_secondary_adjusted_association fit supportive adjusted "
+        "associations for an ordered exposure",
+        "table:adjusted_association_estimates "
+        "table:adjustment_set_and_analytic_population",
+    )
+
+
+def test_generic_adjusted_association_is_not_ordinal_without_closed_product():
+    assert not _matches(
+        "adjusted_association_models",
+        "06_primary_adjusted_association fit the primary adjusted association "
+        "for an ordered exposure",
+        "table:adjusted_association_estimates "
+        "table:adjustment_set_and_analytic_population",
+    )
+    assert _matches(
+        "adjusted_association_models",
+        "fit the primary ordered-exposure model",
+        "table:trend_or",
+    )
+
+
+def test_secondary_or_sensitivity_prose_cannot_create_ownership():
+    for role in ("secondary", "supportive", "sensitivity"):
+        assert not _matches(
+            "logistic_regression",
+            f"{role} model of an ordered exposure severity gradient",
+            "table:adjusted_association_estimates",
+        )

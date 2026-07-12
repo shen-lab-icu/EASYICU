@@ -27,8 +27,6 @@ def test_code_repair_reexports_helpers_by_identity() -> None:
     from easyicu.research_agent import code_repair, code_repair_helpers
 
     for name in (
-        "_primary_association_fallback_code",
-        "_ordinal_primary_association_fallback_code",
         "_patch_primary_predictor_into_design_matrix",
         "_strip_columns_from_list_literals",
         "_extract_missing_index_columns",

@@ -76,7 +76,7 @@ def test_prose_cohort_is_extracted_materialised_and_enforced(
                             ),
                             inputs=[],
                             expected_outputs=["table:analysis_cohort"],
-                            method="descriptive",
+                            method="cohort_definition",
                         ),
                     )
                 revised = current.model_copy(

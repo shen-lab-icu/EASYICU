@@ -98,3 +98,42 @@ def test_code_version_manifest_field_wraps_capture(ra):
     # Either a populated dict or None — but the key is always present so the
     # manifest schema field is populated deterministically.
     assert fields["code_version"] is None or isinstance(fields["code_version"], dict)
+
+
+def test_current_artifact_authority_uses_latest_outer_step_status():
+    from easyicu.research_agent.runtime_artifacts import (
+        active_step_evidence_ids,
+        current_evidence_records,
+        current_step_records,
+        current_successful_step_ids,
+    )
+
+    records = [
+        {"step_id": "01_current", "status": "ok", "evidence_ids": ["keep"]},
+        {"step_id": "02_retried", "status": "ok", "evidence_ids": ["old_ok"]},
+        {
+            "step_id": "02_retried",
+            "status": "blocked_by_concept_audit",
+            "evidence_ids": ["rejected_checkpoint"],
+        },
+    ]
+
+    latest = {record["step_id"]: record for record in current_step_records(records)}
+    assert latest["02_retried"]["status"] == "blocked_by_concept_audit"
+    assert current_successful_step_ids(records) == {"01_current"}
+    assert active_step_evidence_ids(records) == {"keep"}
+
+    evidence = [
+        {"evidence_id": "run_context", "produced_by_step": None},
+        {"evidence_id": "keep", "produced_by_step": "01_current"},
+        {"evidence_id": "old_ok", "produced_by_step": "02_retried"},
+        {
+            "evidence_id": "rejected_checkpoint",
+            "produced_by_step": "02_retried",
+        },
+    ]
+    current = current_evidence_records(evidence, records)
+    assert {record["evidence_id"] for record in current} == {
+        "run_context",
+        "keep",
+    }

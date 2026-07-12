@@ -63,6 +63,13 @@ def test_missingness_rescue_recomputes_percentages_from_counts(tmp_path: Path):
             "measured_one_n": [74641, 44339, 28229],
             "measured_one_pct": [99.7487605073, 59.2537652514, 37.7246789346],
             "value_present_but_measured_zero_n": [0, 0, 46600],
+            "raw_indicator_one_n": [74641, 44339, 28229],
+            "indicator_semantics": [
+                "measurement_availability",
+                "measurement_availability",
+                "binary_event_presence",
+            ],
+            "event_count_column": ["", "", "sep3_sofa2_n"],
         }
     ).to_csv(parent / "missingness_measurement_audit.csv", index=False)
     out = (
@@ -85,12 +92,319 @@ def test_missingness_rescue_recomputes_percentages_from_counts(tmp_path: Path):
     assert resp["missing_pct"] == pytest.approx(0.2512394927)
     assert resp["measured_pct"] == pytest.approx(99.7487605073)
     assert source_flag["measured_pct"] == pytest.approx(100.0)
+    assert source_flag["indicator_semantics"] == "binary_event_presence"
+    assert "analytic event status" in source_flag["display_label"].lower()
     contract = json.loads(
         (out / "missingness_measurement_panel.figure_contract.json").read_text(
             encoding="utf-8"
         )
     )
     assert len(contract["panels"]) == 2
+    assert contract["panels"][1]["title"] == "Analytic availability"
+    assert "absence-as-negative" in contract["panels"][1]["claim"]
+
+
+def test_missingness_split_figure_reads_only_its_direct_parent(tmp_path: Path):
+    direct = tmp_path / "steps" / "05_agent_missingness" / "outputs"
+    direct.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "concept": ["direct_marker"],
+            "n_total": [100],
+            "missing_n": [10],
+            "measured_n": [90],
+        }
+    ).to_csv(direct / "custom_status.csv", index=False)
+    unrelated = tmp_path / "steps" / "01_missingness_measurement" / "outputs"
+    unrelated.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "concept": ["wrong_marker"],
+            "n_total": [100],
+            "missing_n": [99],
+            "measured_n": [1],
+        }
+    ).to_csv(unrelated / "missingness_measurement_audit.csv", index=False)
+    out = tmp_path / "steps" / "05_agent_missingness_figure" / "outputs"
+
+    rid = missingness_rescue(
+        run_dir=tmp_path,
+        current_step_id="05_agent_missingness_figure",
+        out_dir=out,
+    )
+
+    assert rid == "missingness_publication_bundle_from_parent_outputs_v1"
+    source = pd.read_csv(out / "missingness_measurement_panel_source_data.csv")
+    assert set(source["variable"]) == {"direct_marker"}
+    assert set(source["source_table"]) == {"custom_status.csv"}
+
+
+def test_missingness_router_uses_manifest_method_and_standard_count_schema(
+    tmp_path: Path,
+):
+    parent = tmp_path / "steps" / "03_missingness_audit" / "outputs"
+    parent.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "variable": ["lactate", "creatinine"],
+            "n": [100, 100],
+            "n_missing": [10, 25],
+            "fraction_missing": [0.10, 0.25],
+        }
+    ).to_csv(parent / "missingness.csv", index=False)
+    (tmp_path / "manifest_partial.json").write_text(
+        json.dumps(
+            {
+                "per_step_records": [
+                    {
+                        "step_id": "03_missingness_audit",
+                        "status": "ok",
+                        "analysis_request": {
+                            "step": {"method": "missingness"},
+                        },
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    figure_step_id = "03_missingness_audit_figure"
+    out = tmp_path / "steps" / figure_step_id / "outputs"
+
+    assert deterministic_figure_family_supported_for_upstream(
+        tmp_path, figure_step_id
+    )
+    repair_id = routed_rescue(
+        run_dir=tmp_path,
+        current_step_id=figure_step_id,
+        out_dir=out,
+    )
+
+    assert repair_id == "missingness_publication_bundle_from_parent_outputs_v1"
+    source = pd.read_csv(out / "missingness_measurement_panel_source_data.csv")
+    assert source.set_index("variable")["missing_pct"].to_dict() == {
+        "lactate": pytest.approx(10.0),
+        "creatinine": pytest.approx(25.0),
+    }
+    assert (out / "missingness_measurement_panel.figure_contract.json").exists()
+
+
+def test_missingness_rescue_prefers_rich_measurement_process_over_attrition(
+    tmp_path: Path,
+):
+    parent = tmp_path / "steps" / "02_exposure_and_missingness_audit" / "outputs"
+    parent.mkdir(parents=True, exist_ok=True)
+    rows = [
+        {
+            "table_section": "column_missingness",
+            "variable": variable,
+            "metric": "raw_missing",
+            "category": None,
+            "cohort": cohort,
+            "n": raw_n,
+            "denominator": denominator,
+            "percentage": 100.0 * raw_n / denominator,
+            "raw_missing_n": raw_n,
+            "raw_missing_pct": 100.0 * raw_n / denominator,
+            "analysis_unavailable_n": unavailable_n,
+            "analysis_unavailable_pct": 100.0 * unavailable_n / denominator,
+        }
+        for variable, cohort, denominator, raw_n, unavailable_n in [
+            ("marker", "export", 200, 5, 15),
+            ("marker", "adult_analytic_cohort", 100, 10, 30),
+            ("other", "export", 200, 15, 25),
+            ("other", "adult_analytic_cohort", 100, 20, 40),
+        ]
+    ]
+    status_categories = [
+        "valid observed level/value",
+        "no recorded source or observation",
+        "measured or observed source with summary missing",
+        "contradictory or invalid source-summary combinations",
+    ]
+    for cohort, denominator, counts in [
+        ("export", 200, [185, 10, 3, 2]),
+        ("adult_analytic_cohort", 100, [70, 25, 3, 2]),
+    ]:
+        for category, count in zip(status_categories, counts, strict=True):
+            rows.append(
+                {
+                    "table_section": "source_status",
+                    "variable": "marker",
+                    "metric": "mutually_exclusive_source_status",
+                    "category": category,
+                    "cohort": cohort,
+                    "n": count,
+                    "denominator": denominator,
+                    "percentage": 100.0 * count / denominator,
+                    "raw_missing_n": None,
+                    "raw_missing_pct": None,
+                    "analysis_unavailable_n": None,
+                    "analysis_unavailable_pct": None,
+                }
+            )
+    pd.DataFrame(rows).to_csv(
+        parent / "missingness_and_measurement_process.csv", index=False
+    )
+    pd.DataFrame(
+        {
+            "variable": ["marker"],
+            "denominator": [100],
+            "missing_n": [99],
+            "missing_pct": [99.0],
+        }
+    ).to_csv(parent / "complete_case_attrition.csv", index=False)
+    out = (
+        tmp_path
+        / "steps"
+        / "02_exposure_and_missingness_audit_figure"
+        / "outputs"
+    )
+
+    rid = missingness_rescue(
+        run_dir=tmp_path,
+        current_step_id="02_exposure_and_missingness_audit_figure",
+        out_dir=out,
+    )
+
+    assert rid == "missingness_publication_bundle_from_parent_outputs_v1"
+    source = pd.read_csv(out / "missingness_measurement_panel_source_data.csv")
+    assert set(source["variable_name"]) == {"marker", "other"}
+    assert set(source["cohort_name"]) == {"export", "adult_analytic_cohort"}
+    marker = source[
+        (source["variable_name"] == "marker")
+        & (source["cohort_name"] == "adult_analytic_cohort")
+    ].iloc[0]
+    assert marker["source_table"] == "missingness_and_measurement_process.csv"
+    assert marker["source_row_filter"] == "column_missingness:raw_missing"
+    assert marker["missing_pct"] == pytest.approx(10.0)
+    assert marker["measured_pct"] == pytest.approx(70.0)
+    assert marker["analysis_unavailable_pct"] == pytest.approx(30.0)
+    status_path = out / "missingness_status_matrix_source_data.csv"
+    status = pd.read_csv(status_path)
+    assert set(status["status_category"]) == set(status_categories)
+    assert set(status["cohort_name"]) == {"export", "adult_analytic_cohort"}
+    contract = json.loads(
+        (out / "missingness_measurement_panel.figure_contract.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert {panel["metadata"]["chart_type"] for panel in contract["panels"]} == {
+        "missingness_matrix",
+        "availability_panel",
+    }
+
+    step = AnalysisStep(
+        step_id="02_exposure_and_missingness_audit_figure",
+        intent="Render a source-status missingness matrix and availability panel.",
+        expected_outputs=["figure:missingness_matrix", "figure:availability_panel"],
+    )
+    summary = json.loads((out / "step_summary.json").read_text(encoding="utf-8"))
+    findings = FigureSourceDataValidator().audit(
+        step=step,
+        out_dir=out,
+        run_dir=tmp_path,
+        step_summary=summary,
+    )
+    assert not [finding for finding in findings if finding.severity == "error"]
+
+    status.loc[0, "n"] += 1
+    status.to_csv(status_path, index=False)
+    tampered = FigureSourceDataValidator().audit(
+        step=step,
+        out_dir=out,
+        run_dir=tmp_path,
+        step_summary=summary,
+    )
+    assert any(finding.severity == "error" for finding in tampered)
+
+
+def test_missingness_rescue_accepts_scope_section_rich_schema(tmp_path: Path):
+    parent = tmp_path / "steps" / "02_exposure_and_missingness_audit" / "outputs"
+    parent.mkdir(parents=True, exist_ok=True)
+    rows = []
+    for scope, denominator, missing in [
+        ("export", 200, 80),
+        ("adult_analytic_cohort", 100, 30),
+    ]:
+        rows.append(
+            {
+                "scope": scope,
+                "section": "column_missingness",
+                "exposure_or_variable": "marker_first",
+                "metric": "raw_missing",
+                "category": None,
+                "denominator_n": denominator,
+                "n": missing,
+                "percentage": 100.0 * missing / denominator,
+            }
+        )
+        for category, count in [
+            ("valid observed level/value", denominator - missing),
+            ("no recorded source or observation", missing),
+            ("measured or observed source with summary missing", 0),
+            ("contradictory or invalid source-summary combinations", 0),
+        ]:
+            rows.append(
+                {
+                    "scope": scope,
+                    "section": "source_status",
+                    "exposure_or_variable": "marker_first",
+                    "metric": "source_status",
+                    "category": category,
+                    "denominator_n": denominator,
+                    "n": count,
+                    "percentage": 100.0 * count / denominator,
+                }
+            )
+    pd.DataFrame(rows).to_csv(
+        parent / "missingness_and_measurement_process.csv", index=False
+    )
+    pd.DataFrame(
+        {
+            "required_variable": ["marker_first"],
+            "n_full": [100],
+            "missing_n": [99],
+            "missing_percentage": [99.0],
+        }
+    ).to_csv(parent / "complete_case_attrition.csv", index=False)
+    out = (
+        tmp_path
+        / "steps"
+        / "02_exposure_and_missingness_audit_figure"
+        / "outputs"
+    )
+
+    rid = missingness_rescue(
+        run_dir=tmp_path,
+        current_step_id="02_exposure_and_missingness_audit_figure",
+        out_dir=out,
+    )
+
+    assert rid == "missingness_publication_bundle_from_parent_outputs_v1"
+    source = pd.read_csv(out / "missingness_measurement_panel_source_data.csv")
+    assert set(source["cohort_name"]) == {"export", "adult_analytic_cohort"}
+    analytic = source[source["cohort_name"] == "adult_analytic_cohort"].iloc[0]
+    assert analytic["variable_name"] == "marker_first"
+    assert analytic["missing_pct"] == pytest.approx(30.0)
+    assert analytic["measured_pct"] == pytest.approx(70.0)
+    assert analytic["source_table"] == "missingness_and_measurement_process.csv"
+    status = pd.read_csv(out / "missingness_status_matrix_source_data.csv")
+    assert len(status) == 8
+
+    step = AnalysisStep(
+        step_id="02_exposure_and_missingness_audit_figure",
+        intent="Render a missingness matrix and availability panel.",
+        expected_outputs=["figure:missingness_matrix", "figure:availability_panel"],
+    )
+    summary = json.loads((out / "step_summary.json").read_text(encoding="utf-8"))
+    findings = FigureSourceDataValidator().audit(
+        step=step,
+        out_dir=out,
+        run_dir=tmp_path,
+        step_summary=summary,
+    )
+    assert not [finding for finding in findings if finding.severity == "error"]
 
 
 def test_e3_ordered_stage_figure_step_is_deterministically_claimed(tmp_path: Path):
@@ -101,10 +415,11 @@ def test_e3_ordered_stage_figure_step_is_deterministically_claimed(tmp_path: Pat
     # crashed, leaving primary_pub_fig_contracts=0 and failing the run closed.
     # The gate must now claim it AND route it to the association forest renderer.
     step_id = "04_primary_ordered_stage_analysis_figure"
-    assert deterministic_figure_family_supported(step_id) is True
+    assert deterministic_figure_family_supported(step_id) is False
 
     parent = tmp_path / "steps" / "04_primary_ordered_stage_analysis" / "outputs"
     parent.mkdir(parents=True, exist_ok=True)
+    _write_parent_summary(tmp_path, "04_primary_ordered_stage_analysis", "association")
     pd.DataFrame(
         {
             "stage": [0, 1, 2, 3],
@@ -125,13 +440,9 @@ def test_e3_ordered_stage_figure_step_is_deterministically_claimed(tmp_path: Pat
     assert rid is not None
 
 
-def test_survival_by_stage_figure_still_routes_to_survival(tmp_path: Path):
-    # Anti-regression for the "ordered" token addition: a survival figure step
-    # that happens to mention "stage" must NOT be stolen by the association
-    # renderer. It contains no "ordered" token and keeps matching survival.
-    assert (
-        deterministic_figure_family_supported("05_survival_by_disease_stage_figure")
-        is True
+def test_survival_figure_name_alone_is_not_routing_evidence(tmp_path: Path):
+    assert not deterministic_figure_family_supported(
+        "05_survival_by_disease_stage_figure"
     )
 
 
@@ -180,6 +491,26 @@ def test_upstream_family_routes_token_free_primary_figure(tmp_path: Path):
     out = tmp_path / "steps" / step_id / "outputs"
     rid = routed_rescue(run_dir=tmp_path, current_step_id=step_id, out_dir=out)
     assert rid is not None  # association forest renderer claimed + drew it
+
+
+def test_structural_parent_family_outranks_ambiguous_figure_name(tmp_path: Path):
+    step_id = "05_prediction_by_cohort_figure"
+    parent_id = "05_prediction_by_cohort"
+    _write_parent_summary(tmp_path, parent_id, "prediction")
+    parent = tmp_path / "steps" / parent_id / "outputs"
+    pd.DataFrame(
+        {
+            "auroc": [0.78],
+            "brier_score": [0.16],
+            "calibration_slope": [0.96],
+            "calibration_intercept": [0.02],
+        }
+    ).to_csv(parent / "model_performance.csv", index=False)
+
+    out = tmp_path / "steps" / step_id / "outputs"
+    rid = routed_rescue(run_dir=tmp_path, current_step_id=step_id, out_dir=out)
+
+    assert rid == "prediction_publication_bundle_from_parent_outputs_v1"
 
 
 def test_descriptive_parent_supported_but_guarded_against_empty_figure(tmp_path: Path):
@@ -420,6 +751,9 @@ def test_routed_rescue_prioritizes_primary_association_over_missingness(
         / "outputs"
     )
     parent.mkdir(parents=True, exist_ok=True)
+    _write_parent_summary(
+        tmp_path, "03_primary_prevalence_and_adjusted_association", "association"
+    )
     pd.DataFrame(
         {
             "term": ["const", "exposed"],
@@ -488,6 +822,300 @@ def test_routed_rescue_prioritizes_primary_association_over_missingness(
     assert not (out / "missingness_measurement_panel.png").exists()
 
 
+def test_routed_association_prefers_complete_direct_parent_bundle_and_copies_contract_closure(
+    tmp_path: Path,
+):
+    parent = (
+        tmp_path
+        / "steps"
+        / "05_primary_missingness_aware_association"
+        / "outputs"
+    )
+    parent.mkdir(parents=True)
+    _write_parent_summary(
+        tmp_path, "05_primary_missingness_aware_association", "association"
+    )
+    coefficient_rows = pd.DataFrame(
+        {
+            "model_id": ["bili_primary", "bili_primary", "sofa_secondary"],
+            "term": ["bili_log1p", "age", "sofa_level_1"],
+            "term_role": ["exposure", "adjustment", "exposure"],
+            "source_variable": ["bili_max", "age", "sofa2_liver_max"],
+            "analysis_role": ["primary", "primary", "secondary"],
+            "analysis_set": ["source_aware", "source_aware", "source_aware"],
+            "odds_ratio": [1.93, 1.03, 1.68],
+            "ci_low": [1.86, 1.02, 1.56],
+            "ci_high": [2.00, 1.04, 1.81],
+        }
+    )
+    coefficient_rows.to_csv(parent / "coefficients.csv", index=False)
+    figure_source = coefficient_rows.iloc[[0]].copy()
+    figure_source["source_table"] = "coefficients.csv"
+    figure_source.to_csv(parent / "figure_source_data.csv", index=False)
+    pd.DataFrame({"model_id": ["bili_primary"], "n": [94458]}).to_csv(
+        parent / "model_summaries.csv", index=False
+    )
+    pd.DataFrame({"source_status": ["observed"], "n": [41210]}).to_csv(
+        parent / "source_status_summary.csv", index=False
+    )
+    (parent / "primary_adjusted_association_context.png").write_bytes(b"parent-png")
+    (parent / "primary_adjusted_association_context.svg").write_text(
+        "<svg><text>parent</text></svg>", encoding="utf-8"
+    )
+    contract = {
+        "figure_id": "primary_adjusted_association_context",
+        "core_claim": (
+            "The primary bilirubin association is shown with absolute-risk "
+            "context and a separately labelled sensitivity estimate."
+        ),
+        "source_data": "figure_source_data.csv",
+        "statistics_note": (
+            "All estimates and intervals are copied from registered parent-step tables."
+        ),
+        "panels": [
+            {
+                "panel_id": "A",
+                "title": "Absolute-risk context",
+                "role": "descriptive_result",
+                "chart_type": "event_rate_panel",
+                "claim": "Absolute outcome risk is shown before adjusted estimates.",
+                "evidence_ids": ["source_status_summary.csv"],
+            },
+            {
+                "panel_id": "B",
+                "title": "Primary adjusted association",
+                "role": "primary_estimand",
+                "chart_type": "forest",
+                "claim": "The locked primary adjusted odds ratio is shown with its 95% CI.",
+                "evidence_ids": ["coefficients.csv", "model_summaries.csv"],
+            },
+        ],
+    }
+    (parent / "primary_adjusted_association_context.figure_contract.json").write_text(
+        json.dumps(contract), encoding="utf-8"
+    )
+
+    out = (
+        tmp_path
+        / "steps"
+        / "05_primary_missingness_aware_association_figure"
+        / "outputs"
+    )
+    rid = routed_rescue(
+        run_dir=tmp_path,
+        current_step_id="05_primary_missingness_aware_association_figure",
+        out_dir=out,
+    )
+
+    assert rid == "publication_bundle_promote_v1"
+    assert (out / "publication_figure.png").read_bytes() == b"parent-png"
+    assert (out / "publication_figure.svg").read_text(encoding="utf-8") == (
+        "<svg><text>parent</text></svg>"
+    )
+    for filename in (
+        "figure_source_data.csv",
+        "source_status_summary.csv",
+        "coefficients.csv",
+        "model_summaries.csv",
+    ):
+        assert (out / filename).read_bytes() == (parent / filename).read_bytes()
+    summary = json.loads((out / "step_summary.json").read_text(encoding="utf-8"))
+    assert summary["publication_figure_rescue"]["mode"] == "promotion"
+    assert summary["publication_figure_rescue"]["copied_trace_files"] == [
+        "coefficients.csv",
+        "figure_source_data.csv",
+        "model_summaries.csv",
+        "source_status_summary.csv",
+    ]
+    quality_findings = FigureContractQualityValidator().audit(
+        step=AnalysisStep(
+            step_id="05_primary_missingness_aware_association_figure",
+            intent="Render the registered primary association figure.",
+        ),
+        out_dir=out,
+        run_dir=tmp_path,
+        step_summary={"rendering_only": True},
+    )
+    assert not [f for f in quality_findings if f.severity == "error"], quality_findings
+    source_findings = FigureSourceDataValidator().audit(
+        step=AnalysisStep(
+            step_id="05_primary_missingness_aware_association_figure",
+            intent="Render the registered primary association figure.",
+        ),
+        out_dir=out,
+        run_dir=tmp_path,
+        step_summary={"rendering_only": True},
+    )
+    assert source_findings == []
+
+
+def test_routed_association_does_not_promote_bundle_missing_declared_source_data(
+    tmp_path: Path,
+):
+    parent = tmp_path / "steps" / "03_association_model" / "outputs"
+    parent.mkdir(parents=True)
+    _write_parent_summary(tmp_path, "03_association_model", "association")
+    pd.DataFrame(
+        {
+            "variable": ["const", "exposed"],
+            "odds_ratio": [0.10, 1.20],
+            "ci_low": [0.02, 1.05],
+            "ci_high": [0.50, 1.40],
+        }
+    ).to_csv(parent / "association_results.csv", index=False)
+    (parent / "stale_primary.png").write_bytes(b"stale-parent")
+    (parent / "stale_primary.figure_contract.json").write_text(
+        json.dumps(
+            {
+                "figure_id": "stale_primary",
+                "source_data": "missing_source_data.csv",
+                "panels": [
+                    {
+                        "panel_id": "A",
+                        "role": "primary_estimand",
+                        "title": "Stale primary result",
+                        "claim": "This bundle is incomplete and must not be promoted.",
+                        "evidence_ids": ["association_results.csv"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    out = tmp_path / "steps" / "03_association_model_figure" / "outputs"
+    rid = routed_rescue(
+        run_dir=tmp_path,
+        current_step_id="03_association_model_figure",
+        out_dir=out,
+    )
+
+    assert rid in {
+        "association_publication_bundle_from_parent_outputs_v2",
+        "association_publication_bundle_from_parent_outputs_v3",
+    }
+    assert (out / "publication_figure.png").read_bytes() != b"stale-parent"
+    assert not (out / "missing_source_data.csv").exists()
+
+
+def test_association_renderer_keeps_primary_exposure_and_matching_sensitivity_with_composite_trace(
+    tmp_path: Path,
+):
+    unrelated = tmp_path / "steps" / "01_unrelated_association" / "outputs"
+    unrelated.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "term": ["wrong_exposure"],
+            "odds_ratio": [9.9],
+            "ci_low": [8.0],
+            "ci_high": [12.0],
+        }
+    ).to_csv(unrelated / "first_alphabetical_or_table.csv", index=False)
+
+    parent = (
+        tmp_path
+        / "steps"
+        / "05_primary_missingness_aware_association"
+        / "outputs"
+    )
+    parent.mkdir(parents=True)
+    coefficients = pd.DataFrame(
+        [
+            ("bili_full", "const", "intercept", None, "primary", "source_aware", 0.01, 0.005, 0.02),
+            ("bili_full", "bili_log1p", "exposure", "bili_max", "primary", "source_aware", 1.93, 1.86, 2.00),
+            ("bili_full", "bili_source", "availability", "bili_measured", "primary", "source_aware", 1.40, 1.32, 1.48),
+            ("bili_full", "age", "adjustment", "age", "primary", "source_aware", 1.03, 1.02, 1.04),
+            ("bili_cc", "const", "intercept", None, "sensitivity", "complete_case", 0.02, 0.01, 0.03),
+            ("bili_cc", "bili_log1p", "exposure", "bili_max", "sensitivity", "complete_case", 1.88, 1.81, 1.95),
+            ("bili_cc", "age", "adjustment", "age", "sensitivity", "complete_case", 1.02, 1.01, 1.03),
+            ("sofa_full", "const", "intercept", None, "secondary", "source_aware", 0.02, 0.01, 0.03),
+            ("sofa_full", "sofa_level_1", "exposure", "sofa2_liver_max", "secondary", "source_aware", 1.68, 1.56, 1.81),
+            ("sofa_full", "age", "adjustment", "age", "secondary", "source_aware", 1.03, 1.02, 1.04),
+            ("sofa_cc", "const", "intercept", None, "sensitivity", "complete_case", 0.02, 0.01, 0.03),
+            ("sofa_cc", "sofa_level_1", "exposure", "sofa2_liver_max", "sensitivity", "complete_case", 1.64, 1.53, 1.77),
+        ],
+        columns=[
+            "model_id",
+            "term",
+            "term_role",
+            "source_variable",
+            "analysis_role",
+            "analysis_set",
+            "odds_ratio",
+            "ci_low",
+            "ci_high",
+        ],
+    )
+    coefficients.to_csv(parent / "coefficients.csv", index=False)
+    contracts = [
+        {
+            "model_id": "bili_full",
+            "exposure_source": "bili_max",
+            "exposure_role": "primary",
+            "analysis_role": "primary",
+        },
+        {
+            "model_id": "bili_cc",
+            "exposure_source": "bili_max",
+            "exposure_role": "primary",
+            "analysis_role": "sensitivity",
+        },
+        {
+            "model_id": "sofa_full",
+            "exposure_source": "sofa2_liver_max",
+            "exposure_role": "secondary",
+            "analysis_role": "secondary",
+        },
+        {
+            "model_id": "sofa_cc",
+            "exposure_source": "sofa2_liver_max",
+            "exposure_role": "secondary",
+            "analysis_role": "sensitivity",
+        },
+    ]
+    (parent / "step_summary.json").write_text(
+        json.dumps({"primary_model_id": "bili_full", "model_contracts": contracts}),
+        encoding="utf-8",
+    )
+
+    out = (
+        tmp_path
+        / "steps"
+        / "05_primary_missingness_aware_association_figure"
+        / "outputs"
+    )
+    rid = rescue(
+        run_dir=tmp_path,
+        current_step_id="05_primary_missingness_aware_association_figure",
+        out_dir=out,
+    )
+
+    assert rid == "association_publication_bundle_from_parent_outputs_v2"
+    source = pd.read_csv(out / "publication_figure_source_data.csv")
+    assert source["model_id"].tolist() == ["bili_full", "bili_cc"]
+    assert source["term"].tolist() == ["bili_log1p", "bili_log1p"]
+    assert source["term_role"].tolist() == ["exposure", "exposure"]
+    assert source["source_variable"].tolist() == ["bili_max", "bili_max"]
+    assert source["analysis_role"].tolist() == ["primary", "sensitivity"]
+    assert source["analysis_set"].tolist() == ["source_aware", "complete_case"]
+    assert source["odds_ratio"].tolist() == pytest.approx([1.93, 1.88])
+    assert source["ci_low"].tolist() == pytest.approx([1.86, 1.81])
+    assert source["ci_high"].tolist() == pytest.approx([2.00, 1.95])
+    assert "Source Aware" in source.loc[0, "plot_label"]
+    assert "Complete Case" in source.loc[1, "plot_label"]
+    result = FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=source,
+        source_path=out / "publication_figure_source_data.csv",
+        upstream_path=parent / "coefficients.csv",
+    )
+    assert result.get("ok") is True, result
+    assert result.get("key_column") == "model_id+term", result
+    summary = json.loads((out / "step_summary.json").read_text(encoding="utf-8"))
+    assert summary["publication_figure_repair"]["source_association_table"].endswith(
+        "05_primary_missingness_aware_association/outputs/coefficients.csv"
+    )
+
+
 def test_rescue_returns_none_without_or_ci_table(tmp_path: Path):
     _make_parent_step(
         tmp_path, "prevalence.csv", {"group": ["a"], "rate": [0.3]}
@@ -515,8 +1143,8 @@ def test_rescue_returns_none_without_or_ci_table(tmp_path: Path):
         "04_ordinal_trend_analysis_figure",
     ],
 )
-def test_ordinal_figure_step_is_family_supported(step_id: str):
-    assert deterministic_figure_family_supported(step_id) is True
+def test_ordinal_figure_name_is_not_family_evidence(step_id: str):
+    assert deterministic_figure_family_supported(step_id) is False
 
 
 def test_graded_exposure_forest_keys_by_varying_level_not_constant_model(
@@ -528,6 +1156,7 @@ def test_graded_exposure_forest_keys_by_varying_level_not_constant_model(
     # column (which drops the per-row trace key -> "no shared key").
     parent = tmp_path / "steps" / "04_primary_association_model" / "outputs"
     parent.mkdir(parents=True, exist_ok=True)
+    _write_parent_summary(tmp_path, "04_primary_association_model", "association")
     pd.DataFrame(
         {
             "model": ["adjusted"] * 5,
@@ -565,6 +1194,7 @@ def test_ordinal_stage_gradient_figure_routes_to_association_renderer(tmp_path: 
         tmp_path / "steps" / "04_primary_stage_gradient_analysis" / "outputs"
     )
     parent.mkdir(parents=True, exist_ok=True)
+    _write_parent_summary(tmp_path, "04_primary_stage_gradient_analysis", "association")
     # the deterministic ordinal runner's canonical dose_response.csv shape
     pd.DataFrame(
         {
@@ -810,7 +1440,7 @@ def test_sensitivity_rescue_writes_multipanel_contract_and_source_data(
         out_dir=out,
     )
 
-    assert rid == "sensitivity_publication_bundle_from_parent_outputs_v1"
+    assert rid == "sensitivity_publication_bundle_from_parent_outputs_v2"
     contract_path = out / "sensitivity_forest.figure_contract.json"
     contract = json.loads(contract_path.read_text(encoding="utf-8"))
     assert [panel["panel_id"] for panel in contract["panels"]] == ["A", "B", "C"]
@@ -842,5 +1472,245 @@ def test_sensitivity_rescue_writes_multipanel_contract_and_source_data(
         current_step_id="05_sensitivity_comparison_across_definitions_figure",
         out_dir=routed_out,
     )
-    assert routed_id == "sensitivity_publication_bundle_from_parent_outputs_v1"
-    assert (routed_out / "sensitivity_forest_source_data.csv").exists()
+    assert routed_id is None
+    assert not (routed_out / "sensitivity_forest_source_data.csv").exists()
+
+
+def test_sensitivity_rescue_omits_empty_scale_and_separates_nonindependent_rows(
+    tmp_path: Path,
+):
+    parent = tmp_path / "steps" / "06_robustness" / "outputs"
+    parent.mkdir(parents=True, exist_ok=True)
+    exact_ci_high = 1.9991014484226914
+    pd.DataFrame(
+        {
+            "spec_id": ["primary", "alt_cohort_los_ge_1d", "outcome_any"],
+            "axis": ["primary", "cohort", "outcome"],
+            "effect_scale": ["OR", "OR", "OR"],
+            "point_estimate": [1.9259885602397633, 1.8685656161598152, 9.9],
+            "ci_low": [1.8555496206064033, 1.7951476395205703, 9.0],
+            "ci_high": [exact_ci_high, 1.9449862423723512, 10.8],
+            "modeled_analytic_n": [94458, 74829, pd.NA],
+            "event_n": [9466, 7397, pd.NA],
+            "converged": [True, True, True],
+            "independent_variant": [pd.NA, pd.NA, False],
+            "notes": ["primary", "cohort replay", "same scalar outcome"],
+        }
+    ).to_csv(parent / "robustness_matrix.csv", index=False)
+    (parent / "step_summary.json").write_text(
+        json.dumps(
+            {
+                "output_files": {"robustness_matrix": "robustness_matrix.csv"},
+                "aliases": {"sensitivity_comparison": "robustness_matrix.csv"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    out = tmp_path / "steps" / "06_robustness_figure" / "outputs"
+
+    rid = sensitivity_rescue(
+        run_dir=tmp_path,
+        current_step_id="06_robustness_figure",
+        out_dir=out,
+    )
+
+    assert rid == "sensitivity_publication_bundle_from_parent_outputs_v2"
+    contract = json.loads(
+        (out / "sensitivity_forest.figure_contract.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert [panel["title"] for panel in contract["panels"]] == [
+        "Ratio-scale sensitivity",
+        "Model denominator audit",
+    ]
+    assert "Risk difference" not in (
+        out / "sensitivity_forest.svg"
+    ).read_text(encoding="utf-8")
+    plotted = pd.read_csv(
+        out / "sensitivity_forest_source_data.csv",
+        float_precision="round_trip",
+    )
+    assert plotted["spec_id"].tolist() == ["primary", "alt_cohort_los_ge_1d"]
+    assert plotted.loc[0, "ci_high"] == exact_ci_high
+    status = pd.read_csv(out / "sensitivity_estimability_source_data.csv")
+    assert status["spec_id"].tolist() == ["outcome_any"]
+    assert "modeled_analytic_n" not in status.columns
+    assert "model_id" not in status.columns
+    summary = json.loads((out / "step_summary.json").read_text(encoding="utf-8"))
+    assert summary["n_rows_plotted"] == 2
+    assert summary["n_denominator_rows"] == 2
+    assert summary["n_non_independent_variants"] == 1
+
+
+def test_structured_sensitivity_source_preserves_spec_model_trace_and_detects_tamper(
+    tmp_path: Path,
+):
+    parent = tmp_path / "steps" / "06_robustness" / "outputs"
+    parent.mkdir(parents=True, exist_ok=True)
+    script_sha = "a" * 64
+    rows = [
+        {
+            "spec_id": "primary",
+            "effect_scale": "OR",
+            "point_estimate": 1.9,
+            "ci_low": 1.8,
+            "ci_high": 2.0,
+            "modeled_analytic_n": 1000,
+            "model_contract_n": 1000,
+            "event_n": 100,
+            "model_id": "primary_full",
+            "source_model_id": "primary_full",
+            "exposure_source": "exposure",
+            "exposure_expression": "log1p(exposure)",
+            "exposure_role": "primary",
+            "analysis_role": "primary",
+            "analysis_set": "source_aware",
+            "baseline_missing_policy": "explicit_missing_category",
+            "fit_status": "fitted",
+            "fit_method": "registered_model",
+            "replay_mode": "completed_primary_step_output",
+            "coefficient_source_table": "coefficients.csv",
+            "coefficient_term": "exposure_log1p",
+            "model_contract_source": "step_summary.json:model_contracts",
+            "source_script_sha256": script_sha,
+            "axis": "primary",
+            "converged": True,
+            "estimability_status": "estimated",
+            "membership_n": 1000,
+            "independent_variant": pd.NA,
+        },
+        {
+            "spec_id": "alt_cohort",
+            "effect_scale": "OR",
+            "point_estimate": 1.8,
+            "ci_low": 1.7,
+            "ci_high": 1.9,
+            "modeled_analytic_n": 900,
+            "model_contract_n": 900,
+            "event_n": 85,
+            "model_id": "primary_full",
+            "source_model_id": "primary_full",
+            "exposure_source": "exposure",
+            "exposure_expression": "log1p(exposure)",
+            "exposure_role": "primary",
+            "analysis_role": "primary",
+            "analysis_set": "source_aware",
+            "baseline_missing_policy": "explicit_missing_category",
+            "fit_status": "fitted",
+            "fit_method": "registered_model",
+            "replay_mode": "exact_registered_primary_model_code",
+            "coefficient_source_table": "robustness_variant_coefficients.csv",
+            "coefficient_term": "exposure_log1p",
+            "model_contract_source": "step_summary.json:robustness_model_contracts",
+            "source_script_sha256": script_sha,
+            "axis": "cohort",
+            "converged": True,
+            "estimability_status": "estimated",
+            "membership_n": 900,
+            "independent_variant": pd.NA,
+        },
+        {
+            "spec_id": "outcome_any",
+            "effect_scale": "OR",
+            "point_estimate": pd.NA,
+            "ci_low": pd.NA,
+            "ci_high": pd.NA,
+            "modeled_analytic_n": pd.NA,
+            "axis": "outcome",
+            "converged": False,
+            "estimability_status": "not_independent",
+            "membership_n": 1000,
+            "independent_variant": False,
+            "notes": "Same stay-level scalar outcome.",
+        },
+    ]
+    pd.DataFrame(rows).to_csv(parent / "robustness_matrix.csv", index=False)
+
+    def contract(*, n: int, event_n: int, spec_id: str | None = None) -> dict:
+        payload = {
+            "model_id": "primary_full",
+            "exposure_source": "exposure",
+            "exposure_expression": "log1p(exposure)",
+            "exposure_role": "primary",
+            "analysis_role": "primary",
+            "analysis_set": "source_aware",
+            "baseline_missing_policy": "explicit_missing_category",
+            "n": n,
+            "event_n": event_n,
+            "fit_status": "fitted",
+            "converged": True,
+            "separation_detected": False,
+            "penalized": False,
+            "fit_method": "registered_model",
+        }
+        if spec_id is not None:
+            payload.update(
+                {
+                    "spec_id": spec_id,
+                    "source_model_id": "primary_full",
+                    "replay_mode": "exact_registered_primary_model_code",
+                }
+            )
+        return payload
+
+    coefficient = {
+        "model_id": "primary_full",
+        "term": "exposure_log1p",
+        "term_role": "exposure",
+        "source_variable": "exposure",
+        "odds_ratio": 1.9,
+        "ci_low": 1.8,
+        "ci_high": 2.0,
+    }
+    pd.DataFrame([coefficient]).to_csv(parent / "coefficients.csv", index=False)
+    pd.DataFrame(
+        [{**coefficient, "spec_id": "alt_cohort", "odds_ratio": 1.8}]
+    ).to_csv(parent / "robustness_variant_coefficients.csv", index=False)
+    (parent / "step_summary.json").write_text(
+        json.dumps(
+            {
+                "primary_model_id": "primary_full",
+                "model_contracts": [contract(n=1000, event_n=100)],
+                "robustness_model_contracts": [
+                    contract(n=900, event_n=85, spec_id="alt_cohort")
+                ],
+                "output_files": {"robustness_matrix": "robustness_matrix.csv"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    out = tmp_path / "steps" / "06_robustness_figure" / "outputs"
+    assert sensitivity_rescue(
+        run_dir=tmp_path,
+        current_step_id="06_robustness_figure",
+        out_dir=out,
+    ) == "sensitivity_publication_bundle_from_parent_outputs_v2"
+    step = AnalysisStep(
+        step_id="06_robustness_figure",
+        intent="Render the figure declared by step '06_robustness'.",
+    )
+    summary = json.loads((out / "step_summary.json").read_text(encoding="utf-8"))
+    assert FigureSourceDataValidator().audit(
+        step=step,
+        out_dir=out,
+        run_dir=tmp_path,
+        step_summary=summary,
+    ) == []
+
+    figure_source = out / "sensitivity_forest_source_data.csv"
+    tampered = pd.read_csv(figure_source)
+    tampered.loc[tampered["spec_id"] == "alt_cohort", "model_id"] = "wrong_model"
+    tampered.to_csv(figure_source, index=False)
+    findings = FigureSourceDataValidator().audit(
+        step=step,
+        out_dir=out,
+        run_dir=tmp_path,
+        step_summary=summary,
+    )
+    assert findings
+    assert any(
+        "structured sensitivity-model trace" in finding.message
+        or "not a traceable subset" in finding.message
+        for finding in findings
+    )

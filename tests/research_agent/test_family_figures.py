@@ -454,6 +454,31 @@ def test_survival_rescue_from_prior_outputs_builds_compliant_figure(ra, tmp_path
     ]
 
 
+def test_survival_split_figure_never_borrows_an_older_cox_table(
+    ra, tmp_path: Path
+):
+    from easyicu.research_agent.figures.survival import (
+        render_survival_bundle_from_prior_outputs,
+    )
+
+    older = tmp_path / "steps" / "00_old_sensitivity" / "outputs"
+    older.mkdir(parents=True)
+    _cox_summary_frame().to_csv(older / "cox_summary.csv", index=False)
+    direct = tmp_path / "steps" / "05_primary_survival" / "outputs"
+    direct.mkdir(parents=True)
+    pd.DataFrame({"not_a_cox_result": [1.0]}).to_csv(
+        direct / "cox_summary.csv", index=False
+    )
+
+    repair_id = render_survival_bundle_from_prior_outputs(
+        run_dir=tmp_path,
+        current_step_id="05_primary_survival_figure",
+        out_dir=tmp_path / "steps" / "05_primary_survival_figure" / "outputs",
+    )
+
+    assert repair_id is None
+
+
 def test_survival_figure_forest_labels_do_not_overlap_with_many_covariates(
     ra, tmp_path: Path
 ):

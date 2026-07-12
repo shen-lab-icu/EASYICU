@@ -12,11 +12,15 @@ which is the point.
 
 from __future__ import annotations
 
+import ast
 import importlib
+import inspect
 from pathlib import Path
+import textwrap
 from typing import get_args
 
 from easyicu.research_agent import capability_registry as cr
+from easyicu.research_agent import pipeline_execute
 from easyicu.research_agent.figures import FAMILY_RENDERERS
 from easyicu.research_agent.pipeline_execute import (
     _PRIMARY_DETERMINISTIC_RUNNERS as EXEC_RUNNERS,
@@ -116,22 +120,15 @@ def test_every_study_design_family_is_covered():
 def test_partition_helpers_are_consistent():
     det = set(cr.deterministic_primary_families())
     llm = set(cr.llm_coded_primary_families())
-    assert det and llm
+    assert det == set(), "primary scientific analyses must remain agent-owned"
+    assert llm
     assert det.isdisjoint(llm)
     assert len(det) + len(llm) == len(cr.CAPABILITY_REGISTRY)
 
 
-def test_families_without_deterministic_primary_excludes_ambiguous_association():
+def test_every_family_is_without_a_deterministic_primary_owner():
     fams = cr.families_without_deterministic_primary()
-    # unambiguously LLM-coded families are included (drive the cap-rule waiver)
-    assert {"phenotyping", "descriptive", "prediction"} <= fams
-    # association is ambiguous (has a deterministic dose-response record) and
-    # must be EXCLUDED, so requiring a bound primary there still catches an
-    # E3-style dose-response routing miss instead of masking it.
-    assert "association" not in fams
-    # deterministic-primary families are never included
-    assert "causal_emulation" not in fams
-    assert "time_to_event" not in fams
+    assert fams == set(get_args(StudyDesignFamily))
 
 
 # --- renderer ---------------------------------------------------------------
@@ -160,8 +157,30 @@ def test_known_unsupported_boundary_is_recorded_and_rendered():
 def test_get_capability_disambiguates_association():
     dose = cr.get_capability("association", dose_response=True)
     general = cr.get_capability("association", dose_response=False)
-    assert dose is not None and dose.primary_runner == "ordinal_dose_response"
+    assert dose is not None and dose.primary_runner is None
     assert general is not None and general.primary_runner is None
+    assert "graded ordinal" in dose.label.lower()
+    assert "general" in general.label.lower()
+
+
+def test_live_auxiliary_dispatch_matches_registry_in_both_directions():
+    """Inspect actual execute assignments, not a second hand-maintained set."""
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(pipeline_execute.run_execute_phase)))
+    active: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Constant):
+            continue
+        if not isinstance(node.value.value, str):
+            continue
+        for target in node.targets:
+            if not isinstance(target, ast.Subscript):
+                continue
+            key = target.slice
+            if isinstance(key, ast.Constant) and key.value == "deterministic_standard_analysis":
+                active.add(node.value.value)
+    documented = {runner.name for runner in cr.AUXILIARY_DETERMINISTIC_RUNNERS}
+    assert active == documented
 
 
 # --- generated doc stays in sync -------------------------------------------

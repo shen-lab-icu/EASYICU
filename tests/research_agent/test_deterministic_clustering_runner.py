@@ -1,8 +1,6 @@
-"""Regression: the deterministic trajectory-feature clustering runner produces a
-reproducible k-class solution without an LLM coder call (H3 phenotyping).
+"""Historical reproducibility tests for the unrouted clustering fixture.
 
-The tests exec the runner's code string against a synthetic H3-shaped cohort (per
--stay SOFA-2 trajectory windows with planted archetypes + real trailing NA),
+The tests exec the legacy code string against a synthetic SOFA-shaped cohort,
 asserting: it clusters on OBSERVED-window features (never zero-imputes), selects k
 by silhouette, emits the certified tables the phenotype figure renderer consumes,
 reports a DESCRIPTIVE outcome-by-cluster contrast (adjusted_effect=None, no OR),

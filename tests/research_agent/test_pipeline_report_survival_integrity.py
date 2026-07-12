@@ -1,11 +1,8 @@
-"""Fail-closed gate: a primary survival estimand must come from the runner.
+"""Fail-closed numeric integrity for agent-produced survival estimates.
 
-The deterministic Cox runner is the only sanctioned producer of a survival
-hazard ratio (correct exposure, no positional column swaps). When an LLM coder
-produces the primary Cox estimate instead, the result is unverified and can
-silently fabricate an implausible model. These tests lock the gate and,
-crucially, its case-neutrality: a non-survival question is never touched, and a genuine
-cohort-definition-sensitivity step (no primary Cox result) does not trip it.
+The agent owns the method; this gate rejects impossible HR/CI shapes and event
+counts without demanding a deterministic-runner fingerprint. It remains
+case-neutral and ignores non-survival or prep-only steps.
 """
 
 from __future__ import annotations
@@ -42,7 +39,7 @@ def _summary(run_dir: Path, step_id: str, payload: dict) -> None:
 _DET = {"fit_engine": "statsmodels.PHReg", "adjustment_source": "config"}
 
 
-def test_llm_coded_survival_result_is_flagged(tmp_path: Path):
+def test_impossible_event_count_is_flagged(tmp_path: Path):
     _summary(
         tmp_path,
         "01_survival_analysis",
@@ -52,8 +49,8 @@ def test_llm_coded_survival_result_is_flagged(tmp_path: Path):
         _plan({"step_id": "01_survival_analysis", "method": "survival_analysis"}),
         tmp_path,
     )
-    assert errs, "an LLM-coded Cox estimate with no runner fingerprint must flag"
-    assert "deterministic Cox runner" in errs[0]
+    assert errs, "events greater than the analysis denominator must flag"
+    assert "impossible event counts" in errs[0]
 
 
 def test_deterministic_fingerprint_is_clean(tmp_path: Path):
@@ -119,23 +116,45 @@ def test_non_survival_question_is_never_touched(tmp_path: Path):
     )
 
 
-def test_sensitivity_mentioning_primary_step_is_still_flagged(tmp_path: Path):
-    # Regression guard: a PRIMARY survival step can mention sensitivity and
-    # eligibility while still being the primary estimand.
-    # This gate must NOT replicate that exclusion, or it would hide the very
-    # LLM-coded result it exists to catch.
+def test_valid_agent_survival_step_with_sensitivity_language_is_clean(
+    tmp_path: Path,
+):
     _summary(tmp_path, "01_survival_analysis", {"primary_model": {"hazard_ratio": 0.9}})
+    assert (
+        primary_survival_estimate_integrity_errors(
+            _plan(
+                {
+                    "step_id": "01_survival_analysis",
+                    "method": "survival_analysis",
+                    "intent": "primary Cox with sensitivity across eligibility definitions",
+                }
+            ),
+            tmp_path,
+        )
+        == []
+    )
+
+
+def test_nonpositive_hr_and_inverted_ci_are_flagged(tmp_path: Path):
+    _summary(
+        tmp_path,
+        "01_survival_analysis",
+        {
+            "hazard_ratio": 0.0,
+            "ci_low": 1.4,
+            "ci_high": 0.8,
+            "n_analysis": 100,
+            "n_events": 20,
+        },
+    )
+
     errs = primary_survival_estimate_integrity_errors(
-        _plan(
-            {
-                "step_id": "01_survival_analysis",
-                "method": "survival_analysis",
-                "intent": "primary Cox with sensitivity across eligibility definitions",
-            }
-        ),
+        _plan({"step_id": "01_survival_analysis", "method": "survival_analysis"}),
         tmp_path,
     )
-    assert errs, "primary survival step must flag even when intent mentions sensitivity"
+
+    assert any("invalid hazard ratio" in error for error in errs)
+    assert any("invalid HR confidence interval" in error for error in errs)
 
 
 def test_cohort_sensitivity_step_without_a_cox_result_is_clean(tmp_path: Path):

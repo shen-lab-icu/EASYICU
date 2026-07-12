@@ -180,6 +180,37 @@ def test_plan_signature_detects_substantive_change():
     assert _plan_signature(base) != _plan_signature(changed_method)
 
 
+def test_plan_signature_detects_estimand_role_change():
+    """Changing a model from primary to secondary is not prose-only."""
+    from easyicu.research_agent.pipeline_execute import _plan_signature
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    primary = AnalysisPlan(
+        research_question="Compare two representations.",
+        steps=[
+            AnalysisStep(
+                step_id="02_association",
+                intent="Fit the primary exposure model.",
+                expected_outputs=["or_table"],
+                method="logit",
+            )
+        ],
+    )
+    secondary = AnalysisPlan(
+        research_question="Compare two representations.",
+        steps=[
+            AnalysisStep(
+                step_id="02_association",
+                intent="Fit the secondary exposure model.",
+                expected_outputs=["or_table"],
+                method="logit",
+            )
+        ],
+    )
+
+    assert _plan_signature(primary) != _plan_signature(secondary)
+
+
 def test_pipeline_replan_guards_defaults(ra, tmp_path: Path):
     """No-op early-stop stays on; the hard budget defaults to 6 (2026-07-06).
 

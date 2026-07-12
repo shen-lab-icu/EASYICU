@@ -27,6 +27,9 @@ def test_capability_block_lists_baseline_and_forbids_unlisted(ra):
     # The block must explicitly forbid importing anything not named.
     assert "forbidden" in block.lower()
     assert "no network" in block.lower()
+    assert "easyicu.research_agent.methods.*" in block
+    assert "explicitly named by the code contract" in block
+    assert "All other project-local imports" in block
 
 
 def test_available_advanced_packages_appear_in_block(ra):

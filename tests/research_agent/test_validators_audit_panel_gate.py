@@ -206,3 +206,31 @@ def test_primary_forest_still_flagged_without_step(tmp_path: Path):
         path, manuscript_facing=True
     )
     assert any(_PANEL_MSG in f.message for f in findings), [f.message for f in findings]
+
+
+def test_supporting_figure_id_match_is_exact_not_audit_substring(tmp_path: Path):
+    primary_path = _write_contract(
+        tmp_path,
+        "audited_primary_effect",
+        [{"panel_id": "A", "role": "effect", "title": "Primary effect"}],
+        core_claim="Primary adjusted effect estimate from the registered model.",
+    )
+    primary_findings = FigureContractQualityValidator().audit_contract_file(
+        primary_path, manuscript_facing=True
+    )
+    assert any(_PANEL_MSG in finding.message for finding in primary_findings), [
+        finding.message for finding in primary_findings
+    ]
+
+    supporting_path = _write_contract(
+        tmp_path,
+        "audit_panel",
+        [{"panel_id": "A", "role": "audit", "title": "Audit context"}],
+        core_claim="Denominator and measurement checks for reader context.",
+    )
+    supporting_findings = FigureContractQualityValidator().audit_contract_file(
+        supporting_path, manuscript_facing=True
+    )
+    assert not any(
+        _PANEL_MSG in finding.message for finding in supporting_findings
+    ), [finding.message for finding in supporting_findings]
