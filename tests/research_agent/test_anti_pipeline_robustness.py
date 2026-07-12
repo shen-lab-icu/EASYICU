@@ -1058,6 +1058,10 @@ def test_coder_context_receives_locked_spec_definitions_and_universe_contract(
     from easyicu.research_agent.pipeline_execute import (
         _coder_context_with_locked_robustness_specs,
     )
+    from easyicu.research_agent.robustness_execution_contract import (
+        ROBUSTNESS_EXECUTION_CONTRACT_GUIDANCE,
+        ROBUSTNESS_RESULT_REQUIRED_FIELDS,
+    )
     from easyicu.research_agent.schema import CohortDescriptor, ResearchContext
 
     run_dir = tmp_path / "run"
@@ -1086,6 +1090,19 @@ def test_coder_context_receives_locked_spec_definitions_and_universe_contract(
     assert "alt_relaxed_cohort" in (enriched.notes or "")
     assert "cohort_override" in (enriched.notes or "")
     assert "EASYICU_UNIVERSE_PARQUET" in (enriched.notes or "")
+    assert ROBUSTNESS_EXECUTION_CONTRACT_GUIDANCE in (enriched.notes or "")
+    assert all(
+        field in ROBUSTNESS_EXECUTION_CONTRACT_GUIDANCE
+        for field in ROBUSTNESS_RESULT_REQUIRED_FIELDS
+    )
+    assert "n is the analytic fitted-model N" in (enriched.notes or "")
+    assert "applied_outcome_override" in (enriched.notes or "")
+    assert "missing_strategy" in (enriched.notes or "")
+    assert "universe_n" in (enriched.notes or "")
+    assert "variant_membership_n" in (enriched.notes or "")
+    assert "inflow_n" in (enriched.notes or "")
+    assert "outflow_n" in (enriched.notes or "")
+    assert "overlap_n" in (enriched.notes or "")
 
 
 def test_locked_sensitivity_contract_is_wired_into_all_three_contract_passes() -> None:

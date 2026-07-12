@@ -15,6 +15,113 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 from .schema import ResearchContext
 
 
+ROBUSTNESS_RESULT_REQUIRED_TEXT_FIELDS = (
+    "status",
+    "model_id",
+    "outcome_concept_id",
+    "model_family",
+    "effect_scale",
+    "comparison",
+    "coefficient_term",
+    "analysis_set",
+    "baseline_missing_policy",
+    "fit_status",
+    "interval_method",
+)
+ROBUSTNESS_RESULT_REQUIRED_BOOLEAN_FIELDS = (
+    "converged",
+    "penalized",
+    "reportable",
+)
+ROBUSTNESS_RESULT_REQUIRED_FIELDS = (
+    "spec_id",
+    "axis",
+    *ROBUSTNESS_RESULT_REQUIRED_TEXT_FIELDS,
+    *ROBUSTNESS_RESULT_REQUIRED_BOOLEAN_FIELDS,
+    "n",
+    "point_estimate",
+    "ci_low",
+    "ci_high",
+)
+ROBUSTNESS_MODEL_RESULT_REQUIRED_COLUMNS = frozenset(
+    {
+        "model_id",
+        "outcome",
+        "model_family",
+        "effect_scale",
+        "n",
+        "fit_status",
+        "converged",
+        "penalized",
+        "interval_method",
+    }
+)
+ROBUSTNESS_MODEL_RESULT_IDENTIFIER_COLUMNS = frozenset(
+    {"definition_id", "spec_id"}
+)
+ROBUSTNESS_COEFFICIENT_RESULT_REQUIRED_COLUMNS = frozenset(
+    {
+        "model_id",
+        "outcome",
+        "term",
+        "term_role",
+        "effect_scale",
+        "estimate",
+        "ci_low",
+        "ci_high",
+    }
+)
+ROBUSTNESS_COHORT_MEMBERSHIP_ALIASES = {
+    "universe_n": ("universe_n",),
+    "variant_membership_n": (
+        "variant_membership_n",
+        "retained_n",
+        "cohort_n",
+        "membership_n",
+    ),
+    "inflow_n": (
+        "inflow_n",
+        "entered_n",
+        "entering_relative_to_primary_n",
+        "enter_n",
+    ),
+    "outflow_n": (
+        "outflow_n",
+        "left_primary_n",
+        "leaving_relative_to_primary_n",
+        "leave_n",
+    ),
+    "overlap_n": ("overlap_n", "overlap_with_primary_n"),
+}
+
+ROBUSTNESS_EXECUTION_CONTRACT_GUIDANCE = (
+    "CANONICAL ROBUSTNESS EXECUTION CONTRACT: write exactly one "
+    "step_summary['robustness_rows'] row for every locked spec_id. Every row "
+    "must contain these keys: "
+    + ", ".join(ROBUSTNESS_RESULT_REQUIRED_FIELDS)
+    + ". n is the analytic fitted-model N, never a cohort-membership or "
+    "retained-row count. ci_low and ci_high may both be null only for a "
+    "penalized, non-reportable point-only fit with "
+    "interval_method='unavailable'. For an outcome-axis spec, "
+    "applied_outcome_override must exactly equal the locked outcome_override. "
+    "For a missing-axis spec, missing_strategy must exactly equal the locked "
+    "missing_override.strategy. For a cohort-axis spec, report universe_n, "
+    "variant_membership_n (retained_n is an accepted alias), inflow_n, "
+    "outflow_n, and overlap_n; all values must match deterministic replay on "
+    "EASYICU_UNIVERSE_PARQUET. Also emit one unique schema-identifiable model "
+    "result CSV with columns "
+    + ", ".join(sorted(ROBUSTNESS_MODEL_RESULT_REQUIRED_COLUMNS))
+    + " plus definition_id or spec_id, and one unique coefficient CSV with "
+    "columns "
+    + ", ".join(sorted(ROBUSTNESS_COEFFICIENT_RESULT_REQUIRED_COLUMNS))
+    + ". The robustness row, model row, and exposure coefficient row must "
+    "agree exactly on identifiers, outcome, model family, effect scale, term, "
+    "analytic n, point estimate, interval, fit status, and penalty/convergence "
+    "metadata. Specification or membership declarations are not execution "
+    "evidence."
+)
+
+
 def _nonnegative_integral_value(value: Any) -> Optional[int]:
     if value is None or isinstance(value, bool):
         return None
@@ -118,31 +225,12 @@ def _executed_robustness_result_issues(
 
     model_frame, model_table_errors = _unique_structured_csv(
         out_dir=out_dir,
-        required_columns={
-            "model_id",
-            "outcome",
-            "model_family",
-            "effect_scale",
-            "n",
-            "fit_status",
-            "converged",
-            "penalized",
-            "interval_method",
-        },
-        required_any_columns={"definition_id", "spec_id"},
+        required_columns=set(ROBUSTNESS_MODEL_RESULT_REQUIRED_COLUMNS),
+        required_any_columns=set(ROBUSTNESS_MODEL_RESULT_IDENTIFIER_COLUMNS),
     )
     coefficient_frame, coefficient_table_errors = _unique_structured_csv(
         out_dir=out_dir,
-        required_columns={
-            "model_id",
-            "outcome",
-            "term",
-            "term_role",
-            "effect_scale",
-            "estimate",
-            "ci_low",
-            "ci_high",
-        },
+        required_columns=set(ROBUSTNESS_COEFFICIENT_RESULT_REQUIRED_COLUMNS),
     )
     issues: List[Dict[str, Any]] = []
     if model_table_errors:
@@ -192,24 +280,16 @@ def _executed_robustness_result_issues(
                 }
             )
 
-        required_text = (
-            "status",
-            "model_id",
-            "outcome_concept_id",
-            "model_family",
-            "effect_scale",
-            "comparison",
-            "coefficient_term",
-            "analysis_set",
-            "baseline_missing_policy",
-            "fit_status",
-            "interval_method",
-        )
         missing_fields = [
-            field for field in required_text if not str(row.get(field) or "").strip()
+            field
+            for field in ROBUSTNESS_RESULT_REQUIRED_TEXT_FIELDS
+            if not str(row.get(field) or "").strip()
         ]
-        for field in ("converged", "penalized", "reportable"):
+        for field in ROBUSTNESS_RESULT_REQUIRED_BOOLEAN_FIELDS:
             if _result_bool(row.get(field)) is None:
+                missing_fields.append(field)
+        for field in ("ci_low", "ci_high"):
+            if field not in row:
                 missing_fields.append(field)
         n_value = _nonnegative_integral_value(row.get("n"))
         point = _finite_result_number(row.get("point_estimate"))
@@ -486,4 +566,9 @@ def _executed_robustness_result_issues(
     return issues
 
 
-__all__ = ["_executed_robustness_result_issues"]
+__all__ = [
+    "ROBUSTNESS_COHORT_MEMBERSHIP_ALIASES",
+    "ROBUSTNESS_EXECUTION_CONTRACT_GUIDANCE",
+    "ROBUSTNESS_RESULT_REQUIRED_FIELDS",
+    "_executed_robustness_result_issues",
+]
