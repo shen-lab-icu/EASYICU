@@ -1,8 +1,8 @@
 """Primary-effect candidate selection helpers extracted from pipeline.py.
 
-When the cross-database aggregator needs one canonical primary OR per
-database, it walks every ``step_summary.json`` under a finished run and
-picks the candidate that best matches the original research question.
+When the cross-database aggregator needs one canonical primary effect per
+database, it reads the current successful step ledger.  Filesystem discovery
+is retained only for legacy runs whose manifest predates ``per_step_records``.
 The scoring + path inference live here so pipeline.py can stay focused
 on orchestration.
 
@@ -24,6 +24,10 @@ from .plan_utils import (
     _predictor_tokens,
     _primary_effect_from_summary,
 )
+from .runtime_artifacts import (
+    current_successful_step_records,
+    load_run_artifact_authority,
+)
 from .scalar_utils import _first_present_scalar
 from .schema import PipelineResult
 
@@ -32,6 +36,7 @@ __all__ = [
     "_extract_primary_effect_payload_from_records",
     "_extract_primary_effect_payload_from_summary",
     "_infer_primary_predictor_from_run_dir",
+    "_primary_effect_payload_is_complete",
     "_primary_effect_candidate_score",
 ]
 
@@ -41,7 +46,6 @@ def _extract_primary_effect_row(
 ) -> Dict[str, Any]:
     run_dir = Path(result.workdir)
     preferred_predictor = _infer_primary_predictor_from_run_dir(run_dir)
-    summary_candidates = sorted(run_dir.rglob("step_summary.json"))
     payload: Dict[str, Any] = {
         "database": database,
         "run_id": result.run_id,
@@ -53,6 +57,18 @@ def _extract_primary_effect_row(
         "effect_measure": None,
         "status": "missing_primary_association",
     }
+    authority = load_run_artifact_authority(run_dir)
+    if authority is not None:
+        raw_records = authority.get("per_step_records")
+        records = raw_records if isinstance(raw_records, list) else []
+        active_payload = _extract_primary_effect_payload_from_records(
+            records,
+            preferred_predictor=preferred_predictor,
+        )
+        if active_payload is not None:
+            payload.update(active_payload)
+        return payload
+    summary_candidates = sorted(run_dir.rglob("step_summary.json"))
     best_payload: Optional[Dict[str, Any]] = None
     best_score = -10_000
     for path in summary_candidates:
@@ -85,7 +101,7 @@ def _extract_primary_effect_payload_from_records(
 
     best_payload: Optional[Dict[str, Any]] = None
     best_score = -10_000
-    for record in per_step_records or []:
+    for record in current_successful_step_records(per_step_records or []):
         if not isinstance(record, dict):
             continue
         summary = record.get("step_summary")
@@ -138,6 +154,33 @@ def _effect_measure_from_scale(scale: Any) -> Optional[str]:
     return None
 
 
+def _primary_effect_payload_is_complete(payload: Any) -> bool:
+    """Return whether a payload can support a converged primary panel row.
+
+    A point estimate without its declared scale, uncertainty, or analytic
+    denominator is not a primary-result contract.  This deliberately mirrors
+    the fail-closed robustness preflight instead of allowing a prose-derived or
+    partially populated value to become the run headline.
+    """
+
+    if not isinstance(payload, dict):
+        return False
+    point = _finite_float(payload.get("primary_or"))
+    ci_low = _finite_float(payload.get("primary_ci_low"))
+    ci_high = _finite_float(payload.get("primary_ci_high"))
+    sample_size = _finite_float(payload.get("sample_size"))
+    effect_measure = str(payload.get("effect_measure") or "").strip()
+    return bool(
+        point is not None
+        and ci_low is not None
+        and ci_high is not None
+        and ci_low <= ci_high
+        and effect_measure
+        and sample_size is not None
+        and sample_size > 0
+    )
+
+
 def _extract_primary_effect_payload_from_summary(
     summary: Dict[str, Any],
     *,
@@ -148,6 +191,7 @@ def _extract_primary_effect_payload_from_summary(
     predictor = (
         (nested_primary or {}).get("predictor")
         or summary.get("primary_predictor")
+        or summary.get("primary_exposure")
         or summary.get("predictor")
         or summary.get("predictor_variable")
         or summary.get("variable")
@@ -156,9 +200,8 @@ def _extract_primary_effect_payload_from_summary(
     # carries the primary effect RATIO whatever its measure: an odds ratio for a
     # logistic/association design, a HAZARD ratio for a survival/time-to-event
     # design. The deterministic Cox runner emits ``hazard_ratio`` (+ CIs); the
-    # OR-only key lists never matched it, so the survival estimand was dropped and
-    # a logistic OR refit downstream buried the real HR (H1 fix3j: HR 1.82 buried
-    # under a near-null ~1.0). Recognise both measures and record which one won so
+    # OR-only key lists do not match it, so a survival estimand can be dropped and
+    # a downstream logistic refit can take precedence. Recognise both measures so
     # downstream labels the effect correctly instead of silently calling it "OR".
     direct_or = _finite_float(
         _first_direct_scalar(
@@ -174,17 +217,16 @@ def _extract_primary_effect_payload_from_summary(
     )
     # Scale-neutral point estimate: propensity-weighted causal steps write the
     # estimate under ``adjusted_effect`` and declare the scale separately in
-    # ``primary_effect_scale``/``effect_scale``. Without this the real causal OR is
-    # dropped and a probe scalar wins (H2 fix3: OR 2.79 lost to a probe's 28.0).
+    # ``primary_effect_scale``/``effect_scale``. Without this, a valid effect can
+    # be dropped while an unrelated probe scalar wins.
     direct_scaled = _finite_float(
         _first_direct_scalar(summary, ("adjusted_effect", "primary_point_estimate"))
     )
     scaled_measure = _effect_measure_from_scale(
         _first_direct_scalar(
             summary,
-            # ``adjusted_effect_scale`` is what the deterministic IPTW causal
-            # runner emits alongside ``adjusted_effect``; without it the causal
-            # OR (e.g. H2 OR 3.04) is dropped and the headline binds nothing.
+            # ``adjusted_effect_scale`` can accompany ``adjusted_effect``;
+            # without a declared scale the headline cannot be labeled safely.
             ("primary_effect_scale", "effect_scale", "adjusted_effect_scale"),
         )
     )
@@ -285,6 +327,37 @@ def _extract_primary_effect_payload_from_summary(
     )
     if nested_primary is not None and nested_primary.get("sample_size") is not None:
         sample_size = _finite_float(nested_primary.get("sample_size"))
+    model_contracts = summary.get("model_contracts") or []
+    if isinstance(model_contracts, list):
+        primary_model_id = str(summary.get("primary_model_id") or "").strip()
+        primary_contract = next(
+            (
+                contract
+                for contract in model_contracts
+                if isinstance(contract, dict)
+                and primary_model_id
+                and str(contract.get("model_id") or "") == primary_model_id
+            ),
+            None,
+        )
+        if primary_contract is None:
+            primary_contract = next(
+                (
+                    contract
+                    for contract in model_contracts
+                    if isinstance(contract, dict)
+                    and str(contract.get("analysis_role") or "").lower()
+                    == "primary"
+                    and str(contract.get("exposure_role") or "primary").lower()
+                    == "primary"
+                ),
+                None,
+            )
+        if isinstance(primary_contract, dict):
+            if not predictor:
+                predictor = primary_contract.get("exposure_source")
+            if sample_size is None:
+                sample_size = _finite_float(primary_contract.get("n"))
     score_path = path or Path("")
     score = _primary_effect_candidate_score(
         score_path,

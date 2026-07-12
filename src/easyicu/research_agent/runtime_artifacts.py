@@ -6,12 +6,203 @@ import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from .architecture import SystemLayer
 from .schema import AnalysisPlan, ResearchContext, ValidationFinding
+
+
+def current_step_records(
+    per_step_records: Sequence[Mapping[str, Any]],
+) -> List[Mapping[str, Any]]:
+    """Return the latest outer record for each step.
+
+    Evidence blobs and step directories are intentionally append-only across a
+    resume.  The per-step ledger is therefore the execution authority: a later
+    failed/blocked checkpoint supersedes an earlier ``status="ok"`` checkpoint
+    for the same step without deleting its historical artifacts.
+    """
+
+    latest_by_step: Dict[str, Mapping[str, Any]] = {}
+    for record in per_step_records or []:
+        if not isinstance(record, Mapping):
+            continue
+        step_id = str(record.get("step_id") or "").strip()
+        if step_id:
+            latest_by_step[step_id] = record
+    return list(latest_by_step.values())
+
+
+def current_successful_step_records(
+    per_step_records: Sequence[Mapping[str, Any]],
+) -> List[Mapping[str, Any]]:
+    """Latest per-step records whose outer execution status is exactly OK."""
+
+    return [
+        record
+        for record in current_step_records(per_step_records)
+        if str(record.get("status") or "").strip().lower() == "ok"
+    ]
+
+
+def current_successful_step_ids(
+    per_step_records: Sequence[Mapping[str, Any]],
+) -> set[str]:
+    """Step ids currently authorised to contribute scientific artifacts."""
+
+    return {
+        str(record.get("step_id") or "").strip()
+        for record in current_successful_step_records(per_step_records)
+        if str(record.get("step_id") or "").strip()
+    }
+
+
+def active_step_evidence_ids(
+    per_step_records: Sequence[Mapping[str, Any]],
+) -> set[str]:
+    """Evidence ids referenced by the latest successful step checkpoints."""
+
+    return {
+        str(evidence_id)
+        for record in current_successful_step_records(per_step_records)
+        for evidence_id in (record.get("evidence_ids") or [])
+        if str(evidence_id).strip()
+    }
+
+
+def current_evidence_records(
+    evidence_records: Sequence[Any],
+    per_step_records: Optional[Sequence[Mapping[str, Any]]],
+) -> List[Any]:
+    """Filter step-produced evidence to the current successful checkpoints.
+
+    Run-level records have no ``produced_by_step`` and remain visible.  When no
+    step ledger is supplied (legacy readers/tests), preserve the historical
+    behaviour and return every record.
+    """
+
+    if per_step_records is None:
+        return list(evidence_records)
+    active_ids = active_step_evidence_ids(per_step_records)
+    current: List[Any] = []
+    for record in evidence_records:
+        if isinstance(record, Mapping):
+            produced_by_step = record.get("produced_by_step")
+            evidence_id = record.get("evidence_id")
+        else:
+            produced_by_step = getattr(record, "produced_by_step", None)
+            evidence_id = getattr(record, "evidence_id", None)
+        if (
+            not str(produced_by_step or "").strip()
+            or str(evidence_id or "") in active_ids
+        ):
+            current.append(record)
+    return current
+
+
+def load_run_artifact_authority(
+    run_dir: str | Path,
+) -> Optional[Dict[str, Any]]:
+    """Load the newest checkpoint that declares a per-step execution ledger.
+
+    ``manifest_partial.json`` is preferred because a resumed run can update it
+    before a new final manifest is written.  A mapping that explicitly contains
+    ``per_step_records`` is modern authority even when that field is empty or
+    malformed; callers must not fall back to append-only step directories in
+    that case.  ``None`` therefore means *legacy, no ledger field anywhere*, not
+    merely "no currently successful steps".
+    """
+
+    root = Path(run_dir)
+    for name in ("manifest_partial.json", "manifest.json"):
+        path = root / name
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            continue
+        if isinstance(payload, dict) and "per_step_records" in payload:
+            return payload
+    return None
+
+
+def current_run_evidence_records(
+    run_dir: str | Path,
+    *,
+    per_step_records: Optional[Sequence[Mapping[str, Any]]] = None,
+) -> Optional[List[Mapping[str, Any]]]:
+    """Evidence authorised by the run's current successful checkpoints.
+
+    Returns ``None`` only for a legacy run with no per-step ledger and no
+    explicit ledger supplied by the caller.  An empty list is authoritative for
+    a modern run with no active evidence, preserving the crucial distinction
+    between "nothing active" and "scan the filesystem as a fallback".
+    """
+
+    authority = load_run_artifact_authority(run_dir)
+    if authority is None:
+        if per_step_records is None:
+            return None
+        evidence_records: Sequence[Any] = []
+    else:
+        raw_evidence = authority.get("evidence")
+        evidence_records = raw_evidence if isinstance(raw_evidence, list) else []
+    if per_step_records is None:
+        raw_records = (authority or {}).get("per_step_records")
+        per_step_records = raw_records if isinstance(raw_records, list) else []
+    return [
+        record
+        for record in current_evidence_records(evidence_records, per_step_records)
+        if isinstance(record, Mapping)
+    ]
+
+
+def current_run_evidence_paths(
+    run_dir: str | Path,
+    *,
+    per_step_records: Optional[Sequence[Mapping[str, Any]]] = None,
+    evidence_ids: Optional[Iterable[str]] = None,
+) -> Optional[List[Path]]:
+    """Existing, run-contained paths for current authorised evidence records.
+
+    Like :func:`current_run_evidence_records`, ``None`` is the legacy signal;
+    ``[]`` is a modern run with no authorised evidence.  Paths escaping the run
+    directory are ignored so manifest data cannot widen a reader's scope.
+    """
+
+    records = current_run_evidence_records(
+        run_dir,
+        per_step_records=per_step_records,
+    )
+    if records is None:
+        return None
+    allowed_ids = (
+        {str(evidence_id) for evidence_id in evidence_ids}
+        if evidence_ids is not None
+        else None
+    )
+    root = Path(run_dir).resolve()
+    paths: List[Path] = []
+    seen: set[Path] = set()
+    for record in records:
+        if (
+            allowed_ids is not None
+            and str(record.get("evidence_id") or "") not in allowed_ids
+        ):
+            continue
+        relative_path = str(record.get("relative_path") or "").strip()
+        if not relative_path:
+            continue
+        path = (root / relative_path).resolve()
+        try:
+            path.relative_to(root)
+        except ValueError:
+            continue
+        if path.is_file() and path not in seen:
+            seen.add(path)
+            paths.append(path)
+    return paths
 
 
 def _git_field(args: List[str]) -> Optional[str]:
@@ -343,6 +534,14 @@ __all__ = [
     "WorkflowEdge",
     "WorkflowGraph",
     "ExecutionReplayBundle",
+    "current_step_records",
+    "current_successful_step_records",
+    "current_successful_step_ids",
+    "active_step_evidence_ids",
+    "current_evidence_records",
+    "load_run_artifact_authority",
+    "current_run_evidence_records",
+    "current_run_evidence_paths",
     "build_workflow_graph",
     "render_workflow_graph_mermaid",
     "build_execution_replay",

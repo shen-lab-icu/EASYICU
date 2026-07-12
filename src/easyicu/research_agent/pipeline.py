@@ -238,6 +238,7 @@ from .pipeline_writer_aux import (
 )
 from .plan_utils import (
     _cap_plan_preserving_figure_steps,
+    _clustering_contract_applies,
     _cohort_definition_contract_findings,
     _cohort_definition_is_empty,
     _ensure_audit_panel_step_in_plan,
@@ -246,6 +247,7 @@ from .plan_utils import (
     _plan_expects_analysis_cohort,
     _infer_primary_predictor_from_context,
     _parent_step_id_for_figure_step,
+    _prediction_contract_applies,
     _predictor_tokens,
     _preserve_figure_steps_after_replan,
     _question_primary_predictor_is_vasopressor_or_unknown,
@@ -625,7 +627,7 @@ class ResearchAgentPipeline:
         self._submission_profile_locked_at = submission_profile_locked_at
         self._expected_concept_dict_sha = expected_concept_dict_sha
         self._expected_sofa2_dict_sha = expected_sofa2_dict_sha
-        # O22 — run-wide multiple-testing correction. Defaults to ON
+        # O22 — family-aware multiple-testing correction. Defaults to ON
         # because reviewers of a research-agent paper will always ask
         # for it; the correction is cheap to compute and does not
         # rewrite existing artefacts.
@@ -1671,8 +1673,8 @@ class ResearchAgentPipeline:
             findings.extend(split_findings)
             # Force a declared figure step whenever the publication-figure skill
             # will produce one regardless of the plan: the scorer reads
-            # analysis_plan.json, and the question-only heuristic misses tasks
-            # (e.g. E1) that never say "figure" yet still ship one. Likewise
+            # analysis_plan.json, and a question-only heuristic misses tasks
+            # that never say "figure" yet still require one. Likewise
             # ensure a declared audit/robustness panel, since that evidence is
             # produced (locked robustness specs, data-quality summaries) but the
             # plan often never presents it.
@@ -2962,6 +2964,7 @@ def _promote_prior_publication_bundle(
     current_step_id: str,
     out_dir: Path,
     required_roles: Optional[Sequence[str]] = None,
+    require_declared_sources: bool = False,
 ) -> Optional[str]:
     """Promote the strongest earlier figure bundle into a publication step."""
     steps_dir = run_dir / "steps"
@@ -2977,7 +2980,20 @@ def _promote_prior_publication_bundle(
         if str(role).strip()
     }
 
-    for step_dir in sorted(steps_dir.iterdir()):
+    # A split ``<parent>_figure`` step may only promote exports produced by its
+    # direct parent.  If that parent has no figure bundle, copying an unrelated
+    # earlier figure is scientifically worse than failing closed (for example,
+    # a cohort-flow figure must never satisfy an absolute-risk figure step).
+    # Generic terminal publication steps that do not have a sibling parent keep
+    # the historical run-wide strongest-bundle behaviour.
+    parent_step_id = str(current_step_id or "").removesuffix("_figure")
+    direct_parent = steps_dir / parent_step_id
+    if parent_step_id != str(current_step_id or "") and direct_parent.is_dir():
+        candidate_step_dirs = [direct_parent]
+    else:
+        candidate_step_dirs = sorted(steps_dir.iterdir())
+
+    for step_dir in candidate_step_dirs:
         if not step_dir.is_dir() or step_dir.name == current_step_id:
             continue
         outputs_dir = step_dir / "outputs"
@@ -3001,6 +3017,10 @@ def _promote_prior_publication_bundle(
                 files, role_filter
             ):
                 continue
+            if require_declared_sources and not _publication_bundle_has_resolvable_sources(
+                files
+            ):
+                continue
             score = (
                 1 if "publication_figure" in stem else 0,
                 1 if "primary_association" in stem else 0,
@@ -3022,6 +3042,35 @@ def _promote_prior_publication_bundle(
             target = out_dir / f"{target_stem}{key}"
         shutil.copy2(source, target)
 
+    # A figure contract is not self-contained when its source-data and panel
+    # evidence files remain behind in the analysis step.  Promotion previously
+    # copied only the rendered exports + JSON contract, leaving a formally
+    # untraceable bundle in the split figure step.  Copy every file-like local
+    # reference while preserving safe relative names; logical evidence IDs
+    # without a file suffix are intentionally left alone.
+    copied_trace_files: List[str] = []
+    contract_path = files.get("contract")
+    if contract_path is not None and contract_path.is_file():
+        try:
+            contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        except Exception:
+            contract = {}
+
+        artifact_refs = _publication_contract_file_references(contract)
+
+        source_outputs = contract_path.parent.resolve()
+        for ref in dict.fromkeys(artifact_refs):
+            relative_ref = Path(ref)
+            if relative_ref.is_absolute() or ".." in relative_ref.parts:
+                relative_ref = Path(relative_ref.name)
+            source = (source_outputs / relative_ref).resolve()
+            if not source.is_relative_to(source_outputs) or not source.is_file():
+                continue
+            target = out_dir / relative_ref
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+            copied_trace_files.append(str(relative_ref))
+
     step_summary_path = out_dir / "step_summary.json"
     summary: Dict[str, Any] = {}
     if step_summary_path.exists():
@@ -3030,11 +3079,14 @@ def _promote_prior_publication_bundle(
         except Exception:
             summary = {}
     summary.setdefault("publication_figure_rescue", {})
+    source_outputs_dir = files[next(iter(files))].parent
+    source_step_id = source_outputs_dir.parent.name
     summary["publication_figure_rescue"].update(
         {
             "mode": "promotion",
             "source_step_stem": source_stem,
-            "source_outputs_dir": str(files[next(iter(files))].parent),
+            "source_outputs_dir": str(source_outputs_dir),
+            "copied_trace_files": sorted(copied_trace_files),
         }
     )
     exported_figure_files = [
@@ -3042,6 +3094,15 @@ def _promote_prior_publication_bundle(
         for key in sorted(files)
         if key != "contract"
     ]
+    summary.update(
+        {
+            "step_id": current_step_id,
+            "method": "deterministic_publication_bundle_promotion",
+            "rendering_only": True,
+            "source_step_id": source_step_id,
+            "source_data_files": sorted(copied_trace_files),
+        }
+    )
     summary["figure_files"] = exported_figure_files
     if exported_figure_files:
         summary["figure_path"] = exported_figure_files[0]
@@ -3050,6 +3111,59 @@ def _promote_prior_publication_bundle(
         encoding="utf-8",
     )
     return "publication_bundle_promote_v1"
+
+
+def _publication_contract_file_references(contract: Any) -> List[str]:
+    """Return local file-like source/evidence references from a contract."""
+
+    artifact_refs: List[str] = []
+
+    def _collect(value: Any) -> None:
+        if isinstance(value, str):
+            token = value.strip()
+            if token and Path(token).suffix:
+                artifact_refs.append(token)
+            return
+        if isinstance(value, (list, tuple, set)):
+            for item in value:
+                _collect(item)
+            return
+        if isinstance(value, dict):
+            for item in value.values():
+                _collect(item)
+
+    if isinstance(contract, dict):
+        _collect(contract.get("source_data"))
+        panels = contract.get("panels") or []
+        if isinstance(panels, list):
+            for panel in panels:
+                if isinstance(panel, dict):
+                    _collect(panel.get("evidence_ids"))
+    return list(dict.fromkeys(artifact_refs))
+
+
+def _publication_bundle_has_resolvable_sources(files: Mapping[str, Path]) -> bool:
+    """Require every declared file reference to exist beside the parent bundle."""
+
+    contract_path = files.get("contract")
+    if contract_path is None or not contract_path.is_file():
+        return False
+    try:
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    refs = _publication_contract_file_references(contract)
+    if not refs:
+        return False
+    source_outputs = contract_path.parent.resolve()
+    for ref in refs:
+        relative_ref = Path(ref)
+        if relative_ref.is_absolute() or ".." in relative_ref.parts:
+            relative_ref = Path(relative_ref.name)
+        source = (source_outputs / relative_ref).resolve()
+        if not source.is_relative_to(source_outputs) or not source.is_file():
+            return False
+    return True
 
 
 def _publication_bundle_has_any_role(
@@ -3079,6 +3193,33 @@ def _publication_bundle_has_any_role(
     return bool(roles & required_roles)
 
 
+def _figure_parent_candidate_step_dirs(
+    *, steps_dir: Path, current_step_id: str
+) -> tuple[List[Path], bool]:
+    """Return direct parent only for split figures, else legacy prior steps.
+
+    A ``<analysis>_figure`` child is an ownership edge: it may render only the
+    standardized products emitted by ``<analysis>``.  Searching an older step
+    for a same-shaped CSV can silently switch estimand or cohort while remaining
+    formally source-backed.  Legacy terminal overview figures without an
+    existing direct parent retain run-wide rescue behavior.
+    """
+
+    parent_step_id = str(current_step_id or "").removesuffix("_figure")
+    direct_parent = steps_dir / parent_step_id
+    is_split = parent_step_id != str(current_step_id or "")
+    if is_split and direct_parent.is_dir():
+        return [direct_parent], True
+    return (
+        [
+            step_dir
+            for step_dir in sorted(steps_dir.iterdir())
+            if step_dir.is_dir() and step_dir.name != current_step_id
+        ],
+        False,
+    )
+
+
 def _render_prediction_publication_bundle_from_prior_outputs(
     *,
     run_dir: Path,
@@ -3098,9 +3239,10 @@ def _render_prediction_publication_bundle_from_prior_outputs(
         return None
 
     best_parent: Optional[tuple[Path, Path, Dict[str, Any]]] = None
-    for step_dir in sorted(steps_dir.iterdir()):
-        if not step_dir.is_dir() or step_dir.name == current_step_id:
-            continue
+    candidate_step_dirs, _direct_parent_only = _figure_parent_candidate_step_dirs(
+        steps_dir=steps_dir, current_step_id=current_step_id
+    )
+    for step_dir in candidate_step_dirs:
         outputs_dir = step_dir / "outputs"
         perf_path = outputs_dir / "model_performance.csv"
         summary_path = outputs_dir / "step_summary.json"
@@ -3590,6 +3732,333 @@ def _render_cohort_overlap_publication_bundle_from_prior_outputs(
     return "cohort_overlap_publication_bundle_from_parent_outputs_v1"
 
 
+def _render_cohort_flow_publication_bundle_from_prior_outputs(
+    *,
+    run_dir: Path,
+    current_step_id: str,
+    out_dir: Path,
+) -> Optional[str]:
+    """Deterministically render a simple sequential cohort-flow contract.
+
+    This is deliberately narrower than the cohort-definition overlap renderer:
+    it accepts only a parent ``cohort_flow.csv`` plus ``attrition.csv`` with
+    explicit stages, denominators, removals, and exclusion categories.  The
+    overlap renderer remains the first choice for multi-definition analyses.
+    """
+
+    steps_dir = run_dir / "steps"
+    if not steps_dir.exists():
+        return None
+
+    parent_step_id = current_step_id.removesuffix("_figure")
+    parent_outputs = steps_dir / parent_step_id / "outputs"
+    flow_path = parent_outputs / "cohort_flow.csv"
+    attrition_path = parent_outputs / "attrition.csv"
+    if not flow_path.exists() or not attrition_path.exists():
+        return None
+
+    try:
+        flow = pd.read_csv(flow_path)
+        attrition = pd.read_csv(attrition_path)
+    except Exception:
+        return None
+
+    flow_required = {
+        "stage",
+        "n",
+        "percent_of_universe",
+        "n_removed_from_prior_stage",
+        "criterion",
+    }
+    attrition_required = {
+        "attrition_category",
+        "n",
+        "percent_of_universe",
+        "status",
+        "reason",
+        "partition_role",
+    }
+    if not flow_required <= set(flow.columns):
+        return None
+    if not attrition_required <= set(attrition.columns):
+        return None
+    if flow.empty or attrition.empty:
+        return None
+
+    flow_plot = flow.copy()
+    attrition_plot = attrition.copy()
+    for frame, numeric_columns in (
+        (
+            flow_plot,
+            ("n", "percent_of_universe", "n_removed_from_prior_stage"),
+        ),
+        (attrition_plot, ("n", "percent_of_universe")),
+    ):
+        for column in numeric_columns:
+            frame[column] = pd.to_numeric(frame[column], errors="coerce")
+            if frame[column].isna().any() or (~frame[column].map(math.isfinite)).any():
+                return None
+            if (frame[column] < 0).any():
+                return None
+
+    if flow_plot["stage"].fillna("").astype(str).str.strip().eq("").any():
+        return None
+    if (
+        attrition_plot["attrition_category"]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+        .eq("")
+        .any()
+    ):
+        return None
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    source_flow = flow.copy()
+    source_flow["source_table"] = flow_path.name
+    source_attrition = attrition.copy()
+    source_attrition["source_table"] = attrition_path.name
+    source_flow_path = out_dir / "publication_figure_source_data.csv"
+    source_attrition_path = (
+        out_dir / "publication_figure_attrition_source_data.csv"
+    )
+    source_flow.to_csv(source_flow_path, index=False)
+    source_attrition.to_csv(source_attrition_path, index=False)
+
+    excluded = attrition_plot[
+        attrition_plot["status"].fillna("").astype(str).str.lower().eq("excluded")
+    ].copy()
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from easyicu.research_agent.publication_figures import (
+        add_panel_label,
+        apply_publication_style,
+        make_figure_contract,
+        save_publication_figure,
+    )
+
+    palette = apply_publication_style()
+    height_mm = max(112.0, min(170.0, 70.0 + 13.0 * len(flow_plot)))
+    fig, (ax_flow, ax_attrition) = plt.subplots(
+        1,
+        2,
+        figsize=(183 / 25.4, height_mm / 25.4),
+        gridspec_kw={"width_ratios": [1.12, 0.88]},
+        constrained_layout=True,
+    )
+
+    n_stages = len(flow_plot)
+    if n_stages == 1:
+        y_positions = [0.50]
+    else:
+        y_positions = [0.90 - index * 0.78 / (n_stages - 1) for index in range(n_stages)]
+    box_height = min(0.13, 0.52 / max(n_stages, 1))
+    flow_rows = flow_plot.reset_index(drop=True).to_dict(orient="records")
+    for index, (row, y_pos) in enumerate(zip(flow_rows, y_positions)):
+        stage_label = str(row["stage"]).replace("_", " ").strip().title()
+        stage_label = _short_figure_label(stage_label, limit=34)
+        count = int(round(float(row["n"])))
+        percent = float(row["percent_of_universe"])
+        facecolor = (
+            palette.get("blue", "#0F4D92")
+            if index in (0, n_stages - 1)
+            else palette.get("teal", "#42949E")
+        )
+        ax_flow.text(
+            0.46,
+            y_pos,
+            f"{stage_label}\n{count:,} ({percent:.1f}% of universe)",
+            ha="center",
+            va="center",
+            fontsize=7.0,
+            color="white",
+            transform=ax_flow.transAxes,
+            bbox={
+                "boxstyle": "round,pad=0.42",
+                "facecolor": facecolor,
+                "edgecolor": "none",
+            },
+        )
+        if index + 1 >= n_stages:
+            continue
+        next_y = y_positions[index + 1]
+        ax_flow.annotate(
+            "",
+            xy=(0.46, next_y + box_height / 2),
+            xytext=(0.46, y_pos - box_height / 2),
+            xycoords="axes fraction",
+            arrowprops={
+                "arrowstyle": "-|>",
+                "color": palette.get("neutral", "#8F8F8F"),
+                "linewidth": 0.9,
+            },
+        )
+        removed = int(round(float(flow_rows[index + 1]["n_removed_from_prior_stage"])))
+        ax_flow.text(
+            0.62,
+            (y_pos + next_y) / 2,
+            f"Removed: {removed:,}",
+            ha="left",
+            va="center",
+            fontsize=6.3,
+            color=palette.get("neutral_dark", "#4A4A4A"),
+            transform=ax_flow.transAxes,
+        )
+    ax_flow.set_title("Registered eligibility sequence", loc="left", pad=4)
+    ax_flow.set_axis_off()
+    add_panel_label(ax_flow, "A", x=-0.04)
+
+    if excluded.empty:
+        ax_attrition.text(
+            0.5,
+            0.5,
+            "No excluded categories were registered",
+            ha="center",
+            va="center",
+            transform=ax_attrition.transAxes,
+            fontsize=7.0,
+        )
+        ax_attrition.set_xticks([])
+        ax_attrition.set_yticks([])
+    else:
+        excluded = excluded.reset_index(drop=True)
+        y = list(range(len(excluded)))
+        values = excluded["n"].astype(float)
+        labels = [
+            _short_figure_label(
+                str(value).replace("_", " ").strip().title(),
+                limit=28,
+            )
+            for value in excluded["attrition_category"]
+        ]
+        ax_attrition.barh(
+            y,
+            values,
+            color=palette.get("orange", "#E28E2C"),
+            height=0.58,
+        )
+        ax_attrition.set_yticks(y)
+        ax_attrition.set_yticklabels(labels)
+        ax_attrition.invert_yaxis()
+        max_count = float(values.max())
+        ax_attrition.set_xlim(0, max(1.0, max_count * 1.28))
+        for index, row in excluded.iterrows():
+            count = int(round(float(row["n"])))
+            percent = float(row["percent_of_universe"])
+            x_pos = max(float(row["n"]), max(max_count, 1.0) * 0.015)
+            ax_attrition.text(
+                x_pos,
+                index,
+                f" {count:,} ({percent:.1f}%)",
+                ha="left",
+                va="center",
+                fontsize=6.2,
+            )
+        ax_attrition.set_xlabel("Excluded records")
+        ax_attrition.grid(
+            axis="x",
+            color=palette.get("neutral_light", "#D8D8D8"),
+            linewidth=0.55,
+        )
+    ax_attrition.set_title("Recorded attrition", loc="left", pad=4)
+    add_panel_label(ax_attrition, "B", x=-0.16)
+
+    contract = make_figure_contract(
+        figure_id="publication_figure",
+        core_claim=(
+            "The registered eligibility sequence defines the analysis cohort "
+            "and explicitly accounts for exclusions from the supplied study universe."
+        ),
+        panels=[
+            {
+                "panel_id": "A",
+                "title": "Eligibility sequence",
+                "role": "overview",
+                "claim": (
+                    "Stage-specific denominators and removals are read from the "
+                    "registered cohort-flow table."
+                ),
+                "evidence_ids": ["cohort_flow"],
+            },
+            {
+                "panel_id": "B",
+                "title": "Attrition accounting",
+                "role": "audit",
+                "claim": (
+                    "Explicit exclusion categories and percentages are read from "
+                    "the registered attrition table."
+                ),
+                "evidence_ids": ["attrition"],
+            },
+        ],
+        height_mm=height_mm,
+        source_data=[
+            "cohort_flow",
+            "attrition",
+            source_flow_path.name,
+            source_attrition_path.name,
+        ],
+        statistics_note=(
+            "Counts, percentages, and stage removals are rendered directly from "
+            "the parent cohort-flow and attrition tables; no values are inferred "
+            "from the image."
+        ),
+    )
+    outputs = save_publication_figure(
+        fig,
+        out_dir / "publication_figure",
+        contract=contract,
+        dpi=300,
+    )
+    plt.close(fig)
+
+    step_summary_path = out_dir / "step_summary.json"
+    existing_summary: Dict[str, Any] = {}
+    if step_summary_path.exists():
+        try:
+            loaded = json.loads(step_summary_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                existing_summary = loaded
+        except Exception:
+            existing_summary = {}
+    if (
+        existing_summary.get("deterministic_publication_figure_rescue")
+        == "no_parent_outputs"
+    ):
+        existing_summary.pop("warning", None)
+    figure_files = [path.name for key, path in outputs.items() if key != "contract"]
+    existing_summary.update(
+        {
+            "step_id": current_step_id,
+            "method": "deterministic_cohort_flow_publication_figure_repair",
+            "rendering_only": True,
+            "deterministic_publication_figure_rescue": (
+                "cohort_flow_publication_bundle_from_parent_outputs_v1"
+            ),
+            "source_step_id": parent_step_id,
+            "source_cohort_flow_table": str(flow_path),
+            "source_attrition_table": str(attrition_path),
+            "source_data_files": [
+                source_flow_path.name,
+                source_attrition_path.name,
+            ],
+            "n_flow_stages": int(len(flow_plot)),
+            "n_exclusion_categories": int(len(excluded)),
+            "figure_files": figure_files,
+            "figure_path": "publication_figure.png",
+        }
+    )
+    step_summary_path.write_text(
+        json.dumps(existing_summary, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
+    return "cohort_flow_publication_bundle_from_parent_outputs_v1"
+
+
 def _render_missingness_publication_bundle_from_prior_outputs(
     *,
     run_dir: Path,
@@ -3603,15 +4072,14 @@ def _render_missingness_publication_bundle_from_prior_outputs(
         return None
     parent_step_id = current_step_id.removesuffix("_figure")
     candidate_paths: List[Path] = []
-    if parent_step_id and parent_step_id != current_step_id:
-        parent_outputs = steps_dir / parent_step_id / "outputs"
-        if parent_outputs.exists():
-            candidate_paths.extend(sorted(parent_outputs.glob("*.csv")))
-    for step_dir in sorted(steps_dir.iterdir()):
-        if not step_dir.is_dir() or step_dir.name == current_step_id:
-            continue
+    candidate_step_dirs, direct_parent_only = _figure_parent_candidate_step_dirs(
+        steps_dir=steps_dir, current_step_id=current_step_id
+    )
+    for step_dir in candidate_step_dirs:
         text = step_dir.name.lower()
-        if not any(token in text for token in ("missing", "measurement", "quality")):
+        if not direct_parent_only and not any(
+            token in text for token in ("missing", "measurement", "quality")
+        ):
             continue
         outputs_dir = step_dir / "outputs"
         if outputs_dir.exists():
@@ -3624,35 +4092,135 @@ def _render_missingness_publication_bundle_from_prior_outputs(
         return None
 
     parent: Optional[tuple[Path, pd.DataFrame]] = None
+    parent_score = -1
     for csv_path in candidate_paths:
         try:
             frame = pd.read_csv(csv_path)
         except Exception:
             continue
-        has_label = _first_col(frame, ("variable", "concept", "label", "value_col"))
-        has_total = _first_col(frame, ("total_n", "n_total", "denominator", "n"))
-        has_missing = _first_col(frame, ("missing_n", "value_missing_n"))
+        has_label = _first_col(
+            frame,
+            ("variable", "exposure_or_variable", "concept", "label", "value_col"),
+        )
+        has_total = _first_col(
+            frame,
+            ("total_n", "n_total", "denominator", "denominator_n", "n"),
+        )
+        has_missing = _first_col(
+            frame,
+            ("missing_n", "n_missing", "value_missing_n", "raw_missing_n"),
+        )
+        has_unavailable = _first_col(
+            frame,
+            ("analysis_unavailable_n", "unavailable_n", "invalid_or_missing_n"),
+        )
         has_measured = _first_col(frame, ("measured_n", "measured_one_n", "n_nonmissing"))
-        has_pct = _first_col(frame, ("missing_pct", "value_missing_pct", "measured_pct", "measured_one_pct"))
-        if has_label and (has_total and (has_missing or has_measured) or has_pct):
+        has_pct = _first_col(
+            frame,
+            (
+                "missing_pct",
+                "value_missing_pct",
+                "raw_missing_pct",
+                "analysis_unavailable_pct",
+                "measured_pct",
+                "measured_one_pct",
+                "percentage",
+            ),
+        )
+        if not (
+            has_label
+            and (has_total and (has_missing or has_unavailable or has_measured) or has_pct)
+        ):
+            continue
+        name = csv_path.name.lower()
+        score = 0
+        if "missingness" in name:
+            score += 100
+        if "measurement" in name:
+            score += 100
+        if has_missing:
+            score += 20
+        if has_unavailable:
+            score += 20
+        if "metric" in frame.columns and any(
+            column in frame.columns for column in ("table_section", "section")
+        ):
+            score += 10
+        if score > parent_score:
             parent = (csv_path, frame)
-            if "missingness" in csv_path.name.lower() or "measurement" in csv_path.name.lower():
-                break
+            parent_score = score
     if parent is None:
         return None
 
     table_path, frame = parent
-    label_col = _first_col(frame, ("variable", "concept", "value_col", "label"))
-    display_col = _first_col(frame, ("display_label", "label", "concept", "variable", "value_col"))
-    total_col = _first_col(frame, ("total_n", "n_total", "denominator", "n"))
-    missing_n_col = _first_col(frame, ("missing_n", "value_missing_n"))
+    label_col = _first_col(
+        frame,
+        ("variable", "exposure_or_variable", "concept", "value_col", "label"),
+    )
+    display_col = _first_col(
+        frame,
+        (
+            "display_label",
+            "label",
+            "concept",
+            "variable",
+            "exposure_or_variable",
+            "value_col",
+        ),
+    )
+    section_col = _first_col(frame, ("table_section", "section"))
+    metric_col = _first_col(frame, ("metric",))
+    cohort_col = _first_col(frame, ("cohort", "scope"))
+    category_col = _first_col(frame, ("category", "status_category"))
+    total_col = _first_col(
+        frame,
+        ("total_n", "n_total", "denominator", "denominator_n", "n"),
+    )
+    missing_n_col = _first_col(
+        frame,
+        ("missing_n", "n_missing", "value_missing_n", "raw_missing_n"),
+    )
+    unavailable_n_col = _first_col(
+        frame,
+        ("analysis_unavailable_n", "unavailable_n", "invalid_or_missing_n"),
+    )
     measured_n_col = _first_col(frame, ("measured_n", "measured_one_n", "n_nonmissing"))
-    missing_pct_col = _first_col(frame, ("missing_pct", "value_missing_pct"))
+    missing_pct_col = _first_col(
+        frame,
+        ("missing_pct", "value_missing_pct", "raw_missing_pct"),
+    )
+    unavailable_pct_col = _first_col(
+        frame,
+        ("analysis_unavailable_pct", "unavailable_pct", "invalid_or_missing_pct"),
+    )
     measured_pct_col = _first_col(frame, ("measured_pct", "measured_one_pct"))
     if label_col is None:
         return None
 
-    source = frame.copy()
+    rich_process_table = section_col is not None and metric_col is not None
+    source_all = frame.copy()
+    if rich_process_table:
+        source_all["source_row_index"] = range(len(source_all))
+    source = source_all.copy()
+    source_row_filter = "all_compatible_rows"
+    if rich_process_table:
+        section = source[section_col].astype(str).str.lower()
+        metric = source[metric_col].astype(str).str.lower()
+        raw_rows = section.eq("column_missingness") & metric.eq("raw_missing")
+        unavailable_rows = section.eq("column_missingness") & metric.str.contains(
+            "analysis_unavailable",
+            regex=False,
+        )
+        if raw_rows.any():
+            source = source.loc[raw_rows].copy()
+            source_row_filter = "column_missingness:raw_missing"
+        elif unavailable_rows.any():
+            source = source.loc[unavailable_rows].copy()
+            source_row_filter = "column_missingness:analysis_unavailable"
+        if missing_n_col is None and "n" in source.columns:
+            missing_n_col = "n"
+        if missing_pct_col is None and "percentage" in source.columns:
+            missing_pct_col = "percentage"
     total = (
         pd.to_numeric(source[total_col], errors="coerce")
         if total_col is not None
@@ -3668,8 +4236,16 @@ def _render_missingness_publication_bundle_from_prior_outputs(
         if measured_n_col is not None
         else pd.Series(pd.NA, index=source.index, dtype="Float64")
     )
-    if measured_n_col is None and total_col is not None and missing_n_col is not None:
-        measured_n = total - missing_n
+    unavailable_n = (
+        pd.to_numeric(source[unavailable_n_col], errors="coerce")
+        if unavailable_n_col is not None
+        else pd.Series(pd.NA, index=source.index, dtype="Float64")
+    )
+    if measured_n_col is None and total_col is not None:
+        if unavailable_n_col is not None:
+            measured_n = total - unavailable_n
+        elif missing_n_col is not None:
+            measured_n = total - missing_n
     present_but_measured_zero_col = _first_col(
         source,
         ("value_present_but_measured_zero_n", "value_present_but_n_zero_n"),
@@ -3692,6 +4268,13 @@ def _render_missingness_publication_bundle_from_prior_outputs(
         if missing_pct_col is not None
         else pd.Series(pd.NA, index=source.index, dtype="Float64")
     )
+    unavailable_pct = (
+        100.0 * unavailable_n / total
+        if total_col is not None and unavailable_n_col is not None
+        else pd.to_numeric(source[unavailable_pct_col], errors="coerce")
+        if unavailable_pct_col is not None
+        else pd.Series(pd.NA, index=source.index, dtype="Float64")
+    )
     measured_pct = (
         100.0 * measured_n / total
         if total_col is not None and measured_n.notna().any()
@@ -3705,8 +4288,19 @@ def _render_missingness_publication_bundle_from_prior_outputs(
         if display_col is not None
         else labels.map(_publication_label)
     )
+    indicator_semantics_col = _first_col(source, ("indicator_semantics",))
+    event_status_mask = pd.Series(False, index=source.index)
+    if indicator_semantics_col is not None:
+        event_status_mask = source[indicator_semantics_col].astype(str).eq(
+            "binary_event_presence"
+        )
+        display_labels = display_labels.mask(
+            event_status_mask,
+            display_labels.astype(str) + " — analytic event status",
+        )
+    label_output_col = "variable_name" if rich_process_table else "variable"
     source_data_payload: Dict[str, Any] = {
-        "variable": labels,
+        label_output_col: labels,
         "display_label": display_labels,
         "missing_pct": missing_pct.astype(float),
         "missing_n": missing_n.astype(float),
@@ -3716,25 +4310,51 @@ def _render_missingness_publication_bundle_from_prior_outputs(
         "measured_n": measured_n.astype(float),
         "source_table": table_path.name,
         "source_transform": "missingness_measurement_summary_v1",
+        "source_row_filter": source_row_filter,
     }
-    if "concept" in source.columns:
-        source_data_payload["concept"] = source["concept"].astype(str)
+    if rich_process_table:
+        source_data_payload["source_row_index"] = source["source_row_index"].astype(int)
     else:
-        source_data_payload["concept"] = labels
-    if "label" in source.columns:
-        source_data_payload["label"] = source["label"].astype(str)
+        if "concept" in source.columns:
+            source_data_payload["concept"] = source["concept"].astype(str)
+        else:
+            source_data_payload["concept"] = labels
+        if "label" in source.columns:
+            source_data_payload["label"] = source["label"].astype(str)
     if missing_n_col is not None:
         source_data_payload["value_missing_n"] = pd.to_numeric(
             source[missing_n_col],
             errors="coerce",
         )
+        if rich_process_table:
+            source_data_payload[missing_n_col] = pd.to_numeric(
+                source[missing_n_col],
+                errors="coerce",
+            )
     if missing_pct_col is not None:
         source_data_payload["value_missing_pct"] = pd.to_numeric(
             source[missing_pct_col],
             errors="coerce",
         )
+        if rich_process_table:
+            source_data_payload[missing_pct_col] = pd.to_numeric(
+                source[missing_pct_col],
+                errors="coerce",
+            )
+    if unavailable_n_col is not None:
+        source_data_payload["analysis_unavailable_n"] = unavailable_n
+    if unavailable_pct_col is not None or unavailable_n_col is not None:
+        source_data_payload["analysis_unavailable_pct"] = unavailable_pct
     if total_col is not None:
         source_data_payload["n_total"] = pd.to_numeric(source[total_col], errors="coerce")
+        if rich_process_table:
+            source_data_payload[total_col] = pd.to_numeric(
+                source[total_col],
+                errors="coerce",
+            )
+    if cohort_col is not None:
+        cohort_output_col = "cohort_name" if rich_process_table else "cohort"
+        source_data_payload[cohort_output_col] = source[cohort_col].astype(str)
     if "measured_one_n" in source.columns:
         source_data_payload["measured_one_n"] = pd.to_numeric(
             source["measured_one_n"],
@@ -3745,16 +4365,108 @@ def _render_missingness_publication_bundle_from_prior_outputs(
             source["measured_one_pct"],
             errors="coerce",
         )
+    if indicator_semantics_col is not None:
+        source_data_payload["indicator_semantics"] = source[
+            indicator_semantics_col
+        ].astype(str)
+    if "raw_indicator_one_n" in source.columns:
+        source_data_payload["raw_indicator_one_n"] = pd.to_numeric(
+            source["raw_indicator_one_n"],
+            errors="coerce",
+        )
+    if "event_count_column" in source.columns:
+        source_data_payload["event_count_column"] = source[
+            "event_count_column"
+        ].fillna("").astype(str)
     source_data = pd.DataFrame(source_data_payload).dropna(
         subset=["missing_pct", "measured_pct"],
         how="all",
     )
     if source_data.empty:
         return None
-    source_data = source_data.sort_values("missing_pct", ascending=False).head(12)
+    if rich_process_table:
+        variable_order = (
+            source_data.groupby(label_output_col, sort=False)["missing_pct"]
+            .max()
+            .sort_values(ascending=False)
+            .head(12)
+            .index
+        )
+        source_data = source_data[
+            source_data[label_output_col].isin(variable_order)
+        ].copy()
+        source_data[label_output_col] = pd.Categorical(
+            source_data[label_output_col],
+            categories=list(variable_order),
+            ordered=True,
+        )
+        source_data = source_data.sort_values(
+            [label_output_col, "cohort_name"],
+        )
+        source_data[label_output_col] = source_data[label_output_col].astype(str)
+    else:
+        source_data = source_data.sort_values("missing_pct", ascending=False).head(12)
+
+    has_event_status_rows = bool(
+        "indicator_semantics" in source_data.columns
+        and source_data["indicator_semantics"].astype(str).eq(
+            "binary_event_presence"
+        ).any()
+    )
+    availability_title = (
+        "Analytic availability" if has_event_status_rows else "Measurement availability"
+    )
+    availability_axis_label = (
+        "Value / event status available (%)"
+        if has_event_status_rows
+        else "Available observations (%)"
+    )
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    source_data.to_csv(out_dir / "missingness_measurement_panel_source_data.csv", index=False)
+    availability_source_path = out_dir / "missingness_measurement_panel_source_data.csv"
+    source_data.to_csv(availability_source_path, index=False)
+
+    status_source_data = pd.DataFrame()
+    status_source_path = out_dir / "missingness_status_matrix_source_data.csv"
+    if (
+        rich_process_table
+        and label_col is not None
+        and category_col is not None
+        and cohort_col is not None
+        and total_col is not None
+        and {"n", "percentage"}.issubset(source_all.columns)
+    ):
+        status_mask = (
+            source_all[section_col].astype(str).str.lower().eq("source_status")
+            & source_all[metric_col]
+            .astype(str)
+            .str.lower()
+            .isin(("mutually_exclusive_source_status", "source_status"))
+        )
+        status_rows = source_all.loc[status_mask].copy()
+        if not status_rows.empty:
+            status_source_data = pd.DataFrame(
+                {
+                    "variable_name": status_rows[label_col].astype(str),
+                    "display_label": status_rows[label_col].astype(str).map(
+                        _publication_label
+                    ),
+                    "cohort_name": status_rows[cohort_col].astype(str),
+                    "status_category": status_rows[category_col].astype(str),
+                    "n": pd.to_numeric(status_rows["n"], errors="coerce"),
+                    "denominator": pd.to_numeric(
+                        status_rows[total_col], errors="coerce"
+                    ),
+                    "percentage": pd.to_numeric(
+                        status_rows["percentage"], errors="coerce"
+                    ),
+                    "source_row_index": status_rows["source_row_index"].astype(int),
+                    "source_table": table_path.name,
+                    "source_transform": "source_status_matrix_v1",
+                }
+            ).dropna(subset=["percentage"])
+            if not status_source_data.empty:
+                status_source_data.to_csv(status_source_path, index=False)
 
     import matplotlib
 
@@ -3769,45 +4481,261 @@ def _render_missingness_publication_bundle_from_prior_outputs(
     )
 
     palette = apply_publication_style()
-    plot_df = source_data.reset_index(drop=True)
-    y = list(range(len(plot_df)))
-    labels = [
-        _short_figure_label(label, limit=30)
-        for label in plot_df["display_label"].astype(str)
-    ]
-    fig = plt.figure(figsize=(183 / 25.4, 104 / 25.4), constrained_layout=False)
-    grid = fig.add_gridspec(
-        1,
-        2,
-        width_ratios=[1.05, 0.95],
-        left=0.28,
-        right=0.98,
-        top=0.88,
-        bottom=0.16,
-        wspace=0.50,
+    rich_matrix_rendered = not status_source_data.empty
+    if rich_matrix_rendered:
+        fig = plt.figure(
+            figsize=(183 / 25.4, 126 / 25.4),
+            constrained_layout=False,
+        )
+        grid = fig.add_gridspec(
+            1,
+            2,
+            width_ratios=[1.18, 0.82],
+            left=0.16,
+            right=0.98,
+            top=0.88,
+            bottom=0.25,
+            wspace=0.62,
+        )
+        ax_missing = fig.add_subplot(grid[0, 0])
+        ax_measured = fig.add_subplot(grid[0, 1])
+
+        status_plot = status_source_data.copy()
+        multi_cohort = status_plot["cohort_name"].nunique() > 1
+        status_plot["row_label"] = status_plot["display_label"].astype(str)
+        if multi_cohort:
+            status_plot["row_label"] = (
+                status_plot["row_label"]
+                + "\n"
+                + status_plot["cohort_name"].map(_publication_label)
+            )
+        status_rows = list(dict.fromkeys(status_plot["row_label"].tolist()))
+        status_columns = list(
+            dict.fromkeys(status_plot["status_category"].astype(str).tolist())
+        )
+        status_matrix = status_plot.pivot_table(
+            index="row_label",
+            columns="status_category",
+            values="percentage",
+            aggfunc="first",
+        ).reindex(index=status_rows, columns=status_columns)
+
+        def _status_display(value: str) -> str:
+            text = value.lower().replace("_", " ")
+            if "valid observed" in text:
+                return "Observed"
+            if "no recorded source" in text:
+                return "No source"
+            if "summary missing" in text:
+                return "Source present;\nsummary missing"
+            if "contradictory" in text or "invalid" in text:
+                return "Contradictory /\ninvalid"
+            return _short_figure_label(value, limit=24)
+
+        status_values = status_matrix.to_numpy(dtype=float)
+        ax_missing.imshow(
+            status_values,
+            aspect="auto",
+            vmin=0,
+            vmax=100,
+            cmap="Blues",
+        )
+        ax_missing.set_xticks(range(len(status_columns)))
+        ax_missing.set_xticklabels(
+            [_status_display(value) for value in status_columns],
+            rotation=28,
+            ha="right",
+        )
+        ax_missing.set_yticks(range(len(status_rows)))
+        ax_missing.set_yticklabels(status_rows)
+        for row_idx in range(len(status_rows)):
+            for col_idx in range(len(status_columns)):
+                value = status_values[row_idx, col_idx]
+                if pd.isna(value):
+                    continue
+                ax_missing.text(
+                    col_idx,
+                    row_idx,
+                    f"{value:.1f}",
+                    ha="center",
+                    va="center",
+                    fontsize=6.5,
+                    color="white" if value >= 55 else "black",
+                )
+        ax_missing.set_xlabel("Source-status share of cohort (%)")
+        ax_missing.set_title("Measurement-source status", loc="left", pad=4)
+        add_panel_label(ax_missing, "A", x=0.0, y=1.08)
+
+        availability_plot = source_data.copy()
+        variable_rows = list(
+            dict.fromkeys(availability_plot["variable_name"].astype(str).tolist())
+        )
+        cohort_columns = list(
+            dict.fromkeys(availability_plot["cohort_name"].astype(str).tolist())
+        )
+        availability_matrix = availability_plot.pivot_table(
+            index="variable_name",
+            columns="cohort_name",
+            values="measured_pct",
+            aggfunc="first",
+        ).reindex(index=variable_rows, columns=cohort_columns)
+        availability_values = availability_matrix.to_numpy(dtype=float)
+
+        def _measurement_display_map(values: Sequence[str]) -> Dict[str, str]:
+            raw_values = list(dict.fromkeys(str(value) for value in values))
+            display = {value: _publication_label(value) for value in raw_values}
+            counts: Dict[str, int] = {}
+            for label in display.values():
+                counts[label] = counts.get(label, 0) + 1
+            suffix_labels = {
+                "_first": "First value",
+                "_max": "Maximum",
+                "_min": "Minimum",
+                "_mean": "Mean",
+                "_n": "Observation count",
+                "_measured": "Measured flag",
+            }
+            always_expand = ("_first", "_n", "_measured")
+            for value in raw_values:
+                lower_value = value.lower()
+                if counts.get(display[value], 0) <= 1 and not lower_value.endswith(
+                    always_expand
+                ):
+                    continue
+                for suffix, suffix_label in suffix_labels.items():
+                    if lower_value.endswith(suffix):
+                        base = value[: -len(suffix)]
+                        display[value] = f"{_publication_label(base)} — {suffix_label}"
+                        break
+                else:
+                    display[value] = value.replace("_", " ").title()
+            return display
+
+        variable_display = _measurement_display_map(variable_rows)
+        ax_measured.imshow(
+            availability_values,
+            aspect="auto",
+            vmin=0,
+            vmax=100,
+            cmap="Blues",
+        )
+        ax_measured.set_xticks(range(len(cohort_columns)))
+        ax_measured.set_xticklabels(
+            [_publication_label(value) for value in cohort_columns],
+            rotation=28,
+            ha="right",
+        )
+        ax_measured.set_yticks(range(len(variable_rows)))
+        ax_measured.set_yticklabels(
+            [
+                _short_figure_label(variable_display[value], limit=32).replace(
+                    " — ", "\n"
+                )
+                for value in variable_rows
+            ]
+        )
+        for row_idx in range(len(variable_rows)):
+            for col_idx in range(len(cohort_columns)):
+                value = availability_values[row_idx, col_idx]
+                if pd.isna(value):
+                    continue
+                ax_measured.text(
+                    col_idx,
+                    row_idx,
+                    f"{value:.1f}",
+                    ha="center",
+                    va="center",
+                    fontsize=6.5,
+                    color="white" if value >= 55 else "black",
+                )
+        ax_measured.set_xlabel(availability_axis_label)
+        ax_measured.set_title(availability_title, loc="left", pad=4)
+        add_panel_label(ax_measured, "B", x=0.0, y=1.08)
+    else:
+        plot_df = source_data.reset_index(drop=True)
+        y = list(range(len(plot_df)))
+        labels = [
+            _short_figure_label(label, limit=30)
+            for label in plot_df["display_label"].astype(str)
+        ]
+        fig = plt.figure(
+            figsize=(183 / 25.4, 104 / 25.4),
+            constrained_layout=False,
+        )
+        grid = fig.add_gridspec(
+            1,
+            2,
+            width_ratios=[1.05, 0.95],
+            left=0.28,
+            right=0.98,
+            top=0.88,
+            bottom=0.16,
+            wspace=0.50,
+        )
+        ax_missing = fig.add_subplot(grid[0, 0])
+        ax_measured = fig.add_subplot(grid[0, 1], sharey=ax_missing)
+
+        missing = pd.to_numeric(plot_df["missing_pct"], errors="coerce").fillna(0)
+        measured = pd.to_numeric(plot_df["measured_pct"], errors="coerce").fillna(0)
+        ax_missing.barh(
+            y,
+            missing.clip(0, 100),
+            color=palette.get("red", "#B2182B"),
+            height=0.56,
+        )
+        ax_missing.axvline(
+            20,
+            color=palette.get("neutral", "#8F8F8F"),
+            linestyle="--",
+            linewidth=0.8,
+        )
+        ax_missing.set_yticks(y)
+        ax_missing.set_yticklabels(labels)
+        ax_missing.invert_yaxis()
+        ax_missing.set_xlabel("Missing values (%)")
+        ax_missing.set_title("Value missingness", loc="left", pad=4)
+        ax_missing.grid(
+            axis="x",
+            color=palette.get("neutral_light", "#D8D8D8"),
+            linewidth=0.55,
+        )
+        add_panel_label(ax_missing, "A", x=0.0, y=1.08)
+
+        ax_measured.barh(
+            y,
+            measured.clip(0, 100),
+            color=palette.get("blue", "#0F4D92"),
+            height=0.56,
+        )
+        ax_measured.set_xlim(0, 100)
+        ax_measured.set_xlabel(availability_axis_label)
+        ax_measured.set_title(availability_title, loc="left", pad=4)
+        ax_measured.tick_params(axis="y", labelleft=False)
+        ax_measured.grid(
+            axis="x",
+            color=palette.get("neutral_light", "#D8D8D8"),
+            linewidth=0.55,
+        )
+        add_panel_label(ax_measured, "B", x=0.0, y=1.08)
+
+    parent_evidence_id = table_path.stem
+    availability_source_id = availability_source_path.stem
+    status_source_id = status_source_path.stem
+    panel_a_title = "Measurement-source status" if rich_matrix_rendered else "Value missingness"
+    panel_a_claim = (
+        "Mutually exclusive source-status percentages are shown for each audited "
+        "measurement summary and cohort."
+        if rich_matrix_rendered
+        else "Missing percentages are recomputed from missing counts and denominators "
+        "in the parent audit table."
     )
-    ax_missing = fig.add_subplot(grid[0, 0])
-    ax_measured = fig.add_subplot(grid[0, 1], sharey=ax_missing)
-
-    missing = pd.to_numeric(plot_df["missing_pct"], errors="coerce").fillna(0)
-    measured = pd.to_numeric(plot_df["measured_pct"], errors="coerce").fillna(0)
-    ax_missing.barh(y, missing.clip(0, 100), color=palette.get("red", "#B2182B"), height=0.56)
-    ax_missing.axvline(20, color=palette.get("neutral", "#8F8F8F"), linestyle="--", linewidth=0.8)
-    ax_missing.set_yticks(y)
-    ax_missing.set_yticklabels(labels)
-    ax_missing.invert_yaxis()
-    ax_missing.set_xlabel("Missing values (%)")
-    ax_missing.set_title("Value missingness", loc="left", pad=4)
-    ax_missing.grid(axis="x", color=palette.get("neutral_light", "#D8D8D8"), linewidth=0.55)
-    add_panel_label(ax_missing, "A", x=0.0, y=1.08)
-
-    ax_measured.barh(y, measured.clip(0, 100), color=palette.get("blue", "#0F4D92"), height=0.56)
-    ax_measured.set_xlim(0, 100)
-    ax_measured.set_xlabel("Measured / available (%)")
-    ax_measured.set_title("Measurement availability", loc="left", pad=4)
-    ax_measured.tick_params(axis="y", labelleft=False)
-    ax_measured.grid(axis="x", color=palette.get("neutral_light", "#D8D8D8"), linewidth=0.55)
-    add_panel_label(ax_measured, "B", x=0.0, y=1.08)
+    panel_a_evidence = [
+        parent_evidence_id,
+        status_source_id if rich_matrix_rendered else availability_source_id,
+    ]
+    contract_source_data = [parent_evidence_id, availability_source_id]
+    if rich_matrix_rendered:
+        contract_source_data.append(status_source_id)
 
     contract = make_figure_contract(
         figure_id="missingness_measurement_panel",
@@ -3818,26 +4746,32 @@ def _render_missingness_publication_bundle_from_prior_outputs(
         panels=[
             {
                 "panel_id": "A",
-                "title": "Value missingness",
+                "title": panel_a_title,
                 "role": "data_quality",
-                "claim": (
-                    "Missing percentages are recomputed from missing counts "
-                    "and denominators in the parent audit table."
+                "chart_type": (
+                    "missingness_matrix" if rich_matrix_rendered else "missingness_bar"
                 ),
-                "evidence_ids": ["missingness_measurement_audit"],
+                "claim": panel_a_claim,
+                "evidence_ids": panel_a_evidence,
             },
             {
                 "panel_id": "B",
-                "title": "Measurement availability",
+                "title": availability_title,
                 "role": "data_quality",
+                "chart_type": "availability_panel",
                 "claim": (
-                    "Measured or available percentages are recomputed from "
+                    "Value availability percentages are recomputed from counts and "
+                    "denominators in the parent audit table. Registered binary-event "
+                    "rows report analytic status availability under the locked "
+                    "absence-as-negative convention, not literal measurement capture."
+                    if has_event_status_rows
+                    else "Measured or available percentages are recomputed from "
                     "measurement counts and denominators in the parent audit table."
                 ),
-                "evidence_ids": ["missingness_measurement_audit"],
+                "evidence_ids": [parent_evidence_id, availability_source_id],
             },
         ],
-        source_data=["missingness_measurement_audit"],
+        source_data=contract_source_data,
         statistics_note=(
             "Generated deterministically from the registered parent-step "
             "missingness/measurement audit; percentages are count-derived."
@@ -3867,8 +4801,22 @@ def _render_missingness_publication_bundle_from_prior_outputs(
             "rendering_only": True,
             "source_step_id": parent_step_id,
             "source_missingness_table": str(table_path),
-            "source_data_csv": str(out_dir / "missingness_measurement_panel_source_data.csv"),
-            "n_variables_plotted": int(len(source_data)),
+            "source_row_filter": source_row_filter,
+            "source_data_csv": str(availability_source_path),
+            "source_data_files": [
+                availability_source_path.name,
+                *([status_source_path.name] if rich_matrix_rendered else []),
+            ],
+            "n_variables_plotted": int(source_data[label_output_col].nunique()),
+            "n_availability_rows": int(len(source_data)),
+            "n_source_status_rows": int(len(status_source_data)),
+            "n_binary_event_status_rows": int(
+                source_data.get("indicator_semantics", pd.Series(dtype=str))
+                .astype(str)
+                .eq("binary_event_presence")
+                .sum()
+            ),
+            "rich_missingness_matrix_rendered": rich_matrix_rendered,
             "figure_files": [
                 path.name for key, path in outputs.items() if key != "contract"
             ],
@@ -3888,8 +4836,8 @@ def _render_phenotype_publication_bundle_from_prior_outputs(
     current_step_id: str,
     out_dir: Path,
 ) -> Optional[str]:
-    """Deterministically rebuild a phenotyping (clustering) figure from the
-    ``trajectory_clustering`` runner's certified tables.
+    """Deterministically rebuild a phenotyping figure from agent-produced,
+    source-backed standardized clustering products.
 
     Reads ``outcome_by_cluster.csv`` (the descriptive outcome contrast, which
     carries ``ci_low``/``ci_high`` -- validator-checked value columns) as the
@@ -3907,15 +4855,12 @@ def _render_phenotype_publication_bundle_from_prior_outputs(
         return None
     parent_step_id = current_step_id.removesuffix("_figure")
     candidate_paths: List[Path] = []
-    if parent_step_id and parent_step_id != current_step_id:
-        parent_outputs = steps_dir / parent_step_id / "outputs"
-        if parent_outputs.exists():
-            candidate_paths.extend(sorted(parent_outputs.glob("*.csv")))
-    for step_dir in sorted(steps_dir.iterdir()):
-        if not step_dir.is_dir() or step_dir.name == current_step_id:
-            continue
+    candidate_step_dirs, direct_parent_only = _figure_parent_candidate_step_dirs(
+        steps_dir=steps_dir, current_step_id=current_step_id
+    )
+    for step_dir in candidate_step_dirs:
         text = step_dir.name.lower()
-        if not any(
+        if not direct_parent_only and not any(
             token in text
             for token in ("cluster", "phenotype", "subphenotype", "trajectory")
         ):
@@ -4045,16 +4990,16 @@ def _render_phenotype_publication_bundle_from_prior_outputs(
         figure_id="phenotype_cluster_panel",
         core_claim=(
             "Discovered phenotype clusters are shown by size and a DESCRIPTIVE "
-            "outcome-by-cluster comparison, rendered directly from the registered "
-            "clustering runner tables (no causal claim)."
+            "outcome-by-cluster comparison, rendered from the agent-produced, "
+            "source-backed clustering products (no causal claim)."
         ),
         panels=[
             {
                 "panel_id": "A",
                 "title": "Cluster sizes",
                 "role": "phenotype_structure",
-                "claim": "Cluster sizes come directly from the clustering runner.",
-                "evidence_ids": ["trajectory_clustering"],
+                "claim": "Cluster sizes come directly from the declared parent table.",
+                "evidence_ids": ["phenotype_cluster_panel_source_data.csv"],
             },
             {
                 "panel_id": "B",
@@ -4062,16 +5007,17 @@ def _render_phenotype_publication_bundle_from_prior_outputs(
                 "role": "phenotype_outcome",
                 "claim": (
                     "Outcome rates and confidence intervals are copied from the "
-                    "runner's descriptive outcome_by_cluster table; comparison is "
+                    "agent's descriptive outcome-by-cluster product; comparison is "
                     "descriptive, explicitly not causal."
                 ),
-                "evidence_ids": ["trajectory_clustering"],
+                "evidence_ids": ["phenotype_cluster_panel_source_data.csv"],
             },
         ],
-        source_data=["trajectory_clustering"],
+        source_data=["phenotype_cluster_panel_source_data.csv"],
         statistics_note=(
-            "Generated deterministically from the registered clustering runner "
-            "tables; outcome-by-cluster is descriptive (no adjusted effect)."
+            "Rendered deterministically from agent-produced standardized "
+            "clustering products; outcome-by-cluster is descriptive (no adjusted "
+            "effect)."
         ),
     )
     outputs = save_publication_figure(
@@ -4151,15 +5097,12 @@ def _render_descriptive_publication_bundle_from_prior_outputs(
         return None
     parent_step_id = current_step_id.removesuffix("_figure")
     candidate_paths: List[Path] = []
-    if parent_step_id and parent_step_id != current_step_id:
-        parent_outputs = steps_dir / parent_step_id / "outputs"
-        if parent_outputs.exists():
-            candidate_paths.extend(sorted(parent_outputs.glob("*.csv")))
-    for step_dir in sorted(steps_dir.iterdir()):
-        if not step_dir.is_dir() or step_dir.name == current_step_id:
-            continue
+    candidate_step_dirs, direct_parent_only = _figure_parent_candidate_step_dirs(
+        steps_dir=steps_dir, current_step_id=current_step_id
+    )
+    for step_dir in candidate_step_dirs:
         text = step_dir.name.lower()
-        if not any(
+        if not direct_parent_only and not any(
             token in text
             for token in ("baseline", "table_one", "table1", "descriptive", "characteristic")
         ):
@@ -4538,6 +5481,7 @@ def _association_descriptive_context(
     run_dir: Path,
     current_step_id: str,
     out_dir: Path,
+    primary_exposure: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Collect source-backed prevalence or absolute-risk rows for association figures.
 
@@ -4550,12 +5494,64 @@ def _association_descriptive_context(
     has_prevalence = False
     has_outcome_risk = False
 
+    def _canonical_exposure_token(value: Any) -> str:
+        token = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip(
+            "_"
+        )
+        suffixes = (
+            "_log1p_active",
+            "_log1p",
+            "_active",
+            "_maximum",
+            "_minimum",
+            "_median",
+            "_mean",
+            "_first",
+            "_last",
+            "_value",
+            "_max",
+            "_min",
+        )
+        changed = True
+        while changed and token:
+            changed = False
+            for suffix in suffixes:
+                if token.endswith(suffix) and len(token) > len(suffix):
+                    token = token[: -len(suffix)]
+                    changed = True
+                    break
+        return token
+
+    primary_token = _canonical_exposure_token(primary_exposure)
+
     for table_path, frame in _iter_prior_output_tables(
         run_dir=run_dir,
         current_step_id=current_step_id,
     ):
         if frame.empty:
             continue
+        frame = frame.copy()
+        if primary_token:
+            exposure_col = _find_column(
+                frame,
+                exact=(
+                    "exposure",
+                    "exposure_source",
+                    "source_variable",
+                    "concept",
+                    "variable",
+                ),
+            )
+            if exposure_col:
+                matches = frame[exposure_col].map(_canonical_exposure_token).eq(
+                    primary_token
+                )
+                if matches.any():
+                    frame = frame.loc[matches].copy()
+                elif frame[exposure_col].nunique(dropna=True) > 1:
+                    # This is explicitly a multi-exposure context table but it
+                    # contains no row for the locked primary exposure.
+                    continue
         prevalence_pct_col = _find_column(
             frame,
             exact=("prevalence_pct", "incidence_pct"),
@@ -4567,7 +5563,10 @@ def _association_descriptive_context(
                 exact=("n_denominator", "denominator", "n_total", "total_n", "n"),
             )
             event_col = _find_column(frame, exact=("n_positive", "event_n", "events"))
-            label_col = _find_column(frame, exact=("exposure", "variable", "concept", "label"))
+            label_col = _find_column(
+                frame,
+                exact=("label", "exposure", "variable", "concept"),
+            )
             source_rows: List[Dict[str, Any]] = []
             for idx, row in frame.iterrows():
                 estimate = _as_percent(row, prevalence_pct_col or prevalence_prop_col)
@@ -4724,6 +5723,386 @@ def _association_descriptive_context(
     }
 
 
+def _render_absolute_risk_publication_bundle_from_prior_outputs(
+    *,
+    run_dir: Path,
+    current_step_id: str,
+    out_dir: Path,
+) -> Optional[str]:
+    """Render measurement availability and unadjusted outcome risk.
+
+    The renderer accepts only the direct parent's tidy absolute-risk contract
+    (``exposure``, ``group_type``, ``estimate_type``).  It never re-reads the
+    cohort and every plotted row carries a positional trace back to the parent
+    CSV.  This is intentionally separate from the association renderer: an
+    absolute-risk context step has no adjusted estimand to invent or borrow.
+    """
+
+    parent_step_id = str(current_step_id or "").removesuffix("_figure")
+    if not parent_step_id or parent_step_id == str(current_step_id or ""):
+        return None
+    parent_outputs = Path(run_dir) / "steps" / parent_step_id / "outputs"
+    if not parent_outputs.exists():
+        return None
+
+    candidates = [parent_outputs / "exposure_outcome_summary.csv"]
+    candidates.extend(
+        path
+        for path in sorted(parent_outputs.glob("*.csv"))
+        if path not in candidates
+    )
+    table_path: Optional[Path] = None
+    frame: Optional[pd.DataFrame] = None
+    required = {"exposure", "group_type", "estimate_type"}
+    for candidate in candidates:
+        if not candidate.exists():
+            continue
+        try:
+            loaded = pd.read_csv(candidate).reset_index(drop=True)
+        except Exception:
+            continue
+        if loaded.empty or not required.issubset(set(loaded.columns)):
+            continue
+        if not any(
+            column in loaded.columns
+            for column in ("outcome_risk_pct", "outcome_risk", "estimate")
+        ):
+            continue
+        table_path, frame = candidate, loaded
+        break
+    if table_path is None or frame is None:
+        return None
+
+    estimate_type = frame["estimate_type"].astype(str).str.lower()
+    group_type = frame["group_type"].astype(str).str.lower()
+    group_value = frame.get(
+        "group_value", pd.Series("", index=frame.index, dtype="object")
+    ).astype(str).str.lower()
+
+    availability_mask = (
+        estimate_type.eq("prevalence")
+        & group_type.eq("source_state")
+        & group_value.eq("observed")
+    )
+    availability = frame.loc[availability_mask].copy()
+
+    risk_mask = estimate_type.eq("outcome_risk")
+    level_risk = frame.loc[risk_mask & group_type.eq("exposure_level")].copy()
+    if len(level_risk) >= 2:
+        counts = level_risk["exposure"].astype(str).value_counts()
+        primary_exposure = str(counts.index[0])
+        risk = level_risk[
+            level_risk["exposure"].astype(str).eq(primary_exposure)
+        ].copy()
+        no_source = frame.loc[
+            risk_mask
+            & group_type.eq("source_state")
+            & group_value.eq("no_source")
+            & frame["exposure"].astype(str).eq(primary_exposure)
+        ].copy()
+        risk = pd.concat([risk, no_source], axis=0)
+    else:
+        risk = frame.loc[
+            risk_mask & group_type.eq("source_state")
+        ].copy()
+
+    distribution = frame.loc[
+        estimate_type.eq("continuous_distribution")
+        & frame.get("median", pd.Series(float("nan"), index=frame.index)).notna()
+    ].copy()
+    if availability.empty or risk.empty:
+        return None
+
+    def traced(rows: pd.DataFrame, transform: str) -> pd.DataFrame:
+        traced_rows = rows.copy()
+        traced_rows.insert(0, "source_row_index", traced_rows.index.astype(int))
+        # The parent table repeats exposure/label across prevalence and risk
+        # rows.  Those names are generic validator key columns, so preserving
+        # them would trigger an ambiguous many-to-many join.  Rename only the
+        # display identifiers and let ``source_row_index`` provide the exact
+        # positional trace; numeric source columns remain byte-for-byte intact.
+        traced_rows = traced_rows.rename(
+            columns={
+                column: f"source_{column}"
+                for column in (
+                    "label",
+                    "variable",
+                    "term",
+                    "exposure",
+                    "contrast",
+                    "stage",
+                    "level",
+                    "band",
+                    "category",
+                )
+                if column in traced_rows.columns
+            }
+        )
+        traced_rows["source_table"] = table_path.name
+        traced_rows["source_transform"] = transform
+        return traced_rows.reset_index(drop=True)
+
+    availability_source = traced(
+        availability, "observed_source_prevalence_rows_v1"
+    )
+    risk_source = traced(risk, "absolute_outcome_risk_rows_v1")
+    distribution_source = traced(
+        distribution, "continuous_distribution_rows_v1"
+    )
+    out_dir.mkdir(parents=True, exist_ok=True)
+    availability_name = "absolute_risk_availability_source_data.csv"
+    risk_name = "absolute_risk_outcome_source_data.csv"
+    availability_source.to_csv(out_dir / availability_name, index=False)
+    risk_source.to_csv(out_dir / risk_name, index=False)
+    source_files = [availability_name, risk_name]
+    distribution_name = "absolute_risk_distribution_source_data.csv"
+    if not distribution_source.empty:
+        distribution_source.to_csv(out_dir / distribution_name, index=False)
+        source_files.append(distribution_name)
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from easyicu.research_agent.publication_figures import (
+        add_panel_label,
+        apply_publication_style,
+        make_figure_contract,
+        save_publication_figure,
+    )
+
+    palette = apply_publication_style()
+    has_distribution = not distribution.empty
+    fig = plt.figure(
+        figsize=(183 / 25.4, (112 if has_distribution else 88) / 25.4),
+        constrained_layout=False,
+    )
+    if has_distribution:
+        grid = fig.add_gridspec(
+            2,
+            2,
+            width_ratios=[0.82, 1.35],
+            height_ratios=[1.0, 0.72],
+            left=0.16,
+            right=0.98,
+            top=0.84,
+            bottom=0.14,
+            wspace=0.78,
+            hspace=0.70,
+        )
+        ax_availability = fig.add_subplot(grid[0, 0])
+        ax_distribution = fig.add_subplot(grid[1, 0])
+        ax_risk = fig.add_subplot(grid[:, 1])
+    else:
+        grid = fig.add_gridspec(
+            1,
+            2,
+            width_ratios=[0.88, 1.32],
+            left=0.16,
+            right=0.98,
+            top=0.84,
+            bottom=0.18,
+            wspace=0.78,
+        )
+        ax_availability = fig.add_subplot(grid[0, 0])
+        ax_distribution = None
+        ax_risk = fig.add_subplot(grid[0, 1])
+
+    availability_x = [
+        _as_percent(row, "prevalence_pct" if "prevalence_pct" in frame.columns else "prevalence")
+        for _, row in availability.iterrows()
+    ]
+    availability_lo = [
+        _as_percent(row, "ci_low") for _, row in availability.iterrows()
+    ]
+    availability_hi = [
+        _as_percent(row, "ci_high") for _, row in availability.iterrows()
+    ]
+    availability_labels = [
+        _short_figure_label(_publication_label(value), limit=25)
+        for value in availability["exposure"].astype(str)
+    ]
+    y_availability = list(range(len(availability)))
+    ax_availability.errorbar(
+        availability_x,
+        y_availability,
+        xerr=[
+            [max(0.0, x - (lo if lo is not None else x)) for x, lo in zip(availability_x, availability_lo)],
+            [max(0.0, (hi if hi is not None else x) - x) for x, hi in zip(availability_x, availability_hi)],
+        ],
+        fmt="o",
+        color=palette.get("teal", "#42949E"),
+        ecolor=palette.get("teal", "#42949E"),
+        elinewidth=1.0,
+        capsize=2.3,
+        markersize=4.2,
+    )
+    ax_availability.set_yticks(y_availability)
+    ax_availability.set_yticklabels(availability_labels, fontsize=6.7)
+    ax_availability.set_xlim(0, 100)
+    ax_availability.set_xlabel("Observed stays, % (95% CI)")
+    ax_availability.set_title("Measurement availability", loc="left", pad=4)
+    ax_availability.invert_yaxis()
+    ax_availability.grid(axis="x", color="#D8D8D8", linewidth=0.55, alpha=0.8)
+    add_panel_label(ax_availability, "A", x=0.0, y=1.08)
+
+    risk_x = [
+        _as_percent(row, "outcome_risk_pct" if "outcome_risk_pct" in frame.columns else "outcome_risk")
+        for _, row in risk.iterrows()
+    ]
+    risk_lo = [_as_percent(row, "ci_low") for _, row in risk.iterrows()]
+    risk_hi = [_as_percent(row, "ci_high") for _, row in risk.iterrows()]
+    risk_labels = []
+    for _, row in risk.iterrows():
+        exposure_label = _publication_label(row.get("exposure"))
+        if str(row.get("group_type") or "").lower() == "exposure_level":
+            label = f"{exposure_label} = {row.get('group_value')}"
+        elif str(row.get("group_value") or "").lower() == "no_source":
+            label = "No recorded source"
+        else:
+            label = _publication_label(row.get("label") or row.get("group_value"))
+        risk_labels.append(_short_figure_label(label, limit=30))
+    y_risk = list(range(len(risk)))
+    ax_risk.errorbar(
+        risk_x,
+        y_risk,
+        xerr=[
+            [max(0.0, x - (lo if lo is not None else x)) for x, lo in zip(risk_x, risk_lo)],
+            [max(0.0, (hi if hi is not None else x) - x) for x, hi in zip(risk_x, risk_hi)],
+        ],
+        fmt="o",
+        color=palette.get("blue", "#0F4D92"),
+        ecolor=palette.get("blue", "#0F4D92"),
+        elinewidth=1.0,
+        capsize=2.3,
+        markersize=4.2,
+    )
+    max_risk = max([value for value in risk_hi if value is not None] or risk_x)
+    ax_risk.set_xlim(0, max(10.0, max_risk * 1.28))
+    ax_risk.set_yticks(y_risk)
+    ax_risk.set_yticklabels(risk_labels, fontsize=6.8)
+    ax_risk.set_xlabel("Outcome risk, % (95% CI)")
+    ax_risk.set_title("Absolute outcome risk", loc="left", pad=4)
+    ax_risk.invert_yaxis()
+    ax_risk.grid(axis="x", color="#D8D8D8", linewidth=0.55, alpha=0.8)
+    for row_index, (value, upper) in enumerate(zip(risk_x, risk_hi)):
+        ax_risk.text(
+            max(value, upper if upper is not None else value) + 0.45,
+            row_index,
+            f"{value:.1f}%",
+            va="center",
+            fontsize=6.2,
+            color=palette.get("baseline", "#272727"),
+        )
+    add_panel_label(ax_risk, "B", x=0.0, y=1.06)
+
+    panels: List[Dict[str, Any]] = [
+        {
+            "panel_id": "A",
+            "title": "Measurement availability",
+            "role": "descriptive_result",
+            "chart_type": "dot_interval_prevalence",
+            "claim": "Source-consistent observed prevalence is shown for each requested exposure.",
+            "evidence_ids": [availability_name],
+        },
+        {
+            "panel_id": "B",
+            "title": "Absolute outcome risk",
+            "role": "descriptive_result",
+            "chart_type": "dot_interval_absolute_risk",
+            "claim": "Unadjusted outcome risks and Wilson 95% confidence intervals are shown for prespecified exposure levels, retaining the no-source group.",
+            "evidence_ids": [risk_name],
+        },
+    ]
+    if ax_distribution is not None:
+        medians = pd.to_numeric(distribution["median"], errors="coerce").to_numpy()
+        q25 = pd.to_numeric(distribution["q25"], errors="coerce").to_numpy()
+        q75 = pd.to_numeric(distribution["q75"], errors="coerce").to_numpy()
+        y_distribution = list(range(len(distribution)))
+        ax_distribution.errorbar(
+            medians,
+            y_distribution,
+            xerr=[medians - q25, q75 - medians],
+            fmt="o",
+            color=palette.get("orange", "#E69F00"),
+            ecolor=palette.get("orange", "#E69F00"),
+            elinewidth=1.0,
+            capsize=2.3,
+            markersize=4.2,
+        )
+        ax_distribution.set_yticks(y_distribution)
+        ax_distribution.set_yticklabels(
+            [
+                _short_figure_label(_publication_label(value), limit=25)
+                for value in distribution["exposure"].astype(str)
+            ],
+            fontsize=6.7,
+        )
+        ax_distribution.set_xlabel("Median (IQR)")
+        ax_distribution.set_title("Observed distribution", loc="left", pad=4)
+        ax_distribution.invert_yaxis()
+        ax_distribution.grid(axis="x", color="#D8D8D8", linewidth=0.55, alpha=0.8)
+        add_panel_label(ax_distribution, "C", x=0.0, y=1.10)
+        panels.append(
+            {
+                "panel_id": "C",
+                "title": "Observed distribution",
+                "role": "descriptive_result",
+                "chart_type": "median_iqr",
+                "claim": "Continuous observed exposures are summarised by median and interquartile range without post-hoc binning.",
+                "evidence_ids": [distribution_name],
+            }
+        )
+
+    fig.suptitle(
+        "Measurement availability and unadjusted outcome context",
+        x=0.16,
+        ha="left",
+        y=0.98,
+        fontsize=9.2,
+        fontweight="bold",
+    )
+    contract = make_figure_contract(
+        figure_id="publication_figure",
+        core_claim=(
+            "The figure shows measurement availability, absolute outcome risk, "
+            "and continuous-distribution context before adjusted modelling."
+        ),
+        panels=panels,
+        source_data=source_files,
+        statistics_note=(
+            "Rendered deterministically from the direct parent's tidy summary. "
+            "Risk and prevalence intervals are Wilson 95% confidence intervals; "
+            "continuous values are median (IQR)."
+        ),
+    )
+    outputs = save_publication_figure(
+        fig, out_dir / "publication_figure", contract=contract, dpi=300
+    )
+    plt.close(fig)
+
+    figure_files = [path.name for key, path in outputs.items() if key != "contract"]
+    summary = {
+        "step_id": current_step_id,
+        "method": "deterministic_absolute_risk_publication_figure",
+        "rendering_only": True,
+        "source_step_id": parent_step_id,
+        "source_table": str(table_path),
+        "source_data_files": source_files,
+        "n_availability_rows": int(len(availability)),
+        "n_risk_rows": int(len(risk)),
+        "n_distribution_rows": int(len(distribution)),
+        "figure_files": figure_files,
+        "figure_path": "publication_figure.png",
+    }
+    (out_dir / "step_summary.json").write_text(
+        json.dumps(summary, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
+    return "absolute_risk_publication_bundle_from_parent_outputs_v1"
+
+
 def _render_association_publication_bundle_from_prior_outputs(
     *,
     run_dir: Path,
@@ -4824,22 +6203,42 @@ def _render_association_publication_bundle_from_prior_outputs(
         return None
 
     parent: Optional[tuple[Path, pd.DataFrame, tuple[str, str, str]]] = None
-    for step_dir in sorted(steps_dir.iterdir()):
-        if not step_dir.is_dir() or step_dir.name == current_step_id:
-            continue
+    candidate_step_dirs, _direct_parent_only = _figure_parent_candidate_step_dirs(
+        steps_dir=steps_dir, current_step_id=current_step_id
+    )
+    for step_dir in candidate_step_dirs:
         outputs_dir = step_dir / "outputs"
         if not outputs_dir.exists():
             continue
+        candidates: List[
+            tuple[tuple[int, int], Path, pd.DataFrame, tuple[str, str, str]]
+        ] = []
         for csv_path in sorted(outputs_dir.glob("*.csv")):
             try:
-                frame = pd.read_csv(csv_path)
+                candidate_frame = pd.read_csv(csv_path)
             except Exception:
                 continue
-            resolved = _resolve_or_ci_columns(frame)
-            if resolved is not None:
-                parent = (csv_path, frame, resolved)
-                break
-        if parent is not None:
+            resolved = _resolve_or_ci_columns(candidate_frame)
+            if resolved is None:
+                continue
+            columns = {str(column).lower() for column in candidate_frame.columns}
+            structured_coefficients = {
+                "model_id",
+                "term",
+                "term_role",
+                "source_variable",
+            }.issubset(columns)
+            score = (
+                int(structured_coefficients),
+                int(structured_coefficients and "coefficient" in csv_path.stem.lower()),
+            )
+            candidates.append((score, csv_path, candidate_frame, resolved))
+        if candidates:
+            _, csv_path, candidate_frame, resolved = max(
+                candidates,
+                key=lambda item: item[0],
+            )
+            parent = (csv_path, candidate_frame, resolved)
             break
     if parent is None:
         return None
@@ -4847,9 +6246,85 @@ def _render_association_publication_bundle_from_prior_outputs(
     table_path, frame, (or_col, lo_col, hi_col) = parent
     lower_to_orig = {str(c).lower(): c for c in frame.columns}
 
+    parent_summary: Dict[str, Any] = {}
+    summary_path = table_path.parent / "step_summary.json"
+    if summary_path.is_file():
+        try:
+            loaded = json.loads(summary_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                parent_summary = loaded
+        except Exception:
+            parent_summary = {}
+    primary_model_id = str(parent_summary.get("primary_model_id") or "").strip()
+    model_contracts = parent_summary.get("model_contracts") or []
+    if not isinstance(model_contracts, list):
+        model_contracts = []
+    primary_contract = next(
+        (
+            contract
+            for contract in model_contracts
+            if isinstance(contract, dict)
+            and primary_model_id
+            and str(contract.get("model_id") or "") == primary_model_id
+        ),
+        None,
+    )
+    if primary_contract is None:
+        primary_contract = next(
+            (
+                contract
+                for contract in model_contracts
+                if isinstance(contract, dict)
+                and str(contract.get("analysis_role") or "").lower() == "primary"
+                and str(contract.get("exposure_role") or "primary").lower()
+                == "primary"
+            ),
+            None,
+        )
+    if not primary_model_id and isinstance(primary_contract, dict):
+        primary_model_id = str(primary_contract.get("model_id") or "").strip()
+    primary_exposure = (
+        str(primary_contract.get("exposure_source") or "").strip()
+        if isinstance(primary_contract, dict)
+        else ""
+    )
+    matching_model_ids = {
+        str(contract.get("model_id") or "").strip()
+        for contract in model_contracts
+        if isinstance(contract, dict)
+        and primary_exposure
+        and str(contract.get("exposure_source") or "").strip() == primary_exposure
+        and str(contract.get("exposure_role") or "primary").lower() == "primary"
+        and str(contract.get("analysis_role") or "").lower()
+        in {"primary", "sensitivity"}
+    }
+    matching_model_ids.discard("")
+
+    plot_df = frame.copy()
+    term_role_col = lower_to_orig.get("term_role")
+    if term_role_col is not None:
+        exposure_rows = plot_df[term_role_col].astype(str).str.lower().eq("exposure")
+        if exposure_rows.any():
+            plot_df = plot_df.loc[exposure_rows].copy()
+    model_id_col = lower_to_orig.get("model_id")
+    if model_id_col is not None:
+        if matching_model_ids:
+            selected_models = plot_df[model_id_col].astype(str).isin(matching_model_ids)
+            if selected_models.any():
+                plot_df = plot_df.loc[selected_models].copy()
+        elif primary_model_id:
+            selected_primary = plot_df[model_id_col].astype(str).eq(primary_model_id)
+            if selected_primary.any():
+                plot_df = plot_df.loc[selected_primary].copy()
+    source_variable_col = lower_to_orig.get("source_variable")
+    if source_variable_col is not None and primary_exposure:
+        selected_exposure = plot_df[source_variable_col].astype(str).eq(primary_exposure)
+        if selected_exposure.any():
+            plot_df = plot_df.loc[selected_exposure].copy()
+
     def _n_distinct(col: str) -> int:
         try:
-            return int(frame[col].astype(str).nunique(dropna=True))
+            return int(plot_df[col].astype(str).nunique(dropna=True))
         except Exception:
             return 0
 
@@ -4858,9 +6333,8 @@ def _render_association_publication_bundle_from_prior_outputs(
     # rows: an association table for a single graded exposure keeps the exposure
     # name constant (e.g. exposure_variable='sofa2_liver_cat' on every row) and
     # distinguishes rows by an ordinal level/band column. Keying on the constant
-    # column collapses every forest row to one label AND drops the per-row trace
-    # key (M1 regressed this way: all rows labelled "Adjusted", no shared key with
-    # the upstream odds-ratio table). So skip constant candidates and fall back to
+    # column collapses every forest row to one label and drops the per-row trace
+    # key. Skip constant candidates and fall back to
     # the first varying column rather than blindly to columns[0].
     _LABEL_CANDIDATES = (
         "term",
@@ -4891,12 +6365,16 @@ def _render_association_publication_bundle_from_prior_outputs(
         # forests have no collapse risk; keep the original semantic label) ...
         or next(iter(_present), None)
         # ... else the first varying column, else the first column.
-        or next((str(c) for c in frame.columns if _n_distinct(str(c)) > 1), None)
-        or str(frame.columns[0])
+        or next((str(c) for c in plot_df.columns if _n_distinct(str(c)) > 1), None)
+        or str(plot_df.columns[0])
     )
     # Drop the intercept term; it is not an interpretable effect estimate.
-    plot_df = frame[
-        ~frame[var_col].astype(str).str.lower().isin({"const", "intercept"})
+    intercept_col = lower_to_orig.get("term", var_col)
+    plot_df = plot_df[
+        ~plot_df[intercept_col]
+        .astype(str)
+        .str.lower()
+        .isin({"const", "intercept"})
     ]
     for _c in (or_col, lo_col, hi_col):
         plot_df = plot_df.assign(**{_c: pd.to_numeric(plot_df[_c], errors="coerce")})
@@ -4919,6 +6397,20 @@ def _render_association_publication_bundle_from_prior_outputs(
     out_dir.mkdir(parents=True, exist_ok=True)
     labels = plot_df[var_col].astype(str).tolist()
     full_display_labels = [_publication_label(label) for label in labels]
+    analysis_set_col = lower_to_orig.get("analysis_set")
+    if len(plot_df) > 1 and model_id_col is not None:
+        qualified_labels: List[str] = []
+        for row_idx, base_label in enumerate(full_display_labels):
+            row = plot_df.iloc[row_idx]
+            qualifier = (
+                row.get(analysis_set_col)
+                if analysis_set_col is not None
+                else row.get(model_id_col)
+            )
+            qualified_labels.append(
+                f"{base_label} ({_publication_label(qualifier)})"
+            )
+        full_display_labels = qualified_labels
     display_labels = [
         _short_figure_label(label.replace("Maximum ", "Max "), limit=32)
         for label in full_display_labels
@@ -4928,24 +6420,23 @@ def _render_association_publication_bundle_from_prior_outputs(
     hi = plot_df[hi_col].astype(float).to_numpy()
     ci_width = hi - lo
     y = list(range(len(labels)))
-    source_data = pd.DataFrame(
-        {
-            str(var_col): labels,
-            "display_label": full_display_labels,
-            "plot_label": display_labels,
-            "point_estimate": or_vals,
-            "odds_ratio": or_vals,
-            "ci_low": lo,
-            "ci_high": hi,
-            "ci_width": ci_width,
-            "source_table": table_path.name,
-        }
+    source_data = plot_df.copy().reset_index(drop=True)
+    source_data = source_data.assign(
+        display_label=full_display_labels,
+        plot_label=display_labels,
+        point_estimate=or_vals,
+        odds_ratio=or_vals,
+        ci_low=lo,
+        ci_high=hi,
+        ci_width=ci_width,
+        source_table=table_path.name,
     )
     source_data.to_csv(out_dir / "publication_figure_source_data.csv", index=False)
     descriptive_context = _association_descriptive_context(
         run_dir=run_dir,
         current_step_id=current_step_id,
         out_dir=out_dir,
+        primary_exposure=primary_exposure or None,
     )
     descriptive_rows = list(descriptive_context.get("plot_rows") or [])
     association_panel_title = (
@@ -5211,6 +6702,10 @@ def _render_association_publication_bundle_from_prior_outputs(
             "source_association_table": str(table_path),
             "source_data": "publication_figure_source_data.csv",
             "descriptive_source_data": descriptive_context.get("source_files", []),
+            "primary_model_id": primary_model_id or None,
+            "primary_exposure_source": primary_exposure or None,
+            "selected_model_ids": sorted(matching_model_ids),
+            "n_association_rows": int(len(plot_df)),
         }
     )
     figure_files = [path.name for key, path in outputs.items() if key != "contract"]
@@ -5240,25 +6735,60 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
 
     parent_step_id = current_step_id.removesuffix("_figure")
     candidate_paths: List[Path] = []
-    if parent_step_id and parent_step_id != current_step_id:
+    direct_outputs = steps_dir / parent_step_id / "outputs"
+    if (
+        parent_step_id
+        and parent_step_id != current_step_id
+        and direct_outputs.exists()
+    ):
+        # A split rendering step must not silently borrow a similarly-shaped
+        # table from an unrelated sensitivity step.  Search the direct parent
+        # only when it exists.  Older plans whose rendering-step name does not
+        # share the exact parent stem retain the conservative fallback below.
+        direct_candidates = sorted(direct_outputs.glob("*.csv"))
+        declared_names: set[str] = set()
+        try:
+            direct_summary = json.loads(
+                (direct_outputs / "step_summary.json").read_text(encoding="utf-8")
+            )
+        except Exception:
+            direct_summary = {}
+        if isinstance(direct_summary, dict):
+            for mapping_key in ("output_files", "aliases"):
+                mapping = direct_summary.get(mapping_key)
+                if not isinstance(mapping, dict):
+                    continue
+                for alias, value in mapping.items():
+                    if not any(
+                        token in str(alias).lower()
+                        for token in ("robustness", "sensitivity")
+                    ):
+                        continue
+                    if isinstance(value, str) and value.lower().endswith(".csv"):
+                        declared_names.add(Path(value).name)
         candidate_paths.extend(
-            sorted((steps_dir / parent_step_id / "outputs").glob("*.csv"))
-            if (steps_dir / parent_step_id / "outputs").exists()
-            else []
+            sorted(
+                direct_candidates,
+                key=lambda path: (path.name not in declared_names, path.name),
+            )
         )
-    for step_dir in sorted(steps_dir.iterdir()):
-        if not step_dir.is_dir() or step_dir.name == current_step_id:
-            continue
-        if "sensitivity" not in step_dir.name.lower():
-            continue
-        outputs_dir = step_dir / "outputs"
-        if outputs_dir.exists():
-            candidate_paths.extend(sorted(outputs_dir.glob("*.csv")))
+    else:
+        for step_dir in sorted(steps_dir.iterdir()):
+            if not step_dir.is_dir() or step_dir.name == current_step_id:
+                continue
+            if "sensitivity" not in step_dir.name.lower():
+                continue
+            outputs_dir = step_dir / "outputs"
+            if outputs_dir.exists():
+                candidate_paths.extend(sorted(outputs_dir.glob("*.csv")))
 
     parent: Optional[tuple[Path, pd.DataFrame]] = None
     for csv_path in candidate_paths:
         try:
-            frame = pd.read_csv(csv_path)
+            # Preserve round-trippable confidence-limit values; the default
+            # fast parser can change the final binary digit and create a false
+            # source-trace mismatch on an otherwise identical table.
+            frame = pd.read_csv(csv_path, float_precision="round_trip")
         except Exception:
             continue
         required = {"spec_id", "effect_scale", "point_estimate", "ci_low", "ci_high"}
@@ -5269,10 +6799,27 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
         return None
 
     table_path, frame = parent
+    source_step_id = table_path.parents[1].name
     source_data = frame.copy()
-    for col in ("point_estimate", "ci_low", "ci_high", "modeled_analytic_n"):
+    source_data["source_table"] = table_path.name
+    source_data["source_step_id"] = source_step_id
+    for col in (
+        "point_estimate",
+        "ci_low",
+        "ci_high",
+        "modeled_analytic_n",
+        "event_n",
+        "membership_n",
+    ):
         if col in source_data.columns:
             source_data[col] = pd.to_numeric(source_data[col], errors="coerce")
+    for count_col in ("modeled_analytic_n", "event_n", "membership_n"):
+        if count_col not in source_data.columns:
+            continue
+        numeric = pd.to_numeric(source_data[count_col], errors="coerce")
+        finite = numeric.dropna()
+        if finite.empty or ((finite % 1) == 0).all():
+            source_data[count_col] = numeric.astype("Int64")
     if "display_label" not in source_data.columns:
         source_data["display_label"] = source_data["spec_id"].map(_publication_label)
     if "axis" not in source_data.columns:
@@ -5285,9 +6832,14 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
         for row in source_data.to_dict(orient="records")
     ]
     out_dir.mkdir(parents=True, exist_ok=True)
-    source_data.to_csv(out_dir / "sensitivity_forest_source_data.csv", index=False)
 
-    plot_df = source_data.dropna(subset=["point_estimate", "ci_low", "ci_high"]).copy()
+    estimated_mask = source_data[["point_estimate", "ci_low", "ci_high"]].notna().all(axis=1)
+    if "converged" in source_data.columns:
+        estimated_mask &= source_data["converged"].map(_truthy_figure_value)
+    if "independent_variant" in source_data.columns:
+        independent = source_data["independent_variant"]
+        estimated_mask &= ~independent.map(_explicit_false_figure_value)
+    plot_df = source_data.loc[estimated_mask].copy()
     if plot_df.empty:
         return None
     ratio_df = plot_df[
@@ -5296,12 +6848,49 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
     rd_df = plot_df[
         plot_df["effect_scale"].astype(str).str.upper().isin({"RD", "RISK_DIFFERENCE"})
     ].copy()
+    plotted_indexes = ratio_df.index.union(rd_df.index)
+    figure_source_data = source_data.loc[plotted_indexes].copy()
+    estimability_source_data = source_data.drop(index=plotted_indexes).copy()
+    estimability_source_data = estimability_source_data.drop(
+        columns=[
+            "modeled_analytic_n",
+            "model_contract_n",
+            "event_n",
+            "model_id",
+            "source_model_id",
+            "exposure_source",
+            "exposure_expression",
+            "exposure_role",
+            "analysis_role",
+            "analysis_set",
+            "baseline_missing_policy",
+            "fit_status",
+            "fit_method",
+            "replay_mode",
+            "coefficient_source_table",
+            "coefficient_term",
+            "model_contract_source",
+            "source_script_sha256",
+        ],
+        errors="ignore",
+    )
+    figure_source_data.to_csv(
+        out_dir / "sensitivity_forest_source_data.csv",
+        index=False,
+    )
+    estimability_source_filename: Optional[str] = None
+    if not estimability_source_data.empty:
+        estimability_source_filename = "sensitivity_estimability_source_data.csv"
+        estimability_source_data.to_csv(
+            out_dir / estimability_source_filename,
+            index=False,
+        )
     if not rd_df.empty:
         rd_df["plot_label"] = [
             _sensitivity_plot_label(row)
             for row in rd_df.to_dict(orient="records")
         ]
-    n_df = source_data.copy()
+    n_df = figure_source_data.copy()
     if "modeled_analytic_n" in n_df.columns:
         n_df["modeled_analytic_n"] = pd.to_numeric(
             n_df["modeled_analytic_n"],
@@ -5309,6 +6898,7 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
         )
     else:
         n_df["modeled_analytic_n"] = pd.NA
+    n_df = n_df[n_df["modeled_analytic_n"].fillna(0).gt(0)].copy()
 
     import matplotlib
 
@@ -5323,22 +6913,54 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
     )
 
     palette = apply_publication_style()
-    fig = plt.figure(figsize=(183 / 25.4, 128 / 25.4), constrained_layout=False)
-    grid = fig.add_gridspec(
-        2,
-        2,
-        width_ratios=[1.35, 0.95],
-        height_ratios=[1.0, 0.82],
-        left=0.34,
-        right=0.98,
-        top=0.92,
-        bottom=0.13,
-        wspace=0.43,
-        hspace=0.58,
+    if ratio_df.empty and rd_df.empty:
+        return None
+    n_plot = n_df.dropna(subset=["modeled_analytic_n"]).copy()
+    max_rows = max(len(ratio_df), len(rd_df), len(n_plot), 1)
+    figure_height_mm = float(max(88, min(145, 24 + 15 * max_rows)))
+    fig = plt.figure(
+        figsize=(183 / 25.4, figure_height_mm / 25.4),
+        constrained_layout=False,
     )
-    ax_ratio = fig.add_subplot(grid[:, 0])
-    ax_rd = fig.add_subplot(grid[0, 1])
-    ax_n = fig.add_subplot(grid[1, 1])
+    ax_ratio = None
+    ax_rd = None
+    ax_n = None
+    if not ratio_df.empty and not rd_df.empty:
+        grid = fig.add_gridspec(
+            2,
+            2,
+            width_ratios=[1.42, 0.92],
+            height_ratios=[1.0, 0.82],
+            left=0.28,
+            right=0.98,
+            top=0.92,
+            bottom=0.17,
+            wspace=0.78,
+            hspace=0.62,
+        )
+        ax_ratio = fig.add_subplot(grid[:, 0])
+        ax_rd = fig.add_subplot(grid[0, 1])
+        if not n_plot.empty:
+            ax_n = fig.add_subplot(grid[1, 1])
+    else:
+        has_denominator = not n_plot.empty
+        grid = fig.add_gridspec(
+            1,
+            2 if has_denominator else 1,
+            width_ratios=[1.42, 0.92] if has_denominator else [1.0],
+            left=0.25 if has_denominator else 0.30,
+            right=0.98,
+            top=0.90,
+            bottom=0.20,
+            wspace=0.82,
+        )
+        effect_axis = fig.add_subplot(grid[0, 0])
+        if not ratio_df.empty:
+            ax_ratio = effect_axis
+        else:
+            ax_rd = effect_axis
+        if has_denominator:
+            ax_n = fig.add_subplot(grid[0, 1])
 
     def _plot_interval_panel(
         ax,
@@ -5349,18 +6971,6 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
         null_value: float,
         color: str,
     ) -> None:
-        if data.empty:
-            ax.text(
-                0.5,
-                0.5,
-                "No converged estimates",
-                ha="center",
-                va="center",
-                fontsize=7.0,
-                transform=ax.transAxes,
-            )
-            ax.set_axis_off()
-            return
         data = data.reset_index(drop=True)
         y = list(range(len(data)))
         center = data["point_estimate"].astype(float).to_numpy()
@@ -5402,44 +7012,88 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
             alpha=0.8,
         )
 
-    _plot_interval_panel(
-        ax_ratio,
-        ratio_df,
-        title="Ratio-scale estimates",
-        xlabel="Adjusted odds ratio (95% CI)",
-        null_value=1.0,
-        color=palette.get("blue", "#0F4D92"),
-    )
-    add_panel_label(ax_ratio, "A", x=-0.28)
+    contract_panels: List[Dict[str, Any]] = []
+    next_panel_ord = ord("A")
 
-    _plot_interval_panel(
-        ax_rd,
-        rd_df,
-        title="Risk difference",
-        xlabel="Risk difference (95% CI)",
-        null_value=0.0,
-        color=palette.get("green", "#008B5E"),
-    )
-    add_panel_label(ax_rd, "B", x=-0.18, y=1.06, fontsize=10.0)
+    def _next_panel_id() -> str:
+        nonlocal next_panel_ord
+        panel_id = chr(next_panel_ord)
+        next_panel_ord += 1
+        return panel_id
 
-    n_plot = n_df.dropna(subset=["modeled_analytic_n"]).copy()
-    if n_plot.empty:
-        ax_n.text(
-            0.5,
-            0.5,
-            "Analytic n not reported",
-            ha="center",
-            va="center",
-            fontsize=7.0,
-            transform=ax_n.transAxes,
+    source_evidence = ["sensitivity_forest_source_data.csv"]
+    all_source_evidence = list(source_evidence)
+    if estimability_source_filename:
+        all_source_evidence.append(estimability_source_filename)
+    if ax_ratio is not None:
+        ratio_scales = sorted(
+            set(ratio_df["effect_scale"].dropna().astype(str).str.upper())
         )
-        ax_n.set_axis_off()
-    else:
+        ratio_xlabel = {
+            ("OR",): "Adjusted odds ratio (95% CI)",
+            ("RR",): "Adjusted risk ratio (95% CI)",
+            ("HR",): "Hazard ratio (95% CI)",
+        }.get(tuple(ratio_scales), "Ratio estimate (95% CI)")
+        panel_id = _next_panel_id()
+        _plot_interval_panel(
+            ax_ratio,
+            ratio_df,
+            title="Ratio-scale sensitivity",
+            xlabel=ratio_xlabel,
+            null_value=1.0,
+            color=palette.get("blue", "#0F4D92"),
+        )
+        add_panel_label(ax_ratio, panel_id, x=-0.24)
+        contract_panels.append(
+            {
+                "panel_id": panel_id,
+                "title": "Ratio-scale sensitivity",
+                "role": "robustness",
+                "claim": (
+                    "Converged, independently estimable ratio-scale sensitivity "
+                    "estimates are read from the registered parent table."
+                ),
+                "evidence_ids": source_evidence,
+            }
+        )
+
+    if ax_rd is not None:
+        panel_id = _next_panel_id()
+        _plot_interval_panel(
+            ax_rd,
+            rd_df,
+            title="Risk-difference sensitivity",
+            xlabel="Risk difference (95% CI)",
+            null_value=0.0,
+            color=palette.get("green", "#008B5E"),
+        )
+        add_panel_label(ax_rd, panel_id, x=-0.24, y=1.06, fontsize=10.0)
+        contract_panels.append(
+            {
+                "panel_id": panel_id,
+                "title": "Risk-difference sensitivity",
+                "role": "robustness",
+                "claim": (
+                    "Converged, independently estimable risk differences are "
+                    "shown on their own additive scale."
+                ),
+                "evidence_ids": source_evidence,
+            }
+        )
+
+    non_independent_count = 0
+    if "independent_variant" in estimability_source_data.columns:
+        non_independent_count = int(
+            estimability_source_data["independent_variant"]
+            .map(_explicit_false_figure_value)
+            .sum()
+        )
+    if ax_n is not None:
         n_plot = n_plot.reset_index(drop=True)
         y_n = list(range(len(n_plot)))
         colors = [
             palette.get("blue", "#0F4D92")
-            if bool(value)
+            if _truthy_figure_value(value)
             else palette.get("neutral_light", "#D8D8D8")
             for value in n_plot["converged"].fillna(False)
         ]
@@ -5452,20 +7106,72 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
         ax_n.set_yticks(y_n)
         ax_n.set_yticklabels(
             [
-                _short_figure_label(label, limit=22)
+                _short_figure_label(label, limit=26)
                 for label in n_plot["plot_label"].fillna(n_plot["display_label"]).astype(str)
             ]
         )
         ax_n.invert_yaxis()
-        ax_n.set_xlabel("Analytic sample size")
-        ax_n.set_title("Denominator audit", loc="left", pad=4)
+        if non_independent_count:
+            # Reserve an in-axis status row below the final denominator bar;
+            # placing the note at a negative axes fraction pushes SVG text
+            # outside the canvas even when the raster preview looks acceptable.
+            ax_n.set_ylim(len(n_plot) + 0.75, -0.6)
+        event_values = (
+            pd.to_numeric(n_plot["event_n"], errors="coerce")
+            if "event_n" in n_plot.columns
+            else pd.Series([pd.NA] * len(n_plot))
+        )
+        max_n = float(n_plot["modeled_analytic_n"].max())
+        if event_values.notna().any():
+            for row_index, (analytic_n, event_n) in enumerate(
+                zip(n_plot["modeled_analytic_n"], event_values)
+            ):
+                if pd.isna(event_n):
+                    continue
+                ax_n.text(
+                    float(analytic_n) + max_n * 0.015,
+                    row_index,
+                    f"{int(event_n):,} events",
+                    va="center",
+                    fontsize=6.0,
+                    color=palette.get("baseline", "#272727"),
+                )
+            ax_n.set_xlim(0, max_n * 1.29)
+            ax_n.set_xlabel("Analytic sample size")
+        else:
+            ax_n.set_xlabel("Analytic sample size")
+        ax_n.set_title("Model denominator audit", loc="left", pad=4)
         ax_n.grid(
             axis="x",
             color=palette.get("neutral_light", "#D8D8D8"),
             linewidth=0.55,
             alpha=0.8,
         )
-    add_panel_label(ax_n, "C", x=-0.18, y=1.06, fontsize=10.0)
+        if non_independent_count:
+            ax_n.text(
+                0.0,
+                len(n_plot) + 0.25,
+                f"Non-independent outcome variants: {non_independent_count}",
+                ha="left",
+                va="center",
+                fontsize=6.0,
+                color=palette.get("neutral", "#8F8F8F"),
+            )
+        panel_id = _next_panel_id()
+        add_panel_label(ax_n, panel_id, x=-0.24, y=1.06, fontsize=10.0)
+        contract_panels.append(
+            {
+                "panel_id": panel_id,
+                "title": "Model denominator audit",
+                "role": "audit",
+                "claim": (
+                    "Positive analytic sample sizes and available event counts "
+                    "are shown for fitted sensitivity models; non-independent "
+                    "variants are reported separately rather than encoded as N=0."
+                ),
+                "evidence_ids": all_source_evidence,
+            }
+        )
 
     contract = make_figure_contract(
         figure_id="sensitivity_forest",
@@ -5474,41 +7180,9 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
             "registered sensitivity-comparison table with effect-scale and "
             "denominator context."
         ),
-        panels=[
-            {
-                "panel_id": "A",
-                "title": "Ratio-scale estimates",
-                "role": "robustness",
-                "claim": (
-                    "Adjusted odds-ratio and risk-ratio sensitivity estimates "
-                    "are read from the parent sensitivity-comparison table."
-                ),
-                "evidence_ids": ["sensitivity_comparison"],
-            },
-            {
-                "panel_id": "B",
-                "title": "Risk difference",
-                "role": "effect",
-                "claim": (
-                    "Risk-difference estimates are shown on their own scale "
-                    "rather than mixed with ratio estimates; the source-data "
-                    "table declares whether each row is adjusted or descriptive."
-                ),
-                "evidence_ids": ["sensitivity_comparison"],
-            },
-            {
-                "panel_id": "C",
-                "title": "Denominator audit",
-                "role": "audit",
-                "claim": (
-                    "Analytic sample sizes and non-converged variants are "
-                    "visible so robustness shifts are interpreted with data "
-                    "availability context."
-                ),
-                "evidence_ids": ["sensitivity_comparison"],
-            },
-        ],
-        source_data=["sensitivity_comparison"],
+        panels=contract_panels,
+        height_mm=figure_height_mm,
+        source_data=all_source_evidence,
         statistics_note=(
             "Generated deterministically from the registered parent-step "
             "sensitivity-comparison table after the rendering step lacked a "
@@ -5537,12 +7211,22 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
             "step_id": current_step_id,
             "method": "deterministic_sensitivity_publication_figure_repair",
             "rendering_only": True,
-            "source_step_id": parent_step_id,
+            "source_step_id": source_step_id,
             "source_sensitivity_table": str(table_path),
             "source_data_csv": str(out_dir / "sensitivity_forest_source_data.csv"),
-            "n_rows_plotted": int(len(plot_df)),
+            "source_data_files": all_source_evidence,
+            "n_rows_plotted": int(len(figure_source_data)),
+            "n_denominator_rows": int(len(n_plot)),
+            "n_non_independent_variants": non_independent_count,
+            "source_model_ids": sorted(
+                set(
+                    figure_source_data.get("model_id", pd.Series(dtype=str))
+                    .dropna()
+                    .astype(str)
+                )
+            ),
             "effect_scales_plotted": sorted(
-                set(plot_df["effect_scale"].dropna().astype(str))
+                set(figure_source_data["effect_scale"].dropna().astype(str))
             ),
             "figure_files": [
                 path.name for key, path in outputs.items() if key != "contract"
@@ -5554,60 +7238,7 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
         json.dumps(existing_summary, indent=2, ensure_ascii=False, default=str),
         encoding="utf-8",
     )
-    return "sensitivity_publication_bundle_from_parent_outputs_v1"
-
-
-# Token groups shared by the deterministic figure router below and the
-# execute-phase preflight (pipeline_execute._publication_figure_preflight_supported).
-# The preflight must never claim a figure step this router has no renderer
-# family for: a preflight match without a router family replaces the LLM
-# coder with a rescue script that then reports "no_parent_outputs" and
-# leaves the figure step without any exports (E1 run_20260703T115429 step
-# 03_baseline_table_and_absolute_risk_context_figure failure mode — the
-# step intent mentioned "cohort" so the broad preflight hijacked it).
-_DETERMINISTIC_FIGURE_TOKEN_GROUPS: tuple[tuple[str, ...], ...] = (
-    ("cohort", "eligibility", "overlap", "attrition", "definition"),
-    ("prediction", "calibration", "discrimination", "model_performance"),
-    ("sensitivity", "robustness", "specification"),
-    # Association group also owns the ORDINAL dose-response figure: it is an
-    # association-family forest (adjusted OR per graded-exposure stage) rendered
-    # by the same association bundle renderer, which reads dose_response.csv and
-    # emits correct, stage-keyed source data. Without these tokens an LLM that
-    # names its figure step "..._stage_gradient_..." / "..._dose_response_..."
-    # (instead of "...association...") falls through the deterministic renderer
-    # and hand-codes a figure whose CI/count columns get corrupted (E3: ci_low
-    # filled with the cohort count), which the figure-trace gate then rejects.
-    (
-        "association",
-        "odds",
-        "effect",
-        "forest",
-        "gradient",
-        "dose_response",
-        "dose-response",
-        "ordinal",
-        # "ordered" catches the ordinal-regression vocabulary the planner used for
-        # E3's primary figure step (``04_primary_ordered_stage_analysis_figure``):
-        # the deterministic ordinal runner emitted a perfect dose_response.csv, but
-        # this step id matched no token group (``ordered`` != ``ordinal``), so the
-        # forest fell to the LLM coder and crashed. Kept ordinal-specific (no bare
-        # ``stage``/``graded``, which overlap survival step names) so it never
-        # steals a survival/prediction figure step from its own renderer.
-        "ordered",
-        "trend",
-    ),
-    ("primary_result", "primary_results", "main_result", "main_results"),
-    ("missingness", "measurement", "data_quality", "quality"),
-    ("survival", "kaplan", "hazard_ratio", "time_to_event"),
-    # Phenotyping / clustering: distinct enough not to steal an association or
-    # survival figure step. The renderer's own guard returns None for a non-cluster
-    # table, and the branch keeps the parent-family renderer as a fallback.
-    ("phenotype", "subphenotype", "cluster", "clustering", "silhouette", "trajectory"),
-    # Descriptive baseline / table-one. Kept OFF the generic path historically; the
-    # renderer fires only for a genuine table-one summary (guard returns None for a
-    # result table) and the branch falls back to the parent-family renderer.
-    ("table_one", "table1", "baseline", "descriptive", "characteristic"),
-)
+    return "sensitivity_publication_bundle_from_parent_outputs_v2"
 
 
 # A ``*_figure`` step renders its parent analysis step's outputs. The parent's
@@ -5635,12 +7266,38 @@ _UPSTREAM_FAMILY_TO_RENDERER_KEY: dict[str, str] = {
     "missingness": "missingness",
     "measurement": "missingness",
     "data_quality": "missingness",
+    "absolute_risk_context": "absolute_risk",
     "phenotyping": "phenotype",
     "clustering": "phenotype",
     "descriptive": "descriptive",
     "table_one": "descriptive",
     "baseline": "descriptive",
 }
+
+
+# Some supporting/QC analyses intentionally retain a broad analysis family
+# (for example, ``association_study``) while recording a narrower controlled
+# method.  Exact-method routing lets those steps use a schema-matched renderer
+# without teaching the global router any clinical variable, benchmark item, or
+# figure-specific name.  Keep this map closed and exact: free-text method-token
+# matching would recreate the same accidental routing problem as step-id prose.
+_UPSTREAM_METHOD_TO_RENDERER_KEY: dict[str, str] = {
+    "ordinal_exposure_derivation_and_quality_control": "ordered_distribution",
+    "missingness": "missingness",
+    "missingness_audit": "missingness",
+    "missingness_measurement_audit": "missingness",
+}
+
+
+# A step-level artifact contract is more precise than either the whole-step
+# analysis family or the planner's free-form step id.  New producers should
+# declare this closed enum; exact-method routing below remains a compatibility
+# adapter for completed runs that predate the field.
+_UPSTREAM_FIGURE_DATA_FAMILY_TO_RENDERER_KEY: dict[str, str] = {
+    "ordered_category_distribution": "ordered_distribution",
+}
+_AMBIGUOUS_FIGURE_DATA_FAMILY = "__ambiguous_figure_data_family__"
+_INCOMPATIBLE_FIGURE_DATA_FAMILY = "__incompatible_figure_data_family__"
 
 
 def _resolve_upstream_analysis_family(
@@ -5657,6 +7314,125 @@ def _resolve_upstream_analysis_family(
     except Exception:
         return None
     return str(fam).strip().lower() if fam else None
+
+
+def _resolve_upstream_manifest_step(
+    run_dir: Path, current_step_id: str
+) -> Optional[Dict[str, Any]]:
+    """Return the direct parent's structured AnalysisStep from the checkpoint."""
+
+    parent = str(current_step_id or "").removesuffix("_figure")
+    if not parent or parent == str(current_step_id):
+        return None
+    manifest_path = Path(run_dir) / "manifest_partial.json"
+    try:
+        manifest = json.loads(manifest_path.read_text("utf-8"))
+    except Exception:
+        return None
+    records = manifest.get("per_step_records") if isinstance(manifest, dict) else None
+    if not isinstance(records, list):
+        return None
+    for record in reversed(records):
+        if not isinstance(record, dict) or str(record.get("step_id") or "") != parent:
+            continue
+        request = record.get("analysis_request")
+        request_step = request.get("step") if isinstance(request, dict) else None
+        if isinstance(request_step, dict):
+            return dict(request_step)
+    return None
+
+
+def _resolve_upstream_analysis_method(
+    run_dir: Path, current_step_id: str
+) -> Optional[str]:
+    """Return the controlled ``method`` recorded by a figure step's parent."""
+
+    parent = str(current_step_id or "").removesuffix("_figure")
+    if not parent or parent == str(current_step_id):
+        return None
+    summ = Path(run_dir) / "steps" / parent / "outputs" / "step_summary.json"
+    try:
+        method = json.loads(summ.read_text("utf-8")).get("method")
+    except Exception:
+        method = None
+    if method:
+        return str(method).strip().lower()
+
+    # Free-model summaries need not repeat planning metadata.  The partial
+    # manifest retains the exact structured AnalysisStep that produced the
+    # parent, so use that method as a closed fallback instead of inferring a
+    # renderer from the stochastic step id or intent prose.
+    request_step = _resolve_upstream_manifest_step(run_dir, current_step_id)
+    method = request_step.get("method") if request_step else None
+    if method:
+        return str(method).strip().lower()
+    return None
+
+
+def _resolve_upstream_figure_data_family(
+    run_dir: Path, current_step_id: str
+) -> Optional[str]:
+    """Return one unambiguous figure-data family declared by the parent."""
+
+    parent = str(current_step_id or "").removesuffix("_figure")
+    if not parent or parent == str(current_step_id):
+        return None
+    summ = Path(run_dir) / "steps" / parent / "outputs" / "step_summary.json"
+    try:
+        summary = json.loads(summ.read_text("utf-8"))
+    except Exception:
+        return None
+    if not isinstance(summary, dict):
+        return None
+    families = {
+        str(summary.get("figure_data_family") or "").strip().lower()
+    }
+    contracts = summary.get("figure_data_contracts")
+    if isinstance(contracts, list):
+        families.update(
+            str(item.get("family") or "").strip().lower()
+            for item in contracts
+            if isinstance(item, dict)
+        )
+    families.discard("")
+    if not families:
+        return None
+    if len(families) > 1:
+        return _AMBIGUOUS_FIGURE_DATA_FAMILY
+    family = next(iter(families))
+    if family == "ordered_category_distribution":
+        request_step = _resolve_upstream_manifest_step(run_dir, current_step_id)
+        declared_outputs = (
+            request_step.get("expected_outputs") if request_step else None
+        )
+        if isinstance(declared_outputs, list) and declared_outputs:
+            names = {
+                re.sub(
+                    r"[^a-z0-9]+",
+                    "_",
+                    str(item).split(":", 1)[-1].strip().lower(),
+                ).strip("_")
+                for item in declared_outputs
+            }
+            has_distribution = any(
+                name.endswith("_distribution")
+                or name in {"category_distribution", "level_distribution"}
+                for name in names
+            )
+            has_result_product = any(
+                token in name
+                for name in names
+                for token in (
+                    "association",
+                    "effect",
+                    "estimate",
+                    "outcome",
+                    "trend",
+                )
+            )
+            if has_result_product or not has_distribution:
+                return _INCOMPATIBLE_FIGURE_DATA_FAMILY
+    return family
 
 
 def _renderer_for_upstream_family(family: Optional[str]):
@@ -5677,36 +7453,70 @@ def _renderer_for_upstream_family(family: Optional[str]):
         "sensitivity": _render_sensitivity_publication_bundle_from_prior_outputs,
         "cohort": _render_cohort_overlap_publication_bundle_from_prior_outputs,
         "missingness": _render_missingness_publication_bundle_from_prior_outputs,
+        "absolute_risk": _render_absolute_risk_publication_bundle_from_prior_outputs,
         "phenotype": _render_phenotype_publication_bundle_from_prior_outputs,
         "descriptive": _render_descriptive_publication_bundle_from_prior_outputs,
     }.get(key)
 
 
+def _renderer_for_upstream_method(method: Optional[str]):
+    """Map an exact controlled parent method to a deterministic renderer."""
+
+    key = _UPSTREAM_METHOD_TO_RENDERER_KEY.get(
+        str(method or "").strip().lower()
+    )
+    if key == "ordered_distribution":
+        from .figures.ordered_distribution import (
+            render_ordered_distribution_bundle_from_prior_outputs,
+        )
+
+        return render_ordered_distribution_bundle_from_prior_outputs
+    return {
+        "missingness": _render_missingness_publication_bundle_from_prior_outputs,
+    }.get(key)
+
+
+def _renderer_for_upstream_figure_data_family(family: Optional[str]):
+    """Map an explicit step-level figure-data contract to its renderer."""
+
+    key = _UPSTREAM_FIGURE_DATA_FAMILY_TO_RENDERER_KEY.get(
+        str(family or "").strip().lower()
+    )
+    if key == "ordered_distribution":
+        from .figures.ordered_distribution import (
+            render_ordered_distribution_bundle_from_prior_outputs,
+        )
+
+        return render_ordered_distribution_bundle_from_prior_outputs
+    return None
+
+
 def deterministic_figure_family_supported_for_upstream(
     run_dir: Path, step_id: str
 ) -> bool:
-    """True when the figure step's PARENT family has a deterministic renderer."""
+    """True when the figure step's parent method/family has a renderer."""
 
+    artifact_family = _resolve_upstream_figure_data_family(run_dir, step_id)
+    if artifact_family is not None:
+        # An explicit but unknown/ambiguous contract is authoritative and must
+        # fail closed; do not silently fall back to a name or whole-step family.
+        return _renderer_for_upstream_figure_data_family(artifact_family) is not None
     return (
-        _renderer_for_upstream_family(
-            _resolve_upstream_analysis_family(run_dir, step_id)
+        _renderer_for_upstream_method(
+            _resolve_upstream_analysis_method(run_dir, step_id)
         )
         is not None
+        or _renderer_for_upstream_family(
+            _resolve_upstream_analysis_family(run_dir, step_id)
+        ) is not None
     )
 
 
 def deterministic_figure_family_supported(step_id: str) -> bool:
-    """True when the deterministic figure router has a family for ``step_id``.
+    """Deprecated name-only compatibility probe; names never establish ownership."""
 
-    Matches on the step id only — the router's ``full_text`` fallbacks
-    receive an empty ``step_text`` from the rescue script, so the step id
-    is the effective routing key at rescue time.
-    """
-
-    text = str(step_id or "").lower()
-    return any(
-        token in text for group in _DETERMINISTIC_FIGURE_TOKEN_GROUPS for token in group
-    )
+    del step_id
+    return False
 
 
 def _render_publication_bundle_from_prior_outputs_for_step(
@@ -5716,95 +7526,79 @@ def _render_publication_bundle_from_prior_outputs_for_step(
     out_dir: Path,
     step_text: str = "",
 ) -> Optional[str]:
-    """Route deterministic figure rescue to the renderer matching the step."""
+    """Route by the direct parent's artifact, exact method, or family contract."""
 
-    step_id_text = str(current_step_id).lower()
-    full_text = f"{current_step_id} {step_text}".lower()
-    (
-        cohort_tokens,
-        prediction_tokens,
-        sensitivity_tokens,
-        association_tokens,
-        primary_result_tokens,
-        missingness_tokens,
-        survival_tokens,
-        phenotype_tokens,
-        descriptive_tokens,
-    ) = _DETERMINISTIC_FIGURE_TOKEN_GROUPS
+    del step_text
 
-    # The survival family renderer lives in figures/survival.py; import it here
-    # to keep this module's import graph unchanged.
-    from .figures.survival import (
-        render_survival_bundle_from_prior_outputs as _render_survival_bundle,
+    # An explicit artifact family has first priority, followed by the exact
+    # parent-method compatibility adapter.  A supporting QC figure can
+    # contain a generic token such as ``quality`` in its stochastic step id; the
+    # token router would otherwise steal it for the missingness renderer even
+    # though the parent recorded a more precise controlled method.
+    _upstream_artifact_family = _resolve_upstream_figure_data_family(
+        run_dir, current_step_id
+    )
+    _upstream_artifact_renderer = _renderer_for_upstream_figure_data_family(
+        _upstream_artifact_family
+    )
+    _upstream_method_renderer = _renderer_for_upstream_method(
+        _resolve_upstream_analysis_method(run_dir, current_step_id)
     )
 
     # Parent-family renderer (used as the else branch AND as a fallback for the
     # strict phenotype/descriptive renderers when their guard returns None, so a
     # mis-routed step still reaches the correct renderer rather than the coder).
-    _upstream_renderer = _renderer_for_upstream_family(
-        _resolve_upstream_analysis_family(run_dir, current_step_id)
+    _upstream_family = _resolve_upstream_analysis_family(run_dir, current_step_id)
+    _upstream_renderer = _renderer_for_upstream_family(_upstream_family)
+    _upstream_fallback = (
+        (_upstream_renderer,) if _upstream_renderer is not None else ()
     )
-    _upstream_fallback = (_upstream_renderer,) if _upstream_renderer is not None else ()
-
-    if any(token in step_id_text for token in sensitivity_tokens) and any(
-        token in step_id_text for token in cohort_tokens
-    ):
-        renderers = (
+    # Cohort sensitivity, overlap, and attrition/flow are sibling renderings of
+    # one closed cohort-definition family.  A direct-parent family declaration
+    # should outrank stochastic step text, but a sensitivity/overlap renderer
+    # that rejects an attrition-shaped parent must still hand off to the flow
+    # renderer in the same family.  Keep this as an exact-family fallback; do
+    # not reintroduce token routing for unrelated methods.
+    if _upstream_family == "cohort_definition_sensitivity":
+        _upstream_fallback = (
             _render_sensitivity_publication_bundle_from_prior_outputs,
             _render_cohort_overlap_publication_bundle_from_prior_outputs,
+            _render_cohort_flow_publication_bundle_from_prior_outputs,
         )
-    elif any(token in step_id_text for token in cohort_tokens):
-        renderers = (_render_cohort_overlap_publication_bundle_from_prior_outputs,)
-    elif any(token in step_id_text for token in prediction_tokens):
-        renderers = (_render_prediction_publication_bundle_from_prior_outputs,)
-    elif any(token in step_id_text for token in survival_tokens):
-        renderers = (_render_survival_bundle,)
-    elif any(token in step_id_text for token in sensitivity_tokens):
-        renderers = (_render_sensitivity_publication_bundle_from_prior_outputs,)
-    elif any(token in step_id_text for token in association_tokens) or any(
-        token in step_id_text for token in primary_result_tokens
-    ):
-        renderers = (_render_association_publication_bundle_from_prior_outputs,)
-    elif any(token in full_text for token in prediction_tokens):
-        renderers = (_render_prediction_publication_bundle_from_prior_outputs,)
-    elif any(token in full_text for token in survival_tokens):
-        renderers = (_render_survival_bundle,)
-    elif any(token in full_text for token in sensitivity_tokens):
-        renderers = (_render_sensitivity_publication_bundle_from_prior_outputs,)
-    elif any(token in full_text for token in cohort_tokens):
-        renderers = (_render_cohort_overlap_publication_bundle_from_prior_outputs,)
-    elif any(token in full_text for token in association_tokens) or any(
-        token in full_text for token in primary_result_tokens
-    ):
-        renderers = (_render_association_publication_bundle_from_prior_outputs,)
-    elif any(token in step_id_text for token in missingness_tokens):
-        renderers = (_render_missingness_publication_bundle_from_prior_outputs,)
-    elif any(token in full_text for token in missingness_tokens):
-        renderers = (_render_missingness_publication_bundle_from_prior_outputs,)
-    elif any(token in full_text for token in phenotype_tokens):
-        # Phenotyping / clustering figure; the runner-table renderer with the
-        # parent-family renderer as a strict-guard fallback.
-        renderers = (
-            _render_phenotype_publication_bundle_from_prior_outputs,
-            *_upstream_fallback,
+    elif _upstream_family == "cohort_definition":
+        _upstream_fallback = (
+            _render_cohort_overlap_publication_bundle_from_prior_outputs,
+            _render_cohort_flow_publication_bundle_from_prior_outputs,
         )
-    elif any(token in full_text for token in descriptive_tokens):
-        # Descriptive baseline / table-one figure; strict table-one guard, with the
-        # parent-family renderer as a fallback for a mis-matched (e.g. result) table.
-        renderers = (
-            _render_descriptive_publication_bundle_from_prior_outputs,
-            *_upstream_fallback,
-        )
-    else:
-        # Structural fallback: no family token in the (stochastically named) step
-        # id/text — route by the parent analysis step's PROVEN analysis_family
-        # (recorded in its step_summary.json). Fixes primary result figures whose
-        # planner-chosen id carries no family token, e.g.
-        # ``05_primary_stage_outcome_analysis_figure`` whose parent produced a
-        # canonical association forest (dose_response.csv).
-        if _upstream_renderer is None:
+
+    if _upstream_artifact_family is not None:
+        if _upstream_artifact_renderer is None:
             return None
-        renderers = (_upstream_renderer,)
+        renderers = (_upstream_artifact_renderer,)
+    elif _upstream_method_renderer is not None:
+        renderers = (_upstream_method_renderer,)
+    elif _upstream_fallback:
+        renderers = _upstream_fallback
+    else:
+        return None
+
+    # A split association-figure step should preserve a source-backed figure
+    # that the direct analysis parent already produced.  Re-rendering from the
+    # first OR-like CSV can discard panel semantics and flatten primary,
+    # secondary, sensitivity, and adjustment rows into one forest plot.  Role
+    # filtering plus the direct-parent rule in the promoter keeps this scoped;
+    # when no eligible bundle exists, the deterministic renderer below remains
+    # the fallback.
+    if _render_association_publication_bundle_from_prior_outputs in renderers:
+        promoted = _promote_prior_publication_bundle(
+            run_dir=run_dir,
+            current_step_id=current_step_id,
+            out_dir=out_dir,
+            required_roles=("primary_estimand",),
+            require_declared_sources=True,
+        )
+        if promoted is not None:
+            return promoted
 
     for renderer in renderers:
         repair_id = renderer(
@@ -5843,6 +7637,8 @@ def _publication_label(value: Any) -> str:
         "bun_max_per_10": "Maximum BUN, per 10 units",
         "wbc_max_per_10": "Maximum WBC, per 10 units",
         "sofa2": "SOFA-2",
+        "sofa2_liver_max": "SOFA-2 liver maximum",
+        "bili_max": "Bilirubin maximum",
         "death": "In-hospital mortality",
         "alt_adult_no_los_all_vitals_sepsis3_derivable": "No LOS threshold",
         "alt_adult_los1_three_of_four_vitals_sepsis3_derivable": ">=3 of 4 vitals",
@@ -5863,6 +7659,32 @@ def _short_figure_label(value: Any, *, limit: int = 38) -> str:
     if len(text) <= limit:
         return text
     return text[: max(1, limit - 1)].rstrip() + "..."
+
+
+def _truthy_figure_value(value: Any) -> bool:
+    if value is True:
+        return True
+    if value is False or value is None:
+        return False
+    try:
+        if pd.isna(value):
+            return False
+    except (TypeError, ValueError):
+        pass
+    return str(value).strip().lower() in {"true", "1", "yes"}
+
+
+def _explicit_false_figure_value(value: Any) -> bool:
+    if value is False:
+        return True
+    if value is True or value is None:
+        return False
+    try:
+        if pd.isna(value):
+            return False
+    except (TypeError, ValueError):
+        pass
+    return str(value).strip().lower() in {"false", "0", "no"}
 
 
 def _sensitivity_plot_label(row: Mapping[str, Any]) -> str:
@@ -5890,6 +7712,15 @@ def _sensitivity_plot_label(row: Mapping[str, Any]) -> str:
     }
     if spec_id in mapping:
         return mapping[spec_id]
+    los_match = re.fullmatch(r"alt_cohort_los_ge_(\d+(?:p\d+)?)([hd])", spec_id)
+    if los_match:
+        value = los_match.group(1).replace("p", ".")
+        unit = "h" if los_match.group(2) == "h" else "d"
+        return f"ICU LOS >= {value} {unit}"
+    if "complete_case" in spec_id:
+        return "Complete-case"
+    if "source_aware" in spec_id:
+        return "Source-aware"
     label = str(row.get("display_label") or row.get("label") or spec_id).strip()
     return _short_figure_label(label.replace("LOS ≥", "LOS >="), limit=30)
 
@@ -6094,14 +7925,11 @@ def _semantic_aliases_for(step: AnalysisStep, artefact: Path) -> List[str]:
             stripped = re.sub(r"^\d+[_-]+", "", step_id)
             if stripped and stripped != step_id:
                 out.append(stripped)
-        expected = " ".join(str(item).lower() for item in (step.expected_outputs or []))
+        expected = " ".join(
+            str(item).lower() for item in (step.expected_outputs or [])
+        )
         intent = (step.intent or "").lower()
-        prediction_step = "prediction" in intent or "model_training" in step_id.lower()
-        if (
-            any(token in expected for token in ("auroc", "brier"))
-            or ("calibration" in expected and prediction_step)
-            or prediction_step
-        ):
+        if _prediction_contract_applies(step):
             out.extend(
                 [
                     "model_performance",
@@ -6109,10 +7937,11 @@ def _semantic_aliases_for(step: AnalysisStep, artefact: Path) -> List[str]:
                     "baseline_prevalence",
                 ]
             )
-        if any(token in expected for token in ("cluster", "silhouette")) or (
-            "cluster" in intent
-            or "cluster" in step_id.lower()
-            or "trajectory" in step_id.lower()
+        if _clustering_contract_applies(
+            method=str(step.method or ""),
+            step_id=step_id,
+            intent=intent,
+            expected_outputs=step.expected_outputs or [],
         ):
             out.extend(
                 [

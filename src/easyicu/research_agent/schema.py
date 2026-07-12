@@ -18,6 +18,7 @@ they are a stable v1 the rest of the module can lean on.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
@@ -420,6 +421,101 @@ class HypothesisBlueprint(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+# The v1 planner-owned roster is intentionally narrower than EasyICU's full
+# modeling capability.  These are the adjusted-association families whose
+# execution contract is currently checked by PrimaryModelContractValidator.
+# Survival, prediction, mixed-effects, and clustering methods keep their own
+# family-specific plans/contracts until an equally typed validator exists.
+ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES = frozenset(
+    {
+        "binary_logistic_regression",
+        "binomial_logistic_regression",
+        "logistic_regression",
+        "logit",
+        "statsmodels_logit_mle",
+        "statsmodels_glm_binomial",
+    }
+)
+ADJUSTED_ASSOCIATION_CONTINUOUS_METHOD_FAMILIES = frozenset(
+    {
+        "linear_regression",
+        "ordinary_least_squares",
+        "ols",
+        "quantile_regression",
+        "median_quantile_regression",
+        "statsmodels_quantreg",
+        "statsmodels_quantreg_median_vcov_robust",
+    }
+)
+PLANNED_MODEL_REQUIREMENTS_STEP_METHOD = "adjusted_association_models"
+PLANNED_MODEL_REQUIREMENTS_OUTPUT_KIND = "table"
+PLANNED_MODEL_REQUIREMENTS_OUTPUT = "adjusted_association_estimates"
+
+
+def _normalise_model_contract_token(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(value or "").lower()).strip("_")
+
+
+class PlannedModelRequirement(BaseModel):
+    """Planner-owned obligation for a supported adjusted-association model.
+
+    The planner chooses these scientific commitments.  Execution validators
+    only reconcile the emitted model contracts against this typed roster; they
+    must not infer required models from step prose or benchmark vocabulary.
+    This v1 schema does not represent survival, prediction, mixed-effects, or
+    clustering contracts.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    requirement_id: str
+    outcome: str
+    outcome_type: Literal["binary", "continuous"]
+    method_family: str
+    exposure_source: str
+    analysis_role: Literal["primary", "secondary", "sensitivity"]
+    analysis_set: Literal["source_aware", "complete_case"]
+    required_for_step_success: bool = True
+
+    @field_validator(
+        "requirement_id",
+        "outcome",
+        "method_family",
+        "exposure_source",
+    )
+    @classmethod
+    def _nonblank_text(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("planned model requirement fields must be non-empty")
+        return text
+
+    @model_validator(mode="after")
+    def _method_family_matches_supported_outcome(self) -> "PlannedModelRequirement":
+        supported = (
+            ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES
+            if self.outcome_type == "binary"
+            else ADJUSTED_ASSOCIATION_CONTINUOUS_METHOD_FAMILIES
+        )
+        method_family = _normalise_model_contract_token(self.method_family)
+        if method_family not in supported:
+            raise ValueError(
+                "model_requirements currently support only binary logistic "
+                "or continuous linear/quantile adjusted-association families; "
+                f"outcome_type={self.outcome_type!r} is incompatible with "
+                f"method_family={self.method_family!r}"
+            )
+        if (
+            self.analysis_role in {"primary", "secondary"}
+            and not self.required_for_step_success
+        ):
+            raise ValueError(
+                "primary and secondary model_requirements must be required "
+                "for step success; only a sensitivity requirement may be optional"
+            )
+        return self
+
+
 class AnalysisStep(BaseModel):
     """One step in a planner-emitted analysis plan."""
 
@@ -438,6 +534,51 @@ class AnalysisStep(BaseModel):
     )
     method: Optional[str] = None
     icu_rule_refs: List[str] = Field(default_factory=list)
+    model_requirements: List[PlannedModelRequirement] = Field(
+        default_factory=list,
+        description=(
+            "Optional planner-owned roster for the supported binary/continuous "
+            "adjusted-association contract only. Required entries must be matched "
+            "by execution model contracts; an empty roster preserves the legacy "
+            "step contract and is required for other analysis families."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _model_requirement_ids_are_unique(self) -> "AnalysisStep":
+        requirement_ids = [item.requirement_id for item in self.model_requirements]
+        if len(requirement_ids) != len(set(requirement_ids)):
+            raise ValueError("model_requirements requirement_id values must be unique")
+        if self.model_requirements:
+            method_head = str(self.method or "").lower().split(" with ", 1)[0]
+            method = _normalise_model_contract_token(method_head)
+            outputs = set()
+            for output in self.expected_outputs:
+                output_kind, separator, output_name = str(output).partition(":")
+                if not separator:
+                    continue
+                outputs.add(
+                    (
+                        _normalise_model_contract_token(output_kind),
+                        _normalise_model_contract_token(output_name),
+                    )
+                )
+            if (
+                method != PLANNED_MODEL_REQUIREMENTS_STEP_METHOD
+                or (
+                    PLANNED_MODEL_REQUIREMENTS_OUTPUT_KIND,
+                    PLANNED_MODEL_REQUIREMENTS_OUTPUT,
+                )
+                not in outputs
+            ):
+                raise ValueError(
+                    "model_requirements are currently supported only on "
+                    "method='adjusted_association_models' steps that declare "
+                    "expected output 'table:adjusted_association_estimates'; "
+                    "other analysis families must use their family-specific "
+                    "planning and validation contracts"
+                )
+        return self
 
 
 class AnalysisPlan(BaseModel):
@@ -447,11 +588,10 @@ class AnalysisPlan(BaseModel):
     analysis_type: Optional[str] = Field(
         default=None,
         description=(
-            "Locked EHR analysis family key (e.g. survival, "
-            "trajectory_clustering, prediction_model). Stamped deterministically "
-            "by the planner from infer_analysis_type(context); downstream method "
-            "selection and figure routing branch on this. None only on legacy "
-            "plans produced before the field existed."
+            "EHR analysis family declared by the agent/planner (e.g. survival, "
+            "trajectory_clustering, prediction_model). When omitted, the framework "
+            "may attach an inferred family suggestion for review; it must not use "
+            "that suggestion to replace the agent's scientific method or estimand."
         ),
     )
     steps: List[AnalysisStep]

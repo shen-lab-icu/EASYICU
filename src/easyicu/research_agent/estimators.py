@@ -15,8 +15,16 @@ from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
 
 from .cohort_schema import CohortDefinition, build_cohort
 from .methods.missing import apply_missing_strategy
-from .pipeline_primary_effect import _extract_primary_effect_payload_from_records
-from .robustness_panel import PRIMARY_SPEC_ID, RobustnessPanelRow, RobustnessSpec
+from .pipeline_primary_effect import (
+    _extract_primary_effect_payload_from_records,
+    _primary_effect_payload_is_complete,
+)
+from .robustness_panel import (
+    PRIMARY_SPEC_ID,
+    RobustnessPanelRow,
+    RobustnessSpec,
+    _successful_step_records,
+)
 
 EstimatorKind = Literal["logistic", "linear", "cox", "glm_poisson"]
 
@@ -112,7 +120,11 @@ def fit_estimator(
             _join_notes("X/y length mismatch", cohort_note),
         )
     combined = pd.concat(
-        [x_df.reset_index(drop=True), y_series.rename("__y__")], axis=1
+        [
+            x_df.reset_index(drop=True),
+            y_series.reset_index(drop=True).rename("__y__"),
+        ],
+        axis=1,
     )
     combined = combined.dropna()
     n = int(len(combined))
@@ -151,18 +163,48 @@ def fit_estimator(
             ),
         )
 
+    if kind == "logistic":
+        numeric_y = pd.to_numeric(y_series, errors="coerce")
+        is_binary = bool(
+            not numeric_y.isna().any()
+            and numeric_y.isin((0.0, 1.0)).all()
+        )
+        if not is_binary:
+            return EstimatorResult(
+                None,
+                None,
+                None,
+                None,
+                n,
+                False,
+                _join_notes(
+                    "logistic estimator requires a binary 0/1 outcome; "
+                    "the adapter will not change the declared method or mix "
+                    "effect scales implicitly",
+                    cohort_note,
+                ),
+            )
+        y_series = numeric_y
+
     try:
         x_const = sm.add_constant(x_df.astype(float), has_constant="add")
         coefficient_name = next(col for col in x_const.columns if col != "const")
-        # Drop rank-deficient (constant / perfectly collinear) predictors so a
-        # degenerate design does not dead-end the fit with "Singular matrix".
-        x_const, dropped = _robust_design(x_const, keep=["const", coefficient_name])
-        drop_note = (
-            f"dropped collinear/constant predictors: {', '.join(dropped)}"
-            if dropped
-            else ""
-        )
-        fit_note = _join_notes(drop_note, cohort_note) if drop_note else cohort_note
+        _, dropped = _robust_design(x_const, keep=["const", coefficient_name])
+        if dropped:
+            return EstimatorResult(
+                None,
+                None,
+                None,
+                None,
+                n,
+                False,
+                _join_notes(
+                    "rank-deficient locked design; refusing to drop declared "
+                    "predictors: " + ", ".join(dropped),
+                    cohort_note,
+                ),
+            )
+        fit_note = cohort_note
         if kind == "linear":
             result = sm.OLS(y_series.astype(float), x_const).fit()
             coef = float(result.params[coefficient_name])
@@ -181,43 +223,29 @@ def fit_estimator(
                 False,
                 _join_notes("binary outcome has fewer than two classes", cohort_note),
             )
-        try:
-            result = sm.Logit(y_series.astype(float), x_const).fit(
-                disp=False, maxiter=100
-            )
-            coef = float(result.params[coefficient_name])
-            ci_low, ci_high = _conf_interval_for(result, coefficient_name)
-            se = _float_or_none(result.bse[coefficient_name])
-            point = float(np.exp(coef))
-            low = float(np.exp(ci_low)) if ci_low is not None else None
-            high = float(np.exp(ci_high)) if ci_high is not None else None
-            converged = bool(getattr(result, "mle_retvals", {}).get("converged", True))
-            if not math.isfinite(coef):
-                raise ValueError("non-finite logistic coefficient")
-            return EstimatorResult(point, low, high, se, n, converged, fit_note)
-        except Exception as mle_exc:
-            # Unpenalised MLE diverges under (quasi-)separation. A ridge-penalised
-            # fit is the standard robust fallback: it yields a finite point
-            # estimate (a Wald CI is not reliable under penalisation, so it is
-            # reported as None rather than fabricated).
-            reg = sm.Logit(y_series.astype(float), x_const).fit_regularized(
-                alpha=1.0, L1_wt=0.0, disp=False, maxiter=200
-            )
-            coef = float(reg.params[coefficient_name])
-            if not math.isfinite(coef):
-                raise mle_exc
+        result = sm.Logit(y_series.astype(float), x_const).fit(
+            disp=False, maxiter=100
+        )
+        coef = float(result.params[coefficient_name])
+        ci_low, ci_high = _conf_interval_for(result, coefficient_name)
+        se = _float_or_none(result.bse[coefficient_name])
+        point = float(np.exp(coef))
+        low = float(np.exp(ci_low)) if ci_low is not None else None
+        high = float(np.exp(ci_high)) if ci_high is not None else None
+        converged = bool(getattr(result, "mle_retvals", {}).get("converged", True))
+        if not math.isfinite(coef):
+            raise ValueError("non-finite logistic coefficient")
+        if not converged:
             return EstimatorResult(
-                float(np.exp(coef)),
+                None,
                 None,
                 None,
                 None,
                 n,
                 False,
-                _join_notes(
-                    f"penalised (ridge) fallback after MLE failed: {mle_exc}",
-                    fit_note,
-                ),
+                _join_notes("logistic fit did not converge", fit_note),
             )
+        return EstimatorResult(point, low, high, se, n, True, fit_note)
     except Exception as exc:
         return EstimatorResult(
             None,
@@ -241,6 +269,7 @@ def fit_robustness_rows_from_records(
     exposure: Optional[str] = None,
     outcome: Optional[str] = None,
     run_dir: Optional[Path] = None,
+    allow_implicit_cohort_refit: bool = False,
 ) -> Tuple[List[RobustnessPanelRow], List[str]]:
     """Auto-fit the robustness-panel rows for a run.
 
@@ -248,8 +277,8 @@ def fit_robustness_rows_from_records(
 
     1. **Primary row** — the step's *validated* primary estimate
        (``step_summary.primary_or`` / CI / n), never a re-fit, so the panel
-       headline matches the manuscript-facing primary effect. Falls back to a
-       primary re-fit only when no step reports a primary.
+       headline matches the manuscript-facing primary effect. The direct API
+       may fit a primary only when its caller permits implicit cohort refits.
     2. **Variant rows** — re-fit per spec, adjusted for the primary model's
        recovered covariate set (``run_dir``) so each variant reports the
        exposure's effect on the same footing as the primary rather than as a
@@ -257,15 +286,23 @@ def fit_robustness_rows_from_records(
 
     Data source for the re-fits: an explicit ``step_summary.estimator_adapter``
     payload (``{"data": [...], "exposure": "x", "outcome": "y"}``) *if a coder
-    emits one* — no current prompt does, so in practice the operative path
-    infers the exposure/outcome and loads the cohort parquet. Coder-emitted
-    ``robustness_rows`` remain accepted; adapter/step rows win for duplicate
-    ``spec_id`` values and a warning is returned.
+    emits one*. Pipeline finalization disables the implicit cohort-parquet path,
+    so it never selects an exposure, outcome, or method on the agent's behalf.
+    Step-owned ``robustness_rows`` win by ``spec_id``; the adapter fills only
+    specifications the step did not report.
     """
 
     warnings: List[str] = []
-    declared_ids = _declared_robustness_ids(per_step_records)
-    payload_record = _find_estimator_payload(per_step_records)
+    successful_records = _successful_step_records(per_step_records)
+    if not allow_implicit_cohort_refit:
+        validated_primary = _primary_row_from_step_records(successful_records)
+        return ([validated_primary] if validated_primary is not None else []), [
+            "generic deterministic robustness refitting is disabled; only a "
+            "validated step-owned primary estimate is retained, and variants "
+            "require exact registered primary-script replay"
+        ]
+    declared_ids = _declared_robustness_ids(successful_records)
+    payload_record = _find_estimator_payload(successful_records)
     if payload_record is not None:
         record, payload = payload_record
         try:
@@ -275,8 +312,21 @@ def fit_robustness_rows_from_records(
 
         exposure = str(payload.get("exposure") or exposure or "").strip()
         outcome = str(payload.get("outcome") or outcome or "").strip()
-        kind = str(payload.get("estimator_kind") or "logistic")
-        default_missing = str(payload.get("missing_strategy") or "complete_case")
+        kind = str(payload.get("estimator_kind") or "").strip()
+        default_missing = str(payload.get("missing_strategy") or "").strip()
+        if not kind or not default_missing:
+            missing_fields = [
+                field
+                for field, value in (
+                    ("estimator_kind", kind),
+                    ("missing_strategy", default_missing),
+                )
+                if not value
+            ]
+            return [], [
+                "estimator_adapter must explicitly declare scientific choices; "
+                "missing " + ", ".join(missing_fields)
+            ]
         outcome_columns = payload.get("outcome_columns") or {}
         if not isinstance(outcome_columns, dict):
             outcome_columns = {}
@@ -291,14 +341,14 @@ def fit_robustness_rows_from_records(
         exposure = _infer_exposure_column(
             data=data,
             context=context,
-            per_step_records=per_step_records,
+            per_step_records=successful_records,
             requested=exposure,
             outcome=outcome,
         )
         outcome = _infer_outcome_column(
             data=data,
             context=context,
-            per_step_records=per_step_records,
+            per_step_records=successful_records,
             requested=outcome,
         )
         kind = "logistic"
@@ -323,7 +373,7 @@ def fit_robustness_rows_from_records(
     # unadjusted, i.e. the previous behaviour.
     covariates = _recover_primary_covariates(
         run_dir,
-        per_step_records=per_step_records,
+        per_step_records=successful_records,
         exposure=exposure,
         outcome=outcome,
         available_columns=getattr(data, "columns", ()),
@@ -333,8 +383,8 @@ def fit_robustness_rows_from_records(
             "robustness variants adjusted for the primary model covariates: "
             + ", ".join(covariates)
         )
-    primary_row = _primary_row_from_step_records(per_step_records)
-    primary_measure = _primary_effect_measure_from_records(per_step_records)
+    primary_row = _primary_row_from_step_records(successful_records)
+    primary_measure = _primary_effect_measure_from_records(successful_records)
     if (
         primary_row is not None
         and primary_measure == "HR"
@@ -365,13 +415,31 @@ def fit_robustness_rows_from_records(
                 "with spec_id 'primary'"
             )
         row_specs: List[Tuple[str, str, Optional[RobustnessSpec]]] = [
-            (spec.spec_id, spec.axis, spec) for spec in specs
+            (spec.spec_id, spec.axis, spec)
+            for spec in specs
+            if spec.spec_id not in declared_ids
         ]
     else:
         row_specs = [
-            (PRIMARY_SPEC_ID, "primary", None),
-            *[(spec.spec_id, spec.axis, spec) for spec in specs],
+            *(
+                []
+                if PRIMARY_SPEC_ID in declared_ids
+                else [(PRIMARY_SPEC_ID, "primary", None)]
+            ),
+            *[
+                (spec.spec_id, spec.axis, spec)
+                for spec in specs
+                if spec.spec_id not in declared_ids
+            ],
         ]
+    skipped_declared_ids = sorted(
+        declared_ids.intersection({spec.spec_id for spec in specs})
+    )
+    if skipped_declared_ids:
+        warnings.append(
+            "step-owned robustness_rows retained; deterministic adapter skipped "
+            "already reported spec_id values: " + ", ".join(skipped_declared_ids)
+        )
     for spec_id, axis, spec in row_specs:
         row = _fit_one_row(
             spec_id=spec_id,
@@ -389,28 +457,25 @@ def fit_robustness_rows_from_records(
             covariates=covariates,
         )
         rows.append(row)
-        if spec_id in declared_ids:
-            warnings.append(
-                f"estimator adapter row for {spec_id!r} overrides coder-emitted "
-                "robustness_rows with the same spec_id"
-            )
     return rows, warnings
 
 
 def _primary_row_from_step_records(
     per_step_records: Sequence[Dict[str, Any]],
 ) -> Optional[RobustnessPanelRow]:
-    payload = _extract_primary_effect_payload_from_records(per_step_records)
-    if not payload or payload.get("primary_or") is None:
+    payload = _extract_primary_effect_payload_from_records(
+        _successful_step_records(per_step_records)
+    )
+    if not _primary_effect_payload_is_complete(payload):
         return None
+    assert isinstance(payload, dict)
     sample_size = payload.get("sample_size")
     n = int(sample_size) if isinstance(sample_size, int) else 0
     # ``primary_or`` holds the primary effect ratio whatever its measure (OR for a
     # logistic design, HR for a survival design). Record the measure in the notes
     # so the panel/writer does not silently label a Cox hazard ratio as an odds
-    # ratio. Threading a real primary row here also STOPS the logistic-OR refit
-    # fallback from overriding a survival estimand (H1 fix3j: real HR 1.82 was
-    # buried under a refit near-null ~1.0 OR).
+    # ratio. Threading a real primary row here also stops a logistic-OR refit
+    # fallback from overriding a survival estimand.
     measure = str(payload.get("effect_measure") or "").strip()
     notes = (
         f"Primary analysis estimate ({measure}) from step_summary."
@@ -435,7 +500,9 @@ def _primary_effect_measure_from_records(
     per_step_records: Sequence[Dict[str, Any]],
 ) -> Optional[str]:
     """The measure ("HR" / "OR") of the selected primary effect, or ``None``."""
-    payload = _extract_primary_effect_payload_from_records(per_step_records)
+    payload = _extract_primary_effect_payload_from_records(
+        _successful_step_records(per_step_records)
+    )
     return str((payload or {}).get("effect_measure") or "").strip() or None
 
 
@@ -455,6 +522,7 @@ def _recover_primary_covariates(
     CSV ``term`` columns as covariates: those rows can list sensitivity model
     focal terms rather than the primary adjustment set.
     """
+    per_step_records = _successful_step_records(per_step_records)
     if run_dir is None:
         return []
     from .plan_utils import _covariate_names_from_code
@@ -482,12 +550,12 @@ def _recover_primary_covariates(
             names = _covariate_names_from_code(directory)
             if names:
                 break
-    try:
-        available = {str(column) for column in list(available_columns)}
-    except TypeError:
-        available = set()
+    del available_columns
     excluded = {str(exposure or ""), str(outcome or "")}
-    return [name for name in names if name in available and name not in excluded]
+    # Do not silently shrink the primary adjustment set to columns present in a
+    # variant. Missing declared covariates must block that variant in
+    # ``_fit_one_row`` rather than changing its estimand.
+    return [name for name in names if name not in excluded]
 
 
 def _explicit_primary_covariates_from_records(
@@ -590,10 +658,21 @@ def _fit_one_row(
         # so the variant reports the exposure's *adjusted* effect on the same
         # footing as the primary — fit_estimator reports the first non-const
         # column, so the exposure must lead the design matrix.
+        missing_covariates = [
+            column
+            for column in covariates
+            if column not in cohort_df.columns
+            and column not in (exposure, outcome_column)
+        ]
+        if missing_covariates:
+            raise KeyError(
+                "missing locked adjustment covariate(s): "
+                + ", ".join(missing_covariates)
+            )
         present_covariates = [
             column
             for column in covariates
-            if column in cohort_df.columns and column not in (exposure, outcome_column)
+            if column not in (exposure, outcome_column)
         ]
         needed = [exposure, outcome_column, *present_covariates]
         missing_columns = [
@@ -643,7 +722,7 @@ def _fit_one_row(
 def _find_estimator_payload(
     per_step_records: Sequence[Dict[str, Any]],
 ) -> Optional[Tuple[Dict[str, Any], Dict[str, Any]]]:
-    for record in per_step_records:
+    for record in _successful_step_records(per_step_records):
         summary = record.get("step_summary")
         if not isinstance(summary, dict):
             continue
@@ -685,7 +764,7 @@ def _load_direct_dataframe(*, data: Any, cohort_path: Optional[Path]):
 
 def _declared_robustness_ids(per_step_records: Sequence[Dict[str, Any]]) -> set[str]:
     out: set[str] = set()
-    for record in per_step_records:
+    for record in _successful_step_records(per_step_records):
         summary = record.get("step_summary")
         if not isinstance(summary, dict):
             continue

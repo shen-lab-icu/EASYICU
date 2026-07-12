@@ -118,13 +118,24 @@ def _first_numeric_scalar_with_key_fragment(
 
 
 def _first_numeric_effect_from_text(payload: Any) -> Optional[float]:
+    """Extract only explicitly labelled prose effects.
+
+    ``OR`` is an acronym only when it is written in uppercase.  Treating it
+    case-insensitively makes the ordinary English conjunction in text such as
+    ``"increase >=0.3 mg/dL or 1.5-1.9 times baseline"`` look like an odds
+    ratio.  Spelled-out ``odds ratio`` remains case-insensitive.
+    """
+
     text = json.dumps(payload, ensure_ascii=False, default=str)
     patterns = (
-        r"\b(?:OR|odds\s+ratio)\b\s*(?:=|:|of)?\s*([0-9]+(?:\.[0-9]+)?)",
-        r"\b(?:adjusted\s+OR|adjusted\s+odds\s+ratio)\b\s*(?:=|:|of)?\s*([0-9]+(?:\.[0-9]+)?)",
+        (r"\bOR\b\s*(?:=|:|of)?\s*([0-9]+(?:\.[0-9]+)?)", 0),
+        (
+            r"\bodds\s+ratio\b\s*(?:=|:|of)?\s*([0-9]+(?:\.[0-9]+)?)",
+            re.IGNORECASE,
+        ),
     )
-    for pattern in patterns:
-        match = re.search(pattern, text, flags=re.IGNORECASE)
+    for pattern, flags in patterns:
+        match = re.search(pattern, text, flags=flags)
         if not match:
             continue
         try:

@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
+import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -18,6 +23,224 @@ class ResumeApplication:
     resumed_step_ids: Set[str]
     findings: List[ValidationFinding]
     probe_summary: Dict[str, Any]
+
+
+@dataclass(frozen=True)
+class QuarantinedConceptDraft:
+    """Unexecuted code retained only so a failed concept repair can resume."""
+
+    code: str
+    sha256: str
+    relative_path: str
+    findings: Tuple[Dict[str, Any], ...]
+
+
+_QUARANTINE_SCHEMA = "easyicu.quarantined_concept_draft/1"
+_QUARANTINE_DIRNAME = ".quarantine"
+_QUARANTINE_CODE_NAME = "concept_draft.py"
+_QUARANTINE_META_NAME = "concept_draft.json"
+_ROOT_AGENT_CODE_GENERATION_MODES = frozenset(
+    {"llm", "repaired", "runner_repaired"}
+)
+_AGENT_CODE_GENERATION_MODES = frozenset(
+    {*_ROOT_AGENT_CODE_GENERATION_MODES, "resumed_code_reuse"}
+)
+_SHA256_HEX_LENGTH = 64
+
+
+def _agent_origin_generation_mode(payload: Dict[str, Any]) -> Optional[str]:
+    """Resolve a code record to a non-resumed agent origin."""
+
+    generation_mode = str(payload.get("generation_mode") or "")
+    if generation_mode in _ROOT_AGENT_CODE_GENERATION_MODES:
+        return generation_mode
+    if generation_mode != "resumed_code_reuse":
+        return None
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, dict):
+        return None
+    resumed_from = str(metadata.get("resumed_from_generation_mode") or "")
+    if resumed_from in _ROOT_AGENT_CODE_GENERATION_MODES:
+        return resumed_from
+    return None
+
+
+def _safe_step_component(step_id: str) -> str:
+    text = str(step_id or "")
+    if (
+        not text
+        or text in {".", ".."}
+        or "\x00" in text
+        or "/" in text
+        or "\\" in text
+        or Path(text).is_absolute()
+        or Path(text).name != text
+    ):
+        raise ValueError("step_id must be a single safe path component")
+    return text
+
+
+def _quarantine_paths(run_dir: Path, step_id: str) -> Tuple[Path, Path, Path]:
+    safe_step_id = _safe_step_component(step_id)
+    root = Path(run_dir).expanduser().resolve()
+    steps_dir = root / "steps"
+    step_dir = steps_dir / safe_step_id
+    quarantine_dir = step_dir / _QUARANTINE_DIRNAME
+    code_path = quarantine_dir / _QUARANTINE_CODE_NAME
+    meta_path = quarantine_dir / _QUARANTINE_META_NAME
+    for label, path in (
+        ("steps directory", steps_dir),
+        ("step directory", step_dir),
+        ("quarantine directory", quarantine_dir),
+        ("quarantine code", code_path),
+        ("quarantine metadata", meta_path),
+    ):
+        if path.is_symlink():
+            raise ValueError(f"{label} must not be a symbolic link")
+    return (
+        quarantine_dir,
+        code_path,
+        meta_path,
+    )
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_name: Optional[str] = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+            temp_name = handle.name
+        os.replace(temp_name, path)
+        temp_name = None
+    finally:
+        if temp_name is not None:
+            Path(temp_name).unlink(missing_ok=True)
+
+
+def store_quarantined_concept_draft(
+    *,
+    run_dir: Path,
+    step_id: str,
+    code: str,
+    findings: List[Dict[str, Any]],
+) -> QuarantinedConceptDraft:
+    """Atomically retain rejected code outside the ordinary evidence store."""
+
+    quarantine_dir, code_path, meta_path = _quarantine_paths(run_dir, step_id)
+    if not _looks_like_generated_python(code):
+        raise ValueError("quarantined concept draft is not recognisable Python")
+    error_findings: Tuple[Dict[str, Any], ...] = tuple(
+        ValidationFinding.model_validate(finding).model_dump(mode="json")
+        for finding in findings
+        if isinstance(finding, dict) and finding.get("severity") == "error"
+    )
+    if not error_findings:
+        raise ValueError("quarantined concept draft requires an error finding")
+    digest = hashlib.sha256(code.encode("utf-8")).hexdigest()
+    relative_path = str(code_path.relative_to(Path(run_dir).expanduser().resolve()))
+    payload = {
+        "schema_version": _QUARANTINE_SCHEMA,
+        "step_id": step_id,
+        "state": "unexecuted",
+        "requires_repair": True,
+        "sha256": digest,
+        "relative_path": relative_path,
+        "findings": list(error_findings),
+    }
+    quarantine_dir.mkdir(parents=True, exist_ok=True)
+    # Re-check after creating missing parents so a pre-existing or concurrently
+    # swapped symlink is never used as the write destination.
+    quarantine_dir, code_path, meta_path = _quarantine_paths(run_dir, step_id)
+    # Publish metadata last. A crash after the code write leaves no valid
+    # checkpoint; a reader never trusts code without a matching digest record.
+    _atomic_write_text(code_path, code)
+    _atomic_write_text(
+        meta_path,
+        json.dumps(payload, indent=2, ensure_ascii=False, default=str),
+    )
+    return QuarantinedConceptDraft(
+        code=code,
+        sha256=digest,
+        relative_path=relative_path,
+        findings=error_findings,
+    )
+
+
+def load_quarantined_concept_draft(
+    *, run_dir: Path, step_id: str
+) -> Optional[QuarantinedConceptDraft]:
+    """Load a valid rejected draft; malformed or tampered checkpoints fail closed."""
+
+    try:
+        _quarantine_dir, code_path, meta_path = _quarantine_paths(run_dir, step_id)
+    except ValueError:
+        return None
+    if not code_path.is_file() or not meta_path.is_file():
+        return None
+    try:
+        payload = json.loads(meta_path.read_text(encoding="utf-8"))
+        code = code_path.read_text(encoding="utf-8")
+    except (OSError, ValueError, TypeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    root = Path(run_dir).expanduser().resolve()
+    expected_relative_path = str(code_path.relative_to(root))
+    if (
+        payload.get("schema_version") != _QUARANTINE_SCHEMA
+        or payload.get("step_id") != step_id
+        or payload.get("state") != "unexecuted"
+        or payload.get("requires_repair") is not True
+        or payload.get("relative_path") != expected_relative_path
+        or not _looks_like_generated_python(code)
+    ):
+        return None
+    digest = hashlib.sha256(code.encode("utf-8")).hexdigest()
+    if payload.get("sha256") != digest:
+        return None
+    raw_findings = payload.get("findings")
+    if not isinstance(raw_findings, list):
+        return None
+    try:
+        error_findings = tuple(
+            ValidationFinding.model_validate(finding).model_dump(mode="json")
+            for finding in raw_findings
+            if isinstance(finding, dict) and finding.get("severity") == "error"
+        )
+    except (TypeError, ValueError):
+        return None
+    if not error_findings or len(error_findings) != len(raw_findings):
+        return None
+    return QuarantinedConceptDraft(
+        code=code,
+        sha256=digest,
+        relative_path=expected_relative_path,
+        findings=error_findings,
+    )
+
+
+def clear_quarantined_concept_draft(*, run_dir: Path, step_id: str) -> None:
+    """Remove a draft once its material repair passes the concept gate."""
+
+    quarantine_dir, _code_path, _meta_path = _quarantine_paths(run_dir, step_id)
+    if not quarantine_dir.exists():
+        return
+    try:
+        shutil.rmtree(quarantine_dir)
+    except OSError as exc:
+        raise ValueError("quarantine directory could not be removed safely") from exc
+    if quarantine_dir.exists() or quarantine_dir.is_symlink():
+        raise ValueError("quarantine directory remained after removal")
 
 
 class ResumeController:
@@ -197,20 +420,61 @@ class ResumeController:
         self,
         step_id: str,
     ) -> Optional[Tuple[str, Dict[str, Any]]]:
-        """Return prior agent-generated code for an explicitly resumed step."""
+        """Return the latest evidence-bound code for an explicitly resumed step.
+
+        Repair code is registered in ``evidence_index.json`` before the whole
+        step record necessarily reaches ``manifest_partial.json``.  A process
+        interrupted during a later repair must therefore consult both fresh
+        on-disk sources rather than remain pinned to the resume-state snapshot
+        captured at pipeline startup.
+        """
 
         if (
             not self.resume_from_step_id
             or step_id != self.resume_from_step_id
-            or self.resume_state is None
         ):
             return None
-        for payload in reversed(self.resume_state.get("evidence", []) or []):
+
+        payloads: List[Any] = list(
+            (self.resume_state or {}).get("evidence", []) or []
+        )
+        for path in (
+            self.run_dir / "manifest_partial.json",
+            self.run_dir / "evidence" / "evidence_index.json",
+        ):
+            if not path.is_file():
+                continue
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if isinstance(loaded, dict):
+                records = loaded.get("evidence", []) or []
+            elif isinstance(loaded, list):
+                records = loaded
+            else:
+                records = []
+            if isinstance(records, list):
+                payloads.extend(records)
+
+        for payload in reversed(payloads):
             if not isinstance(payload, dict):
                 continue
             if (
                 payload.get("kind") != "code"
                 or payload.get("produced_by_step") != step_id
+            ):
+                continue
+            generation_mode = str(payload.get("generation_mode") or "")
+            if (
+                generation_mode not in _AGENT_CODE_GENERATION_MODES
+                or _agent_origin_generation_mode(payload) is None
+            ):
+                continue
+            expected_sha256 = str(payload.get("sha256") or "").lower()
+            if (
+                len(expected_sha256) != _SHA256_HEX_LENGTH
+                or any(char not in "0123456789abcdef" for char in expected_sha256)
             ):
                 continue
             relative_path = str(payload.get("relative_path") or "")
@@ -219,16 +483,36 @@ class ResumeController:
             source_path = _resolve_resume_evidence_path(self.run_dir, relative_path)
             if source_path is None:
                 continue
-            if not source_path.exists():
+            if not source_path.is_file():
                 continue
             try:
-                prior_code = source_path.read_text(encoding="utf-8")
-            except OSError:
+                raw_code = source_path.read_bytes()
+                if hashlib.sha256(raw_code).hexdigest() != expected_sha256:
+                    continue
+                prior_code = raw_code.decode("utf-8")
+            except (OSError, UnicodeDecodeError):
                 continue
             if not _looks_like_generated_python(prior_code):
                 continue
             return prior_code, dict(payload)
         return None
+
+    def quarantined_concept_draft_for_step(
+        self,
+        step_id: str,
+    ) -> Optional[QuarantinedConceptDraft]:
+        """Return pending rejected code only for the explicitly resumed step.
+
+        This is intentionally separate from :meth:`prior_code_for_step`: the
+        caller must force a fresh repair and all audits before runner execution.
+        """
+
+        if not self.resume_from_step_id or step_id != self.resume_from_step_id:
+            return None
+        return load_quarantined_concept_draft(
+            run_dir=self.run_dir,
+            step_id=step_id,
+        )
 
     def remaining_steps(
         self,
@@ -277,8 +561,14 @@ def _resolve_resume_evidence_path(run_dir: Path, relative_path: str) -> Optional
         return None
     try:
         root = run_dir.resolve()
+        evidence_root = root / "evidence"
+        if evidence_root.is_symlink():
+            return None
+        resolved_evidence_root = evidence_root.resolve()
+        resolved_evidence_root.relative_to(root)
         candidate = (root / candidate_rel).resolve()
         candidate.relative_to(root)
+        candidate.relative_to(resolved_evidence_root)
     except Exception:
         return None
     return candidate

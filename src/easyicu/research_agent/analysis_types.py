@@ -72,6 +72,8 @@ _REGISTRY: Dict[str, AnalysisTypeSpec] = {
         trigger_terms=(
             "associated",
             "association",
+            "dose-response",
+            "dose response",
             "predictor",
             "prognostic",
             "risk factor",
@@ -103,6 +105,9 @@ _REGISTRY: Dict[str, AnalysisTypeSpec] = {
             "predict",
             "prediction",
             "predictive",
+            "预测",
+            "判别",
+            "校准",
             "early warning",
             "classifier",
             "model performance",
@@ -132,14 +137,18 @@ _REGISTRY: Dict[str, AnalysisTypeSpec] = {
         ),
         trigger_terms=(
             "survival",
+            "生存",
             "time-to-event",
             "time to event",
+            "时间到事件",
             "cox",
             "kaplan",
             "kaplan-meier",
             "hazard",
             "competing risk",
+            "竞争风险",
             "censoring",
+            "删失",
             "follow-up",
         ),
         candidate_steps=(
@@ -305,14 +314,20 @@ _REGISTRY: Dict[str, AnalysisTypeSpec] = {
         description=("Estimate a treatment effect under an explicit causal design."),
         trigger_terms=(
             "causal",
+            "因果",
             "treatment effect",
             "target trial",
             "propensity",
+            "倾向评分",
             "ipw",
             "inverse probability",
+            "逆概率加权",
             "g-formula",
             "instrumental variable",
             "do-calculus",
+            "confounding by indication",
+            "indication bias",
+            "适应证混杂",
         ),
         candidate_steps=(
             "define target estimand and time zero",
@@ -613,6 +628,126 @@ def _keyword_present(text: str, keyword: str) -> bool:
     return re.search(pattern, text) is not None
 
 
+_CLUSTERING_NUISANCE_PATTERNS = (
+    re.compile(r"\bcluster[-\s]+robust\b", flags=re.IGNORECASE),
+    re.compile(
+        r"\bclustered\s+(?:standard\s+errors?|s\.?e\.?s?)\b",
+        flags=re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:hospital|site|centre|center|patient)[-\s]+level\s+clustering\b",
+        flags=re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:account|adjust|control)(?:s|ed|ing)?\s+for\b.{0,64}"
+        r"\bcluster(?:ed|ing)?\b",
+        flags=re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bclustering\s+(?:of|among)\s+patients?\s+within\b",
+        flags=re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:gee|generalized\s+estimating\s+equations?|"
+        r"generalised\s+estimating\s+equations?|mixed[-\s]+effects?)\b"
+        r".{0,96}\b(?:cluster(?:ed|ing)?|within[-\s]+(?:hospital|site|"
+        r"centre|center)|correlation)\b",
+        flags=re.IGNORECASE,
+    ),
+)
+
+
+def strong_trajectory_clustering_framing(text: str) -> bool:
+    """Return whether text asks to *discover groups*, not adjust SEs by group.
+
+    A bare ``cluster`` token is not a task-family signal: it also appears in
+    cluster-robust variance, clustered standard errors, and hospital/site-level
+    dependence.  This predicate requires explicit phenotype-discovery language
+    or a clustering algorithm/output contract.  It is shared by analysis-type,
+    study-design, and plan-contract routing so those three layers cannot disagree.
+    """
+
+    normalised = str(text or "").strip().lower()
+    if not normalised:
+        return False
+    # Existing group membership can be an exposure in an association model.  A
+    # noun such as "subphenotype", "latent class", or "cluster assignment" is
+    # therefore not sufficient: require an action that discovers/fits groups or
+    # an unambiguous unsupervised procedure.  This keeps context inference aligned
+    # with execution routing.
+    discovery_action = re.search(
+        r"\b(?:discover|identify|derive|learn|uncover|fit|perform|run|select|"
+        r"partition|group|cluster)\w*\b",
+        normalised,
+    ) is not None
+    phenotype_target = re.search(
+        r"\b(?:sub[-\s]?phenotypes?|phenotypes?|phenotyping)\b",
+        normalised,
+    ) is not None
+    generic_unsupervised_method = re.search(
+        r"\b(?:clustering|k[-_\s]?means|unsupervised|gmm|"
+        r"gaussian[-_\s]+mixture(?:[-_\s]+models?)?|"
+        r"latent[-_\s]+class(?:es)?[-_\s]+(?:analysis|models?|modeling))\b",
+        normalised,
+    ) is not None
+    explicit_procedure = re.search(
+        r"\b(?:trajectory\s+clustering|unsupervised\s+clustering|"
+        r"k[-_\s]?means(?:[-_\s]+clustering)?|gmm|"
+        r"gaussian[-_\s]+mixture(?:[-_\s]+models?)?|"
+        r"latent[-_\s]+class(?:es)?[-_\s]+(?:analysis|models?|modeling))\b",
+        normalised,
+    ) is not None
+    cluster_action_target = re.search(
+        r"\b(?:cluster|partition|group)\s+(?:the\s+)?"
+        r"(?:[a-z0-9_-]+\s+){0,3}(?:patients?|"
+        r"trajectories?|longitudinal\s+(?:records?|profiles?|features?))\b"
+        r".{0,64}\b(?:using|with|based\s+on|according\s+to|by)\b",
+        normalised,
+    ) is not None
+    cluster_into_groups = re.search(
+        r"\bcluster\b.{0,96}\b(?:patients?|trajectories?|longitudinal\s+"
+        r"(?:records?|profiles?|features?))\b.{0,96}\binto\s+(?:latent\s+)?"
+        r"(?:classes|groups|clusters|phenotypes)\b",
+        normalised,
+    ) is not None
+    chinese_discovery = "聚类" in normalised and any(
+        token in normalised for token in ("识别", "发现", "表型", "轨迹", "分群")
+    )
+    has_nuisance = any(
+        pattern.search(normalised) is not None
+        for pattern in _CLUSTERING_NUISANCE_PATTERNS
+    )
+    explicit_discovery_target = re.search(
+        r"\b(?:discover|identify|derive|learn|uncover)\w*\b.{0,64}"
+        r"\b(?:sub[-\s]?phenotypes?|phenotypes?|trajectory\s+clusters?|"
+        r"latent[-\s]+classes?)\b",
+        normalised,
+    ) is not None
+    english_discovery = (
+        cluster_action_target
+        or cluster_into_groups
+        or (discovery_action and phenotype_target and generic_unsupervised_method)
+        or (discovery_action and explicit_procedure)
+        or (
+            explicit_procedure
+            and not has_nuisance
+            and not re.search(
+                r"\b(?:existing|previously|pre[-\s]?assigned|assigned)\b.{0,48}"
+                r"\b(?:cluster|class|phenotype|membership)\b",
+                normalised,
+            )
+        )
+    )
+    if has_nuisance:
+        # Phrases such as "site-level clustering for patients" and
+        # "cluster-robust longitudinal patient records" contain both halves of
+        # otherwise useful discovery regexes.  In a nuisance-variance context,
+        # require an unambiguous phenotype-discovery action plus an explicit
+        # unsupervised procedure before allowing the family switch.
+        return bool(explicit_procedure and explicit_discovery_target)
+    return bool(english_discovery or chinese_discovery)
+
+
 def _preferred_family_key(context: ResearchContext) -> Optional[str]:
     prefs = context.user_preferences
     if prefs is None:
@@ -630,6 +765,90 @@ def _preferred_family_key(context: ResearchContext) -> Optional[str]:
     return None
 
 
+def _cohort_definition_sensitivity_framing(text: str) -> bool:
+    """Require an actual alternative-definition comparison, not workflow boilerplate.
+
+    Benchmark questions routinely require one primary cohort to state inclusion
+    and exclusion criteria. Those words describe normal study setup and must not
+    override the scientific task family. Cohort-definition *sensitivity* needs
+    either an explicit sensitivity phrase or both a definition/eligibility cue
+    and a comparison/variation cue.
+    """
+
+    if any(
+        _keyword_present(text, phrase)
+        for phrase in (
+            "cohort definition sensitivity",
+            "definition sensitivity",
+            "sensitivity across cohort definitions",
+        )
+    ):
+        return True
+    has_definition = any(
+        _keyword_present(text, phrase)
+        for phrase in (
+            "cohort definition",
+            "eligibility criteria",
+            "case definition",
+            "phenotype definition",
+            "icd definition",
+            "inclusion criteria",
+            "exclusion criteria",
+            "eligibility window",
+        )
+    )
+    has_variation = any(
+        _keyword_present(text, phrase)
+        for phrase in (
+            "alternative",
+            "alternatives",
+            "compare",
+            "comparison",
+            "vary",
+            "variant",
+            "variants",
+            "different",
+            "sensitivity",
+            "robustness",
+            "across definitions",
+        )
+    )
+    return has_definition and has_variation
+
+
+def _treatment_response_framing(text: str) -> bool:
+    """Keep severity/exposure dose-response language out of treatment routing."""
+
+    if any(
+        _keyword_present(text, phrase)
+        for phrase in ("treatment response", "drug response", "therapy response")
+    ):
+        return True
+    has_response = any(
+        _keyword_present(text, phrase)
+        for phrase in (
+            "response",
+            "heterogeneity",
+            "responder",
+            "responders",
+            "nonresponder",
+            "nonresponders",
+        )
+    )
+    has_treatment = any(
+        _keyword_present(text, phrase)
+        for phrase in (
+            "treatment",
+            "therapy",
+            "drug",
+            "medication",
+            "intervention",
+            "administered",
+        )
+    )
+    return has_response and has_treatment
+
+
 def infer_analysis_type(
     context: ResearchContext,
     *,
@@ -640,6 +859,56 @@ def infer_analysis_type(
     if preferred is not None:
         return _REGISTRY[preferred]
     text = _question_text(context)
+    primary_predictor = primary_predictor or context.primary_exposure
+    target_outcome = target_outcome or context.target_outcome
+    cohort_sensitivity_framed = _cohort_definition_sensitivity_framing(text)
+    treatment_response_framed = _treatment_response_framing(text)
+    causal_disclaimer = re.search(
+        r"\b(?:do\s+not|don't|not|avoid|without)\b.{0,40}\bcausal(?:ity|ly)?\b"
+        r"|\bcausal\s+(?:claim|conclusion|interpretation)\b.{0,24}\b"
+        r"(?:not|unsupported|avoid)\b",
+        text,
+    ) is not None
+    strong_causal_framing = any(
+        _keyword_present(text, term)
+        for term in (
+            "treatment effect",
+            "target trial",
+            "propensity",
+            "ipw",
+            "iptw",
+            "inverse probability",
+            "g-formula",
+            "instrumental variable",
+            "covariate balance",
+            "positivity",
+            "weighted estimate",
+            "confounding by indication",
+            "indication bias",
+            "适应证混杂",
+            "因果",
+            "倾向评分",
+            "逆概率加权",
+        )
+    ) or (_keyword_present(text, "causal") and not causal_disclaimer)
+    strong_survival_framing = any(
+        _keyword_present(text, term)
+        for term in (
+            "survival",
+            "生存",
+            "time-to-event",
+            "time to event",
+            "时间到事件",
+            "cox",
+            "kaplan",
+            "kaplan-meier",
+            "hazard",
+            "competing risk",
+            "竞争风险",
+            "censoring",
+            "删失",
+        )
+    )
 
     def _has_any(key: str, extras: Iterable[str] = ()) -> bool:
         terms = list(_REGISTRY[key].trigger_terms) + list(extras)
@@ -649,36 +918,19 @@ def infer_analysis_type(
     if _has_any("reinforcement_learning"):
         return _REGISTRY["reinforcement_learning"]
     # A question explicitly framed as latent-class / trajectory clustering is a
-    # descriptive discovery task even when it mentions "causal" in a DISCLAIMING
-    # caveat ("... do NOT interpret a trajectory class as a causal group", H3).
+    # descriptive discovery task even when it mentions "causal" in a disclaimer.
     # The bare "causal" cue must not hijack it into the causal-emulation family
     # (which then imposes an unsatisfiable causal contract). Gate the causal
     # family behind the ABSENCE of strong clustering framing. The cues below are
-    # ones a genuine causal-emulation task never uses as its primary framing:
-    # H2 (early-vasopressor -> mortality via IPTW) also says "causal" in a caveat
-    # ("do NOT state a causal conclusion the design cannot support") but has NONE
-    # of these, so H2 still routes to causal_inference. Bare "cluster" is
-    # deliberately excluded (it collides with "cluster-robust"/"clustered SE").
-    _strong_clustering_framing = any(
-        _keyword_present(text, cue)
-        for cue in (
-            "latent class",
-            "latent classes",
-            "latent-class",
-            "subphenotype",
-            "sub-phenotype",
-            "phenotype discovery",
-            "trajectory clustering",
-            "cluster trajectories",
-            "cluster the trajectories",
-            "cluster longitudinal",
-        )
-    )
-    if _has_any("causal_inference") and not _strong_clustering_framing:
+    # ones a genuine causal-emulation task never uses as its primary framing.
+    # Bare "cluster" is excluded because it collides with cluster-robust and
+    # clustered-standard-error language.
+    _strong_clustering_framing = strong_trajectory_clustering_framing(text)
+    if strong_causal_framing and not _strong_clustering_framing:
         return _REGISTRY["causal_inference"]
-    if _has_any("trajectory_clustering"):
+    if _strong_clustering_framing:
         return _REGISTRY["trajectory_clustering"]
-    if _has_any("survival"):
+    if strong_survival_framing:
         return _REGISTRY["survival"]
     if _has_any("dynamic_prediction"):
         return _REGISTRY["dynamic_prediction"]
@@ -689,21 +941,23 @@ def infer_analysis_type(
     if _has_any(
         # NOTE: do NOT add the bare word "model" here. As a strong pre-scoring
         # cue it false-fires on association/descriptive questions that merely say
-        # "model X continuously" or "regression model" (e.g. the E2 lactate item
-        # was mis-stamped prediction_model by "you may model lactate
-        # continuously"). The real prediction cues (predict/auroc/calibration/
-        # brier/...) are already in prediction_model's trigger_terms.
+        # "model X continuously" or "regression model". The real prediction cues
+        # (predict/AUROC/calibration/Brier/...) are already in trigger_terms.
         "prediction_model",
         extras=("evaluation metric", "evaluation metrics"),
     ):
         return _REGISTRY["prediction_model"]
     if _has_any("measurement_bias_audit"):
         return _REGISTRY["measurement_bias_audit"]
-    if _has_any("cohort_definition_sensitivity"):
+    if cohort_sensitivity_framed and _has_any("cohort_definition_sensitivity"):
         return _REGISTRY["cohort_definition_sensitivity"]
     if _has_any("score_policy_sensitivity"):
         return _REGISTRY["score_policy_sensitivity"]
-    if _has_any("data_quality_audit") and not any(
+    if (
+        _has_any("data_quality_audit")
+        and not (primary_predictor and target_outcome)
+        and not cohort_sensitivity_framed
+        and not any(
         _has_any(key)
         for key in (
             "association_study",
@@ -712,12 +966,12 @@ def infer_analysis_type(
             "trajectory_clustering",
             "reinforcement_learning",
             "measurement_bias_audit",
-            "cohort_definition_sensitivity",
             "score_policy_sensitivity",
+        )
         )
     ):
         return _REGISTRY["data_quality_audit"]
-    if _has_any("treatment_response"):
+    if treatment_response_framed and _has_any("treatment_response"):
         return _REGISTRY["treatment_response"]
 
     scores: Dict[str, int] = {key: 0 for key in _REGISTRY}
@@ -725,6 +979,16 @@ def infer_analysis_type(
         for term in spec.trigger_terms:
             if _keyword_present(text, term):
                 scores[key] += 1
+    if not cohort_sensitivity_framed:
+        scores["cohort_definition_sensitivity"] = 0
+    if not treatment_response_framed:
+        scores["treatment_response"] = 0
+    if not strong_causal_framing:
+        scores["causal_inference"] = 0
+    if not strong_survival_framing:
+        # ``follow-up`` alone describes ascertainment for many fixed binary
+        # endpoints and must not switch the estimand to time-to-event.
+        scores["survival"] = 0
 
     if target_outcome and any(v.role == VariableRole.TIME for v in context.variables):
         scores["prediction_model"] += (
@@ -743,6 +1007,11 @@ def infer_analysis_type(
             )
             else 0
         )
+    if not _strong_clustering_framing:
+        # The registry still contains broad catalog/search terms such as
+        # ``cluster`` and ``trajectory``. They may aid documentation lookup, but
+        # cannot score an execution family without the strong task framing above.
+        scores["trajectory_clustering"] = 0
 
     if any(v.role == VariableRole.TIME for v in context.variables):
         scores["survival"] += (
@@ -756,16 +1025,27 @@ def infer_analysis_type(
     # Word-boundary match, not substring: bare ``in`` made short modality tokens
     # like "ct" (CT scan) fire inside ordinary lab names — "ct" is a substring of
     # "la(ct)ate" — wrongly scoring a plain association cohort as multimodal.
-    if any(
+    has_multimodal_variable = any(
         _keyword_present(((v.name or "") + " " + (v.description or "")).lower(), token)
         for v in context.variables
         for token in ("note", "notes", "text", "waveform", "ecg", "image", "imaging", "cxr", "ct", "mri")
-    ):
+    )
+    if has_multimodal_variable:
         scores["multimodal"] += 2
     if context.cross_database_validation:
         scores["validation"] += 1
         scores["cross_database_replication"] += 2
 
+    if (
+        target_outcome
+        and _has_any("association_study")
+        and not has_multimodal_variable
+    ):
+        # An explicit association/effect question is stronger evidence than the
+        # mere presence of an outcome column.  More specialised families have
+        # already returned above, so this only prevents the generic descriptive
+        # fallback from winning a tie.
+        scores["association_study"] += 2
     if primary_predictor and target_outcome:
         scores["association_study"] += 2
     elif target_outcome:
@@ -806,25 +1086,23 @@ def planner_analysis_type_guide() -> str:
 
 
 def locked_analysis_type_guide(spec: AnalysisTypeSpec) -> str:
-    """Focused prompt block naming the single inferred family for THIS study.
+    """Focused, advisory prompt block naming the inferred family.
 
-    Injected ahead of the full catalog so the planner builds the plan around
-    the locked family's candidate modules instead of silently collapsing every
-    question to a generic association/logistic plan. The full catalog still
-    follows as reference, and the planner may override with explicit
-    justification when the question clearly belongs to another family.
+    The historical function name remains for compatibility. The inference helps
+    prevent generic-plan collapse but is not an execution lock; the planner may
+    select a better-supported family with an explicit rationale.
     """
     return (
-        f"LOCKED ANALYSIS FAMILY FOR THIS STUDY: `{spec.key}` — {spec.name}.\n"
+        f"INFERRED ANALYSIS FAMILY SUGGESTION: `{spec.key}` — {spec.name}.\n"
         f"{spec.description}\n"
         f"Default module backbone (use these as your step set unless the "
         f"context clearly rules one out): {', '.join(spec.candidate_steps)}.\n"
         f"Mandatory guardrails for this family: {' '.join(spec.guardrails)}\n"
-        "Build the plan around THIS family and pick methods/figures it calls "
-        "for. Do not default to a generic association/logistic plan when the "
-        "locked family is survival, trajectory_clustering, dynamic_prediction, "
+        "Use this family when it matches the estimand and pick methods/figures it "
+        "calls for. Do not default to a generic association/logistic plan when the "
+        "suggested family is survival, trajectory_clustering, dynamic_prediction, "
         "causal_inference, etc. If the research question clearly belongs to a "
-        "different family than the one locked above, you may switch — but only "
+        "different family than the suggestion above, you may switch — but only "
         "with an explicit one-line justification in `rationale`.\n"
     )
 
@@ -851,6 +1129,7 @@ __all__ = [
     "list_analysis_types",
     "get_analysis_type",
     "infer_analysis_type",
+    "strong_trajectory_clustering_framing",
     "planner_analysis_type_guide",
     "locked_analysis_type_guide",
     "analysis_type_catalog_markdown",

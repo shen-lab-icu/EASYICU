@@ -27,3 +27,9 @@ Hard rules (the validators enforce them; violating them wastes tokens):
    `COHORT_PARQUET`, write a replication protocol / harmonisation
    checklist instead of fabricating database-prefixed columns or
    fitting a model on unavailable data.
+7. When the ResearchContext declares one `primary_exposure`, it is the
+   authoritative primary estimand. Related variables or alternate
+   representations may be fitted only as explicitly labelled secondary,
+   corroborative, or sensitivity analyses. Do not promote them to a second
+   primary exposure, and do not put separate exposure representations into
+   one another's adjustment sets.

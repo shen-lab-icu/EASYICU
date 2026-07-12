@@ -232,38 +232,22 @@ _SYNTACTIC_REPAIRS = {
 _STRUCTURAL_REPAIRS = {
     "cohort_csv_to_parquet_v1",
     "cohort_file_direct_read_v1",
-    "cut_bins_flatten_v1",
     "dedupe_predictor_numeric_design_v1",
     "dedupe_required_cols_outcome_v1",
-    "derived_analysis_cohort_materialization_v1",
-    "dtype_coerce_v1",
-    "filter_x_cols_after_dummy_encoding_v1",
-    "filter_x_cols_before_dropna_after_dummy_encoding_v1",
     "include_outcome_in_all_vars_v1",
     "inline_missing_to_jsonable_utils_v1",
     "json_dump_numpy_key_sanitizer_v1",
     "local_wilson_proportion_confint_v1",
     "matplotlib_errorbar_xerr_shape_v1",
-    "missing_indicator_source_df_v1",
-    "prediction_preserve_categorical_before_ohe_v1",
     "primary_predictor_safe_summary_lookup_v1",
     "proportion_confint_nobs_keyword_v1",
-    "publication_bundle_promote_script_v1",
     "publication_bundle_promote_v1",
-    "publication_contract_optional_v1",
     "remove_pandas_cut_observed_keyword_v1",
-    "robustness_encode_sex_before_numeric_checks_v1",
-    "seaborn_matplotlib_fallback_v1",
-    "sex_binary_encode_for_logit_v1",
-    "sex_covariate_numeric_loop_guard_v1",
-    "sex_numeric_coercion_before_dropna_v1",
     "sklearn_bool_imputer_cast_v1",
     "sibling_figure_exports_promote_v1",
     "statsmodels_conf_int_filter_axis_v1",
     "statsmodels_dummy_design_float_v1",
-    "statsmodels_endog_exog_index_align_v1",
     "statsmodels_helper_design_float_v1",
-    "strip_unknown_cols_from_list_literals_v1",
     "table_one_binary_key_string_v1",
     "prediction_publication_bundle_from_parent_outputs_v1",
     # Step-summary salvage that faithfully relocates the agent's own output
@@ -279,17 +263,7 @@ _STRUCTURAL_REPAIRS = {
     "age_covariate_no_measured_indicator_v1",
 }
 
-_CONTRACT_FILL_REPAIRS = {
-    "primary_predictor_omitted_from_design_v1",
-    "robustness_missingness_contract_v1",
-    "robustness_predictor_design_and_plot_v1",
-    "categorical_primary_association_selection_v1",
-    # Minimal step-summary backfill that extracts/selects from the step's own
-    # on-disk CSV artefacts (e.g. first non-intercept association row, mean of
-    # model_performance rows). Values are preexisting; the selection rule must
-    # be recorded.
-    "summary_salvage_minimal_contract_v1",
-}
+_CONTRACT_FILL_REPAIRS: set[str] = set()
 
 _METHOD_SUBSTITUTION_REPAIRS = {
     # Drops overadjustment covariates the overadjustment_auditor objectively
@@ -297,7 +271,12 @@ _METHOD_SUBSTITUTION_REPAIRS = {
     # changes the estimand specification, so it must be disclosed even though
     # the trigger is an auditor finding rather than a model failure.
     "drop_overadjustment_covariates_v1",
-    "formula_dummy_name_fallback_v1",
+    "categorical_primary_association_selection_v1",
+    "cut_bins_flatten_v1",
+    "derived_analysis_cohort_materialization_v1",
+    "dtype_coerce_v1",
+    "filter_x_cols_after_dummy_encoding_v1",
+    "filter_x_cols_before_dropna_after_dummy_encoding_v1",
     "logit_regularized_fit_v1",
     "logreg_impute_v1",
     # Reduces the design matrix to a full-rank column subset (preserving the
@@ -305,13 +284,36 @@ _METHOD_SUBSTITUTION_REPAIRS = {
     # singular-matrix null result. Both the covariate set and the estimator
     # change, so results require disclosure.
     "rank_safe_statsmodels_design_v1",
-    "ordinal_primary_association_fallback_v1",
+    "missing_indicator_source_df_v1",
+    "prediction_preserve_categorical_before_ohe_v1",
+    "primary_predictor_omitted_from_design_v1",
+    "publication_bundle_promote_script_v1",
+    "publication_contract_optional_v1",
+    "robustness_missingness_contract_v1",
+    "robustness_encode_sex_before_numeric_checks_v1",
+    "robustness_predictor_design_and_plot_v1",
+    "seaborn_matplotlib_fallback_v1",
+    "sex_binary_encode_for_logit_v1",
+    "sex_covariate_numeric_loop_guard_v1",
+    "sex_numeric_coercion_before_dropna_v1",
+    "statsmodels_endog_exog_index_align_v1",
+    "strip_unknown_cols_from_list_literals_v1",
+    "summary_salvage_minimal_contract_v1",
+    "zero_impute_to_complete_case_v1",
     "outcome_incidence_descriptive_repair_v1",
     "prediction_discrimination_template_v1",
     "prediction_split_minimal_v1",
     "table_one_descriptive_repair_v1",
     "validation_nonconvergence_fallback_v1",
 }
+
+
+# Generic code repair may fix syntax or representation, but it must not replace
+# an agent-authored scientific or descriptive analysis. Standard products such
+# as Table One and outcome incidence belong in explicitly routed
+# AuxiliaryRunners with typed inputs; the old syntax-triggered templates remain
+# available only as historical provenance and direct unit-test fixtures.
+AUTOMATIC_METHOD_SUBSTITUTION_ALLOWLIST: frozenset[str] = frozenset()
 
 
 REPAIR_METADATA: Dict[str, RepairMetadata] = {
@@ -358,8 +360,10 @@ _PATTERN_METADATA: Tuple[Tuple[str, RepairMetadata], ...] = (
         "undefined_helper_stub_",
         _meta(
             "undefined_helper_stub_*_v1",
-            RepairClass.STRUCTURAL,
-            invariants=STRUCTURAL_INVARIANTS,
+            RepairClass.METHOD_SUBSTITUTION,
+            invariants=METHOD_SUBSTITUTION_INVARIANTS,
+            introduces_numbers=True,
+            requires_disclosure=True,
         ),
     ),
 )
@@ -395,6 +399,22 @@ def repair_metadata_for(repair_id: str) -> RepairMetadata:
         requires_disclosure=True,
         description="Conservative fallback for unclassified repair id.",
         classification_source="fallback:unknown_method_substitution",
+    )
+
+
+def automatic_repair_allowed(repair_id: str, *, step: Any = None) -> bool:
+    """Whether a deterministic repair may run without analyst authorization.
+
+    Unknown IDs inherit the conservative METHOD_SUBSTITUTION classification and
+    are denied. ``step`` is accepted so this stays the single policy boundary
+    if a future typed AuxiliaryRunner is authorized.
+    """
+
+    del step
+    metadata = repair_metadata_for(repair_id)
+    return bool(
+        metadata.repair_class is not RepairClass.METHOD_SUBSTITUTION
+        or repair_id in AUTOMATIC_METHOD_SUBSTITUTION_ALLOWLIST
     )
 
 

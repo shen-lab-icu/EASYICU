@@ -13,7 +13,7 @@ A `planned` method carries no runner. It must fail closed if requested as a prim
 
 | Method | Tier | Implementation | Produces | Runner |
 | --- | --- | --- | --- | --- |
-| Cox proportional-hazards hazard ratio | primary | deterministic ✅ | cox_model.csv (hazard_ratio->point_estimate, ci_low, ci_high) + forest panel | `survival_primary_cox` |
+| Cox proportional-hazards hazard ratio | primary | LLM-coded ⚠️ | agent-declared Cox result (hazard_ratio, ci_low, ci_high) + deterministic forest panel | `time_to_event` |
 | Kaplan-Meier curves + log-rank by exposure | standard_supporting | deterministic ✅ | kaplan_meier curve data + log-rank; KM panel | `time_to_event` |
 | Proportional-hazards check (Schoenfeld residuals / PH test) | standard_supporting | planned ⛔ | schoenfeld_test.csv (covariate, chi2, p) + schoenfeld_plot (diagnostics panel slot) | — |
 | Subgroup hazard ratios / interaction forest | standard_supporting | LLM-coded ⚠️ | subgroup HR forest | — |
@@ -25,9 +25,9 @@ A `planned` method carries no runner. It must fail closed if requested as a prim
 
 | Method | Tier | Implementation | Produces | Runner |
 | --- | --- | --- | --- | --- |
-| Stabilised-IPTW marginal odds ratio | primary | deterministic ✅ | iptw effect table (marginal OR, ci) + target_trial_protocol.csv | `causal_primary_iptw` |
+| Stabilised-IPTW marginal odds ratio | primary | LLM-coded ⚠️ | agent-declared causal effect table + target-trial/identification protocol | `causal_emulation` |
 | Covariate balance (SMD love plot, before vs after weighting) | standard_supporting | deterministic ✅ | covariate_balance.csv (covariate, smd_before, smd_after) + love-plot panel | `causal_emulation` |
-| Positivity / overlap (propensity distribution + trimming) | standard_supporting | deterministic ✅ | propensity distribution + trimming report | `causal_primary_iptw` |
+| Positivity / overlap (propensity distribution + trimming) | standard_supporting | LLM-coded ⚠️ | propensity distribution + trimming report | — |
 | E-value (sensitivity to unmeasured confounding) | standard_supporting | planned ⛔ | evalue.csv (point_estimate, evalue, evalue_ci) | — |
 | Negative-control outcome / exposure | standard_supporting | LLM-coded ⚠️ | negative-control contrast | — |
 | Doubly-robust / matching sensitivity (AIPW, TMLE, PS matching) | exploratory | planned ⛔ | alternative-estimator effect table | — |
@@ -37,7 +37,7 @@ A `planned` method carries no runner. It must fail closed if requested as a prim
 
 | Method | Tier | Implementation | Produces | Runner |
 | --- | --- | --- | --- | --- |
-| Ordinal dose-response (OR per +1 stage, per-stage forest, monotonicity) | primary | deterministic ✅ | dose_response.csv (stage, odds_ratio, ci_low, ci_high) + forest | `ordinal_dose_response` |
+| Ordinal dose-response (OR per +1 stage, per-stage forest, monotonicity) | primary | LLM-coded ⚠️ | agent-declared ordered trend + dose_response.csv; deterministic forest | — |
 | Adjusted association (logistic / linear) | primary | LLM-coded ⚠️ | adjusted effect estimate (bound via NumericClaim) + forest (deterministic figure) | — |
 | Multiple adjustment sets (crude / minimal / full) | standard_supporting | LLM-coded ⚠️ | nested-model effect table | — |
 | Effect modification / interaction + subgroup forest | standard_supporting | LLM-coded ⚠️ | interaction test + subgroup forest | — |
@@ -45,7 +45,7 @@ A `planned` method carries no runner. It must fail closed if requested as a prim
 | Multiple-testing correction (FDR / Bonferroni) | standard_supporting | deterministic ✅ | adjusted p-value table | `multiple_testing` |
 | Restricted cubic spline dose-response (continuous exposure) | standard_supporting | planned ⛔ | spline_dose_response.csv (x, log_or, ci) + spline panel | — |
 | E-value (sensitivity to unmeasured confounding) | standard_supporting | planned ⛔ | evalue.csv | — |
-| Robustness panel (alternative specifications) | exploratory | deterministic ✅ | robustness_panel.csv | `deterministic_sensitivity` |
+| Robustness panel (alternative specifications) | exploratory | deterministic ✅ | robustness_panel.csv | `robustness_sensitivity` |
 | Mediation / quantitative bias analysis | planned | planned ⛔ | mediation / bias-analysis table | — |
 
 ## Prediction / risk modelling
@@ -74,7 +74,7 @@ A `planned` method carries no runner. It must fail closed if requested as a prim
 | Stability / reproducibility (bootstrap, consensus, adjusted Rand) | standard_supporting | LLM-coded ⚠️ | stability report | — |
 | Cluster sizes + degenerate-cluster flag | standard_supporting | deterministic ✅ | cluster_sizes.csv; figure panel | `phenotyping` |
 | Outcome-by-cluster descriptive comparison | standard_supporting | deterministic ✅ | outcome_by_cluster.csv; figure panel | `phenotyping` |
-| Trajectory-feature clustering (deterministic) | primary | deterministic ✅ | trajectory_features.csv + cluster assignments + silhouette/stability/size QC + outcome-by-trajectory | `trajectory_clustering` |
+| Trajectory-feature clustering | primary | LLM-coded ⚠️ | agent-declared feature representation + cluster assignments + silhouette/stability/size QC + outcome-by-trajectory | `phenotyping` |
 | LCGA / group-based trajectory modelling (GBTM) | planned | planned ⛔ | latent-class trajectory model | — |
 | Mixed-effects / growth-mixture trajectory models | planned | planned ⛔ | mixed-effects / GMM trajectory model | — |
 | DTW / time-series distance clustering | planned | planned ⛔ | DTW distance clustering | — |

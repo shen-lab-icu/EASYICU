@@ -218,6 +218,12 @@ def _format_context(ctx: ResearchContext) -> str:
         lines.append("Exclusion: " + "; ".join(ctx.cohort.exclusion_criteria))
     if ctx.target_outcome:
         lines.append(f"Target outcome: {ctx.target_outcome}")
+    if ctx.primary_exposure:
+        lines.append(
+            f"Primary exposure/predictor: {ctx.primary_exposure} "
+            "(authoritative; related representations are secondary unless the "
+            "study contract explicitly replaces it)"
+        )
     lines.append("Time windows:")
     for w in ctx.time_windows:
         lines.append(f"  - {w.name}: {w.start_hours}-{w.end_hours}h from {w.anchor}")
@@ -288,8 +294,8 @@ def _format_concept_id_allowlist() -> str:
     lines = [
         "ALLOWED concept_ids — the ONLY values acceptable in any "
         "CohortDefinition or RobustnessSpec.cohort_override.concept_id field. "
-        'Synthesizing new names (e.g. "sofa2_admission", '
-        '"kdigo_aki_max", "sepsis_onset_window") is forbidden — these '
+        'Synthesizing new names (e.g. "score_at_admission", '
+        '"concept_peak_window", "condition_onset_window") is forbidden — these '
         "are operationalizations, not concepts. To operationalize a concept "
         "over a time window, use the 5-tuple form: "
         'concept_id="<one from the list below>" + time_window + aggregation.',
@@ -356,18 +362,29 @@ def _build_planner_user_prompt(context: ResearchContext) -> str:
         "prefixed variables such as eicu:age in `inputs`. Honor "
         "explicit user preferences and requested outputs when they "
         "are compatible with the cohort and analysis family.\n"
-        "For prediction_model tasks, keep the executable plan compact: "
-        "use one self-contained model training/evaluation step that reads "
-        "the cohort and writes AUROC, Brier/calibration, baseline prevalence, "
-        "model metadata, and the discrimination/calibration figure. Do not "
-        "split training, performance evaluation, figure generation, and "
-        "baseline comparison into separate code steps unless those later "
-        "steps can be completed directly from COHORT_PARQUET without reading "
-        "prior step outputs. For clustering tasks, likewise keep cluster-label "
-        "generation, cluster characteristics, silhouette/stability metrics, "
-        "post-hoc mortality by cluster, and the clustering figure in one "
-        "self-contained clustering step; do not create later mortality-by-cluster "
-        "steps that require cluster labels from prior outputs.\n\n"
+        "Choose step boundaries that make the analysis reviewable. A later step "
+        "may consume an earlier standardized artifact only when that dependency "
+        "is explicit in `inputs` and the producer declares it in "
+        "`expected_outputs`; never rely on hidden in-memory state. Do not force "
+        "prediction, clustering, or any other family into a hard-coded mega-step "
+        "or split it solely to fit a shared pipeline template.\n\n"
+        "The typed `model_requirements` roster currently covers only a complex "
+        "binary/continuous adjusted-association step whose method is exactly "
+        "`adjusted_association_models` and whose expected outputs include "
+        "`table:adjusted_association_estimates`. For that supported contract, "
+        "record each pre-specified estimand/model in the roster instead of "
+        "leaving the scientific decision only in prose. Each "
+        "entry has `requirement_id`, `outcome`, `outcome_type` (binary or "
+        "continuous), `method_family`, `exposure_source`, `analysis_role` "
+        "(primary, secondary, or sensitivity), `analysis_set` (source_aware or "
+        "complete_case), and `required_for_step_success`. You decide this roster; "
+        "the execution layer only verifies it. `method_family` must be a binary "
+        "logistic family or a continuous linear/quantile family matching "
+        "`outcome_type`. Primary and secondary entries must be required for step "
+        "success; only a sensitivity entry may be optional. Leave the array empty "
+        "for survival, prediction, "
+        "mixed-effects, clustering, and every other analysis family; those use "
+        "their own family-specific planning and validation contracts.\n\n"
         + _format_concept_id_allowlist()
         + "\n\n"
         + _format_ctas_schema_constraints()
@@ -424,7 +441,8 @@ def _build_planner_user_prompt(context: ResearchContext) -> str:
         '      "inputs": ["<variable names from context>"],\n'
         '      "expected_outputs": ["table:table_one"],\n'
         '      "method": "descriptive",\n'
-        '      "icu_rule_refs": ["aggregation_rule_for"]\n'
+        '      "icu_rule_refs": ["aggregation_rule_for"],\n'
+        '      "model_requirements": []\n'
         "    }\n"
         "  ],\n"
         '  "robustness_specs": [\n'
@@ -528,7 +546,8 @@ class PlannerAgent:
                 "research_question (string), cohort (object or null), "
                 "steps (array of objects "
                 "each with step_id, intent, inputs, expected_outputs, "
-                "method, icu_rule_refs), rationale (string). "
+                "method, icu_rule_refs, and optional model_requirements), "
+                "rationale (string). "
                 "All string values must be plain ASCII or UTF-8 quoted strings; "
                 "do not use special Unicode whitespace inside values."
             ),
@@ -565,11 +584,12 @@ class PlannerAgent:
         data, dropped = _normalise_plan_payload(data)
         self.last_dropped_plan_keys = dropped
         plan = AnalysisPlan.model_validate(data)
-        # Stamp the locked analysis family deterministically. The LLM is given
-        # the family in its prompt, but the field used downstream for method
-        # and figure routing is authoritative from infer_analysis_type so it
-        # cannot silently collapse to a generic association plan.
-        plan.analysis_type = infer_analysis_type(context).key
+        # Family inference is a planner hint, not execution authority. Preserve
+        # a valid agent-selected family (and its rationale); only fill the field
+        # when the agent omitted it. Downstream contract checks may surface a
+        # mismatch for critic/replanner review, but never rewrite the science.
+        if not str(plan.analysis_type or "").strip():
+            plan.analysis_type = infer_analysis_type(context).key
         return plan
 
 
@@ -1266,12 +1286,10 @@ _MAX_PRE_EXEC_COMPATIBILITY_REPAIRS = 2
 
 
 # Output-token budget for analysis-script generation and repair. A full
-# robustness step (multiple model fits + an aic/ci summary block) easily runs
-# past 4096 output tokens with a verbose model; the E1 20260611 v4-flash run
-# truncated analysis.py mid-expression ("models.append(res", "float(aic_linear
-# - a") -> SyntaxError "'(' was never closed". 8192 is the DeepSeek v4 output
-# ceiling and roughly doubles the headroom. If truncation recurs at this cap,
-# add a finish_reason=="length" continuation rather than raising it blindly.
+# robustness step (multiple model fits + an AIC/CI summary block) can exceed
+# 4096 output tokens with a verbose model and truncate analysis.py mid-expression.
+# 8192 roughly doubles the headroom. If truncation recurs at this cap, add a
+# finish_reason=="length" continuation rather than raising it blindly.
 _CODER_MAX_TOKENS = 8192
 
 
@@ -1313,6 +1331,8 @@ class CoderAgent:
                     f"Step intent: {step.intent}\n"
                     f"Step inputs: {step.inputs}\n"
                     f"Expected outputs: {step.expected_outputs}\n"
+                    "Model requirements: "
+                    f"{json.dumps([item.model_dump(mode='json') for item in step.model_requirements], ensure_ascii=False)}\n"
                     f"Method: {step.method or '(unspecified — choose conservatively)'}\n\n"
                     + coder_method_capability_block()
                     + "\n\n"
@@ -1375,16 +1395,22 @@ class CoderAgent:
         the coder the traceback once and asks for a complete replacement
         script.
         """
+        family = infer_analysis_type(context)
         messages = [
             LLMMessage(role="system", content=_SYSTEM_GUIDE + _CODER_GUIDE),
             LLMMessage(
                 role="user",
                 content=(
                     f"REPAIR THE PYTHON CODE FOR STEP {step.step_id}.\n"
+                    f"Locked analysis family: {family.key} ({family.name}). "
+                    "Do not let generic cohort-setup or data-quality workflow "
+                    "requirements replace the current step's scientific role.\n"
                     f"Repair attempt: {attempt}\n"
                     f"Step intent: {step.intent}\n"
                     f"Step inputs: {step.inputs}\n"
                     f"Expected outputs: {step.expected_outputs}\n"
+                    "Model requirements: "
+                    f"{json.dumps([item.model_dump(mode='json') for item in step.model_requirements], ensure_ascii=False)}\n"
                     f"Method: {step.method or '(unspecified)'}\n\n"
                     "The previous script failed at execution time. Return "
                     "only a complete replacement Python script that follows "
@@ -1397,11 +1423,14 @@ class CoderAgent:
                     "- IMPORTS: " + coder_method_capability_block() + "\n"
                     "  **There is NO `easyicu.research_agent.rcs` / "
                     "`.metrics` / `.utils` etc.** — the analysis script runs in a "
-                    "sandbox that has NO easyicu sub-modules on the path. If "
-                    "you need restricted cubic splines, write your own helper "
-                    "with `patsy` or `numpy`; if you need calibration, import "
-                    "from `sklearn.calibration`. Do not import any `easyicu.*` "
-                    "or undocumented project-local modules.\n"
+                    "sandbox with a closed import contract. A method-specific "
+                    "code contract above may explicitly name documented "
+                    "`easyicu.research_agent.methods.*` modules; only those exact "
+                    "modules and symbols are allowed for that method. All other "
+                    "`easyicu.*` imports and undocumented project-local modules "
+                    "remain forbidden. If you need restricted cubic splines and "
+                    "no documented helper was named, use `patsy` or `numpy`; if "
+                    "you need calibration, import from `sklearn.calibration`.\n"
                     "- If this is an association or prediction step, keep every named "
                     "primary predictor/exposure in the fitted design matrix.\n"
                     "- If you read `result.params[name]`, `result.conf_int().loc[name]`, "
@@ -1937,6 +1966,17 @@ def _normalise_plan_payload(
         "expected_outputs",
         "method",
         "icu_rule_refs",
+        "model_requirements",
+    }
+    allowed_model_requirement = {
+        "requirement_id",
+        "outcome",
+        "outcome_type",
+        "method_family",
+        "exposure_source",
+        "analysis_role",
+        "analysis_set",
+        "required_for_step_success",
     }
     allowed_robustness_spec = {
         "spec_id",
@@ -1949,6 +1989,7 @@ def _normalise_plan_payload(
     dropped: Dict[str, List[str]] = {
         "top_level": [],
         "steps": [],
+        "model_requirements": [],
         "robustness_specs": [],
     }
     out = {}
@@ -1967,6 +2008,28 @@ def _normalise_plan_payload(
                 else:
                     step_id = raw_step.get("step_id") or f"step[{idx}]"
                     dropped["steps"].append(f"{step_id}:{key}")
+            requirements = []
+            for req_idx, raw_requirement in enumerate(
+                step_payload.get("model_requirements", []) or []
+            ):
+                if not isinstance(raw_requirement, dict):
+                    requirements.append(raw_requirement)
+                    continue
+                requirement_payload = {}
+                requirement_id = (
+                    raw_requirement.get("requirement_id")
+                    or f"step[{idx}].model_requirements[{req_idx}]"
+                )
+                for key, value in raw_requirement.items():
+                    if key in allowed_model_requirement:
+                        requirement_payload[key] = value
+                    else:
+                        dropped["model_requirements"].append(
+                            f"{requirement_id}:{key}"
+                        )
+                requirements.append(requirement_payload)
+            if "model_requirements" in step_payload:
+                step_payload["model_requirements"] = requirements
             steps.append(step_payload)
     out["steps"] = steps
     specs = []
@@ -2109,9 +2172,8 @@ def _sentences_missing_evidence_tokens(scaffold: str) -> List[str]:
         # they carry numbers + claimy words (auroc/brier/death) but reference
         # evidence via a plaintext ``evidence=<step>`` token (no ``](evidence/)``
         # link) when a claim binds to a step-level virtual evidence, so the
-        # support check mis-flagged the whole footnote block as one unsupported
-        # result sentence and falsely tripped manuscript_ready=False (E2). The
-        # block proves the claims ARE bound; it must not be scanned as prose.
+        # support check can mis-flag the whole footnote block as unsupported
+        # prose. The block proves the claims are bound and is not prose to audit.
         if re.match(r"^\[\^[^\]]+\]:", stripped):
             continue
         match = section_label_re.match(stripped)

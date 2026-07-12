@@ -1694,6 +1694,70 @@ def _select_existing_step_publication_figure_bundle(
                     group.setdefault("source_records", []).append(record)
                     group["order"] = max(int(group.get("order", 0)), order)
 
+    # Content-addressed evidence registration can deduplicate a copied source
+    # table back to its original parent-step record.  In that common case the
+    # publication-figure child has valid contract references but no table whose
+    # ``produced_by_step`` equals the child step, so the one-pass association
+    # above incorrectly declares the bundle source-less.  Resolve every local
+    # table/evidence reference named by the contract across the whole store;
+    # exact basename/stem/id matching keeps the promotion evidence-bound.
+    table_records = [record for record in records if record.kind == "table"]
+    record_order = {
+        record.evidence_id: order for order, record in enumerate(records)
+    }
+    for group in groups.values():
+        refs = _contract_payload_source_references(
+            group.get("contract_payload") or {}
+        )
+        attached = list(group.get("source_records") or [])
+        attached_ids = {record.evidence_id for record in attached}
+
+        def record_step_id(record: EvidenceRecord) -> str:
+            return str(
+                (record.metadata or {}).get("step_id")
+                or getattr(record, "produced_by_step", "")
+                or ""
+            )
+
+        def record_tokens(record: EvidenceRecord) -> set[str]:
+            basename = _record_artifact_basename(record).lower()
+            return {
+                record.evidence_id.lower(),
+                basename,
+                Path(basename).stem,
+                Path(record.relative_path).name.lower(),
+                Path(record.relative_path).stem.lower(),
+            }
+
+        group_step_id = str(group.get("step_id") or "")
+        direct_parent_id = group_step_id.removesuffix("_figure")
+        for ref in refs:
+            token = str(ref).strip().lower()
+            if not token:
+                continue
+            ref_tokens = {token, Path(token).name, Path(token).stem}
+            candidates = [
+                record
+                for record in table_records
+                if ref_tokens & record_tokens(record)
+            ]
+            if not candidates:
+                continue
+            candidates.sort(
+                key=lambda record: (
+                    2 if record_step_id(record) == group_step_id else 0,
+                    1 if record_step_id(record) == direct_parent_id else 0,
+                    record_order.get(record.evidence_id, -1),
+                ),
+                reverse=True,
+            )
+            record = candidates[0]
+            if record.evidence_id in attached_ids:
+                continue
+            attached.append(record)
+            attached_ids.add(record.evidence_id)
+        group["source_records"] = attached
+
     viable = [
         group
         for group in groups.values()
@@ -1705,6 +1769,30 @@ def _select_existing_step_publication_figure_bundle(
         return None
     ranked = sorted(viable, key=_step_publication_bundle_rank)
     return ranked[0]
+
+
+def _contract_payload_source_references(payload: Any) -> List[str]:
+    """Collect source/evidence references from a raw figure contract."""
+
+    references: List[str] = []
+
+    def collect(value: Any) -> None:
+        if isinstance(value, str):
+            token = value.strip()
+            if token:
+                references.append(token)
+            return
+        if isinstance(value, (list, tuple, set)):
+            for item in value:
+                collect(item)
+
+    if not isinstance(payload, dict):
+        return references
+    collect(payload.get("source_data"))
+    for panel in payload.get("panels") or []:
+        if isinstance(panel, dict):
+            collect(panel.get("evidence_ids"))
+    return list(dict.fromkeys(references))
 
 
 _PRIMARY_RESULT_PANEL_ROLES = {

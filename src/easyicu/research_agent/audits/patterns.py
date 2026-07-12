@@ -40,6 +40,7 @@ import re
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
+from ..ordered_stratified_contract import ordered_stratified_script_findings
 from ..schema import (
     AnalysisStep,
     ConceptDescriptor,
@@ -392,6 +393,11 @@ class AnalysisPatternAuditor:
         alias_map = _build_alias_map(tree)
         inspection = _inspect_script(tree)
         findings: List[ValidationFinding] = []
+        findings.extend(
+            ordered_stratified_script_findings(step=step, script_text=script_text)
+            if step is not None
+            else []
+        )
 
         # ------------------------------------------------------------
         # 1) Distance-based estimators on ordinal / composite scores

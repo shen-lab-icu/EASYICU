@@ -56,17 +56,11 @@ from .code_repair_helpers import (  # noqa: F401  (re-exported for back-compat)
     _extract_required_cols_list,
     _family_allows_binary_model_repair,
     _infer_analysis_cohort_source_column,
-    _infer_binary_outcome_from_code,
-    _infer_overexpanded_categorical_predictor,
-    _infer_primary_association_predictor_from_code,
-    _normalise_predictor_column_candidate,
-    _ordinal_primary_association_fallback_code,
     _patch_derived_analysis_cohort_materialization,
     _patch_json_dump_numpy_key_sanitizer,
     _patch_primary_predictor_into_design_matrix,
     _patch_statsmodels_conf_int_filter_axis,
     _patch_statsmodels_endog_exog_index_alignment,
-    _primary_association_fallback_code,
     _statsmodels_repair_allowed_for_family,
     _strip_columns_from_list_literals,
 )
@@ -304,52 +298,17 @@ def deterministic_concept_audit_repair(
     code: str,
     audit_messages: Sequence[str],
 ) -> tuple[str, List[str]]:
-    """Repair mechanical ICU anti-patterns flagged by the concept-audit gate.
+    """Compatibility no-op for concept-audit repair callers.
 
-    Returns ``(possibly_rewritten_code, applied_repair_names)``. When no
-    repair applies the original ``code`` is returned with an empty list, so
-    the caller can fall through to the LLM repair / block path.
-
-    Currently handles:
-
-    * **silent zero-imputation of a lab/continuous variable** —
-      ``df[col] = df[col].fillna(0)`` is rewritten to complete-case
-      handling (``df = df.dropna(subset=[col])``). This removes the
-      objectively-wrong fabricated zeros while *keeping the missingness
-      visible* in the cohort; it does not pick an imputation strategy
-      (which would be a ``caution``-class analytical choice we must leave
-      to the user). Count/indicator columns are left untouched because 0
-      is a real value there.
+    A concept finding may identify an invalid missing-value treatment, but
+    replacing zero-imputation with complete-case analysis changes the cohort
+    and missing-data strategy.  That scientific choice belongs to agent repair
+    (or fail-closed handling), so shared deterministic code no longer rewrites
+    it.  The helper remains importable for older integrations.
     """
-    applied: List[str] = []
-    repaired = code
 
-    flagged_zero_impute = any(
-        _ZERO_IMPUTE_FINDING_RE.search(m or "") for m in audit_messages
-    )
-    if flagged_zero_impute and _FILLNA_ZERO_ASSIGN_RE.search(repaired):
-
-        def _sub(match: "re.Match[str]") -> str:
-            col = match.group("col").strip()
-            # Leave count/indicator columns alone: a literal 0 is legitimate
-            # there, so stripping it would itself be an error.
-            if col[:1] in {"'", '"'} and _COUNT_LIKE_COL_RE.search(col):
-                return match.group(0)
-            indent = match.group("indent")
-            frame = match.group("frame")
-            return (
-                f"{indent}{frame} = {frame}.dropna(subset=[{col}])  "
-                f"# auto-repair[zero_impute_to_complete_case_v1]: silent "
-                f"fillna(0) of a lab/continuous value fabricates zeros; "
-                f"complete-case keeps the missingness honest"
-            )
-
-        new_code = _FILLNA_ZERO_ASSIGN_RE.sub(_sub, repaired)
-        if new_code != repaired:
-            repaired = new_code
-            applied.append("zero_impute_to_complete_case_v1")
-
-    return repaired, applied
+    del audit_messages
+    return code, []
 
 
 def _overadjustment_strip_names(offenders: Sequence[str]) -> List[str]:
@@ -490,13 +449,6 @@ def _deterministic_summary_repair(
     index_alignment_soft_failure = (
         "indices for endog and exog are not aligned" in error_text.lower()
     )
-    undefined_dummy_formula_failure = (
-        "nameerror" in error_text.lower()
-        and "sex_" in error_text.lower()
-        and "not defined" in error_text.lower()
-        and "pd.get_dummies" in code
-        and "logit(" in code.lower()
-    )
     binary_model_repair_allowed = _family_allows_binary_model_repair(analysis_family)
     if (
         predictor
@@ -506,7 +458,6 @@ def _deterministic_summary_repair(
             generic_soft_failure
             or dtype_soft_failure
             or index_alignment_soft_failure
-            or undefined_dummy_formula_failure
         )
     ):
         return None
@@ -521,11 +472,6 @@ def _deterministic_summary_repair(
             repaired = code.replace(
                 "x_cols = [predictor_col] + [col for col in model_df.columns if col != outcome_col]",
                 "x_cols = [predictor_col] + [col for col in model_df.columns if col not in [outcome_col, predictor_col]]",
-                1,
-            )
-            repaired = repaired.replace(
-                "X = model_df[x_cols]\n",
-                'X = model_df[x_cols].apply(pd.to_numeric, errors="coerce").astype(float)\n',
                 1,
             )
             if repaired != code:
@@ -612,29 +558,6 @@ def _deterministic_summary_repair(
                 repaired = code.replace(marker, patch, 1)
                 if repaired != code:
                     return repair_name, repaired
-        if (
-            undefined_dummy_formula_failure
-            and predictor
-            and binary_model_repair_allowed
-        ):
-            repair_name = "formula_dummy_name_fallback_v1"
-            if previous_repair != repair_name:
-                fallback_outcome = str(
-                    step_summary.get("outcome")
-                    or _infer_binary_outcome_from_code(code)
-                    or ""
-                ).strip()
-                if not fallback_outcome:
-                    return None
-                fallback = _primary_association_fallback_code(
-                    predictor=predictor,
-                    outcome=fallback_outcome,
-                    reason=(
-                        "Deterministic fallback after statsmodels formula used "
-                        "a hard-coded dummy column name that was not present."
-                    ),
-                )
-                return repair_name, code.rstrip() + "\n\n" + fallback + "\n"
         nested_primary_singular = (
             null_model_summary
             and "singular matrix" in summary_text
@@ -653,82 +576,6 @@ def _deterministic_summary_repair(
                 repaired = _patch_rank_safe_statsmodels_design(code)
                 if repaired is not None and repaired != code:
                     return repair_name, repaired
-        glm_primary_effect_null = (
-            null_model_summary
-            and (
-                "primary_odds_ratio" in summary_text
-                or "primary_association_estimate" in summary_text
-                or "primary association" in summary_text
-                or '"primary_or": null' in summary_text
-                or '"primary_ci_low": null' in summary_text
-                or '"primary_ci_high": null' in summary_text
-                or "statistic:primary_or" in summary_text
-            )
-            and (
-                "sm.glm" in code.lower()
-                or "sm.logit" in code.lower()
-                or "logit(" in code.lower()
-            )
-            and (
-                "mle_retvals" in code
-                or "glmresults" in summary_text
-                or "model_fit_error" in summary_text
-                or dtype_summary_failure
-                or '"converged": false' in summary_text
-                or '"primary_or": null' in summary_text
-                or '"primary_ci_low": null' in summary_text
-                or '"primary_ci_high": null' in summary_text
-            )
-        )
-        if glm_primary_effect_null and binary_model_repair_allowed:
-            fallback_predictor = _infer_primary_association_predictor_from_code(
-                step_summary,
-                code,
-            )
-            if fallback_predictor:
-                fallback_outcome = _infer_binary_outcome_from_code(code)
-                if not fallback_outcome:
-                    return None
-                repair_name = "ordinal_primary_association_fallback_v1"
-                if previous_repair != repair_name:
-                    fallback = _ordinal_primary_association_fallback_code(
-                        predictor=fallback_predictor,
-                        outcome=fallback_outcome,
-                        reason=(
-                            "Deterministic fallback after generated GLM/Logit "
-                            "model failed to produce a finite primary association."
-                        ),
-                    )
-                    return repair_name, code.rstrip() + "\n\n" + fallback + "\n"
-        overexpanded_categorical_singular = (
-            null_model_summary
-            and "singular matrix" in summary_text
-            and (
-                "primary_association_estimate" in summary_text
-                or "primary association" in summary_text
-                or "primary_or" in summary_text
-            )
-        )
-        if overexpanded_categorical_singular and binary_model_repair_allowed:
-            categorical_predictor = _infer_overexpanded_categorical_predictor(
-                step_summary,
-                code,
-            )
-            if categorical_predictor:
-                fallback_outcome = _infer_binary_outcome_from_code(code)
-                if not fallback_outcome:
-                    return None
-                repair_name = "ordinal_primary_association_fallback_v1"
-                if previous_repair != repair_name:
-                    fallback = _ordinal_primary_association_fallback_code(
-                        predictor=categorical_predictor,
-                        outcome=fallback_outcome,
-                        reason=(
-                            "Deterministic fallback after generated categorical "
-                            "logistic model failed with a singular matrix."
-                        ),
-                    )
-                    return repair_name, code.rstrip() + "\n\n" + fallback + "\n"
         raw_categorical_sex_logit = (
             null_model_summary
             and "sm.logit" in code.lower()

@@ -255,11 +255,11 @@ def salvage_step_summary(
 ) -> Optional[SummarySalvageOutcome]:
     """Run step-summary salvage and report what (if anything) was salvaged.
 
-    Behaviour matches the previous inline logic exactly:
-
-    * if ``step_summary.json`` is absent, try stdout JSON then a named summary
-      artefact (short-circuit), and signal that artefacts should be re-listed;
-    * else (present but empty) backfill a minimal contract from on-disk CSVs.
+    If ``step_summary.json`` is absent, try stdout JSON then a named summary
+    artefact (short-circuit), and signal that artefacts should be re-listed.
+    An empty summary is deliberately not reconstructed from result tables:
+    selecting a primary row or aggregating performance rows would make the
+    deterministic layer choose the scientific headline.
 
     Returns ``None`` when no salvage was needed or possible. The caller is
     responsible for recording the returned outcome in the repair ledger.
@@ -287,21 +287,7 @@ def salvage_step_summary(
                 reset_artefacts=True,
             )
         return None
-    if _salvage_minimal_contract_step_summary(step=step, out_dir=run_result.out_dir):
-        return SummarySalvageOutcome(
-            repair_id="summary_salvage_minimal_contract_v1",
-            trigger_reason=(
-                "empty step_summary.json backfilled from on-disk artefacts"
-            ),
-            transformation=(
-                "Backfilled a minimal step_summary from existing CSV/figure "
-                "artefacts; no numbers invented beyond deterministic extraction."
-            ),
-            selection_rule=(
-                "first non-const/intercept association row; mean of "
-                "model_performance rows; deterministic CSV-to-summary extraction"
-            ),
-        )
+    del step
     return None
 
 

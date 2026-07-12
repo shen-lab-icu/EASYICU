@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from .evidence import EvidenceStore
 from .figure_contracts import (
@@ -20,6 +20,7 @@ from .figure_contracts import (
     panel_text,
     relative_contract_paths,
 )
+from .runtime_artifacts import current_evidence_records
 from .schema import AnalysisPlan, ResearchContext
 from .study_design import infer_study_design_family
 
@@ -174,6 +175,7 @@ def summarize_display_suite_status(
     evidence: EvidenceStore,
     run_dir: Path,
     publication: Dict[str, Any],
+    per_step_records: Optional[Sequence[Mapping[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Summarise article-level display coverage.
 
@@ -184,7 +186,14 @@ def summarize_display_suite_status(
 
     table_keys: set[str] = set()
     categories: set[str] = set()
-    for record in evidence.records():
+    for record in current_evidence_records(evidence.records(), per_step_records):
+        if per_step_records is not None and not str(
+            record.produced_by_step or ""
+        ).strip():
+            # Run-level logs/statistics are audit or packaging products, not
+            # proof that a current step produced a manuscript display. Current
+            # publication figures are evaluated separately via their contract.
+            continue
         text = " ".join(
             [
                 record.evidence_id,
@@ -202,7 +211,10 @@ def summarize_display_suite_status(
     result_like_tokens = _RESULT_LIKE_BASE_TOKENS + _RESULT_LIKE_FAMILY_TOKENS.get(
         family, ()
     )
-    contract_paths = figure_contract_paths(run_dir)
+    contract_paths = figure_contract_paths(
+        run_dir,
+        per_step_records=per_step_records,
+    )
     primary_contract_paths = [
         path
         for path in contract_paths

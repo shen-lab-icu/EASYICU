@@ -42,6 +42,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Mapping, Optional, Sequence
 
+from .runtime_artifacts import (
+    current_run_evidence_paths,
+    current_successful_step_records,
+    load_run_artifact_authority,
+)
+
 __all__ = [
     "ValiditySignal",
     "assess_validity_signals",
@@ -68,6 +74,15 @@ class ValiditySignal:
 
 
 def _iter_step_summaries(run_dir: Path) -> List[Mapping[str, object]]:
+    authority = load_run_artifact_authority(run_dir)
+    if authority is not None:
+        records = authority.get("per_step_records")
+        records = records if isinstance(records, list) else []
+        return [
+            summary
+            for record in current_successful_step_records(records)
+            if isinstance((summary := record.get("step_summary")), Mapping)
+        ]
     out: List[Mapping[str, object]] = []
     for pat in ("steps/*/outputs/step_summary.json", "steps/*/step_summary.json"):
         for p in run_dir.glob(pat):
@@ -91,7 +106,9 @@ def _summary_get(summaries: Sequence[Mapping[str, object]], *keys: str) -> objec
 def _find_artifacts(run_dir: Path, *substrings: str) -> List[Path]:
     subs = tuple(s.lower() for s in substrings)
     hits: List[Path] = []
-    for p in run_dir.rglob("*"):
+    current_paths = current_run_evidence_paths(run_dir)
+    candidates = current_paths if current_paths is not None else run_dir.rglob("*")
+    for p in candidates:
         if not p.is_file() or p.suffix.lower() not in {".csv", ".json"}:
             continue
         name = p.name.lower()

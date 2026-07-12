@@ -23,6 +23,10 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set
 from pydantic import BaseModel, ConfigDict, Field
 
 from .figure_contracts import figure_contract_paths
+from .runtime_artifacts import (
+    current_evidence_records,
+    current_successful_step_records,
+)
 from .schema import AnalysisPlan, AnalysisStep, ResearchContext, ValidationFinding
 from .study_design import StudyDesignBrief, build_study_design_brief
 from .study_design_playbook import (
@@ -298,9 +302,22 @@ def _step_summary_text(record: Mapping[str, Any]) -> str:
     if record.get("status") != "ok":
         return ""
     summary = record.get("step_summary")
-    if not summary:
+    if not isinstance(summary, Mapping):
         return ""
-    return _normalise_space(json.dumps(summary, ensure_ascii=False, default=str))
+    # Article-role ownership comes from structured artifact identity, not free
+    # prose buried in notes/diagnostics. Otherwise a baseline table that merely
+    # mentions a future "sensitivity analysis" can falsely satisfy robustness.
+    identity = {
+        "step_id": record.get("step_id") or summary.get("step_id"),
+        "method": summary.get("method"),
+        "deterministic_standard_analysis": summary.get(
+            "deterministic_standard_analysis"
+        ),
+        "output_files": summary.get("output_files"),
+        "figure_files": summary.get("figure_files"),
+        "contract_files": summary.get("contract_files"),
+    }
+    return _normalise_space(json.dumps(identity, ensure_ascii=False, default=str))
 
 
 # Shared with figure_strategy / display_suite via figure_contracts so all
@@ -345,15 +362,26 @@ def _artifact_texts(
     run_dir: Path,
 ) -> List[str]:
     texts: List[str] = []
-    for record in evidence_records:
+    for record in current_evidence_records(evidence_records, per_step_records):
+        produced_by_step = str(
+            getattr(record, "produced_by_step", None) or ""
+        ).strip()
+        if per_step_records is not None and not produced_by_step:
+            # A run-level audit/package record does not prove that a current
+            # execution step delivered this scientific role. Step summaries
+            # and current figure contracts remain the execution authority.
+            continue
         kind = str(getattr(record, "kind", "") or "")
         if kind in _COUNTED_ARTIFACT_KINDS:
             texts.append(_record_to_text(record))
-    for record in per_step_records:
+    for record in current_successful_step_records(per_step_records):
         text = _step_summary_text(record)
         if text:
             texts.append(text)
-    for path in _figure_contract_paths(run_dir):
+    for path in _figure_contract_paths(
+        run_dir,
+        per_step_records=per_step_records,
+    ):
         text = _figure_contract_text(path)
         if text:
             texts.append(text)

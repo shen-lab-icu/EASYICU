@@ -197,8 +197,10 @@ def coder_method_capability_block(
             "baseline-library fallback for that method instead."
         )
     lines.append(
-        "Importing any package not named above is forbidden — it will fail in "
-        "the sandbox and waste a repair attempt."
+        "Importing any package not named above is forbidden, except an exact "
+        "documented `easyicu.research_agent.methods.*` module explicitly named "
+        "by the code contract for the current method. All other project-local "
+        "imports will fail in the sandbox and waste a repair attempt."
     )
     return "\n".join(lines)
 

@@ -481,9 +481,16 @@ def _acceptable_chart_match(role: FigureRoleStrategy, chart_type: str) -> bool:
     return bool(family_aliases.get(chart_type, set()) & accepted)
 
 
-def _read_panels(run_dir: Path) -> List[Dict[str, Any]]:
+def _read_panels(
+    run_dir: Path,
+    *,
+    per_step_records: Optional[Sequence[Mapping[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
     panels: List[Dict[str, Any]] = []
-    for path in _contract_paths(run_dir):
+    for path in _contract_paths(
+        run_dir,
+        per_step_records=per_step_records,
+    ):
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
@@ -513,9 +520,10 @@ def summarize_article_figure_strategy_coverage(
     *,
     context: ResearchContext,
     run_dir: Path,
+    per_step_records: Optional[Sequence[Mapping[str, Any]]] = None,
 ) -> Dict[str, Any]:
     strategy = build_article_figure_strategy(context)
-    panels = _read_panels(run_dir)
+    panels = _read_panels(run_dir, per_step_records=per_step_records)
     primary_panels = [
         panel for panel in panels if panel.get("_primary_publication_contract")
     ]
@@ -649,10 +657,12 @@ def validate_run_against_article_figure_strategy(
     *,
     context: ResearchContext,
     run_dir: Path,
+    per_step_records: Optional[Sequence[Mapping[str, Any]]] = None,
 ) -> List[ValidationFinding]:
     status = summarize_article_figure_strategy_coverage(
         context=context,
         run_dir=run_dir,
+        per_step_records=per_step_records,
     )
     if status["article_figure_strategy_complete"]:
         return []

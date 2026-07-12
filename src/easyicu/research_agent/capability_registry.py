@@ -1,23 +1,25 @@
 """EasyICU research-agent capability registry — the explicit capability surface.
 
 This module is the SINGLE SOURCE OF TRUTH for one question a reviewer (or a new
-user) will ask: *for a given study-design family, does EasyICU compute the
-primary estimand with a deterministic runner, fall back to LLM-coded analysis,
-or fail closed?* The answer used to be implicit, spread across the preflight
+user) will ask: *for a given study-design family, which scientific result is
+agent-produced, which standardized products are rendered or audited
+deterministically, and where does the framework fail closed?* The answer used to
+be implicit, spread across the preflight
 dispatch ladder in ``pipeline_execute``, the ``FAMILY_RENDERERS`` table, and the
 readiness gates in ``pipeline_report``. Here it is declared once, rendered to a
 matrix, and kept honest by ``tests/research_agent/test_capability_registry.py``,
 which cross-checks every claim below against the code that is actually wired
-(``_PRIMARY_DETERMINISTIC_RUNNERS`` in both pipeline modules and
-``figures.FAMILY_RENDERERS``). If a runner is added or removed without updating
+(``AUXILIARY_DETERMINISTIC_RUNNERS`` and ``figures.FAMILY_RENDERERS``). If a
+runner is added or removed without updating
 this registry, that test fails — the matrix cannot silently rot.
 
 Two design points this registry makes explicit:
 
-* **Deterministic vs LLM-coded is a per-estimand property, not per-family.** A
-  family can have a deterministic FIGURE renderer while its PRIMARY analysis is
-  still LLM-coded (prediction, phenotyping), or vice versa. The registry keeps
-  ``primary_analysis`` and ``figure`` separate for exactly this reason.
+* **The agent owns every primary scientific analysis.** Deterministic code may
+  validate calculations or render a declared standardized product, but it does
+  not preflight-replace the agent's cohort, exposure, outcome, method, or
+  estimand. ``primary_analysis`` and ``figure`` stay separate for exactly this
+  reason.
 * **A capability gap is always REPORTED, never silently filled.** When no valid
   runner/data contract exists the pipeline fails closed with a specific reason
   (see ``FAIL_CLOSED_LADDER``); it never fabricates a result or degrades a
@@ -55,7 +57,7 @@ class FamilyCapability:
     # primary analysis (the reported estimand)
     primary_analysis: str  # "deterministic" | "llm_coded"
     primary_estimand: str
-    primary_runner: Optional[str]  # name in _PRIMARY_DETERMINISTIC_RUNNERS, or None
+    primary_runner: Optional[str]  # reserved; primary scientific runners are not wired
     primary_runner_module: Optional[str]
     # figure
     figure: str  # "deterministic" | "llm_coded"
@@ -88,10 +90,10 @@ CAPABILITY_REGISTRY: Tuple[FamilyCapability, ...] = (
     FamilyCapability(
         family="time_to_event",
         label="Survival / time-to-event",
-        primary_analysis="deterministic",
-        primary_estimand="Cox proportional-hazards hazard ratio (+ Kaplan-Meier curve data)",
-        primary_runner="survival_primary_cox",
-        primary_runner_module="deterministic_survival",
+        primary_analysis="llm_coded",
+        primary_estimand="Agent-coded time-to-event estimand under the declared survival method; value/provenance checked",
+        primary_runner=None,
+        primary_runner_module=None,
         figure="deterministic",
         figure_renderer="time_to_event",
         data_contract=(
@@ -100,19 +102,19 @@ CAPABILITY_REGISTRY: Tuple[FamilyCapability, ...] = (
             "event indicator (event_observed)",
         ),
         fail_closed=(
-            "Runner blocks (status=blocked) when the follow-up column is absent "
-            "or uncensored; the survival-estimand integrity gate rejects any "
-            "headline that is not the deterministic Cox HR."
+            "The agent step fails when certified follow-up/event inputs are absent, "
+            "and survival plausibility/provenance gates reject invalid event counts, "
+            "effect scales, or unsupported estimands."
         ),
-        notes="Follow-up column certified upstream by the 01b step.",
+        notes="The deterministic survival component renders declared Cox/KM products; it does not choose the time origin, method, exposure, or outcome.",
     ),
     FamilyCapability(
         family="causal_emulation",
         label="Causal inference / target-trial emulation",
-        primary_analysis="deterministic",
-        primary_estimand="Stabilised-IPTW marginal odds ratio (+ covariate balance, propensity, target-trial protocol)",
-        primary_runner="causal_primary_iptw",
-        primary_runner_module="deterministic_causal",
+        primary_analysis="llm_coded",
+        primary_estimand="Agent-coded causal contrast under a declared target-trial/identification strategy; assumptions and balance checked",
+        primary_runner=None,
+        primary_runner_module=None,
         figure="deterministic",
         figure_renderer="causal_emulation",
         data_contract=(
@@ -121,18 +123,19 @@ CAPABILITY_REGISTRY: Tuple[FamilyCapability, ...] = (
             "adjustment set (config user_preferences.covariates, else demographics+severity)",
         ),
         fail_closed=(
-            "Runner blocks with 'Missing required causal columns' or 'Exposure "
-            "groups too small'; positivity enforced by propensity trimming. The "
-            "design schematic reads the runner's target_trial_protocol.csv."
+            "The agent step fails when its declared exposure, outcome, time zero, "
+            "or adjustment inputs cannot be resolved; balance, positivity, and "
+            "causal-language gates reject unsupported claims."
         ),
+        notes="The deterministic causal component renders registered balance/effect products only; it never selects covariates or an estimator.",
     ),
     FamilyCapability(
         family="association",
         label="Association — graded ordinal exposure (dose-response)",
-        primary_analysis="deterministic",
-        primary_estimand="Adjusted odds ratio per +1 stage (trend) + per-stage forest + monotonicity",
-        primary_runner="ordinal_dose_response",
-        primary_runner_module="deterministic_ordinal",
+        primary_analysis="llm_coded",
+        primary_estimand="Agent-coded ordered-exposure association under the declared trend method; per-stage products value-checked",
+        primary_runner=None,
+        primary_runner_module=None,
         figure="deterministic",
         figure_renderer="base_association_skill",
         data_contract=(
@@ -141,11 +144,11 @@ CAPABILITY_REGISTRY: Tuple[FamilyCapability, ...] = (
             "adjustment set",
         ),
         fail_closed=(
-            "Runner blocks with 'Could not resolve a graded ordinal exposure "
-            "(>=3 levels)'; a binary/continuous exposure is never coerced into a "
-            "grade. Routes only on an explicit dose-response signal."
+            "The ordered-product contract rejects fewer than three declared levels, "
+            "invalid level ordering, cohort drift, or missing trend statistics; a "
+            "binary/continuous exposure is never coerced into an ordinal gradient."
         ),
-        notes="A dose-response IS an association study; no separate family exists.",
+        notes="Validated ordered-trend calculation primitives are available to agent code; the execution framework does not choose the exposure, adjustment set, or model.",
     ),
     FamilyCapability(
         family="association",
@@ -158,9 +161,10 @@ CAPABILITY_REGISTRY: Tuple[FamilyCapability, ...] = (
         figure_renderer="base_association_skill",
         data_contract=("exposure", "outcome", "covariates"),
         fail_closed=(
-            "LLM code failure -> code_repair -> if still failing the step fails, "
-            "the execution gate floors the status to diagnostic_only, and the "
-            "specific error is surfaced (never a silent pass)."
+            "LLM code failure -> mechanical code_repair only (no deterministic "
+            "association refit or estimator substitution) -> if still failing the "
+            "step fails, the execution gate floors the status to diagnostic_only, "
+            "and the specific error is surfaced (never a silent pass)."
         ),
         notes="Base figure skill renders forest + strata + missingness deterministically.",
     ),
@@ -196,12 +200,10 @@ CAPABILITY_REGISTRY: Tuple[FamilyCapability, ...] = (
         ),
         notes=(
             "Cluster heatmap + stability + outcome-by-cluster figure is "
-            "deterministic. The trajectory-clustering STEP now runs via the "
-            "deterministic `trajectory_clustering` auxiliary runner (observed-"
-            "window features, silhouette-selected k, seed stability); "
-            "primary_analysis stays llm_coded because phenotyping binds no scalar "
-            "deterministic estimand — the report layer's no-deterministic-primary "
-            "waiver depends on this."
+            "deterministic from registered clustering products. The clustering "
+            "method, feature representation, and k-selection remain agent-owned; "
+            "the former SOFA-specific KMeans script is not advertised or routed "
+            "as a general auxiliary capability."
         ),
     ),
     FamilyCapability(
@@ -224,22 +226,18 @@ CAPABILITY_REGISTRY: Tuple[FamilyCapability, ...] = (
 
 AUXILIARY_DETERMINISTIC_RUNNERS: Tuple[AuxiliaryRunner, ...] = (
     AuxiliaryRunner(
-        name="cohort_definition_overlap",
-        entrypoint="cohort_definition_overlap_code",
-        module="deterministic_sensitivity",
-        purpose="Overlap / concordance of alternative cohort definitions.",
-        fail_closed="Blocks with a reason when no alternative definition is registered.",
+        name="absolute_risk_context",
+        entrypoint="absolute_risk_context_code",
+        module="deterministic_descriptive",
+        purpose="Render descriptive exposure prevalence and absolute-risk context from an explicit product contract.",
+        fail_closed="Declines figure/primary-effect contracts and blocks when the declared descriptive columns are unavailable.",
     ),
     AuxiliaryRunner(
-        name="cohort_definition_sensitivity",
-        entrypoint="cohort_definition_sensitivity_comparison_code",
-        module="deterministic_sensitivity",
-        purpose="Re-fit the primary estimand under alternative cohort definitions.",
-        fail_closed=(
-            "Degrades to a CLEAN skip (status=skipped, not_applicable) when no "
-            "alternative_cohort_attrition.csv exists upstream — it does NOT block "
-            "(this removed the H2 'produce the missing file' replan loop)."
-        ),
+        name="robustness_sensitivity",
+        entrypoint="robustness_sensitivity_preflight_code",
+        module="deterministic_robustness",
+        purpose="Replay an agent-locked primary model across prespecified robustness variants.",
+        fail_closed="Requires a locked model/specification contract and never selects the primary exposure, outcome, cohort, or estimator.",
     ),
     AuxiliaryRunner(
         name="missingness_measurement_audit",
@@ -252,26 +250,8 @@ AUXILIARY_DETERMINISTIC_RUNNERS: Tuple[AuxiliaryRunner, ...] = (
         ),
         fail_closed=(
             "Blocks with a reason when no <concept>_measured columns resolve. "
-            "Owns the audit so the LLM coder no longer times out on it (~27.6 min "
-            "then fail); the figure step renders via the data_quality->missingness "
-            "renderer."
-        ),
-    ),
-    AuxiliaryRunner(
-        name="trajectory_clustering",
-        entrypoint="trajectory_clustering_analysis_code",
-        module="deterministic_clustering",
-        purpose=(
-            "Deterministic phenotyping partition: features over OBSERVED trajectory "
-            "windows (never zero-imputed), silhouette-selected k, seed-stability, "
-            "and a DESCRIPTIVE outcome-by-cluster contrast (adjusted_effect=None)."
-        ),
-        fail_closed=(
-            "Blocks with a specific reason when no trajectory columns resolve — "
-            "never fabricates a partition. Supports the phenotyping figure "
-            "(cluster_characteristics + clustering_metrics) without binding a "
-            "scalar primary estimand, so phenotyping stays LLM-coded-primary for "
-            "the report layer's no-deterministic-primary waiver."
+            "The figure step renders the registered audit product via the "
+            "data_quality->missingness renderer."
         ),
     ),
 )
@@ -288,9 +268,8 @@ KNOWN_UNSUPPORTED_ESTIMANDS: Tuple[Tuple[str, str], ...] = (
     (
         "Competing-risks cumulative incidence (Fine-Gray / CIF)",
         "No deterministic runner. A cause-naive Cox HR is NOT a CIF, so a "
-        "competing-risks question (e.g. RRT with death as a competing risk) must "
-        "fail closed to diagnostic_only — not be answered with a Cox HR. Exercised "
-        "by meta-benchmark probe MG12.",
+        "competing-risks question (for example, an event with death as a competing "
+        "risk) must fail closed to diagnostic_only — not be answered with a Cox HR.",
     ),
 )
 
@@ -302,24 +281,25 @@ KNOWN_UNSUPPORTED_ESTIMANDS: Tuple[Tuple[str, str], ...] = (
 
 FAIL_CLOSED_LADDER: Tuple[Tuple[str, str], ...] = (
     (
-        "1. Deterministic runner match",
-        "A family's preflight predicate fires only for its PRIMARY result step "
-        "(not a figure/sensitivity step). If it fires and the data contract is "
-        "met, the deterministic estimand is used and owns its step contract.",
+        "1. Agent method and product contract",
+        "The planner/coder owns the scientific method, cohort, exposure and outcome. "
+        "Deterministic code is limited to validated calculation primitives or an "
+        "explicit auxiliary product contract; it does not preflight-replace a "
+        "primary estimand.",
     ),
     (
         "2. Runner contract unmet",
-        "The deterministic runner writes status=blocked + a SPECIFIC "
-        "blocking_reason (e.g. missing exposure/outcome column, degenerate "
-        "groups, non-ordinal exposure). It never guesses a surrogate — "
-        "case-specific values come from research_context.json only. Auxiliary "
+        "An auxiliary runner writes status=blocked + a specific blocking_reason "
+        "when its declared standardized inputs are missing or invalid. It never "
+        "guesses scientific variables or a surrogate method. Optional auxiliary "
         "steps degrade to status=skipped + not_applicable when their input is "
         "legitimately absent.",
     ),
     (
-        "3. No deterministic runner for the family",
-        "The LLM coder generates the analysis; code_repair applies deterministic "
-        "post-failure repairs (KeyError strip, missing-helper restore, ...).",
+        "3. Agent execution",
+        "The agent generates the planned primary analysis; code repair and "
+        "statistical validators may repair implementation faults but never replace "
+        "the declared scientific method.",
     ),
     (
         "4. Output / validity gates (fail-closed)",
@@ -327,8 +307,8 @@ FAIL_CLOSED_LADDER: Tuple[Tuple[str, str], ...] = (
         "(STRICT: unbound citations blocked); numeric_verified (value-level "
         "provenance: hallucinated numbers blocked); analysis_validated "
         "(plausibility + survival-estimand + figure-credit + headline==primary-"
-        "estimand gates); replan_budget (runaway loop -> advisory if "
-        "converged-clean with a bound deterministic primary, else demote).",
+        "estimand gates); replan_budget (runaway loop -> advisory only after a "
+        "clean, bound primary result, else demote).",
     ),
     (
         "5. Verdict",
@@ -358,9 +338,9 @@ def get_capability(
     if not matches:
         return None
     if family == "association":
-        want_runner = "ordinal_dose_response" if dose_response else None
         for c in matches:
-            if c.primary_runner == want_runner:
+            is_graded = "graded ordinal" in c.label.lower()
+            if is_graded == dose_response:
                 return c
     return matches[0]
 
@@ -382,16 +362,10 @@ def llm_coded_primary_families() -> Tuple[str, ...]:
 def families_without_deterministic_primary() -> frozenset:
     """StudyDesignFamily values where EVERY capability record is LLM-coded.
 
-    These families have no deterministic primary estimand *by design*, so a
-    bound deterministic primary can never be required of them. The outcome-aware
-    replan rule uses this to avoid demoting a converged phenotyping / descriptive
-    / prediction run to diagnostic_only purely for hitting the replan cap.
-
-    ``association`` is intentionally EXCLUDED: it has BOTH an LLM-coded (general)
-    and a deterministic (dose-response / ordinal) record, so requiring a bound
-    primary there still catches a dose-response routing miss (an E3-style bug)
-    rather than masking it. Only families that are unambiguously LLM-coded across
-    all their records are returned.
+    Every current family is agent-primary by design, so a deterministic primary
+    can never be required merely to survive the replan-budget gate. The helper
+    remains explicit and will automatically exclude a family if a future
+    architecture deliberately introduces a true primary owner.
     """
     by_family: dict = {}
     for c in CAPABILITY_REGISTRY:

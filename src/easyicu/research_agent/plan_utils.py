@@ -39,8 +39,11 @@ from .icu_rules import (
     overadjustment_caution,
     treatment_mediator_caution,
 )
+from .ordered_stratified_contract import (
+    is_ordered_stratified_analysis_step,
+    ordered_stratified_structure_findings,
+)
 from .scalar_utils import (
-    _first_numeric_effect_from_text,
     _first_numeric_scalar_with_key_fragment,
     _first_present_scalar,
     _flatten_scalar_dict,
@@ -112,45 +115,57 @@ def _parent_step_id_for_figure_step(step: AnalysisStep) -> Optional[str]:
 
 
 def _step_expects_figure(step: AnalysisStep) -> bool:
-    if "figure" in str(step.method or "").lower():
+    method = re.sub(r"[^a-z0-9]+", "_", str(step.method or "").strip().lower()).strip(
+        "_"
+    )
+    if method in _FIGURE_METHODS:
         return True
     return any(
-        "figure" in str(output or "").lower() or "plot" in str(output or "").lower()
-        for output in (step.expected_outputs or [])
+        _output_declares_figure(output) for output in step.expected_outputs or []
     )
 
 
-# Markers that a step is *defining* the analysis population (not merely
-# describing "the cohort"). The bare word "cohort" is deliberately excluded —
-# it appears in descriptive intents ("cohort table", "describe the cohort")
-# that do not apply inclusion/exclusion, and would false-positive the contract.
-_COHORT_DEFINITION_MARKERS = (
-    "cohort_def",  # step_id: 01_cohort_definition
-    "cohort definition",
-    "attrition",
-    "eligib",  # eligibility / eligible
-    "inclusion criteria",
-    "exclusion criteria",
-    "inclusion/exclusion",
-    "纳排",
-    "纳入",
-    "排除",
+_PRIMARY_COHORT_OWNER_METHODS = frozenset(
+    {
+        "cohort_construction",
+        "cohort_definition",
+        "eligibility_definition",
+        "primary_cohort_definition",
+    }
 )
+_PRIMARY_COHORT_OWNER_PRODUCTS = frozenset(
+    {
+        "analysis_cohort",
+        "attrition",
+        "attrition_by_rule",
+        "cohort_attrition",
+        "cohort_denominator",
+        "cohort_denominators",
+        "cohort_flow",
+        "eligibility_flow",
+        "locked_cohort",
+    }
+)
+
+
+def _step_owns_primary_cohort_contract(step: AnalysisStep) -> bool:
+    """Require an exact cohort-owner method and a closed population product."""
+
+    head = _normalised_method_head(str(step.method or ""))
+    products = _normalised_structured_output_names(step.expected_outputs or [])
+    return head in _PRIMARY_COHORT_OWNER_METHODS and bool(
+        products & _PRIMARY_COHORT_OWNER_PRODUCTS
+    )
 
 
 def _plan_expects_analysis_cohort(plan: AnalysisPlan) -> bool:
     """True when the plan clearly intends to *define* an analysis population.
 
-    A cohort-definition / eligibility / attrition step means the agent is
-    applying inclusion/exclusion, so leaving ``plan.cohort`` empty is a contract
-    violation — not a legitimate whole-universe analysis. Mere descriptive
-    mentions of "the cohort" do not count.
+    Scientific ownership comes from the structured method/output contract.  A
+    prose mention such as "treatment eligibility bias" is not a cohort owner and
+    must never send an effect step through automatic cohort materialisation.
     """
-    for step in plan.steps or []:
-        blob = " ".join([step.step_id or "", step.intent or ""]).lower()
-        if any(marker in blob for marker in _COHORT_DEFINITION_MARKERS):
-            return True
-    return False
+    return any(_step_owns_primary_cohort_contract(step) for step in plan.steps or [])
 
 
 def _cohort_definition_prose(plan: AnalysisPlan) -> str:
@@ -158,15 +173,14 @@ def _cohort_definition_prose(plan: AnalysisPlan) -> str:
 
     This is the free-text 纳排 the agent wrote in lieu of a structured
     ``plan.cohort``; ``cohort_repair`` translates it into typed predicates.
-    Uses the same markers as :func:`_plan_expects_analysis_cohort` so the
-    definition of "a cohort step" stays in one place.
+    Uses the same structured owner predicate as
+    :func:`_plan_expects_analysis_cohort` so unrelated scientific prose is never
+    translated into inclusion/exclusion predicates.
     """
     prose: List[str] = []
     for step in plan.steps or []:
-        blob = " ".join([step.step_id or "", step.intent or ""]).lower()
-        if any(marker in blob for marker in _COHORT_DEFINITION_MARKERS):
-            if step.intent:
-                prose.append(step.intent)
+        if _step_owns_primary_cohort_contract(step) and step.intent:
+            prose.append(step.intent)
     return "\n".join(prose)
 
 
@@ -248,7 +262,6 @@ _ANALYSIS_TYPE_TO_CONTRACT_FAMILY = {
 # their markers are specific enough to avoid the bare-"model" false-match.
 _HEURISTIC_REACHABLE_FAMILIES = {
     "prediction_model",
-    "clustering",
     "bias_audit",
     "robustness",
 }
@@ -269,156 +282,507 @@ def _normalise_contract_family(raw: Optional[str]) -> str:
 
 
 def _article_display_roles(steps: Sequence[AnalysisStep]) -> set[str]:
-    """Infer article-display roles represented by a plan's step text.
+    """Infer article-display roles from method owners and declared products.
 
-    This is intentionally coarse. Its job is to detect when the planner has
-    already produced a multi-part article structure so the advanced contract
-    enforcer does not collapse it into one executable mega-step.
+    Free-text ids and intents are deliberately excluded: this helper decides
+    whether contract augmentation may target an existing article module.
     """
 
     roles: set[str] = set()
     for step in steps or []:
-        blob = " ".join(
-            [
-                step.step_id or "",
-                step.intent or "",
-                step.method or "",
-                " ".join(step.expected_outputs or []),
-            ]
-        ).lower()
-        if any(
-            token in blob
-            for token in ("cohort", "attrition", "eligibility", "denominator")
-        ):
+        method = _normalised_method_head(str(step.method or ""))
+        outputs = _normalised_structured_output_names(step.expected_outputs or [])
+        if _cohort_change_contract_applies(step):
             roles.add("cohort_accounting")
-        if any(
-            token in blob
-            for token in ("table one", "table_one", "baseline", "characteristic")
+        if method in {"descriptive", "table_one", "baseline_characteristics"} and (
+            outputs
+            & {"table_one", "baseline_table", "baseline_characteristics"}
         ):
             roles.add("baseline_context")
-        if any(
-            token in blob
-            for token in ("missing", "measurement", "availability", "data quality")
+        if method in {
+            "data_quality_audit",
+            "missingness",
+            "missingness_audit",
+            "missingness_measurement_audit",
+        } and (
+            outputs
+            & {
+                "data_quality",
+                "measurement_availability",
+                "missingness",
+                "missingness_measurement_audit",
+                "missingness_profile",
+            }
         ):
             roles.add("data_quality")
-        if any(
-            token in blob
-            for token in (
-                "primary",
-                "association",
-                "adjusted",
-                "odds ratio",
-                "effect estimate",
-                "primary_or",
+        if (
+            _effect_contract_applies(step)
+            or _prediction_contract_applies(step)
+            or _clustering_contract_applies(
+                method=str(step.method or ""),
+                step_id=step.step_id,
+                intent=step.intent or "",
+                expected_outputs=step.expected_outputs or [],
             )
         ):
             roles.add("primary_estimand")
-        if any(
-            token in blob
-            for token in (
-                "robust",
-                "sensitivity",
-                "complete-case",
-                "complete case",
-                "alternative",
-                "definition",
-            )
+        if method in _PLAN_FAMILY_METHODS["robustness"] and (
+            outputs
+            & {
+                "complete_case_n",
+                "robustness_matrix",
+                "robustness_summary",
+                "sensitivity_grid",
+            }
         ):
             roles.add("robustness")
     return roles
 
 
 def _best_contract_step_for_outputs(steps: Sequence[AnalysisStep]) -> AnalysisStep:
-    """Choose the existing step that should receive mandatory contract outputs."""
+    """Use the final agent-declared owner; callers already filtered by family."""
 
-    preferred = (
-        "robust",
-        "sensitivity",
-        "complete-case",
-        "complete case",
-        "association",
-        "model",
-    )
-    for step in reversed(list(steps or [])):
-        blob = " ".join(
-            [
-                step.step_id or "",
-                step.intent or "",
-                step.method or "",
-                " ".join(step.expected_outputs or []),
-            ]
-        ).lower()
-        if any(token in blob for token in preferred):
-            return step
     return list(steps)[-1]
 
 
-# Families whose whole point is an estimand that is NOT a static association
-# (a Cox hazard ratio, an AUROC, a target-trial contrast, a cluster partition).
-# For these, a plan that produced only an association/descriptive primary step
-# is a design error, and the contract converts the primary-estimand step into
-# the canonical family step rather than silently accepting the wrong estimand.
-# ``robustness`` and ``bias_audit`` are intentionally absent: their estimand IS
-# an association/odds ratio, so a marker miss there means "leave it alone".
-_FORCE_CONVERT_FAMILIES = {
-    "survival",
-    "prediction_model",
-    "dynamic_prediction",
-    "causal_inference",
-    "treatment_response",
-    "validation",
-    "clustering",
+_CLUSTERING_ANALYSIS_METHODS = frozenset(
+    {
+        "trajectory_clustering",
+        "trajectory_clustering_analysis",
+        "trajectory_feature_clustering",
+        "clustering",
+        "kmeans",
+        "k_means",
+        "kmeans_clustering",
+        "k_means_clustering",
+        "phenotyping",
+        "phenotype_clustering",
+        "unsupervised_clustering",
+        "latent_class",
+        "latent_class_analysis",
+        "latent_class_model",
+        "cluster_analysis",
+        "gmm",
+        "gaussian_mixture",
+        "gaussian_mixture_model",
+    }
+)
+_KMEANS_AUXILIARY_METHODS = frozenset(
+    {
+        "kmeans",
+        "k_means",
+        "kmeans_clustering",
+        "k_means_clustering",
+        "kmeans_trajectory_clustering",
+        "k_means_trajectory_clustering",
+        "trajectory_kmeans_clustering",
+        "trajectory_k_means_clustering",
+    }
+)
+_CLUSTERING_CONTRACT_OUTPUTS = frozenset(
+    {
+        "cluster_assignments",
+        "cluster_characteristics",
+        "cluster_mortality",
+        "outcome_by_cluster",
+        "clustering_metrics",
+        "silhouette_score",
+        "silhouette_metrics",
+        "cluster_count",
+        "cluster_sizes",
+        "cluster_stability",
+        "trajectory_features",
+        "clustering_methodology",
+        "clustering_visualization",
+    }
+)
+
+
+def _normalised_expected_output_names(
+    expected_outputs: Sequence[str] | str,
+) -> set[str]:
+    if isinstance(expected_outputs, str):
+        values = re.split(r"[\s,]+", expected_outputs)
+    else:
+        values = [str(value or "") for value in (expected_outputs or [])]
+    names: set[str] = set()
+    for raw in values:
+        value = str(raw or "").strip().lower()
+        if not value:
+            continue
+        name = value.split(":", 1)[-1].rsplit("/", 1)[-1]
+        name = re.sub(r"\.(?:csv|json|parquet|png|svg|pdf|tiff?)$", "", name)
+        names.add(name)
+    return names
+
+
+_STRUCTURED_CONTRACT_OUTPUT_KINDS = frozenset(
+    {"", "statistic", "table", "model", "manifest", "dataset", "artifact"}
+)
+
+
+def _normalised_structured_output_names(
+    expected_outputs: Sequence[str] | str,
+) -> set[str]:
+    if isinstance(expected_outputs, str):
+        values = re.split(r"[\s,]+", expected_outputs)
+    else:
+        values = [str(value or "") for value in (expected_outputs or [])]
+    names: set[str] = set()
+    for raw in values:
+        value = str(raw or "").strip().lower()
+        if not value:
+            continue
+        kind, separator, product = value.partition(":")
+        if separator and kind not in _STRUCTURED_CONTRACT_OUTPUT_KINDS:
+            continue
+        name = (product if separator else kind).rsplit("/", 1)[-1]
+        name = re.sub(r"\.(?:csv|json|parquet)$", "", name)
+        names.add(name)
+    return names
+
+
+def _normalised_method_head(method: str) -> str:
+    """Return the exact normalized method head before an optional ``with`` rider."""
+
+    normalized = re.sub(r"[^a-z0-9]+", "_", str(method or "").strip().lower()).strip(
+        "_"
+    )
+    return normalized.split("_with_", 1)[0]
+
+
+def _clustering_contract_applies(
+    *,
+    method: str,
+    step_id: str = "",
+    intent: str = "",
+    expected_outputs: Sequence[str] | str = (),
+    auxiliary_kmeans_only: bool = False,
+    minimum_output_signals: int = 1,
+) -> bool:
+    """Return whether a step owns a closed clustering-analysis contract.
+
+    Scientific ownership comes from an exact method head plus declared standard
+    products, never prose or output names alone.  The stricter auxiliary mode
+    additionally prevents a KMeans fallback from replacing latent-class/GMM or
+    otherwise agent-selected phenotyping methods.
+    """
+
+    head = _normalised_method_head(method)
+    outputs = _normalised_structured_output_names(expected_outputs)
+    output_signals = outputs & _CLUSTERING_CONTRACT_OUTPUTS
+    allowed_methods = (
+        _KMEANS_AUXILIARY_METHODS
+        if auxiliary_kmeans_only
+        else _CLUSTERING_ANALYSIS_METHODS
+    )
+    return head in allowed_methods and len(output_signals) >= minimum_output_signals
+
+
+_PLAN_FAMILY_METHODS: dict[str, frozenset[str]] = {
+    "prediction_model": frozenset(
+        {
+            "prediction_model",
+            "prediction_model_analysis",
+            "model_training",
+            "risk_prediction",
+            "classification_model",
+        }
+    ),
+    "survival": frozenset(
+        {
+            "survival_analysis",
+            "time_to_event",
+            "cox",
+            "cox_ph",
+            "cox_proportional_hazards",
+            "kaplan_meier",
+        }
+    ),
+    "dynamic_prediction": frozenset(
+        {"dynamic_prediction", "landmark_model", "time_updated_prediction"}
+    ),
+    "causal_inference": frozenset(
+        {
+            "causal_inference",
+            "causal_emulation",
+            "iptw",
+            "ipw",
+            "psm",
+            "propensity_score",
+            "target_trial",
+            "target_trial_emulation",
+            "g_computation",
+        }
+    ),
+    "treatment_response": frozenset(
+        {"treatment_response", "interaction_model", "effect_modification"}
+    ),
+    "validation": frozenset(
+        {"validation", "external_validation", "transportability_validation"}
+    ),
+    "bias_audit": frozenset(
+        {
+            "bias_audit_association",
+            "selection_bias_audit",
+            "confounding_bias_audit",
+        }
+    ),
+    "robustness": frozenset(
+        {
+            "association_robustness",
+            "prespecified_robustness",
+            "robustness_sensitivity",
+            "sensitivity_comparison",
+        }
+    ),
+}
+_PLAN_FAMILY_OUTPUTS: dict[str, frozenset[str]] = {
+    "prediction_model": frozenset(
+        {"auroc", "brier_score", "model_performance", "roc_curve", "calibration_curve"}
+    ),
+    "survival": frozenset(
+        {"hazard_ratio", "hr", "cox_summary", "km_curve", "survival_curves"}
+    ),
+    "dynamic_prediction": frozenset(
+        {"time_varying_auroc", "prediction_horizon", "horizon_performance"}
+    ),
+    "causal_inference": frozenset(
+        {"adjusted_effect", "covariate_balance", "causal_effect", "balance_pre_post"}
+    ),
+    "treatment_response": frozenset(
+        {"overall_effect", "interaction_pvalue", "subgroup_effects"}
+    ),
+    "validation": frozenset(
+        {"validation_auroc", "calibration_slope", "validation_performance"}
+    ),
+    "bias_audit": frozenset(
+        {"selection_bias_warning", "association_summary", "clinical_constraint_warning"}
+    ),
+    "robustness": frozenset(
+        {"robustness_matrix", "robustness_summary", "complete_case_n"}
+    ),
 }
 
 
-def _primary_estimand_step_index(steps: Sequence[AnalysisStep]) -> Optional[int]:
-    """Index of the main modelling / primary-estimand step, or None.
+_EFFECT_CONTRACT_METHODS = frozenset(
+    {
+        "association",
+        "association_analysis",
+        "association_study",
+        "multivariable_association",
+        "logistic_regression_association",
+        "regression",
+        "logit",
+        "logistic_regression",
+        "adjusted_logistic_regression",
+        "regularized_logistic_regression",
+        "mixed_effects_regression",
+        "generalized_linear_model",
+        "glm",
+        "gee",
+        "ordinal_logistic_regression",
+        "ordinal_dose_response",
+        "cox",
+        "cox_ph",
+        "cox_regression",
+        "cox_proportional_hazards",
+        "survival_primary_cox",
+        "iptw",
+        "ipw",
+        "causal_primary_iptw",
+        "g_computation",
+        "treatment_effect",
+        "effect_modification",
+        "interaction_model",
+    }
+)
+_EFFECT_CONTRACT_PRODUCTS = frozenset(
+    {
+        "adjusted_or_ci",
+        "primary_association",
+        "primary_association_estimate",
+        "association_estimate",
+        "association_estimates",
+        "adjusted_effect",
+        "adjusted_effect_estimates",
+        "causal_effect",
+        "primary_estimate",
+        "primary_or",
+        "adjusted_or",
+        "odds_ratio",
+        "adjusted_odds_ratio",
+        "adjusted_odds_ratios",
+        "primary_hr",
+        "hazard_ratio",
+        "risk_ratio",
+        "risk_difference",
+        "coefficient",
+        "coefficients",
+        "overall_effect",
+        "subgroup_effects",
+        "interaction_pvalue",
+    }
+)
+_EFFECT_CONTRACT_PRODUCT_PREFIXES = (
+    "association_estimate_",
+    "adjusted_odds_ratio_",
+    "odds_ratio_",
+    "hazard_ratio_",
+    "risk_ratio_",
+    "risk_difference_",
+)
 
-    This is the contract's conversion target when the planner produced no step
-    matching a strong family's own methods -- e.g. it answered a survival
-    question with a static association model. That association *model* step (not
-    the cohort, table-one, data-quality, or figure steps) is the one to convert
-    into the canonical family step. Figure and descriptive-only steps are
-    skipped; the earliest genuine primary-model step wins over later
-    sensitivity/robustness models.
+_PREDICTION_CONTRACT_METHODS = frozenset(
+    {
+        *_PLAN_FAMILY_METHODS["prediction_model"],
+        *_PLAN_FAMILY_METHODS["dynamic_prediction"],
+        "model_evaluation",
+        "prediction_model_evaluation",
+        "cross_validated_prediction_model",
+        "logistic_regression",
+        "regularized_logistic_regression",
+        "random_forest",
+        "gradient_boosting",
+        "xgboost",
+        "elastic_net",
+    }
+)
+_PREDICTION_CONTRACT_PRODUCTS = frozenset(
+    {
+        "auroc",
+        "auc",
+        "held_out_auroc",
+        "cv_auroc",
+        "cv_auroc_mean",
+        "mean_auroc",
+        "auroc_mean",
+        "auroc_median",
+        "brier_score",
+        "cv_brier_mean",
+        "brier_mean",
+        "held_out_brier",
+        "brier_median",
+        "calibration_slope",
+        "calibration_slope_median",
+        "calibration_intercept",
+        "calibration_intercept_median",
+        "model_performance",
+        "validation_performance",
+        "horizon_performance",
+        "time_varying_auroc",
+        "prediction_horizon",
+    }
+)
+_PREDICTION_CONTRACT_PRODUCT_PREFIXES = (
+    "auroc_",
+    "auc_",
+    "brier_score_",
+    "calibration_slope_",
+    "calibration_intercept_",
+)
+
+_COHORT_CHANGE_OWNER_METHODS = frozenset(
+    {
+        "cohort_definition",
+        "primary_cohort_definition",
+        "eligibility_definition",
+        "cohort_definition_sensitivity",
+        "cohort_sensitivity",
+        "definition_sensitivity",
+        "alternative_cohort_definition",
+        "alternative_eligibility_comparison",
+        "cohort_overlap",
+    }
+)
+_COHORT_CHANGE_PRODUCTS = frozenset(
+    {
+        "cohort_flow",
+        "cohort_attrition",
+        "attrition",
+        "attrition_by_rule",
+        "locked_cohort",
+        "analysis_cohort",
+        "alternative_cohort_attrition",
+        "cohort_overlap",
+        "cohort_overlap_matrix",
+        "cohort_overlap_and_attrition",
+        "overlap_and_movement_across_cohorts",
+    }
+)
+
+
+def _has_closed_contract_product(
+    expected_outputs: Sequence[str] | str,
+    *,
+    products: frozenset[str],
+    product_prefixes: Sequence[str] = (),
+) -> bool:
+    names = _normalised_structured_output_names(expected_outputs)
+    return bool(names & products) or any(
+        name.startswith(tuple(product_prefixes)) for name in names if product_prefixes
+    )
+
+
+def _effect_contract_applies(step: AnalysisStep) -> bool:
+    """Whether this exact method owner declares a result-bearing effect product."""
+
+    return _normalised_method_head(
+        str(step.method or "")
+    ) in _EFFECT_CONTRACT_METHODS and (
+        _has_closed_contract_product(
+            step.expected_outputs or [],
+            products=_EFFECT_CONTRACT_PRODUCTS,
+            product_prefixes=_EFFECT_CONTRACT_PRODUCT_PREFIXES,
+        )
+    )
+
+
+def _prediction_contract_applies(step: AnalysisStep) -> bool:
+    """Whether this exact method owner declares a prediction-performance product."""
+
+    return _normalised_method_head(
+        str(step.method or "")
+    ) in _PREDICTION_CONTRACT_METHODS and _has_closed_contract_product(
+        step.expected_outputs or [],
+        products=_PREDICTION_CONTRACT_PRODUCTS,
+        product_prefixes=_PREDICTION_CONTRACT_PRODUCT_PREFIXES,
+    )
+
+
+def _cohort_change_contract_applies(step: AnalysisStep) -> bool:
+    """Whether a cohort owner declares a closed attrition/overlap product."""
+
+    return _normalised_method_head(
+        str(step.method or "")
+    ) in _COHORT_CHANGE_OWNER_METHODS and _has_closed_contract_product(
+        step.expected_outputs or [],
+        products=_COHORT_CHANGE_PRODUCTS,
+    )
+
+
+def _plan_step_owns_contract_family(family: str, step: AnalysisStep) -> bool:
+    """Match a scientific plan step by method head plus structured products.
+
+    Free-text mentions are deliberately ignored.  A cohort step that says
+    "survival cohort" is not a Cox/KM owner, and an association step that says
+    "cluster-robust" is not a phenotype-discovery owner.
     """
 
-    best_score: Optional[int] = None
-    best_idx: Optional[int] = None
-    for idx, step in enumerate(steps or []):
-        sid = (step.step_id or "").lower()
-        method = (step.method or "").lower()
-        if sid.endswith("_figure") or "figure" in method:
-            continue
-        blob = " ".join(
-            [sid, step.intent or "", method, " ".join(step.expected_outputs or [])]
-        ).lower()
-        is_primary_model = any(
-            token in blob
-            for token in (
-                "primary",
-                "association",
-                "adjusted",
-                "effect estimate",
-                "odds ratio",
-                "hazard",
-                "model",
-                "estimate",
-            )
+    if family == "clustering":
+        return _clustering_contract_applies(
+            method=str(step.method or ""),
+            step_id=str(step.step_id or ""),
+            intent=str(step.intent or ""),
+            expected_outputs=step.expected_outputs or [],
         )
-        if not is_primary_model:
-            continue
-        score = 0
-        if "primary" in blob:
-            score += 3
-        if "model" in blob or "association" in blob or "effect" in blob:
-            score += 1
-        if any(t in blob for t in ("sensitivity", "robust", "diagnostic")):
-            score -= 3
-        if best_score is None or score > best_score:
-            best_score = score
-            best_idx = idx
-    return best_idx
+    if family == "prediction_model":
+        return _prediction_contract_applies(step)
+    head = _normalised_method_head(str(step.method or ""))
+    methods = _PLAN_FAMILY_METHODS.get(family, frozenset())
+    products = _PLAN_FAMILY_OUTPUTS.get(family, frozenset())
+    outputs = _normalised_expected_output_names(step.expected_outputs or [])
+    return head in methods and bool(outputs & products)
 
 
 def _enforce_advanced_plan_contract(
@@ -446,106 +810,25 @@ def _enforce_advanced_plan_contract(
         if stamped and stamped not in _HEURISTIC_REACHABLE_FAMILIES:
             family = stamped
     if not family:
-        plan_blob = " ".join(
-            [
-                context.research_question or "",
-                " ".join(
-                    " ".join(
-                        [
-                            step.step_id or "",
-                            step.intent or "",
-                            step.method or "",
-                            " ".join(step.expected_outputs or []),
-                        ]
-                    )
-                    for step in (plan.steps or [])
-                ),
-            ]
-        ).lower()
-        if any(
-            marker in plan_blob
-            for marker in (
-                "complete-case",
-                "complete case",
-                "missing-indicator",
-                "missing indicator",
-                "reduced-variable",
-                "reduced variable",
-                "robustness",
-            )
+        # An unstamped plan may opt into a contract only through an explicit
+        # method family plus a structured product.  Free-text benchmark prose is
+        # not an execution routing surface.
+        for candidate in (
+            "robustness",
+            "clustering",
+            "bias_audit",
+            "prediction_model",
         ):
-            family = "robustness"
-        elif any(
-            marker in plan_blob
-            for marker in (
-                "cluster",
-                "clustering",
-                "phenotype",
-                "trajectory",
-                "silhouette",
-            )
-        ):
-            family = "clustering"
-        elif (
-            "sofa" not in plan_blob
-            and _question_primary_predictor_is_vasopressor_or_unknown(context)
-            and (
-                any(
-                    marker in plan_blob
-                    for marker in (
-                        "selection bias",
-                        "confounding by indication",
-                        "confounded by indication",
-                    )
-                )
-                or (
-                    ("vasopressor" in plan_blob or "vaso" in plan_blob)
-                    and "association" in plan_blob
-                    and "mortality" in plan_blob
-                )
-            )
-        ):
-            family = "bias_audit"
-        elif any(
-            marker in plan_blob
-            for marker in (
-                "prediction",
-                "auroc",
-                "auc",
-                "brier",
-                "calibration",
-                "cross-validation",
-                "cross validation",
-                "held-out",
-                "held out",
-            )
-        ):
-            family = "prediction_model"
+            if any(
+                _plan_step_owns_contract_family(candidate, step)
+                for step in (plan.steps or [])
+            ):
+                family = candidate
+                break
     if family not in _CONTRACT_FAMILIES:
         return plan, []
 
     if family == "prediction_model":
-        markers = (
-            "prediction",
-            "model",
-            "training",
-            "performance",
-            "auroc",
-            "auc",
-            "brier",
-            "calibration",
-            "discrimination",
-        )
-        canonical_step_id = "01_model_training"
-        canonical_method = "prediction_model"
-        canonical_intent = (
-            "Train and validate the mortality prediction model in one "
-            "self-contained executable step. Write a `model_performance` table "
-            "(metric,value rows incl. auroc and brier_score) plus a `roc_curve` "
-            "table (columns fpr,tpr) and a `calibration_curve` table (columns "
-            "predicted,observed[,n]) so the publication figure renders ROC and "
-            "calibration deterministically on the held-out split."
-        )
         required_outputs = [
             "statistic:auroc",
             "statistic:brier_score",
@@ -557,22 +840,6 @@ def _enforce_advanced_plan_contract(
             "figure:discrimination_calibration",
         ]
     elif family == "clustering":
-        markers = (
-            "cluster",
-            "clustering",
-            "phenotype",
-            "trajectory",
-            "silhouette",
-            "mortality_by_cluster",
-        )
-        canonical_step_id = "01_phenotype_trajectory_clustering"
-        canonical_method = "clustering"
-        canonical_intent = (
-            "Generate trajectory clusters over the predictor variables named "
-            "in the research context, with cluster summaries, post-hoc "
-            "outcome rate by cluster, validation metrics and a figure in one "
-            "self-contained executable step."
-        )
         required_outputs = [
             "statistic:silhouette_score",
             "statistic:cluster_count",
@@ -583,37 +850,6 @@ def _enforce_advanced_plan_contract(
             "manifest:clustering_methodology",
         ]
     elif family == "survival":
-        markers = (
-            "survival",
-            "time-to-event",
-            "time to event",
-            "kaplan",
-            "kaplan-meier",
-            "kaplan meier",
-            "cox",
-            "hazard",
-            "proportional hazards",
-            "log-rank",
-            "log rank",
-            "person-time",
-        )
-        canonical_step_id = "01_survival_analysis"
-        canonical_method = "survival_analysis"
-        canonical_intent = (
-            "Run the time-to-event survival analysis in one self-contained "
-            "executable step: define time-zero and the follow-up window, "
-            "estimate Kaplan-Meier curves by the primary stratum, fit a Cox "
-            "proportional-hazards model, and write the hazard-ratio table plus "
-            "the survival-curve figure. Respect censoring and do not collapse "
-            "time-to-event into a static binary outcome. Prefer the tested, "
-            "deterministic estimator `from easyicu.research_agent import "
-            "fit_cox_model` (Breslow-tie Cox PH: hazard ratios, 95% CIs, "
-            "p-values, concordance) over hand-written partial-likelihood code. "
-            "Also write a `cox_summary` table (columns term,hr,lower,upper) and "
-            "a `km_curve` table (columns group,time,survival,at_risk giving the "
-            "Kaplan-Meier step points per stratum) so the publication figure "
-            "renders the survival curve and hazard-ratio forest deterministically."
-        )
         required_outputs = [
             "statistic:hazard_ratio",
             "statistic:n_events",
@@ -624,30 +860,6 @@ def _enforce_advanced_plan_contract(
             "log:survival_time_definition",
         ]
     elif family == "dynamic_prediction":
-        markers = (
-            "dynamic prediction",
-            "time-updated",
-            "time updated",
-            "time-varying",
-            "time varying",
-            "time-dependent",
-            "rolling",
-            "landmark",
-            "early warning",
-            "deterioration",
-            "prediction horizon",
-            "update cadence",
-        )
-        canonical_step_id = "01_dynamic_prediction"
-        canonical_method = "dynamic_prediction"
-        canonical_intent = (
-            "Build the time-updated prediction analysis in one self-contained "
-            "executable step: keep prediction time, observation window, and "
-            "target horizon distinct, evaluate discrimination at each horizon "
-            "with a strict anti-leakage split, and write the time-varying "
-            "discrimination figure. Do not collapse longitudinal forecasting "
-            "into a single static prediction."
-        )
         required_outputs = [
             "statistic:time_varying_auroc",
             "statistic:prediction_horizon",
@@ -656,36 +868,6 @@ def _enforce_advanced_plan_contract(
             "log:anti_leakage_audit",
         ]
     elif family == "causal_inference":
-        markers = (
-            "causal",
-            "propensity",
-            "ipw",
-            "iptw",
-            "inverse probability",
-            "g-formula",
-            "g-computation",
-            "doubly robust",
-            "target trial",
-            "instrumental variable",
-            "marginal structural",
-            "counterfactual",
-            "standardized mean difference",
-            "covariate balance",
-        )
-        canonical_step_id = "01_causal_effect_estimation"
-        canonical_method = "causal_inference"
-        canonical_intent = (
-            "Estimate the adjusted treatment effect in one self-contained "
-            "executable step: state the identification assumptions, check "
-            "covariate balance / positivity before and after weighting, report "
-            "the adjusted effect with its uncertainty, and write the "
-            "covariate-balance (love) figure. Keep causal language conditional "
-            "on the stated assumptions; do not over-claim causality. Write a "
-            "`covariate_balance` table (columns covariate,smd_unweighted,"
-            "smd_weighted) and a `causal_effect` table (columns estimate,lower,"
-            "upper,scale) so the publication figure renders the love plot and "
-            "adjusted contrast deterministically."
-        )
         required_outputs = [
             "statistic:adjusted_effect",
             "statistic:max_smd_after_weighting",
@@ -695,27 +877,6 @@ def _enforce_advanced_plan_contract(
             "log:identification_assumptions",
         ]
     elif family == "treatment_response":
-        markers = (
-            "treatment response",
-            "responder",
-            "nonresponder",
-            "non-responder",
-            "heterogeneous treatment effect",
-            "effect modification",
-            "drug response",
-            "therapy response",
-            "cate",
-        )
-        canonical_step_id = "01_treatment_response_heterogeneity"
-        canonical_method = "treatment_response"
-        canonical_intent = (
-            "Characterize treatment-response heterogeneity in one self-contained "
-            "executable step: estimate the overall effect, test for effect "
-            "modification with an explicit interaction term, summarize "
-            "pre-specified subgroup effects, and write the subgroup forest "
-            "figure. Treat subgroup effects as exploratory and report the "
-            "interaction test plus multiplicity, not subgroup p-values alone."
-        )
         required_outputs = [
             "statistic:overall_effect",
             "statistic:interaction_pvalue",
@@ -724,26 +885,6 @@ def _enforce_advanced_plan_contract(
             "log:multiplicity_note",
         ]
     elif family == "validation":
-        markers = (
-            "external validation",
-            "externally validate",
-            "transportability",
-            "reclassification",
-            "net reclassification",
-            "score comparison",
-            "compare score",
-            "validate score",
-            "calibration-in-the-large",
-        )
-        canonical_step_id = "01_external_validation"
-        canonical_method = "validation"
-        canonical_intent = (
-            "Validate the score/model in one self-contained executable step: "
-            "evaluate discrimination and calibration on the validation cohort, "
-            "report calibration-in-the-large and slope alongside AUROC, and "
-            "write the external discrimination/calibration figure. Keep the "
-            "development and validation cohorts and time windows distinct."
-        )
         required_outputs = [
             "statistic:validation_auroc",
             "statistic:calibration_slope",
@@ -752,34 +893,6 @@ def _enforce_advanced_plan_contract(
             "log:validation_cohort_definition",
         ]
     elif family == "bias_audit":
-        markers = (
-            "association",
-            "vasopressor",
-            "vaso",
-            "mortality",
-            "selection",
-            "bias",
-            "confounding",
-            "missingness",
-            "clinical-constraint",
-            "clinical constraint",
-            "logistic",
-            "regression",
-            "model",
-            "strategy",
-            "adjusted",
-            "odds ratio",
-            "or",
-        )
-        canonical_step_id = "02_treatment_exposure_bias_association"
-        canonical_method = "bias_audit_association"
-        canonical_intent = (
-            "Fit an outcome association model for the treatment exposure named "
-            "in the research context with severity / missingness covariates; "
-            "report the primary odds ratio, selection-bias or "
-            "confounding-by-indication warning, missingness profile, and avoid "
-            "causal treatment-effect language."
-        )
         required_outputs = [
             "statistic:primary_or",
             "statistic:selection_bias_warning",
@@ -789,28 +902,6 @@ def _enforce_advanced_plan_contract(
             "log:clinical_constraint_warning",
         ]
     else:
-        markers = (
-            "complete-case",
-            "complete case",
-            "missing-indicator",
-            "missing indicator",
-            "reduced-variable",
-            "reduced variable",
-            "robustness",
-            "odds ratio",
-            "logistic",
-            "model",
-            "figure",
-            "performance",
-        )
-        canonical_step_id = "03_complete_case_robustness"
-        canonical_method = "association_robustness"
-        canonical_intent = (
-            "Fit complete-case, missing-indicator, and reduced-variable association "
-            "models; extract the primary effect estimate and complete-case sample "
-            "size; write the summary table and robustness figure in one "
-            "self-contained executable step."
-        )
         required_outputs = [
             "statistic:primary_or",
             "statistic:complete_case_n",
@@ -820,53 +911,46 @@ def _enforce_advanced_plan_contract(
         ]
 
     def _is_relevant(step: AnalysisStep) -> bool:
-        text = " ".join(
-            [
-                step.step_id or "",
-                step.intent or "",
-                step.method or "",
-                " ".join(step.expected_outputs or []),
-            ]
-        ).lower()
-        return any(marker in text for marker in markers)
+        return _plan_step_owns_contract_family(family, step)
 
     relevant_indexes = [
         idx for idx, step in enumerate(plan.steps) if _is_relevant(step)
     ]
-    converted_from_association = False
     if not relevant_indexes:
-        # The planner produced no step matching this family's own methods. For a
-        # strong result-bearing family that is a design error (e.g. a survival
-        # question answered with a static association model): convert the
-        # primary-estimand model step into the canonical family step rather than
-        # silently accepting the wrong estimand. For association/robustness/
-        # bias_audit families a marker miss legitimately means "leave alone".
-        if family in _FORCE_CONVERT_FAMILIES:
-            fallback_idx = _primary_estimand_step_index(plan.steps)
-            if fallback_idx is not None:
-                relevant_indexes = [fallback_idx]
-                converted_from_association = True
-        if not relevant_indexes:
-            return plan, []
+        # Family inference is advisory evidence for the planner/critic, not
+        # authority to rewrite scientific choices.  If no method-head +
+        # structured-product owner exists, preserve every agent step verbatim
+        # and surface the mismatch for replanning.  In particular, never turn a
+        # cohort step or a mixed-effects association into Cox/IPTW/KMeans merely
+        # because free text scored highly for another family.
+        return plan, [
+            ValidationFinding(
+                validator="plan_contract",
+                severity="warning",
+                message=(
+                    f"The inferred {family} family has no agent-declared method "
+                    "owner with a compatible structured product contract. The "
+                    "plan was preserved unchanged for critic/replanner review; "
+                    "the framework did not choose or replace the scientific method."
+                ),
+                detail={
+                    "family": family,
+                    "preserved_step_ids": [step.step_id for step in plan.steps],
+                    "missing_structured_owner": True,
+                    "required_outputs": required_outputs,
+                },
+            )
+        ]
 
     first_index = relevant_indexes[0]
     relevant_steps = [plan.steps[idx] for idx in relevant_indexes]
-    combined_inputs: List[str] = []
-    for step in relevant_steps:
-        for item in step.inputs or []:
-            if item not in combined_inputs:
-                combined_inputs.append(item)
     combined_outputs = list(required_outputs)
-    if not converted_from_association:
-        # Normalising an existing family step: keep whatever extra outputs it
-        # already declared. When CONVERTING an association step, do NOT carry
-        # over its association outputs (e.g. adjusted_association_estimates) --
-        # they would tell the coder to also compute a static OR alongside the
-        # Cox/KM estimand, reintroducing the wrong-method result we are fixing.
-        for step in relevant_steps:
-            for item in step.expected_outputs or []:
-                if item not in combined_outputs:
-                    combined_outputs.append(item)
+    # The agent already selected a compatible method. Preserve every additional
+    # requested product and add only missing standard machine-readable outputs.
+    for step in relevant_steps:
+        for item in step.expected_outputs or []:
+            if item not in combined_outputs:
+                combined_outputs.append(item)
 
     article_roles = _article_display_roles(plan.steps)
     if family == "robustness" and len(plan.steps or []) > 2 and len(article_roles) >= 4:
@@ -914,34 +998,65 @@ def _enforce_advanced_plan_contract(
         )
         return revised, [finding]
 
+    if len(relevant_indexes) > 1:
+        declared_outputs = {
+            item for step in relevant_steps for item in (step.expected_outputs or [])
+        }
+        missing_across_family = [
+            item for item in required_outputs if item not in declared_outputs
+        ]
+        if not missing_across_family:
+            return plan, []
+        owner_index = relevant_indexes[0]
+        new_steps = list(plan.steps)
+        owner = new_steps[owner_index]
+        new_steps[owner_index] = owner.model_copy(
+            update={
+                "expected_outputs": [
+                    *(owner.expected_outputs or []),
+                    *missing_across_family,
+                ]
+            }
+        )
+        revised = plan.model_copy(
+            update={"steps": new_steps, "revision": max(1, plan.revision) + 1}
+        )
+        return revised, [
+            ValidationFinding(
+                validator="plan_contract",
+                severity="info",
+                message=(
+                    f"Preserved the planner's {family} step boundaries and added "
+                    "missing machine-readable products to the existing method owner."
+                ),
+                detail={
+                    "family": family,
+                    "preserved_step_ids": [step.step_id for step in plan.steps],
+                    "contract_step_id": owner.step_id,
+                    "added_outputs": missing_across_family,
+                },
+            )
+        ]
+
     current = relevant_steps[0]
     missing_outputs = [
         item for item in required_outputs if item not in current.expected_outputs
     ]
-    needs_normalisation = (
-        len(relevant_indexes) != 1
-        or bool(missing_outputs)
-        or current.step_id != canonical_step_id
-    )
+    needs_normalisation = len(relevant_indexes) != 1 or bool(missing_outputs)
     if not needs_normalisation:
         return plan, []
 
-    canonical_step = current.model_copy(
-        update={
-            "step_id": canonical_step_id,
-            "intent": canonical_intent,
-            "inputs": combined_inputs or current.inputs,
-            "expected_outputs": combined_outputs,
-            "method": canonical_method,
-        }
-    )
+    # Add products only. Never relabel KMeans as generic clustering, PSM as
+    # generic causal inference, or a specific Cox/mixed-effects method as a broad
+    # family recipe.
+    contract_step = current.model_copy(update={"expected_outputs": combined_outputs})
     new_steps: List[AnalysisStep] = []
     inserted = False
     relevant_set = set(relevant_indexes)
     for idx, step in enumerate(plan.steps):
         if idx in relevant_set:
             if not inserted:
-                new_steps.append(canonical_step)
+                new_steps.append(contract_step)
                 inserted = True
             continue
         new_steps.append(step)
@@ -949,19 +1064,11 @@ def _enforce_advanced_plan_contract(
     revised = plan.model_copy(
         update={"steps": new_steps, "revision": max(1, plan.revision) + 1}
     )
-    if converted_from_association:
-        message = (
-            f"Planner produced no {family}-appropriate estimator for a locked "
-            f"{family} design and defaulted to a static association model; the "
-            f"primary-estimand step was converted to the canonical {family} "
-            "analysis so the reported result matches the study design."
-        )
-    else:
-        message = (
-            f"Planner output for {family} was normalized to a single "
-            "self-contained advanced-analysis step with explicit v14 metric "
-            "and artefact contracts."
-        )
+    message = (
+        f"Planner output for {family} kept its agent-selected method and "
+        "step identity while receiving the missing machine-readable metric "
+        "and artefact contracts."
+    )
     finding = ValidationFinding(
         validator="plan_contract",
         severity="warning",
@@ -969,10 +1076,10 @@ def _enforce_advanced_plan_contract(
         detail={
             "family": family,
             "original_step_ids": [step.step_id for step in relevant_steps],
-            "canonical_step_id": canonical_step_id,
-            "canonical_insert_index": first_index,
+            "contract_step_id": contract_step.step_id,
+            "contract_step_index": first_index,
             "required_outputs": required_outputs,
-            "converted_from_association": converted_from_association,
+            "converted_from_association": False,
         },
     )
     return revised, [finding]
@@ -1055,7 +1162,33 @@ def _predictor_tokens(name: Optional[str]) -> set[str]:
     return tokens
 
 
-_FIGURE_STEP_TOKENS = ("figure", "plot", "chart", "fig:", "figure:", "plot:")
+_FIGURE_METHODS = frozenset(
+    {
+        "figure",
+        "visualization",
+        "visualisation",
+        "plotting",
+        "publication_figure",
+        "render_figure",
+        "figure_generation",
+        "chart_generation",
+    }
+)
+_FIGURE_OUTPUT_KINDS = frozenset({"figure", "plot", "chart", "fig", "heatmap"})
+_FIGURE_FILE_SUFFIXES = (".png", ".svg", ".pdf", ".tif", ".tiff")
+
+
+def _output_declares_figure(output: str) -> bool:
+    token = str(output or "").strip().lower()
+    if not token:
+        return False
+    kind, separator, _name = token.partition(":")
+    if separator and kind.strip() in _FIGURE_OUTPUT_KINDS:
+        return True
+    if token.endswith(_FIGURE_FILE_SUFFIXES):
+        return True
+    words = set(filter(None, re.split(r"[^a-z0-9]+", token)))
+    return bool(words & {"figure", "plot", "chart", "heatmap"})
 
 
 _PUBLICATION_FIGURE_TRIGGER_TOKENS = (
@@ -1065,7 +1198,6 @@ _PUBLICATION_FIGURE_TRIGGER_TOKENS = (
     "produce a heatmap",
     "produce a figure",
     "publication-ready",
-    "figure or",
     "and a figure",
     "and a heatmap",
     "and a publication",
@@ -1120,11 +1252,7 @@ def _split_table_and_figure_outputs_in_plan(
             # pins.
             new_steps.append(step)
             continue
-        figure_outputs = [
-            out
-            for out in outputs
-            if any(needle in (out or "").lower() for needle in _FIGURE_STEP_TOKENS)
-        ]
+        figure_outputs = [out for out in outputs if _output_declares_figure(out)]
         non_figure_outputs = [out for out in outputs if out not in figure_outputs]
         # Only split when the step is genuinely mixed — at least one
         # non-figure analytic payload (table, statistic, log, model, ...)
@@ -1205,7 +1333,9 @@ def _research_question_implies_figure(question: str) -> bool:
     text = (question or "").lower()
     if not text:
         return False
-    return any(token in text for token in _PUBLICATION_FIGURE_TRIGGER_TOKENS)
+    if any(token in text for token in _PUBLICATION_FIGURE_TRIGGER_TOKENS):
+        return True
+    return re.search(r"\bfigure\s+or\b", text) is not None
 
 
 def _ensure_publication_figure_step_in_plan(
@@ -1278,7 +1408,8 @@ def _ensure_publication_figure_step_in_plan(
 
 # Mirror of ``evaluation_scorecard._AUDIT_OUTPUT_HINTS`` (kept in sync by hand to
 # avoid a plan_utils -> evaluation_scorecard import cycle). A plan "declares an
-# audit panel" when a step's intent or expected_outputs mention any of these.
+# audit panel" when a step's intent or expected_outputs contain one of these as
+# a complete word or snake-case segment.
 _AUDIT_PANEL_TOKENS = ("audit", "completeness", "sensitivity", "leakage", "calibration")
 
 
@@ -1286,7 +1417,10 @@ def _step_declares_audit_panel(step: AnalysisStep) -> bool:
     """True if the step declares an audit/sensitivity/robustness display item."""
     for text in [step.intent or "", *(step.expected_outputs or [])]:
         lowered = (text or "").lower()
-        if any(token in lowered for token in _AUDIT_PANEL_TOKENS):
+        if any(
+            re.search(rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])", lowered)
+            for token in _AUDIT_PANEL_TOKENS
+        ):
             return True
     return False
 
@@ -1347,12 +1481,9 @@ def _ensure_audit_panel_step_in_plan(
 
 def _step_produces_figure(step: AnalysisStep) -> bool:
     """True if the step's expected_outputs declare a figure/plot artefact."""
-    for output in step.expected_outputs or []:
-        token = (output or "").lower()
-        for needle in _FIGURE_STEP_TOKENS:
-            if needle in token:
-                return True
-    return False
+    return any(
+        _output_declares_figure(output) for output in step.expected_outputs or []
+    )
 
 
 def _preserve_figure_steps_after_replan(
@@ -1398,75 +1529,49 @@ def _preserve_figure_steps_after_replan(
     return preserved, findings
 
 
-# Method-name families that mark a step as a RESULT-BEARING PRIMARY model — one
-# that produces the adjusted effect estimate the article contract's
-# ``primary_estimand`` role requires. Matched by SUBSTRING on the step
-# ``method`` (the LLM names methods freely, so an exact allowlist is brittle),
-# with an exclusion set so descriptive / audit / robustness / cohort steps —
-# which routinely carry "primary"/"association"/"adjusted" in their *id* — cannot
-# masquerade as the estimand. This is exactly why the token-based role detector
-# (_plan_contract_roles) and _primary_estimand_step_index BOTH fail to notice the
-# drop: in M1 both ``04_exposure_derivation_and_absolute_risk``
-# (descriptive_association_context) and ``04b_primary_cohort_reconciliation_audit``
-# (data_quality_audit) satisfy those token checks. The METHOD is the discriminator.
-_PRIMARY_ESTIMATOR_METHOD_PATTERNS = (
-    "regression",  # logistic_regression / linear_regression / poisson_regression / cox_regression
-    "logistic",
-    "cox",  # cox / coxph / cox_ph
-    "proportional_hazards",
-    "hazard",
-    "glm",
-    "gee",
-    "mixed_effects",
-    "iptw",  # causal_primary_iptw
-    "propensity",
-    "dose_response",  # ordinal_dose_response
-    "ordinal_logistic",
-    "survival_primary",
-    "causal_primary",
-    "xgboost",
-    "gradient_boost",
-    "random_forest",
-    "elastic_net",
-    "lasso",
-    "ridge",
-)
-_NON_ESTIMAND_METHOD_PATTERNS = (
-    "descriptive",
-    "audit",
-    "quality",
-    "cohort",
-    "table_one",
-    "table one",
-    "baseline",
-    "attrition",
-    "sensitivity",  # robustness family, not the primary estimand
-    "robustness",
-    "context",
-    "reconciliation",
-    "probe",
-    "figure",
-)
-
-
 def _step_is_primary_estimand_model(step: AnalysisStep) -> bool:
     """True when ``step`` is a result-bearing PRIMARY model (the estimand).
 
-    Keyed on the step ``method`` family, not its id/intent tokens: a
-    data-quality / descriptive / robustness step routinely carries
-    "primary"/"association"/"adjusted" in its id without being the estimand,
-    which is why the token-based checks cannot see the estimand being dropped.
+    Requires both a compatible method family and a structured result product.
+    Free-text id/intent tokens and preparation-only outputs do not establish
+    ownership of the primary estimand.
     """
 
-    method = (step.method or "").lower()
-    if not method:
+    if _step_expects_figure(step):
         return False
-    sid = (step.step_id or "").lower()
-    if sid.endswith("_figure") or "figure" in method:
+    # Both helpers normalize only the ``<head>`` of a ``<head>_with_<rider>``
+    # method and require a closed result-bearing product.  Thus a legitimate
+    # mixed-effects model with a cohort-robust rider remains primary, while a
+    # propensity-preparation or audit step cannot qualify through prose.
+    return _effect_contract_applies(step) or _prediction_contract_applies(step)
+
+
+def _step_is_baseline_context_table(step: AnalysisStep) -> bool:
+    """True for a structured Table 1 / baseline-context analysis step.
+
+    Match only the step id and declared outputs. Replan repair prose often
+    mentions missing baseline context without owning a baseline artifact, so
+    intent and free-form method text are deliberately excluded.
+    """
+
+    if _step_produces_figure(step):
         return False
-    if any(bad in method for bad in _NON_ESTIMAND_METHOD_PATTERNS):
-        return False
-    return any(good in method for good in _PRIMARY_ESTIMATOR_METHOD_PATTERNS)
+    structured = " ".join(
+        [step.step_id or "", " ".join(step.expected_outputs or [])]
+    ).lower()
+    return any(
+        token in structured
+        for token in (
+            "table_one",
+            "table one",
+            "baseline_context",
+            "baseline context",
+            "baseline_table",
+            "baseline table",
+            "baseline_characteristics",
+            "baseline characteristics",
+        )
+    )
 
 
 def _preserve_primary_estimand_step_after_replan(
@@ -1478,12 +1583,9 @@ def _preserve_primary_estimand_step_after_replan(
 
     The replanner is an LLM call and can drop the adjusted-model step that
     produces the primary estimand while inserting an audit/reconciliation step,
-    even when its own rationale claims it is keeping the primary model. In M1,
-    revision 7 removed ``05_primary_adjusted_association`` (logistic_regression)
-    and added ``04b_primary_cohort_reconciliation_audit`` (data_quality_audit);
-    the run then produced NO adjusted OR and replan-exhausted to
-    ``diagnostic_only``. The article contract still requires a primary estimand,
-    so the primary model step is load-bearing: if ``current`` has one and
+    even when its own rationale claims it is keeping the primary model. The
+    article contract still requires a primary estimand, so the primary model
+    step is load-bearing: if ``current`` has one and
     ``revised`` has NO result-bearing model step at all, re-attach the dropped
     step(s).
 
@@ -1532,6 +1634,11 @@ def _cap_plan_preserving_figure_steps(
     their upstream source step remains in the plan. Treat the parent and child
     as a small dependency unit: a cap may displace another non-figure step to
     keep both, but it must not preserve a figure child by replacing its parent.
+
+    The first genuine primary-estimand model and first structured baseline /
+    Table 1 step are article-contract anchors as well. Replan repair steps can
+    push these anchors past ``steps[:cap]``; silently dropping either makes a
+    busy plan incapable of answering the research question.
     """
 
     steps = list(plan.steps or [])
@@ -1544,6 +1651,13 @@ def _cap_plan_preserving_figure_steps(
     protected_ids = {
         str(step_id) for step_id in (protected_step_ids or []) if step_id in step_by_id
     }
+    for predicate in (
+        _step_is_primary_estimand_model,
+        _step_is_baseline_context_table,
+    ):
+        owner = next((step for step in steps if predicate(step)), None)
+        if owner is not None:
+            protected_ids.add(owner.step_id)
     kept_ids.update(protected_ids)
     original_kept_ids = set(kept_ids)
     preserved_step_ids: List[str] = []
@@ -1576,6 +1690,13 @@ def _cap_plan_preserving_figure_steps(
         kept_ids.remove(displaced_id)
         displaced_step_ids.append(displaced_id)
         return True
+
+    # A protected article-contract anchor may sit beyond the initial
+    # first-``cap`` slice. Make room immediately rather than relying on a later
+    # figure step to happen to trigger eviction.
+    while len(kept_ids) > cap:
+        if not _remove_displaceable(set()):
+            break
 
     for step in steps[cap:]:
         if not _step_produces_figure(step):
@@ -1836,8 +1957,10 @@ def _primary_effect_from_summary(step_summary: Dict[str, Any]) -> Optional[float
             effect = _finite_float(value)
             if effect is not None:
                 return effect
-    effect = _first_numeric_effect_from_text(step_summary)
-    return _finite_float(effect)
+    # Canonical effects must come from structured numeric fields or tables.
+    # Free prose is not an evidence contract and can contain ordinary language
+    # such as "or 1.5-1.9 times baseline" that resembles an OR label.
+    return None
 
 
 def _primary_effect_from_completed_records(
@@ -1980,25 +2103,6 @@ _CLUSTER_SCALAR_KEYS = (
     "statistic:cluster_count",
 )
 
-# Method labels that *prepare for* clustering (feature audit / freeze, cohort
-# definition, descriptive baselines) rather than *fit* clusters. A step whose
-# method is one of these must never be required to report a silhouette/cluster
-# count itself even when its intent or expected_outputs mention "clustering" —
-# the real clustering runs in a dedicated downstream step. (Regression: the M3
-# ``01_feature_audit_and_primary_set_freeze`` step self-declared "froze the
-# feature set but did not fit clusters" yet fail-closed the whole run.)
-_NON_CLUSTERING_PREP_METHODS = frozenset(
-    {
-        "data_quality_audit",
-        "descriptive",
-        "table_one",
-        "cohort_definition",
-        "descriptive_trend_test",
-        "missingness_audit",
-        "feature_audit",
-    }
-)
-
 
 def _clustering_metric_from_completed_records(
     completed_step_records: Optional[Sequence[Dict[str, Any]]],
@@ -2126,10 +2230,11 @@ def _primary_exposure_contract_findings(
             message=(
                 f"The question's primary exposure is `{required}`, but this "
                 f"primary model estimated `{actual}`. Re-fit the association "
-                f"with `{required}` as the primary exposure — derive its binary "
-                f"indicator from the source columns if needed (an absent event "
-                f"is 0/False, not missing data). Keep illness-severity scores "
-                f"as adjustment covariates only, never as the exposure."
+                f"with `{required}` as the primary exposure using the "
+                "prespecified representation and measurement semantics. Label "
+                "other exposure representations secondary/corroborative and fit "
+                "them separately unless the study contract explicitly justifies "
+                "including one in the other's adjustment set."
             ),
             detail={
                 "kind": "exposure_contract",
@@ -2342,7 +2447,11 @@ _COEF_TABLE_ID_COLUMNS = frozenset(
 _NON_COVARIATE_TERMS = frozenset({"const", "intercept", "(intercept)"})
 
 
-def read_model_covariate_names(directory: Path) -> List[str]:
+def read_model_covariate_names(
+    directory: Path,
+    *,
+    files: Optional[Sequence[Path]] = None,
+) -> List[str]:
     """Variable names from every model coefficient table under ``directory``.
 
     De-duplicated, intercept rows dropped, first-seen order preserved. Returns
@@ -2353,9 +2462,18 @@ def read_model_covariate_names(directory: Path) -> List[str]:
     """
     names: List[str] = []
     base = Path(directory)
-    if not base.exists():
+    if files is None and not base.exists():
         return names
-    for path in sorted(base.rglob("*.csv")):
+    candidates = (
+        sorted(base.rglob("*.csv"))
+        if files is None
+        else sorted(
+            Path(path)
+            for path in files
+            if Path(path).is_file() and Path(path).suffix.lower() == ".csv"
+        )
+    )
+    for path in candidates:
         try:
             with path.open(newline="", encoding="utf-8") as fh:
                 reader = csv.DictReader(fh)
@@ -2413,10 +2531,8 @@ _COVARIATE_INTENT_EXACT = frozenset(
 # the model (``renal_source_not_adjusted``, ``excluded_covariates``,
 # ``dropped_for_overadjustment``, the columns of the ``unadjusted`` model) is the
 # inverse of the adjustment set. Reading it as the adjustment set inverts its
-# meaning and manufactures a phantom overadjustment/leakage finding — the exact
-# false positive that failed a fully-correct KDIGO missingness audit (its
-# ``RENAL_SOURCE_NOT_ADJUSTED`` renal-component list, named precisely to document
-# the exclusion, substring-matched ``adjust``). These markers are unambiguous:
+# meaning and manufactures a phantom overadjustment/leakage finding. These
+# markers are unambiguous:
 # each *means* "not in the model", so suppressing them cannot hide a genuine
 # adjustment set (which is never named this way) — no false-negative risk. Only
 # clear negations are listed; transformation words ("drop"/"remove"/"omit") are
@@ -2487,7 +2603,11 @@ def _formula_rhs_terms(formula: str) -> List[str]:
     return terms
 
 
-def _covariate_names_from_code(directory: Path) -> List[str]:
+def _covariate_names_from_code(
+    directory: Path,
+    *,
+    files: Optional[Sequence[Path]] = None,
+) -> List[str]:
     """Adjustment-set column names recovered from a run's analysis code.
 
     General + conservative: parses the analysis ``*.py`` near ``directory`` and
@@ -2508,12 +2628,20 @@ def _covariate_names_from_code(directory: Path) -> List[str]:
 
     # Search the directory, its parent (a step's outputs/ sits beside analysis.py),
     # and any steps/*/analysis.py beneath it (the post-hoc run-root case). Bounded.
-    candidates: List[Path] = []
-    for src in (base, base.parent):
-        if src.exists():
-            candidates.extend(sorted(src.glob("*.py")))
-    if base.exists():
-        candidates.extend(sorted(base.rglob("analysis.py")))
+    candidates: List[Path]
+    if files is None:
+        candidates = []
+        for src in (base, base.parent):
+            if src.exists():
+                candidates.extend(sorted(src.glob("*.py")))
+        if base.exists():
+            candidates.extend(sorted(base.rglob("analysis.py")))
+    else:
+        candidates = [
+            Path(path)
+            for path in files
+            if Path(path).is_file() and Path(path).suffix.lower() == ".py"
+        ]
 
     visited: set = set()
     for path in candidates:
@@ -2540,19 +2668,26 @@ def _covariate_names_from_code(directory: Path) -> List[str]:
     return seen
 
 
-def read_adjustment_covariates(directory: Path) -> List[str]:
+def read_adjustment_covariates(
+    directory: Path,
+    *,
+    files: Optional[Sequence[Path]] = None,
+) -> List[str]:
     """The model's adjustment set, preferring the coefficient table.
 
     A per-covariate coefficient table is the ground truth of what entered the
-    model, so it wins when present. When a run reports only a model-level OR
-    summary (no coefficient table), the adjustment set is recovered from the
-    analysis code instead, so the overadjustment / leakage auditors are not blind
-    to summary-only outputs. Returns ``[]`` when neither source yields anything.
+    model, so it wins when present. ``files`` restricts discovery to an explicit
+    authority list (for example, current manifest evidence); when omitted the
+    historical directory scan is preserved. When a run reports only a
+    model-level OR summary (no coefficient table), the adjustment set is
+    recovered from the analysis code instead, so the overadjustment / leakage
+    auditors are not blind to summary-only outputs. Returns ``[]`` when neither
+    source yields anything.
     """
-    coef_names = read_model_covariate_names(directory)
+    coef_names = read_model_covariate_names(directory, files=files)
     if coef_names:
         return coef_names
-    return _covariate_names_from_code(directory)
+    return _covariate_names_from_code(directory, files=files)
 
 
 def _primary_exposure_overadjustment_findings(
@@ -2738,10 +2873,44 @@ def _step_contract_findings(
         ]
 
     findings: List[ValidationFinding] = []
+    reported_status = str(step_summary.get("status") or "").strip().lower()
+    if reported_status in {
+        "blocked",
+        "error",
+        "failed",
+        "execution_failed",
+        "contract_failed",
+        "repair_failed",
+    }:
+        findings.append(
+            ValidationFinding(
+                validator="step_contract",
+                severity="error",
+                message=(
+                    f"Step {step.step_id} reported status={reported_status!r} "
+                    "inside step_summary.json and cannot be recorded as a "
+                    "successful completed step."
+                ),
+                detail={
+                    "step_id": step.step_id,
+                    "reported_status": reported_status,
+                    "blocking_reason": step_summary.get("blocking_reason"),
+                    "error": step_summary.get("error"),
+                },
+            )
+        )
     expected = " ".join(str(item).lower() for item in (step.expected_outputs or []))
-    step_id = (step.step_id or "").lower()
     intent = (step.intent or "").lower()
-    method = (step.method or "").lower()
+
+    # Closed, method-specific declaration for an agent-authored ordered-group
+    # descriptive step.  The contract records the agent's variable/order/
+    # denominator decisions; a separate cohort replay verifies the numbers.
+    findings.extend(
+        ordered_stratified_structure_findings(
+            step=step,
+            step_summary=step_summary,
+        )
+    )
 
     # Figure-only follow-up steps (created by ``_split_table_and_figure_outputs_in_plan``)
     # inherit the parent's step_id with a ``_figure`` suffix, e.g.
@@ -2752,9 +2921,282 @@ def _step_contract_findings(
     # below would falsely demand effect/prediction/clustering metrics from a
     # render-only step that legitimately has no such fields in its summary.
     figure_only_step = bool(step.expected_outputs) and all(
-        any(needle in (out or "").lower() for needle in _FIGURE_STEP_TOKENS)
-        for out in step.expected_outputs
+        _output_declares_figure(out) for out in step.expected_outputs
     )
+
+    # The input parquet is already the locked analysis cohort. A generated
+    # downstream QC/model/descriptive script must not relabel itself as a cohort
+    # definition/sensitivity step and silently re-run eligibility. Check the
+    # plan's own method/id/intent/output contract rather than trusting the
+    # generated summary's family (the latter is exactly what can drift).
+    cohort_change_authorized = _cohort_change_contract_applies(step)
+    summary_family = str(step_summary.get("analysis_family") or "").lower()
+    summary_cohort = step_summary.get("cohort_definition")
+    summary_claims_cohort_change = summary_family in {
+        "cohort_definition",
+        "cohort_definition_sensitivity",
+        "cohort_sensitivity",
+        "definition_sensitivity",
+    } or bool(
+        isinstance(summary_cohort, dict)
+        and summary_cohort.get("current_step_is_cohort_definition_sensitivity")
+    )
+    if (
+        not figure_only_step
+        and summary_claims_cohort_change
+        and not cohort_change_authorized
+    ):
+        findings.append(
+            ValidationFinding(
+                validator="step_contract",
+                severity="error",
+                message=(
+                    f"Step {step.step_id} is not a cohort-definition or "
+                    "alternative-cohort step, but its summary relabels it as "
+                    "cohort-definition sensitivity. Treat COHORT_PARQUET as the "
+                    "already locked analysis cohort; remove age, length-of-stay, "
+                    "identifier, outcome-availability, and other eligibility "
+                    "filters from this step."
+                ),
+                detail={
+                    "kind": "unauthorized_cohort_redefinition",
+                    "step_id": step.step_id,
+                    "planned_method": step.method,
+                    "reported_analysis_family": summary_family or None,
+                    "reported_current_step_is_cohort_definition_sensitivity": (
+                        summary_cohort.get(
+                            "current_step_is_cohort_definition_sensitivity"
+                        )
+                        if isinstance(summary_cohort, dict)
+                        else None
+                    ),
+                },
+            )
+        )
+
+    # A component derivation/QC table that declares measurement flags must state
+    # whether independent per-stay observation counts were reconciled. The
+    # companion count may be absent in another database, so the contract permits
+    # an explicit unavailable state; silence is not an audit.
+    component_qc_required = (
+        not figure_only_step
+        and "component_qc" in expected
+        and any(str(value).lower().endswith("_measured") for value in step.inputs)
+    )
+    if component_qc_required:
+        component_qc = step_summary.get("component_qc")
+        count_status = (
+            str(component_qc.get("count_consistency_status") or "").lower()
+            if isinstance(component_qc, dict)
+            else ""
+        )
+        checked_ok = False
+        unavailable_ok = False
+        if isinstance(component_qc, dict) and count_status == "checked":
+            comparison_n = _finite_float(component_qc.get("count_flag_comparison_n"))
+            discordant_n = _finite_float(component_qc.get("count_flag_discordant_n"))
+            count_columns = component_qc.get("count_columns")
+            checked_ok = bool(
+                comparison_n is not None
+                and comparison_n >= 0
+                and discordant_n is not None
+                and 0 <= discordant_n <= comparison_n
+                and isinstance(count_columns, (list, tuple, dict))
+                and len(count_columns) > 0
+            )
+        elif isinstance(component_qc, dict) and count_status == "unavailable":
+            missing_count_columns = component_qc.get("missing_count_columns")
+            unavailable_ok = bool(
+                isinstance(missing_count_columns, (list, tuple))
+                and len(missing_count_columns) > 0
+            )
+        if not (checked_ok or unavailable_ok):
+            findings.append(
+                ValidationFinding(
+                    validator="step_contract",
+                    severity="error",
+                    message=(
+                        f"Step {step.step_id} declares component source-status QC "
+                        "but does not record an independent <concept>_n versus "
+                        "<concept>_measured consistency audit. If count columns "
+                        "exist, compare (n > 0) with the flag per stay and report "
+                        "component_qc.count_consistency_status='checked', "
+                        "count_columns, count_flag_comparison_n, and "
+                        "count_flag_discordant_n. Otherwise report status "
+                        "'unavailable' with missing_count_columns."
+                    ),
+                    detail={
+                        "kind": "component_count_consistency_missing",
+                        "step_id": step.step_id,
+                        "component_qc": component_qc,
+                    },
+                )
+            )
+
+        # A global aggregate can look valid while silently omitting the
+        # authoritative summary family (for example, auditing component counts
+        # but not the primary stage count). Require an explicit count-column or
+        # unavailable declaration for every measured family named by the plan.
+        expected_count_columns = {
+            str(value)[: -len("_measured")] + "_n"
+            for value in step.inputs
+            if str(value).lower().endswith("_measured")
+        }
+
+        def _reported_column_names(raw: Any) -> set[str]:
+            if isinstance(raw, dict):
+                values = [*raw.keys(), *raw.values()]
+            elif isinstance(raw, (list, tuple, set)):
+                values = list(raw)
+            else:
+                values = []
+            return {
+                str(value)
+                for value in values
+                if isinstance(value, (str, int, float)) and str(value).strip()
+            }
+
+        reported_count_columns = (
+            _reported_column_names(component_qc.get("count_columns"))
+            if isinstance(component_qc, dict)
+            else set()
+        )
+        reported_missing_columns = (
+            _reported_column_names(component_qc.get("missing_count_columns"))
+            if isinstance(component_qc, dict)
+            else set()
+        )
+        uncovered_count_columns = sorted(
+            expected_count_columns - reported_count_columns - reported_missing_columns
+        )
+        if uncovered_count_columns:
+            findings.append(
+                ValidationFinding(
+                    validator="step_contract",
+                    severity="error",
+                    message=(
+                        f"Step {step.step_id} reports a partial count-versus-"
+                        "measured audit. Every declared <concept>_measured "
+                        "family, including the authoritative primary summary, "
+                        "must have its <concept>_n listed in count_columns or "
+                        "missing_count_columns. Keep count checks audit-only; "
+                        "do not use them to redefine the exposure. Missing "
+                        "coverage: " + ", ".join(uncovered_count_columns) + "."
+                    ),
+                    detail={
+                        "kind": "component_count_consistency_scope_incomplete",
+                        "step_id": step.step_id,
+                        "expected_count_columns": sorted(expected_count_columns),
+                        "reported_count_columns": sorted(reported_count_columns),
+                        "reported_missing_count_columns": sorted(
+                            reported_missing_columns
+                        ),
+                        "uncovered_count_columns": uncovered_count_columns,
+                    },
+                )
+            )
+
+        per_input = (
+            component_qc.get("count_consistency_by_measured_input")
+            if isinstance(component_qc, dict)
+            else None
+        )
+        invalid_per_input: List[Dict[str, Any]] = []
+        for measured_input in sorted(
+            str(value)
+            for value in step.inputs
+            if str(value).lower().endswith("_measured")
+        ):
+            expected_count = measured_input[: -len("_measured")] + "_n"
+            entry = (
+                per_input.get(measured_input) if isinstance(per_input, dict) else None
+            )
+            if not isinstance(entry, dict):
+                invalid_per_input.append(
+                    {
+                        "measured_input": measured_input,
+                        "expected_count_column": expected_count,
+                        "reason": "missing_entry",
+                    }
+                )
+                continue
+
+            entry_status = str(entry.get("status") or "").strip().lower()
+            reported_count = str(entry.get("count_column") or "").strip()
+            if reported_count != expected_count:
+                invalid_per_input.append(
+                    {
+                        "measured_input": measured_input,
+                        "expected_count_column": expected_count,
+                        "reported_count_column": reported_count or None,
+                        "reason": "wrong_count_pairing",
+                    }
+                )
+                continue
+
+            if entry_status == "checked":
+                comparison_n = _finite_float(entry.get("comparison_n"))
+                discordant_n = _finite_float(entry.get("discordant_n"))
+                if not (
+                    comparison_n is not None
+                    and comparison_n > 0
+                    and float(comparison_n).is_integer()
+                    and discordant_n is not None
+                    and discordant_n >= 0
+                    and float(discordant_n).is_integer()
+                    and discordant_n <= comparison_n
+                ):
+                    invalid_per_input.append(
+                        {
+                            "measured_input": measured_input,
+                            "expected_count_column": expected_count,
+                            "reason": "invalid_checked_counts",
+                            "comparison_n": entry.get("comparison_n"),
+                            "discordant_n": entry.get("discordant_n"),
+                        }
+                    )
+            elif entry_status == "unavailable":
+                if not str(entry.get("reason") or "").strip():
+                    invalid_per_input.append(
+                        {
+                            "measured_input": measured_input,
+                            "expected_count_column": expected_count,
+                            "reason": "unavailable_without_reason",
+                        }
+                    )
+            else:
+                invalid_per_input.append(
+                    {
+                        "measured_input": measured_input,
+                        "expected_count_column": expected_count,
+                        "reason": "invalid_status",
+                        "status": entry_status or None,
+                    }
+                )
+
+        if invalid_per_input:
+            findings.append(
+                ValidationFinding(
+                    validator="step_contract",
+                    severity="error",
+                    message=(
+                        f"Step {step.step_id} lacks a valid per-input count "
+                        "consistency record for every declared measurement "
+                        "flag. Report component_qc."
+                        "count_consistency_by_measured_input using exact "
+                        "<concept>_measured to <concept>_n pairings. Checked "
+                        "entries need positive integer comparison_n and a "
+                        "valid discordant_n; unavailable entries need a reason. "
+                        "Counts remain provenance QC and must not redefine the "
+                        "exposure or filter the cohort."
+                    ),
+                    detail={
+                        "kind": "component_count_consistency_by_input_invalid",
+                        "step_id": step.step_id,
+                        "invalid_entries": invalid_per_input,
+                    },
+                )
+            )
 
     def _append_missing(message: str, keys: Sequence[str]) -> None:
         findings.append(
@@ -2773,35 +3215,7 @@ def _step_contract_findings(
             )
         )
 
-    effect_required = not figure_only_step and (
-        any(
-            token in expected
-            for token in (
-                "adjusted_or_ci",
-                "primary_association",
-                "odds_ratio",
-                "primary_or",
-                "adjusted_or",
-            )
-        )
-        or "primary_association" in step_id
-    )
-    if not effect_required and not figure_only_step and "association" in expected:
-        effect_required = (
-            "model" in step_id
-            or "regression" in intent
-            or "estimate" in intent
-            or "odds" in expected
-        )
-    if (
-        not effect_required
-        and not figure_only_step
-        and (
-            ("logistic" in expected or "logistic" in intent or "odds" in intent)
-            and ("model" in step_id or "model" in expected or "regression" in intent)
-        )
-    ):
-        effect_required = True
+    effect_required = not figure_only_step and _effect_contract_applies(step)
     if effect_required:
         effect_value = _primary_effect_from_summary(step_summary)
         fallback_effect = None
@@ -2838,17 +3252,7 @@ def _step_contract_findings(
                 ("estimate", "primary_or", "odds_ratio", "adjusted_or"),
             )
 
-    prediction_step = (
-        "training_and_evaluation" in step_id
-        or "model_training" in step_id
-        or "prediction" in step_id
-        or "prediction" in intent
-    )
-    prediction_required = (not figure_only_step) and (
-        any(token in expected for token in ("auroc", "auc", "brier", "discrimination"))
-        or ("calibration" in expected and prediction_step)
-        or prediction_step
-    )
+    prediction_required = not figure_only_step and _prediction_contract_applies(step)
     if prediction_required:
         auroc_value = _first_present_scalar(
             step_summary,
@@ -3000,25 +3404,15 @@ def _step_contract_findings(
                 ),
             )
 
-    # A step is subject to the clustering contract only when it actually *fits*
-    # clusters. A step whose step_id or method names clustering qualifies; a step
-    # that merely *mentions* clustering in its intent/expected_outputs (e.g. a
-    # feature-audit / freeze step that prepares the feature set for a downstream
-    # clustering step) does NOT — unless its method is itself a clustering method.
-    clustering_step_signal = ("cluster" in step_id) or (
-        method not in _NON_CLUSTERING_PREP_METHODS
-        and (
-            "cluster" in method
-            or method in {"phenotyping", "latent_class", "gmm", "kmeans"}
-        )
-    )
-    clustering_mention = (
-        any(token in expected for token in ("cluster", "silhouette"))
-        or "clustering" in intent
-    )
-    clustering_required = (not figure_only_step) and (
-        clustering_step_signal
-        or (clustering_mention and method not in _NON_CLUSTERING_PREP_METHODS)
+    # Apply the cluster metric contract only to a method-owned clustering step
+    # with declared standard products.  Existing class membership, hospital-level
+    # clustering and cluster-robust standard errors are association details, not
+    # phenotype-discovery ownership.
+    clustering_required = (not figure_only_step) and _clustering_contract_applies(
+        method=str(step.method or ""),
+        step_id=str(step.step_id or ""),
+        intent=str(step.intent or ""),
+        expected_outputs=step.expected_outputs or [],
     )
     if clustering_required:
         cluster_value = _first_present_scalar(step_summary, _CLUSTER_SCALAR_KEYS)
@@ -3081,10 +3475,8 @@ def _step_contract_findings(
         figure_only_step and "figure:" in expected
     )
     if figure_required:
-        # 🔧 2026-05-16: when the step itself declares it skipped (typically
-        # because the underlying data wasn't present — e.g.
-        # `"skipped": ["No SOFA-2 components available in the dataset"]` from
-        # 11_sofa2_component_figure), don't fail the figure contract. The
+        # When the step itself declares it skipped because the underlying data
+        # are unavailable, do not fail the figure contract. The
         # skipped reason is the documented absence; the manuscript binder
         # already treats `skipped` as a first-class signal. Otherwise figure-
         # only steps would block the entire run whenever a sensitivity branch
@@ -3175,6 +3567,16 @@ def _step_contract_repair_guidance(
         step_summary.get("primary_predictor") or step_summary.get("predictor") or ""
     ).strip()
     summary_text = json.dumps(step_summary or {}, ensure_ascii=False, default=str)
+    if is_ordered_stratified_analysis_step(step):
+        guidance.append(
+            "Keep this as an agent-authored ordered-stratified analysis, but call "
+            "the documented wilson_interval, cochran_armitage_trend, and "
+            "jonckheere_terpstra_trend primitives. Use explicit CA scores, "
+            "individual-level values for JT, nonzero bounded p-values with log-p "
+            "metadata, one two-test Holm family, the canonical flat CSV columns, "
+            "and a complete ordered_stratified_contract declaration. Spearman "
+            "must not be substituted or relabelled as JT."
+        )
     if predictor and predictor in summary_text:
         guidance.append(
             f"The machine summary identifies `{predictor}` as the primary predictor. "
@@ -3237,33 +3639,7 @@ def _step_contract_repair_guidance(
             "non-null odds ratio."
         )
     expected = " ".join(str(item).lower() for item in (step.expected_outputs or []))
-    step_id = (step.step_id or "").lower()
-    intent = (step.intent or "").lower()
-    effect_required = (
-        any(
-            token in expected
-            for token in (
-                "adjusted_or_ci",
-                "primary_association",
-                "odds_ratio",
-                "primary_or",
-                "adjusted_or",
-            )
-        )
-        or "primary_association" in step_id
-    )
-    if not effect_required and "association" in expected:
-        effect_required = (
-            "model" in step_id
-            or "regression" in intent
-            or "estimate" in intent
-            or "odds" in expected
-        )
-    if not effect_required and (
-        ("logistic" in expected or "logistic" in intent or "odds" in intent)
-        and ("model" in step_id or "model" in expected or "regression" in intent)
-    ):
-        effect_required = True
+    effect_required = _effect_contract_applies(step)
     if effect_required:
         guidance.append(
             "This association step must write a non-null numeric primary effect "
@@ -3271,23 +3647,7 @@ def _step_contract_repair_guidance(
             "`odds_ratio`, or `primary_association_estimate`. Do not satisfy the "
             "contract by leaving association fields null."
         )
-    prediction_step = (
-        any(
-            token in step_id
-            for token in (
-                "prediction",
-                "model_training",
-                "training_and_evaluation",
-                "performance",
-            )
-        )
-        or "prediction" in intent
-    )
-    prediction_required = (
-        any(token in expected for token in ("auroc", "auc", "brier", "discrimination"))
-        or ("calibration" in expected and prediction_step)
-        or prediction_step
-    )
+    prediction_required = _prediction_contract_applies(step)
     if prediction_required:
         guidance.append(
             "This prediction step must produce numeric AUROC and Brier/calibration metrics "
@@ -3316,10 +3676,11 @@ def _step_contract_repair_guidance(
             "to int before fitting scikit-learn pipelines, or route them through a "
             "numeric branch with median imputation after conversion."
         )
-    clustering_required = (
-        any(token in expected for token in ("cluster", "silhouette"))
-        or any(token in step_id for token in ("cluster", "trajectory"))
-        or "clustering" in intent
+    clustering_required = _clustering_contract_applies(
+        method=str(step.method or ""),
+        step_id=str(step.step_id or ""),
+        intent=str(step.intent or ""),
+        expected_outputs=step.expected_outputs or [],
     )
     if clustering_required:
         guidance.append(

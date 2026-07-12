@@ -927,6 +927,12 @@ def _parse_citation_json(raw: str) -> List[Dict]:
 
 
 def _pick_blueprint_predictor(context: ResearchContext) -> Optional[str]:
+    declared_primary = (context.primary_exposure or "").strip()
+    if declared_primary:
+        # The explicit study contract outranks role/name heuristics. It may name
+        # a concept family rather than one materialised summary column; the
+        # planner resolves the concrete representation using context metadata.
+        return declared_primary
     outcome = context.target_outcome
     role_priority = {
         VariableRole.COMPOSITE_SCORE: 0,
