@@ -1517,6 +1517,79 @@ def test_primary_model_contract_rejects_unverified_penalized_provenance(
     assert "penalized_convergence_not_verified" in issues
 
 
+def test_primary_model_contract_accepts_model_bound_nested_ridge_diagnostics(
+    tmp_path: Path,
+):
+    contracts = copy.deepcopy(_contracts())
+    contract = contracts[0]
+    contract.pop("convergence_method")
+    contract.pop("optimizer_success")
+    contract["diagnostics"] = {
+        "ridge_converged": True,
+        "ridge_iterations": 98,
+    }
+
+    assert _audit(tmp_path, contracts=contracts) == []
+
+
+@pytest.mark.parametrize(
+    ("fit_method", "penalized", "diagnostics"),
+    [
+        (
+            "sklearn_ridge_logistic_regression(C=1)",
+            True,
+            {"ridge_converged": False, "ridge_iterations": 98},
+        ),
+        (
+            "sklearn_ridge_logistic_regression(C=1)",
+            True,
+            {"ridge_converged": True},
+        ),
+        (
+            "statsmodels_regularized_logit",
+            True,
+            {"ridge_converged": True, "ridge_iterations": 98},
+        ),
+        (
+            "sklearn_ridge_logistic_regression(C=1)",
+            False,
+            {"ridge_converged": True, "ridge_iterations": 98},
+        ),
+        (
+            "sklearn_ridge_logistic_regression(C=1)",
+            True,
+            {
+                "model_id": "organ_source_aware",
+                "ridge_converged": True,
+                "ridge_iterations": 98,
+            },
+        ),
+        (
+            "sklearn_ridge_logistic_regression(C=1)",
+            True,
+            {"ridge_converged": True, "ridge_iterations": -1},
+        ),
+    ],
+)
+def test_primary_model_contract_rejects_unsafe_nested_ridge_aliases(
+    tmp_path: Path,
+    fit_method: str,
+    penalized: bool,
+    diagnostics: dict,
+):
+    contracts = copy.deepcopy(_contracts())
+    contract = contracts[0]
+    contract.pop("convergence_method")
+    contract.pop("optimizer_success")
+    contract["fit_method"] = fit_method
+    contract["penalized"] = penalized
+    contract["diagnostics"] = diagnostics
+
+    issues = _issue_types(_audit(tmp_path, contracts=contracts))
+
+    assert "penalized_convergence_not_verified" in issues
+
+
 def test_contract_repair_log_preserves_structured_issue_details() -> None:
     payload = _contract_repair_log(
         [

@@ -2280,7 +2280,50 @@ class PrimaryModelContractValidator:
         combined.update(contract)
         if "model_family" not in combined and combined.get("family") is not None:
             combined["model_family"] = combined.get("family")
+        cls._apply_nested_ridge_convergence_alias(
+            contract=contract,
+            metadata=combined,
+        )
         return combined
+
+    @classmethod
+    def _apply_nested_ridge_convergence_alias(
+        cls,
+        *,
+        contract: Mapping[str, Any],
+        metadata: Dict[str, Any],
+    ) -> None:
+        """Map model-bound sklearn ridge diagnostics to the controlled fields."""
+
+        if (
+            "convergence_method" in metadata
+            or "optimizer_success" in metadata
+            or cls._as_bool(metadata.get("penalized")) is not True
+        ):
+            return
+        fit_method = cls._normalise(metadata.get("fit_method"))
+        penalty = cls._normalise(metadata.get("penalty"))
+        if not (
+            re.search(r"(?:^|_)ridge(?:_|$)", fit_method)
+            or penalty == "ridge"
+        ):
+            return
+        diagnostics = contract.get("diagnostics")
+        if not isinstance(diagnostics, Mapping):
+            return
+        model_id = str(contract.get("model_id") or "").strip()
+        diagnostics_model_id = str(diagnostics.get("model_id") or "").strip()
+        if diagnostics_model_id and diagnostics_model_id != model_id:
+            return
+        iterations = cls._as_nonnegative_int(diagnostics.get("ridge_iterations"))
+        if (
+            cls._as_bool(diagnostics.get("ridge_converged")) is not True
+            or iterations is None
+            or iterations < 1
+        ):
+            return
+        metadata["convergence_method"] = "optimizer_success"
+        metadata["optimizer_success"] = True
 
     @classmethod
     def _declared_outcome_type(
