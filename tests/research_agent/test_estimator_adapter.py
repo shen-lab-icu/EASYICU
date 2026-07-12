@@ -90,10 +90,14 @@ def test_non_convergence_is_captured_not_raised() -> None:
 
 
 def test_adapter_builds_full_eight_row_panel_and_registers_claims(ra, tmp_path) -> None:
+    import json
+    from types import SimpleNamespace
+
     from easyicu.research_agent.estimators import fit_robustness_rows_from_records
     from easyicu.research_agent.robustness_panel import (
         build_robustness_panel_from_records,
         default_robustness_specs,
+        write_locked_robustness_specs,
         write_robustness_panel,
     )
 
@@ -104,12 +108,32 @@ def test_adapter_builds_full_eight_row_panel_and_registers_claims(ra, tmp_path) 
         per_step_records=records,
         allow_implicit_cohort_refit=True,
     )
+    evidence = ra.EvidenceStore(tmp_path)
+    source_summary = tmp_path / "adapter_step_summary.json"
+    summary_payload = dict(records[0]["step_summary"])
+    summary_payload["robustness_rows"] = [
+        row.to_dict() for row in rows if row.spec_id != "primary"
+    ]
+    source_summary.write_text(json.dumps(summary_payload), encoding="utf-8")
+    evidence.register_file(
+        kind="statistic",
+        description="Digest-bound estimator-adapter step summary.",
+        source_path=source_summary,
+        produced_by_step="01_model",
+        evidence_id="stat_model",
+    )
+    write_locked_robustness_specs(
+        run_dir=tmp_path,
+        plan=SimpleNamespace(robustness_specs=specs),
+        evidence=evidence,
+        prompt_pack_version="test",
+        llm_signature="mock",
+    )
     panel = build_robustness_panel_from_records(
         specs=specs,
         per_step_records=records,
         adapter_rows=rows,
     )
-    evidence = ra.EvidenceStore(tmp_path)
     write_robustness_panel(
         run_dir=tmp_path,
         panel=panel,

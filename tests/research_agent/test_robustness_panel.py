@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -130,6 +131,309 @@ def test_locked_robustness_specs_restore_after_replan_drop(ra, tmp_path: Path) -
     )
 
     assert [spec.spec_id for spec in restored] == [spec.spec_id for spec in specs]
+
+
+def test_execution_rejects_replanned_specs_that_drift_from_lock(
+    ra,
+    tmp_path: Path,
+) -> None:
+    from types import SimpleNamespace
+
+    from easyicu.research_agent.robustness_panel import (
+        default_robustness_specs,
+        robustness_specs_for_execution,
+        write_locked_robustness_specs,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    specs = default_robustness_specs()
+    plan = AnalysisPlan(
+        research_question="Does the exposure predict the outcome?",
+        steps=[AnalysisStep(step_id="01_model", intent="Fit the primary model.")],
+        robustness_specs=specs,
+    )
+    write_locked_robustness_specs(
+        run_dir=tmp_path,
+        plan=plan,
+        evidence=ra.EvidenceStore(tmp_path),
+        prompt_pack_version="test",
+        llm_signature="mock",
+    )
+
+    replanned = SimpleNamespace(robustness_specs=list(reversed(specs)))
+    with pytest.raises(Exception, match="changed after plan lock"):
+        robustness_specs_for_execution(run_dir=tmp_path, plan=replanned)
+
+
+def test_execution_rejects_tampered_lock_hash(ra, tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    from easyicu.research_agent.robustness_panel import (
+        default_robustness_specs,
+        robustness_specs_for_execution,
+        write_locked_robustness_specs,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    specs = default_robustness_specs()
+    plan = AnalysisPlan(
+        research_question="Does the exposure predict the outcome?",
+        steps=[AnalysisStep(step_id="01_model", intent="Fit the primary model.")],
+        robustness_specs=specs,
+    )
+    lock_path = write_locked_robustness_specs(
+        run_dir=tmp_path,
+        plan=plan,
+        evidence=ra.EvidenceStore(tmp_path),
+        prompt_pack_version="test",
+        llm_signature="mock",
+    )
+    payload = json.loads(lock_path.read_text(encoding="utf-8"))
+    payload["specs"][0]["description"] = "tampered after planning"
+    lock_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(Exception, match="lock hash mismatch"):
+        robustness_specs_for_execution(
+            run_dir=tmp_path,
+            plan=SimpleNamespace(robustness_specs=[]),
+        )
+
+
+def test_execution_rejects_self_rehashed_lock_against_evidence_anchor(
+    ra,
+    tmp_path: Path,
+) -> None:
+    from types import SimpleNamespace
+
+    from easyicu.research_agent.robustness_panel import (
+        RobustnessSpec,
+        default_robustness_specs,
+        robustness_specs_for_execution,
+        robustness_specs_sha,
+        write_locked_robustness_specs,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    specs = default_robustness_specs()
+    plan = AnalysisPlan(
+        research_question="Does the exposure predict the outcome?",
+        steps=[AnalysisStep(step_id="01_model", intent="Fit the primary model.")],
+        robustness_specs=specs,
+    )
+    lock_path = write_locked_robustness_specs(
+        run_dir=tmp_path,
+        plan=plan,
+        evidence=ra.EvidenceStore(tmp_path),
+        prompt_pack_version="test",
+        llm_signature="mock",
+    )
+    payload = json.loads(lock_path.read_text(encoding="utf-8"))
+    payload["specs"][0]["description"] = "post-lock rewrite with a fresh self-hash"
+    rewritten = [RobustnessSpec.from_dict(item) for item in payload["specs"]]
+    payload["spec_sha256"] = robustness_specs_sha(rewritten)
+    lock_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(Exception, match="plan-time evidence anchor"):
+        robustness_specs_for_execution(
+            run_dir=tmp_path,
+            plan=SimpleNamespace(robustness_specs=[]),
+        )
+
+
+def test_panel_ignores_old_success_after_newer_step_failure() -> None:
+    from easyicu.research_agent.robustness_panel import (
+        build_robustness_panel_from_records,
+    )
+
+    old_success = {
+        "step_id": "01_model",
+        "status": "ok",
+        "step_summary_evidence_id": "stale_primary",
+        "step_summary": {
+            "primary_or": 1.4,
+            "primary_ci_low": 1.1,
+            "primary_ci_high": 1.8,
+            "n_total": 100,
+        },
+    }
+    current_failure = {
+        "step_id": "01_model",
+        "status": "contract_failed",
+        "step_summary": {"status": "rejected"},
+    }
+
+    panel = build_robustness_panel_from_records(
+        specs=[],
+        per_step_records=[old_success, current_failure],
+    )
+
+    assert panel.rows[0].converged is False
+    assert panel.rows[0].point_estimate is None
+
+
+def test_panel_excludes_variant_outside_plan_time_lock() -> None:
+    from easyicu.research_agent.robustness_panel import (
+        build_robustness_panel_from_records,
+        default_robustness_specs,
+    )
+
+    specs = default_robustness_specs()
+    panel = build_robustness_panel_from_records(
+        specs=specs,
+        per_step_records=[
+            {
+                "step_id": "01_model",
+                "status": "ok",
+                "step_summary_evidence_id": "stat_primary",
+                "step_summary": {
+                    "primary_or": 1.4,
+                    "primary_ci_low": 1.1,
+                    "primary_ci_high": 1.8,
+                    "n_total": 100,
+                    "robustness_rows": [
+                        {
+                            "spec_id": "invented_after_lock",
+                            "axis": "cohort",
+                            "n": 100,
+                            "point_estimate": 9.9,
+                            "ci_low": 9.8,
+                            "ci_high": 10.0,
+                            "converged": True,
+                        }
+                    ],
+                },
+            }
+        ],
+    )
+
+    assert "invented_after_lock" not in {row.spec_id for row in panel.rows}
+    assert panel.range_high == pytest.approx(1.8)
+
+
+def test_panel_writer_rejects_nonprimary_rows_without_verified_lock(
+    ra,
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.robustness_panel import (
+        RobustnessPanel,
+        RobustnessPanelRow,
+        write_robustness_panel,
+    )
+
+    source_summary = tmp_path / "unlocked_variant_summary.json"
+    source_summary.write_text(
+        json.dumps(
+            {
+                "robustness_rows": [
+                    {
+                        "spec_id": "unlocked_variant",
+                        "axis": "cohort",
+                        "n": 90,
+                        "point_estimate": 1.5,
+                        "ci_low": 1.1,
+                        "ci_high": 2.0,
+                        "converged": True,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    evidence = ra.EvidenceStore(tmp_path)
+    source_record = evidence.register_file(
+        kind="statistic",
+        description="Digest-valid but unlocked robustness variant.",
+        source_path=source_summary,
+        evidence_id="stat_unlocked_variant",
+    )
+    panel = RobustnessPanel.from_rows(
+        [
+            RobustnessPanelRow(
+                "unlocked_variant",
+                "cohort",
+                90,
+                1.5,
+                1.1,
+                2.0,
+                0.2,
+                source_record.evidence_id,
+                True,
+            )
+        ]
+    )
+
+    with pytest.raises(Exception, match="verified plan-time lock"):
+        write_robustness_panel(
+            run_dir=tmp_path,
+            panel=panel,
+            evidence=evidence,
+            prompt_pack_version="test",
+        )
+    assert not (tmp_path / "robustness_panel.json").exists()
+
+
+@pytest.mark.parametrize("evidence_state", ["nonexistent", "stale"])
+def test_panel_writer_rejects_nonexistent_or_stale_summary_evidence(
+    ra,
+    tmp_path: Path,
+    evidence_state: str,
+) -> None:
+    from easyicu.research_agent.robustness_panel import (
+        build_robustness_panel_from_records,
+        write_robustness_panel,
+    )
+
+    evidence = ra.EvidenceStore(tmp_path)
+    evidence_id = "missing_summary"
+    if evidence_state == "stale":
+        source_path = tmp_path / "source_step_summary.json"
+        source_path.write_text(
+            json.dumps(
+                {
+                    "primary_or": 1.4,
+                    "primary_ci_low": 1.1,
+                    "primary_ci_high": 1.8,
+                    "n_total": 100,
+                }
+            ),
+            encoding="utf-8",
+        )
+        record = evidence.register_file(
+            kind="statistic",
+            description="Primary model summary.",
+            source_path=source_path,
+            produced_by_step="01_model",
+            evidence_id="stat_primary",
+        )
+        evidence_id = record.evidence_id
+        (tmp_path / record.relative_path).write_text("{}", encoding="utf-8")
+
+    panel = build_robustness_panel_from_records(
+        specs=[],
+        per_step_records=[
+            {
+                "step_id": "01_model",
+                "status": "ok",
+                "step_summary_evidence_id": evidence_id,
+                "evidence_ids": [evidence_id],
+                "step_summary": {
+                    "primary_or": 1.4,
+                    "primary_ci_low": 1.1,
+                    "primary_ci_high": 1.8,
+                    "n_total": 100,
+                },
+            }
+        ],
+    )
+
+    with pytest.raises(Exception, match=evidence_state):
+        write_robustness_panel(
+            run_dir=tmp_path,
+            panel=panel,
+            evidence=evidence,
+            prompt_pack_version="test",
+        )
+    assert not (tmp_path / "robustness_panel.json").exists()
 
 
 def test_write_locked_robustness_specs_reuses_existing_lock_on_resume(
@@ -678,30 +982,107 @@ def test_panel_numeric_digest_deduplicates_repeated_panel_values() -> None:
 
 
 def test_writer_digest_contains_panel_block(ra, tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
     from easyicu.research_agent.robustness_panel import (
         RobustnessPanel,
         RobustnessPanelRow,
+        default_robustness_specs,
+        write_locked_robustness_specs,
         write_robustness_panel,
     )
     from easyicu.research_agent.pipeline_writer_aux import (
         _render_writer_evidence_digest_v2,
     )
 
+    specs = default_robustness_specs()
+    cohort_worst_id = specs[0].spec_id
+    cohort_hidden_id = specs[1].spec_id
+    source_summary = tmp_path / "panel_source_summary.json"
+    source_summary.write_text(
+        json.dumps(
+            {
+                "primary_or": 1.2,
+                "primary_ci_low": 1.0,
+                "primary_ci_high": 1.4,
+                "n_total": 100,
+                "robustness_rows": [
+                    {
+                        "spec_id": cohort_worst_id,
+                        "axis": "cohort",
+                        "n": 90,
+                        "point_estimate": 1.1,
+                        "ci_low": 0.7,
+                        "ci_high": 1.8,
+                        "converged": True,
+                    },
+                    {
+                        "spec_id": cohort_hidden_id,
+                        "axis": "cohort",
+                        "n": 90,
+                        "point_estimate": 1.9,
+                        "ci_low": 1.5,
+                        "ci_high": 2.3,
+                        "converged": True,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    evidence = ra.EvidenceStore(tmp_path)
+    source_record = evidence.register_file(
+        kind="statistic",
+        description="Digest-bound source summary for the robustness panel.",
+        source_path=source_summary,
+        produced_by_step="01_model",
+        evidence_id="stat_panel_source",
+    )
+    write_locked_robustness_specs(
+        run_dir=tmp_path,
+        plan=SimpleNamespace(robustness_specs=specs),
+        evidence=evidence,
+        prompt_pack_version="test",
+        llm_signature="mock",
+    )
     panel = RobustnessPanel.from_rows(
         [
             RobustnessPanelRow(
-                "primary", "primary", 100, 1.2, 1.0, 1.4, 0.1, "e1", True
+                "primary",
+                "primary",
+                100,
+                1.2,
+                1.0,
+                1.4,
+                0.1,
+                source_record.evidence_id,
+                True,
             ),
             RobustnessPanelRow(
-                "cohort_worst", "cohort", 90, 1.1, 0.7, 1.8, 0.2, "e2", True
+                cohort_worst_id,
+                "cohort",
+                90,
+                1.1,
+                0.7,
+                1.8,
+                0.2,
+                source_record.evidence_id,
+                True,
             ),
             RobustnessPanelRow(
-                "cohort_hidden", "cohort", 90, 1.9, 1.5, 2.3, 0.2, "e3", True
+                cohort_hidden_id,
+                "cohort",
+                90,
+                1.9,
+                1.5,
+                2.3,
+                0.2,
+                source_record.evidence_id,
+                True,
             ),
         ],
         locked_at="2026-05-27T00:00:00Z",
     )
-    evidence = ra.EvidenceStore(tmp_path)
     write_robustness_panel(
         run_dir=tmp_path,
         panel=panel,
@@ -717,7 +1098,7 @@ def test_writer_digest_contains_panel_block(ra, tmp_path: Path) -> None:
 
     assert "## robustness panel" in digest
     assert "n_variants=2" in digest
-    assert "cohort_hidden" not in digest
+    assert cohort_hidden_id not in digest
     assert "OR=1.9" not in digest
 
 
@@ -764,21 +1145,81 @@ def test_manifest_records_panel_artifact(tmp_path: Path) -> None:
 
 
 def test_panel_numerics_registered_in_evidence_store(ra, tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
     from easyicu.research_agent.robustness_panel import (
         RobustnessPanel,
         RobustnessPanelRow,
+        default_robustness_specs,
+        write_locked_robustness_specs,
         write_robustness_panel,
     )
 
+    specs = default_robustness_specs()
+    cohort_spec_id = specs[0].spec_id
+    source_summary = tmp_path / "numeric_panel_source.json"
+    source_summary.write_text(
+        json.dumps(
+            {
+                "primary_or": 1.2,
+                "primary_ci_low": 1.0,
+                "primary_ci_high": 1.4,
+                "n_total": 100,
+                "robustness_rows": [
+                    {
+                        "spec_id": cohort_spec_id,
+                        "axis": "cohort",
+                        "n": 90,
+                        "point_estimate": 1.5,
+                        "ci_low": 0.8,
+                        "ci_high": 2.0,
+                        "converged": True,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    evidence = ra.EvidenceStore(tmp_path)
+    source_record = evidence.register_file(
+        kind="statistic",
+        description="Source summary for panel numeric claims.",
+        source_path=source_summary,
+        evidence_id="stat_panel_source",
+    )
+    write_locked_robustness_specs(
+        run_dir=tmp_path,
+        plan=SimpleNamespace(robustness_specs=specs),
+        evidence=evidence,
+        prompt_pack_version="test",
+        llm_signature="mock",
+    )
     panel = RobustnessPanel.from_rows(
         [
             RobustnessPanelRow(
-                "primary", "primary", 100, 1.2, 1.0, 1.4, 0.1, "e1", True
+                "primary",
+                "primary",
+                100,
+                1.2,
+                1.0,
+                1.4,
+                0.1,
+                source_record.evidence_id,
+                True,
             ),
-            RobustnessPanelRow("a", "cohort", 90, 1.5, 0.8, 2.0, 0.2, "e2", True),
+            RobustnessPanelRow(
+                cohort_spec_id,
+                "cohort",
+                90,
+                1.5,
+                0.8,
+                2.0,
+                0.2,
+                source_record.evidence_id,
+                True,
+            ),
         ]
     )
-    evidence = ra.EvidenceStore(tmp_path)
     write_robustness_panel(
         run_dir=tmp_path,
         panel=panel,
@@ -823,14 +1264,40 @@ def test_primary_only_panel_does_not_register_duplicate_range_claims(
         write_robustness_panel,
     )
 
+    source_summary = tmp_path / "primary_only_source.json"
+    source_summary.write_text(
+        json.dumps(
+            {
+                "primary_or": 1.2,
+                "primary_ci_low": 1.0,
+                "primary_ci_high": 1.4,
+                "n_total": 100,
+            }
+        ),
+        encoding="utf-8",
+    )
+    evidence = ra.EvidenceStore(tmp_path)
+    source_record = evidence.register_file(
+        kind="statistic",
+        description="Source summary for a primary-only panel.",
+        source_path=source_summary,
+        evidence_id="stat_primary_source",
+    )
     panel = RobustnessPanel.from_rows(
         [
             RobustnessPanelRow(
-                "primary", "primary", 100, 1.2, 1.0, 1.4, 0.1, "e1", True
+                "primary",
+                "primary",
+                100,
+                1.2,
+                1.0,
+                1.4,
+                0.1,
+                source_record.evidence_id,
+                True,
             ),
         ]
     )
-    evidence = ra.EvidenceStore(tmp_path)
     write_robustness_panel(
         run_dir=tmp_path,
         panel=panel,
