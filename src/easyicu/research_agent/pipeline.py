@@ -7704,6 +7704,12 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
         json.dumps(existing_summary, indent=2, ensure_ascii=False, default=str),
         encoding="utf-8",
     )
+    if (
+        table_path.name == "robustness_summary.csv"
+        and _resolve_upstream_analysis_method(run_dir, current_step_id)
+        == "cohort_definition_sensitivity"
+    ):
+        return "sensitivity_publication_bundle_from_locked_summary_v1"
     return "sensitivity_publication_bundle_from_parent_outputs_v2"
 
 
@@ -8071,7 +8077,7 @@ def deterministic_figure_repair_id_for_upstream(
         == "cohort_definition_sensitivity"
         and "robustness_summary.csv" in verified_tables
     ):
-        return "sensitivity_publication_bundle_from_parent_outputs_v2"
+        return "sensitivity_publication_bundle_from_locked_summary_v1"
     if (
         _resolve_upstream_analysis_family(run_dir, step_id) == "cohort_definition"
         and {"cohort_flow.csv", "attrition.csv"} <= verified_tables

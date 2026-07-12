@@ -1537,7 +1537,7 @@ def test_sensitivity_rescue_prefers_declared_summary_and_excludes_point_only_row
         out_dir=out,
     )
 
-    assert rid == "sensitivity_publication_bundle_from_parent_outputs_v2"
+    assert rid == "sensitivity_publication_bundle_from_locked_summary_v1"
     plotted = pd.read_csv(out / "sensitivity_forest_source_data.csv")
     assert plotted["spec_id"].tolist() == ["alt_continuous"]
     assert plotted["source_table"].unique().tolist() == ["robustness_summary.csv"]
@@ -1578,7 +1578,7 @@ def test_sensitivity_exact_method_authorizes_only_verified_summary(monkeypatch):
 
     assert pipeline_module.deterministic_figure_repair_id_for_upstream(
         Path("/unused"), "07_sensitivity_figure"
-    ) == "sensitivity_publication_bundle_from_parent_outputs_v2"
+    ) == "sensitivity_publication_bundle_from_locked_summary_v1"
 
 
 def test_sensitivity_rescue_omits_empty_scale_and_separates_nonindependent_rows(
