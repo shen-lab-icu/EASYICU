@@ -389,6 +389,16 @@ def missingness_measurement_audit_code() -> str:
         for requested in requested_inputs:
             resolved = requested if requested in df.columns else low.get(requested.lower())
             if resolved is None:
+                # A bare concept name (e.g. ``crea`` present only as
+                # ``crea_first``/``crea_measured``) is audited above via
+                # ``_representative_value_column``; resolve the analytic
+                # denominator the SAME way so a legitimately-audited concept is
+                # not spuriously flagged as a missing declared input (which would
+                # block an otherwise-complete missingness audit).
+                resolved = _representative_value_column(
+                    _family_base(low.get(requested.lower(), requested))
+                )
+            if resolved is None:
                 missing_declared_inputs.append(requested)
                 continue
             if resolved not in resolved_inputs:

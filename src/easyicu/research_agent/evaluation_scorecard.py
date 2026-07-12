@@ -61,6 +61,7 @@ from .icu_rules import (
 from .plan_utils import read_adjustment_covariates
 from .runtime_artifacts import (
     current_run_evidence_paths,
+    current_step_records,
     current_successful_step_records,
     load_run_artifact_authority,
 )
@@ -1413,9 +1414,16 @@ def _deliberate_block_reason(run_dir: Path) -> Optional[str]:
     if authority is not None:
         records = authority.get("per_step_records")
         records = records if isinstance(records, list) else []
+        # A DELIBERATE block is by definition recorded on a NON-ok step (its
+        # modeling contract fails, so its outer status is blocked/contract_failed).
+        # Inspect the latest record per step WITHOUT the status==ok filter so the
+        # self-inflicted-block signal is still seen on a real run that has a
+        # manifest -- otherwise ``current_successful_step_records`` drops exactly
+        # the step this detector exists to surface, and the signal silently never
+        # fires (the no-manifest glob fallback below is already unfiltered).
         summaries = [
             summary
-            for record in current_successful_step_records(records)
+            for record in current_step_records(records)
             if isinstance((summary := record.get("step_summary")), dict)
         ]
     else:

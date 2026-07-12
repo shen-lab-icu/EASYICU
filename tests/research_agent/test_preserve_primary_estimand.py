@@ -74,6 +74,50 @@ def _m1_rev7() -> AnalysisPlan:
     )
 
 
+def test_combined_model_plus_figure_step_stays_primary_and_is_not_duplicated():
+    # Regression (2719ce4): the replanner can emit the primary model step BEFORE
+    # the figure/table splitter runs, bundling a figure output into it. The guard
+    # in _step_is_primary_estimand_model must exclude only a PURE figure/render
+    # child, not a combined model+figure step -- otherwise the preserve pass
+    # thinks the estimand was dropped and re-attaches a stale duplicate.
+    combined = AnalysisStep(
+        step_id="05_primary_adjusted_association",
+        intent="primary adjusted association",
+        method="adjusted_logistic_regression",
+        expected_outputs=["statistic:adjusted_odds_ratio", "figure:forest_plot"],
+    )
+    figure_only = AnalysisStep(
+        step_id="05_primary_adjusted_association_figure",
+        intent="forest plot",
+        method="figure",
+        expected_outputs=["figure:forest_plot"],
+    )
+    assert _step_is_primary_estimand_model(combined) is True
+    assert _step_is_primary_estimand_model(figure_only) is False
+
+    cohort = AnalysisStep(
+        step_id="01_cohort",
+        intent="cohort",
+        method="cohort_definition",
+        expected_outputs=["table:analysis_cohort"],
+    )
+    model = AnalysisStep(
+        step_id="05_model",
+        intent="model",
+        method="adjusted_logistic_regression",
+        expected_outputs=["statistic:adjusted_odds_ratio"],
+    )
+    current = AnalysisPlan(research_question="Q", steps=[cohort, model])
+    # revised renamed the model AND bundled a figure into it (unsplit)
+    revised = AnalysisPlan(research_question="Q", steps=[cohort, combined])
+    preserved, findings = _preserve_primary_estimand_step_after_replan(
+        current=current, revised=revised
+    )
+    primary = [s.step_id for s in preserved.steps if _step_is_primary_estimand_model(s)]
+    assert primary == ["05_primary_adjusted_association"]  # exactly one, no duplicate
+    assert findings == []  # nothing re-attached
+
+
 def test_predicate_keys_on_method_not_id_tokens():
     # Only the real estimator method counts; descriptive/audit/sensitivity steps
     # that carry "primary"/"association" in their id do NOT.

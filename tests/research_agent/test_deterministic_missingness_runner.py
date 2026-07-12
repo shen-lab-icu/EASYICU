@@ -264,6 +264,52 @@ def test_family_aggregate_and_declared_analytic_denominator(tmp_path: Path):
     assert summary["missing_declared_inputs"] == []
 
 
+def test_bare_concept_declared_input_resolves_to_value_column_not_blocked(tmp_path: Path):
+    # Regression: a plan may declare a time-series concept by its BARE name
+    # (``crea``) while the cohort materialises it only as aggregates
+    # (``crea_first``/``crea_measured``). The audit resolves it via
+    # _representative_value_column, so the analytic-denominator loop must resolve
+    # it the SAME way instead of flagging it as a missing declared input and
+    # spuriously blocking an otherwise-complete audit.
+    cohort = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4, 5],
+            "age": [60, 61, 62, 63, 64],
+            "crea_first": [0.8, 1.1, np.nan, 2.0, 0.9],
+            "crea_measured": [1, 1, 0, 1, 1],
+        }
+    )
+    summary, out_dir = _exec_runner(
+        tmp_path, cohort, {}, requested_inputs=["crea", "age"]
+    )
+    audit = pd.read_csv(out_dir / "missingness_measurement_audit.csv")
+    assert "crea" in set(audit["concept"])  # concept was genuinely audited
+    assert summary["status"] == "ok"  # ... so it must not be blocked
+    assert summary["missing_declared_inputs"] == []
+    denominators = pd.read_csv(out_dir / "analytic_denominators.csv")
+    complete = denominators[
+        denominators["analysis_set"] == "all_requested_inputs"
+    ].iloc[0]
+    # crea_first missing on row 3 only -> 4 complete on {crea, age}
+    assert complete["n_complete"] == 4
+
+
+def test_genuinely_absent_declared_input_still_blocks(tmp_path: Path):
+    # The bare-name resolution must NOT mask a truly-missing declared input.
+    cohort = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3],
+            "crea_first": [0.8, np.nan, 2.0],
+            "crea_measured": [1, 0, 1],
+        }
+    )
+    summary, _ = _exec_runner(
+        tmp_path, cohort, {}, requested_inputs=["crea", "nonexistent_var"]
+    )
+    assert summary["status"] == "blocked"
+    assert summary["missing_declared_inputs"] == ["nonexistent_var"]
+
+
 def test_declared_inputs_scope_audit_instead_of_scanning_unrelated_wide_columns(
     tmp_path: Path,
 ):
