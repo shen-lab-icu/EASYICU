@@ -158,6 +158,12 @@ from .robustness_panel import (
     robustness_specs_sha,
     write_robustness_panel,
 )
+from .trajectory_bundle import trajectory_bundle_findings
+from .trajectory_plan_contract import (
+    augment_trajectory_plan_products,
+    trajectory_plan_contract_applies,
+    trajectory_plan_dag_findings,
+)
 from .repair_registry import (
     InvariantStatus,
     RepairLedger,
@@ -1459,6 +1465,7 @@ def _plan_signature(
         (
             step.step_id,
             step.method,
+            tuple(step.inputs),
             tuple(step.expected_outputs),
             tuple(
                 role
@@ -2740,6 +2747,11 @@ def run_execute_phase(
         )
         if robustness_lock_finding is not None:
             findings.append(robustness_lock_finding)
+        revised, trajectory_product_findings = augment_trajectory_plan_products(
+            plan=revised,
+            context=context,
+        )
+        findings.extend(trajectory_product_findings)
 
         # No-op detection on the *substantive* step DAG, not the full
         # model_dump. A verbose replanner can rewrite each step's ``intent``
@@ -2812,6 +2824,7 @@ def run_execute_phase(
             )
         return revised
 
+    trajectory_plan_blocked = False
     probe_step_id = "00_probe"
     if pipeline._enable_probe_step and probe_step_id not in resumed_step_ids:
         probe_summary, probe_files = _build_probe_summary(
@@ -2850,11 +2863,55 @@ def run_execute_phase(
         }
         per_step_records.append(probe_record)
         _flush_partial_manifest()
+        trajectory_preflight = trajectory_plan_dag_findings(
+            plan=plan,
+            context=context,
+        )
+        trajectory_directive = None
+        if trajectory_preflight:
+            trajectory_directive = (
+                "Repair the agent-declared fixed-window trajectory plan DAG "
+                "without changing its scientific choices. Preserve legitimate "
+                "representation, candidate-selection, stability/freeze, and "
+                "characterization step boundaries; repair only missing/ambiguous "
+                "typed artifact edges, role declarations, and silent internal "
+                "window-grid omissions. Do not choose a clustering method, k, "
+                "eligibility threshold, or deterministic runner. Contract findings: "
+                + json.dumps(
+                    [
+                        {
+                            "message": finding.message,
+                            "detail": finding.detail,
+                        }
+                        for finding in trajectory_preflight
+                    ],
+                    ensure_ascii=False,
+                    default=str,
+                )
+            )
         plan = _maybe_replan(
             current_plan=plan,
             reason="probe_summary",
             probe_summary_payload=probe_summary,
             completed_records=[probe_record],
+            directive=trajectory_directive,
+            force=bool(trajectory_preflight),
+        )
+
+    final_trajectory_plan_findings = trajectory_plan_dag_findings(
+        plan=plan,
+        context=context,
+    )
+    if final_trajectory_plan_findings:
+        trajectory_plan_blocked = True
+        findings.extend(final_trajectory_plan_findings)
+        _flush_partial_manifest(
+            {
+                "trajectory_plan_contract_blocked": True,
+                "trajectory_plan_contract_error_count": len(
+                    final_trajectory_plan_findings
+                ),
+            }
         )
 
     shared_lock = threading.Lock()
@@ -6371,9 +6428,13 @@ else:
         )
         return step_record
 
-    steps_to_run = resume_controller.remaining_steps(
-        plan=plan,
-        executed_step_ids=set(resumed_step_ids),
+    steps_to_run = (
+        []
+        if trajectory_plan_blocked
+        else resume_controller.remaining_steps(
+            plan=plan,
+            executed_step_ids=set(resumed_step_ids),
+        )
     )
     for skipped_step_id in sorted(resumed_step_ids):
         emit_progress(
@@ -6538,6 +6599,28 @@ else:
                                 message=f"Worker raised an unhandled exception: {exc!r}",
                             )
                         )
+
+    if (
+        not trajectory_plan_blocked
+        and trajectory_plan_contract_applies(plan=plan, context=context)
+    ):
+        run_level_trajectory_findings = trajectory_bundle_findings(
+            context=context,
+            plan=plan,
+            per_step_records=per_step_records,
+            evidence=evidence,
+            run_dir=run_dir,
+            cohort_path=cohort_path,
+        )
+        findings.extend(run_level_trajectory_findings)
+        _flush_partial_manifest(
+            {
+                "trajectory_bundle_error_count": sum(
+                    finding.severity == "error"
+                    for finding in run_level_trajectory_findings
+                )
+            }
+        )
 
     try:
         robustness_specs = robustness_specs_for_execution(run_dir=run_dir, plan=plan)

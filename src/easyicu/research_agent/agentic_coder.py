@@ -67,6 +67,7 @@ class AgenticCoderAgent:
     def _build_prompt(self, context: ResearchContext, step: AnalysisStep) -> str:
         from .agents import _format_context
         from .trajectory_contract import trajectory_phenotyping_code_contract
+        from .trajectory_plan_contract import trajectory_role_code_contract
 
         return (
             f"You are authoring ONE self-contained Python analysis script for "
@@ -88,6 +89,7 @@ class AgenticCoderAgent:
             "RESEARCH CONTEXT:\n"
             + _format_context(context)
             + trajectory_phenotyping_code_contract(context=context, step=step)
+            + trajectory_role_code_contract(context=context, step=step)
         )
 
     def _argv(self, workdir: str) -> List[str]:

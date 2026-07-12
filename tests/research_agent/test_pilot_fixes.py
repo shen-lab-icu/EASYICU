@@ -204,6 +204,17 @@ def test_plan_signature_detects_substantive_change():
     assert _plan_signature(base) != _plan_signature(changed_method)
 
 
+def test_plan_signature_detects_artifact_edge_or_source_input_change():
+    """Repairing a scientific DAG edge/window input is a real revision."""
+    from easyicu.research_agent.pipeline_execute import _plan_signature
+
+    base = _two_step_plan("Define the cohort.")
+    changed = base.model_copy(deep=True)
+    changed.steps[1].inputs = ["artifact:trajectory_features", "window_h6_12"]
+
+    assert _plan_signature(base) != _plan_signature(changed)
+
+
 def test_plan_signature_detects_estimand_role_change():
     """Changing a model from primary to secondary is not prose-only."""
     from easyicu.research_agent.pipeline_execute import _plan_signature

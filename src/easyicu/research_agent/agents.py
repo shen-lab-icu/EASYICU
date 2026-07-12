@@ -43,6 +43,7 @@ from .analysis_types import (
     planner_analysis_type_guide,
 )
 from .trajectory_contract import trajectory_phenotyping_code_contract
+from .trajectory_plan_contract import trajectory_role_code_contract
 from .method_capabilities import coder_method_capability_block
 from .cohort_schema import ALLOWED_CTAS_AGGREGATIONS, known_concept_ids
 from .icu_rules import (
@@ -1362,6 +1363,7 @@ class CoderAgent:
                         context=context,
                         step=step,
                     )
+                    + trajectory_role_code_contract(context=context, step=step)
                     + "\n\n"
                     "OUTPUT FORMAT — VERY IMPORTANT:\n"
                     "Return *only* a complete, runnable Python script. A "
@@ -1443,6 +1445,7 @@ class CoderAgent:
                         context=context,
                         step=step,
                     )
+                    + trajectory_role_code_contract(context=context, step=step)
                     + "\n\n"
                     "The previous script failed at execution time. Return "
                     "only a complete replacement Python script that follows "
