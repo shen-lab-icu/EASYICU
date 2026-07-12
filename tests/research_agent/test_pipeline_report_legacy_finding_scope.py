@@ -98,6 +98,21 @@ def test_legacy_unscoped_finding_stays_active_until_owner_succeeds() -> None:
     assert superseded == []
 
 
+def test_legacy_inference_cannot_claim_replanned_away_supersession() -> None:
+    plan = _robustness_plan()
+    finding = _legacy_membership_error()
+
+    active, superseded = _partition_findings_by_supersession(
+        [finding],
+        success_step_ids={"07_sensitivity_figure"},
+        known_step_ids={"07_sensitivity_figure"},
+        plan=plan,
+    )
+
+    assert active == [finding]
+    assert superseded == []
+
+
 def test_run_level_robustness_finding_is_never_inferred_as_step_owned() -> None:
     plan = _robustness_plan()
     finding = ValidationFinding(

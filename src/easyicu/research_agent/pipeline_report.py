@@ -1564,7 +1564,7 @@ def _partition_findings_by_supersession(
        recognised message pattern) and that step_id is in
        ``success_step_ids`` — the step ultimately succeeded so its
        earlier failure findings are stale.
-    2. It references a step_id that is no longer in the plan-of-
+    2. It explicitly references a step_id that is no longer in the plan-of-
        record (i.e. not in ``known_step_ids``). This is the
        "replanned away" axis: the replanner dropped the failing
        step and the substitute step ran instead. The original
@@ -1595,14 +1595,20 @@ def _partition_findings_by_supersession(
     active: List[ValidationFinding] = []
     superseded: List[ValidationFinding] = []
     for f in findings:
-        sid = _step_id_referenced_in_finding(f) or (
-            _legacy_unscoped_finding_owner_step_id(f, plan=plan)
-        )
+        explicit_sid = _step_id_referenced_in_finding(f)
+        legacy_sid = None
+        if not explicit_sid:
+            legacy_sid = _legacy_unscoped_finding_owner_step_id(f, plan=plan)
+        sid = explicit_sid or legacy_sid
         if sid:
             if sid in success_step_ids:
                 superseded.append(f)
                 continue
-            if known_step_ids is not None and sid not in known_step_ids:
+            if (
+                explicit_sid
+                and known_step_ids is not None
+                and sid not in known_step_ids
+            ):
                 # Step was replanned away — its failure is no longer
                 # part of the plan-of-record.
                 superseded.append(f)
