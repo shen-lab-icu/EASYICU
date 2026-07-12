@@ -2,13 +2,25 @@
 
 > Task ID: `SUBMISSION-ACCEL-20260712`
 > 日期: 2026-07-12
-> 状态: active plan；本文件定义后续执行顺序和停止规则，不代表尚未完成的实验已经通过。
+> 状态: active plan；2026-07-12 用户将优先级改为“先完成全部实验，再进入正文装配”。
 > 当前代码基线: `fix/easyicu-concept-bounds-enforcement` @ `a9fce77`；架构修复尚未 push。
-> 当前实验真相: Figure 2 冻结 6/9，Fresh E3 完成 9/12；剩余 E2/E3/H3。
+> 当前实验真相: Figure 2 development 状态 6/9，Fresh E3 完成 9/12；剩余 E2/E3/H3。
+
+## 0. 2026-07-12 优先级修订
+
+本修订覆盖本文较早的“已冻结 6 题不重跑、立即并行组稿”建议：
+
+1. 先把 E2/E3/H3 作为 **development stress runs** 跑完，只修它们暴露的 case-neutral 框架问题。
+2. 随后冻结代码、模型、prompt、rubric、输入 SHA、hidden oracle 和 retry policy。
+3. 在同一冻结配置下，对全部九题做 fresh paper-facing canonical evaluation；开发期的 6 个旧 artifact 可作诊断历史，但不再拼接成最终 Figure 2。
+4. 增加从未用于修框架的 held-out tasks/variants 和人工盲审，避免“九题既是开发集又是测试集”。
+5. 正文实质写作暂缓到 canonical/held-out 实验冻结后；API 等待期只做实验输入、评价协议、oracle 与执行准备，不进入结果段装配。
+
+评价设计审计与 npj 对照见 `EASYICU/task_logs/20260712_fig2_evaluation_protocol_audit.md`。
 
 ## 1. 目标与成功定义
 
-目标不是把 9 个题目调到“看起来都成功”，而是尽快得到一套可投稿、可追溯、能诚实说明 EasyICU 通用能力边界的完整证据包，并把论文写作从实验的串行尾部移到并行主线。
+目标不是把 9 个题目调到“看起来都成功”，而是先得到一套可投稿、可追溯、能诚实说明 EasyICU 能力边界的完整实验包；实验冻结后再一次性装配论文，避免用开发期结果提前写稿。
 
 本计划把“完成”分成两层：
 
@@ -28,18 +40,20 @@
 
 当前正文中的“九题 9/9”“全部 gate-reportable”“统一 gpt-5.4”“旧 Fig5 已成立”等表述均视为**待证据重绑的过期声明**，在新 evidence-to-claim 对账完成前不得继续传播到摘要、图注或英文稿。
 
-## 3. 需要先冻结的一项实验设计决策
+## 3. Figure 2 两层评价设计
 
-### 推荐方案：platform capability suite
+### 开发层：protocol-rich capability suite
 
-Figure 2 定位为 **protocol-versioned platform capability suite**：
+当前九题已经参与框架迭代，因此 E2/E3/H3 与此前 6 题都属于 development/capability suite。它们用于发现通用架构缺口，不能单独证明 untouched generalization。
 
-- 保留 6 个已冻结题，不为追求表面上的单模型整齐度重跑；
-- E2/E3/H3 只从当前失败步骤精确续跑；
-- 每题披露模型、provider、运行日期、commit、数据快照和 protocol version；
-- Figure 2 证明的是同一 EasyICU 架构跨方法族完成/安全拦截任务的能力，不声称比较模型优劣，也不声称单一模型的总体成功率。
+### 论文层：frozen canonical + held-out validation
 
-这是最快且与当前证据最一致的选择。若改为“统一模型、统一 commit 的 9 题 canonical benchmark”，就必须重跑已冻结 6 题，预计会重新成为全文最大关键路径；在正式 protocol freeze 前应由作者明确选择，不能在正文里同时使用两种口径。
+- 架构修复结束后，冻结同一 commit、模型/provider、prompt/rubric、数据 SHA、预算与 retry policy。
+- 全部九题在冻结配置下 fresh 运行；最终 Figure 2 不混用不同 commit/模型的开发 artifact。
+- 推荐每题 3 次独立 fresh run；若资源限制，则至少完成九题 pass@1 并对预先指定的高随机性任务重复，且把结论限定为 case-suite evidence。
+- 另加 3–6 个未参与开发的 held-out tasks/variants，包含可完成正控和应 fail-closed 负控。
+- 每题披露 task-specific oracle、hazard/forbidden-claim key、人工盲审与一致性；不把内部 validator 通过替代为科学正确性。
+- Figure 2 仍称 **prespecified nine-task ICU research capability suite**，不称 comprehensive/general benchmark。
 
 ## 4. 双轨并行执行
 
@@ -88,9 +102,9 @@ Figure 2 定位为 **protocol-versioned platform capability suite**：
 - **Table 1 / Fig3**：完成真实六库 export bounds/profile spot-check 和 daggered mapping/source-data 复核后才锁数字。
 - **Fig5**：先做 FiO2 分母、采样窗口和缺失结构的 outcome-blind feasibility gate；候选通过后，只能由 `tools/run_discovery_to_manuscript.py` 全链生成。手算只作 oracle，不能进入论文。
 
-### Track B — Paper Assembly（并行轻任务通道）
+### Track B — Paper Assembly（canonical 冻结后启动）
 
-实验等待 API 或运行时，持续推进正文，不等 9 题全部结束才开始写。
+按照用户最新优先级，正文实质装配推迟到 Figure 2 canonical/held-out 实验冻结后。下列结构保留为后续写作顺序，不在当前实验阶段执行结果段写作。
 
 #### B0. 先做 stale-claim quarantine
 
@@ -157,9 +171,9 @@ Figure 2 定位为 **protocol-versioned platform capability suite**：
 
 ### 不再重做的工作
 
-- 不重跑 6 个已冻结题，除非发现影响其 artifact validity 的明确代码/数据 bug。
-- 明确不重跑 E1、M1、M2、M3、H1、H2，也不重跑 E3 已通过的 Steps 01–05 及其已绿图件。
-- 不全量重跑 9 题来验证一个局部修复。
+- development 阶段不为每个局部修复全量重跑九题；只定点验证失败步骤和相关回归。
+- 旧 E1/M1/M2/M3/H1/H2 与 E3 Steps 01–05 可作为开发诊断历史复用，但不再直接充当最终 paper-facing canonical artifact。
+- 只在框架与评价协议冻结后进行一次统一的九题 fresh canonical batch；若冻结后发现真实框架 bug，升级 protocol version 并明确作废受影响的结果。
 - 不为题目新增决定暴露、结局、队列或模型的 deterministic runner。
 - 不把 launcher `rc=0`、`/models=200` 或旧 manifest `status=ok` 当成科学成功。
 - 不在 canonical protocol 中途换模型并隐去差异；若必须换，逐题披露。
@@ -170,22 +184,22 @@ Figure 2 定位为 **protocol-versioned platform capability suite**：
 
 | Phase | 机器通道 | 写作/审计通道 | 出口条件 |
 |---|---|---|---|
-| P0 事实源冻结 | 建立干净 worktree、冻结 protocol/model/data manifest | 建 claim–evidence matrix、隔离旧声明 | 唯一代码/数据/正文事实源明确 |
-| P1 Fig2 收口 | E3 Step06→07；随后 E2/H3 定点 resume | 完成稳定正文、Methods、Supplement 骨架 | 9 题各有冻结且诚实的最终状态 |
-| P2 平台结果 | 仅在审计不符时重生 Fig3/4 | 核对 Table1、caption、结果槽位 | Fig3/4 durable bundle + 数据门通过 |
-| P3 Discovery | FiO2 gate → full discovery-to-manuscript | 写 Fig5 protocol/限制，不预写结果 | Fig5 full-pipeline provenance + source data |
-| P4 全文合并 | 不再改实验，除非 integrity blocker | 一次性 evidence-to-claim merge，中英稿统一 | 正文/图/表/补充零数字冲突 |
-| P5 投稿门禁 | 只做可复现性复核 | integrity → review → revision → final integrity | submission bundle + SHA manifest |
+| P0 开发 stress | E3 Step06→07；随后 H3/E2 | 只准备 E2 input、oracle、rubric 与 run manifest | 剩余三题完成或诚实 fail-closed；通用 blocker 收口 |
+| P1 Protocol freeze | 冻结 clean worktree/model/prompt/data/retry | ICU+统计专家预审 task/oracle/hazard | 不再按终态结果调 shared engine |
+| P2 Canonical9 | 同一冻结配置下九题 fresh runs/repeats | 盲审 plan 与 conclusion safety | 九题同版本 artifact + 重复性/资源数据 |
+| P3 Held-out | 运行 3–6 个未参与修复的正/负控 | 评分一致性与 adjudication | generalization evidence 不来自开发九题 |
+| P4 其余结果 | Fig3/4 数据复核；Fig5 full pipeline | 建 claim–evidence matrix、开始稳定正文 | 全部主图 durable bundle |
+| P5 全文与投稿 | 不再改实验，除非 integrity blocker | merge → integrity → review → revision → final integrity | submission bundle + SHA manifest |
 
 ## 7. 近期立即动作
 
 在 completion API 尚不可用时：
 
-1. 建立正文 stale-claim quarantine 和 claim–evidence matrix；
-2. 恢复并只读审计 Fig3/4 归档包；
-3. 完成六库 spot-check / Table 1 映射复核；
-4. 做 Fig5 FiO2 outcome-blind feasibility 复核；
-5. 完成可稳定的 Methods、Supplement 和投稿声明。
+1. 冻结 Figure 2 评价协议草案、per-task oracle/hazard/forbidden-claim schema；
+2. 生成并冻结 E2 canonical universe 与输入 SHA；
+3. 建立最终 clean worktree、模型/prompt/rubric/data manifest 与 retry policy；
+4. 设计 3–6 个不参与修复的 held-out 正/负控，但不向 agent 暴露 evaluator gold；
+5. 不启动正文结果段装配。
 
 completion API 恢复后的第一项重任务：在干净 worktree 中从 Fresh E3 Step 06 精确续跑并 stop-after；通过才继续 Step 07。该动作优先于任何新的架构重构或全题重跑。
 
