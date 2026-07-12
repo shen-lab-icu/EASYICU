@@ -31,6 +31,8 @@ from easyicu.research_agent.pipeline import (
     _load_compatible_resume_plan,
     _load_resume_state,
 )
+from easyicu.research_agent.evidence import EvidenceStore
+from easyicu.research_agent.runtime_artifacts import verified_run_evidence_path
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
 
@@ -198,11 +200,30 @@ def test_resume_prefers_latest_compatible_plan_revision(tmp_path: Path):
             ),
         ],
     )
-    (run_dir / "analysis_plan.json").write_text(
+    original_path = run_dir / "analysis_plan.json"
+    original_path.write_text(
         original.model_dump_json(indent=2), encoding="utf-8"
     )
-    (run_dir / "analysis_plan_revision_2.json").write_text(
+    revision_path = run_dir / "analysis_plan_revision_2.json"
+    revision_path.write_text(
         revision.model_dump_json(indent=2), encoding="utf-8"
+    )
+    evidence = EvidenceStore(run_dir)
+    evidence.register_file(
+        kind="log",
+        description="Original plan.",
+        source_path=original_path,
+        evidence_id="analysis_plan",
+        producer="planner",
+        generation_mode="llm",
+    )
+    evidence.register_file(
+        kind="log",
+        description="Revised plan.",
+        source_path=revision_path,
+        evidence_id="analysis_plan_revision_2",
+        producer="replanner",
+        generation_mode="llm",
     )
     resume_state = {
         "plan_path": "analysis_plan.json",
@@ -218,7 +239,10 @@ def test_resume_prefers_latest_compatible_plan_revision(tmp_path: Path):
         resume_state=resume_state,
     )
 
-    assert path == run_dir / "analysis_plan_revision_2.json"
+    assert path == verified_run_evidence_path(
+        run_dir,
+        evidence.get("analysis_plan_revision_2"),
+    )
     assert [step.step_id for step in plan.steps][-2:] == [
         "05_sensitivity",
         "05_sensitivity_figure",
@@ -999,6 +1023,7 @@ def test_resume_reuses_locked_plan_instead_of_replanning(
     first = _run_full(ra, synthetic_cohort, tmp_path)
     run_dir = Path(first.workdir)
     plan_path = run_dir / "analysis_plan.json"
+    plan_bytes_before = plan_path.read_bytes()
     step_ids_before = [s["step_id"] for s in json.loads(
         plan_path.read_text(encoding="utf-8"))["steps"]]
     assert step_ids_before, "first run produced no plan steps"
@@ -1051,6 +1076,10 @@ def test_resume_reuses_locked_plan_instead_of_replanning(
         f"{step_ids_before} -> {step_ids_after}"
     )
     assert "88_resume_should_ignore_this" not in step_ids_after
+    assert plan_path.read_bytes() == plan_bytes_before, (
+        "ordinary resume must read immutable plan evidence without "
+        "re-serializing the mutable analysis_plan.json"
+    )
 
     manifest = json.loads(Path(second.manifest_path).read_text(encoding="utf-8"))
     assert any(
