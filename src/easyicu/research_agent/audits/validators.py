@@ -8017,7 +8017,7 @@ __all__ = [
 def dedupe_findings(
     findings: Sequence[ValidationFinding],
 ) -> List[ValidationFinding]:
-    """Collapse byte-identical ``(validator, severity, message)`` findings.
+    """Collapse byte-identical findings within the same authority scope.
 
     The pilot run on 2026-05-15 surfaced the same
     ``concept_usage_auditor`` message recorded 5 times in a single run
@@ -8028,14 +8028,18 @@ def dedupe_findings(
     and merges ``evidence_ids`` across the collapsed group so no
     reference is lost.
 
-    Findings that already declare a non-empty ``detail`` are still
-    merged: their detail is shallow-copied and the duplicate count
-    overwrites only the dedicated key.
+    Findings that already declare a non-empty ``detail`` are still merged when
+    their owner scope matches: ``detail.step_id`` participates in the dedupe
+    key.  This prevents the same prose emitted by two independent steps from
+    being collapsed under the first step's authority and then incorrectly
+    retired when only that first step succeeds.  Other detail remains
+    shallow-copied and the duplicate count overwrites only the dedicated key.
     """
     seen: Dict[tuple, int] = {}
     out: List[ValidationFinding] = []
     for f in findings:
-        key = (f.validator, f.severity, f.message)
+        owner_step_id = str((f.detail or {}).get("step_id") or "").strip() or None
+        key = (f.validator, f.severity, f.message, owner_step_id)
         if key not in seen:
             seen[key] = len(out)
             out.append(f)
