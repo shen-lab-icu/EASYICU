@@ -28,11 +28,15 @@ from .estimators import (
     _data_with_predicate_aliases,
     fit_robustness_rows_from_records,
 )
-from .pipeline_primary_effect import _extract_primary_effect_payload_from_records
+from .pipeline_primary_effect import (
+    _extract_primary_effect_payload_from_records,
+    _primary_effect_payload_is_complete,
+)
 from .robustness_panel import (
     PRIMARY_SPEC_ID,
     RobustnessPanelRow,
     RobustnessSpec,
+    _assert_lock_matches_evidence_anchor,
     robustness_specs_sha,
     validate_robustness_specs,
 )
@@ -101,6 +105,10 @@ _SUPPORTED_MISSING_STRATEGIES = {
     "mean_imputation",
     "median_imputation",
 }
+_STRUCTURED_MISSING_STRATEGIES = {
+    "complete_case",
+    "source_aware_categories_no_imputation",
+}
 
 
 def robustness_sensitivity_preflight_code() -> str:
@@ -161,7 +169,7 @@ def _run_robustness_preflight(
     warnings: List[str] = []
 
     try:
-        specs, locked_at = _load_locked_specs(lock_path)
+        specs, locked_at = _load_locked_specs(lock_path, run_dir=run_dir)
     except Exception as exc:
         specs, locked_at = [], None
         blocking_reasons.append(f"Locked robustness specifications unavailable: {exc}")
@@ -203,20 +211,33 @@ def _run_robustness_preflight(
             "Research context must declare primary_exposure and target_outcome"
         )
 
-    primary = _extract_primary_effect_payload_from_records(
+    reported_primary = _extract_primary_effect_payload_from_records(
         records,
         preferred_predictor=exposure or None,
     )
+
+    structured_source = _find_structured_primary_model_source(
+        records=records,
+        run_dir=run_dir,
+        evidence_records=(
+            manifest_payload.get("evidence")
+            if isinstance(manifest_payload.get("evidence"), list)
+            else []
+        ),
+    )
+    primary = reported_primary
+    if structured_source is not None:
+        primary, primary_authority_errors = _structured_primary_effect_payload(
+            source=structured_source,
+            reported_payload=reported_primary,
+            preferred_predictor=exposure or None,
+        )
+        blocking_reasons.extend(primary_authority_errors)
     if not _complete_primary_payload(primary):
         blocking_reasons.append(
             "A completed primary estimate with point estimate and confidence interval "
             "is required before robustness comparison"
         )
-
-    structured_source = _find_structured_primary_model_source(
-        records=records,
-        run_dir=run_dir,
-    )
 
     membership_rows = _membership_audit(
         specs=specs,
@@ -229,6 +250,7 @@ def _run_robustness_preflight(
         specs=specs,
         data=universe if universe is not None else cohort,
         primary_outcome=outcome,
+        exact_primary_replay_available=structured_source is not None,
     )
     missing_rows = _missing_strategy_audit(
         specs,
@@ -238,6 +260,7 @@ def _run_robustness_preflight(
     effect_scale = str((primary or {}).get("effect_measure") or "").upper()
     fitted_rows: List[RobustnessPanelRow] = []
     structured_replay: Dict[str, Any] = {}
+    executable_specs: List[RobustnessSpec] = []
     if _complete_primary_payload(primary):
         fitted_rows.append(_primary_panel_row(primary or {}))
 
@@ -283,7 +306,35 @@ def _run_robustness_preflight(
             "effect scale; the validated primary estimate is retained and variants fail closed"
         )
 
+    unexecutable_specs = _unexecutable_locked_spec_ids(
+        specs=specs,
+        membership_rows=membership_rows,
+        outcome_rows=outcome_rows,
+        missing_rows=missing_rows,
+    )
+    if unexecutable_specs:
+        blocking_reasons.append(
+            "Locked robustness specifications are not executable under the "
+            "registered analysis contract: " + ", ".join(unexecutable_specs)
+        )
+    if _complete_primary_payload(primary) and specs and effect_scale != "OR":
+        blocking_reasons.append(
+            "Locked robustness specifications require variant estimates, but "
+            "deterministic fitting is unavailable for primary effect scale "
+            f"{effect_scale or 'unlabeled'}"
+        )
+
     row_by_id = {row.spec_id: row for row in fitted_rows}
+    missing_estimates = [
+        spec.spec_id
+        for spec in executable_specs
+        if not _panel_row_has_verifiable_estimate(row_by_id.get(spec.spec_id))
+    ]
+    if missing_estimates:
+        blocking_reasons.append(
+            "Executable locked robustness specifications did not emit verifiable "
+            "estimates: " + ", ".join(missing_estimates)
+        )
     membership_by_id = {row["spec_id"]: row for row in membership_rows}
     outcome_by_id = {row["spec_id"]: row for row in outcome_rows}
     missing_by_id = {row["spec_id"]: row for row in missing_rows}
@@ -345,6 +396,13 @@ def _run_robustness_preflight(
             contract_n = model_trace.get("model_contract_n")
             if not _finite(contract_n) or int(float(contract_n)) != int(row.n):
                 missing_trace.append("model_contract_n_matches_modeled_n")
+            membership_n = membership.get("variant_membership_n")
+            if (
+                axis == "cohort"
+                and _finite(membership_n)
+                and int(row.n) > int(float(membership_n))
+            ):
+                missing_trace.append("modeled_n_within_replayed_membership")
             if missing_trace:
                 trace_error = (
                     f"{spec_id}: fitted sensitivity estimate lacks an unambiguous "
@@ -585,10 +643,101 @@ def _run_robustness_preflight(
     )
 
 
+def _safe_step_id(step_id: str) -> bool:
+    return bool(
+        step_id
+        and step_id not in {".", ".."}
+        and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", step_id)
+    )
+
+
+def _contained_regular_file(path: Path, root: Path) -> Optional[Path]:
+    """Return a resolved file only when no path component is a symlink."""
+
+    candidate = Path(path)
+    root = Path(root).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+    cursor = candidate
+    while cursor != root:
+        if cursor.is_symlink():
+            return None
+        parent = cursor.parent
+        if parent == cursor:
+            return None
+        cursor = parent
+    if not candidate.is_file():
+        return None
+    try:
+        resolved = candidate.resolve(strict=True)
+        resolved.relative_to(root)
+    except (OSError, ValueError):
+        return None
+    return resolved
+
+
+def _matching_active_evidence_id(
+    *,
+    evidence_by_id: Dict[str, Dict[str, Any]],
+    evidence_ids: set[str],
+    run_root: Path,
+    evidence_root: Path,
+    step_id: str,
+    expected_sha256: str,
+    kind: Optional[str] = None,
+    required_script_evidence_id: Optional[str] = None,
+    expected_logical_name: Optional[str] = None,
+) -> Optional[str]:
+    """Find an active, hashed evidence copy for one source artefact."""
+
+    for evidence_id in evidence_ids:
+        record = evidence_by_id.get(evidence_id)
+        if not isinstance(record, dict):
+            continue
+        if str(record.get("produced_by_step") or "") != step_id:
+            continue
+        record_kind = str(record.get("kind") or "").strip().lower()
+        if kind is not None and record_kind != kind:
+            continue
+        if kind is None and record_kind == "code":
+            continue
+        if (
+            required_script_evidence_id is not None
+            and str(record.get("script_evidence_id") or "")
+            != required_script_evidence_id
+        ):
+            continue
+        if str(record.get("sha256") or "").strip() != expected_sha256:
+            continue
+        relative_path = Path(str(record.get("relative_path") or ""))
+        if (
+            not relative_path.parts
+            or relative_path.is_absolute()
+            or ".." in relative_path.parts
+        ):
+            continue
+        evidence_path = _contained_regular_file(run_root / relative_path, run_root)
+        if evidence_path is None:
+            continue
+        try:
+            evidence_path.relative_to(evidence_root.resolve())
+        except ValueError:
+            continue
+        logical_name = evidence_path.name.split("__", 1)[-1]
+        if expected_logical_name is not None and logical_name != expected_logical_name:
+            continue
+        if _sha256_file(evidence_path) == expected_sha256:
+            return evidence_id
+    return None
+
+
 def _find_structured_primary_model_source(
     *,
     records: Sequence[Dict[str, Any]],
     run_dir: Path,
+    evidence_records: Sequence[Dict[str, Any]] = (),
 ) -> Optional[Dict[str, Any]]:
     """Locate a completed primary model whose exact code can be replayed.
 
@@ -598,18 +747,80 @@ def _find_structured_primary_model_source(
     coefficient table, and the registered analysis script.
     """
 
-    for record in reversed(list(records)):
+    from .runtime_artifacts import current_successful_step_records
+
+    run_root = Path(run_dir).resolve()
+    steps_root = run_root / "steps"
+    evidence_root = run_root / "evidence"
+    evidence_by_id = {
+        str(item.get("evidence_id") or ""): item
+        for item in evidence_records
+        if isinstance(item, dict) and str(item.get("evidence_id") or "").strip()
+    }
+
+    for record in reversed(list(current_successful_step_records(records))):
         if not isinstance(record, dict):
             continue
-        if str(record.get("status") or "").lower() not in {
-            "ok",
-            "complete",
-            "completed",
-            "repaired",
-            "runner_repaired",
-        }:
+        step_id = str(record.get("step_id") or "").strip()
+        if not _safe_step_id(step_id):
             continue
-        summary = record.get("step_summary")
+        step_dir = steps_root / step_id
+        script_path = _contained_regular_file(step_dir / "analysis.py", run_root)
+        outputs_dir = step_dir / "outputs"
+        summary_path = _contained_regular_file(
+            outputs_dir / "step_summary.json",
+            run_root,
+        )
+        coefficient_path = _contained_regular_file(
+            outputs_dir / "coefficients.csv",
+            run_root,
+        )
+        if script_path is None or summary_path is None or coefficient_path is None:
+            continue
+        if outputs_dir.is_symlink() or step_dir.is_symlink():
+            continue
+        script_sha256 = _sha256_file(script_path)
+        if str(record.get("executed_code_sha256") or "").strip() != script_sha256:
+            continue
+        active_evidence_ids = {
+            str(evidence_id)
+            for evidence_id in record.get("evidence_ids") or []
+            if str(evidence_id).strip()
+        }
+        code_evidence_id = _matching_active_evidence_id(
+            evidence_by_id=evidence_by_id,
+            evidence_ids=active_evidence_ids,
+            run_root=run_root,
+            evidence_root=evidence_root,
+            step_id=step_id,
+            expected_sha256=script_sha256,
+            kind="code",
+            expected_logical_name="analysis.py",
+        )
+        if code_evidence_id is None:
+            continue
+        summary_sha256 = _sha256_file(summary_path)
+        summary_evidence_id = _matching_active_evidence_id(
+            evidence_by_id=evidence_by_id,
+            evidence_ids=active_evidence_ids,
+            run_root=run_root,
+            evidence_root=evidence_root,
+            step_id=step_id,
+            expected_sha256=summary_sha256,
+            kind="statistic",
+            required_script_evidence_id=code_evidence_id,
+            expected_logical_name="step_summary.json",
+        )
+        if (
+            summary_evidence_id is None
+            or str(record.get("step_summary_evidence_id") or "")
+            != summary_evidence_id
+        ):
+            continue
+        try:
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
         if not isinstance(summary, dict):
             continue
         contracts = summary.get("model_contracts")
@@ -641,20 +852,31 @@ def _find_structured_primary_model_source(
             )
         if not isinstance(primary_contract, dict):
             continue
-        step_id = str(record.get("step_id") or "").strip()
-        step_dir = run_dir / "steps" / step_id
-        script_path = (step_dir / "analysis.py").resolve()
-        outputs_dir = (step_dir / "outputs").resolve()
-        coefficient_path = outputs_dir / "coefficients.csv"
-        if not script_path.is_file() or not coefficient_path.is_file():
+        coefficient_sha256 = _sha256_file(coefficient_path)
+        coefficient_evidence_id = _matching_active_evidence_id(
+            evidence_by_id=evidence_by_id,
+            evidence_ids=active_evidence_ids,
+            run_root=run_root,
+            evidence_root=evidence_root,
+            step_id=step_id,
+            expected_sha256=coefficient_sha256,
+            kind="table",
+            required_script_evidence_id=code_evidence_id,
+            expected_logical_name="coefficients.csv",
+        )
+        if coefficient_evidence_id is None:
             continue
+        outputs_dir = outputs_dir.resolve()
         return {
             "step_id": step_id,
             "record": record,
             "summary": summary,
             "primary_contract": primary_contract,
             "script_path": script_path,
-            "script_sha256": _sha256_file(script_path),
+            "script_sha256": script_sha256,
+            "code_evidence_id": code_evidence_id,
+            "summary_evidence_id": summary_evidence_id,
+            "coefficient_evidence_id": coefficient_evidence_id,
             "outputs_dir": outputs_dir,
             "coefficient_path": coefficient_path,
         }
@@ -693,7 +915,7 @@ def _fit_structured_robustness_rows(
                     source,
                     analysis_set="complete_case",
                 )
-            elif "source_aware" in strategy:
+            elif strategy == "source_aware_categories_no_imputation":
                 contract = dict(source["primary_contract"])
             else:
                 contract = None
@@ -702,9 +924,7 @@ def _fit_structured_robustness_rows(
                 axis=spec.axis,
                 outputs_dir=source["outputs_dir"],
                 contract=contract,
-                evidence_id=str(
-                    source["record"].get("step_summary_evidence_id") or ""
-                ),
+                evidence_id=str(source["coefficient_evidence_id"]),
                 note_prefix=(
                     "Inherited the exact fitted model from the completed primary "
                     f"step for missing-data strategy {strategy or 'unspecified'}."
@@ -813,6 +1033,20 @@ def _replay_primary_model_for_cohort(
         variant_cohort = build_cohort(spec.cohort_override, data=data_for_filter)
         cohort_path = replay_root / "cohort.parquet"
         variant_cohort.to_parquet(cohort_path, index=False)
+        input_cohort_sha256 = _sha256_file(cohort_path)
+        identifier = _identifier_column(variant_cohort)
+        membership_payload = (
+            sorted(str(value) for value in variant_cohort[identifier].dropna())
+            if identifier is not None
+            else [str(index) for index in variant_cohort.index]
+        )
+        input_membership_sha256 = hashlib.sha256(
+            json.dumps(
+                membership_payload,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
     except Exception as exc:
         return _blocked_structured_replay(
             spec=spec,
@@ -911,6 +1145,17 @@ def _replay_primary_model_for_cohort(
             f"override {spec.cohort_override.name}."
         ),
     )
+    input_n = int(len(variant_cohort))
+    if error is None and (row.n <= 0 or row.n > input_n):
+        return _blocked_structured_replay(
+            spec=spec,
+            error=(
+                "replayed model analytic n is not contained in the locked "
+                f"cohort membership (model_n={row.n}, input_n={input_n})"
+            ),
+            replay_root=replay_root,
+            input_n=input_n,
+        )
     evidence_contracts, evidence_coefficients = _variant_model_evidence(
         summary=replay_summary,
         outputs_dir=replay_outputs,
@@ -925,7 +1170,9 @@ def _replay_primary_model_for_cohort(
         "source_step_id": source["step_id"],
         "source_script_sha256": source["script_sha256"],
         "replay_dir": str(replay_root.relative_to(out_dir.resolve())),
-        "input_n": int(len(variant_cohort)),
+        "input_n": input_n,
+        "input_cohort_sha256": input_cohort_sha256,
+        "input_membership_sha256": input_membership_sha256,
         "modeled_n": row.n,
         "status": "ok" if error is None else "blocked",
         "error": error,
@@ -1289,16 +1536,26 @@ def _copy_structured_primary_contract_artifacts(
     source: Dict[str, Any],
     out_dir: Path,
 ) -> Dict[str, str]:
+    import pandas as pd  # type: ignore
+
     copied: Dict[str, str] = {}
-    for key, filename in (
-        ("coefficients", "coefficients.csv"),
-        ("model_summaries", "model_summaries.csv"),
+    coefficient_path = source.get("coefficient_path")
+    if isinstance(coefficient_path, Path) and coefficient_path.is_file():
+        shutil.copy2(coefficient_path, out_dir / "coefficients.csv")
+        copied["coefficients"] = "coefficients.csv"
+
+    # Never copy an unregistered sibling model_summaries.csv.  Re-materialize
+    # it from the digest-verified step_summary evidence that authorized the
+    # structured source instead.
+    raw_contracts = source.get("summary", {}).get("model_contracts")
+    if isinstance(raw_contracts, list) and raw_contracts and all(
+        isinstance(contract, dict) for contract in raw_contracts
     ):
-        source_path = source["outputs_dir"] / filename
-        if not source_path.is_file():
-            continue
-        shutil.copy2(source_path, out_dir / filename)
-        copied[key] = filename
+        pd.DataFrame(raw_contracts).to_csv(
+            out_dir / "model_summaries.csv",
+            index=False,
+        )
+        copied["model_summaries"] = "model_summaries.csv"
     return copied
 
 
@@ -1330,19 +1587,30 @@ def _load_manifest(path: Path, *, run_dir: Path) -> Dict[str, Any]:
     raise ValueError("; ".join(errors) or "no manifest file exists")
 
 
-def _load_locked_specs(path: Path) -> tuple[List[RobustnessSpec], Optional[str]]:
+def _load_locked_specs(
+    path: Path,
+    *,
+    run_dir: Optional[Path] = None,
+) -> tuple[List[RobustnessSpec], Optional[str]]:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("robustness_specs_locked.json must be a regular file")
     payload = _load_json_object(path)
     raw_specs = payload.get("specs")
     if not isinstance(raw_specs, list) or not raw_specs:
         raise ValueError("robustness_specs_locked.json has no specs")
-    specs = [
-        RobustnessSpec.from_dict(item) for item in raw_specs if isinstance(item, dict)
-    ]
+    if any(not isinstance(item, dict) for item in raw_specs):
+        raise ValueError("robustness_specs_locked.json has invalid spec entries")
+    specs = [RobustnessSpec.from_dict(item) for item in raw_specs]
     validate_robustness_specs(specs)
     expected_sha = str(payload.get("spec_sha256") or "")
     observed_sha = robustness_specs_sha(specs)
     if not expected_sha or expected_sha != observed_sha:
         raise ValueError("robustness specification lock hash mismatch")
+    if run_dir is not None:
+        _assert_lock_matches_evidence_anchor(
+            run_dir=Path(run_dir),
+            lock_path=path,
+        )
     return specs, str(payload.get("locked_at") or "") or None
 
 
@@ -1368,13 +1636,7 @@ def _to_namespace(value: Any) -> Any:
 
 
 def _complete_primary_payload(payload: Optional[Dict[str, Any]]) -> bool:
-    return bool(
-        payload
-        and _finite(payload.get("primary_or"))
-        and _finite(payload.get("primary_ci_low"))
-        and _finite(payload.get("primary_ci_high"))
-        and str(payload.get("effect_measure") or "").strip()
-    )
+    return _primary_effect_payload_is_complete(payload)
 
 
 def _primary_panel_row(payload: Dict[str, Any]) -> RobustnessPanelRow:
@@ -1388,8 +1650,117 @@ def _primary_panel_row(payload: Dict[str, Any]) -> RobustnessPanelRow:
         se=None,
         evidence_id=str(payload.get("evidence_id") or ""),
         converged=True,
-        notes="Validated primary estimate from a completed step summary.",
+        notes="Validated primary estimate from current digest-bound evidence.",
     )
+
+
+def _structured_primary_effect_payload(
+    *,
+    source: Dict[str, Any],
+    reported_payload: Optional[Dict[str, Any]],
+    preferred_predictor: Optional[str],
+) -> tuple[Optional[Dict[str, Any]], List[str]]:
+    """Bind the headline to one digest-verified primary coefficient row.
+
+    The append-only manifest embeds a convenient step-summary copy, but that
+    copy is not value authority.  The registered summary must agree with the
+    unique primary-exposure row in the registered coefficient table, and the
+    current manifest's reported headline must agree with both.  The returned
+    payload is rebuilt from the coefficient row so downstream matrices cannot
+    inherit a forged summary scalar or an unregistered evidence id.
+    """
+
+    row, _coefficients, _contract, error = _structured_model_row(
+        spec_id=PRIMARY_SPEC_ID,
+        axis="primary",
+        outputs_dir=source["outputs_dir"],
+        contract=source["primary_contract"],
+        evidence_id=str(source["coefficient_evidence_id"]),
+        note_prefix="Digest-verified primary exposure coefficient.",
+    )
+    if error is not None or not _panel_row_has_verifiable_estimate(row):
+        return None, [
+            "Digest-verified primary coefficient could not authorize the "
+            f"robustness headline: {error or 'invalid coefficient row'}"
+        ]
+
+    authoritative_record = {
+        "step_id": source["step_id"],
+        "status": "ok",
+        "step_summary": source["summary"],
+        "step_summary_evidence_id": source["summary_evidence_id"],
+        "evidence_ids": [
+            source["summary_evidence_id"],
+            source["coefficient_evidence_id"],
+        ],
+    }
+    summary_payload = _extract_primary_effect_payload_from_records(
+        [authoritative_record],
+        preferred_predictor=preferred_predictor,
+    )
+    errors: List[str] = []
+
+    def _payload_disagrees(payload: Optional[Dict[str, Any]], label: str) -> None:
+        if not _complete_primary_payload(payload):
+            errors.append(f"{label} primary headline is incomplete")
+            return
+        assert payload is not None
+        expected = {
+            "primary_or": row.point_estimate,
+            "primary_ci_low": row.ci_low,
+            "primary_ci_high": row.ci_high,
+        }
+        for key, expected_value in expected.items():
+            observed = _float_or_none(payload.get(key))
+            if (
+                observed is None
+                or expected_value is None
+                or not math.isclose(
+                    float(observed),
+                    float(expected_value),
+                    rel_tol=1e-9,
+                    abs_tol=1e-12,
+                )
+            ):
+                errors.append(
+                    f"{label} {key} disagrees with the digest-verified "
+                    "primary coefficient"
+                )
+        if int(float(payload.get("sample_size") or 0)) != int(row.n):
+            errors.append(
+                f"{label} sample_size disagrees with the primary model contract"
+            )
+        if str(payload.get("effect_measure") or "").strip().upper() != "OR":
+            errors.append(f"{label} effect measure is not the verified OR scale")
+
+    _payload_disagrees(summary_payload, "Registered step summary")
+    _payload_disagrees(reported_payload, "Current manifest")
+    if isinstance(reported_payload, dict) and str(
+        reported_payload.get("evidence_id") or ""
+    ) not in {
+        str(source["summary_evidence_id"]),
+        str(source["coefficient_evidence_id"]),
+    }:
+        errors.append(
+            "Current manifest primary headline references an evidence id that "
+            "is not the registered summary or coefficient source"
+        )
+
+    payload = {
+        "step_id": source["step_id"],
+        "predictor": str(
+            source["primary_contract"].get("exposure_source")
+            or preferred_predictor
+            or ""
+        ),
+        "primary_or": float(row.point_estimate),
+        "primary_ci_low": float(row.ci_low),
+        "primary_ci_high": float(row.ci_high),
+        "effect_measure": "OR",
+        "sample_size": int(row.n),
+        "evidence_id": str(source["coefficient_evidence_id"]),
+    }
+    return payload, errors
 
 
 def _load_primary_cohort(run_dir: Path):
@@ -1547,6 +1918,7 @@ def _outcome_executability_audit(
     specs: Sequence[RobustnessSpec],
     data: Any,
     primary_outcome: str,
+    exact_primary_replay_available: bool = False,
 ) -> List[Dict[str, Any]]:
     outcome_specs = [spec for spec in specs if spec.axis == "outcome"]
     if not outcome_specs:
@@ -1583,7 +1955,9 @@ def _outcome_executability_audit(
         )
         timing_available = time_column is not None
         scalar_compatible = aggregation in {"", "first", "identity", "value"}
-        executable = bool(target_column and (scalar_compatible or timing_available))
+        data_executable = bool(
+            target_column and (scalar_compatible or timing_available)
+        )
         same_scalar_label = bool(
             scalar_shape
             and target_column
@@ -1592,7 +1966,11 @@ def _outcome_executability_audit(
                 or target_counts.get(requested_target, 0) > 1
             )
         )
-        independent = bool(executable and not same_scalar_label)
+        independent = bool(data_executable and not same_scalar_label)
+        executable = bool(
+            data_executable
+            and not (exact_primary_replay_available and independent)
+        )
         if target_column is None:
             note = "Declared outcome column is absent; the variant was not executed."
         elif same_scalar_label:
@@ -1601,10 +1979,16 @@ def _outcome_executability_audit(
                 "outcome. They are not independently executable, and no duplicate "
                 "estimate is presented as robustness evidence."
             )
-        elif not executable:
+        elif not data_executable:
             note = (
                 "The requested aggregation requires explicit event timing, but no "
                 "declared or '<outcome>_time' column is available."
+            )
+        elif exact_primary_replay_available:
+            note = (
+                "The registered primary-model script fixes its outcome. The "
+                "auxiliary runner will not substitute a different endpoint, so "
+                "this locked variant is not executable by exact replay."
             )
         else:
             note = "Outcome variant is independently executable from explicit columns."
@@ -1618,6 +2002,7 @@ def _outcome_executability_audit(
                 "event_timing_available": timing_available,
                 "outcome_executable": executable,
                 "independent_variant": independent,
+                "same_scalar_label": same_scalar_label,
                 "notes": note,
             }
         )
@@ -1634,12 +2019,11 @@ def _missing_strategy_audit(
         if spec.axis != "missing":
             continue
         strategy = str((spec.missing_override or {}).get("strategy") or "").strip()
-        structured_source_aware = bool(
-            structured_source_aware_available
-            and "source_aware" in strategy.lower()
-            and "imputation" in strategy.lower()
-        )
-        executable = strategy in _SUPPORTED_MISSING_STRATEGIES or structured_source_aware
+        normalized = strategy.lower()
+        if structured_source_aware_available:
+            executable = normalized in _STRUCTURED_MISSING_STRATEGIES
+        else:
+            executable = normalized in _SUPPORTED_MISSING_STRATEGIES
         rows.append(
             {
                 "spec_id": spec.spec_id,
@@ -1647,11 +2031,16 @@ def _missing_strategy_audit(
                 "strategy_executable": executable,
                 "notes": (
                     "Strategy is supported by exact registered primary-model replay."
-                    if structured_source_aware
+                    if executable and structured_source_aware_available
                     else (
                         "Strategy is supported by the deterministic estimator adapter."
                         if executable
-                        else "Strategy is not supported by the deterministic estimator adapter."
+                        else (
+                            "Strategy is not emitted by the registered primary-model "
+                            "script; exact replay refuses to invent an imputation fit."
+                            if structured_source_aware_available
+                            else "Strategy is not supported by the deterministic estimator adapter."
+                        )
                     )
                 ),
             }
@@ -1687,6 +2076,37 @@ def _executable_specs(
                 continue
         selected.append(spec)
     return selected
+
+
+def _unexecutable_locked_spec_ids(
+    *,
+    specs: Sequence[RobustnessSpec],
+    membership_rows: Sequence[Dict[str, Any]],
+    outcome_rows: Sequence[Dict[str, Any]],
+    missing_rows: Sequence[Dict[str, Any]],
+) -> List[str]:
+    """Locked variants that cannot run, excluding true scalar duplicates."""
+
+    membership = {row["spec_id"]: row for row in membership_rows}
+    outcome = {row["spec_id"]: row for row in outcome_rows}
+    missing = {row["spec_id"]: row for row in missing_rows}
+    blocked: List[str] = []
+    for spec in specs:
+        if spec.axis == "cohort":
+            if membership.get(spec.spec_id, {}).get("membership_executable") is not True:
+                blocked.append(spec.spec_id)
+        elif spec.axis == "missing":
+            if missing.get(spec.spec_id, {}).get("strategy_executable") is not True:
+                blocked.append(spec.spec_id)
+        elif spec.axis == "outcome":
+            audit = outcome.get(spec.spec_id, {})
+            # Repeating the same one-value-per-stay label is explicitly
+            # disclosed as non-independent, not misrepresented as a failed fit.
+            if audit.get("same_scalar_label") is True:
+                continue
+            if audit.get("outcome_executable") is not True:
+                blocked.append(spec.spec_id)
+    return blocked
 
 
 def _outcome_target(spec: RobustnessSpec, primary_outcome: str) -> str:
@@ -1767,6 +2187,19 @@ def _finite(value: Any) -> bool:
         return math.isfinite(float(value))
     except (TypeError, ValueError):
         return False
+
+
+def _panel_row_has_verifiable_estimate(
+    row: Optional[RobustnessPanelRow],
+) -> bool:
+    if row is None or not row.converged or int(row.n or 0) <= 0:
+        return False
+    if not row.evidence_id:
+        return False
+    if not all(_finite(value) for value in (row.point_estimate, row.ci_low, row.ci_high)):
+        return False
+    assert row.ci_low is not None and row.ci_high is not None
+    return float(row.ci_low) <= float(row.ci_high)
 
 
 def _float_or_none(value: Any) -> Optional[float]:

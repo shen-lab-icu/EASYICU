@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -9,6 +10,7 @@ import textwrap
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from easyicu.research_agent.cohort_schema import (
     CohortDefinition,
@@ -255,7 +257,8 @@ def test_preflight_emits_renderer_contract_and_nonindependent_scalar_outcomes(
     assert cohort_rows["variant_membership_n"].notna().all()
 
     summary = json.loads((out_dir / "step_summary.json").read_text())
-    assert summary["status"] == "ok"
+    assert summary["status"] == "blocked"
+    assert "did not emit verifiable estimates" in summary["blocking_reason"]
     assert summary["aliases"]["sensitivity_comparison"] == "robustness_matrix.csv"
     assert (
         summary["aliases"]["cohort_overlap_and_attrition"]
@@ -329,6 +332,83 @@ def test_preflight_fails_closed_without_locked_specs(
     summary = json.loads((out_dir / "step_summary.json").read_text())
     assert summary["status"] == "blocked"
     assert "Locked robustness specifications unavailable" in summary["blocking_reason"]
+
+
+def test_preflight_blocks_locked_variants_for_non_or_primary(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    out_dir, cohort_path, universe_path = _prepare_run(tmp_path, include_primary=True)
+    manifest_path = out_dir.parents[2] / "manifest_partial.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    primary = manifest["per_step_records"][0]["step_summary"]
+    primary.pop("primary_or")
+    primary.pop("primary_ci_low")
+    primary.pop("primary_ci_high")
+    primary.update(
+        {
+            "hazard_ratio": 1.4,
+            "hazard_ratio_ci_low": 1.1,
+            "hazard_ratio_ci_high": 1.8,
+            "n_analysis": primary["n_total"],
+        }
+    )
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    _run_generated(
+        monkeypatch,
+        out_dir=out_dir,
+        cohort_path=cohort_path,
+        universe_path=universe_path,
+    )
+
+    summary = json.loads((out_dir / "step_summary.json").read_text())
+    assert summary["status"] == "blocked"
+    assert "primary effect scale HR" in summary["blocking_reason"]
+
+
+def test_preflight_blocks_unsupported_locked_missing_strategy(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    out_dir, cohort_path, universe_path = _prepare_run(tmp_path, include_primary=True)
+    run_dir = out_dir.parents[2]
+    lock_path = run_dir / "robustness_specs_locked.json"
+    specs = _specs()
+    median_index = next(
+        index for index, spec in enumerate(specs) if spec.spec_id == "missing_median"
+    )
+    specs[median_index] = RobustnessSpec(
+        spec_id="missing_unimplemented",
+        axis="missing",
+        description="A locked strategy not implemented by the runner.",
+        missing_override={"strategy": "multiple_imputation"},
+    )
+    lock_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "easyicu.robustness_specs/1",
+                "locked_at": "2026-07-10T00:00:00+00:00",
+                "spec_sha256": robustness_specs_sha(specs),
+                "specs": [spec.to_dict() for spec in specs],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    _run_generated(
+        monkeypatch,
+        out_dir=out_dir,
+        cohort_path=cohort_path,
+        universe_path=universe_path,
+    )
+
+    summary = json.loads((out_dir / "step_summary.json").read_text())
+    assert summary["status"] == "blocked"
+    assert "missing_unimplemented" in summary["blocking_reason"]
+    assert "not executable under the registered analysis contract" in summary[
+        "blocking_reason"
+    ]
 
 
 def test_structured_preflight_replays_exact_primary_code_and_emits_spec_by_model_evidence(
@@ -447,6 +527,27 @@ def test_structured_preflight_replays_exact_primary_code_and_emits_spec_by_model
         check=True,
     )
     source_summary = json.loads((source_outputs / "step_summary.json").read_text())
+    script_sha = hashlib.sha256(source_script.read_bytes()).hexdigest()
+    coefficient_sha = hashlib.sha256(
+        (source_outputs / "coefficients.csv").read_bytes()
+    ).hexdigest()
+    summary_sha = hashlib.sha256(
+        (source_outputs / "step_summary.json").read_bytes()
+    ).hexdigest()
+    evidence_dir = run_dir / "evidence"
+    evidence_dir.mkdir()
+    code_evidence_path = evidence_dir / "code_primary_analysis__analysis.py"
+    coefficient_evidence_path = (
+        evidence_dir / "table_primary_coefficients__coefficients.csv"
+    )
+    summary_evidence_path = evidence_dir / "structured_primary__step_summary.json"
+    code_evidence_path.write_bytes(source_script.read_bytes())
+    coefficient_evidence_path.write_bytes(
+        (source_outputs / "coefficients.csv").read_bytes()
+    )
+    summary_evidence_path.write_bytes(
+        (source_outputs / "step_summary.json").read_bytes()
+    )
     (run_dir / "manifest_partial.json").write_text(
         json.dumps(
             {
@@ -455,9 +556,46 @@ def test_structured_preflight_replays_exact_primary_code_and_emits_spec_by_model
                     {
                         "step_id": "07_primary_model",
                         "status": "ok",
+                        "executed_code_sha256": script_sha,
+                        "evidence_ids": [
+                            "code_primary_analysis",
+                            "table_primary_coefficients",
+                            "structured_primary",
+                        ],
                         "step_summary_evidence_id": "structured_primary",
                         "step_summary": source_summary,
                     }
+                ],
+                "evidence": [
+                    {
+                        "evidence_id": "code_primary_analysis",
+                        "kind": "code",
+                        "relative_path": str(
+                            code_evidence_path.relative_to(run_dir)
+                        ),
+                        "sha256": script_sha,
+                        "produced_by_step": "07_primary_model",
+                    },
+                    {
+                        "evidence_id": "table_primary_coefficients",
+                        "kind": "table",
+                        "relative_path": str(
+                            coefficient_evidence_path.relative_to(run_dir)
+                        ),
+                        "sha256": coefficient_sha,
+                        "produced_by_step": "07_primary_model",
+                        "script_evidence_id": "code_primary_analysis",
+                    },
+                    {
+                        "evidence_id": "structured_primary",
+                        "kind": "statistic",
+                        "relative_path": str(
+                            summary_evidence_path.relative_to(run_dir)
+                        ),
+                        "sha256": summary_sha,
+                        "produced_by_step": "07_primary_model",
+                        "script_evidence_id": "code_primary_analysis",
+                    },
                 ],
             }
         )
@@ -567,3 +705,407 @@ def test_structured_preflight_replays_exact_primary_code_and_emits_spec_by_model
         "source_script_sha256"
     ]
     assert all(item["status"] == "ok" for item in replay_index["variants"])
+
+
+def _write_structured_source_authority(run_dir: Path):
+    step_id = "01_primary_model"
+    step_dir = run_dir / "steps" / step_id
+    outputs_dir = step_dir / "outputs"
+    evidence_dir = run_dir / "evidence"
+    outputs_dir.mkdir(parents=True)
+    evidence_dir.mkdir(parents=True)
+    script_path = step_dir / "analysis.py"
+    coefficient_path = outputs_dir / "coefficients.csv"
+    script_path.write_text("print('registered primary model')\n", encoding="utf-8")
+    coefficient_path.write_text(
+        "model_id,term,term_role,source_variable,odds_ratio,ci_low,ci_high,std_error\n"
+        "primary,exposure,exposure,exposure,1.4,1.1,1.8,0.1\n",
+        encoding="utf-8",
+    )
+    summary = {
+        "status": "ok",
+        "primary_model_id": "primary",
+        "primary_exposure": "exposure",
+        "primary_or": 1.4,
+        "primary_ci_low": 1.1,
+        "primary_ci_high": 1.8,
+        "primary_model_n": 100,
+        "model_contracts": [
+            {
+                "model_id": "primary",
+                "analysis_role": "primary",
+                "exposure_role": "primary",
+                "exposure_source": "exposure",
+                "exposure_expression": "exposure",
+                "analysis_set": "source_aware",
+                "n": 100,
+                "event_n": 20,
+                "fit_status": "fitted",
+                "converged": True,
+                "fit_method": "registered_test_model",
+            }
+        ],
+    }
+    summary_path = outputs_dir / "step_summary.json"
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+    script_sha = hashlib.sha256(script_path.read_bytes()).hexdigest()
+    coefficient_sha = hashlib.sha256(coefficient_path.read_bytes()).hexdigest()
+    summary_sha = hashlib.sha256(summary_path.read_bytes()).hexdigest()
+    code_copy = evidence_dir / "code_primary__analysis.py"
+    coefficient_copy = evidence_dir / "table_coefficients__coefficients.csv"
+    summary_copy = evidence_dir / "stat_primary__step_summary.json"
+    code_copy.write_bytes(script_path.read_bytes())
+    coefficient_copy.write_bytes(coefficient_path.read_bytes())
+    summary_copy.write_bytes(summary_path.read_bytes())
+    evidence = [
+        {
+            "evidence_id": "code_primary",
+            "kind": "code",
+            "relative_path": str(code_copy.relative_to(run_dir)),
+            "sha256": script_sha,
+            "produced_by_step": step_id,
+        },
+        {
+            "evidence_id": "table_coefficients",
+            "kind": "table",
+            "relative_path": str(coefficient_copy.relative_to(run_dir)),
+            "sha256": coefficient_sha,
+            "produced_by_step": step_id,
+            "script_evidence_id": "code_primary",
+        },
+        {
+            "evidence_id": "stat_primary",
+            "kind": "statistic",
+            "relative_path": str(summary_copy.relative_to(run_dir)),
+            "sha256": summary_sha,
+            "produced_by_step": step_id,
+            "script_evidence_id": "code_primary",
+        },
+    ]
+    record = {
+        "step_id": step_id,
+        "status": "ok",
+        "executed_code_sha256": script_sha,
+        "evidence_ids": ["code_primary", "table_coefficients", "stat_primary"],
+        "step_summary_evidence_id": "stat_primary",
+        "step_summary": summary,
+    }
+    return record, evidence, script_path
+
+
+def test_structured_source_uses_latest_step_record_and_registered_code_sha(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.deterministic_robustness import (
+        _find_structured_primary_model_source,
+    )
+
+    run_dir = tmp_path / "run"
+    record, evidence, script_path = _write_structured_source_authority(run_dir)
+
+    assert (
+        _find_structured_primary_model_source(
+            records=[record],
+            run_dir=run_dir,
+            evidence_records=evidence,
+        )
+        is not None
+    )
+
+    wrong_kind_evidence = [dict(item) for item in evidence]
+    wrong_kind_evidence[1]["kind"] = "log"
+    assert (
+        _find_structured_primary_model_source(
+            records=[record],
+            run_dir=run_dir,
+            evidence_records=wrong_kind_evidence,
+        )
+        is None
+    )
+
+    failed_retry = {
+        "step_id": record["step_id"],
+        "status": "contract_failed",
+        "step_summary": {"status": "rejected"},
+    }
+    assert (
+        _find_structured_primary_model_source(
+            records=[record, failed_retry],
+            run_dir=run_dir,
+            evidence_records=evidence,
+        )
+        is None
+    )
+
+    script_path.write_text("print('mutated after execution')\n", encoding="utf-8")
+    assert (
+        _find_structured_primary_model_source(
+            records=[record],
+            run_dir=run_dir,
+            evidence_records=evidence,
+        )
+        is None
+    )
+
+
+def test_structured_source_rejects_symlinked_analysis_script(tmp_path: Path) -> None:
+    from easyicu.research_agent.deterministic_robustness import (
+        _find_structured_primary_model_source,
+    )
+
+    run_dir = tmp_path / "run"
+    record, evidence, script_path = _write_structured_source_authority(run_dir)
+    registered_copy = run_dir / evidence[0]["relative_path"]
+    script_path.unlink()
+    script_path.symlink_to(registered_copy)
+
+    assert (
+        _find_structured_primary_model_source(
+            records=[record],
+            run_dir=run_dir,
+            evidence_records=evidence,
+        )
+        is None
+    )
+
+
+def test_structured_primary_headline_blocks_manifest_scalar_forgery(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.deterministic_robustness import (
+        _find_structured_primary_model_source,
+        _structured_primary_effect_payload,
+    )
+    from easyicu.research_agent.pipeline_primary_effect import (
+        _extract_primary_effect_payload_from_records,
+    )
+
+    run_dir = tmp_path / "run"
+    record, evidence, _script_path = _write_structured_source_authority(run_dir)
+    source = _find_structured_primary_model_source(
+        records=[record],
+        run_dir=run_dir,
+        evidence_records=evidence,
+    )
+    assert source is not None
+
+    forged_record = json.loads(json.dumps(record))
+    forged_record["step_summary"].update(
+        {
+            "primary_or": 9.9,
+            "primary_ci_low": 9.8,
+            "primary_ci_high": 10.0,
+        }
+    )
+    forged_record["step_summary_evidence_id"] = "structured_primary"
+    reported = _extract_primary_effect_payload_from_records(
+        [forged_record],
+        preferred_predictor="exposure",
+    )
+
+    authoritative, errors = _structured_primary_effect_payload(
+        source=source,
+        reported_payload=reported,
+        preferred_predictor="exposure",
+    )
+
+    assert errors
+    assert any("Current manifest primary_or disagrees" in item for item in errors)
+    assert any("evidence id" in item for item in errors)
+    assert authoritative is not None
+    assert authoritative["primary_or"] == pytest.approx(1.4)
+    assert authoritative["evidence_id"] == "table_coefficients"
+
+
+def test_exact_replay_does_not_advertise_unimplemented_variants() -> None:
+    from easyicu.research_agent.deterministic_robustness import (
+        _missing_strategy_audit,
+        _outcome_executability_audit,
+        _unexecutable_locked_spec_ids,
+    )
+
+    median = RobustnessSpec(
+        spec_id="missing_median",
+        axis="missing",
+        description="Median imputation.",
+        missing_override={"strategy": "median_imputation"},
+    )
+    missing_audit = _missing_strategy_audit(
+        [median],
+        structured_source_aware_available=True,
+    )
+    assert missing_audit[0]["strategy_executable"] is False
+
+    decoy = RobustnessSpec(
+        spec_id="missing_source_aware_decoy",
+        axis="missing",
+        description="Unsupported look-alike strategy.",
+        missing_override={"strategy": "not_source_aware_categories"},
+    )
+    decoy_audit = _missing_strategy_audit(
+        [decoy],
+        structured_source_aware_available=True,
+    )
+    assert decoy_audit[0]["strategy_executable"] is False
+
+    alternate_outcome = RobustnessSpec(
+        spec_id="alternate_outcome",
+        axis="outcome",
+        description="Use the locked alternate endpoint.",
+        outcome_override={"column": "alternate_outcome"},
+    )
+    outcome_audit = _outcome_executability_audit(
+        specs=[alternate_outcome],
+        data=pd.DataFrame(
+            {
+                "stay_id": [1, 2, 3],
+                "primary_outcome": [0, 1, 0],
+                "alternate_outcome": [1, 0, 1],
+            }
+        ),
+        primary_outcome="primary_outcome",
+        exact_primary_replay_available=True,
+    )
+    assert outcome_audit[0]["independent_variant"] is True
+    assert outcome_audit[0]["outcome_executable"] is False
+    assert _unexecutable_locked_spec_ids(
+        specs=[median, alternate_outcome],
+        membership_rows=[],
+        missing_rows=missing_audit,
+        outcome_rows=outcome_audit,
+    ) == ["missing_median", "alternate_outcome"]
+
+
+def test_same_scalar_outcome_is_disclosed_without_becoming_blocking() -> None:
+    from easyicu.research_agent.deterministic_robustness import (
+        _outcome_executability_audit,
+        _unexecutable_locked_spec_ids,
+    )
+
+    duplicate = RobustnessSpec(
+        spec_id="same_scalar",
+        axis="outcome",
+        description="Repeat the same scalar endpoint.",
+        outcome_override={"column": "outcome"},
+    )
+    audits = _outcome_executability_audit(
+        specs=[duplicate],
+        data=pd.DataFrame({"stay_id": [1, 2], "outcome": [0, 1]}),
+        primary_outcome="outcome",
+        exact_primary_replay_available=True,
+    )
+
+    assert audits[0]["outcome_executable"] is True
+    assert audits[0]["independent_variant"] is False
+    assert _unexecutable_locked_spec_ids(
+        specs=[duplicate],
+        membership_rows=[],
+        missing_rows=[],
+        outcome_rows=audits,
+    ) == []
+
+
+def test_exact_replay_blocks_script_that_ignores_locked_cohort_membership(
+    tmp_path: Path,
+) -> None:
+    from types import SimpleNamespace
+
+    from easyicu.research_agent.deterministic_robustness import (
+        _replay_primary_model_for_cohort,
+    )
+
+    source_dir = tmp_path / "source_step"
+    source_outputs = source_dir / "outputs"
+    source_outputs.mkdir(parents=True)
+    source_script = source_dir / "analysis.py"
+    source_script.write_text(
+        textwrap.dedent(
+            """
+            import json, os
+            from pathlib import Path
+            import pandas as pd
+
+            # Regression decoy: ignore COHORT_PARQUET and repeat the original
+            # four-row result regardless of the locked replay membership.
+            out = Path(os.environ["STEP_OUT_DIR"])
+            out.mkdir(parents=True, exist_ok=True)
+            contract = {
+                "model_id": "primary",
+                "exposure_source": "exposure",
+                "exposure_expression": "exposure",
+                "exposure_role": "primary",
+                "analysis_role": "primary",
+                "analysis_set": "source_aware",
+                "n": 4,
+                "event_n": 2,
+                "fit_status": "fitted",
+                "converged": True,
+                "fit_method": "constant_decoy",
+            }
+            pd.DataFrame([{
+                "model_id": "primary",
+                "term": "exposure",
+                "term_role": "exposure",
+                "source_variable": "exposure",
+                "odds_ratio": 1.5,
+                "ci_low": 1.1,
+                "ci_high": 2.0,
+            }]).to_csv(out / "coefficients.csv", index=False)
+            (out / "step_summary.json").write_text(json.dumps({
+                "primary_model_id": "primary",
+                "model_contracts": [contract],
+            }))
+            """
+        ),
+        encoding="utf-8",
+    )
+    primary_contract = {
+        "model_id": "primary",
+        "exposure_source": "exposure",
+        "exposure_expression": "exposure",
+        "exposure_role": "primary",
+        "analysis_role": "primary",
+        "analysis_set": "source_aware",
+        "n": 4,
+        "event_n": 2,
+        "fit_status": "fitted",
+        "converged": True,
+        "fit_method": "constant_decoy",
+    }
+    source = {
+        "primary_contract": primary_contract,
+        "script_path": source_script,
+        "step_id": "01_primary_model",
+        "script_sha256": hashlib.sha256(source_script.read_bytes()).hexdigest(),
+        "outputs_dir": source_outputs,
+    }
+    spec = RobustnessSpec(
+        spec_id="older_adults",
+        axis="cohort",
+        description="Restrict the replay to two older adults.",
+        cohort_override=CohortDefinition(
+            name="older_adults",
+            inclusion=[_predicate("age", ">=", 50)],
+        ),
+    )
+    data = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4],
+            "age": [20, 30, 60, 70],
+            "exposure": [0.0, 1.0, 0.0, 1.0],
+            "outcome": [0, 1, 0, 1],
+        }
+    )
+
+    replay = _replay_primary_model_for_cohort(
+        spec=spec,
+        source=source,
+        data=data,
+        context=SimpleNamespace(),
+        out_dir=tmp_path / "robustness_outputs",
+    )
+
+    assert replay["index"]["input_n"] == 2
+    assert replay["index"]["status"] == "blocked"
+    assert replay["row"].converged is False
+    assert "model_n=4, input_n=2" in replay["error"]

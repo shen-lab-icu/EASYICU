@@ -30,20 +30,86 @@ MIN_AXIS_COUNTS: Dict[str, int] = {"cohort": 3, "missing": 2, "outcome": 2}
 PRIMARY_SPEC_ID = "primary"
 LOCK_FILENAME = "robustness_specs_locked.json"
 PANEL_FILENAME = "robustness_panel.json"
-_SUCCESSFUL_STEP_STATUSES = frozenset({"ok"})
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _assert_lock_matches_evidence_anchor(*, run_dir: Path, lock_path: Path) -> bool:
+    """Verify a modern lock against its immutable plan-time evidence copy.
+
+    Older fixture/legacy runs can predate ``evidence_index.json``; their
+    self-hash remains the compatibility boundary.  Once an evidence index
+    exists, however, the lock must match the exact bytes registered by the
+    planner.  This prevents a post-lock rewrite from self-authorising merely by
+    recomputing ``spec_sha256`` inside the same mutable JSON file.
+    """
+
+    run_root = Path(run_dir).resolve()
+    index_path = run_root / "evidence" / "evidence_index.json"
+    if not index_path.exists():
+        return False
+    if index_path.is_symlink() or not index_path.is_file():
+        raise RobustnessPlanError(
+            "robustness specification evidence index is not a regular file"
+        )
+    try:
+        raw_records = json.loads(index_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise RobustnessPlanError(
+            f"robustness specification evidence index is unreadable: {exc}"
+        ) from exc
+    if not isinstance(raw_records, list):
+        raise RobustnessPlanError(
+            "robustness specification evidence index has an invalid payload"
+        )
+    anchors = [
+        record
+        for record in raw_records
+        if isinstance(record, dict)
+        and str(record.get("evidence_id") or "") == "robustness_specs_locked"
+    ]
+    if len(anchors) != 1:
+        raise RobustnessPlanError(
+            "robustness specification lock has no unique plan-time evidence anchor"
+        )
+
+    # Lazy import avoids the schema -> robustness_panel -> runtime_artifacts
+    # import cycle during model initialisation.
+    from .runtime_artifacts import verified_run_evidence_path
+
+    anchor_path = verified_run_evidence_path(run_root, anchors[0])
+    if anchor_path is None:
+        raise RobustnessPlanError(
+            "robustness specification evidence anchor is missing or stale"
+        )
+    expected_sha = str(anchors[0].get("sha256") or "").strip().lower()
+    observed_sha = _sha256_file(lock_path)
+    if observed_sha != expected_sha:
+        raise RobustnessPlanError(
+            "robustness specification lock differs from its plan-time evidence anchor"
+        )
+    return True
 
 
 def _successful_step_records(
     per_step_records: Sequence[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """Return only records with an explicit successful terminal status."""
+    """Return latest-per-step records with an explicit successful status."""
+
+    # Imported lazily because runtime_artifacts owns schema models, while the
+    # schema imports RobustnessSpec from this module.
+    from .runtime_artifacts import current_successful_step_records
 
     return [
         record
-        for record in per_step_records
+        for record in current_successful_step_records(per_step_records)
         if isinstance(record, dict)
-        and str(record.get("status") or "").strip().lower()
-        in _SUCCESSFUL_STEP_STATUSES
     ]
 
 
@@ -130,12 +196,9 @@ class RobustnessPanel:
         locked_at: Optional[str] = None,
     ) -> "RobustnessPanel":
         row_tuple = tuple(rows)
-        converged_lows = [
-            r.ci_low for r in row_tuple if r.converged and r.ci_low is not None
-        ]
-        converged_highs = [
-            r.ci_high for r in row_tuple if r.converged and r.ci_high is not None
-        ]
+        claimable_rows = [row for row in row_tuple if _row_has_claimable_estimate(row)]
+        converged_lows = [r.ci_low for r in claimable_rows if r.ci_low is not None]
+        converged_highs = [r.ci_high for r in claimable_rows if r.ci_high is not None]
         return cls(
             primary_spec_id=primary_spec_id,
             rows=row_tuple,
@@ -284,9 +347,16 @@ def write_locked_robustness_specs(
 ) -> Path:
     specs = list(getattr(plan, "robustness_specs", []) or [])
     path = run_dir / LOCK_FILENAME
-    if not specs and path.exists():
+    if path.exists():
         locked_specs = load_locked_robustness_specs(run_dir)
         validate_robustness_specs(locked_specs)
+        if specs and robustness_specs_sha(specs) != robustness_specs_sha(
+            locked_specs
+        ):
+            raise RobustnessPlanError(
+                "robustness_specs changed after plan lock; refusing to overwrite "
+                "the pre-specified execution contract"
+            )
         if evidence.get("robustness_specs_locked") is None:
             evidence.register_file(
                 kind="log",
@@ -329,18 +399,13 @@ def write_locked_robustness_specs(
 
 def assert_robustness_specs_locked(*, run_dir: Path, plan: Any) -> None:
     specs = list(getattr(plan, "robustness_specs", []) or [])
-    if not specs:
-        return
     path = run_dir / LOCK_FILENAME
+    if not path.exists() and not specs:
+        return
     if not path.exists():
         raise RobustnessPlanError("robustness_specs plan locked file is missing")
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        raise RobustnessPlanError(f"robustness_specs lock is unreadable: {exc}") from exc
-    expected = str(payload.get("spec_sha256") or "")
-    observed = robustness_specs_sha(specs)
-    if observed != expected:
+    locked_specs = load_locked_robustness_specs(run_dir)
+    if specs and robustness_specs_sha(specs) != robustness_specs_sha(locked_specs):
         raise RobustnessPlanError(
             "robustness_specs changed after plan lock; execute phase refuses "
             "to run an unlocked robustness panel"
@@ -358,6 +423,8 @@ def load_locked_robustness_specs(run_dir: Path) -> List[RobustnessSpec]:
     path = Path(run_dir) / LOCK_FILENAME
     if not path.exists():
         return []
+    if path.is_symlink() or not path.is_file():
+        raise RobustnessPlanError("robustness_specs lock must be a regular file")
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
@@ -365,22 +432,37 @@ def load_locked_robustness_specs(run_dir: Path) -> List[RobustnessSpec]:
             f"robustness_specs lock is unreadable: {exc}"
         ) from exc
     raw_specs = payload.get("specs") or []
-    if not isinstance(raw_specs, list):
+    if not isinstance(raw_specs, list) or not raw_specs:
         raise RobustnessPlanError("robustness_specs lock has invalid specs payload")
-    return [
+    if any(not isinstance(spec, dict) for spec in raw_specs):
+        raise RobustnessPlanError("robustness_specs lock has invalid spec entries")
+    specs = [
         RobustnessSpec.from_dict(spec)
         for spec in raw_specs
-        if isinstance(spec, dict)
     ]
+    validate_robustness_specs(specs)
+    expected_sha = str(payload.get("spec_sha256") or "").strip()
+    observed_sha = robustness_specs_sha(specs)
+    if not expected_sha or expected_sha != observed_sha:
+        raise RobustnessPlanError("robustness specification lock hash mismatch")
+    _assert_lock_matches_evidence_anchor(run_dir=Path(run_dir), lock_path=path)
+    return specs
 
 
 def robustness_specs_for_execution(*, run_dir: Path, plan: Any) -> List[RobustnessSpec]:
-    """Return active plan specs, falling back to the plan-time lock."""
+    """Return the validated plan-time lock as the sole execution contract."""
 
-    specs = list(getattr(plan, "robustness_specs", []) or [])
-    if specs:
-        return specs
-    return load_locked_robustness_specs(run_dir)
+    active_specs = list(getattr(plan, "robustness_specs", []) or [])
+    locked_specs = load_locked_robustness_specs(run_dir)
+    if active_specs:
+        if not locked_specs:
+            raise RobustnessPlanError("robustness_specs plan locked file is missing")
+        if robustness_specs_sha(active_specs) != robustness_specs_sha(locked_specs):
+            raise RobustnessPlanError(
+                "robustness_specs changed after plan lock; execute phase refuses "
+                "to run an unlocked robustness panel"
+            )
+    return locked_specs
 
 
 def robustness_specs_sha(specs: Sequence[RobustnessSpec]) -> str:
@@ -397,6 +479,7 @@ def build_robustness_panel_from_records(
     locked_at: Optional[str] = None,
 ) -> RobustnessPanel:
     successful_records = _successful_step_records(per_step_records)
+    locked_axes = {spec.spec_id: spec.axis for spec in specs}
     rows: List[RobustnessPanelRow] = []
     existing: set[str] = set()
     primary = _primary_row_from_records(successful_records)
@@ -409,6 +492,8 @@ def build_robustness_panel_from_records(
         # agent/step-owned scientific products and outrank auxiliary refits.
         if row.spec_id == PRIMARY_SPEC_ID:
             continue
+        if locked_axes.get(row.spec_id) != row.axis:
+            continue
         if row.spec_id in existing:
             continue
         rows.append(row)
@@ -417,6 +502,8 @@ def build_robustness_panel_from_records(
         # Auxiliary fitting may fill only pre-specified non-primary variants.
         # The primary row must come from a complete successful step contract.
         if row.spec_id == PRIMARY_SPEC_ID:
+            continue
+        if locked_axes.get(row.spec_id) != row.axis:
             continue
         if row.spec_id in existing:
             continue
@@ -468,6 +555,41 @@ def write_robustness_panel(
     evidence: Any,
     prompt_pack_version: Optional[str],
 ) -> Path:
+    lock_path = Path(run_dir) / LOCK_FILENAME
+    non_primary_rows = [
+        row for row in panel.rows if row.spec_id != PRIMARY_SPEC_ID
+    ]
+    if non_primary_rows and not lock_path.exists():
+        raise RobustnessPlanError(
+            "non-primary robustness panel rows require a verified plan-time lock"
+        )
+    if lock_path.exists():
+        locked_axes = {
+            spec.spec_id: spec.axis for spec in load_locked_robustness_specs(run_dir)
+        }
+        if non_primary_rows and not _assert_lock_matches_evidence_anchor(
+            run_dir=Path(run_dir),
+            lock_path=lock_path,
+        ):
+            raise RobustnessPlanError(
+                "non-primary robustness panel rows require a verified plan-time lock"
+            )
+        invalid_rows = [
+            row.spec_id
+            for row in panel.rows
+            if row.spec_id != PRIMARY_SPEC_ID
+            and locked_axes.get(row.spec_id) != row.axis
+        ]
+        if invalid_rows:
+            raise RobustnessPlanError(
+                "robustness panel contains rows outside the plan-time lock: "
+                + ", ".join(sorted(set(invalid_rows)))
+            )
+    _assert_claimable_panel_rows_match_evidence(
+        run_dir=Path(run_dir),
+        panel=panel,
+        evidence=evidence,
+    )
     path = run_dir / PANEL_FILENAME
     path.write_text(
         json.dumps(panel.to_dict(), indent=2, ensure_ascii=False, allow_nan=False),
@@ -560,7 +682,7 @@ def numeric_digest_for_panel(panel: RobustnessPanel) -> Dict[str, Any]:
 def worst_rows_by_axis(panel: RobustnessPanel) -> Dict[str, RobustnessPanelRow]:
     selected: Dict[str, RobustnessPanelRow] = {}
     for row in panel.rows:
-        if row.spec_id == panel.primary_spec_id or not row.converged:
+        if row.spec_id == panel.primary_spec_id or not _row_has_claimable_estimate(row):
             continue
         if row.point_estimate is None:
             continue
@@ -615,8 +737,136 @@ def _declared_rows_from_records(
             if not isinstance(raw, dict):
                 continue
             data = dict(raw)
-            data.setdefault("evidence_id", str(record.get("step_summary_evidence_id") or ""))
+            # Numeric authority is the current digest-bound step summary that
+            # contains this row.  A free-form row must not redirect its values to
+            # an unrelated evidence id such as a replay log.
+            data["evidence_id"] = str(
+                record.get("step_summary_evidence_id") or ""
+            )
             yield RobustnessPanelRow.from_dict(data)
+
+
+def _row_has_claimable_estimate(row: RobustnessPanelRow) -> bool:
+    return bool(
+        row.converged
+        and row.n > 0
+        and row.evidence_id
+        and row.point_estimate is not None
+        and row.ci_low is not None
+        and row.ci_high is not None
+        and all(
+            math.isfinite(float(value))
+            for value in (row.point_estimate, row.ci_low, row.ci_high)
+        )
+        and float(row.ci_low) <= float(row.ci_high)
+    )
+
+
+def _same_number(left: Any, right: Any) -> bool:
+    left_value = _optional_float(left)
+    right_value = _optional_float(right)
+    return bool(
+        left_value is not None
+        and right_value is not None
+        and math.isclose(left_value, right_value, rel_tol=1e-9, abs_tol=1e-12)
+    )
+
+
+def _row_matches_summary_payload(
+    row: RobustnessPanelRow,
+    payload: Dict[str, Any],
+) -> bool:
+    if row.spec_id == PRIMARY_SPEC_ID:
+        from .pipeline_primary_effect import (
+            _extract_primary_effect_payload_from_summary,
+            _primary_effect_payload_is_complete,
+        )
+
+        candidate = _extract_primary_effect_payload_from_summary(
+            payload,
+            path=None,
+            preferred_predictor=None,
+        )
+        candidate.pop("_score", None)
+        if not _primary_effect_payload_is_complete(candidate):
+            return False
+        return bool(
+            int(float(candidate.get("sample_size") or 0)) == row.n
+            and _same_number(candidate.get("primary_or"), row.point_estimate)
+            and _same_number(candidate.get("primary_ci_low"), row.ci_low)
+            and _same_number(candidate.get("primary_ci_high"), row.ci_high)
+        )
+
+    candidates = payload.get("robustness_rows")
+    if candidates is None and isinstance(payload.get("robustness_panel"), dict):
+        candidates = payload["robustness_panel"].get("rows")
+    if not isinstance(candidates, list):
+        return False
+    matching = [
+        candidate
+        for candidate in candidates
+        if isinstance(candidate, dict)
+        and str(candidate.get("spec_id") or "") == row.spec_id
+        and str(candidate.get("axis") or "") == row.axis
+    ]
+    if len(matching) != 1:
+        return False
+    candidate = matching[0]
+    return bool(
+        bool(candidate.get("converged"))
+        and int(candidate.get("n") or 0) == row.n
+        and _same_number(candidate.get("point_estimate"), row.point_estimate)
+        and _same_number(candidate.get("ci_low"), row.ci_low)
+        and _same_number(candidate.get("ci_high"), row.ci_high)
+    )
+
+
+def _assert_claimable_panel_rows_match_evidence(
+    *,
+    run_dir: Path,
+    panel: RobustnessPanel,
+    evidence: Any,
+) -> None:
+    records = {
+        str(record.evidence_id): record
+        for record in evidence.records()
+        if str(getattr(record, "evidence_id", "")).strip()
+    }
+    aliases = evidence.aliases()
+    from .runtime_artifacts import verified_run_evidence_path
+
+    for row in panel.rows:
+        if row.converged and not _row_has_claimable_estimate(row):
+            raise RobustnessPlanError(
+                f"robustness panel row {row.spec_id!r} has an incomplete claim contract"
+            )
+        if not _row_has_claimable_estimate(row):
+            continue
+        canonical_id = (
+            row.evidence_id
+            if row.evidence_id in records
+            else str(aliases.get(row.evidence_id) or "")
+        )
+        record = records.get(canonical_id)
+        if record is None:
+            raise RobustnessPlanError(
+                f"robustness panel row {row.spec_id!r} references nonexistent evidence"
+            )
+        evidence_path = verified_run_evidence_path(run_dir, record)
+        if evidence_path is None:
+            raise RobustnessPlanError(
+                f"robustness panel row {row.spec_id!r} references stale evidence"
+            )
+        try:
+            payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise RobustnessPlanError(
+                f"robustness panel row {row.spec_id!r} evidence is not a JSON summary"
+            ) from exc
+        if not isinstance(payload, dict) or not _row_matches_summary_payload(row, payload):
+            raise RobustnessPlanError(
+                f"robustness panel row {row.spec_id!r} disagrees with its evidence summary"
+            )
 
 
 def _dict_or_none(value: Any) -> Optional[Dict[str, Any]]:
