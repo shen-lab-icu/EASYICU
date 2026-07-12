@@ -107,6 +107,7 @@ from .pipeline import (
     _build_probe_summary,
     _clear_output_dir,
     deterministic_figure_family_supported_for_upstream,
+    deterministic_figure_repair_id_for_upstream,
     _has_figure_exports,
     _promote_prior_publication_bundle,
     _promote_sibling_figure_exports,
@@ -156,6 +157,7 @@ from .repair_registry import (
     RepairObservedState,
     automatic_repair_allowed,
 )
+from .runtime_artifacts import current_step_records, current_successful_step_records
 from .scalar_utils import _expected_numeric_annotations_for_step
 from .side_findings import SideFinding
 from .skills import ClinicalSkill
@@ -219,6 +221,7 @@ def _repair_publication_figure_in_staging(
     run_dir: Path,
     current_step_id: str,
     out_dir: Path,
+    authorizer: Callable[[str], bool],
     step_text: str = "",
     renderer: Callable[..., Optional[str]] = (
         _render_publication_bundle_from_prior_outputs_for_step
@@ -253,6 +256,11 @@ def _repair_publication_figure_in_staging(
             )
             return None
         if repair_id is None or not _has_figure_exports(staging_dir):
+            return None
+        # Rendering into an isolated temporary directory is non-authoritative.
+        # Ask the central repair policy before installing any generated bundle
+        # into the live step directory.
+        if not authorizer(repair_id):
             return None
 
         backup_dir = Path(
@@ -340,6 +348,35 @@ def _step_requires_publication_figure_exports(step: AnalysisStep) -> bool:
 
     method = str(step.method or "").strip().lower()
     return method == "publication_figure_generation" or _step_expects_figure(step)
+
+
+def _step_has_figure_only_output_contract(step: AnalysisStep) -> bool:
+    """Whether replacing ``outputs/`` can only replace presentation artifacts.
+
+    Deterministic renderers install a complete staged bundle.  They are safe as
+    a preflight or whole-directory repair only for an explicitly figure-only
+    step; a mixed table/model + figure contract must stay with the coder so a
+    renderer cannot erase or silently stand in for scientific products.
+    """
+
+    outputs = [
+        str(output or "").strip()
+        for output in (step.expected_outputs or [])
+        if str(output or "").strip()
+    ]
+    def _is_typed_figure_product(output: str) -> bool:
+        token = str(output or "").strip().lower()
+        kind, separator, _product = token.partition(":")
+        if separator:
+            # The artifact kind is authoritative. A scientific table/model
+            # whose product name happens to contain ``figure`` or ``plot`` is
+            # still a mixed contract and must remain coder-owned.
+            return kind.strip() in {"figure", "plot", "chart", "fig", "heatmap"}
+        # Legacy bare declarations are figure-only only when they name an
+        # actual image/vector export, never from a keyword in the stem.
+        return token.endswith((".png", ".svg", ".pdf", ".tif", ".tiff"))
+
+    return bool(outputs) and all(_is_typed_figure_product(output) for output in outputs)
 
 
 def _read_locked_robustness_spec_dicts(run_dir: Path) -> List[Dict[str, Any]]:
@@ -898,9 +935,10 @@ def _terminal_publication_repair_replan_skip_detail(
 ) -> Optional[Dict[str, Any]]:
     """Return a skip reason when replanning would only delay deterministic repairs."""
 
+    current_records = current_step_records(completed_records or [])
     completed_ok = {
         str(record.get("step_id") or "")
-        for record in (completed_records or [])
+        for record in current_records
         if record.get("status") == "ok" and record.get("step_id")
     }
     remaining_steps = [
@@ -915,7 +953,7 @@ def _terminal_publication_repair_replan_skip_detail(
     ):
         return None
 
-    for record in reversed(list(completed_records or [])):
+    for record in reversed(current_records):
         if record.get("status") != "ok" or not record.get("step_id"):
             continue
         step_id = str(record["step_id"])
@@ -929,6 +967,75 @@ def _terminal_publication_repair_replan_skip_detail(
                 "satisfied_by_outputs_dir": str(outputs_dir),
             }
     return None
+
+
+def _detached_figure_repair_binding(
+    *,
+    step: AnalysisStep,
+    plan: AnalysisPlan,
+    completed_records: Sequence[Mapping[str, Any]],
+) -> Optional[Tuple[str, str, List[str]]]:
+    """Bind a detached rendering-only repair to one failed figure target.
+
+    The binding is orchestrator-owned: it comes from the current plan and
+    latest outer step ledger, never from the renderer's self-reported
+    ``parent_step`` text. Ambiguous repairs remain unbound and therefore cannot
+    receive execution credit.
+    """
+
+    if not _is_terminal_publication_figure_repair_step(step):
+        return None
+    latest = {
+        str(record.get("step_id") or ""): record
+        for record in current_step_records(completed_records)
+    }
+    plan_steps = {
+        str(candidate.step_id or ""): candidate for candidate in plan.steps or []
+    }
+    declared_step_inputs = {
+        str(value or "").strip()
+        for value in (step.inputs or [])
+        if str(value or "").strip() in plan_steps
+    }
+    candidates: List[Tuple[str, str, List[str]]] = []
+    for target_step_id, target_step in plan_steps.items():
+        if target_step_id == str(step.step_id or ""):
+            continue
+        target_record = latest.get(target_step_id)
+        target_status = str(
+            (target_record or {}).get("status") or ""
+        ).strip().lower()
+        if target_record is None or target_status not in {
+            "execution_failed",
+            "contract_failed",
+            "repair_failed",
+        }:
+            continue
+        if not _step_has_figure_only_output_contract(target_step):
+            continue
+        source_step_id = _parent_step_id_for_figure_step(target_step)
+        if source_step_id is None:
+            continue
+        source_record = latest.get(source_step_id)
+        if source_record is None or str(
+            source_record.get("status") or ""
+        ).strip().lower() != "ok":
+            continue
+        if declared_step_inputs and not (
+            {target_step_id, source_step_id} & declared_step_inputs
+        ):
+            continue
+        source_evidence_ids = [
+            str(evidence_id)
+            for evidence_id in (source_record.get("evidence_ids") or [])
+            if str(evidence_id).strip()
+        ]
+        if not source_evidence_ids:
+            continue
+        candidates.append((target_step_id, source_step_id, source_evidence_ids))
+    if len(candidates) != 1:
+        return None
+    return candidates[0]
 
 
 if TYPE_CHECKING:
@@ -1394,11 +1501,46 @@ _EFFECT_OUTPUT_FRAGMENTS = (
     "cox_summary",
 )
 
+_AUXILIARY_OUTPUT_KINDS = frozenset({"table", "statistic", "log"})
+
+
+def _closed_auxiliary_output_products(
+    expected_outputs: Sequence[str],
+    *,
+    supported_products: set[str] | frozenset[str],
+) -> Optional[set[str]]:
+    """Return all declared products only when one auxiliary owns all of them.
+
+    Every non-empty output participates in the closed-contract decision,
+    including bare filenames.  Unsupported artifact kinds and even one foreign
+    product return ``None`` so a compact runner cannot silently ignore the rest
+    of a mixed agent step.
+    """
+
+    products: set[str] = set()
+    for raw in expected_outputs or []:
+        value = str(raw or "").strip().lower()
+        if not value:
+            continue
+        kind, separator, _product = value.partition(":")
+        if separator and kind not in _AUXILIARY_OUTPUT_KINDS:
+            return None
+        normalized = _normalised_expected_output_names([value])
+        if len(normalized) != 1:
+            return None
+        products.update(normalized)
+    if not products or not products.issubset(set(supported_products)):
+        return None
+    return products
+
 
 def _method_head(method: str) -> str:
     """Return the scientific owner of a ``<head>_with_<rider>`` method."""
 
-    return str(method or "").strip().lower().split("_with_", 1)[0]
+    normalized = re.sub(
+        r"[^a-z0-9]+", "_", str(method or "").strip().lower()
+    ).strip("_")
+    return normalized.split("_with_", 1)[0]
 
 
 def _method_is_effect_or_association(method: str) -> bool:
@@ -1435,13 +1577,11 @@ def _primary_cohort_flow_runner_owns_step(
 
     del step_id, intent
     method_normalized = str(method or "").lower()
-    expected_names = _normalised_expected_output_names(expected_outputs)
-    if expected_names & set(_COHORT_DEF_SENSITIVITY_OUTPUT_TOKENS):
-        return False
-    has_output = bool(
-        expected_names & _PRIMARY_COHORT_FLOW_OUTPUTS
+    expected_names = _closed_auxiliary_output_products(
+        expected_outputs,
+        supported_products=_PRIMARY_COHORT_FLOW_OUTPUTS,
     )
-    if not has_output:
+    if expected_names is None:
         return False
     method_head = _method_head(method_normalized)
     if _method_is_effect_or_association(method_head) or _declares_effect_output(
@@ -1567,18 +1707,11 @@ def _simple_missingness_audit_runner_owns_step(
         _RICH_EXPOSURE_AUDIT_OUTPUT_TOKENS
     ):
         return False
-    declared_artifacts = [
-        str(item or "").lower()
-        for item in (expected_outputs or [])
-        if str(item or "")
-        .lower()
-        .startswith(("table:", "statistic:", "log:", "data:", "test:"))
-    ]
-    declared_names = _normalised_expected_output_names(declared_artifacts)
-    if any(
-        artifact.startswith(("data:", "test:"))
-        for artifact in declared_artifacts
-    ) or not declared_names.issubset(_COMPACT_MISSINGNESS_SUPPORTED_OUTPUTS):
+    declared_names = _closed_auxiliary_output_products(
+        expected_outputs,
+        supported_products=_COMPACT_MISSINGNESS_SUPPORTED_OUTPUTS,
+    )
+    if declared_names is None:
         # A method label such as ``data_quality_audit`` is not sufficient
         # ownership.  If even one declared artefact belongs to a different
         # contract (e.g. representation reconciliation), leave the step to its
@@ -1590,7 +1723,7 @@ def _simple_missingness_audit_runner_owns_step(
         return False
     if _declares_effect_output(expected_outputs):
         return False
-    return bool(declared_artifacts)
+    return True
 
 
 def _absolute_risk_context_runner_owns_step(
@@ -1600,14 +1733,15 @@ def _absolute_risk_context_runner_owns_step(
 ) -> bool:
     """True for a descriptive exposure-prevalence / absolute-risk owner."""
 
+    del step_id
     outputs = {str(item or "").lower() for item in (expected_outputs or [])}
     if any(item.startswith("figure:") for item in outputs):
         return False
-    supported_outputs = {
-        "table:exposure_outcome_summary",
-        "table:exposure_prevalence_and_absolute_risk",
-        "table:absolute_risk",
-        "table:absolute_risk_context",
+    supported_products = {
+        "exposure_outcome_summary",
+        "exposure_prevalence_and_absolute_risk",
+        "absolute_risk",
+        "absolute_risk_context",
     }
     if _method_head(method) not in _ABSOLUTE_RISK_CONTEXT_METHODS:
         return False
@@ -1615,7 +1749,11 @@ def _absolute_risk_context_runner_owns_step(
         expected_outputs
     ):
         return False
-    if outputs.intersection(supported_outputs):
+    structured_products = _closed_auxiliary_output_products(
+        expected_outputs,
+        supported_products=supported_products,
+    )
+    if structured_products is not None:
         return True
     # A reconciliation/audit step may mention absolute-risk context while
     # owning different artefacts (representation reconciliation, gap notes,
@@ -1632,17 +1770,29 @@ def _robustness_sensitivity_runner_owns_step(
 ) -> bool:
     """True for a separate prespecified robustness-comparison owner."""
 
+    del step_id
     outputs = {str(item or "").lower() for item in (expected_outputs or [])}
     if any(item.startswith("figure:") for item in outputs):
         return False
     method_head = _method_head(method)
     if method_head not in _ROBUSTNESS_SENSITIVITY_METHODS:
         return False
-    has_matrix = "table:robustness_matrix" in outputs
+    supported_products = {
+        "robustness_matrix",
+        "robustness_summary",
+        "complete_case_n",
+    }
+    structured_products = _closed_auxiliary_output_products(
+        expected_outputs,
+        supported_products=supported_products,
+    )
+    if structured_products is None:
+        return False
+    has_matrix = "robustness_matrix" in structured_products
     has_summary_contract = {
-        "table:robustness_summary",
-        "statistic:complete_case_n",
-    }.issubset(outputs)
+        "robustness_summary",
+        "complete_case_n",
+    }.issubset(structured_products)
     return has_matrix or has_summary_contract
 
 
@@ -2369,7 +2519,9 @@ def run_execute_phase(
         if cap > 0 and len(revised.steps) > cap:
             protected_step_ids = [
                 str(record.get("step_id"))
-                for record in (completed_records or [])
+                for record in current_successful_step_records(
+                    completed_records or []
+                )
                 if record.get("step_id") and record.get("status") == "ok"
             ]
             capped_revised, cap_findings = _cap_plan_preserving_figure_steps(
@@ -2589,26 +2741,24 @@ def run_execute_phase(
                 )
             )
 
-    def _authorize_automatic_repair(
-        repair: Optional[Tuple[str, str]],
+    def _automatic_repair_authorized(
+        repair_id: str,
         *,
         step: AnalysisStep,
         source: str,
-        before_code: str,
-    ) -> Optional[Tuple[str, str]]:
+        before_code: Optional[str] = None,
+        after_code: Optional[str] = None,
+    ) -> bool:
         """Apply the central no-auto-method-substitution policy.
 
-        Candidate generation stays pure in ``code_repair``; this execution
-        boundary owns authorization and provenance.  A denied candidate is
-        recorded but its code is never assigned to the live step.
+        Code rewrites and artifact/rendering transforms share this boundary. A
+        staged figure may be built speculatively, but it is not installed into
+        the live step unless this policy authorizes its typed repair id.
         """
 
-        if repair is None:
-            return None
-        repair_id, candidate_code = repair
         step_id = str(step.step_id)
         if automatic_repair_allowed(repair_id, step=step):
-            return repair
+            return True
         _record_repair(
             repair_id=repair_id,
             step_id=step_id,
@@ -2621,7 +2771,7 @@ def run_execute_phase(
                 "substitution is forbidden."
             ),
             before_code=before_code,
-            after_code=candidate_code,
+            after_code=after_code,
             outcome="blocked_by_automatic_repair_policy",
         )
         findings.append(
@@ -2641,7 +2791,29 @@ def run_execute_phase(
                 },
             )
         )
-        return None
+        return False
+
+    def _authorize_automatic_repair(
+        repair: Optional[Tuple[str, str]],
+        *,
+        step: AnalysisStep,
+        source: str,
+        before_code: str,
+    ) -> Optional[Tuple[str, str]]:
+        """Authorize a generated code repair before assigning live code."""
+
+        if repair is None:
+            return None
+        repair_id, candidate_code = repair
+        if not _automatic_repair_authorized(
+            repair_id,
+            step=step,
+            source=source,
+            before_code=before_code,
+            after_code=candidate_code,
+        ):
+            return None
+        return repair
 
     def _script_generation_mode(
         *,
@@ -2716,12 +2888,15 @@ def run_execute_phase(
             return None
         with shared_lock:
             records = list(per_step_records)
-        for record in records:
-            if record.get("step_id") != parent_step_id:
-                continue
+        latest = {
+            str(record.get("step_id") or ""): record
+            for record in current_step_records(records)
+        }
+        record = latest.get(parent_step_id)
+        if record is not None:
             if str(record.get("status") or "").lower() == "ok":
                 return None
-            return record
+            return dict(record)
         return None
 
     def _execute_one_step(step: AnalysisStep) -> Dict[str, Any]:
@@ -3008,7 +3183,7 @@ def run_execute_phase(
             # Claim only a split figure whose direct parent recorded a controlled
             # figure-data family, exact method, or analysis family.  Legacy name
             # routing remains available only after an agent figure fails QA.
-            if not _step_expects_figure(step):
+            if not _step_has_figure_only_output_contract(step):
                 return False
             return deterministic_figure_family_supported_for_upstream(
                 run_dir, step.step_id
@@ -3016,20 +3191,19 @@ def run_execute_phase(
 
         def _deterministic_publication_figure_code(
             reason: str,
-            *,
-            preflight: bool = False,
         ) -> Optional[str]:
-            nonlocal deterministic_fallback_used
+            nonlocal deterministic_fallback_used, preexecution_runner_repair_name
+            exact_repair_id = deterministic_figure_repair_id_for_upstream(
+                run_dir, step.step_id
+            )
             if (
                 deterministic_fallback_used
                 or not pipeline._enable_deterministic_runner_repair
-                or not _step_expects_figure(step)
-                or (preflight and not _publication_figure_preflight_supported())
+                or not _step_has_figure_only_output_contract(step)
+                or exact_repair_id is None
             ):
                 return None
-            deterministic_fallback_used = True
-            step_record["deterministic_code_fallback"] = reason
-            return """
+            candidate_code = """
 import json
 import os
 from pathlib import Path
@@ -3048,18 +3222,49 @@ repair_id = _render_publication_bundle_from_prior_outputs_for_step(
     out_dir=out_dir,
 )
 
-if repair_id is None:
+expected_repair_id = __EXPECTED_REPAIR_ID__
+if repair_id != expected_repair_id:
     summary = {
         "rendering_only": True,
-        "deterministic_publication_figure_rescue": "no_parent_outputs",
+        "deterministic_publication_figure_rescue": "typed_renderer_mismatch",
+        "expected_repair_id": expected_repair_id,
+        "observed_repair_id": repair_id,
         "figure_files": [],
-        "warning": "No compatible parent outputs were available for deterministic figure rendering.",
+        "warning": "The evidence-bound renderer did not return its authorized repair id.",
     }
     with open(out_dir / "step_summary.json", "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
 else:
     print(json.dumps({"deterministic_publication_figure_rescue": repair_id}))
 """
+            candidate_code = candidate_code.replace(
+                "__EXPECTED_REPAIR_ID__", repr(exact_repair_id)
+            )
+            repair_id = exact_repair_id
+            authorized = _authorize_automatic_repair(
+                (repair_id, candidate_code),
+                step=step,
+                source=reason,
+                before_code="",
+            )
+            if authorized is None:
+                return None
+            deterministic_fallback_used = True
+            preexecution_runner_repair_name = repair_id
+            step_record["deterministic_code_fallback"] = reason
+            step_record["runner_repair"] = repair_id
+            _record_repair(
+                repair_id=repair_id,
+                step_id=step.step_id,
+                trigger={"source": reason},
+                transformation=(
+                    "Executed a rendering-only adapter over the typed direct "
+                    "parent outputs; no estimand, cohort, or method was selected."
+                ),
+                before_code="",
+                after_code=candidate_code,
+            )
+            return authorized[1]
 
         def _absolute_risk_context_preflight_supported() -> bool:
             if _step_expects_figure(step):
@@ -3283,7 +3488,6 @@ else:
         else:
             preflight_figure_code = _deterministic_publication_figure_code(
                 "publication_figure_parent_outputs_preflight",
-                preflight=True,
             )
             if preflight_figure_code is not None:
                 code = preflight_figure_code
@@ -4551,6 +4755,7 @@ else:
                     out_dir=run_result.out_dir,
                     run_dir=run_dir,
                     step_summary=visual_step_summary,
+                    completed_step_records=completed_records_snapshot,
                 )
                 # For the controlled ordered-stratified method, replay the
                 # agent-authored tables from the locked cohort before evidence
@@ -5029,7 +5234,16 @@ else:
             else None
         )
         if publication_step and not _has_figure_exports(run_result.out_dir):
-            promoted = _promote_sibling_figure_exports(out_dir=run_result.out_dir)
+            sibling_repair_id = "sibling_figure_exports_promote_v1"
+            promoted = None
+            if _automatic_repair_authorized(
+                sibling_repair_id,
+                step=step,
+                source="publication_figure_sibling_promotion",
+            ):
+                promoted = _promote_sibling_figure_exports(
+                    out_dir=run_result.out_dir
+                )
             if promoted is not None:
                 runner_repair_name = promoted
                 step_record["runner_repair"] = promoted
@@ -5040,12 +5254,24 @@ else:
                     transformation="Promoted sibling figure exports into canonical outputs directory.",
                 )
             else:
-                rescued = _render_publication_bundle_from_prior_outputs_for_step(
-                    run_dir=run_dir,
-                    current_step_id=step.step_id,
-                    out_dir=run_result.out_dir,
-                    step_text=f"{step.intent} {step.method}",
-                )
+                rescued = None
+                if (
+                    _step_has_figure_only_output_contract(step)
+                    and deterministic_figure_family_supported_for_upstream(
+                        run_dir, step.step_id
+                    )
+                ):
+                    rescued = _repair_publication_figure_in_staging(
+                        run_dir=run_dir,
+                        current_step_id=step.step_id,
+                        out_dir=run_result.out_dir,
+                        step_text=f"{step.intent} {step.method}",
+                        authorizer=lambda repair_id: _automatic_repair_authorized(
+                            repair_id,
+                            step=step,
+                            source="typed_publication_bundle_rescue",
+                        ),
+                    )
                 if rescued is not None:
                     runner_repair_name = rescued
                     step_record["runner_repair"] = rescued
@@ -5065,6 +5291,11 @@ else:
                     if (
                         parent_step_id != str(step.step_id or "")
                         and direct_parent.is_dir()
+                        and _automatic_repair_authorized(
+                            "publication_bundle_promote_v1",
+                            step=step,
+                            source="publication_figure_prior_bundle_promotion",
+                        )
                     ):
                         promoted = _promote_prior_publication_bundle(
                             run_dir=run_dir,
@@ -5083,6 +5314,73 @@ else:
                             },
                             transformation="Promoted prior publication figure bundle into current outputs directory.",
                         )
+
+        if _has_figure_exports(run_result.out_dir):
+            with shared_lock:
+                repair_binding_records = list(per_step_records)
+            detached_repair_binding = _detached_figure_repair_binding(
+                step=step,
+                plan=plan,
+                completed_records=repair_binding_records,
+            )
+        else:
+            detached_repair_binding = None
+        repair_source_evidence_ids: List[str] = []
+        repair_evidence_metadata: Dict[str, Any] = {}
+        if detached_repair_binding is not None:
+            (
+                repair_target_step_id,
+                repair_source_step_id,
+                repair_source_evidence_ids,
+            ) = detached_repair_binding
+            step_record["repair_target_step_id"] = repair_target_step_id
+            step_record["source_evidence_ids"] = list(
+                repair_source_evidence_ids
+            )
+            repair_evidence_metadata = {
+                "repair_target_step_id": repair_target_step_id,
+                "source_step_id": repair_source_step_id,
+                "source_evidence_ids": list(repair_source_evidence_ids),
+            }
+            # Persist the same orchestrator binding in the registered summary.
+            # The renderer may suggest a parent, but this exact value comes only
+            # from the current plan + latest outer execution ledger above.
+            summary_path = run_result.out_dir / "step_summary.json"
+            try:
+                summary_payload = (
+                    json.loads(summary_path.read_text(encoding="utf-8"))
+                    if summary_path.exists()
+                    else {}
+                )
+            except Exception:
+                summary_payload = {}
+            if not isinstance(summary_payload, dict):
+                summary_payload = {"raw": summary_payload}
+            figure_exports = sorted(
+                path.name
+                for path in run_result.out_dir.iterdir()
+                if path.is_file()
+                and path.suffix.lower()
+                in {".png", ".svg", ".pdf", ".tiff", ".tif", ".pptx"}
+            )
+            summary_payload.update(
+                {
+                    "rendering_only": True,
+                    "source_step_id": repair_source_step_id,
+                    "repair_target_step_id": repair_target_step_id,
+                    "source_evidence_ids": list(repair_source_evidence_ids),
+                    "figure_files": figure_exports,
+                }
+            )
+            summary_path.write_text(
+                json.dumps(
+                    summary_payload,
+                    indent=2,
+                    ensure_ascii=False,
+                    default=str,
+                ),
+                encoding="utf-8",
+            )
 
         run_result.artefacts = sorted(
             p for p in run_result.out_dir.iterdir() if p.is_file()
@@ -5131,6 +5429,7 @@ else:
                     description=f"Machine-readable summary for step {step.step_id}.",
                     source_path=art,
                     produced_by_step=step.step_id,
+                    inputs=repair_source_evidence_ids or None,
                     script_evidence_id=script_record.evidence_id,
                     aliases=step_aliases,
                     producer="runner",
@@ -5139,6 +5438,7 @@ else:
                         "script_evidence_id": script_record.evidence_id,
                         "figure_role": figure_role or "analysis_figure",
                         "diagnostic_only": False,
+                        **repair_evidence_metadata,
                     },
                 )
                 step_summary_record_id = rec.evidence_id
@@ -5148,11 +5448,15 @@ else:
                     description=f"Table {art.stem} from step {step.step_id}.",
                     source_path=art,
                     produced_by_step=step.step_id,
+                    inputs=repair_source_evidence_ids or None,
                     script_evidence_id=script_record.evidence_id,
                     aliases=step_aliases,
                     producer="runner",
                     generation_mode=generation_mode,
-                    metadata={"script_evidence_id": script_record.evidence_id},
+                    metadata={
+                        "script_evidence_id": script_record.evidence_id,
+                        **repair_evidence_metadata,
+                    },
                 )
             elif art.suffix.lower() in {
                 ".png",
@@ -5167,6 +5471,7 @@ else:
                     description=f"Figure {art.stem} from step {step.step_id}.",
                     source_path=art,
                     produced_by_step=step.step_id,
+                    inputs=repair_source_evidence_ids or None,
                     script_evidence_id=script_record.evidence_id,
                     aliases=step_aliases,
                     producer="runner",
@@ -5175,6 +5480,7 @@ else:
                         "script_evidence_id": script_record.evidence_id,
                         "figure_role": figure_role or "analysis_figure",
                         "diagnostic_only": False,
+                        **repair_evidence_metadata,
                     },
                 )
             else:
@@ -5183,11 +5489,15 @@ else:
                     description=f"Auxiliary artefact {art.name}.",
                     source_path=art,
                     produced_by_step=step.step_id,
+                    inputs=repair_source_evidence_ids or None,
                     script_evidence_id=script_record.evidence_id,
                     aliases=step_aliases,
                     producer="runner",
                     generation_mode=generation_mode,
-                    metadata={"script_evidence_id": script_record.evidence_id},
+                    metadata={
+                        "script_evidence_id": script_record.evidence_id,
+                        **repair_evidence_metadata,
+                    },
                 )
             evidence_ids_for_step.append(rec.evidence_id)
 
@@ -5283,6 +5593,7 @@ else:
                 ),
                 source_path=auto_contract_path,
                 produced_by_step=step.step_id,
+                inputs=repair_source_evidence_ids or None,
                 script_evidence_id=script_record.evidence_id,
                 aliases=_semantic_aliases_for(step, auto_contract_path),
                 producer="runner",
@@ -5291,6 +5602,7 @@ else:
                     "script_evidence_id": script_record.evidence_id,
                     "figure_role": figure_role or "analysis_figure",
                     "synthesis": "step_summary_figure_contract_v1",
+                    **repair_evidence_metadata,
                 },
             )
             evidence_ids_for_step.append(rec.evidence_id)
@@ -5437,6 +5749,7 @@ else:
             out_dir=run_result.out_dir,
             run_dir=run_dir,
             step_summary=step_summary,
+            completed_step_records=completed_records_snapshot,
         )
         figure_gate_errors = [
             finding
@@ -5446,6 +5759,7 @@ else:
         ]
         repairable_publication_step = (
             publication_step
+            and _step_has_figure_only_output_contract(step)
             and deterministic_figure_family_supported_for_upstream(
                 run_dir, step.step_id
             )
@@ -5456,6 +5770,11 @@ else:
                 current_step_id=step.step_id,
                 out_dir=run_result.out_dir,
                 step_text=f"{step.intent} {step.method}",
+                authorizer=lambda repair_id: _automatic_repair_authorized(
+                    repair_id,
+                    step=step,
+                    source="publication_figure_quality_repair",
+                ),
             )
             transformation = (
                 "Replaced invalid figure-step exports with a deterministic "
@@ -5590,6 +5909,7 @@ else:
                     out_dir=run_result.out_dir,
                     run_dir=run_dir,
                     step_summary=step_summary,
+                    completed_step_records=completed_records_snapshot,
                 )
         with shared_lock:
             findings.extend(stat_findings)

@@ -1,16 +1,8 @@
-"""A deterministic PRIMARY runner owns its step's contract.
+"""Deterministic auxiliaries never own or waive a primary estimand contract.
 
-Built 2026-07-07 after H2 fix7: the LLM planner handed the causal step a
-17-output contract (target_trial_protocol, confounder_set, model_stability_audit
-...). The deterministic IPTW runner emits its core estimate + a handful of
-tables, so the contract check flagged the *missing* documentation tables as
-errors and triggered a repair that replaced the trustworthy estimate
-(OR 3.04) with LLM code that then blocked (adjusted_effect=None).
-
-Fix: when a primary deterministic runner (causal IPTW / survival Cox) produced
-its core estimate, ``step_contract`` missing-output ERRORS are demoted to
-advisory warnings so planner output-bloat cannot repair-away the estimate.
-Integrity findings from other validators still block.
+Primary causal, survival, and association methods remain agent-owned. Historical
+runner labels in resumed manifests cannot demote a missing-output error merely
+because a summary contains an estimate-shaped value.
 """
 
 from __future__ import annotations
@@ -40,8 +32,8 @@ def _integrity_error() -> ValidationFinding:
 # --- core-estimate detection ------------------------------------------------
 
 
-def test_core_estimate_present_causal_ok():
-    assert _primary_runner_core_estimate_present(
+def test_historical_causal_runner_never_owns_primary_estimate():
+    assert not _primary_runner_core_estimate_present(
         "causal_primary_iptw", {"status": "ok", "adjusted_effect": 3.04}
     )
 
@@ -52,11 +44,11 @@ def test_core_estimate_absent_causal_blocked():
     )
 
 
-def test_core_estimate_present_survival_flat_and_nested():
-    assert _primary_runner_core_estimate_present(
+def test_historical_survival_runner_never_owns_flat_or_nested_estimate():
+    assert not _primary_runner_core_estimate_present(
         "survival_primary_cox", {"status": "ok", "hazard_ratio": 0.83}
     )
-    assert _primary_runner_core_estimate_present(
+    assert not _primary_runner_core_estimate_present(
         "survival_primary_cox",
         {"status": "ok", "primary_model": {"hazard_ratio": 0.83}},
     )
@@ -74,14 +66,13 @@ def test_core_estimate_non_primary_runner_is_never_owned():
 # --- demotion behaviour -----------------------------------------------------
 
 
-def test_causal_runner_with_estimate_demotes_step_contract_errors():
+def test_historical_causal_runner_cannot_demote_step_contract_errors():
     step_record = {"deterministic_standard_analysis": "causal_primary_iptw"}
     summary = {"status": "ok", "adjusted_effect": 3.04}
     out = _demote_step_contract_for_primary_runner(
         step_record, summary, [_contract_error()]
     )
-    assert out[0].severity == "warning"
-    assert "advisory" in out[0].message
+    assert out[0].severity == "error"
 
 
 def test_causal_runner_blocked_does_not_demote():
@@ -93,13 +84,13 @@ def test_causal_runner_blocked_does_not_demote():
     assert out[0].severity == "error"
 
 
-def test_survival_runner_with_hr_demotes():
+def test_historical_survival_runner_cannot_demote_step_contract_errors():
     step_record = {"deterministic_standard_analysis": "survival_primary_cox"}
     summary = {"status": "ok", "hazard_ratio": 0.83}
     out = _demote_step_contract_for_primary_runner(
         step_record, summary, [_contract_error()]
     )
-    assert out[0].severity == "warning"
+    assert out[0].severity == "error"
 
 
 def test_integrity_findings_are_never_demoted():
@@ -109,7 +100,7 @@ def test_integrity_findings_are_never_demoted():
         step_record, summary, [_contract_error(), _integrity_error()]
     )
     by_validator = {f.validator: f.severity for f in out}
-    assert by_validator["step_contract"] == "warning"
+    assert by_validator["step_contract"] == "error"
     # the overadjustment / leakage integrity error must still block
     assert by_validator["primary_exposure_overadjustment"] == "error"
 

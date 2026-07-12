@@ -28,7 +28,12 @@ from .runtime_artifacts import (
     current_successful_step_records,
 )
 from .schema import AnalysisPlan, AnalysisStep, ResearchContext, ValidationFinding
-from .study_design import StudyDesignBrief, build_study_design_brief
+from .study_design import (
+    StudyDesignBrief,
+    _declaration_matches_term,
+    _structured_plan_declarations,
+    build_study_design_brief,
+)
 from .study_design_playbook import (
     DisplayModuleSpec,
     DisplayTier,
@@ -217,24 +222,29 @@ def render_article_analysis_contract_for_prompt(
     return "\n".join(lines)
 
 
-def _step_text(step: AnalysisStep) -> str:
-    return _normalise_space(
-        "\n".join(
-            [
-                step.step_id,
-                step.intent,
-                step.method or "",
-                " ".join(step.inputs or []),
-                " ".join(step.expected_outputs or []),
-                " ".join(step.icu_rule_refs or []),
-            ]
-        )
-    )
-
-
-def _text_matches_requirement(text: str, requirement: ArticleDisplayRequirement) -> bool:
+def _artifact_text_matches_requirement(
+    text: str, requirement: ArticleDisplayRequirement
+) -> bool:
     haystack = _normalise_space(text)
     return any(term and term in haystack for term in requirement.search_terms)
+
+
+def _plan_outputs_match_requirement(
+    output_declarations: Set[str],
+    requirement: ArticleDisplayRequirement,
+) -> bool:
+    terms = [
+        requirement.module_id,
+        requirement.role,
+        *requirement.acceptable_outputs,
+        *role_check_terms(requirement.role),
+        *_ROLE_ALIASES.get(requirement.role, ()),
+    ]
+    return any(
+        _declaration_matches_term(declaration, term)
+        for declaration in output_declarations
+        for term in terms
+    )
 
 
 def roles_covered_by_plan(
@@ -243,10 +253,10 @@ def roles_covered_by_plan(
 ) -> Set[str]:
     if plan is None:
         return set()
-    texts = [_step_text(step) for step in plan.steps or []]
+    _method_declarations, output_declarations = _structured_plan_declarations(plan)
     covered: Set[str] = set()
     for requirement in contract.requirements:
-        if any(_text_matches_requirement(text, requirement) for text in texts):
+        if _plan_outputs_match_requirement(output_declarations, requirement):
             covered.add(requirement.role)
     return covered
 
@@ -402,7 +412,9 @@ def roles_covered_by_artifacts(
     )
     covered: Set[str] = set()
     for requirement in contract.requirements:
-        if any(_text_matches_requirement(text, requirement) for text in texts):
+        if any(
+            _artifact_text_matches_requirement(text, requirement) for text in texts
+        ):
             covered.add(requirement.role)
     return covered
 

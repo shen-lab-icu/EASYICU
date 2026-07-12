@@ -249,7 +249,12 @@ _STRUCTURAL_REPAIRS = {
     "statsmodels_dummy_design_float_v1",
     "statsmodels_helper_design_float_v1",
     "table_one_binary_key_string_v1",
-    "prediction_publication_bundle_from_parent_outputs_v1",
+    # Only renderers with an exact direct-parent product, closed source schema,
+    # and no scientific selection are automatic.  Heuristic result-table,
+    # exposure, outcome, or model selection remains METHOD_SUBSTITUTION by the
+    # conservative unknown-id fallback until it gains a typed source contract.
+    "ordered_category_distribution_publication_bundle_v1",
+    "cohort_flow_publication_bundle_from_parent_outputs_v1",
     # Step-summary salvage that faithfully relocates the agent's own output
     # (stdout JSON / a named summary artefact) into step_summary.json. No new
     # numbers are introduced; it is a representation/location change.

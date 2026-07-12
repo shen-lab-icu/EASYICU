@@ -58,6 +58,15 @@ _ANALYSIS_TYPE_TO_DESIGN_FAMILY: dict[str, StudyDesignFamily] = {
     "score_policy_sensitivity": "descriptive",
 }
 
+# The analysis-type catalog is broader than the six article-design playbooks.
+# Unmapped families use a neutral descriptive brief; they must not be
+# reclassified from keyword fragments in disclaimer prose.
+_UNMAPPED_ANALYSIS_TYPE_TO_DESIGN_FAMILY: dict[str, StudyDesignFamily] = {
+    "multimodal": "descriptive",
+    "reinforcement_learning": "descriptive",
+    "cross_database_replication": "descriptive",
+}
+
 
 class StudyDesignBrief(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -81,130 +90,22 @@ class StudyDesignBrief(BaseModel):
 
 
 def infer_study_design_family(context: ResearchContext) -> StudyDesignFamily:
-    preference = ""
-    if context.user_preferences and context.user_preferences.inferred_analysis_family:
-        preference = context.user_preferences.inferred_analysis_family.lower()
-    preferred_methods = ""
-    if context.user_preferences and context.user_preferences.preferred_methods:
-        preferred_methods = str(context.user_preferences.preferred_methods)
-    text = " ".join(
-        [
-            preference,
-            context.research_question or "",
-            context.target_outcome or "",
-            context.primary_exposure or "",
-            preferred_methods,
-        ]
-    ).lower()
-    # Defer to the authoritative analysis-type scorer for the strong,
-    # result-bearing families (see _ANALYSIS_TYPE_TO_DESIGN_FAMILY) so the design
-    # family stays consistent with the plan contract. Best-effort: any failure
-    # falls through to the keyword cascade -- this classifier must never raise
-    # into figure rendering or the rigor audit.
+    # Defer to the authoritative analysis-type scorer so the design family and
+    # plan contract cannot disagree. Best-effort failures use the neutral
+    # descriptive playbook; a second naked-keyword cascade would reinterpret
+    # negated phrases such as "do not perform survival analysis" as authority.
     try:
-        from .analysis_types import (
-            infer_analysis_type,
-            strong_trajectory_clustering_framing,
-        )
+        from .analysis_types import infer_analysis_type
 
-        strong_family = _ANALYSIS_TYPE_TO_DESIGN_FAMILY.get(
-            infer_analysis_type(context).key
+        inferred_key = infer_analysis_type(context).key
+        return _ANALYSIS_TYPE_TO_DESIGN_FAMILY.get(
+            inferred_key,
+            _UNMAPPED_ANALYSIS_TYPE_TO_DESIGN_FAMILY.get(
+                inferred_key, "descriptive"
+            ),
         )
-        clustering_framed = strong_trajectory_clustering_framing(text)
     except Exception:
-        strong_family = None
-        clustering_framed = False
-    if strong_family:
-        return strong_family
-    if any(
-        token in text
-        for token in (
-            "target trial",
-            "causal",
-            "treatment effect",
-            "iptw",
-            "propensity",
-            "indication bias",
-            "confounding",
-            "因果",
-            "治疗效应",
-            "倾向",
-            "指征偏倚",
-            "混杂",
-        )
-    ):
-        return "causal_emulation"
-    if any(
-        token in text
-        for token in (
-            "survival",
-            "time-to-event",
-            "time to event",
-            "hazard",
-            "cox",
-            "生存",
-            "时间到事件",
-            "风险比",
-        )
-    ):
-        return "time_to_event"
-    if any(
-        token in text
-        for token in (
-            "predict",
-            "prediction",
-            "auroc",
-            "calibration",
-            "risk score",
-            "external validation",
-            "预测",
-            "校准",
-            "判别",
-            "泛化",
-            "迁移",
-        )
-    ):
-        return "prediction"
-    if clustering_framed:
-        return "phenotyping"
-    if any(
-        token in text
-        for token in (
-            "association",
-            "associated",
-            "dose-response",
-            "dose response",
-            "odds ratio",
-            "risk ratio",
-            "adjust",
-            "adjusted",
-            "关联",
-            "相关",
-            "比值比",
-            "风险比",
-            "校正",
-            "调整",
-        )
-    ):
-        return "association"
-    if any(
-        token in text
-        for token in (
-            "describe",
-            "descriptive",
-            "distribution",
-            "prevalence",
-            "coverage",
-            "denominator",
-            "描述",
-            "分布",
-            "患病率",
-            "覆盖率",
-            "denominator",
-        )
-    ):
         return "descriptive"
-    return "descriptive"
 
 
 def _context_text(context: ResearchContext) -> str:
@@ -409,52 +310,168 @@ def render_study_design_brief_for_prompt(brief: StudyDesignBrief) -> str:
     return "\n".join(lines)
 
 
-def _plan_blob(plan: AnalysisPlan) -> str:
-    """Return only structured declarations used for coverage validation.
+_GENERIC_OUTPUT_SUFFIXES = {
+    "artifact",
+    "chart",
+    "diagram",
+    "estimate",
+    "estimates",
+    "figure",
+    "metric",
+    "metrics",
+    "panel",
+    "plot",
+    "summary",
+    "table",
+}
+_ALLOWED_STRUCTURAL_PREFIXES = {
+    "causal",
+    "clinical",
+    "database",
+    "descriptive",
+    "development_validation",
+    "exposure",
+    "external",
+    "feature_availability",
+    "missingness",
+    "modeling",
+    "modelling",
+    "outcome",
+    "phenotyping",
+    "primary",
+    "risk_set",
+    "site",
+}
+_ALLOWED_STRUCTURAL_SUFFIXES = {
+    "by_database",
+    "by_exposure",
+    "by_group",
+    "by_site",
+    "by_source",
+    "by_stratum",
+}
+_DISPLAY_OUTPUT_KINDS = frozenset({"figure", "statistic", "table"})
 
-    Research-question, rationale, step-id, and intent prose are excluded so a
-    plan cannot satisfy a method/display requirement merely by repeating it.
-    """
 
-    parts: List[str] = [plan.analysis_type or ""]
+def _normalise_structured_declaration(value: str) -> str:
+    token = str(value or "").strip().lower()
+    if ":" in token:
+        token = token.split(":", 1)[1]
+    token = re.sub(r"\.(?:csv|tsv|parquet|json|png|svg|pdf|tiff?)$", "", token)
+    token = re.sub(r"[^a-z0-9]+", "_", token).strip("_")
+    if token in {"table_1", "table1"}:
+        return "table_one"
+    return token
+
+
+def _method_head(method: str) -> str:
+    normalized = _normalise_structured_declaration(method)
+    return normalized.split("_with_", 1)[0]
+
+
+def _structured_plan_declarations(plan: AnalysisPlan) -> tuple[set[str], set[str]]:
+    """Return exact method heads and display-capable typed output products."""
+
+    methods: set[str] = set()
+    outputs: set[str] = set()
     for step in plan.steps or []:
-        parts.extend(
-            [
-                step.method or "",
-                " ".join(step.expected_outputs or []),
-            ]
+        method = _method_head(step.method or "")
+        if method:
+            methods.add(method)
+        for output in step.expected_outputs or []:
+            raw = str(output or "").strip().lower()
+            kind, separator, _product = raw.partition(":")
+            # Article/display coverage requires an explicit artifact kind.
+            # Logs, tests, datasets, and bare prose/file names cannot satisfy a
+            # manuscript display merely by sharing its product token.
+            if not separator or kind not in _DISPLAY_OUTPUT_KINDS:
+                continue
+            product = _normalise_structured_declaration(output)
+            if product:
+                outputs.add(product)
+    return methods, outputs
+
+
+def _without_generic_output_suffix(token: str) -> str:
+    parts = [part for part in token.split("_") if part]
+    while parts and parts[-1] in _GENERIC_OUTPUT_SUFFIXES:
+        parts.pop()
+    return "_".join(parts)
+
+
+def _declaration_matches_term(declaration: str, term: str) -> bool:
+    declared = _without_generic_output_suffix(
+        _normalise_structured_declaration(declaration)
+    )
+    required = _without_generic_output_suffix(_normalise_structured_declaration(term))
+    if not declared or not required:
+        return False
+    if declared == required:
+        return True
+    suffix = "_" + required
+    # Permit only known structural qualifiers. Arbitrary prefixes such as
+    # ``not_a_`` or a different product name cannot launder a declaration into
+    # coverage merely because they contain ``cohort_flow`` as a substring.
+    if declared.endswith(suffix) and (
+        declared[: -len(suffix)] in _ALLOWED_STRUCTURAL_PREFIXES
+    ):
+        return True
+    required_prefix = required + "_"
+    if declared.startswith(required_prefix):
+        suffix_qualifier = declared[len(required_prefix) :]
+        return suffix_qualifier in _ALLOWED_STRUCTURAL_SUFFIXES
+    return False
+
+
+def _brief_item_covered(item: str, declarations: set[str]) -> bool:
+    def _matches(term: str) -> bool:
+        return any(
+            _declaration_matches_term(declaration, term)
+            for declaration in declarations
         )
-    return "\n".join(parts).lower()
+
+    alternatives = [
+        part.strip()
+        for part in re.split(r"\s*(?:/|\bor\b)\s*", item, flags=re.IGNORECASE)
+        if part.strip()
+    ]
+    if len(alternatives) > 1 and any(_matches(part) for part in alternatives):
+        return True
+    conjuncts = [
+        part.strip()
+        for part in re.split(r"\s+and\s+", item, flags=re.IGNORECASE)
+        if part.strip()
+    ]
+    if len(conjuncts) > 1 and all(_matches(part) for part in conjuncts):
+        return True
+    terms = [item, *(brief_check_terms(item) or ())]
+    return any(_matches(term) for term in terms)
 
 
-def _brief_item_covered(item: str, blob: str) -> bool:
-    terms = brief_check_terms(item)
-    if terms is None:
-        terms = tuple(re.split(r"[/, ]+", item.lower()))
-    return any(term and term.lower() in blob for term in terms)
-
-
-def _module_covered(module: DisplayModuleSpec, blob: str) -> bool:
+def _module_covered(module: DisplayModuleSpec, declarations: set[str]) -> bool:
     terms: List[str] = [
         module.module_id,
-        module.module_id.replace("_", " "),
         module.role,
-        module.role.replace("_", " "),
         *module.acceptable_outputs,
         *role_check_terms(module.role),
     ]
-    return any(term and term.lower() in blob for term in terms)
+    return any(
+        _declaration_matches_term(declaration, term)
+        for declaration in declarations
+        for term in terms
+    )
 
 
 def _covered_modules(
     plan: AnalysisPlan,
     brief: StudyDesignBrief,
 ) -> List[DisplayModuleSpec]:
-    blob = _plan_blob(plan)
+    _methods, output_declarations = _structured_plan_declarations(plan)
     return [
         module
         for module in brief.display_modules
-        if module.tier != "supplementary" and _module_covered(module, blob)
+        if module.tier != "supplementary"
+        and _module_covered(module, output_declarations)
     ]
 
 
@@ -463,7 +480,8 @@ def validate_plan_against_study_design_brief(
     plan: AnalysisPlan,
     brief: StudyDesignBrief,
 ) -> List[ValidationFinding]:
-    blob = _plan_blob(plan)
+    method_declarations, output_declarations = _structured_plan_declarations(plan)
+    all_declarations = method_declarations | output_declarations
     core_modules = [module for module in brief.display_modules if module.tier == "core"]
     conditional_modules = [
         module for module in brief.display_modules if module.tier == "conditional"
@@ -471,26 +489,30 @@ def validate_plan_against_study_design_brief(
     missing_core_modules = [
         module
         for module in core_modules
-        if not _module_covered(module, blob)
+        if not _module_covered(module, output_declarations)
     ]
     missing_conditional_modules = [
         module
         for module in conditional_modules
-        if not _module_covered(module, blob)
+        if not _module_covered(module, output_declarations)
     ]
     covered_modules = _covered_modules(plan, brief)
     covered_roles = sorted({module.role for module in covered_modules})
     required_core_roles = sorted({module.role for module in core_modules})
     missing_main = [
-        item for item in brief.main_text_displays if not _brief_item_covered(item, blob)
+        item
+        for item in brief.main_text_displays
+        if not _brief_item_covered(item, output_declarations)
     ]
     missing_methods = [
-        item for item in brief.required_methods if not _brief_item_covered(item, blob)
+        item
+        for item in brief.required_methods
+        if not _brief_item_covered(item, all_declarations)
     ]
     missing_sensitivity = [
         item
         for item in brief.sensitivity_requirements
-        if not _brief_item_covered(item, blob)
+        if not _brief_item_covered(item, all_declarations)
     ]
     findings: List[ValidationFinding] = []
     if missing_core_modules:

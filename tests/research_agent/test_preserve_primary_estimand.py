@@ -17,7 +17,9 @@ from __future__ import annotations
 
 from easyicu.research_agent.plan_utils import (
     _cap_plan_preserving_figure_steps,
+    _output_declares_figure,
     _preserve_primary_estimand_step_after_replan,
+    _split_table_and_figure_outputs_in_plan,
     _step_is_primary_estimand_model,
 )
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
@@ -113,6 +115,28 @@ def test_method_rider_cannot_hide_a_primary_effect_owner():
     )
     assert [item.step_id for item in preserved.steps] == [step.step_id]
     assert findings and findings[0].detail["preserved_step_ids"] == [step.step_id]
+
+
+def test_typed_table_product_named_figure_does_not_launder_primary_owner():
+    step = AnalysisStep(
+        step_id="05_primary_association",
+        intent="Fit the adjusted primary association model.",
+        method="logistic_regression",
+        expected_outputs=[
+            "statistic:primary_or",
+            "table:figure_summary",
+        ],
+    )
+
+    assert not _output_declares_figure("table:figure_summary")
+    assert _output_declares_figure("figure:primary_result")
+    assert _step_is_primary_estimand_model(step)
+
+    plan = AnalysisPlan(research_question="q", steps=[step])
+    revised, findings = _split_table_and_figure_outputs_in_plan(plan)
+
+    assert revised is plan
+    assert findings == []
 
 
 def test_propensity_preparation_is_not_a_primary_estimand_owner():

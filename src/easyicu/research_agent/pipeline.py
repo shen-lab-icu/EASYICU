@@ -177,6 +177,7 @@ from .evidence import (
     EvidenceEnforcementMode,
     EvidenceStore,
     _coerce_enforcement_mode,
+    sha256_of_file,
 )
 from .experience import (
     ExperienceBank,
@@ -307,7 +308,10 @@ from .runtime_artifacts import (
     AuditLogger,
     build_execution_replay,
     build_workflow_graph,
+    current_step_records,
+    load_run_artifact_authority,
     render_workflow_graph_mermaid,
+    verified_run_evidence_path,
     write_json_artifact,
 )
 from .audits.validators import (
@@ -7491,25 +7495,127 @@ def _renderer_for_upstream_figure_data_family(family: Optional[str]):
     return None
 
 
-def deterministic_figure_family_supported_for_upstream(
+def _verified_direct_parent_table_names(
+    run_dir: Path,
+    figure_step_id: str,
+) -> Optional[set[str]]:
+    """Return digest-bound direct-parent tables from the current checkpoint.
+
+    ``None`` means the figure does not have one exact ``*_figure`` parent or
+    the modern outer ledger cannot prove that parent is currently successful.
+    Both the immutable evidence copy and the mutable step-output copy must
+    match the registered digest before an automatic renderer may read it.
+    """
+
+    parent_step_id = str(figure_step_id or "").removesuffix("_figure")
+    if not parent_step_id or parent_step_id == str(figure_step_id or ""):
+        return None
+    authority = load_run_artifact_authority(run_dir)
+    if authority is None:
+        return None
+    raw_records = authority.get("per_step_records")
+    if not isinstance(raw_records, list):
+        return None
+    current = {
+        str(record.get("step_id") or ""): record
+        for record in current_step_records(raw_records)
+    }
+    parent_record = current.get(parent_step_id)
+    if (
+        not isinstance(parent_record, Mapping)
+        or str(parent_record.get("status") or "").strip().lower() != "ok"
+    ):
+        return None
+    active_ids = {
+        str(evidence_id)
+        for evidence_id in (parent_record.get("evidence_ids") or [])
+        if str(evidence_id).strip()
+    }
+    raw_evidence = authority.get("evidence")
+    evidence_by_id = {
+        str(record.get("evidence_id") or ""): record
+        for record in (raw_evidence if isinstance(raw_evidence, list) else [])
+        if isinstance(record, Mapping) and str(record.get("evidence_id") or "")
+    }
+    verified_names: set[str] = set()
+    verified_summary = False
+    for evidence_id in active_ids:
+        record = evidence_by_id.get(evidence_id)
+        if (
+            not isinstance(record, Mapping)
+            or str(record.get("produced_by_step") or "") != parent_step_id
+        ):
+            continue
+        evidence_path = verified_run_evidence_path(run_dir, record)
+        if evidence_path is None:
+            continue
+        evidence_name = evidence_path.name
+        logical_name = (
+            evidence_name.split("__", 1)[1]
+            if "__" in evidence_name
+            else evidence_name
+        )
+        output_path = (
+            Path(run_dir) / "steps" / parent_step_id / "outputs" / logical_name
+        )
+        try:
+            if output_path.is_symlink() or not output_path.is_file():
+                continue
+            output_path.resolve(strict=True).relative_to(Path(run_dir).resolve())
+        except (OSError, ValueError):
+            continue
+        if sha256_of_file(output_path) != str(record.get("sha256") or ""):
+            continue
+        kind = str(record.get("kind") or "").strip().lower()
+        if kind == "table":
+            verified_names.add(logical_name)
+        elif (
+            kind == "statistic"
+            and logical_name == "step_summary.json"
+            and evidence_id
+            == str(parent_record.get("step_summary_evidence_id") or "")
+        ):
+            verified_summary = True
+    return verified_names if verified_summary else None
+
+
+def deterministic_figure_repair_id_for_upstream(
     run_dir: Path, step_id: str
-) -> bool:
-    """True when the figure step's parent method/family has a renderer."""
+) -> Optional[str]:
+    """Return one evidence-bound, science-neutral renderer repair id."""
+
+    verified_tables = _verified_direct_parent_table_names(run_dir, step_id)
+    if not verified_tables:
+        return None
 
     artifact_family = _resolve_upstream_figure_data_family(run_dir, step_id)
     if artifact_family is not None:
         # An explicit but unknown/ambiguous contract is authoritative and must
         # fail closed; do not silently fall back to a name or whole-step family.
-        return _renderer_for_upstream_figure_data_family(artifact_family) is not None
-    return (
-        _renderer_for_upstream_method(
-            _resolve_upstream_analysis_method(run_dir, step_id)
-        )
-        is not None
-        or _renderer_for_upstream_family(
-            _resolve_upstream_analysis_family(run_dir, step_id)
-        ) is not None
-    )
+        if artifact_family == "ordered_category_distribution" and (
+            _renderer_for_upstream_figure_data_family(artifact_family) is not None
+        ):
+            return "ordered_category_distribution_publication_bundle_v1"
+        return None
+    if (
+        _resolve_upstream_analysis_method(run_dir, step_id)
+        == "ordinal_exposure_derivation_and_quality_control"
+    ):
+        return "ordered_category_distribution_publication_bundle_v1"
+    if (
+        _resolve_upstream_analysis_family(run_dir, step_id) == "cohort_definition"
+        and {"cohort_flow.csv", "attrition.csv"} <= verified_tables
+    ):
+        return "cohort_flow_publication_bundle_from_parent_outputs_v1"
+    return None
+
+
+def deterministic_figure_family_supported_for_upstream(
+    run_dir: Path, step_id: str
+) -> bool:
+    """Compatibility boolean for the typed automatic-renderer gate."""
+
+    return deterministic_figure_repair_id_for_upstream(run_dir, step_id) is not None
 
 
 def deterministic_figure_family_supported(step_id: str) -> bool:
@@ -7566,8 +7672,11 @@ def _render_publication_bundle_from_prior_outputs_for_step(
             _render_cohort_flow_publication_bundle_from_prior_outputs,
         )
     elif _upstream_family == "cohort_definition":
+        # The automatic path admits this family only when the current direct
+        # parent has digest-bound cohort_flow.csv + attrition.csv.  Render that
+        # exact closed product; never probe an overlap renderer first and let a
+        # schema coincidence choose a different scientific display.
         _upstream_fallback = (
-            _render_cohort_overlap_publication_bundle_from_prior_outputs,
             _render_cohort_flow_publication_bundle_from_prior_outputs,
         )
 
@@ -7637,8 +7746,6 @@ def _publication_label(value: Any) -> str:
         "bun_max_per_10": "Maximum BUN, per 10 units",
         "wbc_max_per_10": "Maximum WBC, per 10 units",
         "sofa2": "SOFA-2",
-        "sofa2_liver_max": "SOFA-2 liver maximum",
-        "bili_max": "Bilirubin maximum",
         "death": "In-hospital mortality",
         "alt_adult_no_los_all_vitals_sepsis3_derivable": "No LOS threshold",
         "alt_adult_los1_three_of_four_vitals_sepsis3_derivable": ">=3 of 4 vitals",
