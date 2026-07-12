@@ -298,6 +298,9 @@ from .schema import (
     TimeWindow,
     ValidationFinding,
     VariableRole,
+    PLANNED_MODEL_REQUIREMENTS_OUTPUT,
+    PLANNED_MODEL_REQUIREMENTS_OUTPUT_KIND,
+    PLANNED_MODEL_REQUIREMENTS_STEP_METHOD,
 )
 from .study_design import (
     build_study_design_brief,
@@ -340,30 +343,48 @@ def _resume_plan_candidate_paths(
     run_dir: Path,
     resume_state: Optional[Dict[str, Any]],
 ) -> List[Path]:
-    """Return saved resume plan candidates from most to least current."""
-    candidates: List[Path] = []
-    def _revision_key(path: Path) -> tuple[int, str]:
-        match = re.search(r"analysis_plan_revision_(\d+)\.json$", path.name)
-        revision = int(match.group(1)) if match else -1
-        return revision, path.name
+    """Return digest-verified immutable plan evidence, newest first.
 
-    candidates.extend(
-        sorted(
-            run_dir.glob("analysis_plan_revision_*.json"),
-            key=_revision_key,
-            reverse=True,
-        )
-    )
-    plan_path_value = (resume_state or {}).get("plan_path")
-    if plan_path_value:
-        manifest_path = Path(str(plan_path_value))
-        if not manifest_path.is_absolute():
-            manifest_path = run_dir / manifest_path
-        if manifest_path.exists():
-            candidates.append(manifest_path)
-    analysis_plan_path = run_dir / "analysis_plan.json"
-    if analysis_plan_path.exists():
-        candidates.append(analysis_plan_path)
+    Live ``analysis_plan*.json`` files are mutable runtime conveniences and can
+    be re-serialized under a newer schema during resume. They are never plan
+    authority. The evidence copies retain the planner/replanner bytes and are
+    usable only after path containment and SHA-256 verification.
+    """
+
+    del resume_state  # Evidence authority supersedes a mutable manifest path.
+    index_path = run_dir / "evidence" / "evidence_index.json"
+    if not index_path.is_file() or index_path.is_symlink():
+        return []
+    try:
+        records = json.loads(index_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if not isinstance(records, list):
+        return []
+
+    ranked: List[tuple[int, int, Path]] = []
+    for index, record in enumerate(records):
+        if not isinstance(record, dict):
+            continue
+        evidence_id = str(record.get("evidence_id") or "").strip()
+        if evidence_id == "analysis_plan":
+            revision = -1
+        else:
+            match = re.fullmatch(
+                r"analysis_plan_revision_(\d+)(?:_[0-9a-f]{8})?",
+                evidence_id,
+            )
+            if match is None:
+                continue
+            revision = int(match.group(1))
+        verified_path = verified_run_evidence_path(run_dir, record)
+        if verified_path is not None:
+            ranked.append((revision, index, verified_path))
+
+    candidates = [
+        path
+        for _revision, _index, path in sorted(ranked, reverse=True)
+    ]
 
     unique: List[Path] = []
     seen: set[Path] = set()
@@ -403,6 +424,269 @@ def _load_compatible_resume_plan(
         if plan.steps and completed_step_ids <= step_ids:
             return plan, candidate
     return None, None
+
+
+class LegacyResumePlanMigrationError(RuntimeError):
+    """A legacy resume plan could not be migrated without scientific drift."""
+
+
+def _normalise_plan_contract_token(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(value or "").lower()).strip("_")
+
+
+def _is_closed_adjusted_association_step(step: AnalysisStep) -> bool:
+    """Match the typed roster's exact method-and-product contract only."""
+
+    method_head = str(step.method or "").lower().split(" with ", 1)[0]
+    if (
+        _normalise_plan_contract_token(method_head)
+        != PLANNED_MODEL_REQUIREMENTS_STEP_METHOD
+    ):
+        return False
+    products = set()
+    for output in step.expected_outputs or []:
+        kind, separator, name = str(output or "").partition(":")
+        if separator:
+            products.add(
+                (
+                    _normalise_plan_contract_token(kind),
+                    _normalise_plan_contract_token(name),
+                )
+            )
+    return (
+        PLANNED_MODEL_REQUIREMENTS_OUTPUT_KIND,
+        PLANNED_MODEL_REQUIREMENTS_OUTPUT,
+    ) in products
+
+
+def _resume_completed_records_for_plan_migration(
+    *,
+    plan: AnalysisPlan,
+    resume_state: Optional[Dict[str, Any]],
+    resume_from_step_id: Optional[str],
+) -> List[Dict[str, Any]]:
+    """Return current successful records that remain completed after a cut."""
+
+    current_records = [
+        dict(record)
+        for record in current_step_records(
+            [
+                record
+                for record in ((resume_state or {}).get("per_step_records") or [])
+                if isinstance(record, dict) and record.get("step_id")
+            ]
+        )
+    ]
+    cut_step_id = str(resume_from_step_id or "").strip()
+    if not cut_step_id:
+        return [record for record in current_records if record.get("status") == "ok"]
+
+    step_order = {step.step_id: index for index, step in enumerate(plan.steps)}
+    if cut_step_id == "00_probe":
+        cut_index = -1
+    elif cut_step_id in step_order:
+        cut_index = step_order[cut_step_id]
+    else:
+        raise LegacyResumePlanMigrationError(
+            f"resume_from_step_id={cut_step_id!r} is not in the active analysis plan"
+        )
+
+    completed: List[Dict[str, Any]] = []
+    for record in current_records:
+        if record.get("status") != "ok":
+            continue
+        step_id = str(record.get("step_id") or "")
+        record_index = -1 if step_id == "00_probe" else step_order.get(step_id)
+        if record_index is not None and record_index < cut_index:
+            completed.append(record)
+    return completed
+
+
+def _legacy_resume_model_roster_targets(
+    *,
+    plan: AnalysisPlan,
+    completed_step_ids: set[str],
+) -> tuple[str, ...]:
+    """Select only remaining, exact closed-contract steps with an empty roster."""
+
+    return tuple(
+        step.step_id
+        for step in plan.steps
+        if step.step_id not in completed_step_ids
+        and _is_closed_adjusted_association_step(step)
+        and not step.model_requirements
+    )
+
+
+def _assert_legacy_resume_roster_revision_is_scoped(
+    *,
+    original: AnalysisPlan,
+    revised: AnalysisPlan,
+    target_step_ids: tuple[str, ...],
+) -> None:
+    """Reject every replanner change except target ``model_requirements``."""
+
+    original_payload = original.model_dump(mode="json")
+    revised_payload = revised.model_dump(mode="json")
+    for payload in (original_payload, revised_payload):
+        payload.pop("steps", None)
+        payload.pop("revision", None)
+    if revised_payload != original_payload:
+        raise LegacyResumePlanMigrationError(
+            "legacy resume migration changed a non-step AnalysisPlan field"
+        )
+
+    original_ids = [step.step_id for step in original.steps]
+    revised_ids = [step.step_id for step in revised.steps]
+    if revised_ids != original_ids:
+        raise LegacyResumePlanMigrationError(
+            "legacy resume migration changed step identity, order, or count"
+        )
+
+    targets = set(target_step_ids)
+    for original_step, revised_step in zip(original.steps, revised.steps):
+        original_step_payload = original_step.model_dump(mode="json")
+        revised_step_payload = revised_step.model_dump(mode="json")
+        original_requirements = original_step_payload.pop("model_requirements", [])
+        revised_requirements = revised_step_payload.pop("model_requirements", [])
+        if revised_step_payload != original_step_payload:
+            raise LegacyResumePlanMigrationError(
+                "legacy resume migration changed a non-model_requirements field "
+                f"on step {original_step.step_id!r}"
+            )
+        if original_step.step_id in targets:
+            if original_requirements or not revised_requirements:
+                raise LegacyResumePlanMigrationError(
+                    "legacy resume migration did not populate the required typed "
+                    f"model roster for step {original_step.step_id!r}"
+                )
+        elif revised_requirements != original_requirements:
+            raise LegacyResumePlanMigrationError(
+                "legacy resume migration changed model_requirements outside its "
+                f"target set on step {original_step.step_id!r}"
+            )
+
+
+def _next_analysis_plan_revision(
+    *,
+    run_dir: Path,
+    plan: AnalysisPlan,
+    evidence: EvidenceStore,
+) -> int:
+    revision = int(plan.revision) + 1
+    for path in run_dir.glob("analysis_plan_revision_*.json"):
+        match = re.fullmatch(r"analysis_plan_revision_(\d+)\.json", path.name)
+        if match:
+            revision = max(revision, int(match.group(1)) + 1)
+    while evidence.get(f"analysis_plan_revision_{revision}") is not None:
+        revision += 1
+    return revision
+
+
+def _migrate_legacy_resume_model_requirements(
+    *,
+    plan: AnalysisPlan,
+    context: ResearchContext,
+    run_dir: Path,
+    resume_state: Optional[Dict[str, Any]],
+    resume_from_step_id: Optional[str],
+    role_resolver: Callable[[str], Any],
+    evidence: EvidenceStore,
+    prompt_version: str,
+    llm_signature: str,
+) -> tuple[AnalysisPlan, Optional[Path], tuple[str, ...]]:
+    """Ask the planner LLM to migrate an old empty typed-model roster.
+
+    The framework identifies only the schema surface that requires migration.
+    It never derives an outcome, exposure, analysis role, analysis set, or model
+    family from prose. Those scientific commitments must come back from the
+    :class:`ReplannerAgent`, and a field-for-field scope check rejects any other
+    plan change before a revision is written or registered.
+    """
+
+    completed_records = _resume_completed_records_for_plan_migration(
+        plan=plan,
+        resume_state=resume_state,
+        resume_from_step_id=resume_from_step_id,
+    )
+    completed_step_ids = {
+        str(record.get("step_id")) for record in completed_records
+    }
+    target_step_ids = _legacy_resume_model_roster_targets(
+        plan=plan,
+        completed_step_ids=completed_step_ids,
+    )
+    if not target_step_ids:
+        return plan, None, ()
+
+    directive = (
+        "LEGACY SCHEMA MIGRATION ONLY. Populate the typed `model_requirements` "
+        "roster for each listed remaining step, using your scientific judgment "
+        "from the unchanged ResearchContext and current plan: "
+        f"{json.dumps(list(target_step_ids), ensure_ascii=False)}. Do not change "
+        "research_question, analysis_type, cohort, robustness_specs, rationale, "
+        "step order, step ids, intent, inputs, expected_outputs, method, "
+        "icu_rule_refs, completed steps, or any non-target model_requirements. "
+        "Do not add a default model: if the existing evidence is insufficient "
+        "to choose the typed roster, the migration must fail closed."
+    )
+    probe_summary = next(
+        (
+            record.get("step_summary")
+            for record in reversed(completed_records)
+            if record.get("step_id") == "00_probe"
+            and isinstance(record.get("step_summary"), dict)
+        ),
+        None,
+    )
+    try:
+        revised = ReplannerAgent(role_resolver("planner")).run(
+            context=context,
+            current_plan=plan,
+            probe_summary=probe_summary,
+            completed_step_records=completed_records,
+            directive=directive,
+        )
+    except Exception as exc:
+        raise LegacyResumePlanMigrationError(
+            "planner LLM failed while migrating legacy model_requirements; "
+            "resume stopped without a default model"
+        ) from exc
+
+    _assert_legacy_resume_roster_revision_is_scoped(
+        original=plan,
+        revised=revised,
+        target_step_ids=target_step_ids,
+    )
+    revision = _next_analysis_plan_revision(
+        run_dir=run_dir,
+        plan=plan,
+        evidence=evidence,
+    )
+    revised = revised.model_copy(update={"revision": revision})
+    revision_path = run_dir / f"analysis_plan_revision_{revision}.json"
+    if revision_path.exists():
+        raise LegacyResumePlanMigrationError(
+            f"refusing to overwrite existing plan revision {revision_path.name}"
+        )
+    revision_path.write_text(revised.model_dump_json(indent=2), encoding="utf-8")
+    evidence.register_file(
+        kind="log",
+        description=(
+            "Planner-owned legacy resume migration for typed model requirements."
+        ),
+        source_path=revision_path,
+        evidence_id=f"analysis_plan_revision_{revision}",
+        producer="replanner",
+        generation_mode="llm",
+        prompt_pack_version=prompt_version,
+        metadata={
+            "reason": "legacy_missing_model_requirements",
+            "target_step_ids": list(target_step_ids),
+            "llm_signature": llm_signature,
+        },
+    )
+    return revised, revision_path, target_step_ids
 
 
 def _load_resume_state(run_dir: Path) -> Optional[Dict[str, Any]]:
@@ -862,6 +1146,7 @@ class ResearchAgentPipeline:
         run_language: str,
         experiment_spec_path: Optional[Path],
         resume_state: Optional[Dict[str, Any]],
+        resume_from_step_id: Optional[str],
         emit_progress: Callable[..., None],
     ) -> _PlanPhaseResult:
         """Build context, attach memory, and emit an execution plan."""
@@ -1507,6 +1792,8 @@ class ResearchAgentPipeline:
         # whole analysis under new names. Reusing the saved plan keeps the
         # already-completed step_ids aligned and continues from the failed step.
         reused_prior_plan = False
+        reused_plan_path: Optional[Path] = None
+        migrated_plan_path: Optional[Path] = None
         if resume_state is not None:
             plan, _prior_plan_path = _load_compatible_resume_plan(
                 run_dir=run_dir,
@@ -1514,6 +1801,7 @@ class ResearchAgentPipeline:
             )
             if plan is not None and plan.steps:
                 reused_prior_plan = True
+                reused_plan_path = _prior_plan_path
                 plan_generation_mode = "resumed"
                 findings.append(
                     ValidationFinding(
@@ -1537,9 +1825,44 @@ class ResearchAgentPipeline:
                         },
                     )
                 )
+            else:
+                raise LegacyResumePlanMigrationError(
+                    "resume checkpoint has no digest-verified analysis plan "
+                    "evidence compatible with every completed step"
+                )
 
         if reused_prior_plan:
-            pass
+            plan, migrated_plan_path, migrated_step_ids = (
+                _migrate_legacy_resume_model_requirements(
+                    plan=plan,
+                    context=agent_context,
+                    run_dir=run_dir,
+                    resume_state=resume_state,
+                    resume_from_step_id=resume_from_step_id,
+                    role_resolver=role_resolver,
+                    evidence=evidence,
+                    prompt_version=prompt_version,
+                    llm_signature=llm_signature,
+                )
+            )
+            if migrated_plan_path is not None:
+                plan_generation_mode = "resumed_replanner_migration"
+                findings.append(
+                    ValidationFinding(
+                        validator="planner_schema_migration",
+                        severity="warning",
+                        message=(
+                            "Migrated legacy remaining adjusted-association "
+                            "step(s) to the planner-owned typed model roster."
+                        ),
+                        detail={
+                            "target_step_ids": list(migrated_step_ids),
+                            "plan_path": str(
+                                migrated_plan_path.relative_to(run_dir)
+                            ),
+                        },
+                    )
+                )
         elif skill_obj is not None:
             plan_generation_mode = "deterministic_skill"
             issues = skill_obj.validate_against(pd.read_parquet(cohort_path))
@@ -1725,8 +2048,13 @@ class ResearchAgentPipeline:
                     blueprint=analysis_blueprint,
                 )
             )
-        plan_path = run_dir / "analysis_plan.json"
-        plan_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
+        plan_path = (
+            migrated_plan_path
+            or reused_plan_path
+            or (run_dir / "analysis_plan.json")
+        )
+        if not reused_prior_plan:
+            plan_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
         if evidence.get("analysis_plan") is None:
             evidence.register_file(
                 kind="log",
@@ -2237,6 +2565,7 @@ class ResearchAgentPipeline:
                 run_language=run_language,
                 experiment_spec_path=experiment_spec_path,
                 resume_state=resume_state,
+                resume_from_step_id=resume_from_step_id,
                 emit_progress=_emit_progress,
             )
 
