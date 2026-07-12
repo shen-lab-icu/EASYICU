@@ -92,6 +92,41 @@ def test_runner_build_command_defaults_to_network_isolation(ra, tmp_path: Path):
         assert f'(allow file-write* (subpath "{runner.workdir}"))' not in profile
 
 
+def test_code_runner_resolves_symlinked_python_parent(ra, tmp_path: Path):
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)
+    runtime_dir = Path(sys.executable).parent.resolve(strict=True)
+    runtime_link = tmp_path / "runtime-link"
+    runtime_link.symlink_to(runtime_dir, target_is_directory=True)
+    linked_python = runtime_link / Path(sys.executable).name
+
+    runner = ra.CodeRunner(
+        workdir=tmp_path / "run",
+        cohort_parquet=cohort_path,
+        python_executable=str(linked_python),
+    )
+
+    assert runner.python_executable == str(runtime_dir / Path(sys.executable).name)
+    command = runner.build_command(script_path=tmp_path / "analysis.py")
+    assert command[-2] == runner.python_executable
+    assert str(linked_python) not in command
+
+
+def test_code_runner_preserves_bare_python_command(ra, tmp_path: Path):
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)
+
+    runner = ra.CodeRunner(
+        workdir=tmp_path / "run",
+        cohort_parquet=cohort_path,
+        python_executable="custom-python",
+    )
+
+    assert runner.python_executable == "custom-python"
+    command = runner.build_command(script_path=tmp_path / "analysis.py")
+    assert command[-2] == "custom-python"
+
+
 def test_code_runner_scrubs_secrets_and_reports_filesystem_degradation(
     ra, tmp_path: Path, monkeypatch
 ):
@@ -197,6 +232,37 @@ def test_code_runner_default_blocks_direct_host_execution(
     assert result.returncode == 126
     assert result.effective_isolation == "blocked_fail_closed"
     assert result.isolation_degraded is False
+
+
+@pytest.mark.skipif(
+    sys.platform != "darwin" or shutil.which("sandbox-exec") is None,
+    reason="requires the macOS sandbox-exec backend",
+)
+def test_macos_sandbox_executes_resolved_python_symlink(ra, tmp_path: Path):
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)
+    runtime_dir = Path(sys.executable).parent.resolve(strict=True)
+    runtime_link = tmp_path / "runtime-link"
+    runtime_link.symlink_to(runtime_dir, target_is_directory=True)
+    linked_python = runtime_link / Path(sys.executable).name
+    runner = ra.CodeRunner(
+        workdir=tmp_path / "run",
+        cohort_parquet=cohort_path,
+        python_executable=str(linked_python),
+    )
+
+    result = runner.run(
+        step_id="symlinked_python",
+        code=(
+            "import os\n"
+            "from pathlib import Path\n"
+            "Path(os.environ['STEP_OUT_DIR'], 'ok.txt').write_text('ok')\n"
+        ),
+    )
+
+    assert result.succeeded, result.stderr
+    assert result.effective_isolation == "macos_sandbox_exec"
+    assert (result.out_dir / "ok.txt").read_text(encoding="utf-8") == "ok"
 
 
 @pytest.mark.skipif(

@@ -172,7 +172,23 @@ class CodeRunner:
                 f"Cohort parquet does not exist: {self.cohort_parquet}"
             )
         self.timeout_seconds = timeout_seconds
-        self.python_executable = python_executable or sys.executable
+        selected_python = str(python_executable or sys.executable)
+        python_path = Path(selected_python).expanduser()
+        if python_path.is_absolute():
+            try:
+                # Resolve symlinked *directory* ancestors (for example a
+                # worktree-local ``.venv`` link) so sandbox-exec sees the same
+                # runtime path that its profile allows.  Preserve the final
+                # ``bin/python`` entry point: resolving that symlink all the
+                # way to a base interpreter would discard virtualenv prefix
+                # discovery and could silently run with the wrong packages.
+                resolved_parent = python_path.parent.resolve(strict=True)
+                normalized_python = resolved_parent / python_path.name
+                if normalized_python.exists():
+                    selected_python = str(normalized_python)
+            except (OSError, RuntimeError):
+                pass
+        self.python_executable = selected_python
         self.extra_env = dict(extra_env or {})
         self.network_policy = (network_policy or "none").lower()
         self.allow_unsafe_host_fallback = (
