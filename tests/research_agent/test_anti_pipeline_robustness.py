@@ -646,6 +646,58 @@ def test_locked_sensitivity_gate_accepts_declared_specification_csv(tmp_path) ->
     assert findings == []
 
 
+def test_locked_sensitivity_gate_accepts_typed_overlap_table_names(tmp_path) -> None:
+    from easyicu.research_agent.pipeline_execute import (
+        _cohort_definition_sensitivity_contract_findings,
+    )
+
+    run_dir = tmp_path / "run"
+    out_dir = run_dir / "steps" / "07_sensitivity" / "outputs"
+    out_dir.mkdir(parents=True)
+    lock = _locked_specs_payload()
+    (run_dir / "robustness_specs_locked.json").write_text(
+        json.dumps(lock), encoding="utf-8"
+    )
+    universe_path, cohort_path = _write_membership_inputs(run_dir)
+    matrix_path = out_dir / "sensitivity_specification_matrix.csv"
+    pd.DataFrame(
+        [
+            {"spec_id": spec["spec_id"], "axis": spec["axis"]}
+            for spec in lock["specs"]
+        ]
+    ).to_csv(matrix_path, index=False)
+    overlap_path = out_dir / "cohort_definition_overlap_attrition.csv"
+    pd.DataFrame(
+        [
+            {
+                "definition_id": "alt_relaxed_cohort",
+                "axis": "cohort",
+                "universe_n": 5,
+                "retained_n": 5,
+                "entered_n": 2,
+                "left_primary_n": 0,
+                "overlap_n": 3,
+            }
+        ]
+    ).to_csv(overlap_path, index=False)
+
+    findings = _cohort_definition_sensitivity_contract_findings(
+        step=_sensitivity_step(),
+        step_summary={
+            "output_files": {
+                "table:sensitivity_specification_matrix": str(matrix_path),
+                "table:cohort_definition_overlap_attrition": str(overlap_path),
+            }
+        },
+        out_dir=out_dir,
+        run_dir=run_dir,
+        universe_path=universe_path,
+        cohort_path=cohort_path,
+    )
+
+    assert findings == []
+
+
 def test_sensitivity_figure_step_is_not_subject_to_result_spec_gate(tmp_path) -> None:
     from easyicu.research_agent.pipeline_execute import (
         _cohort_definition_sensitivity_contract_findings,
