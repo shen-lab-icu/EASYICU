@@ -49,7 +49,9 @@ from .runtime_artifacts import (
     build_execution_replay,
     build_workflow_graph,
     capture_code_version,
+    current_evidence_records,
     render_workflow_graph_mermaid,
+    verified_run_evidence_path,
     write_json_artifact,
 )
 from .robustness_panel import PANEL_FILENAME, load_robustness_panel
@@ -97,6 +99,58 @@ def _active_step_evidence_ids(
     """
 
     return active_step_evidence_ids(per_step_records)
+
+
+def _current_verified_semantic_csv(
+    *,
+    evidence: EvidenceStore,
+    per_step_records: List[Dict[str, Any]],
+    run_dir: Path,
+    semantic_id: str,
+) -> Optional[tuple[Any, Path]]:
+    """Resolve one current, step-produced CSV for a stable semantic name.
+
+    Evidence aliases are first-write-wins, while a resumed step whose bytes
+    change is registered as ``<id>_v2``.  Looking up the stable alias directly
+    would therefore silently select the superseded file.  Resolve the semantic
+    family first, filter it through the latest successful step ledger, and
+    require one digest-valid evidence copy.  Missing, stale, or ambiguous
+    authority fails closed.
+    """
+
+    all_records = list(evidence.records())
+    alias_root = str(evidence.aliases().get(semantic_id) or "").strip()
+    family_roots = {semantic_id}
+    if alias_root:
+        family_roots.add(alias_root)
+
+    candidates: List[tuple[Any, Path]] = []
+    for record in current_evidence_records(all_records, per_step_records):
+        producer_step = str(getattr(record, "produced_by_step", None) or "").strip()
+        if not producer_step:
+            continue
+        evidence_id = str(getattr(record, "evidence_id", "") or "").strip()
+        metadata = getattr(record, "metadata", None)
+        metadata = metadata if isinstance(metadata, dict) else {}
+        supersedes = str(metadata.get("resume_supersedes") or "").strip()
+        relative_path = Path(str(getattr(record, "relative_path", "") or ""))
+        logical_name = relative_path.name.split("__", 1)[-1]
+        logical_path = Path(logical_name)
+        belongs_to_family = bool(
+            evidence_id in family_roots
+            or supersedes in family_roots
+            or logical_path.stem == semantic_id
+        )
+        if not belongs_to_family or logical_path.suffix.lower() != ".csv":
+            continue
+        path = verified_run_evidence_path(run_dir, record)
+        if path is not None:
+            candidates.append((record, path))
+
+    unique = {str(record.evidence_id): (record, path) for record, path in candidates}
+    if len(unique) != 1:
+        return None
+    return next(iter(unique.values()))
 
 
 def _register_multiple_testing_outputs(
@@ -335,7 +389,9 @@ def finalise_success(
     # ``{evidence:multiple_testing_report}``.
     if pipeline._enable_multiple_testing_correction:
         mt_report = build_multiple_testing_report(
-            evidence_records=evidence.records(),
+            evidence_records=current_evidence_records(
+                evidence.records(), per_step_records
+            ),
             run_dir=run_dir,
             alpha=pipeline._multiple_testing_alpha,
             active_evidence_ids=_active_step_evidence_ids(per_step_records),
@@ -418,53 +474,41 @@ def finalise_success(
     # Baseline prevalence defaults to observed outcome rate when
     # an ``outcome_rate.csv`` was registered.
     try:
-        primary_path = None
-        for rec in evidence.records():
-            if rec.evidence_id != "primary_association":
-                continue
-            candidates = [
-                run_dir / "evidence" / rec.relative_path,
-                run_dir / rec.relative_path,
-            ]
-            primary_path = next(
-                (c for c in candidates if c.exists() and c.suffix == ".csv"),
-                None,
-            )
-            break
-        if primary_path is not None:
+        primary_source = _current_verified_semantic_csv(
+            evidence=evidence,
+            per_step_records=per_step_records,
+            run_dir=run_dir,
+            semantic_id="primary_association",
+        )
+        if primary_source is not None:
             import csv as _csv
 
+            primary_record, primary_path = primary_source
             baseline_prev = 0.1
-            outcome_rate_rec = evidence.get("outcome_rate")
-            if outcome_rate_rec is not None:
+            outcome_rate_source = _current_verified_semantic_csv(
+                evidence=evidence,
+                per_step_records=per_step_records,
+                run_dir=run_dir,
+                semantic_id="outcome_rate",
+            )
+            if outcome_rate_source is not None:
                 try:
-                    or_path = next(
-                        (
-                            p
-                            for p in (
-                                run_dir / "evidence" / outcome_rate_rec.relative_path,
-                                run_dir / outcome_rate_rec.relative_path,
-                            )
-                            if p.exists() and p.suffix == ".csv"
-                        ),
-                        None,
-                    )
-                    if or_path:
-                        with or_path.open("r", encoding="utf-8") as fh:
-                            for row in _csv.DictReader(fh):
-                                for key in (
-                                    "outcome_rate",
-                                    "rate",
-                                    "mortality_rate",
-                                    "event_rate",
-                                ):
-                                    if key in row:
-                                        try:
-                                            cand = float(row[key])
-                                            if 0 < cand < 1:
-                                                baseline_prev = cand
-                                        except (TypeError, ValueError):
-                                            pass
+                    _outcome_rate_record, or_path = outcome_rate_source
+                    with or_path.open("r", encoding="utf-8") as fh:
+                        for row in _csv.DictReader(fh):
+                            for key in (
+                                "outcome_rate",
+                                "rate",
+                                "mortality_rate",
+                                "event_rate",
+                            ):
+                                if key in row:
+                                    try:
+                                        cand = float(row[key])
+                                        if 0 < cand < 1:
+                                            baseline_prev = cand
+                                    except (TypeError, ValueError):
+                                        pass
                 except Exception:
                     pass
 
@@ -546,27 +590,32 @@ def finalise_success(
                         )
                     )
                 ev_md.write_text("\n".join(ev_md_lines) + "\n", encoding="utf-8")
-                if evidence.get("e_values") is None:
-                    evidence.register_file(
-                        kind="statistic",
-                        description=(
-                            "VanderWeele–Ding E-values for every primary "
-                            "effect row (O23)."
-                        ),
-                        source_path=ev_csv,
-                        evidence_id="e_values",
-                        producer="pipeline",
-                        generation_mode="system",
-                    )
-                if evidence.get("e_values_summary") is None:
-                    evidence.register_file(
-                        kind="log",
-                        description="Human-readable E-value summary (O23).",
-                        source_path=ev_md,
-                        evidence_id="e_values_summary",
-                        producer="pipeline",
-                        generation_mode="system",
-                    )
+                source_ids = [str(primary_record.evidence_id)]
+                if outcome_rate_source is not None:
+                    source_ids.append(str(outcome_rate_source[0].evidence_id))
+                ev_record = evidence.register_file(
+                    kind="statistic",
+                    description=(
+                        "VanderWeele–Ding E-values for every primary "
+                        "effect row (O23)."
+                    ),
+                    source_path=ev_csv,
+                    evidence_id="e_values",
+                    inputs=source_ids,
+                    producer="pipeline",
+                    generation_mode="system",
+                    on_sha_change="new_id",
+                )
+                evidence.register_file(
+                    kind="log",
+                    description="Human-readable E-value summary (O23).",
+                    source_path=ev_md,
+                    evidence_id="e_values_summary",
+                    inputs=source_ids,
+                    producer="pipeline",
+                    generation_mode="system",
+                    on_sha_change="new_id",
+                )
                 findings.append(
                     ValidationFinding(
                         validator="e_value",
@@ -575,7 +624,7 @@ def finalise_success(
                             f"Computed E-values for {len(rows_out)} primary "
                             f"effect row(s) (baseline prevalence={baseline_prev:.3f})."
                         ),
-                        evidence_ids=["e_values"],
+                        evidence_ids=[ev_record.evidence_id],
                     )
                 )
     except Exception as exc:
@@ -594,37 +643,34 @@ def finalise_success(
     # stay consistent with the rest of the deterministic layer.
     if pipeline._enable_fairness_subgroups:
         try:
-            primary_rec = evidence.get("primary_association")
-            if primary_rec is not None:
+            primary_source = _current_verified_semantic_csv(
+                evidence=evidence,
+                per_step_records=per_step_records,
+                run_dir=run_dir,
+                semantic_id="primary_association",
+            )
+            if primary_source is not None:
                 import csv as _csv
 
-                candidates = [
-                    run_dir / "evidence" / primary_rec.relative_path,
-                    run_dir / primary_rec.relative_path,
-                ]
-                primary_path = next(
-                    (p for p in candidates if p.exists() and p.suffix == ".csv"),
-                    None,
-                )
+                primary_record, primary_path = primary_source
                 predictor_name: Optional[str] = None
                 outcome_name = context.target_outcome
-                if primary_path is not None:
-                    with primary_path.open("r", encoding="utf-8") as fh:
-                        for row in _csv.DictReader(fh):
-                            term = (
-                                row.get("term")
-                                or row.get("variable")
-                                or row.get("predictor")
-                                or ""
-                            )
-                            if term and term.lower() not in {
-                                "intercept",
-                                "const",
-                                "age",
-                                "sex_m",
-                            }:
-                                predictor_name = term
-                                break
+                with primary_path.open("r", encoding="utf-8") as fh:
+                    for row in _csv.DictReader(fh):
+                        term = (
+                            row.get("term")
+                            or row.get("variable")
+                            or row.get("predictor")
+                            or ""
+                        )
+                        if term and term.lower() not in {
+                            "intercept",
+                            "const",
+                            "age",
+                            "sex_m",
+                        }:
+                            predictor_name = term
+                            break
                 cohort_df = pd.read_parquet(cohort_path)
                 candidate_subgroups = [
                     col
@@ -649,29 +695,31 @@ def finalise_success(
                     fair_md = run_dir / "fairness_subgroups.md"
                     result.write_csv(fair_csv)
                     result.write_markdown(fair_md)
-                    if evidence.get("fairness_subgroups") is None:
-                        evidence.register_file(
-                            kind="statistic",
-                            description=(
-                                "Subgroup / fairness analysis for the "
-                                "primary effect (O24)."
-                            ),
-                            source_path=fair_csv,
-                            evidence_id="fairness_subgroups",
-                            producer="pipeline",
-                            generation_mode="system",
-                        )
-                    if evidence.get("fairness_subgroups_summary") is None:
-                        evidence.register_file(
-                            kind="log",
-                            description=(
-                                "Human-readable fairness / subgroup summary (O24)."
-                            ),
-                            source_path=fair_md,
-                            evidence_id="fairness_subgroups_summary",
-                            producer="pipeline",
-                            generation_mode="system",
-                        )
+                    fair_record = evidence.register_file(
+                        kind="statistic",
+                        description=(
+                            "Subgroup / fairness analysis for the "
+                            "primary effect (O24)."
+                        ),
+                        source_path=fair_csv,
+                        evidence_id="fairness_subgroups",
+                        inputs=[str(primary_record.evidence_id)],
+                        producer="pipeline",
+                        generation_mode="system",
+                        on_sha_change="new_id",
+                    )
+                    evidence.register_file(
+                        kind="log",
+                        description=(
+                            "Human-readable fairness / subgroup summary (O24)."
+                        ),
+                        source_path=fair_md,
+                        evidence_id="fairness_subgroups_summary",
+                        inputs=[str(primary_record.evidence_id)],
+                        producer="pipeline",
+                        generation_mode="system",
+                        on_sha_change="new_id",
+                    )
                     findings.append(
                         ValidationFinding(
                             validator="fairness_subgroups",
@@ -681,7 +729,7 @@ def finalise_success(
                                 f"{outcome_name} across "
                                 f"{len(candidate_subgroups)} axis/axes."
                             ),
-                            evidence_ids=["fairness_subgroups"],
+                            evidence_ids=[fair_record.evidence_id],
                             detail={
                                 "predictor": predictor_name,
                                 "outcome": outcome_name,
@@ -704,7 +752,7 @@ def finalise_success(
                                     f"{sig_cols}; subgroup heterogeneity "
                                     "must be discussed."
                                 ),
-                                evidence_ids=["fairness_subgroups"],
+                                evidence_ids=[fair_record.evidence_id],
                                 detail={"significant_subgroups": sig_cols},
                             )
                         )

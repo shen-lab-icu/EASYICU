@@ -51,6 +51,7 @@ from .display_suite import summarize_display_suite_status
 from .evidence import EvidenceStore, sha256_of_file
 from .figure_strategy import summarize_article_figure_strategy_coverage
 from .publication_figures import PUBLICATION_FIGURE_SKILL_POLICY_VERSION
+from .plan_utils import _output_declares_figure, _parent_step_id_for_figure_step
 from .review_artifacts import build_review_artifact_payloads
 from .runtime_artifacts import (
     active_step_evidence_ids,
@@ -58,16 +59,38 @@ from .runtime_artifacts import (
     current_evidence_records,
     current_run_evidence_records,
     current_run_evidence_paths,
+    current_step_records,
     current_successful_step_ids,
     current_successful_step_records,
     load_run_artifact_authority,
+    verified_run_evidence_path,
 )
 from .schema import AnalysisPlan, ResearchContext, ValidationFinding
+
+
+def _has_figure_only_output_contract(step: Any) -> bool:
+    outputs = [
+        str(output or "").strip()
+        for output in (getattr(step, "expected_outputs", None) or [])
+        if str(output or "").strip()
+    ]
+    if not outputs:
+        return False
+    for output in outputs:
+        kind, separator, _product = output.lower().partition(":")
+        if separator:
+            if kind.strip() not in {"figure", "plot", "chart", "fig", "heatmap"}:
+                return False
+        elif not _output_declares_figure(output):
+            return False
+    return True
 
 
 def _figure_steps_satisfied_by_repair(
     run_dir: Path,
     per_step_records: Optional[Sequence[Mapping[str, Any]]],
+    *,
+    plan: Optional[AnalysisPlan] = None,
 ) -> set:
     """Figure step_ids whose figure a successful rendering-only repair produced.
 
@@ -75,10 +98,10 @@ def _figure_steps_satisfied_by_repair(
     salvaged by a later ``*_figure_repair`` step that renders the figure into its
     OWN outputs dir. That repair step is not a required plan step, so the gate
     would otherwise still count the original figure step as ``execution_failed``.
-    We credit it: a rendering-only repair step (``status == ok`` with a real
-    rendered figure on disk) whose ``parent_step`` is ``P`` satisfies the figure
-    step ``P + "_figure"``. Matching is exact via ``parent_step`` — no fuzzy
-    token overlap — so an unrelated repair can never mask a genuine failure.
+    Credit requires an orchestrator-owned ``repair_target_step_id``, a current
+    successful source checkpoint, and (for modern manifests) digest-bound
+    evidence that names the source evidence it rendered.  A renderer's own
+    ``parent_step``-style self-report is deliberately insufficient.
     """
 
     satisfied: set = set()
@@ -90,7 +113,11 @@ def _figure_steps_satisfied_by_repair(
         if per_step_records is not None
         else None
     )
-    strict_evidence_binding = authority is not None
+    if per_step_records is not None and authority is None:
+        # A modern outer ledger cannot gain repair credit from append-only
+        # files when its evidence authority is absent.
+        return satisfied
+    strict_evidence_binding = per_step_records is not None
     evidence_by_id = {
         str(record.get("evidence_id") or ""): record
         for record in ((authority or {}).get("evidence") or [])
@@ -113,6 +140,16 @@ def _figure_steps_satisfied_by_repair(
             except Exception:
                 continue
             candidates.append((summary.parents[1].name, payload, None))
+    current_by_step = {
+        str(record.get("step_id") or ""): record
+        for record in current_step_records(per_step_records or [])
+        if str(record.get("step_id") or "")
+    }
+    plan_by_step = {
+        str(step.step_id or ""): step
+        for step in ((plan.steps if plan is not None else []) or [])
+        if str(step.step_id or "")
+    }
     for step_id, payload, ledger_record in candidates:
         if not isinstance(payload, dict):
             continue
@@ -129,11 +166,87 @@ def _figure_steps_satisfied_by_repair(
             or str(payload.get("status") or "") != "ok"
         ):
             continue
-        parent = str(payload.get("parent_step") or "").strip()
-        if not parent:
+        # A renderer may describe its own inputs, but that self-report is not
+        # enough to supersede a failed plan step.  The orchestrator-owned outer
+        # ledger must name the exact target, and the target must be the split
+        # figure directly downstream of a currently successful source step.
+        source_step_id = str(payload.get("source_step_id") or "").strip()
+        target_step_id = str(
+            (ledger_record or {}).get("repair_target_step_id") or ""
+        ).strip()
+        if (
+            not source_step_id
+            or not target_step_id
+        ):
             continue
+        if plan is not None:
+            target_step = plan_by_step.get(target_step_id)
+            if (
+                target_step is None
+                or not _has_figure_only_output_contract(target_step)
+                or _parent_step_id_for_figure_step(target_step) != source_step_id
+            ):
+                continue
+        elif target_step_id != f"{source_step_id}_figure":
+            continue
+        source_record = current_by_step.get(source_step_id)
+        target_record = current_by_step.get(target_step_id)
+        target_status = str(
+            (target_record or {}).get("status")
+            if isinstance(target_record, Mapping)
+            else ""
+        ).strip().lower()
+        if (
+            not isinstance(target_record, Mapping)
+            or target_status
+            not in {"execution_failed", "contract_failed", "repair_failed"}
+        ):
+            continue
+
+        if strict_evidence_binding and (
+            not isinstance(source_record, Mapping)
+            or str(source_record.get("status") or "").strip().lower() != "ok"
+        ):
+            continue
+
+        source_evidence_ids = {
+            str(evidence_id)
+            for evidence_id in (
+                (source_record.get("evidence_ids") or [])
+                if isinstance(source_record, Mapping)
+                else []
+            )
+            if str(evidence_id).strip()
+        }
+        ledger_source_ids = {
+            str(evidence_id)
+            for evidence_id in ((ledger_record or {}).get("source_evidence_ids") or [])
+            if str(evidence_id).strip()
+        }
+        if strict_evidence_binding and (
+            not ledger_source_ids
+            or not source_evidence_ids
+            or not ledger_source_ids <= source_evidence_ids
+        ):
+            continue
+        if strict_evidence_binding:
+            source_evidence_verified = True
+            for evidence_id in ledger_source_ids:
+                source_evidence = evidence_by_id.get(evidence_id)
+                if (
+                    not isinstance(source_evidence, Mapping)
+                    or str(source_evidence.get("produced_by_step") or "")
+                    != source_step_id
+                    or verified_run_evidence_path(run_dir, source_evidence) is None
+                ):
+                    source_evidence_verified = False
+                    break
+            if not source_evidence_verified:
+                continue
         outputs_dir = steps_dir / step_id / "outputs"
         try:
+            if outputs_dir.is_symlink():
+                continue
             outputs_dir.resolve().relative_to(steps_dir.resolve())
         except ValueError:
             continue
@@ -160,7 +273,7 @@ def _figure_steps_satisfied_by_repair(
                 path.resolve().relative_to(outputs_dir.resolve())
             except ValueError:
                 return False
-            if not path.is_file() or path.suffix.lower() not in {
+            if path.is_symlink() or not path.is_file() or path.suffix.lower() not in {
                 ".png",
                 ".svg",
                 ".pdf",
@@ -183,7 +296,6 @@ def _figure_steps_satisfied_by_repair(
                 if str(evidence_id).strip()
             }
             output_digest = sha256_of_file(path)
-            run_root = run_dir.resolve()
             for evidence_id in active_ids:
                 evidence_record = evidence_by_id.get(evidence_id)
                 if not isinstance(evidence_record, Mapping):
@@ -194,13 +306,26 @@ def _figure_steps_satisfied_by_repair(
                     or str(evidence_record.get("sha256") or "") != output_digest
                 ):
                     continue
-                relative_path = str(evidence_record.get("relative_path") or "").strip()
-                if not relative_path:
+                evidence_path = verified_run_evidence_path(run_dir, evidence_record)
+                if evidence_path is None:
                     continue
-                evidence_path = (run_root / relative_path).resolve()
-                try:
-                    evidence_path.relative_to(run_root)
-                except ValueError:
+                metadata = evidence_record.get("metadata")
+                metadata = metadata if isinstance(metadata, Mapping) else {}
+                evidence_source_ids = {
+                    str(value)
+                    for value in (evidence_record.get("inputs") or [])
+                    if str(value).strip()
+                }
+                raw_source_ids = metadata.get("source_evidence_ids")
+                if isinstance(raw_source_ids, (list, tuple, set)):
+                    evidence_source_ids.update(
+                        str(value) for value in raw_source_ids if str(value).strip()
+                    )
+                else:
+                    source_id = str(metadata.get("source_evidence_id") or "").strip()
+                    if source_id:
+                        evidence_source_ids.add(source_id)
+                if not ledger_source_ids <= evidence_source_ids:
                     continue
                 original_name = evidence_path.name.split("__", 1)[-1]
                 if (
@@ -223,7 +348,7 @@ def _figure_steps_satisfied_by_repair(
                 for ext in (".png", ".svg", ".pdf", ".tif", ".tiff")
             )
         if has_rendered_figure:
-            satisfied.add(parent + "_figure")
+            satisfied.add(target_step_id)
     return satisfied
 
 
@@ -251,7 +376,7 @@ def execution_gate_status(
     # the deterministic probe record fixes the false negative.
     status_by_step = {
         str(record.get("step_id")): str(record.get("status") or "")
-        for record in per_step_records
+        for record in current_step_records(per_step_records)
         if record.get("step_id")
     }
     missing_steps = [
@@ -263,14 +388,18 @@ def execution_gate_status(
     # matched EXACTLY by a repair's ``parent_step`` are credited; every other
     # failure still blocks the gate. ``run_dir=None`` preserves legacy behaviour.
     repaired_figures: set = (
-        _figure_steps_satisfied_by_repair(run_dir, per_step_records)
+        _figure_steps_satisfied_by_repair(
+            run_dir,
+            per_step_records,
+            plan=plan,
+        )
         if run_dir is not None
         else set()
     )
 
     def _step_ok(step_id: str) -> bool:
         return status_by_step.get(step_id) == "ok" or (
-            step_id in repaired_figures and str(step_id).endswith("_figure")
+            step_id in repaired_figures
         )
 
     failed_steps = [
@@ -385,16 +514,7 @@ def _authoritative_step_summaries(
 
 
 def _evidence_record_path(run_dir: Path, record: Mapping[str, Any]) -> Optional[Path]:
-    relative_path = str(record.get("relative_path") or "").strip()
-    if not relative_path:
-        return None
-    root = run_dir.resolve()
-    path = (root / relative_path).resolve()
-    try:
-        path.relative_to(root)
-    except ValueError:
-        return None
-    return path if path.is_file() else None
+    return verified_run_evidence_path(run_dir, record)
 
 
 def _blocked_outcome_step_ids(
@@ -423,7 +543,11 @@ def _blocked_outcome_step_ids(
                 continue
             path = _evidence_record_path(run_dir, record)
             step_id = str(record.get("produced_by_step") or "").strip()
-            if path is not None and step_id:
+            if path is None and step_id:
+                # A current gate record whose registered bytes disappeared or
+                # changed cannot authenticate an open outcome-analysis state.
+                blocked.add(step_id)
+            elif path is not None and step_id:
                 gate_files.append((step_id, path))
     for step_id, path in gate_files:
         try:
@@ -575,7 +699,20 @@ def _publication_figure_bundle_ready(
         record
         for record in current_evidence_records(evidence.records(), per_step_records)
         if _sources_belong_to_current_checkpoint(record)
+        and verified_run_evidence_path(run_dir, record) is not None
     ]
+    verified_ids = {str(record.evidence_id) for record in current_records}
+
+    def _verified_source_ids(metadata: Mapping[str, Any]) -> set[str]:
+        raw_ids = metadata.get("source_evidence_ids")
+        if isinstance(raw_ids, (list, tuple, set)):
+            source_ids = {str(value) for value in raw_ids if str(value).strip()}
+        else:
+            source_ids = set()
+        single = str(metadata.get("source_evidence_id") or "").strip()
+        if single:
+            source_ids.add(single)
+        return source_ids if source_ids and source_ids <= verified_ids else set()
 
     def _is_publication_contract(record: Any) -> bool:
         metadata = record.metadata or {}
@@ -599,11 +736,7 @@ def _publication_figure_bundle_ready(
             source_ready = True
         is_contract_record = _is_publication_contract(record)
         if record.kind != "figure":
-            if is_contract_record and (
-                metadata.get("source_evidence_id")
-                or metadata.get("source_evidence_ids")
-                or metadata.get("source_data")
-            ):
+            if is_contract_record and _verified_source_ids(metadata):
                 source_ready = True
             continue
         role = str(metadata.get("figure_role") or "").lower()
@@ -625,15 +758,14 @@ def _publication_figure_bundle_ready(
         if _run_level_publication_skill_record(record) and (
             not _source_fingerprints_match(evidence, metadata)
             or not _publication_figure_policy_matches(metadata)
+            or not _verified_source_ids(metadata)
         ):
             continue
-        if (
-            metadata.get("source_evidence_id")
-            or metadata.get("source_evidence_ids")
-            or metadata.get("source_data")
-        ):
+        if _verified_source_ids(metadata):
             source_ready = True
-        path = run_dir / record.relative_path
+        path = verified_run_evidence_path(run_dir, record)
+        if path is None:
+            continue
         stem = path.with_suffix("").name.split("__", 1)[-1]
         stems.setdefault(stem, set()).add(path.suffix.lower().lstrip("."))
     ready_stems = [
@@ -877,6 +1009,9 @@ _PUBLICATION_FIGURE_SUMMARY_RE = re.compile(
     r"^publication_figure_skill_summary(?:_v(?P<version>\d+))?"
     r"__publication_figure_skill_summary\.json$"
 )
+_PUBLICATION_FIGURE_SUMMARY_ID_RE = re.compile(
+    r"^publication_figure_skill_summary(?:_v(?P<version>\d+))?$"
+)
 
 
 def _publication_figure_summary_sort_key(path: Path) -> tuple[int, str]:
@@ -887,33 +1022,110 @@ def _publication_figure_summary_sort_key(path: Path) -> tuple[int, str]:
     return (version, path.name)
 
 
-def _latest_publication_figure_audit_status(run_dir: Path) -> Optional[Dict[str, Any]]:
-    """Return the latest versioned publication-figure audit summary, if any."""
-    candidates = sorted(
-        (run_dir / "evidence").glob(
-            "publication_figure_skill_summary*__publication_figure_skill_summary.json"
-        ),
-        key=_publication_figure_summary_sort_key,
+def _publication_figure_summary_record_sort_key(record: Any) -> tuple[int, str]:
+    evidence_id = str(getattr(record, "evidence_id", "") or "")
+    match = _PUBLICATION_FIGURE_SUMMARY_ID_RE.match(evidence_id)
+    if match:
+        return (int(match.group("version") or "1"), evidence_id)
+    return _publication_figure_summary_sort_key(
+        Path(str(getattr(record, "relative_path", "") or ""))
     )
-    for path in reversed(candidates):
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        findings = payload.get("audit_findings")
-        if not isinstance(findings, list):
-            continue
-        errors = [
-            item
-            for item in findings
-            if isinstance(item, dict) and item.get("severity") == "error"
-        ]
-        return {
-            "path": str(path),
-            "error_count": len(errors),
-            "errors": errors,
-        }
-    return None
+
+
+def _latest_publication_figure_audit_status(
+    run_dir: Path,
+    *,
+    evidence: EvidenceStore,
+    per_step_records: Optional[Sequence[Mapping[str, Any]]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Return the latest *authorised* publication-figure audit summary.
+
+    The evidence directory is append-only, so a filename glob cannot establish
+    current authority.  Only a registered, digest-valid record whose declared
+    sources are still present in the current checkpoint may supersede an older
+    visual finding.
+    """
+
+    all_records = list(evidence.records())
+    summary_records = [
+        record
+        for record in all_records
+        if _PUBLICATION_FIGURE_SUMMARY_ID_RE.match(str(record.evidence_id))
+        or _PUBLICATION_FIGURE_SUMMARY_RE.match(Path(record.relative_path).name)
+    ]
+    if not summary_records:
+        return None
+    # Never fall back from a newer malformed/stale/tampered audit to an older
+    # clean one.  The newest registered attempt owns the audit state and fails
+    # closed when it cannot prove authority.
+    latest_record = max(
+        summary_records,
+        key=_publication_figure_summary_record_sort_key,
+    )
+
+    current_records = [
+        record
+        for record in current_evidence_records(all_records, per_step_records)
+        if verified_run_evidence_path(run_dir, record) is not None
+    ]
+    current_by_id = {str(record.evidence_id): record for record in current_records}
+    current_ids = set(current_by_id)
+    record = current_by_id.get(str(latest_record.evidence_id))
+    path = verified_run_evidence_path(run_dir, latest_record)
+    if record is None or path is None or not _PUBLICATION_FIGURE_SUMMARY_RE.match(path.name):
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    findings = payload.get("audit_findings")
+    if not isinstance(findings, list):
+        return None
+    raw_source_ids = payload.get("source_evidence_ids")
+    source_ids = (
+        {str(value) for value in raw_source_ids if str(value).strip()}
+        if isinstance(raw_source_ids, list)
+        else set()
+    )
+    if not source_ids or not source_ids <= current_ids:
+        return None
+    contract_id = str(payload.get("contract_evidence_id") or "").strip()
+    raw_figure_ids = payload.get("figure_evidence_ids")
+    figure_ids = (
+        {str(value) for value in raw_figure_ids if str(value).strip()}
+        if isinstance(raw_figure_ids, list)
+        else set()
+    )
+    contract_record = current_by_id.get(contract_id)
+    if (
+        payload.get("generated") is not True
+        or not contract_id
+        or not figure_ids
+        or contract_record is None
+        or not figure_ids <= current_ids
+        or not (
+            contract_id == "publication_figure_contract"
+            or contract_id.startswith("publication_figure_contract_v")
+            or (contract_record.metadata or {}).get("artifact_role")
+            == "figure_contract"
+        )
+        or any(
+            str(current_by_id[figure_id].kind) != "figure"
+            for figure_id in figure_ids
+        )
+    ):
+        return None
+    errors = [
+        item
+        for item in findings
+        if isinstance(item, dict) and item.get("severity") == "error"
+    ]
+    return {
+        "path": str(path),
+        "evidence_id": str(record.evidence_id),
+        "error_count": len(errors),
+        "errors": errors,
+    }
 
 
 def _finding_references_publication_figure(finding: ValidationFinding) -> bool:
@@ -1484,7 +1696,11 @@ def _compute_readiness_gates(
             isinstance(critique_payload, dict)
             and critique_payload.get("status") == "pass"
         )
-    latest_publication_audit = _latest_publication_figure_audit_status(run_dir)
+    latest_publication_audit = _latest_publication_figure_audit_status(
+        run_dir,
+        evidence=evidence,
+        per_step_records=per_step_records,
+    )
     active_findings, superseded_findings = _partition_findings_by_supersession(
         findings,
         success_step_ids=success_step_ids,

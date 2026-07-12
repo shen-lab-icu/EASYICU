@@ -16,6 +16,7 @@ from easyicu.research_agent.pipeline_resume import (
     store_quarantined_concept_draft,
     upsert_step_record,
 )
+from easyicu.research_agent.contracts import ValidationFinding
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
 
@@ -114,7 +115,6 @@ def test_resume_controller_drops_requested_step_and_stale_findings(tmp_path: Pat
     ]
     assert resume_findings
     assert resume_findings[-1].detail["dropped_completed_step_ids"] == [
-        "02_model",
         "03_figure",
         "04_unplanned",
     ]
@@ -126,6 +126,71 @@ def test_pipeline_resume_entrypoints_are_importable() -> None:
     assert ResumeController.__name__ == "ResumeController"
     assert ResumeApplication.__name__ == "ResumeApplication"
     assert callable(upsert_step_record)
+
+
+def test_finding_step_match_uses_exact_identifier_boundaries() -> None:
+    finding = ValidationFinding(
+        validator="runner",
+        severity="error",
+        message="Failure belongs to 02_model_figure, not its parent.",
+    )
+
+    assert not ResumeController._finding_mentions_step(finding, {"02_model"})
+    assert ResumeController._finding_mentions_step(finding, {"02_model_figure"})
+
+
+def test_resume_runner_finding_uses_exact_step_identifier_boundary(
+    tmp_path: Path,
+) -> None:
+    plan = AnalysisPlan(
+        research_question="Keep distinct step identifiers distinct.",
+        steps=[
+            AnalysisStep(step_id="step1", intent="First step."),
+            AnalysisStep(step_id="step10", intent="Tenth step."),
+        ],
+    )
+    state = {
+        "per_step_records": [{"step_id": "step1", "status": "ok"}],
+        "findings": [
+            ValidationFinding(
+                validator="runner",
+                severity="error",
+                message="Runner failed for step10.",
+            ).model_dump(mode="json")
+        ],
+    }
+
+    application = ResumeController(
+        plan=plan,
+        run_dir=tmp_path,
+        resume_state=state,
+    ).apply()
+
+    assert [(finding.validator, finding.message) for finding in application.findings] == [
+        ("runner", "Runner failed for step10.")
+    ]
+
+
+def test_resume_controller_does_not_reuse_ok_superseded_by_failure(
+    tmp_path: Path,
+) -> None:
+    applied = ResumeController(
+        plan=_plan(),
+        run_dir=tmp_path,
+        resume_state={
+            "per_step_records": [
+                {"step_id": "01_define", "status": "ok"},
+                {
+                    "step_id": "01_define",
+                    "status": "contract_failed",
+                    "step_summary": {"status": "rejected"},
+                },
+            ]
+        },
+    ).apply()
+
+    assert applied.resumed_step_ids == set()
+    assert applied.per_step_records == []
 
 
 def test_pipeline_resume_is_a_leaf_module() -> None:
@@ -476,6 +541,40 @@ def test_resume_controller_rejects_tampered_or_non_evidence_code(tmp_path: Path)
                 "sha256": original_sha256,
                 "generation_mode": "llm",
             },
+        ]
+    }
+
+    assert (
+        ResumeController(
+            plan=_plan(),
+            run_dir=tmp_path,
+            resume_state=state,
+            resume_from_step_id="02_model",
+        ).prior_code_for_step("02_model")
+        is None
+    )
+
+
+def test_resume_controller_rejects_symlinked_evidence_code(tmp_path: Path):
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir()
+    outside = tmp_path / "outside.py"
+    outside.write_text("import os\nprint('outside')\n", encoding="utf-8")
+    link = evidence_dir / "code_agent__analysis.py"
+    try:
+        link.symlink_to(outside)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    state = {
+        "evidence": [
+            {
+                "evidence_id": "code_agent",
+                "kind": "code",
+                "produced_by_step": "02_model",
+                "relative_path": str(link.relative_to(tmp_path)),
+                "sha256": _sha256(outside),
+                "generation_mode": "llm",
+            }
         ]
     }
 

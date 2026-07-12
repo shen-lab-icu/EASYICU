@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -149,6 +150,50 @@ def test_active_and_legacy_readiness_controls_still_gate(tmp_path: Path):
     assert primary_survival_estimate_integrity_errors(_survival_plan(), tmp_path)
 
 
+def test_blocked_outcome_gate_fails_closed_when_evidence_is_tampered(
+    tmp_path: Path,
+) -> None:
+    step_id = "01_outcome_gate"
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir()
+    gate_path = evidence_dir / "outcome_gate__outcome_gate.csv"
+    gate_path.write_text(
+        "status,primary_analysis_authorized,outcome\n"
+        "blocked,false,mortality\n",
+        encoding="utf-8",
+    )
+    evidence_id = "outcome_gate"
+    records = [
+        {
+            "step_id": step_id,
+            "status": "ok",
+            "evidence_ids": [evidence_id],
+            "step_summary": {},
+        }
+    ]
+    _write_manifest(
+        tmp_path,
+        records,
+        evidence=[
+            {
+                "evidence_id": evidence_id,
+                "kind": "table",
+                "relative_path": str(gate_path.relative_to(tmp_path)),
+                "sha256": hashlib.sha256(gate_path.read_bytes()).hexdigest(),
+                "produced_by_step": step_id,
+            }
+        ],
+    )
+    assert _blocked_outcome_step_ids(tmp_path, records) == [step_id]
+
+    gate_path.write_text(
+        "status,primary_analysis_authorized,outcome\n"
+        "ok,true,mortality\n",
+        encoding="utf-8",
+    )
+
+    assert _blocked_outcome_step_ids(tmp_path, records) == [step_id]
+
 def test_validity_signals_ignore_failed_summary_and_failed_evidence(
     tmp_path: Path,
 ):
@@ -266,6 +311,23 @@ def test_scorecard_does_not_read_stale_failed_primary_coefficients(
         "variable,coef\nsepsis3,0.7\nsofa_max,0.4\n",
         encoding="utf-8",
     )
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir()
+    registered_primary = evidence_dir / "active_coefficients__model_coefficients.csv"
+    registered_secondary = evidence_dir / "secondary_coefficients__coefficients.csv"
+    registered_primary.write_bytes(coefficient_path.read_bytes())
+    registered_secondary.write_bytes(secondary_path.read_bytes())
+
+    def registered_record(
+        *, evidence_id: str, path: Path, produced_by_step: str
+    ) -> dict:
+        return {
+            "evidence_id": evidence_id,
+            "relative_path": str(path.relative_to(tmp_path)),
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "produced_by_step": produced_by_step,
+        }
+
     primary_summary = {"primary_model": {"exposure": "sepsis3"}}
     _write_manifest(
         tmp_path,
@@ -290,16 +352,16 @@ def test_scorecard_does_not_read_stale_failed_primary_coefficients(
             },
         ],
         evidence=[
-            {
-                "evidence_id": "stale_coefficients",
-                "relative_path": str(coefficient_path.relative_to(tmp_path)),
-                "produced_by_step": "01_primary_model",
-            },
-            {
-                "evidence_id": "secondary_coefficients",
-                "relative_path": str(secondary_path.relative_to(tmp_path)),
-                "produced_by_step": "02_secondary_model",
-            }
+            registered_record(
+                evidence_id="stale_coefficients",
+                path=registered_primary,
+                produced_by_step="01_primary_model",
+            ),
+            registered_record(
+                evidence_id="secondary_coefficients",
+                path=registered_secondary,
+                produced_by_step="02_secondary_model",
+            ),
         ],
     )
 
@@ -322,11 +384,11 @@ def test_scorecard_does_not_read_stale_failed_primary_coefficients(
             }
         ],
         evidence=[
-            {
-                "evidence_id": "active_coefficients",
-                "relative_path": str(coefficient_path.relative_to(tmp_path)),
-                "produced_by_step": "01_primary_model",
-            }
+            registered_record(
+                evidence_id="active_coefficients",
+                path=registered_primary,
+                produced_by_step="01_primary_model",
+            )
         ],
     )
     active = score_run_from_dir(

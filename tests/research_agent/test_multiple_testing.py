@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import csv
+import hashlib
+import inspect
 import json
 from pathlib import Path
 
@@ -63,11 +65,18 @@ class _EvRec:
     """Minimal evidence-record stand-in for the extractor."""
 
     def __init__(
-        self, *, evidence_id, kind, relative_path, produced_by_step=None
+        self,
+        *,
+        evidence_id,
+        kind,
+        relative_path,
+        source_path: Path,
+        produced_by_step=None,
     ):
         self.evidence_id = evidence_id
         self.kind = kind
         self.relative_path = relative_path
+        self.sha256 = hashlib.sha256(source_path.read_bytes()).hexdigest()
         self.produced_by_step = produced_by_step
 
 
@@ -93,7 +102,14 @@ def test_extract_pvalues_from_column(ra, tmp_path):
         ],
         header=["comparison", "statistic", "p_value"],
     )
-    recs = [_EvRec(evidence_id="primary_association", kind="table", relative_path="primary.csv")]
+    recs = [
+        _EvRec(
+            evidence_id="primary_association",
+            kind="table",
+            relative_path="primary.csv",
+            source_path=csv_path,
+        )
+    ]
     report = ra.build_multiple_testing_report(
         evidence_records=recs, run_dir=run_dir, alpha=0.05,
     )
@@ -126,7 +142,8 @@ def test_primary_p_value_exact_field_remains_backward_compatible(ra, tmp_path):
     run_dir = tmp_path / "run"
     evidence_dir = run_dir / "evidence"
     evidence_dir.mkdir(parents=True)
-    (evidence_dir / "step_summary.json").write_text(
+    summary_path = evidence_dir / "step_summary.json"
+    summary_path.write_text(
         json.dumps(
             {
                 "primary_predictor": "exposure",
@@ -144,6 +161,7 @@ def test_primary_p_value_exact_field_remains_backward_compatible(ra, tmp_path):
                 evidence_id="step_summary",
                 kind="statistic",
                 relative_path="step_summary.json",
+                source_path=summary_path,
             )
         ],
         run_dir=run_dir,
@@ -168,7 +186,12 @@ def test_group_value_and_pvalue_bounded_are_never_tests(ra, tmp_path):
     )
     report = ra.build_multiple_testing_report(
         evidence_records=[
-            _EvRec(evidence_id="trend", kind="table", relative_path="trend.csv")
+            _EvRec(
+                evidence_id="trend",
+                kind="table",
+                relative_path="trend.csv",
+                source_path=csv_path,
+            )
         ],
         run_dir=run_dir,
     )
@@ -191,7 +214,14 @@ def test_extract_skips_out_of_range_pvalues(ra, tmp_path):
         ],
         header=["term", "pvalue"],
     )
-    recs = [_EvRec(evidence_id="broken", kind="table", relative_path="broken.csv")]
+    recs = [
+        _EvRec(
+            evidence_id="broken",
+            kind="table",
+            relative_path="broken.csv",
+            source_path=csv_path,
+        )
+    ]
     report = ra.build_multiple_testing_report(
         evidence_records=recs, run_dir=run_dir,
     )
@@ -230,7 +260,14 @@ def test_extract_from_json_recurses(ra, tmp_path):
             }
         )
     )
-    recs = [_EvRec(evidence_id="stat", kind="statistic", relative_path="stat.json")]
+    recs = [
+        _EvRec(
+            evidence_id="stat",
+            kind="statistic",
+            relative_path="stat.json",
+            source_path=json_path,
+        )
+    ]
     report = ra.build_multiple_testing_report(
         evidence_records=recs, run_dir=run_dir,
     )
@@ -269,6 +306,7 @@ def test_structured_coefficients_exclude_nuisance_and_sensitivity_rows(ra, tmp_p
                 evidence_id="coefficients",
                 kind="table",
                 relative_path="coefficients.csv",
+                source_path=csv_path,
             )
         ],
         run_dir=run_dir,
@@ -298,6 +336,7 @@ def test_untyped_structured_coefficient_dump_is_omitted(ra, tmp_path):
                 evidence_id="coefficients",
                 kind="table",
                 relative_path="coefficients.csv",
+                source_path=csv_path,
             )
         ],
         run_dir=run_dir,
@@ -328,6 +367,7 @@ def test_untyped_coefficient_alias_dump_is_omitted(ra, tmp_path, term_column):
                 evidence_id="coefficients",
                 kind="table",
                 relative_path="coefficients.csv",
+                source_path=csv_path,
             )
         ],
         run_dir=run_dir,
@@ -356,6 +396,7 @@ def test_explicit_hypothesis_families_are_corrected_separately(ra, tmp_path):
                 evidence_id="planned_tests",
                 kind="table",
                 relative_path="planned_tests.csv",
+                source_path=csv_path,
             )
         ],
         run_dir=run_dir,
@@ -393,6 +434,7 @@ def test_explicit_family_id_is_authoritative_across_models(ra, tmp_path):
                 evidence_id="planned_tests",
                 kind="table",
                 relative_path="planned_tests.csv",
+                source_path=csv_path,
             )
         ],
         run_dir=run_dir,
@@ -406,15 +448,17 @@ def test_csv_and_json_duplicate_statistics_are_counted_once(ra, tmp_path):
     run_dir = tmp_path / "run"
     evidence_dir = run_dir / "evidence"
     evidence_dir.mkdir(parents=True)
+    trend_path = evidence_dir / "trend.csv"
     _write_csv(
-        evidence_dir / "trend.csv",
+        trend_path,
         rows=[
             ["death", "cochran_armitage", "ordered_trends", 0.01],
             ["los_icu", "jonckheere_terpstra", "ordered_trends", 0.02],
         ],
         header=["outcome", "test_id", "family_id", "p_value"],
     )
-    (evidence_dir / "summary.json").write_text(
+    summary_path = evidence_dir / "summary.json"
+    summary_path.write_text(
         json.dumps(
             {
                 "trend_results": [
@@ -439,11 +483,17 @@ def test_csv_and_json_duplicate_statistics_are_counted_once(ra, tmp_path):
     )
     report = ra.build_multiple_testing_report(
         evidence_records=[
-            _EvRec(evidence_id="trend", kind="table", relative_path="trend.csv"),
+            _EvRec(
+                evidence_id="trend",
+                kind="table",
+                relative_path="trend.csv",
+                source_path=trend_path,
+            ),
             _EvRec(
                 evidence_id="summary",
                 kind="statistic",
                 relative_path="summary.json",
+                source_path=summary_path,
             ),
         ],
         run_dir=run_dir,
@@ -460,17 +510,24 @@ def test_resume_report_is_not_reingested_and_duplicate_evidence_is_deduped(
     run_dir = tmp_path / "run"
     evidence_dir = run_dir / "evidence"
     evidence_dir.mkdir(parents=True)
+    tests_path = evidence_dir / "tests.csv"
     _write_csv(
-        evidence_dir / "tests.csv",
+        tests_path,
         rows=[["primary comparison", "primary_family", 0.01]],
         header=["comparison", "family_id", "p_value"],
     )
+    prior_report_path = evidence_dir / "multiple_testing_report.csv"
     _write_csv(
-        evidence_dir / "multiple_testing_report.csv",
+        prior_report_path,
         rows=[["primary comparison", 0.01]],
         header=["label", "p_raw"],
     )
-    source = _EvRec(evidence_id="tests", kind="table", relative_path="tests.csv")
+    source = _EvRec(
+        evidence_id="tests",
+        kind="table",
+        relative_path="tests.csv",
+        source_path=tests_path,
+    )
     report = ra.build_multiple_testing_report(
         evidence_records=[
             source,
@@ -479,6 +536,7 @@ def test_resume_report_is_not_reingested_and_duplicate_evidence_is_deduped(
                 evidence_id="multiple_testing_report",
                 kind="statistic",
                 relative_path="multiple_testing_report.csv",
+                source_path=prior_report_path,
             ),
         ],
         run_dir=run_dir,
@@ -509,12 +567,14 @@ def test_resume_uses_only_latest_step_evidence_and_versions_o22_report(ra, tmp_p
             evidence_id="old_result",
             kind="table",
             relative_path="old.csv",
+            source_path=evidence_dir / "old.csv",
             produced_by_step="06_model",
         ),
         _EvRec(
             evidence_id="new_result",
             kind="table",
             relative_path="new.csv",
+            source_path=evidence_dir / "new.csv",
             produced_by_step="06_model",
         ),
     ]
@@ -574,17 +634,144 @@ def test_resume_uses_only_latest_step_evidence_and_versions_o22_report(ra, tmp_p
     assert (run_dir / resumed_md_record.relative_path).read_bytes() == markdown_path.read_bytes()
 
 
+def test_package_scopes_o22_evidence_to_its_own_current_producer(ra, tmp_path):
+    from easyicu.research_agent import pipeline_package
+    from easyicu.research_agent.runtime_artifacts import current_evidence_records
+
+    run_dir = tmp_path / "run"
+    evidence_dir = run_dir / "evidence"
+    evidence_dir.mkdir(parents=True)
+    for name, p_value in (("current.csv", 0.03), ("borrowed.csv", 0.001)):
+        _write_csv(
+            evidence_dir / name,
+            rows=[[name, "planned_family", p_value]],
+            header=["hypothesis_id", "family_id", "p_value"],
+        )
+    evidence_records = [
+        _EvRec(
+            evidence_id="current_result",
+            kind="table",
+            relative_path="current.csv",
+            source_path=evidence_dir / "current.csv",
+            produced_by_step="01_current",
+        ),
+        _EvRec(
+            evidence_id="borrowed_result",
+            kind="table",
+            relative_path="borrowed.csv",
+            source_path=evidence_dir / "borrowed.csv",
+            produced_by_step="02_failed",
+        ),
+    ]
+    per_step_records = [
+        {
+            "step_id": "01_current",
+            "status": "ok",
+            # Global id membership alone must not borrow 02_failed's output.
+            "evidence_ids": ["current_result", "borrowed_result"],
+        },
+        {"step_id": "02_failed", "status": "contract_failed", "evidence_ids": []},
+    ]
+
+    report = ra.build_multiple_testing_report(
+        evidence_records=current_evidence_records(
+            evidence_records, per_step_records
+        ),
+        run_dir=run_dir,
+        active_evidence_ids=pipeline_package._active_step_evidence_ids(
+            per_step_records
+        ),
+    )
+
+    assert [record.evidence_id for record in report.records] == ["current_result"]
+    package_source = inspect.getsource(pipeline_package.finalise_success)
+    assert "evidence_records=current_evidence_records(" in package_source
+
+
 def test_no_pvalues_produces_note(ra, tmp_path):
     run_dir = tmp_path / "run"
     (run_dir / "evidence").mkdir(parents=True)
     csv_path = run_dir / "evidence" / "desc.csv"
     _write_csv(csv_path, rows=[["age", 65], ["n", 800]], header=["field", "value"])
-    recs = [_EvRec(evidence_id="desc", kind="table", relative_path="desc.csv")]
+    recs = [
+        _EvRec(
+            evidence_id="desc",
+            kind="table",
+            relative_path="desc.csv",
+            source_path=csv_path,
+        )
+    ]
     report = ra.build_multiple_testing_report(
         evidence_records=recs, run_dir=run_dir,
     )
     assert report.n_tests == 0
     assert any("No p-values" in n for n in report.notes)
+
+
+def test_pvalue_source_with_stale_digest_is_not_scanned(ra, tmp_path):
+    run_dir = tmp_path / "run"
+    source = run_dir / "evidence" / "tests.csv"
+    _write_csv(source, rows=[["primary", 0.01]], header=["term", "p_value"])
+    record = _EvRec(
+        evidence_id="tests",
+        kind="table",
+        relative_path="tests.csv",
+        source_path=source,
+    )
+    source.write_text("term,p_value\nprimary,0.99\n", encoding="utf-8")
+
+    report = ra.build_multiple_testing_report(
+        evidence_records=[record],
+        run_dir=run_dir,
+    )
+
+    assert report.n_tests == 0
+
+
+def test_pvalue_source_cannot_escape_evidence_directory(ra, tmp_path):
+    run_dir = tmp_path / "run"
+    (run_dir / "evidence").mkdir(parents=True)
+    outside = tmp_path / "outside.csv"
+    _write_csv(outside, rows=[["primary", 0.01]], header=["term", "p_value"])
+    record = _EvRec(
+        evidence_id="outside",
+        kind="table",
+        relative_path="../../outside.csv",
+        source_path=outside,
+    )
+
+    report = ra.build_multiple_testing_report(
+        evidence_records=[record],
+        run_dir=run_dir,
+    )
+
+    assert report.n_tests == 0
+
+
+def test_pvalue_source_symlink_is_not_scanned(ra, tmp_path):
+    run_dir = tmp_path / "run"
+    evidence_dir = run_dir / "evidence"
+    evidence_dir.mkdir(parents=True)
+    outside = tmp_path / "outside.csv"
+    _write_csv(outside, rows=[["primary", 0.01]], header=["term", "p_value"])
+    link = evidence_dir / "linked.csv"
+    try:
+        link.symlink_to(outside)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    record = _EvRec(
+        evidence_id="linked",
+        kind="table",
+        relative_path="linked.csv",
+        source_path=outside,
+    )
+
+    report = ra.build_multiple_testing_report(
+        evidence_records=[record],
+        run_dir=run_dir,
+    )
+
+    assert report.n_tests == 0
 
 
 # ---------------------------------------------------------------------------
