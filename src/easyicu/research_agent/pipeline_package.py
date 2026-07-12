@@ -24,35 +24,36 @@ from typing import Any, Callable, Dict, List, Optional
 import pandas as pd
 
 from .audits.validators import dedupe_findings
+from .cohort_schema import COHORT_LOCK_FILENAME
+from .concept_dict_audit import (
+    CONCEPT_DICT_PACKAGE_PATH,
+    SOFA2_DICT_PACKAGE_PATH,
+    compute_concept_dict_fingerprint,
+)
 from .contracts import (
     ValidationFinding,
     _ExecutePhaseResult,
     _PlanPhaseResult,
     _WritePhaseResult,
 )
-from .concept_dict_audit import (
-    CONCEPT_DICT_PACKAGE_PATH,
-    SOFA2_DICT_PACKAGE_PATH,
-    compute_concept_dict_fingerprint,
-)
 from .cost import CostMeter
 from .evidence import EvidenceStore
 from .methods.multiple_testing import build_multiple_testing_report
+from .methods.sensitivity import compute_e_value
 from .pipeline_cross_db import _literature_provenance_note
 from .pipeline_report import render_report, write_readiness_artifacts
 from .prompts import PROMPT_PACK_VERSION, prompt_pack_files
 from .runtime_artifacts import (
     AuditLogger,
+    active_step_evidence_ids,
     build_execution_replay,
     build_workflow_graph,
     capture_code_version,
     render_workflow_graph_mermaid,
     write_json_artifact,
 )
-from .schema import AnalysisManifest, PipelineResult, ResearchContext
-from .methods.sensitivity import compute_e_value
-from .cohort_schema import COHORT_LOCK_FILENAME
 from .robustness_panel import PANEL_FILENAME, load_robustness_panel
+from .schema import AnalysisManifest, PipelineResult, ResearchContext
 from .side_findings import collect_side_findings, write_side_findings
 
 logger = logging.getLogger(__name__)
@@ -83,6 +84,51 @@ def _concept_dictionary_manifest_fields() -> Dict[str, Any]:
         "sofa2_dict_sha": fingerprint.sofa2_dict_sha,
         "concept_dict_fingerprint": fingerprint.to_dict(),
     }
+
+
+def _active_step_evidence_ids(
+    per_step_records: List[Dict[str, Any]],
+) -> set[str]:
+    """Return evidence referenced by the latest checkpoint for each step.
+
+    Evidence blobs are immutable, so a resumed step leaves its prior outputs in
+    the store.  The ordered per-step ledger appends the resumed checkpoint; the
+    last record for a step is therefore the current execution authority.
+    """
+
+    return active_step_evidence_ids(per_step_records)
+
+
+def _register_multiple_testing_outputs(
+    *,
+    evidence: EvidenceStore,
+    csv_path: Path,
+    markdown_path: Path,
+) -> tuple[str, str]:
+    """Register the current O22 outputs, versioning changed resume content."""
+
+    csv_record = evidence.register_file(
+        kind="statistic",
+        description=(
+            "Family-scoped Benjamini–Hochberg and Bonferroni "
+            "correction for auditable registered p-values (O22)."
+        ),
+        source_path=csv_path,
+        evidence_id="multiple_testing_report",
+        producer="pipeline",
+        generation_mode="system",
+        on_sha_change="new_id",
+    )
+    markdown_record = evidence.register_file(
+        kind="log",
+        description="Human-readable summary of multiple-testing correction (O22).",
+        source_path=markdown_path,
+        evidence_id="multiple_testing_summary",
+        producer="pipeline",
+        generation_mode="system",
+        on_sha_change="new_id",
+    )
+    return csv_record.evidence_id, markdown_record.evidence_id
 
 
 def finalise_success(
@@ -281,44 +327,28 @@ def finalise_success(
         )
         reproducibility_summary = plan_result.repro_envelope.to_manifest_summary()
 
-    # O22 — Multiple-testing correction. Scan every registered
-    # table / statistic artefact for p-values and BH-adjust the
-    # whole family run-wide. Writes a CSV + MD pair and registers
-    # both as evidence so the manuscript can cite
+    # O22 — Multiple-testing correction. Scan registered table /
+    # statistic artefacts for auditable raw p-values and adjust them
+    # within their declared (or defensible source-local) hypothesis
+    # families. Writes a CSV + MD pair and registers both as evidence
+    # so the manuscript can cite
     # ``{evidence:multiple_testing_report}``.
     if pipeline._enable_multiple_testing_correction:
         mt_report = build_multiple_testing_report(
             evidence_records=evidence.records(),
             run_dir=run_dir,
             alpha=pipeline._multiple_testing_alpha,
+            active_evidence_ids=_active_step_evidence_ids(per_step_records),
         )
         mt_csv = run_dir / "multiple_testing_report.csv"
         mt_md = run_dir / "multiple_testing_report.md"
         mt_report.write_csv(mt_csv)
         mt_report.write_markdown(mt_md)
-        if evidence.get("multiple_testing_report") is None:
-            evidence.register_file(
-                kind="statistic",
-                description=(
-                    "Run-wide Benjamini–Hochberg and Bonferroni correction "
-                    "for every registered p-value (O22)."
-                ),
-                source_path=mt_csv,
-                evidence_id="multiple_testing_report",
-                producer="pipeline",
-                generation_mode="system",
-            )
-        if evidence.get("multiple_testing_summary") is None:
-            evidence.register_file(
-                kind="log",
-                description=(
-                    "Human-readable summary of multiple-testing correction (O22)."
-                ),
-                source_path=mt_md,
-                evidence_id="multiple_testing_summary",
-                producer="pipeline",
-                generation_mode="system",
-            )
+        mt_evidence_id, _mt_summary_evidence_id = _register_multiple_testing_outputs(
+            evidence=evidence,
+            csv_path=mt_csv,
+            markdown_path=mt_md,
+        )
         summary = mt_report.summary()
         if summary["n_tests"] > 0:
             # Surface the raw → corrected gap as an info finding so
@@ -329,13 +359,14 @@ def finalise_success(
                     validator="multiple_testing",
                     severity="info",
                     message=(
-                        f"Ran BH-FDR across {summary['n_tests']} tests at "
+                        f"Ran family-scoped BH-FDR across {summary['n_tests']} "
+                        f"tests in {summary['n_families']} families at "
                         f"alpha={summary['alpha']:.3f}: "
                         f"{summary['n_significant_raw']} significant raw, "
                         f"{summary['n_significant_bh']} after BH, "
                         f"{summary['n_significant_bonferroni']} after Bonferroni."
                     ),
-                    evidence_ids=["multiple_testing_report"],
+                    evidence_ids=[mt_evidence_id],
                     detail=summary,
                 )
             )
@@ -348,11 +379,12 @@ def finalise_success(
                         severity="warning",
                         message=(
                             "Some raw-significant results did not survive "
-                            "BH-FDR at the run-wide family level. Revise "
-                            "the primary / secondary endpoint distinction "
-                            "or report corrected p-values explicitly."
+                            "BH-FDR within their declared or source-local "
+                            "hypothesis families. Revise the primary / "
+                            "secondary endpoint distinction or report "
+                            "family-scoped corrected p-values explicitly."
                         ),
-                        evidence_ids=["multiple_testing_report"],
+                        evidence_ids=[mt_evidence_id],
                         detail={
                             "n_raw_only": (
                                 summary["n_significant_raw"]
@@ -361,6 +393,24 @@ def finalise_success(
                         },
                     )
                 )
+        else:
+            # An empty, defensibly scoped report is still an audit result. Keep
+            # it visible in the manifest instead of making downstream reviewers
+            # infer that O22 never ran. Do not relax extraction by promoting an
+            # untyped coefficient dump into an invented hypothesis family.
+            findings.append(
+                ValidationFinding(
+                    validator="multiple_testing",
+                    severity="info",
+                    message=(
+                        "Multiple-testing audit completed, but no raw p-values "
+                        "with a defensible declared or source-local hypothesis "
+                        "family were found; no adjustment was computed."
+                    ),
+                    evidence_ids=[mt_evidence_id],
+                    detail=summary,
+                )
+            )
 
     # O23 — E-values. For every primary-association row, compute
     # VanderWeele–Ding E-value + lower-CI E-value. Writes

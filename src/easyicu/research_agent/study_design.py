@@ -39,10 +39,9 @@ STUDY_DESIGN_BRIEF_SCHEMA_VERSION = "easyicu.study_design_brief/2"
 # figure renderer and the methodological-rigor auditor -- both keyed on
 # ``infer_study_design_family`` -- route to "association" and never fire the
 # survival figure / method-match check. This map is deliberately UPGRADE-ONLY:
-# ``association_study`` / ``descriptive_epidemiology`` / the ``*_audit`` and
-# ``*_sensitivity`` keys are intentionally absent so the common
-# association/descriptive path still falls through to the keyword cascade below
-# and its behaviour is unchanged.
+# Include the ordinary association/descriptive paths too so disclaimer prose
+# ("do not make a causal claim") cannot override the analysis-type result in a
+# second, independent keyword cascade.
 _ANALYSIS_TYPE_TO_DESIGN_FAMILY: dict[str, StudyDesignFamily] = {
     "survival": "time_to_event",
     "prediction_model": "prediction",
@@ -51,6 +50,12 @@ _ANALYSIS_TYPE_TO_DESIGN_FAMILY: dict[str, StudyDesignFamily] = {
     "trajectory_clustering": "phenotyping",
     "causal_inference": "causal_emulation",
     "treatment_response": "causal_emulation",
+    "association_study": "association",
+    "descriptive_epidemiology": "descriptive",
+    "data_quality_audit": "descriptive",
+    "measurement_bias_audit": "descriptive",
+    "cohort_definition_sensitivity": "descriptive",
+    "score_policy_sensitivity": "descriptive",
 }
 
 
@@ -97,13 +102,18 @@ def infer_study_design_family(context: ResearchContext) -> StudyDesignFamily:
     # falls through to the keyword cascade -- this classifier must never raise
     # into figure rendering or the rigor audit.
     try:
-        from .analysis_types import infer_analysis_type
+        from .analysis_types import (
+            infer_analysis_type,
+            strong_trajectory_clustering_framing,
+        )
 
         strong_family = _ANALYSIS_TYPE_TO_DESIGN_FAMILY.get(
             infer_analysis_type(context).key
         )
+        clustering_framed = strong_trajectory_clustering_framing(text)
     except Exception:
         strong_family = None
+        clustering_framed = False
     if strong_family:
         return strong_family
     if any(
@@ -155,26 +165,15 @@ def infer_study_design_family(context: ResearchContext) -> StudyDesignFamily:
         )
     ):
         return "prediction"
-    if any(
-        token in text
-        for token in (
-            "cluster",
-            "phenotype",
-            "phenotyping",
-            "trajectory",
-            "latent class",
-            "聚类",
-            "表型",
-            "轨迹",
-            "潜类",
-        )
-    ):
+    if clustering_framed:
         return "phenotyping"
     if any(
         token in text
         for token in (
             "association",
             "associated",
+            "dose-response",
+            "dose response",
             "odds ratio",
             "risk ratio",
             "adjust",
@@ -411,16 +410,18 @@ def render_study_design_brief_for_prompt(brief: StudyDesignBrief) -> str:
 
 
 def _plan_blob(plan: AnalysisPlan) -> str:
-    parts: List[str] = [plan.research_question or "", plan.analysis_type or "", plan.rationale or ""]
+    """Return only structured declarations used for coverage validation.
+
+    Research-question, rationale, step-id, and intent prose are excluded so a
+    plan cannot satisfy a method/display requirement merely by repeating it.
+    """
+
+    parts: List[str] = [plan.analysis_type or ""]
     for step in plan.steps or []:
         parts.extend(
             [
-                step.step_id or "",
-                step.intent or "",
                 step.method or "",
-                " ".join(step.inputs or []),
                 " ".join(step.expected_outputs or []),
-                " ".join(step.icu_rule_refs or []),
             ]
         )
     return "\n".join(parts).lower()

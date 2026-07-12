@@ -190,6 +190,78 @@ def _findings_join(manifest: Dict[str, Any]) -> str:
     return " || ".join(f.get("message", "") for f in manifest.get("findings", []))
 
 
+def _manifest_for_scoring(
+    run_dir: Path, manifest: Optional[Dict[str, Any]] = None
+) -> Optional[Dict[str, Any]]:
+    if manifest is not None:
+        return manifest
+    path = run_dir / "manifest.json"
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _latest_active_step_records(
+    manifest: Dict[str, Any],
+) -> Optional[List[Dict[str, Any]]]:
+    """Return the latest successful outer record for each modern-run step.
+
+    ``None`` means the manifest predates ``per_step_records`` and may use the
+    legacy filesystem fallback. An existing but empty/malformed field is a
+    modern manifest with no active records, so it deliberately returns ``[]``.
+    """
+    if "per_step_records" not in manifest:
+        return None
+    raw_records = manifest.get("per_step_records")
+    if not isinstance(raw_records, list):
+        return []
+
+    latest_by_step: Dict[str, tuple[int, Dict[str, Any]]] = {}
+    for index, record in enumerate(raw_records):
+        if not isinstance(record, dict):
+            continue
+        step_id = str(record.get("step_id") or "").strip()
+        if step_id:
+            latest_by_step[step_id] = (index, record)
+
+    latest = [
+        item
+        for item in sorted(latest_by_step.values(), key=lambda item: item[0])
+        if str(item[1].get("status") or "").strip().lower() == "ok"
+    ]
+    return [record for _, record in latest]
+
+
+def _active_evidence_records(manifest: Dict[str, Any]) -> List[Dict[str, Any]]:
+    evidence = manifest.get("evidence")
+    if not isinstance(evidence, list):
+        return []
+    records = [item for item in evidence if isinstance(item, dict)]
+    active_steps = _latest_active_step_records(manifest)
+    if active_steps is None:
+        return records
+
+    active_ids = {
+        str(evidence_id)
+        for record in active_steps
+        for evidence_id in (
+            record.get("evidence_ids")
+            if isinstance(record.get("evidence_ids"), list)
+            else []
+        )
+        if str(evidence_id).strip()
+    }
+    return [
+        record
+        for record in records
+        if str(record.get("evidence_id") or "") in active_ids
+    ]
+
+
 _LOGISTIC_METHODS = {
     "logistic",
     "logistic_regression",
@@ -350,20 +422,27 @@ def _primary_or(
     expected_predictor: str = "",
     item_key: str = "",
     research_question: str = "",
+    manifest: Optional[Dict[str, Any]] = None,
 ) -> Optional[float]:
     """Return the manuscript-facing primary odds ratio for OR benchmarks.
 
-    The benchmark scores the effect the agent actually surfaced in the
-    manuscript. Prefer the robustness-panel primary row because writer-facing
-    claims are registered from that canonical panel. Fall back to explicit
-    per-point predictor trends, then to unambiguous logistic summaries.
+    For modern manifests, score only summaries attached to the latest
+    successful outer record for each step. Legacy runs without
+    ``per_step_records`` retain the historical robustness-panel/filesystem
+    fallback. Within the selected summaries, prefer explicit per-point trends
+    and then unambiguous logistic summaries.
     """
     if _non_or_benchmark(item_key=item_key, research_question=research_question):
         return None
-    panel_value = _primary_or_from_robustness_panel(run_dir)
-    if panel_value is not None:
-        return panel_value
-    records = _step_records(run_dir)
+    scoring_manifest = _manifest_for_scoring(run_dir, manifest)
+    modern_manifest = (
+        scoring_manifest is not None and "per_step_records" in scoring_manifest
+    )
+    if not modern_manifest:
+        panel_value = _primary_or_from_robustness_panel(run_dir)
+        if panel_value is not None:
+            return panel_value
+    records = _step_records(run_dir, manifest=scoring_manifest)
     trend_value = _primary_or_from_predictor_trend(records, expected_predictor)
     if trend_value is not None:
         return trend_value
@@ -388,7 +467,18 @@ def _findings_substring_hits(
     return {n: (n.lower() in blob) for n in needles}
 
 
-def _step_records(run_dir: Path) -> List[Dict[str, Any]]:
+def _step_records(
+    run_dir: Path, manifest: Optional[Dict[str, Any]] = None
+) -> List[Dict[str, Any]]:
+    scoring_manifest = _manifest_for_scoring(run_dir, manifest)
+    if scoring_manifest is not None and "per_step_records" in scoring_manifest:
+        active_steps = _latest_active_step_records(scoring_manifest) or []
+        return [
+            summary
+            for record in active_steps
+            if isinstance((summary := record.get("step_summary")), dict)
+        ]
+
     records: List[Dict[str, Any]] = []
     for ssj in run_dir.rglob("step_summary.json"):
         try:
@@ -398,11 +488,15 @@ def _step_records(run_dir: Path) -> List[Dict[str, Any]]:
     return records
 
 
-def _step_substring_hits(run_dir: Path, needles: List[str]) -> Dict[str, bool]:
+def _step_substring_hits(
+    run_dir: Path,
+    needles: List[str],
+    manifest: Optional[Dict[str, Any]] = None,
+) -> Dict[str, bool]:
     if not needles:
         return {}
     tokens: List[str] = []
-    for record in _step_records(run_dir):
+    for record in _step_records(run_dir, manifest=manifest):
         for key in ("step_name", "title", "method", "step_key", "description"):
             value = record.get(key)
             if value:
@@ -417,7 +511,7 @@ def _artifact_substring_hits(
     if not needles:
         return {}
     tokens: List[str] = []
-    for evidence in manifest.get("evidence", []):
+    for evidence in _active_evidence_records(manifest):
         for key in (
             "evidence_id",
             "kind",
@@ -443,7 +537,7 @@ def _artifact_substring_hits(
 
 
 def _kinds_complete(manifest: Dict[str, Any]) -> Dict[str, Any]:
-    kinds = {e.get("kind") for e in manifest.get("evidence", [])}
+    kinds = {e.get("kind") for e in _active_evidence_records(manifest)}
     return {
         "kinds_seen": sorted(k for k in kinds if k),
         "kinds_missing": sorted(_REQUIRED_KINDS - kinds),
@@ -619,6 +713,7 @@ def _score_arm(*, run_dir: Path, item, label: str) -> Dict[str, Any]:
         expected_predictor=getattr(item, "primary_predictor", ""),
         item_key=getattr(item, "key", ""),
         research_question=getattr(item, "research_question", ""),
+        manifest=manifest,
     )
     return {
         "arm": label,
@@ -631,7 +726,9 @@ def _score_arm(*, run_dir: Path, item, label: str) -> Dict[str, Any]:
             manifest, item.expected_finding_substrings
         ),
         "workflow_hits": _step_substring_hits(
-            run_dir, getattr(item, "expected_step_substrings", [])
+            run_dir,
+            getattr(item, "expected_step_substrings", []),
+            manifest=manifest,
         ),
         "artifact_hits": _artifact_substring_hits(
             manifest, getattr(item, "expected_artifact_substrings", [])
@@ -656,7 +753,7 @@ def _score_arm(*, run_dir: Path, item, label: str) -> Dict[str, Any]:
             if isinstance(readiness, dict) and "superseded_error_count" in readiness
             else None
         ),
-        "evidence_count": len(manifest.get("evidence", [])),
+        "evidence_count": len(_active_evidence_records(manifest)),
         "evidence_kinds": _kinds_complete(manifest),
         "evidence_missing_in_manuscript": _evidence_missing_count(run_dir),
         # Additive §M1 Tier-1 five-dimension scorecard (does not yet replace the

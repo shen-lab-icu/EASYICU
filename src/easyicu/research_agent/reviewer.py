@@ -240,8 +240,9 @@ def _build_statistician_comments(
                 topic="multiple_testing",
                 message=(
                     "Multiple-testing correction does not appear in the "
-                    "pipeline findings. Please report BH-adjusted or "
-                    "family-wise corrected p-values run-wide."
+                    "pipeline findings. Please define the relevant "
+                    "hypothesis families and report family-scoped "
+                    "BH-adjusted or family-wise corrected p-values."
                 ),
                 evidence_ids=["multiple_testing_report"] if "multiple_testing_report" in aliases else [],
             )
@@ -254,9 +255,10 @@ def _build_statistician_comments(
                 topic="multiple_testing",
                 message=(
                     "At least one raw-significant result did not survive "
-                    "BH-FDR at the run-wide family level. The primary / "
-                    "secondary endpoint distinction and the corrected "
-                    "p-values must be stated explicitly."
+                    "BH-FDR within its declared hypothesis family. The "
+                    "primary / secondary endpoint distinction, family "
+                    "definition, and corrected p-values must be stated "
+                    "explicitly."
                 ),
                 evidence_ids=["multiple_testing_report"],
             )

@@ -30,6 +30,21 @@ MIN_AXIS_COUNTS: Dict[str, int] = {"cohort": 3, "missing": 2, "outcome": 2}
 PRIMARY_SPEC_ID = "primary"
 LOCK_FILENAME = "robustness_specs_locked.json"
 PANEL_FILENAME = "robustness_panel.json"
+_SUCCESSFUL_STEP_STATUSES = frozenset({"ok"})
+
+
+def _successful_step_records(
+    per_step_records: Sequence[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Return only records with an explicit successful terminal status."""
+
+    return [
+        record
+        for record in per_step_records
+        if isinstance(record, dict)
+        and str(record.get("status") or "").strip().lower()
+        in _SUCCESSFUL_STEP_STATUSES
+    ]
 
 
 @dataclass(frozen=True)
@@ -381,15 +396,28 @@ def build_robustness_panel_from_records(
     adapter_rows: Optional[Sequence[RobustnessPanelRow]] = None,
     locked_at: Optional[str] = None,
 ) -> RobustnessPanel:
+    successful_records = _successful_step_records(per_step_records)
     rows: List[RobustnessPanelRow] = []
-    for row in adapter_rows or []:
-        rows.append(row)
-    existing = {row.spec_id for row in rows}
-    primary = _primary_row_from_records(per_step_records)
-    if primary is not None and primary.spec_id not in existing:
+    existing: set[str] = set()
+    primary = _primary_row_from_records(successful_records)
+    if primary is not None:
         rows.append(primary)
         existing.add(primary.spec_id)
-    for row in _declared_rows_from_records(per_step_records):
+    for row in _declared_rows_from_records(successful_records):
+        # The canonical primary row requires a complete typed effect contract;
+        # free-form panel rows cannot replace it. Variant rows, however, are the
+        # agent/step-owned scientific products and outrank auxiliary refits.
+        if row.spec_id == PRIMARY_SPEC_ID:
+            continue
+        if row.spec_id in existing:
+            continue
+        rows.append(row)
+        existing.add(row.spec_id)
+    for row in adapter_rows or []:
+        # Auxiliary fitting may fill only pre-specified non-primary variants.
+        # The primary row must come from a complete successful step contract.
+        if row.spec_id == PRIMARY_SPEC_ID:
+            continue
         if row.spec_id in existing:
             continue
         rows.append(row)
@@ -502,7 +530,24 @@ def numeric_digest_for_panel(panel: RobustnessPanel) -> Dict[str, Any]:
         _add_unique("range_low", panel.range_low)
     if panel.n_variants > 0 and panel.range_high is not None:
         _add_unique("range_high", panel.range_high)
-    if primary is not None:
+    primary_is_claimable = bool(
+        primary is not None
+        and primary.converged
+        and primary.n > 0
+        and primary.evidence_id
+        and primary.point_estimate is not None
+        and primary.ci_low is not None
+        and primary.ci_high is not None
+        and all(
+            math.isfinite(float(value))
+            for value in (
+                primary.point_estimate,
+                primary.ci_low,
+                primary.ci_high,
+            )
+        )
+    )
+    if primary_is_claimable and primary is not None:
         _add_unique("primary_n", primary.n)
         _add_unique("primary_point_estimate", primary.point_estimate)
         _add_unique("primary_ci_low", primary.ci_low)
@@ -528,11 +573,17 @@ def worst_rows_by_axis(panel: RobustnessPanel) -> Dict[str, RobustnessPanelRow]:
 def _primary_row_from_records(
     per_step_records: Sequence[Dict[str, Any]]
 ) -> Optional[RobustnessPanelRow]:
-    from .pipeline_primary_effect import _extract_primary_effect_payload_from_records
+    from .pipeline_primary_effect import (
+        _extract_primary_effect_payload_from_records,
+        _primary_effect_payload_is_complete,
+    )
 
-    payload = _extract_primary_effect_payload_from_records(per_step_records)
-    if not payload or payload.get("primary_or") is None:
+    payload = _extract_primary_effect_payload_from_records(
+        _successful_step_records(per_step_records)
+    )
+    if not _primary_effect_payload_is_complete(payload):
         return None
+    assert isinstance(payload, dict)
     sample_size = payload.get("sample_size")
     return RobustnessPanelRow(
         spec_id=PRIMARY_SPEC_ID,
@@ -551,7 +602,7 @@ def _primary_row_from_records(
 def _declared_rows_from_records(
     per_step_records: Sequence[Dict[str, Any]]
 ) -> Iterable[RobustnessPanelRow]:
-    for record in per_step_records:
+    for record in _successful_step_records(per_step_records):
         summary = record.get("step_summary")
         if not isinstance(summary, dict):
             continue

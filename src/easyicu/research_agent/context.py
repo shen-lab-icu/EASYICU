@@ -165,36 +165,55 @@ def _estimate_mvn_with_em(
     cov = np.asarray(cov, dtype=float)
     cov += np.eye(p) * 1e-6
 
+    # Missingness does not change across EM iterations. Grouping rows once lets
+    # each iteration evaluate the same conditional-moment formulas in matrix
+    # form, rather than allocating one expectation and p×p outer product per
+    # ICU stay. With at most eight MCAR-screen variables there are at most 256
+    # groups, and real source-status exports typically have only a handful.
+    missing_patterns, pattern_index = np.unique(
+        np.isnan(x), axis=0, return_inverse=True
+    )
+    pattern_groups = [
+        (
+            np.flatnonzero(~missing),
+            np.flatnonzero(missing),
+            x[pattern_index == index],
+        )
+        for index, missing in enumerate(missing_patterns)
+    ]
+
     for _ in range(max_iter):
-        expected_rows: List[np.ndarray] = []
-        second_moments: List[np.ndarray] = []
-        for row in x:
-            obs = np.flatnonzero(~np.isnan(row))
-            mis = np.flatnonzero(np.isnan(row))
+        expected_sum = np.zeros(p, dtype=float)
+        second_sum = np.zeros((p, p), dtype=float)
+        for obs, mis, rows in pattern_groups:
+            group_n = len(rows)
             if len(mis) == 0:
-                row_expectation = row.astype(float)
-                second = np.outer(row_expectation, row_expectation)
+                expected = rows.astype(float, copy=False)
+                expected_sum += expected.sum(axis=0)
+                second_sum += expected.T @ expected
             elif len(obs) == 0:
-                row_expectation = mu.copy()
-                second = cov + np.outer(mu, mu)
+                expected_sum += group_n * mu
+                second_sum += group_n * (cov + np.outer(mu, mu))
             else:
                 sigma_oo = cov[np.ix_(obs, obs)] + np.eye(len(obs)) * 1e-8
                 sigma_mo = cov[np.ix_(mis, obs)]
                 sigma_om = cov[np.ix_(obs, mis)]
                 sigma_mm = cov[np.ix_(mis, mis)]
                 inv_oo = np.linalg.pinv(sigma_oo)
-                row_expectation = row.copy().astype(float)
-                cond_mean = mu[mis] + sigma_mo @ inv_oo @ (row[obs] - mu[obs])
-                cond_cov = sigma_mm - sigma_mo @ inv_oo @ sigma_om
-                row_expectation[mis] = cond_mean
-                second = np.outer(row_expectation, row_expectation)
-                second[np.ix_(mis, mis)] += cond_cov
-            expected_rows.append(row_expectation)
-            second_moments.append(second)
+                conditional_weights = sigma_mo @ inv_oo
+                cond_cov = sigma_mm - conditional_weights @ sigma_om
 
-        expected = np.vstack(expected_rows)
-        mu_new = expected.mean(axis=0)
-        cov_new = np.mean(second_moments, axis=0) - np.outer(mu_new, mu_new)
+                expected = rows.copy().astype(float)
+                expected[:, mis] = (
+                    mu[mis]
+                    + (rows[:, obs] - mu[obs]) @ conditional_weights.T
+                )
+                expected_sum += expected.sum(axis=0)
+                second_sum += expected.T @ expected
+                second_sum[np.ix_(mis, mis)] += group_n * cond_cov
+
+        mu_new = expected_sum / n
+        cov_new = second_sum / n - np.outer(mu_new, mu_new)
         cov_new = (cov_new + cov_new.T) / 2.0
         cov_new += np.eye(p) * 1e-6
 

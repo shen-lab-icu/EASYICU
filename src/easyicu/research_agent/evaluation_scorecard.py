@@ -59,6 +59,11 @@ from .icu_rules import (
     treatment_mediator_caution,
 )
 from .plan_utils import read_adjustment_covariates
+from .runtime_artifacts import (
+    current_run_evidence_paths,
+    current_successful_step_records,
+    load_run_artifact_authority,
+)
 from .validity_signals import (
     ValiditySignal,
     assess_validity_signals,
@@ -982,26 +987,19 @@ def _load_cohort_hygiene_cautions(run_dir: Path) -> List[str]:
     return cautions
 
 
-def _current_primary_model_output_dirs(run_dir: Path) -> List[Path]:
-    manifest_path = Path(run_dir) / "manifest_partial.json"
-    if not manifest_path.exists():
-        return []
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError, TypeError):
-        return []
-    records = manifest.get("per_step_records") if isinstance(manifest, dict) else []
-    if not isinstance(records, list):
-        return []
-    dirs: List[Path] = []
-    for record in records:
-        if not isinstance(record, dict) or record.get("status") != "ok":
-            continue
+def _current_primary_model_evidence_ids(run_dir: Path) -> Optional[set[str]]:
+    manifest = load_run_artifact_authority(run_dir)
+    if manifest is None:
+        return None
+    records = manifest.get("per_step_records")
+    records = records if isinstance(records, list) else []
+    evidence_ids: set[str] = set()
+    for record in current_successful_step_records(records):
         step_id = str(record.get("step_id") or "").strip()
-        if not step_id:
-            continue
         lowered = step_id.lower()
-        if any(token in lowered for token in ("figure", "repair", "audit")):
+        if not step_id or any(
+            token in lowered for token in ("figure", "repair", "audit")
+        ):
             continue
         summary = record.get("step_summary")
         summary = summary if isinstance(summary, dict) else {}
@@ -1016,12 +1014,13 @@ def _current_primary_model_output_dirs(run_dir: Path) -> List[Path]:
         textual_primary_model = "primary" in lowered and any(
             token in lowered for token in ("association", "model", "effect")
         )
-        if not (has_primary_model or textual_primary_model):
-            continue
-        outputs = Path(run_dir) / "steps" / step_id / "outputs"
-        if outputs.exists():
-            dirs.append(outputs)
-    return dirs
+        if has_primary_model or textual_primary_model:
+            evidence_ids.update(
+                str(evidence_id)
+                for evidence_id in record.get("evidence_ids") or []
+                if str(evidence_id).strip()
+            )
+    return evidence_ids
 
 
 def _load_regression_covariates(run_dir: Path) -> List[str]:
@@ -1036,10 +1035,13 @@ def _load_regression_covariates(run_dir: Path) -> List[str]:
     model-level OR summary is not invisible to the check. Missing/malformed
     sources degrade to an empty list.
     """
-    for outputs_dir in _current_primary_model_output_dirs(run_dir):
-        covariates = read_adjustment_covariates(outputs_dir)
-        if covariates:
-            return covariates
+    primary_evidence_ids = _current_primary_model_evidence_ids(run_dir)
+    if primary_evidence_ids is not None:
+        current_paths = current_run_evidence_paths(
+            run_dir,
+            evidence_ids=primary_evidence_ids,
+        )
+        return read_adjustment_covariates(run_dir, files=current_paths or [])
     return read_adjustment_covariates(run_dir)
 
 
@@ -1083,11 +1085,17 @@ def _find_run_artifacts(run_dir: Path, *substrings: str) -> List[Path]:
     """
     subs = tuple(s.lower() for s in substrings)
     hits: List[Path] = []
-    for path in (
-        list(run_dir.glob("*"))
-        + list(run_dir.glob("evidence/*"))
-        + list(run_dir.glob("steps/*/outputs/*"))
-    ):
+    current_paths = current_run_evidence_paths(run_dir)
+    candidates = (
+        current_paths
+        if current_paths is not None
+        else (
+            list(run_dir.glob("*"))
+            + list(run_dir.glob("evidence/*"))
+            + list(run_dir.glob("steps/*/outputs/*"))
+        )
+    )
+    for path in candidates:
         if path.is_file() and any(s in path.name.lower() for s in subs):
             hits.append(path)
     hits.sort(key=lambda p: p.stat().st_mtime, reverse=True)
@@ -1123,13 +1131,12 @@ def _load_cluster_validity(run_dir: Path) -> Dict[str, object]:
         "clustering_validity.json",
         "validity_metrics.json",
     ):
-        doc = _load_json(run_dir / name)
-        if doc:
-            return doc
-    for path in run_dir.glob("steps/*/outputs/cluster_validity.json"):
-        doc = _load_json(path)
-        if doc:
-            return doc
+        for path in _find_run_artifacts(run_dir, name):
+            if path.name.split("__", 1)[-1] != name:
+                continue
+            doc = _load_json(path)
+            if doc:
+                return doc
 
     # 2. Recover the same fields from the agent's own emitted artifacts.
     out: Dict[str, object] = {}
@@ -1402,11 +1409,21 @@ def _deliberate_block_reason(run_dir: Path) -> Optional[str]:
     failure (already reflected in ``code``); a deliberate block on viable data is
     a self-paralysis failure mode that would otherwise be invisible.
     """
-    summaries = list(run_dir.glob("steps/*/outputs/step_summary.json")) + list(
-        run_dir.glob("steps/*/step_summary.json")
-    )
-    for p in summaries:
-        doc = _load_json(p)
+    authority = load_run_artifact_authority(run_dir)
+    if authority is not None:
+        records = authority.get("per_step_records")
+        records = records if isinstance(records, list) else []
+        summaries = [
+            summary
+            for record in current_successful_step_records(records)
+            if isinstance((summary := record.get("step_summary")), dict)
+        ]
+    else:
+        paths = list(run_dir.glob("steps/*/outputs/step_summary.json")) + list(
+            run_dir.glob("steps/*/step_summary.json")
+        )
+        summaries = [_load_json(path) for path in paths]
+    for doc in summaries:
         if not isinstance(doc, dict):
             continue
         signal = step_summary_block_signal(doc)

@@ -769,9 +769,17 @@ def render_survival_bundle_from_prior_outputs(
     cox_source: Optional[str] = None
     target_outcome: Optional[str] = None
     primary_exposure: Optional[str] = None
-    for step_dir in sorted(steps_dir.iterdir()):
-        if not step_dir.is_dir() or step_dir.name == current_step_id:
-            continue
+    parent_step_id = str(current_step_id or "").removesuffix("_figure")
+    direct_parent = steps_dir / parent_step_id
+    if parent_step_id != str(current_step_id or "") and direct_parent.is_dir():
+        candidate_step_dirs = [direct_parent]
+    else:
+        candidate_step_dirs = [
+            step_dir
+            for step_dir in sorted(steps_dir.iterdir())
+            if step_dir.is_dir() and step_dir.name != current_step_id
+        ]
+    for step_dir in candidate_step_dirs:
         outputs_dir = step_dir / "outputs"
         for cox_name in ("cox_model.csv", "cox_summary.csv", "hazard_ratio.csv"):
             path = outputs_dir / cox_name

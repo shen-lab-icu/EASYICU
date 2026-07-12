@@ -250,10 +250,11 @@ _SURVIVAL = MethodSuite(
             name="Cox proportional-hazards hazard ratio",
             purpose="Primary adjusted effect of exposure on the event hazard.",
             tier="primary",
-            implementation="deterministic",
-            produces="cox_model.csv (hazard_ratio->point_estimate, ci_low, ci_high) + forest panel",
-            runner="survival_primary_cox",
+            implementation="llm_coded",
+            produces="agent-declared Cox result (hazard_ratio, ci_low, ci_high) + deterministic forest panel",
+            runner="time_to_event",
             reporting_items=("STROBE 16",),
+            notes="The agent owns time zero, censoring, exposure, adjustment, and fit; the runner renders registered Cox/KM products only.",
         ),
         AnalysisMethod(
             key="km_logrank",
@@ -303,7 +304,7 @@ _SURVIVAL = MethodSuite(
             implementation="planned",
             produces="cause-specific CIF",
             runner=None,
-            notes="A cause-naive Cox HR is NOT a CIF — this stays a KNOWN_UNSUPPORTED_ESTIMAND that fails closed (capability_registry MG12), never approximated.",
+            notes="A cause-naive Cox HR is NOT a CIF — this stays a KNOWN_UNSUPPORTED_ESTIMAND that fails closed, never approximated.",
         ),
         AnalysisMethod(
             key="time_varying_hr",
@@ -326,10 +327,11 @@ _CAUSAL = MethodSuite(
             name="Stabilised-IPTW marginal odds ratio",
             purpose="Primary marginal causal contrast under a target-trial protocol.",
             tier="primary",
-            implementation="deterministic",
-            produces="iptw effect table (marginal OR, ci) + target_trial_protocol.csv",
-            runner="causal_primary_iptw",
+            implementation="llm_coded",
+            produces="agent-declared causal effect table + target-trial/identification protocol",
+            runner="causal_emulation",
             reporting_items=("STROBE 16",),
+            notes="The agent owns the estimator, exposure/outcome, covariates, and identification assumptions; deterministic code renders registered products only.",
         ),
         AnalysisMethod(
             key="covariate_balance",
@@ -346,10 +348,11 @@ _CAUSAL = MethodSuite(
             name="Positivity / overlap (propensity distribution + trimming)",
             purpose="Confirm treated/untreated overlap so weights are not dominated by extreme units.",
             tier="standard_supporting",
-            implementation="deterministic",
+            implementation="llm_coded",
             produces="propensity distribution + trimming report",
-            runner="causal_primary_iptw",  # runner enforces positivity via trimming
+            runner=None,
             reporting_items=("STROBE 9",),
+            notes="Computed by the agent under the declared causal method; the deterministic causal figure can display the registered overlap product.",
         ),
         AnalysisMethod(
             key="evalue",
@@ -402,10 +405,11 @@ _ASSOCIATION = MethodSuite(
             name="Ordinal dose-response (OR per +1 stage, per-stage forest, monotonicity)",
             purpose="Primary graded-exposure trend when the exposure has >=3 ordered levels.",
             tier="primary",
-            implementation="deterministic",
-            produces="dose_response.csv (stage, odds_ratio, ci_low, ci_high) + forest",
-            runner="ordinal_dose_response",
+            implementation="llm_coded",
+            produces="agent-declared ordered trend + dose_response.csv; deterministic forest",
+            runner=None,
             reporting_items=("STROBE 16",),
+            notes="Validated ordered-trend primitives are available to agent code, but the framework never selects the exposure, scores, adjustment set, or model.",
         ),
         AnalysisMethod(
             key="adjusted_association",
@@ -484,7 +488,7 @@ _ASSOCIATION = MethodSuite(
             tier="exploratory",
             implementation="deterministic",
             produces="robustness_panel.csv",
-            runner="deterministic_sensitivity",  # + robustness_panel.py
+            runner="robustness_sensitivity",  # deterministic_robustness + renderer
             reporting_items=("STROBE 12e",),
         ),
         AnalysisMethod(
@@ -554,17 +558,17 @@ _PHENOTYPING = MethodSuite(
             reporting_items=("internal_phenotype P8",),
             notes="figure_strategy blocks 'clusters are causal entities'; kept descriptive by contract.",
         ),
-        # --- Longitudinal trajectory sub-suite (H3 / WS3) ---
+        # --- Longitudinal trajectory sub-suite ---
         AnalysisMethod(
             key="trajectory_feature_clustering",
-            name="Trajectory-feature clustering (deterministic)",
-            purpose="Longitudinal phenotyping: cluster on 0-72h trajectory FEATURES (baseline, early/late change, slope, AUC, variability, coverage) via KMeans/GMM/hierarchical with fixed seed + QC.",
+            name="Trajectory-feature clustering",
+            purpose="Longitudinal phenotyping using the agent-declared representation and unsupervised method appropriate to the planned question and data.",
             tier="primary",
-            implementation="deterministic",
-            produces="trajectory_features.csv + cluster assignments + silhouette/stability/size QC + outcome-by-trajectory",
-            runner="trajectory_clustering",
+            implementation="llm_coded",
+            produces="agent-declared feature representation + cluster assignments + silhouette/stability/size QC + outcome-by-trajectory",
+            runner="phenotyping",
             reporting_items=("internal_phenotype P4", "internal_phenotype P5", "internal_phenotype P9"),
-            notes="WS3 (#58): the DETERMINISTIC `trajectory_clustering` runner (deterministic_clustering.py) computes it — features over OBSERVED windows (never zero-imputed), silhouette-selected k, seed-stability, descriptive outcome-by-cluster. Trajectory-FEATURE clustering, deliberately NOT LCGA. Distinct capability from cross-sectional cluster_solution.",
+            notes="The agent owns the feature representation, time horizon, clustering method, and k-selection. The `phenotyping` runner only renders standardized, source-backed products; it never chooses the science. Trajectory-feature clustering is deliberately not relabelled as LCGA.",
         ),
         AnalysisMethod(
             key="lcga_gbtm",

@@ -7,6 +7,8 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence
 
+from .runtime_artifacts import current_successful_step_records
+
 
 EXPORT_SUFFIXES = ("png", "svg", "pdf", "tiff", "tif")
 
@@ -18,10 +20,44 @@ def relative_to_run(path: Path, run_dir: Path) -> str:
         return str(path)
 
 
-def figure_contract_paths(run_dir: Path) -> List[Path]:
+def figure_contract_paths(
+    run_dir: Path,
+    *,
+    per_step_records: Sequence[Mapping[str, Any]] | None = None,
+) -> List[Path]:
+    supporting_paths = list(run_dir.glob("steps/*/outputs/*.figure_contract.json"))
+    if per_step_records is not None:
+        current_records = current_successful_step_records(per_step_records)
+        declared_contracts: Dict[str, set[str] | None] = {}
+        for record in current_records:
+            step_id = str(record.get("step_id") or "").strip()
+            if not step_id:
+                continue
+            summary = record.get("step_summary")
+            if isinstance(summary, Mapping) and "contract_files" in summary:
+                raw_files = summary.get("contract_files")
+                declared_contracts[step_id] = {
+                    Path(str(name)).name
+                    for name in (raw_files if isinstance(raw_files, list) else [])
+                    if str(name).strip()
+                }
+            else:
+                # Compatibility for successful legacy records that predate the
+                # explicit contract_files field. Modern records with the field
+                # present (including an empty list) remain fail-closed.
+                declared_contracts[step_id] = None
+        supporting_paths = [
+            path
+            for path in supporting_paths
+            if path.parents[1].name in declared_contracts
+            and (
+                declared_contracts[path.parents[1].name] is None
+                or path.name in declared_contracts[path.parents[1].name]
+            )
+        ]
     paths = [
         *run_dir.glob("publication_figures/*.figure_contract.json"),
-        *run_dir.glob("steps/*/outputs/*.figure_contract.json"),
+        *supporting_paths,
     ]
     seen: set[str] = set()
     unique: List[Path] = []

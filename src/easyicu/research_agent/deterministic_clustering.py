@@ -1,15 +1,11 @@
-"""Deterministic trajectory-feature clustering runner (phenotyping / H3).
+"""Legacy, unrouted trajectory-feature clustering experiment.
 
-The phenotyping counterpart of :mod:`deterministic_ordinal` /
-:mod:`deterministic_survival`: cluster per-stay LONGITUDINAL organ-dysfunction
-trajectories into latent classes and relate the classes DESCRIPTIVELY to the
-outcome. It returns a self-contained runner script that produces a reproducible
-k-class solution WITHOUT an LLM coder call.
-
-Motivation (H3, 2026-07-08): the case asks to "cluster first-72h SOFA-2 total and
-its organ components (binned into fixed 6-hour windows) into latent classes and
-relate the classes to in-hospital mortality." There was NO deterministic runner
-for this, so the primary clustering step fell to the LLM coder and fail-closed.
+This module is retained only to reproduce historical artifacts and unit fixtures.
+It is intentionally absent from the capability registry and execution dispatch:
+its SOFA-shaped feature discovery, default outcome, time horizon, k search, and
+minimum-window rules make scientific choices that belong to the planner/coder.
+New production code must use agent-declared clustering products and deterministic
+rendering/validation, not call this script as a general ICU capability.
 
 Design decisions (deliberate, non-overclaiming):
 
@@ -39,7 +35,7 @@ __all__ = ["trajectory_clustering_analysis_code"]
 
 
 def trajectory_clustering_analysis_code() -> str:
-    """Return a runner script that computes the deterministic clustering solution."""
+    """Return the legacy reproduction script; not a production entrypoint."""
     return textwrap.dedent(r"""
         import json
         import os

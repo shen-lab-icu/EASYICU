@@ -1,5 +1,115 @@
 Code contract:
 - Read the cohort from os.environ["COHORT_PARQUET"].
+- When the formatted ResearchContext names a singular primary exposure, only
+  its model is primary. Fit related or alternate representations as separately
+  labelled secondary/corroborative models; never mutually adjust separate
+  exposure representations or call both primary.
+- For a regression step that explicitly requests separate source-aware and
+  complete-case models, emit `step_summary["model_contracts"]` with one object
+  per model and these exact fields: `model_id`, `outcome`, `outcome_type`,
+  `model_family`, `exposure_source`, `exposure_expression`, `exposure_role`,
+  `analysis_role`, `analysis_set`, `baseline_missing_policy`, `effect_scale`,
+  `outcome_unit`, `n`, `event_n`, `fit_status`, `converged`,
+  `separation_detected`, `penalized`, `fit_method`, and `interval_method`.
+  These are controlled machine fields, not prose: `exposure_role` is exactly
+  `primary` for every model of the context-designated primary exposure and
+  exactly `secondary` for an alternate exposure; `analysis_role` is exactly
+  one of `primary`, `secondary`, or `sensitivity`, with exactly one model
+  labelled `primary`;
+  `analysis_set` is exactly `source_aware` or `complete_case`;
+  `baseline_missing_policy` is exactly `drop_missing_baseline` or
+  `explicit_missing_category`; and `fit_status` is exactly `fitted`,
+  `not_fitted`, or `separation_no_estimate`. A successful penalized model still
+  uses `fit_status="fitted"` and records the penalty via `penalized=true` plus
+  `fit_method`. Write `exposure_expression` as the atomic executable expression
+  only (for example `log1p(lab_max)`), never as a prose description containing
+  source-status, cohort, or estimand text. Complete-case and other sensitivity
+  models of the context primary exposure keep `exposure_role="primary"`;
+  `analysis_role`, not `exposure_role`, distinguishes their sensitivity role.
+  A step with mixed outcomes must emit a separate contract for each fitted
+  outcome, with its actual outcome column, outcome type, model family, effect
+  scale, and unit. `event_n` is the binary-event count for a binary outcome and
+  is null for a continuous outcome; never reuse one outcome's denominator or
+  family metadata for another model.
+  The planner-owned `model_requirements` roster is currently defined only for
+  a binary/continuous adjusted-association step with
+  `method="adjusted_association_models"` and expected output
+  `table:adjusted_association_estimates`; it is not a generic contract for
+  survival, prediction, mixed-effects, or clustering steps. When that supported
+  step supplies `model_requirements`, every
+  emitted model contract must include the matching `requirement_id` and must
+  copy that requirement's `outcome`, `outcome_type`, `method_family`,
+  `exposure_source`, `analysis_role`, and `analysis_set` exactly. Do not delete
+  a required entry after a failed fit or substitute a different model under its
+  id. If a fit cannot be completed, report `fit_status="not_fitted"` or
+  `"separation_no_estimate"` honestly and include a non-empty
+  `fit_failure_reason`; a required model will correctly keep the step
+  fail-closed. Optional sensitivity models may report that diagnostic state.
+  A non-fitted model must not carry finite coefficients, confidence intervals,
+  standard errors, or p-values, and it does not need fabricated all-null
+  coefficient rows.
+  Also write one term-level coefficient CSV
+  carrying `model_id`, `outcome`, `outcome_type`, `model_family`, `term`,
+  `term_role`, `source_variable`, `effect_scale`, `outcome_unit`, an effect
+  column (`estimate`, `odds_ratio`, or `or`), `ci_low`, `ci_high`, and
+  `interval_method`. `term_role` is exactly one of `intercept`, `exposure`,
+  `availability`, or `adjustment`.
+  Measurement/source terms are `availability`, never ordinary adjustment
+  covariates.
+  Before fitting, audit every categorical predictor (exposure, adjustment, and
+  availability terms) and its intended reference level. Report the level count
+  for every outcome; for a binary outcome also report event and non-event counts
+  and identify sparse, zero-event, and zero-non-event cells. Set and disclose a
+  defensible reference explicitly: do not let `drop_first=True`, lexical
+  sorting, or first-observed order choose it implicitly. A reference or pooling
+  rule must come from the protocol/domain semantics or a prespecified
+  outcome-blind frequency rule. Never change pooling or the reference after
+  inspecting coefficient signs, p-values, or significance; if an unplanned
+  zero cell remains, use a defensible penalized/bias-reduced method or report
+  the effect as not estimable.
+  Report the actual final fit diagnostics, including separation and whether a
+  penalized fit was used; do not mark a nonconverged fit as fitted. An optimizer
+  success flag alone does not establish a finite interior maximum-likelihood
+  estimate. Treat invalid Hessian/Fisher diagnostics, boundary-sized
+  coefficients, singular or non-positive-semidefinite covariance, and missing
+  or non-finite standard errors/confidence limits as a failed ordinary MLE even
+  if the optimizer reports convergence. Do not clip a log coefficient before
+  exponentiation, cap an overflowed ratio at the largest finite float, or
+  otherwise manufacture a huge finite effect; report it as not estimable and
+  preserve the numerical failure in diagnostics.
+  Every coefficient, confidence interval, and derived estimate must use the
+  scale and unit implied by its own model family. In particular, a quantile-
+  regression coefficient is a conditional-quantile difference in the outcome
+  unit, never a log-odds or odds-ratio effect. Do not reuse a logistic label for
+  a continuous-outcome model merely because both models share one CSV writer.
+  When ridge regularization is used only to stabilize separation in an
+  inferential association model, report its strength inside `fit_method`. For
+  statsmodels GLM `fit_regularized`, whose loss is normalized per observation,
+  use and report `alpha <= 1/n` (for example
+  `statsmodels_glm_ridge(alpha=1e-5)` when n is at least 100,000); do not use an
+  arbitrary prediction-strength penalty that materially shrinks the target
+  exposure. For sklearn logistic regression report `C` and use `C >= 1` for
+  this weak-ridge separation fallback. By default a penalized fallback is
+  point-only: write `interval_method="unavailable"` and keep `ci_low`,
+  `ci_high`, standard error, and inferential p-value null. Do not hand-build a
+  confidence interval from a pseudoinverse or penalized Hessian, and do not set
+  `converged=true` merely because finite parameters were returned. An interval
+  or convergence claim is allowed only for a vetted Firth, bootstrap, or shared
+  helper implementation whose penalty curvature matches the fitted objective
+  (including its observation scaling and intercept treatment) and whose
+  optimizer success and objective/KKT diagnostics are explicitly checked and
+  recorded under `interval_method` and model diagnostics.
+  Audit-only coefficient p-values are not automatically one multiplicity
+  family. Do not pool intercepts, adjustment terms, separate outcomes, and
+  sensitivity models into a single adjustment. Define each inferential family
+  from prespecified estimands within an outcome; omit audit-only p-values or
+  label them non-inferential rather than creating a post hoc global family.
+- Treat `COHORT_PARQUET` as the already-materialised, locked analysis cohort.
+  Do not re-derive eligibility or add age, length-of-stay, identifier,
+  outcome-availability, or other row filters unless the current step
+  explicitly asks for an alternative-cohort or cohort-definition sensitivity
+  analysis. A fixed-cohort reconciliation may audit those fields but must keep
+  every input row and report a final cohort count equal to `len(df)`.
 - Write any artefact (CSV, PNG, SVG, JSON) to os.environ["STEP_OUT_DIR"].
 - If a step depends on an artefact produced by a previous step, first look for
   these runtime paths when available: `EASYICU_RUN_DIR`,
@@ -7,6 +117,38 @@ Code contract:
   `manifest_partial.json` or search the evidence directory for the registered
   artefact name/alias before guessing a relative `steps/.../outputs` path.
   Evidence records store `relative_path` values relative to `EASYICU_RUN_DIR`.
+  When the upstream step is named, filter manifest evidence by the exact
+  `produced_by_step` first, then by the required artefact `kind` and filename
+  or alias, and resolve its `relative_path`. A requested table must resolve to
+  a table-like file (for example CSV/Parquet), never to a code, log, critique,
+  or figure record merely because it appeared first or shared a step label.
+  If the exact upstream step registered only one table, or its step summary
+  names one under `output_files`, use that table even when its filename does
+  not repeat words such as "absolute risk" from the current step's intent.
+  Semantic filename matching is only a tie-breaker among multiple compatible
+  table records, never a reason to discard the sole registered table.
+  When reconciling rows from that table, match semantic row type before
+  extracting numbers. Inspect the parent table's actual grouping columns and
+  match both the grouping dimension and its value (for example,
+  `group_type` plus `group_value`); do not assume the parent uses guessed
+  columns such as `stratum`, `level`, or `source_status`. Normalise equivalent
+  labels such as `level_0` and numeric group value `0`, and map request-role
+  labels to the actual parent grouping semantics (for example an ordinal
+  `*_level` request can map to parent `exposure_level`, and `source_status` can
+  map to `source_state`). For a detailed reconciliation table, record the
+  requested role/value, whether the registered parent row was supported, the
+  registered `n`/`event_n`/risk or distribution values, and the exact selected
+  parent field names. Include detailed rows for every range flag declared in
+  the step summary. For an outcome-risk row require
+  `estimate_type == "outcome_risk"` and take stratum `n`, `event_n`,
+  `outcome_risk`, and its CI; do not take prevalence `estimate` or the full
+  `n_denominator`. Match a continuous summary only to its distribution row and
+  take `n`, median, q25, and q75 without inventing a risk. Treat source-state
+  aliases such as `observed` and `valid observed` as equivalent. Record the
+  exact selected row/field names and verify them against the locally
+  reconciled values before claiming `row_supported`.
+  If no compatible registered artefact exists, report that precise gap; do
+  not silently substitute an arbitrary evidence file.
 - For rendering-only figure steps, prefer the explicitly named upstream
   analysis step outputs over broad evidence-directory search. Do not use
   existing figure files, previous figure source-data CSVs, robustness panels,
@@ -14,7 +156,50 @@ Code contract:
   rendering step as the primary data source unless the step explicitly asks
   for that file. If one canonical upstream table is present, render from
   that table alone and use audit/provenance tables only for short notes or
-  metadata.
+  metadata. Resolve the exact current upstream step outputs directory first.
+  The runner exposes the run root as `EASYICU_RUN_DIR`, the current evidence
+  index as `EASYICU_EVIDENCE_DIR/evidence_index.json`, and the checkpoint as
+  `EASYICU_MANIFEST_PARTIAL`; use these explicit handoff paths instead of
+  guessing parent directories.
+  Only if those outputs are absent may you use manifest evidence, and then
+  restrict candidates to evidence_ids on the most recent completed record for
+  that exact upstream step; never rank all historical resume records together.
+  Write a clean `<figure_stem>_source_data.csv` containing every plotted value,
+  its denominator, and the source row/key needed for reconciliation. For a
+  publication figure, save matching PNG, SVG, PDF, and TIFF exports; keep SVG
+  text editable and use the same data for every format.
+  For a positional source-row trace, use the exact canonical columns
+  `source_row_index` (the zero-based original row position in the declared
+  upstream table) and `source_table` (that upstream table's basename). Do not
+  prefix or rename either provenance field, and make any FigureContract
+  `key_column` agree with the CSV column name.
+  When an analysis step emits one unambiguous ordered-category distribution
+  together with a mutually exclusive source-availability partition for a
+  direct figure step, declare
+  `step_summary["figure_data_family"] = "ordered_category_distribution"`.
+  Declare this closed artifact family only when the level counts reconcile to
+  the valid-observed denominator and the availability counts reconcile to the
+  locked cohort; do not infer it from a clinical variable name or a figure id.
+  Do not declare this distribution family for a step whose structured outputs
+  are outcome-, trend-, association-, effect-, or estimate-bearing; those are
+  result products, not a supporting category-distribution artifact.
+  In every source-data row, the reported percentage must equal
+  `100 * count / denominator` (within rounding tolerance). If a distribution
+  is conditional on valid-observed records, use the conditional percentage
+  column and its valid-observed denominator; show no-source/missing records in
+  a separate availability panel against the locked-cohort denominator. Never
+  relabel a sub-100% locked-cohort percentage sum as "sums to 100".
+  More generally, before plotting any count-derived rate, risk, fraction, or
+  percentage, require its denominator to be greater than zero and recompute or
+  verify the displayed value from the source event/count numerator and that
+  denominator. Do not trust a preformatted percentage when its counts disagree.
+  Missing confidence limits are unavailable evidence: keep them null and mark
+  the interval unavailable or omit that error bar. Never replace a missing
+  bound with the point estimate, because that fabricates a zero-width interval.
+  If invalid result rows are excluded from a plot, disclose every excluded row
+  and reason in source-data audit fields and `step_summary.json`; never silently
+  drop them. A row with `n == 0` cannot carry or display a rate, interval,
+  median, quartile, or other numeric summary.
 - OPTIONAL trajectory: if os.environ.get("TRAJECTORY_PARQUET") is set, it
   is a LONG per-timepoint table with columns
   (stay_id, charttime, concept, value_num, value_str) — charttime is
@@ -140,6 +325,121 @@ Code contract:
   `tight_layout`, `bbox_inches`, or journal cropping.
 - Save a machine-readable summary to step_summary.json containing
   every numeric statistic that downstream agents may quote.
+- Machine-summary units must match field names: values under keys containing
+  `fraction` are proportions in [0, 1], while explicitly named `_pct`,
+  `percent`, or `percentage` fields may use [0, 100]. Never copy a percentage
+  value directly into a fraction-valued field.
+- When reporting a source-status count map, always include the complete four
+  category schema: valid observed; no source; measured/source present but
+  summary missing; and contradictory/invalid. Preserve zero-frequency
+  categories explicitly with count 0 instead of omitting their keys; their
+  risks and confidence intervals remain null/not estimable, not 0%.
+- A percentage/fraction column must use the population named in its denominator.
+  In particular, source-status rows partition the locked cohort, so report
+  their fraction/pct of the locked cohort (or NA). Do not label no-source or
+  other source-status counts as a percentage of valid-observed rows. Reserve a
+  valid-observed distribution denominator for levels/values within that subset.
+- CONTROLLED ORDERED-STRATIFIED METHOD: when and only when the step method is
+  exactly `ordinal_stratified_descriptive_analysis`, the agent remains
+  responsible for resolving the declared input columns, fixing the explicit
+  ordered level sequence, defining each outcome-specific analysis set and
+  denominator, composing the per-level descriptive table, and writing the
+  result tables. The statistical helpers do not make those research decisions.
+  For this exact method, import these documented, case-neutral primitives:
+  ```python
+  from easyicu.research_agent.methods.ordered_trends import (
+      cochran_armitage_trend,
+      jonckheere_terpstra_trend,
+      wilson_interval,
+  )
+  ```
+  Call the primitives with their documented signatures (do not pass
+  individual binary outcome/group arrays to Cochran-Armitage):
+  ```python
+  ci = wilson_interval(event_n=event_n, n=binary_n, alpha=0.05)
+  ca = cochran_armitage_trend(
+      event_counts=event_counts,
+      totals=totals,
+      scores=scores,
+      group_order=ordered_levels,
+      alternative="two-sided",
+  )
+  jt = jonckheere_terpstra_trend(
+      values=individual_outcomes,
+      groups=aligned_group_labels,
+      group_order=ordered_levels,
+      alternative="two-sided",
+  )
+  ```
+  Read Wilson bounds from `ci.ci_low` and `ci.ci_high`, not by indexing or
+  unpacking the dataclass. For either trend result, copy
+  `result.statistic_type` verbatim into the CSV `statistic_name` field. Copy
+  the nullable fields as returned: Jonckheere-Terpstra has
+  `result.chi_square is None` and `result.score_scheme is None`; do not invent
+  Cochran-Armitage labels for that row.
+  Use `wilson_interval` for every binary-outcome level's risk interval. Use
+  `cochran_armitage_trend` for the binary outcome, passing `group_order` and an
+  explicit `scores` vector. Consecutive scores such as `[0, 1, ..., k-1]`
+  impose an equal-spacing consecutive-rank assumption; record that assumption
+  in the contract as `score_scheme="consecutive_ordinal_ranks"`; otherwise use
+  `score_scheme="prespecified_numeric_scores"`. Never claim that the test uses
+  order alone. Use `jonckheere_terpstra_trend` for the continuous or ordinal
+  outcome, passing the individual-level outcome values, their aligned group
+  labels, and explicit `group_order`; never substitute group medians or other
+  aggregated summaries. Both controlled tests use `alternative="two-sided"`.
+  Spearman and Kendall may be independent audit comparators, but neither may be
+  labelled, reported, or cited as a Jonckheere-Terpstra test or
+  "JT-equivalent" result.
+  Preserve the primitives' nonzero `p_value`, `p_value_reporting`,
+  `log_p_value`, `negative_log10_p`, and `p_value_bounded` fields; never
+  serialize or report a p value as `0` or `0.0`. Unless the step contract
+  explicitly prespecifies another multiplicity policy, treat the binary and
+  continuous/ordinal trend tests as one prespecified family of exactly two and
+  apply Holm adjustment across both raw p values (for example with
+  `statsmodels.stats.multitest.multipletests(..., method="holm")`). Retain raw
+  and adjusted p values. On both trend-table rows write
+  `family_id="ordered_trend_outcomes"`, `family_size=2`, `prespecified=true`,
+  and `multiplicity_policy="holm_familywise"`. Do not silently shrink the
+  planned family when a requested test is not estimable.
+  In `step_summary.json`, include the closed declaration
+  `step_summary["ordered_stratified_contract"]` with these exact fields and
+  controlled values: `schema_version="1.0"`; `ordered_exposure_column`;
+  `ordered_levels` (the field name is exactly `ordered_levels`, never
+  `explicit_ordered_levels`); `cochran_armitage_scores`; `score_scheme` equal
+  to `consecutive_ordinal_ranks` or `prespecified_numeric_scores`;
+  `binary_outcome_column`; `continuous_outcome_column`; `locked_cohort_n`;
+  `valid_ordered_exposure_n`; `ci_method="wilson_score"`; `ci_alpha=0.05`;
+  `continuous_summary="median_iqr"`; `quantile_method="linear"`;
+  `stratified_table`; `trend_table`; `tests` equal to
+  `{"binary":{"test_id":"cochran_armitage","alternative":"two-sided"},
+  "continuous":{"test_id":"jonckheere_terpstra","alternative":"two-sided"}}`;
+  `multiplicity_policy="holm_familywise"`; and
+  `multiplicity_family_size=2`. Preserve JSON numeric types:
+  `ordered_levels` and `cochran_armitage_scores` are lists of numbers;
+  `locked_cohort_n`, `valid_ordered_exposure_n`, and
+  `multiplicity_family_size` are integers; and `ci_alpha` is a number. Never
+  stringify these values (for example, write `2`, not `"2"`, and `0.05`, not
+  `"0.05"`). The three selected columns must be distinct
+  exact names from the current step inputs, and the two table names must be CSV
+  basenames inside `STEP_OUT_DIR`. Do not embed trend-result payloads inside
+  this declaration; write results in the trend CSV and the ordinary numeric
+  summary instead.
+  The stratified CSV must contain one row per declared level and these columns:
+  `level_value`, `level_order`, `level_n`, `level_percentage`,
+  `binary_outcome`, `binary_n`, `binary_missing_n`, `binary_event_n`,
+  `binary_risk`, `binary_percentage`, `binary_ci_low`, `binary_ci_high`,
+  `binary_ci_method`, `binary_ci_alpha`, `continuous_outcome`, `continuous_n`,
+  `continuous_missing_n`, `continuous_median`, `continuous_q25`, and
+  `continuous_q75`. Use `binary_ci_method="wilson_score"` and pandas linear
+  quantiles for the median/IQR summaries.
+  The trend CSV must contain exactly the two planned outcome rows and retain:
+  `outcome`, `outcome_type`, `test_id`, `test_name`, `alternative`, `n`,
+  `levels_with_data`, `statistic`, `statistic_name`, `expected_statistic`,
+  `variance`, `z_statistic`, `chi_square`, `effect_size`, `effect_size_name`,
+  `p_value`, `adjusted_p`, `p_value_reporting`, `log_p_value`,
+  `negative_log10_p`, `p_value_bounded`, `tie_correction`,
+  `continuity_correction`, `implementation`, `score_scheme`, `family_id`,
+  `family_size`, `prespecified`, `multiplicity_policy`, and `status="ok"`.
 - DERIVED NUMBERS (optional): if you computed a derived value (a CI
   bound from a coefficient + standard error, an OR from a coefficient,
   a between-cohort difference, etc.), you MAY declare it under a
@@ -180,6 +480,15 @@ Code contract:
   and ``notes``. If a variant cannot be run, emit the row with
   ``converged=false``, ``n=0``, null numeric fields, and a precise
   note. Do not change the primary estimate based on panel results.
+  For a planned cohort sensitivity that can relax primary eligibility and add
+  previously excluded records, load `EASYICU_UNIVERSE_PARQUET` and replay
+  membership there. `COHORT_PARQUET` is already locked and filtered, so it
+  cannot recover excluded rows. Cover every locked robustness `spec_id`
+  exactly once, plus one explicit primary row; do not rename, invent, or
+  substitute variants. Report the universe, primary, and variant counts and
+  their overlap, including intersection, moved-in, and moved-out counts. If the
+  universe is unavailable, retain every required row with null estimates and a
+  precise fail-closed reason instead of pretending the relaxed cohort was run.
 - SIDE FINDINGS (optional): if execution reveals a secondary
   observation the plan did not request, record it under
   ``step_summary["side_findings"]`` as a list of objects with
@@ -291,6 +600,44 @@ CLINICAL SCORE AND MISSINGNESS SEMANTICS:
 - Never treat a numeric score value of 0 as equivalent to "not measured".
   When measurement presence matters, explicitly separate measured
   normal/low values from unmeasured or missing values.
+- When one measured concept has several per-stay summaries (for example
+  `<concept>_first`, `_max`, `_min`, or `_mean`) plus source-presence fields
+  such as `<concept>_n` or `<concept>_measured`, apply the same source-status
+  consistency gate to EVERY summary. A summary-specific validity mask must
+  combine its numeric/domain check with the shared source-present and
+  non-contradictory indicator mask; it must not bypass that gate merely
+  because the summary value is finite or in range.
+- For a component derivation/source-status QUALITY-CONTROL step, a declared
+  `<concept>_measured` flag does not replace the independent observation-count
+  audit. Repeat this for EVERY declared `<concept>_measured` family in the
+  step, including the authoritative primary summary and each audit-only
+  component; checking only the components is incomplete. If `<concept>_n`
+  exists in the locked wide cohort, treat it as an
+  auxiliary provenance field even when the planner omitted it from the primary
+  input list: compare `<concept>_measured` with `(<concept>_n > 0)` per stay and
+  report `count_consistency_status="checked"`, `count_flag_comparison_n`,
+  `count_flag_discordant_n`, and the count-column names under
+  `step_summary["component_qc"]`. The union of `count_columns` and
+  `missing_count_columns` must cover every declared measured family. If no
+  companion count exists, report
+  `count_consistency_status="unavailable"` plus `missing_count_columns`; never
+  fabricate a check or substitute a value-domain comparison for it. Also emit
+  `count_consistency_by_measured_input`, keyed by the exact declared
+  `<concept>_measured` name. Each entry must report either
+  `{status:"checked", count_column:"<concept>_n", comparison_n,
+  discordant_n}` or `{status:"unavailable", count_column:"<concept>_n",
+  reason}`. A checked comparison must have at least one comparable stay. These
+  count columns are audit-only, not new exposures or adjustment covariates.
+- A shared source-status helper must make the summary semantics explicit
+  (for example `require_integer=True` only for an ordinal stage or count).
+  Never apply an ordinal/integer-like check to a continuous laboratory value
+  merely because both variables use the same helper. Validate continuous
+  values with their own finite/domain rule and ordinal values with their own
+  integer/level rule.
+- Treat a declared plausibility, display, or audit range as a range flag, not
+  an automatic exclusion rule. If the locked protocol says to retain and flag
+  finite values outside that range, do not reclassify them as invalid, cap
+  them, or drop them in a later descriptive or modelling step.
 - Never derive a binary exposure, outcome, event flag, or eligibility flag
   with `.fillna(0)` or by otherwise recoding missing source values to the
   negative class. Use an explicit rule that preserves missingness first, e.g.

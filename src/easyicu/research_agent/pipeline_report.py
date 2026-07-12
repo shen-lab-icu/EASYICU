@@ -37,25 +37,38 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import re
 import textwrap
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from .article_contract import (
     article_contract_audit_payload,
     summarize_article_contract_coverage,
 )
 from .display_suite import summarize_display_suite_status
-from .evidence import EvidenceStore
+from .evidence import EvidenceStore, sha256_of_file
 from .figure_strategy import summarize_article_figure_strategy_coverage
 from .publication_figures import PUBLICATION_FIGURE_SKILL_POLICY_VERSION
 from .review_artifacts import build_review_artifact_payloads
-from .runtime_artifacts import capture_code_version
+from .runtime_artifacts import (
+    active_step_evidence_ids,
+    capture_code_version,
+    current_evidence_records,
+    current_run_evidence_records,
+    current_run_evidence_paths,
+    current_successful_step_ids,
+    current_successful_step_records,
+    load_run_artifact_authority,
+)
 from .schema import AnalysisPlan, ResearchContext, ValidationFinding
 
 
-def _figure_steps_satisfied_by_repair(run_dir: Path) -> set:
+def _figure_steps_satisfied_by_repair(
+    run_dir: Path,
+    per_step_records: Optional[Sequence[Mapping[str, Any]]],
+) -> set:
     """Figure step_ids whose figure a successful rendering-only repair produced.
 
     A ``*_figure`` step can fail (its own runner emitted no exports) yet still be
@@ -72,26 +85,143 @@ def _figure_steps_satisfied_by_repair(run_dir: Path) -> set:
     steps_dir = run_dir / "steps"
     if not steps_dir.is_dir():
         return satisfied
-    for summary in steps_dir.glob("*/outputs/step_summary.json"):
-        try:
-            payload = json.loads(summary.read_text(encoding="utf-8"))
-        except Exception:
-            continue
+    authority = (
+        load_run_artifact_authority(run_dir)
+        if per_step_records is not None
+        else None
+    )
+    strict_evidence_binding = authority is not None
+    evidence_by_id = {
+        str(record.get("evidence_id") or ""): record
+        for record in ((authority or {}).get("evidence") or [])
+        if isinstance(record, Mapping) and str(record.get("evidence_id") or "")
+    }
+    if per_step_records is not None:
+        candidates = [
+            (
+                str(record.get("step_id") or ""),
+                record.get("step_summary"),
+                record,
+            )
+            for record in current_successful_step_records(per_step_records)
+        ]
+    else:
+        candidates = []
+        for summary in steps_dir.glob("*/outputs/step_summary.json"):
+            try:
+                payload = json.loads(summary.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            candidates.append((summary.parents[1].name, payload, None))
+    for step_id, payload, ledger_record in candidates:
         if not isinstance(payload, dict):
             continue
         if (
-            not payload.get("rendering_only")
+            not step_id
+            or step_id in {".", ".."}
+            or Path(step_id).name != step_id
+            or "/" in step_id
+            or "\\" in step_id
+        ):
+            continue
+        if (
+            payload.get("rendering_only") is not True
             or str(payload.get("status") or "") != "ok"
         ):
             continue
         parent = str(payload.get("parent_step") or "").strip()
         if not parent:
             continue
-        outputs_dir = summary.parent
+        outputs_dir = steps_dir / step_id / "outputs"
+        try:
+            outputs_dir.resolve().relative_to(steps_dir.resolve())
+        except ValueError:
+            continue
+        declared_paths: List[str] = []
+        for key in ("figure_paths", "figure_files", "figure_path", "figure_file"):
+            value = payload.get(key)
+            if isinstance(value, Mapping):
+                declared_paths.extend(str(item) for item in value.values())
+            elif isinstance(value, (list, tuple, set)):
+                declared_paths.extend(str(item) for item in value)
+            elif value:
+                declared_paths.append(str(value))
+        def _declared_figure_exists(candidate: str) -> bool:
+            path = Path(candidate)
+            if not path.is_absolute():
+                # Step summaries conventionally declare export basenames (for
+                # example ``publication_figure.png``), relative to their own
+                # outputs directory.  Resolving those names from ``run_dir``
+                # makes a real, ledgered repair look absent.  The containment
+                # check below still rejects ``..`` traversal and symlinks that
+                # resolve outside this repair's outputs directory.
+                path = outputs_dir / path
+            try:
+                path.resolve().relative_to(outputs_dir.resolve())
+            except ValueError:
+                return False
+            if not path.is_file() or path.suffix.lower() not in {
+                ".png",
+                ".svg",
+                ".pdf",
+                ".tif",
+                ".tiff",
+            }:
+                return False
+            if not strict_evidence_binding:
+                return True
+
+            # A current manifest can prove more than file existence: the
+            # successful outer record must actively bind a figure evidence
+            # record produced by this repair, and both the output and evidence
+            # copy must still match the registered digest.  This prevents an
+            # old same-step file from gaining credit merely because a newer
+            # summary repeats its basename.
+            active_ids = {
+                str(evidence_id)
+                for evidence_id in ((ledger_record or {}).get("evidence_ids") or [])
+                if str(evidence_id).strip()
+            }
+            output_digest = sha256_of_file(path)
+            run_root = run_dir.resolve()
+            for evidence_id in active_ids:
+                evidence_record = evidence_by_id.get(evidence_id)
+                if not isinstance(evidence_record, Mapping):
+                    continue
+                if (
+                    str(evidence_record.get("kind") or "") != "figure"
+                    or str(evidence_record.get("produced_by_step") or "") != step_id
+                    or str(evidence_record.get("sha256") or "") != output_digest
+                ):
+                    continue
+                relative_path = str(evidence_record.get("relative_path") or "").strip()
+                if not relative_path:
+                    continue
+                evidence_path = (run_root / relative_path).resolve()
+                try:
+                    evidence_path.relative_to(run_root)
+                except ValueError:
+                    continue
+                original_name = evidence_path.name.split("__", 1)[-1]
+                if (
+                    original_name == path.name
+                    and evidence_path.is_file()
+                    and sha256_of_file(evidence_path) == output_digest
+                ):
+                    return True
+            return False
+
         has_rendered_figure = any(
-            any(outputs_dir.glob(f"*{ext}"))
-            for ext in (".png", ".svg", ".pdf", ".tiff")
+            _declared_figure_exists(candidate) for candidate in declared_paths
         )
+        if per_step_records is None and not declared_paths:
+            # Historical summaries did not always declare exports. Filesystem
+            # discovery is retained only for that explicit legacy path; a live
+            # ledger may never gain credit from an append-only stale file.
+            has_rendered_figure = any(
+                any(outputs_dir.glob(f"*{ext}"))
+                for ext in (".png", ".svg", ".pdf", ".tif", ".tiff")
+            )
         if has_rendered_figure:
             satisfied.add(parent + "_figure")
     return satisfied
@@ -133,7 +263,9 @@ def execution_gate_status(
     # matched EXACTLY by a repair's ``parent_step`` are credited; every other
     # failure still blocks the gate. ``run_dir=None`` preserves legacy behaviour.
     repaired_figures: set = (
-        _figure_steps_satisfied_by_repair(run_dir) if run_dir is not None else set()
+        _figure_steps_satisfied_by_repair(run_dir, per_step_records)
+        if run_dir is not None
+        else set()
     )
 
     def _step_ok(step_id: str) -> bool:
@@ -215,16 +347,85 @@ def _step_summary_blocks_outcome(payload: Dict[str, Any]) -> bool:
     return False
 
 
-def _blocked_outcome_step_ids(run_dir: Path) -> List[str]:
-    blocked: set[str] = set()
+def _step_authority_records(
+    run_dir: Path,
+    per_step_records: Optional[Sequence[Mapping[str, Any]]],
+) -> Optional[Sequence[Mapping[str, Any]]]:
+    if per_step_records is not None:
+        return per_step_records
+    authority = load_run_artifact_authority(run_dir)
+    if authority is None:
+        return None
+    records = authority.get("per_step_records")
+    return records if isinstance(records, list) else []
+
+
+def _authoritative_step_summaries(
+    run_dir: Path,
+    per_step_records: Optional[Sequence[Mapping[str, Any]]],
+) -> List[tuple[str, Mapping[str, Any]]]:
+    """Current successful summaries, or filesystem summaries for legacy callers."""
+
+    per_step_records = _step_authority_records(run_dir, per_step_records)
+    if per_step_records is not None:
+        return [
+            (str(record.get("step_id") or ""), summary)
+            for record in current_successful_step_records(per_step_records)
+            if isinstance((summary := record.get("step_summary")), Mapping)
+        ]
+    summaries: List[tuple[str, Mapping[str, Any]]] = []
     for path in sorted(run_dir.glob("steps/*/outputs/step_summary.json")):
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             continue
-        if isinstance(payload, dict) and _step_summary_blocks_outcome(payload):
-            blocked.add(path.parents[1].name)
-    for path in sorted(run_dir.glob("steps/*/outputs/*gate*.csv")):
+        if isinstance(payload, Mapping):
+            summaries.append((path.parents[1].name, payload))
+    return summaries
+
+
+def _evidence_record_path(run_dir: Path, record: Mapping[str, Any]) -> Optional[Path]:
+    relative_path = str(record.get("relative_path") or "").strip()
+    if not relative_path:
+        return None
+    root = run_dir.resolve()
+    path = (root / relative_path).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return None
+    return path if path.is_file() else None
+
+
+def _blocked_outcome_step_ids(
+    run_dir: Path,
+    per_step_records: Optional[Sequence[Mapping[str, Any]]] = None,
+) -> List[str]:
+    per_step_records = _step_authority_records(run_dir, per_step_records)
+    blocked: set[str] = set()
+    for step_id, payload in _authoritative_step_summaries(run_dir, per_step_records):
+        if _step_summary_blocks_outcome(dict(payload)):
+            blocked.add(step_id)
+    if per_step_records is None:
+        gate_files = [
+            (path.parents[1].name, path)
+            for path in sorted(run_dir.glob("steps/*/outputs/*gate*.csv"))
+        ]
+    else:
+        gate_files = []
+        for record in current_run_evidence_records(
+            run_dir,
+            per_step_records=per_step_records,
+        ) or []:
+            basename = Path(str(record.get("relative_path") or "")).name
+            basename = basename.split("__", 1)[-1].lower()
+            if "gate" not in basename or not basename.endswith(".csv"):
+                continue
+            path = _evidence_record_path(run_dir, record)
+            step_id = str(record.get("produced_by_step") or "").strip()
+            if path is not None and step_id:
+                gate_files.append((step_id, path))
+    for step_id, path in gate_files:
         try:
             with path.open(newline="", encoding="utf-8") as fh:
                 rows = list(csv.DictReader(fh))
@@ -244,7 +445,7 @@ def _blocked_outcome_step_ids(run_dir: Path) -> List[str]:
                 and _OUTCOME_ENDPOINT_RE.search(row_text)
                 and (false_authorization or "blocked" in row_text)
             ):
-                blocked.add(path.parents[1].name)
+                blocked.add(step_id)
                 break
     return sorted(blocked)
 
@@ -327,7 +528,7 @@ def _is_cosmetic_visual_error(finding: ValidationFinding) -> bool:
     layer: the step-level demotion runs during execution, but this exact finding
     is re-generated when the FINAL manuscript SVG is audited, after that pass, so
     it leaks into ``analysis_errors`` / the figure-bundle gate and blocks a run
-    whose analysis and evidence are sound (the M3 subphenotype block). A minor
+    whose analysis and evidence are sound. A minor
     multi-panel label/annotation overlap is demoted; genuine visual_qa errors
     (blank/absent figure, wrong content) still block because they do not carry
     the deterministic "overlapping text elements … spacing" signature.
@@ -343,10 +544,48 @@ def _publication_figure_bundle_ready(
     evidence: EvidenceStore,
     run_dir: Path,
     findings: Optional[Sequence[ValidationFinding]] = None,
+    per_step_records: Optional[Sequence[Mapping[str, Any]]] = None,
 ) -> Dict[str, Any]:
     stems: Dict[str, set[str]] = {}
     source_ready = False
-    contract_ready = evidence.get("publication_figure_contract") is not None
+    strict_checkpoint = per_step_records is not None
+    active_ids = active_step_evidence_ids(per_step_records or [])
+
+    def _sources_belong_to_current_checkpoint(record: Any) -> bool:
+        if not strict_checkpoint:
+            return True
+        metadata = record.metadata or {}
+        raw_ids = metadata.get("source_evidence_ids")
+        if isinstance(raw_ids, list):
+            source_ids = {str(value) for value in raw_ids if str(value).strip()}
+        else:
+            value = str(metadata.get("source_evidence_id") or "").strip()
+            source_ids = {value} if value else set()
+        if source_ids:
+            return source_ids <= active_ids
+        # Step-produced records were already filtered by
+        # current_evidence_records. A run-level publication artifact without
+        # source ids cannot prove that it still belongs to this checkpoint.
+        return bool(str(record.produced_by_step or "").strip()) or not (
+            record.producer == "publication_figure_skill"
+            or str(record.evidence_id).startswith("publication_figure_")
+        )
+
+    current_records = [
+        record
+        for record in current_evidence_records(evidence.records(), per_step_records)
+        if _sources_belong_to_current_checkpoint(record)
+    ]
+
+    def _is_publication_contract(record: Any) -> bool:
+        metadata = record.metadata or {}
+        return (
+            record.evidence_id == "publication_figure_contract"
+            or str(record.evidence_id).startswith("publication_figure_contract_v")
+            or metadata.get("artifact_role") == "figure_contract"
+        )
+
+    contract_ready = any(_is_publication_contract(record) for record in current_records)
     visual_errors = [
         finding
         for finding in (findings or [])
@@ -354,11 +593,11 @@ def _publication_figure_bundle_ready(
         and finding.validator in _PUBLICATION_FIGURE_VISUAL_ERROR_VALIDATORS
         and not _is_cosmetic_visual_error(finding)
     ]
-    for record in evidence.records():
+    for record in current_records:
         metadata = record.metadata or {}
         if record.evidence_id.startswith("publication_figure_source_"):
             source_ready = True
-        is_contract_record = record.evidence_id == "publication_figure_contract"
+        is_contract_record = _is_publication_contract(record)
         if record.kind != "figure":
             if is_contract_record and (
                 metadata.get("source_evidence_id")
@@ -470,11 +709,7 @@ def _successful_step_ids(per_step_records: Sequence[Dict[str, Any]]) -> set:
     final readiness gates — they remain in the manifest for the
     audit trail but are not treated as errors at the report stage.
     """
-    return {
-        str(rec.get("step_id"))
-        for rec in per_step_records
-        if isinstance(rec, dict) and rec.get("status") == "ok" and rec.get("step_id")
-    }
+    return current_successful_step_ids(per_step_records)
 
 
 def _step_ids_in_records(per_step_records: Sequence[Dict[str, Any]]) -> set:
@@ -855,68 +1090,69 @@ def _plausibility_walk(node: Any):
             yield from _plausibility_walk(item)
 
 
-def primary_result_plausibility_errors(run_dir: Path) -> List[str]:
+def primary_result_plausibility_errors(
+    run_dir: Path,
+    per_step_records: Optional[Sequence[Mapping[str, Any]]] = None,
+) -> List[str]:
     """Return case-neutral ``table == reality`` violations in primary artefacts.
 
-    Scans every step's ``step_summary.json`` (recursively) and the known
-    primary-result CSVs for values that are physically impossible for any
-    question. Returns an empty list for a healthy run; a non-empty list is a
-    fail-closed analysis error so the run cannot reach ``manuscript_ready``.
+    Modern callers supply the per-step ledger, so only the latest successful
+    summaries and their active evidence are inspected.  Filesystem scanning is
+    retained solely for legacy callers with no ledger.
     """
 
+    per_step_records = _step_authority_records(run_dir, per_step_records)
     errors: List[str] = []
     seen: set = set()
-    steps_dir = run_dir / "steps"
-    if not steps_dir.is_dir():
-        return errors
-
     def _add(new_errors: List[str]) -> None:
         for err in new_errors:
             if err not in seen:
                 seen.add(err)
                 errors.append(err)
 
-    for summary in sorted(steps_dir.glob("*/outputs/step_summary.json")):
-        try:
-            payload = json.loads(summary.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        label = summary.parent.parent.name
+    for label, payload in _authoritative_step_summaries(
+        run_dir,
+        per_step_records,
+    ):
         for mapping in _plausibility_walk(payload):
             _add(_plausibility_errors_for_row(label, mapping))
 
-    for outputs_dir in sorted(steps_dir.glob("*/outputs")):
-        for name in _PLAUSIBILITY_RESULT_CSVS:
-            path = outputs_dir / name
-            if not path.exists():
-                continue
-            try:
-                with path.open(newline="", encoding="utf-8") as handle:
-                    for row in csv.DictReader(handle):
-                        _add(
-                            _plausibility_errors_for_row(
-                                f"{outputs_dir.parent.name}/{name}", dict(row)
-                            )
+    if per_step_records is None:
+        csv_paths = [
+            path
+            for outputs_dir in sorted((run_dir / "steps").glob("*/outputs"))
+            for name in _PLAUSIBILITY_RESULT_CSVS
+            if (path := outputs_dir / name).exists()
+        ]
+    else:
+        csv_paths = []
+        for path in current_run_evidence_paths(
+            run_dir,
+            per_step_records=per_step_records,
+        ) or []:
+            basename = path.name.split("__", 1)[-1]
+            if basename in _PLAUSIBILITY_RESULT_CSVS:
+                csv_paths.append(path)
+    for path in csv_paths:
+        basename = path.name.split("__", 1)[-1]
+        try:
+            with path.open(newline="", encoding="utf-8") as handle:
+                for row in csv.DictReader(handle):
+                    _add(
+                        _plausibility_errors_for_row(
+                            basename,
+                            dict(row),
                         )
-            except Exception:
-                continue
+                    )
+        except Exception:
+            continue
     return errors
 
 
 # --- primary survival estimand integrity -------------------------------------
-# The PRIMARY time-to-event estimate must come from the deterministic Cox runner
-# (reproducible, correct exposure, no positional column swaps). When an LLM coder
-# produces it instead, the estimate is unverified and can silently fabricate an
-# implausible Cox model, including positional column swaps where non-event values
-# are interpreted as events. This gate fails closed on that path regardless of
-# *why* the deterministic runner did not fire (disabled flag, unmet preflight,
-# already-consumed fallback). It is case-neutral: it only fires for plans that
-# declare a survival / time-to-event PRIMARY step, so association / prediction /
-# clustering questions are untouched.
+# The agent owns the survival method.  This gate checks impossible numeric shape
+# (event counts, HR/CI scale) without requiring a deterministic-runner fingerprint.
 _SURVIVAL_PRIMARY_METHODS = ("survival_analysis", "time_to_event", "cox", "cox_ph")
-# Keys the deterministic Cox runner always writes into its step_summary; together
-# they fingerprint that step_summary as runner-produced (see deterministic_survival).
-_DETERMINISTIC_SURVIVAL_MARKERS = ("fit_engine", "adjustment_source")
 # Keys that show a step actually REPORTED a survival estimate, so an empty or
 # prep-only survival step is not misread as a fabricated result.
 _SURVIVAL_RESULT_KEYS = (
@@ -945,58 +1181,102 @@ def _is_survival_method_step(step: Any) -> bool:
     return "figure" not in step_id
 
 
-def _survival_summary_is_deterministic(payload: Dict[str, Any]) -> bool:
-    return payload.get(
-        "deterministic_standard_analysis"
-    ) == "survival_primary_cox" or all(
-        key in payload for key in _DETERMINISTIC_SURVIVAL_MARKERS
-    )
+def _survival_summary_scalar(
+    payload: Dict[str, Any], *keys: str
+) -> Optional[float]:
+    containers: List[Dict[str, Any]] = [payload]
+    primary_model = payload.get("primary_model")
+    if isinstance(primary_model, dict):
+        containers.append(primary_model)
+    for container in containers:
+        for key in keys:
+            value = container.get(key)
+            if value is None:
+                continue
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return float("nan")
+    return None
 
 
 def primary_survival_estimate_integrity_errors(
-    plan: Optional[AnalysisPlan], run_dir: Optional[Path]
+    plan: Optional[AnalysisPlan],
+    run_dir: Optional[Path],
+    per_step_records: Optional[Sequence[Mapping[str, Any]]] = None,
 ) -> List[str]:
-    """Fail closed if a survival estimand did not come from the runner.
+    """Fail closed on impossible agent-produced survival summary values.
 
-    Returns ``[]`` for any question without a survival / time-to-event step and
-    for a survival design where the primary Cox estimate carries the
-    deterministic runner fingerprint. When a survival design produced a primary
-    Cox estimate (``hazard_ratio`` / ``primary_model``) but NO survival result
-    step carries the fingerprint, the estimand is an unverified LLM-coded result
-    and this returns a fail-closed analysis error.
+    Provenance/value validators establish traceability elsewhere. This focused
+    gate is method-neutral: it accepts agent-coded Cox products and rejects
+    non-positive/non-finite HRs, invalid CIs, or event counts outside the analysis
+    denominator. A non-survival question remains untouched.
     """
     if plan is None or run_dir is None:
         return []
-    result_steps: List[str] = []
-    any_deterministic = False
+    per_step_records = _step_authority_records(run_dir, per_step_records)
+    errors: List[str] = []
+    active_summaries = dict(
+        _authoritative_step_summaries(run_dir, per_step_records)
+    )
     for step in getattr(plan, "steps", None) or []:
         if not _is_survival_method_step(step):
             continue
         step_id = str(getattr(step, "step_id", "") or "")
-        summary_path = run_dir / "steps" / step_id / "outputs" / "step_summary.json"
-        if not summary_path.exists():
+        payload = active_summaries.get(step_id)
+        if payload is None:
             # A missing summary is the execution gate's concern (missing/failed
             # step); this gate only judges a step that DID produce a summary.
             continue
-        try:
-            payload = json.loads(summary_path.read_text(encoding="utf-8"))
-        except Exception:
+        payload = dict(payload)
+        if not any(key in payload for key in _SURVIVAL_RESULT_KEYS):
             continue
-        if not isinstance(payload, dict):
-            continue
-        if _survival_summary_is_deterministic(payload):
-            any_deterministic = True
-            continue
-        if any(key in payload for key in _SURVIVAL_RESULT_KEYS):
-            result_steps.append(step_id)
-    if result_steps and not any_deterministic:
-        joined = ", ".join(sorted(result_steps))
-        return [
-            "primary survival estimand was not produced by the deterministic Cox "
-            f"runner (steps {joined} reported a Cox estimate with no runner "
-            "fingerprint -- unverified LLM-coded survival result; fail closed)"
-        ]
-    return []
+        hr = _survival_summary_scalar(
+            payload, "hazard_ratio", "hr", "point_estimate"
+        )
+        if hr is not None and (not math.isfinite(hr) or hr <= 0):
+            errors.append(
+                f"primary survival step {step_id} reported an invalid hazard "
+                f"ratio ({hr}); HR must be finite and > 0"
+            )
+        ci_low = _survival_summary_scalar(
+            payload, "ci_low", "lower", "hr_ci_low", "lower_ci"
+        )
+        ci_high = _survival_summary_scalar(
+            payload, "ci_high", "upper", "hr_ci_high", "upper_ci"
+        )
+        if ci_low is not None and ci_high is not None:
+            if (
+                not math.isfinite(ci_low)
+                or not math.isfinite(ci_high)
+                or ci_low <= 0
+                or ci_high <= 0
+                or ci_low > ci_high
+                or (hr is not None and math.isfinite(hr) and not (ci_low <= hr <= ci_high))
+            ):
+                errors.append(
+                    f"primary survival step {step_id} reported an invalid HR "
+                    f"confidence interval ({ci_low}, {ci_high}) for estimate {hr}"
+                )
+        n_analysis = _survival_summary_scalar(
+            payload, "n_analysis", "analysis_n", "n", "cohort_n"
+        )
+        n_events = _survival_summary_scalar(
+            payload, "n_events", "events", "event_n"
+        )
+        if n_analysis is not None and n_events is not None:
+            if (
+                not math.isfinite(n_analysis)
+                or not math.isfinite(n_events)
+                or n_analysis < 0
+                or n_events < 0
+                or n_events > n_analysis
+            ):
+                errors.append(
+                    f"primary survival step {step_id} reported impossible event "
+                    f"counts (events={n_events}, analysis_n={n_analysis})"
+                )
+    return errors
 
 
 def _partition_findings_by_supersession(
@@ -1065,20 +1345,17 @@ def _partition_findings_by_supersession(
     return active, superseded
 
 
-_PRIMARY_DETERMINISTIC_RUNNERS = frozenset(
-    {"causal_primary_iptw", "survival_primary_cox", "ordinal_dose_response"}
-)
+# Primary scientific analyses are agent-owned.  The empty set remains for
+# backward-compatible inspection of legacy records, not live dispatch.
+_PRIMARY_DETERMINISTIC_RUNNERS: frozenset[str] = frozenset()
 
 
 def _deterministic_primary_estimate_bound(per_step_records: Any) -> bool:
-    """True when a deterministic PRIMARY runner produced a bound primary estimate.
+    """Inspect legacy records without granting retired runners primary ownership.
 
-    Drives the outcome-aware replan-budget rule: a cap hit is treated as advisory
-    (not a fail-closed demotion) only when the trustworthy deterministic estimand
-    is actually bound to a value, so a churny-but-converged H1/H2 run keeps its
-    manuscript while a genuinely unresolved run (no bound headline) still fails
-    closed. Requiring the estimate to come from a deterministic runner is the
-    conservative choice: an LLM-coded primary that hit the cap stays demoted.
+    The live capability registry has no deterministic primary runner.  This
+    compatibility predicate therefore stays false even when an old run record
+    carries a historical runner marker and a finite estimate.
     """
     from .pipeline_primary_effect import (
         _extract_primary_effect_payload_from_records,
@@ -1110,24 +1387,17 @@ def _replan_budget_demotes(
     primary_estimate_bound: bool,
     no_deterministic_primary_expected: bool = False,
 ) -> bool:
-    """Outcome-aware replan-budget rule (2026-07-07).
+    """Outcome-aware replan-budget rule.
 
     Reaching the replan cap demotes the run to ``diagnostic_only`` ONLY if it did
     not otherwise converge. A run that reached ``execution_complete`` with zero
-    failed steps, a clean + numeric-verified manuscript, a bound deterministic
-    primary estimate, and no other hard errors is churny-but-successful -- the
-    cap is advisory there, not a runaway to fail closed. A cap hit on an
-    unresolved run (failed steps, missing headline binding, or other hard
-    errors) still fails closed. Pure so both branches are unit-testable.
+    failed steps, a clean + numeric-verified manuscript, and no other hard errors
+    is churny-but-successful. A cap hit on an unresolved run still fails closed.
 
-    ``no_deterministic_primary_expected`` (2026-07-07, M3 subphenotype): some
-    study-design families are LLM-coded-primary BY DESIGN (phenotyping /
-    descriptive / prediction) and can never bind a deterministic primary. For
-    them, a converged + fully-validated run must not be demoted purely for the
-    cap hit, so the bound-primary requirement is waived. It is set ONLY for
-    families the capability registry marks as unambiguously LLM-coded, so it
-    cannot mask a routing bug (e.g. a dose-response step that should have hit the
-    deterministic ordinal runner but did not).
+    ``no_deterministic_primary_expected`` is derived from the capability
+    registry. Primary science is agent-owned, so a clean run is not penalized
+    merely because no auxiliary renderer can bind an estimand. If family
+    inference fails, the conservative default remains false.
     """
     if not hit:
         return False
@@ -1260,7 +1530,10 @@ def _compute_readiness_gates(
         and bool((getattr(f, "detail", None) or {}).get("replan_budget_exhausted"))
     ]
     replan_budget_hit = bool(replan_budget_errors)
-    blocked_outcome_steps = _blocked_outcome_step_ids(run_dir)
+    blocked_outcome_steps = _blocked_outcome_step_ids(
+        run_dir,
+        per_step_records,
+    )
     blocked_outcome_leaks = (
         _blocked_outcome_manuscript_leaks(manuscript_text)
         if blocked_outcome_steps
@@ -1285,29 +1558,28 @@ def _compute_readiness_gates(
     # column-swapped Cox table with more events than patients) fails closed even
     # though the value-level numeric auditor — which only checks
     # manuscript-number == table-number — would pass it.
-    plausibility_errors = primary_result_plausibility_errors(run_dir)
+    plausibility_errors = primary_result_plausibility_errors(
+        run_dir,
+        per_step_records,
+    )
     # Integrity: a survival PRIMARY estimand must come from the deterministic Cox
     # runner, never an LLM coder that may silently swap columns.
     survival_integrity_errors = primary_survival_estimate_integrity_errors(
-        plan, run_dir
+        plan,
+        run_dir,
+        per_step_records,
     )
-    # Outcome-aware replan-budget rule (2026-07-07): reaching the cap demotes the
-    # run to diagnostic_only ONLY if it did not otherwise converge. A run that
-    # reached execution_complete with zero failed steps, a clean + numeric-
-    # verified manuscript, a bound deterministic primary estimate, and no other
-    # hard errors is churny-but-successful -- the cap is advisory there, not a
-    # runaway to fail closed. A cap hit on an unresolved run (failed steps,
-    # missing headline binding, or other hard errors) still fails closed.
+    # Reaching the cap demotes the run only when it did not otherwise converge.
+    # Clean, complete, numerically verified agent-owned analyses treat the cap as
+    # advisory; failed or unresolved runs still fail closed.
     base_analysis_errors = (
         non_manuscript_errors
         + blocked_outcome_errors
         + plausibility_errors
         + survival_integrity_errors
     )
-    # A study-design family that is LLM-coded-primary by design (phenotyping /
-    # descriptive / prediction) can never bind a deterministic primary, so the
-    # bound-primary requirement of the cap rule is waived for it. Fail-safe to
-    # the strict rule (False) if the family cannot be inferred.
+    # Primary science is agent-owned across the registry. Fail safe to the strict
+    # rule (False) if the family cannot be inferred.
     try:
         from .capability_registry import families_without_deterministic_primary
         from .study_design import infer_study_design_family
@@ -1342,6 +1614,7 @@ def _compute_readiness_gates(
         evidence=evidence,
         run_dir=run_dir,
         findings=active_findings,
+        per_step_records=per_step_records,
     )
     display_suite = summarize_display_suite_status(
         context=context,
@@ -1349,6 +1622,7 @@ def _compute_readiness_gates(
         evidence=evidence,
         run_dir=run_dir,
         publication=publication,
+        per_step_records=per_step_records,
     )
     article_contract = summarize_article_contract_coverage(
         context=context,
@@ -1360,6 +1634,7 @@ def _compute_readiness_gates(
     figure_strategy = summarize_article_figure_strategy_coverage(
         context=context,
         run_dir=run_dir,
+        per_step_records=per_step_records,
     )
     return {
         **execution,
