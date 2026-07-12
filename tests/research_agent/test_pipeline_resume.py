@@ -707,6 +707,24 @@ def test_resume_controller_remaining_steps_respects_stop_point(tmp_path: Path):
     assert [step.step_id for step in remaining] == ["02_model"]
 
 
+def test_resume_controller_remaining_steps_respects_explicit_start_point(
+    tmp_path: Path,
+):
+    controller = ResumeController(
+        plan=_plan(),
+        run_dir=tmp_path,
+        resume_state={"per_step_records": []},
+        resume_from_step_id="02_model",
+    )
+
+    remaining = controller.remaining_steps(
+        plan=_plan(),
+        executed_step_ids=set(),
+    )
+
+    assert [step.step_id for step in remaining] == ["02_model", "03_figure"]
+
+
 def test_resume_controller_rejects_unknown_resume_or_stop_step(tmp_path: Path):
     with pytest.raises(ValueError, match="resume_from_step_id"):
         ResumeController(
