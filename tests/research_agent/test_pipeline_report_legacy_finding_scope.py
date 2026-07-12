@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from easyicu.research_agent.pipeline_report import (
     _legacy_unscoped_finding_owner_step_id,
     _partition_findings_by_supersession,
@@ -135,6 +137,31 @@ def test_legacy_inference_cannot_claim_replanned_away_supersession() -> None:
     )
 
     assert active == [finding]
+    assert superseded == []
+
+
+@pytest.mark.parametrize("legacy_first", [True, False])
+def test_current_scoped_error_blocks_legacy_retirement_regardless_of_order(
+    legacy_first: bool,
+) -> None:
+    plan = _robustness_plan()
+    legacy = _legacy_membership_error()
+    current = ValidationFinding(
+        validator="robustness_cohort_membership",
+        severity="error",
+        message="Current owner still fails membership replay.",
+        detail={"step_id": "08_current"},
+    )
+    findings = [legacy, current] if legacy_first else [current, legacy]
+
+    active, superseded = _partition_findings_by_supersession(
+        findings,
+        success_step_ids={"07_sensitivity"},
+        known_step_ids={"07_sensitivity", "08_current"},
+        plan=plan,
+    )
+
+    assert active == findings
     assert superseded == []
 
 

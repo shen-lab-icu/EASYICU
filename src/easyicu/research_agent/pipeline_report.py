@@ -1589,8 +1589,9 @@ def _partition_findings_by_supersession(
        finding in the audit trail.
     5. A legacy persisted finding lacks a step id, but its validator belongs to
        the closed migration registry and the current plan has exactly one
-       matching non-figure owner step.  It is then treated exactly like an
-       explicitly scoped finding.  Ambiguous ownership remains active.
+       matching non-figure owner step and no unresolved explicitly scoped error
+       from the same validator.  It is then treated exactly like an explicitly
+       scoped finding.  Ambiguous or currently failing ownership remains active.
 
     The classification is purely deterministic — same inputs always
     yield the same partition. The superseded set is returned
@@ -1600,10 +1601,27 @@ def _partition_findings_by_supersession(
     gate_state = gate_state or {}
     active: List[ValidationFinding] = []
     superseded: List[ValidationFinding] = []
+    # Precompute this across the whole batch so legacy classification is
+    # deterministic regardless of finding order.  A scoped error on a known,
+    # not-yet-successful step is current authority for that validator family;
+    # while it exists, do not retire an unscoped historical sibling merely
+    # because another owner step succeeded.
+    unresolved_scoped_error_validators = {
+        str(f.validator or "")
+        for f in findings
+        if f.severity == "error"
+        and (sid := _step_id_referenced_in_finding(f)) is not None
+        and sid not in success_step_ids
+        and (known_step_ids is None or sid in known_step_ids)
+    }
     for f in findings:
         explicit_sid = _step_id_referenced_in_finding(f)
         legacy_sid = None
-        if not explicit_sid:
+        if (
+            not explicit_sid
+            and str(f.validator or "")
+            not in unresolved_scoped_error_validators
+        ):
             legacy_sid = _legacy_unscoped_finding_owner_step_id(f, plan=plan)
         sid = explicit_sid or legacy_sid
         if sid:
