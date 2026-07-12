@@ -541,12 +541,18 @@ class ResumeController:
         plan: AnalysisPlan,
         step: AnalysisStep,
     ) -> bool:
-        stop_index = self.stop_index_for_plan(plan)
-        if stop_index is None:
-            return True
         step_order = {s.step_id: i for i, s in enumerate(plan.steps)}
         idx = step_order.get(step.step_id)
-        return idx is not None and idx <= stop_index
+        if idx is None:
+            return False
+        # ``resume_from_step_id`` is a real lower execution bound, not merely a
+        # finding-cleanup hint. Earlier incomplete/supporting steps are outside
+        # an explicitly targeted repair window and must not consume model calls.
+        start_index = self._resume_cut_index()
+        if start_index is not None and idx < start_index:
+            return False
+        stop_index = self.stop_index_for_plan(plan)
+        return stop_index is None or idx <= stop_index
 
     def stop_index_for_plan(self, plan: AnalysisPlan) -> Optional[int]:
         if self.stop_after_step_id is None:
