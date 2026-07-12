@@ -7186,9 +7186,13 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
         if isinstance(direct_summary, dict):
             for mapping_key in ("output_files", "aliases"):
                 mapping = direct_summary.get(mapping_key)
-                if not isinstance(mapping, dict):
+                if isinstance(mapping, dict):
+                    declared_items = mapping.items()
+                elif isinstance(mapping, list):
+                    declared_items = ((str(value), value) for value in mapping)
+                else:
                     continue
-                for alias, value in mapping.items():
+                for alias, value in declared_items:
                     if not any(
                         token in str(alias).lower()
                         for token in ("robustness", "sensitivity")
@@ -7243,6 +7247,13 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
     ):
         if col in source_data.columns:
             source_data[col] = pd.to_numeric(source_data[col], errors="coerce")
+    if "modeled_analytic_n" not in source_data.columns:
+        for count_alias in ("analysis_n", "n"):
+            if count_alias in source_data.columns:
+                source_data["modeled_analytic_n"] = pd.to_numeric(
+                    source_data[count_alias], errors="coerce"
+                )
+                break
     for count_col in ("modeled_analytic_n", "event_n", "membership_n"):
         if count_col not in source_data.columns:
             continue
@@ -7266,6 +7277,8 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
     estimated_mask = source_data[["point_estimate", "ci_low", "ci_high"]].notna().all(axis=1)
     if "converged" in source_data.columns:
         estimated_mask &= source_data["converged"].map(_truthy_figure_value)
+    if "reportable" in source_data.columns:
+        estimated_mask &= source_data["reportable"].map(_truthy_figure_value)
     if "independent_variant" in source_data.columns:
         independent = source_data["independent_variant"]
         estimated_mask &= ~independent.map(_explicit_false_figure_value)
@@ -7275,8 +7288,16 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
     ratio_df = plot_df[
         plot_df["effect_scale"].astype(str).str.upper().isin({"OR", "RR", "HR"})
     ].copy()
+    additive_scales = {
+        "RD",
+        "RISK_DIFFERENCE",
+        "MEAN_DIFFERENCE",
+        "MEDIAN_DIFFERENCE",
+        "CONDITIONAL_MEAN_DIFFERENCE",
+        "CONDITIONAL_MEDIAN_DIFFERENCE",
+    }
     rd_df = plot_df[
-        plot_df["effect_scale"].astype(str).str.upper().isin({"RD", "RISK_DIFFERENCE"})
+        plot_df["effect_scale"].astype(str).str.upper().isin(additive_scales)
     ].copy()
     plotted_indexes = ratio_df.index.union(rd_df.index)
     figure_source_data = source_data.loc[plotted_indexes].copy()
@@ -7488,12 +7509,27 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
         )
 
     if ax_rd is not None:
+        additive_values = sorted(
+            set(rd_df["effect_scale"].dropna().astype(str).str.upper())
+        )
+        if set(additive_values) <= {"RD", "RISK_DIFFERENCE"}:
+            additive_title = "Risk-difference sensitivity"
+            additive_xlabel = "Risk difference (95% CI)"
+        elif additive_values and all("MEDIAN" in value for value in additive_values):
+            additive_title = "Median-difference sensitivity"
+            additive_xlabel = "Adjusted median difference (95% CI)"
+        elif additive_values and all("MEAN" in value for value in additive_values):
+            additive_title = "Mean-difference sensitivity"
+            additive_xlabel = "Adjusted mean difference (95% CI)"
+        else:
+            additive_title = "Additive-scale sensitivity"
+            additive_xlabel = "Adjusted difference (95% CI)"
         panel_id = _next_panel_id()
         _plot_interval_panel(
             ax_rd,
             rd_df,
-            title="Risk-difference sensitivity",
-            xlabel="Risk difference (95% CI)",
+            title=additive_title,
+            xlabel=additive_xlabel,
             null_value=0.0,
             color=palette.get("green", "#008B5E"),
         )
@@ -7501,11 +7537,11 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
         contract_panels.append(
             {
                 "panel_id": panel_id,
-                "title": "Risk-difference sensitivity",
+                "title": additive_title,
                 "role": "robustness",
                 "claim": (
-                    "Converged, independently estimable risk differences are "
-                    "shown on their own additive scale."
+                    "Converged, reportable additive-scale sensitivity estimates "
+                    "are shown on their declared scale."
                 ),
                 "evidence_ids": source_evidence,
             }
@@ -7713,6 +7749,7 @@ _UPSTREAM_FAMILY_TO_RENDERER_KEY: dict[str, str] = {
 # matching would recreate the same accidental routing problem as step-id prose.
 _UPSTREAM_METHOD_TO_RENDERER_KEY: dict[str, str] = {
     "ordinal_exposure_derivation_and_quality_control": "ordered_distribution",
+    "cohort_definition_sensitivity": "sensitivity",
     "missingness": "missingness",
     "missingness_audit": "missingness",
     "missingness_measurement_audit": "missingness",
@@ -7902,6 +7939,7 @@ def _renderer_for_upstream_method(method: Optional[str]):
 
         return render_ordered_distribution_bundle_from_prior_outputs
     return {
+        "sensitivity": _render_sensitivity_publication_bundle_from_prior_outputs,
         "missingness": _render_missingness_publication_bundle_from_prior_outputs,
     }.get(key)
 
@@ -8028,6 +8066,12 @@ def deterministic_figure_repair_id_for_upstream(
         == "ordinal_exposure_derivation_and_quality_control"
     ):
         return "ordered_category_distribution_publication_bundle_v1"
+    if (
+        _resolve_upstream_analysis_method(run_dir, step_id)
+        == "cohort_definition_sensitivity"
+        and "robustness_summary.csv" in verified_tables
+    ):
+        return "sensitivity_publication_bundle_from_parent_outputs_v2"
     if (
         _resolve_upstream_analysis_family(run_dir, step_id) == "cohort_definition"
         and {"cohort_flow.csv", "attrition.csv"} <= verified_tables
