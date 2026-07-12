@@ -219,7 +219,7 @@ def test_sibling_stability_must_bind_the_sibling_cluster_count():
     )
 
 
-def test_effect_contract_ignores_id_intent_and_output_without_method_owner():
+def test_non_effect_method_does_not_gain_effect_scope_from_id_or_output():
     audit = _step(
         method="data_quality_audit",
         step_id="04_primary_association_model",
@@ -228,7 +228,11 @@ def test_effect_contract_ignores_id_intent_and_output_without_method_owner():
     )
 
     assert not _effect_contract_applies(audit)
-    assert _errors(audit) == []
+    errors = _errors(audit)
+    assert any(
+        finding.detail.get("kind") == "unauthorized_effect_product"
+        for finding in errors
+    )
     assert "association step must" not in _step_contract_repair_guidance(
         step=audit,
         step_summary={"status": "ok"},
@@ -261,6 +265,34 @@ def test_effect_contract_requires_closed_product_from_exact_method_owner():
         step=owner,
         step_summary={"status": "ok"},
         code="",
+    )
+
+
+def test_cohort_definition_sensitivity_may_own_declared_effect_replay():
+    sensitivity = _step(
+        method="cohort_definition_sensitivity",
+        step_id="robustness",
+        outputs=[
+            "table:cohort_overlap",
+            "statistic:primary_or",
+            "table:robustness_summary",
+        ],
+    )
+    summary = {
+        "status": "ok",
+        "primary_or": 1.2,
+        "output_files": {
+            "table:cohort_overlap": "cohort_overlap.csv",
+            "statistic:primary_or": 1.2,
+            "table:robustness_summary": "robustness_summary.csv",
+        },
+    }
+
+    errors = _errors(sensitivity, summary)
+
+    assert not any(
+        finding.detail.get("kind") == "unauthorized_effect_product"
+        for finding in errors
     )
 
 

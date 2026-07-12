@@ -34,6 +34,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from pydantic import ValidationError
 
+from .declared_product_contract import declared_product_contract_findings
 from .icu_rules import (
     detect_outcome_as_predictor,
     detect_overadjustment,
@@ -610,6 +611,11 @@ _EFFECT_CONTRACT_METHODS = frozenset(
         "treatment_effect",
         "effect_modification",
         "interaction_model",
+        # A prespecified cohort-definition sensitivity may legitimately refit
+        # the already agent-planned estimand in each declared cohort. The
+        # effect product remains required as structural evidence; this method
+        # name alone never creates or routes an effect analysis.
+        "cohort_definition_sensitivity",
     }
 )
 _EFFECT_CONTRACT_PRODUCTS = frozenset(
@@ -3015,6 +3021,7 @@ def _step_contract_findings(
     step: AnalysisStep,
     step_summary: Dict[str, Any],
     completed_step_records: Optional[Sequence[Dict[str, Any]]] = None,
+    out_dir: Optional[Path] = None,
 ) -> List[ValidationFinding]:
     if not isinstance(step_summary, dict) or not step_summary:
         return [
@@ -3079,6 +3086,18 @@ def _step_contract_findings(
     # render-only step that legitimately has no such fields in its summary.
     figure_only_step = bool(step.expected_outputs) and all(
         _output_declares_figure(out) for out in step.expected_outputs
+    )
+    findings.extend(
+        declared_product_contract_findings(
+            step=step,
+            step_summary=step_summary,
+            effect_method_authorized=(
+                _normalised_method_head(str(step.method or ""))
+                in _EFFECT_CONTRACT_METHODS
+                or bool(step.model_requirements)
+            ),
+            out_dir=out_dir,
+        )
     )
 
     # The input parquet is already the locked analysis cohort. A generated
