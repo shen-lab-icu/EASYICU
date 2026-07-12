@@ -759,6 +759,46 @@ def test_self_inflicted_block_flagged_on_viable_cohort(tmp_path: Path):
     assert any("self-inflicted" in n for n in card.code.notes)
 
 
+def test_self_inflicted_block_detected_with_manifest_present(tmp_path: Path):
+    # Regression (2719ce4): real runs write a manifest ledger (manifest_partial/
+    # manifest.json), and a self-inflicted modeling block is recorded there as a
+    # NON-ok (contract_failed) step. _deliberate_block_reason must still see it;
+    # previously it filtered to status==ok records in the manifest branch, so on
+    # every real run the signal silently never fired. The other self-inflicted
+    # tests here write NO manifest, so they only exercised the glob fallback.
+    run_dir = _write_blocked_run(tmp_path, n_rows=2000, n_events=200, n_feats=8)
+    blocked_summary = json.loads(
+        (
+            run_dir / "steps" / "01_model_training" / "outputs" / "step_summary.json"
+        ).read_text(encoding="utf-8")
+    )
+    (run_dir / "manifest_partial.json").write_text(
+        json.dumps(
+            {
+                "per_step_records": [
+                    {
+                        "step_id": "00_cohort",
+                        "status": "ok",
+                        "step_summary": {"step_id": "00_cohort"},
+                    },
+                    {
+                        "step_id": "01_model_training",
+                        "status": "contract_failed",
+                        "step_summary": blocked_summary,
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    card = sc.score_run_from_dir(
+        _kind_task("mortality_prediction"), run_dir, outcome_concept="death"
+    )
+    assert card.tristate == "diagnostic_only"
+    assert card.code.signals.get("self_inflicted_block") is True
+    assert any("self-inflicted" in n for n in card.code.notes)
+
+
 def test_self_inflicted_block_silent_when_execution_completed(tmp_path: Path):
     run_dir = _write_blocked_run(tmp_path, n_rows=2000, n_events=200, n_feats=8)
     (run_dir / "run_status.json").write_text(

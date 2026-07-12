@@ -125,6 +125,26 @@ def _step_expects_figure(step: AnalysisStep) -> bool:
     )
 
 
+def _step_is_figure_only(step: AnalysisStep) -> bool:
+    """A pure figure/render step: it declares a figure and owns NO non-figure
+    structured product.
+
+    A render *child* (``expected_outputs=['figure:forest_plot']``) is figure-only
+    and is never the primary estimand. But a *combined* model+figure step that
+    the replanner can emit before the figure/table splitter runs
+    (``['statistic:primary_estimate', 'figure:forest_plot']``) still owns the
+    result product and must remain eligible as the primary model -- excluding it
+    here would make ``_preserve_primary_estimand_step_after_replan`` re-attach a
+    stale duplicate of the primary model.
+    """
+
+    if not _step_expects_figure(step):
+        return False
+    return not any(
+        not _output_declares_figure(output) for output in step.expected_outputs or []
+    )
+
+
 _PRIMARY_COHORT_OWNER_METHODS = frozenset(
     {
         "cohort_construction",
@@ -1539,7 +1559,12 @@ def _step_is_primary_estimand_model(step: AnalysisStep) -> bool:
     ownership of the primary estimand.
     """
 
-    if _step_expects_figure(step):
+    # Exclude only a PURE figure/render child, not a combined model+figure step
+    # (which the replanner can emit before the figure/table splitter runs). Both
+    # contract helpers below already require a closed result-bearing product, so
+    # a combined step that owns the estimand stays primary and is not duplicated
+    # by _preserve_primary_estimand_step_after_replan.
+    if _step_is_figure_only(step):
         return False
     # Both helpers normalize only the ``<head>`` of a ``<head>_with_<rider>``
     # method and require a closed result-bearing product.  Thus a legitimate
