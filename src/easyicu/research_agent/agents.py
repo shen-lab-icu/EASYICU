@@ -1317,6 +1317,34 @@ _MAX_PRE_EXEC_COMPATIBILITY_REPAIRS = 2
 _CODER_MAX_TOKENS = 8192
 
 
+def _declared_output_scope_contract(step: AnalysisStep) -> str:
+    """Keep code generation inside the plan's typed product boundary.
+
+    Figure outputs are split into rendering-only steps before execution.  A
+    science step that redraws them anyway duplicates work and creates a second,
+    undeclared evidence owner.  Required runtime metadata and source-data
+    companions remain allowed; only undeclared scientific products are barred.
+    """
+
+    outputs = [str(item or "").strip() for item in step.expected_outputs]
+    has_figure = any(item.lower().startswith("figure:") for item in outputs)
+    lines = [
+        "DECLARED OUTPUT SCOPE (binding):",
+        "- Create only the scientific products named in Expected outputs, plus "
+        "required step_summary.json and necessary source-data or diagnostic companions.",
+    ]
+    if has_figure:
+        lines.append(
+            "- Figure rendering is allowed only for the explicitly declared figure products."
+        )
+    else:
+        lines.append(
+            "- This step declares no figure product. Do not render, save, or register "
+            "figures; leave presentation to a separately declared figure step."
+        )
+    return "\n".join(lines) + "\n"
+
+
 class CoderAgent:
     """Generates a self-contained Python analysis script for one step.
 
@@ -1358,6 +1386,7 @@ class CoderAgent:
                     "Model requirements: "
                     f"{json.dumps([item.model_dump(mode='json') for item in step.model_requirements], ensure_ascii=False)}\n"
                     f"Method: {step.method or '(unspecified — choose conservatively)'}\n\n"
+                    + _declared_output_scope_contract(step)
                     + coder_method_capability_block()
                     + trajectory_phenotyping_code_contract(
                         context=context,
@@ -1441,6 +1470,7 @@ class CoderAgent:
                     "Model requirements: "
                     f"{json.dumps([item.model_dump(mode='json') for item in step.model_requirements], ensure_ascii=False)}\n"
                     f"Method: {step.method or '(unspecified)'}\n\n"
+                    + _declared_output_scope_contract(step)
                     + trajectory_phenotyping_code_contract(
                         context=context,
                         step=step,
