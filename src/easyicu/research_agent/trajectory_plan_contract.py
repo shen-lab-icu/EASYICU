@@ -114,6 +114,11 @@ _CHARACTERIZATION_PRODUCTS = frozenset(
     }
 )
 
+_REDUNDANT_SPLIT_ROLE_OUTPUTS: Mapping[str, frozenset[Tuple[str, str]]] = {
+    "candidate_selection": frozenset({("table", "cluster_number_selection")}),
+    "characterization": frozenset({("table", "cluster_sizes")}),
+}
+
 
 @dataclass(frozen=True)
 class TrajectoryPlanDagEvaluation:
@@ -663,6 +668,26 @@ def evaluate_trajectory_plan_dag(
                 )
             )
 
+    for step in steps:
+        for kind, product in sorted(products_by_step[step.step_id]):
+            if kind in _FIGURE_KINDS or _is_window_manifest_product((kind, product)):
+                continue
+            product_role = _trajectory_output_role(f"{kind}:{product}")
+            expected_owner = role_owners.get(product_role or "")
+            if expected_owner is None or expected_owner == step.step_id:
+                continue
+            findings.append(
+                _finding(
+                    "trajectory_role_product_owner_mismatch",
+                    "A typed trajectory scientific product is declared outside "
+                    "its unique role owner.",
+                    role=product_role,
+                    typed_product=f"{kind}:{product}",
+                    expected_owner_step_id=expected_owner,
+                    declared_owner_step_id=step.step_id,
+                )
+            )
+
     producer_candidates: Dict[str, List[str]] = defaultdict(list)
     for step in steps:
         for artifact in sorted(artifact_outputs[step.step_id]):
@@ -681,6 +706,51 @@ def evaluate_trajectory_plan_dag(
                     producer_step_ids=producers,
                 )
             )
+
+    typed_product_producers: Dict[Tuple[str, str], List[str]] = defaultdict(list)
+    for step in steps:
+        for product in sorted(products_by_step[step.step_id]):
+            typed_product_producers[product].append(step.step_id)
+    for (kind, product), producers in sorted(typed_product_producers.items()):
+        if len(producers) <= 1:
+            continue
+        findings.append(
+            _finding(
+                "trajectory_typed_product_producer_ambiguous",
+                "A typed trajectory scientific product must have exactly one "
+                "plan owner.",
+                typed_product=f"{kind}:{product}",
+                producer_step_ids=producers,
+            )
+        )
+    for consumer in steps:
+        for kind, product in sorted(_step_typed_inputs(consumer)):
+            producers = typed_product_producers.get((kind, product), [])
+            if not producers:
+                findings.append(
+                    _finding(
+                        "trajectory_typed_product_orphan",
+                        "A consumed typed trajectory product has no declared "
+                        "producer.",
+                        typed_product=f"{kind}:{product}",
+                        consumer_step_id=consumer.step_id,
+                    )
+                )
+                continue
+            if len(producers) != 1:
+                continue
+            producer = producers[0]
+            if step_index[producer] >= step_index[consumer.step_id]:
+                findings.append(
+                    _finding(
+                        "trajectory_typed_product_producer_not_preceding_consumer",
+                        "A consumed typed trajectory product must come from one "
+                        "earlier plan step.",
+                        typed_product=f"{kind}:{product}",
+                        producer_step_id=producer,
+                        consumer_step_id=consumer.step_id,
+                    )
+                )
 
     edges: List[Tuple[str, str, str]] = []
     for consumer in steps:
@@ -910,6 +980,119 @@ def trajectory_plan_dag_findings(
     return list(evaluate_trajectory_plan_dag(plan=plan, context=context).findings)
 
 
+def _normalise_redundant_split_role_outputs(
+    *,
+    plan: AnalysisPlan,
+) -> tuple[AnalysisPlan, Dict[str, List[str]], Dict[str, List[str]]]:
+    """Drop only redundant products misplaced on a dedicated stability owner.
+
+    Older saved plans sometimes asked the stability step to repeat a cluster-
+    count selection table or cluster-size table even though separate candidate
+    and characterization owners already existed.  Those repeats are schema
+    aliases of canonical products, not independent scientific decisions.  The
+    migration is deliberately narrow: it acts only when all three dedicated
+    owners are independently proven by their method family and non-redundant
+    typed products.  Ambiguous or monolithic plans remain untouched and fail
+    through the ordinary DAG audit.
+    """
+
+    anchor_products = {
+        "candidate_selection": _REDUNDANT_SPLIT_ROLE_OUTPUTS["candidate_selection"],
+        "stability_freeze": frozenset(),
+        "characterization": _REDUNDANT_SPLIT_ROLE_OUTPUTS["characterization"],
+    }
+    candidates: Dict[str, List[str]] = {role: [] for role in anchor_products}
+    for step in plan.steps or []:
+        method = _method_head(step.method)
+        products = _step_products(step)
+        for role, ignored in anchor_products.items():
+            if _role_qualifies(role, method=method, products=products - ignored):
+                candidates[role].append(step.step_id)
+    if any(len(step_ids) != 1 for step_ids in candidates.values()):
+        return plan, {}, {}
+
+    owners = {role: step_ids[0] for role, step_ids in candidates.items()}
+    stability_owner = owners["stability_freeze"]
+    if stability_owner in {
+        owners["candidate_selection"],
+        owners["characterization"],
+    }:
+        return plan, {}, {}
+
+    removals: Dict[str, List[str]] = defaultdict(list)
+    revised_steps: List[AnalysisStep] = []
+    for step in plan.steps or []:
+        if step.step_id != stability_owner:
+            revised_steps.append(step)
+            continue
+        kept: List[str] = []
+        for raw_output in step.expected_outputs or []:
+            product = _declared_product(raw_output)
+            target_role = next(
+                (
+                    role
+                    for role, redundant in _REDUNDANT_SPLIT_ROLE_OUTPUTS.items()
+                    if product in redundant
+                ),
+                None,
+            )
+            if target_role is None or owners[target_role] == stability_owner:
+                kept.append(raw_output)
+                continue
+            removals[step.step_id].append(str(raw_output))
+        revised_steps.append(
+            step.model_copy(update={"expected_outputs": kept})
+            if removals.get(step.step_id)
+            else step
+        )
+    if not removals:
+        return plan, {}, {}
+
+    input_removals: Dict[str, List[str]] = defaultdict(list)
+    characterization_owner = owners["characterization"]
+    final_steps: List[AnalysisStep] = []
+    removed_cluster_sizes = "table:cluster_sizes" in removals.get(
+        stability_owner, []
+    )
+    removed_cluster_selection = "table:cluster_number_selection" in removals.get(
+        stability_owner, []
+    )
+    for step in revised_steps:
+        kept_inputs: List[str] = []
+        inputs_changed = False
+        for raw_input in step.inputs or []:
+            product = _declared_product(raw_input)
+            if (
+                step.step_id == characterization_owner
+                and removed_cluster_sizes
+                and product == ("table", "cluster_sizes")
+            ):
+                input_removals[step.step_id].append(str(raw_input))
+                inputs_changed = True
+            elif (
+                removed_cluster_selection
+                and product == ("table", "cluster_number_selection")
+            ):
+                input_removals[step.step_id].append(str(raw_input))
+                if "manifest:cluster_selection" not in kept_inputs and (
+                    "manifest:cluster_selection" not in (step.inputs or [])
+                ):
+                    kept_inputs.append("manifest:cluster_selection")
+                inputs_changed = True
+            else:
+                kept_inputs.append(raw_input)
+        final_steps.append(
+            step.model_copy(update={"inputs": kept_inputs})
+            if inputs_changed
+            else step
+        )
+    return (
+        plan.model_copy(update={"steps": final_steps}),
+        dict(removals),
+        dict(input_removals),
+    )
+
+
 def augment_trajectory_plan_products(
     *,
     plan: AnalysisPlan,
@@ -918,26 +1101,59 @@ def augment_trajectory_plan_products(
     """Add only canonical replay products to the agent's existing role owners.
 
     This is schema normalization, not scientific planning: step identities,
-    methods, inputs, order, and all existing outputs remain unchanged.  Missing
-    or ambiguous roles are left for :func:`trajectory_plan_dag_findings` to
-    block rather than being invented by the framework.
+    methods, order, and scientific choices remain unchanged.  A split
+    stability owner is bound to the candidate owner's canonical selection
+    manifest, and narrowly recognized redundant cross-role aliases are removed.
+    Missing or ambiguous roles are left for
+    :func:`trajectory_plan_dag_findings` to block rather than being invented by
+    the framework.
     """
 
-    evaluation = evaluate_trajectory_plan_dag(plan=plan, context=context)
+    normalized, removed, removed_inputs = _normalise_redundant_split_role_outputs(
+        plan=plan
+    )
+    normalization_findings: List[ValidationFinding] = []
+    if removed or removed_inputs:
+        normalization_findings.append(
+            ValidationFinding(
+                validator="plan_contract",
+                severity="info",
+                message=(
+                    "Removed redundant selection/characterization aliases from "
+                    "a dedicated trajectory stability owner."
+                ),
+                detail={
+                    "kind": "trajectory_redundant_split_role_outputs_removed",
+                    "removed_outputs_by_step": removed,
+                    "removed_inputs_by_step": removed_inputs,
+                    "preserved_step_ids": [step.step_id for step in plan.steps],
+                },
+            )
+        )
+
+    evaluation = evaluate_trajectory_plan_dag(plan=normalized, context=context)
     if not evaluation.applies or set(evaluation.role_owners) != set(_ROLE_ORDER):
-        return plan, []
+        if normalized == plan:
+            return plan, normalization_findings
+        return (
+            normalized.model_copy(
+                update={"revision": max(1, int(plan.revision)) + 1}
+            ),
+            normalization_findings,
+        )
 
     additions: Dict[str, List[str]] = defaultdict(list)
+    input_additions: Dict[str, List[str]] = defaultdict(list)
     for role, outputs in _ROLE_CANONICAL_OUTPUTS.items():
         owner = evaluation.role_owners[role]
-        step = next(item for item in plan.steps if item.step_id == owner)
+        step = next(item for item in normalized.steps if item.step_id == owner)
         for output in outputs:
             if output not in (step.expected_outputs or []):
                 additions[owner].append(output)
 
     characterization_owner = evaluation.role_owners["characterization"]
     characterization = next(
-        item for item in plan.steps if item.step_id == characterization_owner
+        item for item in normalized.steps if item.step_id == characterization_owner
     )
     declared_products = {
         product
@@ -952,45 +1168,67 @@ def augment_trajectory_plan_products(
     ):
         additions[characterization_owner].append("table:outcome_by_cluster")
 
-    if not additions:
-        return plan, []
+    candidate_owner = evaluation.role_owners["candidate_selection"]
+    stability_owner = evaluation.role_owners["stability_freeze"]
+    stability = next(
+        item for item in normalized.steps if item.step_id == stability_owner
+    )
+    if (
+        candidate_owner != stability_owner
+        and "manifest:cluster_selection" not in (stability.inputs or [])
+    ):
+        input_additions[stability_owner].append("manifest:cluster_selection")
+
+    if not additions and not input_additions and normalized == plan:
+        return plan, normalization_findings
     revised_steps = [
         step.model_copy(
             update={
                 "expected_outputs": [
                     *(step.expected_outputs or []),
                     *additions.get(step.step_id, []),
-                ]
+                ],
+                "inputs": [
+                    *(step.inputs or []),
+                    *input_additions.get(step.step_id, []),
+                ],
             }
         )
-        if step.step_id in additions
+        if step.step_id in additions or step.step_id in input_additions
         else step
-        for step in plan.steps
+        for step in normalized.steps
     ]
-    revised = plan.model_copy(
+    revised = normalized.model_copy(
         update={
             "steps": revised_steps,
             "revision": max(1, int(plan.revision)) + 1,
         }
     )
-    return revised, [
-        ValidationFinding(
-            validator="plan_contract",
-            severity="info",
-            message=(
-                "Added canonical replay products to the existing agent-declared "
-                "trajectory DAG roles without changing scientific ownership."
-            ),
-            detail={
-                "kind": "trajectory_canonical_products_added",
-                "added_outputs_by_step": {
-                    step_id: list(outputs)
-                    for step_id, outputs in sorted(additions.items())
+    augmentation_findings = list(normalization_findings)
+    if additions or input_additions:
+        augmentation_findings.append(
+            ValidationFinding(
+                validator="plan_contract",
+                severity="info",
+                message=(
+                    "Added canonical replay products to the existing agent-declared "
+                    "trajectory DAG roles without changing scientific ownership."
+                ),
+                detail={
+                    "kind": "trajectory_canonical_products_added",
+                    "added_outputs_by_step": {
+                        step_id: list(outputs)
+                        for step_id, outputs in sorted(additions.items())
+                    },
+                    "added_inputs_by_step": {
+                        step_id: list(inputs)
+                        for step_id, inputs in sorted(input_additions.items())
+                    },
+                    "preserved_step_ids": [step.step_id for step in plan.steps],
                 },
-                "preserved_step_ids": [step.step_id for step in plan.steps],
-            },
+            )
         )
-    ]
+    return revised, augmentation_findings
 
 
 def trajectory_planner_contract_guide(
@@ -1025,7 +1263,11 @@ def trajectory_planner_contract_guide(
         "- characterization: declare `table:trajectory_profiles` and "
         "`table:cluster_sizes`, plus `table:outcome_by_cluster` only when an "
         "outcome description is planned.\n"
-        "Connect separate owners through explicit typed producer/consumer edges. "
+        "Each typed scientific product has one role owner. A separate stability "
+        "owner must consume `manifest:cluster_selection` and the candidate "
+        "fit/assignment artifacts; it must not repeat selection tables, cluster "
+        "sizes, profiles, outcomes, or figures. Connect separate owners through "
+        "explicit typed producer/consumer edges. "
         "If representation reads raw fixed-window columns directly, list them in "
         "its inputs. If it instead reads an upstream aligned panel, the panel "
         "producer must list the raw fixed-window columns in its inputs, produce "
@@ -1110,7 +1352,11 @@ def trajectory_role_code_contract(
             "selected_n_clusters, at least two finite candidates with "
             "n_clusters and criterion_value, and rationale. Repeat the exact "
             "object as step_summary.cluster_selection and report n_clusters "
-            "and clustering_method. The agent owns the method, criterion, and k."
+            "and clustering_method. Candidate fit/assignment artifacts used by a "
+            "separate stability owner must also preserve the selected method "
+            "family, exact representation_columns, selected_n_clusters (or the "
+            "full cluster_selection object), and candidate assignment labels. "
+            "The agent owns the method, criterion, and k."
             + role_boundary
         )
     if declarations & {
@@ -1119,10 +1365,23 @@ def trajectory_role_code_contract(
         "cluster_stability_assignments",
     }:
         sections.append(
-            "STABILITY/FREEZE ROLE: read the declared upstream representation "
-            "and candidate-selection artifacts. Write trajectory_missingness_policy.json "
+            "STABILITY/FREEZE ROLE: read only the exact files bound in "
+            "EASYICU_RESOLVED_INPUTS_JSON for the declared upstream representation, "
+            "cluster-selection manifest, and candidate fit/assignment artifacts. "
+            "The upstream representation rows and identifiers are the frozen "
+            "eligible population: do not read COHORT_PARQUET, scan raw fixed-window "
+            "or trajectory columns, or reapply cohort, anchor, observed-window, "
+            "adult, or other eligibility rules. Reuse selected_n_clusters and the "
+            "selected clustering method from the candidate-selection artifacts; "
+            "use their exact representation_columns in the same order, and copy "
+            "the selected candidate labels into the final cluster assignments. "
+            "Do not compare candidate k values or choose a new method, k, coordinate "
+            "layer, population, or reference assignment. If any required upstream "
+            "field is absent or inconsistent, fail closed in step_summary.json "
+            "instead of inferring or reconstructing it. Write trajectory_missingness_policy.json "
             "with id_column, observation_family, ordered observation_columns, "
-            "min_observed_windows, profile_columns, profile_summary_statistic, "
+            "the exact model representation_columns, min_observed_windows, "
+            "profile_columns, profile_summary_statistic, "
             "clustering_method, n_clusters, time_axis='relative_hours', anchor, "
             "anchor_provenance, anchor_source, and trailing_na_policy={zero_imputation:false, "
             "eligibility_uses_observed_window_count:true, "
@@ -1132,7 +1391,10 @@ def trajectory_role_code_contract(
             "seed, sampling_method, sample_n, sample_id_hash, and selected_n_clusters; "
             "and cluster_stability_assignments.csv with resample_id, id_column, "
             "reference_cluster, and resampled_cluster. Use at least two genuinely "
-            "distinct resamples/refits and never use the outcome to form clusters."
+            "distinct resamples/refits of that same method and same k, with distinct "
+            "seeds, refit_model_id values, and sampled-id hashes; never use the "
+            "outcome to form clusters. This owner writes no candidate-selection "
+            "table, cluster sizes, profiles, outcome summaries, or figures."
         )
     if declarations & {"trajectory_profiles", "cluster_sizes", "outcome_by_cluster"}:
         outcome_clause = (

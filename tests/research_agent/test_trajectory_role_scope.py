@@ -207,3 +207,71 @@ def test_candidate_code_contract_consumes_one_upstream_coordinate_layer():
     assert "do not reapply cohort, anchor, or observed-window eligibility" in contract
     assert "do not run bootstrap" in contract
     assert "do not write cluster profiles" in contract
+
+
+def test_stability_code_contract_reuses_frozen_candidate_solution_only():
+    step = AnalysisStep(
+        step_id="stability_freeze",
+        intent="Assess resampling stability and freeze the selected solution.",
+        method="model_based_clustering_with_bootstrap_stability",
+        inputs=[
+            "artifact:trajectory_representation",
+            "artifact:candidate_cluster_models",
+            "artifact:candidate_cluster_assignments",
+            "manifest:cluster_selection",
+        ],
+        expected_outputs=[
+            "manifest:trajectory_missingness_policy",
+            "table:cluster_assignments",
+            "table:cluster_stability",
+            "table:cluster_stability_assignments",
+        ],
+    )
+
+    contract = trajectory_role_code_contract(context=_context(), step=step)
+
+    assert "EASYICU_RESOLVED_INPUTS_JSON" in contract
+    assert "do not read COHORT_PARQUET" in contract
+    assert "exact representation_columns in the same order" in contract
+    assert "copy the selected candidate labels" in contract
+    assert "Do not compare candidate k values" in contract
+    assert "same method and same k" in contract
+    assert "at least two genuinely distinct resamples/refits" in contract
+    assert "no candidate-selection table, cluster sizes, profiles" in contract
+
+
+def test_stability_summary_cannot_claim_characterization_products():
+    step = AnalysisStep(
+        step_id="stability_freeze",
+        intent="Assess resampling stability and freeze the selected solution.",
+        method="model_based_clustering_with_bootstrap_stability",
+        expected_outputs=[
+            "manifest:trajectory_missingness_policy",
+            "table:cluster_assignments",
+            "table:cluster_stability",
+            "table:cluster_stability_assignments",
+        ],
+    )
+
+    findings = declared_product_contract_findings(
+        step=step,
+        step_summary={
+            "status": "ok",
+            "output_files": [
+                "trajectory_missingness_policy.json",
+                "cluster_assignments.csv",
+                "cluster_stability.csv",
+                "cluster_stability_assignments.csv",
+                "cluster_sizes.csv",
+                "trajectory_profiles.csv",
+            ],
+        },
+        effect_method_authorized=False,
+    )
+
+    assert any(
+        finding.detail.get("kind") == "trajectory_role_product_out_of_scope"
+        and "characterization"
+        in finding.detail.get("unauthorized_products_by_role", {})
+        for finding in findings
+    )

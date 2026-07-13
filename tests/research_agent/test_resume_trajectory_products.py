@@ -11,6 +11,9 @@ from easyicu.research_agent.schema import (
     ResearchContext,
     VariableRole,
 )
+from easyicu.research_agent.trajectory_plan_contract import (
+    evaluate_trajectory_plan_dag,
+)
 
 
 def _context() -> ResearchContext:
@@ -78,6 +81,72 @@ def _legacy_plan() -> AnalysisPlan:
     )
 
 
+def _split_plan_with_stability_role_drift() -> AnalysisPlan:
+    windows = ["score_h0_6", "score_h6_12"]
+    return AnalysisPlan(
+        research_question="Discover fixed-window phenotypes.",
+        analysis_type="trajectory_clustering",
+        revision=4,
+        steps=[
+            AnalysisStep(
+                step_id="representation",
+                intent="Build the frozen trajectory representation.",
+                method="missingness_aware_trajectory_representation",
+                inputs=windows,
+                expected_outputs=[
+                    "artifact:trajectory_representation",
+                    "table:trajectory_membership",
+                ],
+            ),
+            AnalysisStep(
+                step_id="candidate_selection",
+                intent="Compare candidate clustering solutions.",
+                method="model_based_clustering",
+                inputs=["artifact:trajectory_representation"],
+                expected_outputs=[
+                    "artifact:candidate_cluster_models",
+                    "artifact:candidate_cluster_assignments",
+                    "manifest:cluster_selection",
+                ],
+            ),
+            AnalysisStep(
+                step_id="stability",
+                intent="Refit resamples and freeze the selected solution.",
+                method="model_based_clustering_with_bootstrap_stability",
+                inputs=[
+                    "artifact:trajectory_representation",
+                    "artifact:candidate_cluster_models",
+                    "artifact:candidate_cluster_assignments",
+                ],
+                expected_outputs=[
+                    "artifact:stability_freeze",
+                    "artifact:cluster_assignments",
+                    "table:cluster_number_selection",
+                    "table:cluster_stability",
+                    "table:cluster_sizes",
+                    "manifest:trajectory_missingness_policy",
+                    "table:cluster_assignments",
+                    "table:cluster_stability_assignments",
+                ],
+            ),
+            AnalysisStep(
+                step_id="characterize",
+                intent="Describe the frozen clusters.",
+                method="descriptive_cluster_characterization",
+                inputs=[
+                    "artifact:cluster_assignments",
+                    "artifact:stability_freeze",
+                    "table:cluster_sizes",
+                ],
+                expected_outputs=[
+                    "table:trajectory_profiles",
+                    "table:cluster_sizes",
+                ],
+            ),
+        ],
+    )
+
+
 def test_resume_writes_schema_only_trajectory_revision(tmp_path):
     evidence = EvidenceStore(tmp_path)
 
@@ -135,3 +204,35 @@ def test_current_trajectory_schema_is_not_revised_again(tmp_path):
     assert unchanged == first
     assert path is None
     assert findings == []
+
+
+def test_resume_migrates_redundant_split_role_outputs_before_execution(tmp_path):
+    evidence = EvidenceStore(tmp_path)
+
+    migrated, path, findings = _migrate_resume_trajectory_products(
+        plan=_split_plan_with_stability_role_drift(),
+        context=_context(),
+        run_dir=tmp_path,
+        evidence=evidence,
+        prompt_version="test",
+        llm_signature="mock",
+    )
+
+    assert path == tmp_path / "analysis_plan_revision_5.json"
+    stability = next(step for step in migrated.steps if step.step_id == "stability")
+    characterize = next(
+        step for step in migrated.steps if step.step_id == "characterize"
+    )
+    assert "table:cluster_number_selection" not in stability.expected_outputs
+    assert "table:cluster_sizes" not in stability.expected_outputs
+    assert "manifest:cluster_selection" in stability.inputs
+    assert "table:cluster_sizes" not in characterize.inputs
+    assert evaluate_trajectory_plan_dag(
+        plan=migrated,
+        context=_context(),
+    ).findings == ()
+    assert any(
+        finding.detail.get("kind")
+        == "trajectory_redundant_split_role_outputs_removed"
+        for finding in findings
+    )

@@ -192,7 +192,17 @@ def resolve_trajectory_bundle_plan_authority(
             "The plan is not stamped as a fixed-window trajectory analysis.",
         )
         return TrajectoryBundlePlanAuthority(False, {}, (), (finding,))
-    if evaluation.findings:
+    bundle_owner_findings = {
+        "trajectory_role_product_owner_mismatch",
+        "trajectory_typed_product_producer_ambiguous",
+    }
+    blocking_plan_findings = [
+        item
+        for item in evaluation.findings
+        if str((item.detail or {}).get("kind") or "")
+        not in bundle_owner_findings
+    ]
+    if blocking_plan_findings:
         contributor_step_ids = tuple(
             step.step_id
             for step in plan.steps or []
@@ -205,7 +215,7 @@ def resolve_trajectory_bundle_plan_authority(
             plan_finding_kinds=sorted(
                 {
                     str((item.detail or {}).get("kind") or "")
-                    for item in evaluation.findings
+                    for item in blocking_plan_findings
                     if str((item.detail or {}).get("kind") or "")
                 }
             ),
