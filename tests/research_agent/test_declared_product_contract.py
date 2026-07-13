@@ -11,7 +11,10 @@ from easyicu.research_agent.declared_product_contract import (
     declared_product_contract_findings,
     read_digest_bound_artifact_snapshot,
 )
-from easyicu.research_agent.plan_utils import _step_contract_findings
+from easyicu.research_agent.plan_utils import (
+    _step_contract_findings,
+    effect_output_authorized,
+)
 from easyicu.research_agent.schema import AnalysisStep
 
 
@@ -221,15 +224,66 @@ def test_nested_effect_estimate_is_scientific_output_not_diagnostic_companion():
 
 
 def test_effect_method_owner_may_realise_its_declared_effect():
-    findings = declared_product_contract_findings(
-        step=_step(
-            method="adjusted_logistic_regression",
-            outputs=["statistic:adjusted_or"],
-        ),
-        step_summary={"adjusted_or": 1.4},
-        effect_method_authorized=True,
+    step = _step(
+        method="adjusted_logistic_regression with prespecified covariates",
+        outputs=["statistic:adjusted_or"],
     )
+    findings = declared_product_contract_findings(
+        step=step,
+        step_summary={"adjusted_or": 1.4},
+        effect_method_authorized=effect_output_authorized(step),
+    )
+    assert effect_output_authorized(step) is True
     assert findings == []
+
+
+def test_inferred_effect_family_does_not_authorize_non_effect_method_output():
+    step = _step(outputs=["table:cohort_summary"])
+    findings = _step_contract_findings(
+        step=step,
+        step_summary={
+            "status": "ok",
+            "analysis_family": "association_study",
+            "output_files": {"table:cohort_summary": "cohort_summary.csv"},
+            "nested_results": {"risk_ratio_vs_reference": 1.8},
+        },
+    )
+
+    assert effect_output_authorized(step) is False
+    assert "unauthorized_effect_product" in _kinds(findings)
+
+
+def test_effect_method_without_declared_effect_product_cannot_smuggle_effect():
+    step = _step(
+        method="adjusted_logistic_regression",
+        outputs=["table:cohort_summary"],
+    )
+    findings = _step_contract_findings(
+        step=step,
+        step_summary={
+            "status": "ok",
+            "output_files": {"table:cohort_summary": "cohort_summary.csv"},
+            "nested_results": {"risk_ratio": 1.7},
+        },
+    )
+
+    assert effect_output_authorized(step) is False
+    assert "unauthorized_effect_product" in _kinds(findings)
+
+
+def test_non_effect_hypothesis_test_p_value_is_not_misclassified_as_effect():
+    step = _step(
+        method="ordinal_stratified_descriptive_analysis",
+        outputs=["statistic:trend_p_value"],
+    )
+    findings = declared_product_contract_findings(
+        step=step,
+        step_summary={"trend_p_value": 0.03},
+        effect_method_authorized=effect_output_authorized(step),
+    )
+
+    assert effect_output_authorized(step) is False
+    assert "unauthorized_effect_product" not in _kinds(findings)
 
 
 def test_plan_utils_integration_fails_closed():

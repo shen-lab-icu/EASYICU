@@ -55,6 +55,7 @@ from .icu_rules import (
     default_time_windows,
 )
 from .llm import LLMClient, LLMMessage
+from .plan_utils import effect_output_authorized
 from .prompts import PROMPT_PACK_VERSION, load_prompt_pack
 from .schema import (
     AggregationRule,
@@ -1120,7 +1121,11 @@ class CriticAgent:
             concerns=concerns,
             unsupported_claims=[],
             missing_evidence_refs=[] if evidence_refs else [step.step_id],
-            suggested_repairs=_suggest_repairs_for(step_summary, findings),
+            suggested_repairs=(
+                []
+                if status == "pass"
+                else _suggest_repairs_for(step_summary, concerns)
+            ),
             related_evidence_refs=list(evidence_refs),
         )
 
@@ -1165,10 +1170,14 @@ class CriticAgent:
             concerns=concerns,
             unsupported_claims=unsupported,
             missing_evidence_refs=missing,
-            suggested_repairs=[
-                "Ensure every quantitative result sentence cites a valid {evidence:<id>} placeholder.",
-                "Regenerate unsupported narrative from registered evidence artifacts only.",
-            ],
+            suggested_repairs=(
+                []
+                if status == "pass"
+                else [
+                    "Ensure every quantitative result sentence cites a valid {evidence:<id>} placeholder.",
+                    "Regenerate unsupported narrative from registered evidence artifacts only.",
+                ]
+            ),
             related_evidence_refs=[
                 EvidenceRef(evidence_id=eid)
                 for eid in available_evidence_ids
@@ -1349,11 +1358,34 @@ def _declared_output_scope_contract(step: AnalysisStep) -> str:
 
     outputs = [str(item or "").strip() for item in step.expected_outputs]
     has_figure = any(item.lower().startswith("figure:") for item in outputs)
+    effect_authorized = effect_output_authorized(step)
     lines = [
         "DECLARED OUTPUT SCOPE (binding):",
         "- Create only the scientific products named in Expected outputs, plus "
         "required step_summary.json and necessary source-data or diagnostic companions.",
+        f"- effect_output_authorized: {str(effect_authorized).lower()}.",
+        "- The planner-owned Method and Expected outputs are binding. Typed model "
+        "requirements are part of the method contract. The inferred analysis family "
+        "is context only and cannot authorize additional scientific products.",
     ]
+    if effect_authorized:
+        lines.append(
+            "- Effect authorization does not widen scope: emit effect estimates or "
+            "contrasts only when their exact scientific product is named in Expected outputs."
+        )
+    else:
+        lines.extend(
+            [
+                "- effect_output_authorized=false: do not add reference-group contrasts, "
+                "risk ratios (RR), odds ratios (OR), hazard ratios (HR), risk differences "
+                "(RD), model coefficients, or interactions to declared table columns, "
+                "nested step_summary fields, or output registries; likewise do not add "
+                "p-values for any such undeclared effect contrast or interaction.",
+                "- Descriptive counts, denominators, rates, absolute summaries, and "
+                "uncertainty intervals for those same descriptive summaries remain allowed "
+                "when they are inside the declared product scope.",
+            ]
+        )
     if has_figure:
         lines.append(
             "- Figure rendering is allowed only for the explicitly declared figure products."
@@ -1431,11 +1463,11 @@ class CoderAgent:
                 role="user",
                 content=(
                     f"Write the Python CODE for STEP {step.step_id}.\n"
-                    f"Locked analysis family: {_family.key} ({_family.name}). "
-                    f"Pick methods and figures this family calls for; do not "
-                    f"fall back to a generic association/logistic script when "
-                    f"the family and step method call for survival, clustering, "
-                    f"dynamic prediction, etc.\n"
+                    f"Analysis-family context: {_family.key} ({_family.name}). "
+                    "Use this only to reject method-incompatible substitutions. "
+                    "Execute the planner-owned Method and Expected outputs below; "
+                    "the family label does not authorize another method, estimand, "
+                    "figure, or scientific product.\n"
                     f"Step intent: {step.intent}\n"
                     f"Step inputs: {step.inputs}\n"
                     f"Expected outputs: {step.expected_outputs}\n"
@@ -1517,9 +1549,10 @@ class CoderAgent:
                 role="user",
                 content=(
                     f"REPAIR THE PYTHON CODE FOR STEP {step.step_id}.\n"
-                    f"Locked analysis family: {family.key} ({family.name}). "
-                    "Do not let generic cohort-setup or data-quality workflow "
-                    "requirements replace the current step's scientific role.\n"
+                    f"Analysis-family context: {family.key} ({family.name}). "
+                    "Use this only for method-compatibility checks. Preserve the "
+                    "planner-owned Method and Expected outputs; the family label "
+                    "cannot add or replace a scientific product.\n"
                     f"Repair attempt: {attempt}\n"
                     f"Step intent: {step.intent}\n"
                     f"Step inputs: {step.inputs}\n"
