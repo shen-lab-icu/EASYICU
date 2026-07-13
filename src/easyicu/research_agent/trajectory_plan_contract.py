@@ -376,7 +376,19 @@ def _trajectory_output_role(name: object) -> Optional[str]:
         return "candidate_selection"
     if {"cluster", "selection"} <= tokens:
         return "candidate_selection"
-    if "stability" in tokens and bool(tokens & {"cluster", "clustering"}):
+    if "stability" in tokens and bool(
+        tokens
+        & {
+            "adjusted",
+            "ari",
+            "bootstrap",
+            "cluster",
+            "clustering",
+            "consensus",
+            "rand",
+            "resampling",
+        }
+    ):
         return "stability_freeze"
     if {"cluster", "assignments"} <= tokens or {
         "trajectory",
@@ -1066,11 +1078,32 @@ def trajectory_role_code_contract(
             "assignments, characterize profiles, or analyze outcomes here."
         )
     if "cluster_selection" in declarations:
+        owned_roles = trajectory_step_roles(step)
+        role_boundary = ""
+        if "stability_freeze" not in owned_roles:
+            role_boundary += (
+                " This owner does not own stability/freeze: do not run bootstrap, "
+                "resampling, consensus, or stability refits, and do not write "
+                "stability products."
+            )
+        if "characterization" not in owned_roles:
+            role_boundary += (
+                " This owner does not own characterization: do not write cluster "
+                "profiles, cluster characteristics, cluster sizes, or outcomes."
+            )
         sections.append(
             "CANDIDATE-SELECTION ROLE: consume the declared upstream trajectory "
             "representation artifact as the clustering model matrix; do not "
             "reconstruct trajectory features from COHORT_PARQUET (the locked "
             "cohort may be used only for identifier reconciliation or audits). "
+            "Treat the representation rows as the upstream owner\'s already-frozen "
+            "eligible population; do not reapply cohort, anchor, or observed-window "
+            "eligibility unless an explicit membership artifact is also a declared "
+            "input. When an upstream scaling summary names "
+            "scaled_representation_column, use those exact named columns as the "
+            "model coordinates; do not concatenate missingness indicators, rank "
+            "intermediates, scaled coordinates, and profile summaries into duplicate "
+            "representations. "
             "Write cluster_selection.json using the "
             "typed candidate schema: criterion, selection_rule (minimum or "
             "maximum), direction (minimize or maximize), "
@@ -1078,6 +1111,7 @@ def trajectory_role_code_contract(
             "n_clusters and criterion_value, and rationale. Repeat the exact "
             "object as step_summary.cluster_selection and report n_clusters "
             "and clustering_method. The agent owns the method, criterion, and k."
+            + role_boundary
         )
     if declarations & {
         "trajectory_missingness_policy",
