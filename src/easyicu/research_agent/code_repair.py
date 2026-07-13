@@ -474,6 +474,11 @@ def _deterministic_summary_repair(
                 "x_cols = [predictor_col] + [col for col in model_df.columns if col not in [outcome_col, predictor_col]]",
                 1,
             )
+            repaired = repaired.replace(
+                "X = model_df[x_cols]",
+                'X = model_df[x_cols].apply(pd.to_numeric, errors="coerce").astype(float)',
+                1,
+            )
             if repaired != code:
                 return repair_name, repaired
     repaired = None
