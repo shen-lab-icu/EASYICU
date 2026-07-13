@@ -78,6 +78,7 @@ from .audits.validators import (
     StatisticalGuard,
     StatisticalValidator,
     StepSummaryFractionValidator,
+    _downgrade_metadata_supported_outcome_findings,
 )
 from .code_repair import (
     _deterministic_runner_repair,
@@ -99,6 +100,7 @@ from .deterministic_robustness import (
     replay_locked_memberships,
     robustness_sensitivity_preflight_code,
 )
+from .declared_product_contract import typed_product as _canonical_typed_product
 from .estimators import fit_robustness_rows_from_records
 from .evidence import sha256_of_bytes, sha256_of_file
 from .llm import MockLLMClient
@@ -144,12 +146,24 @@ from .pipeline_resume import (
     upsert_step_record,
 )
 from .schema import AnalysisPlan, AnalysisStep, EvidenceRef, ResearchContext
+from .robustness_execution_contract import (
+    ROBUSTNESS_COHORT_MEMBERSHIP_ALIASES,
+    ROBUSTNESS_EXECUTION_CONTRACT_GUIDANCE,
+    _executed_robustness_result_issues,
+)
 from .robustness_panel import (
     RobustnessSpec,
     assert_robustness_specs_locked,
     build_robustness_panel_from_records,
     robustness_specs_for_execution,
+    robustness_specs_sha,
     write_robustness_panel,
+)
+from .trajectory_bundle import trajectory_bundle_findings
+from .trajectory_plan_contract import (
+    augment_trajectory_plan_products,
+    trajectory_plan_contract_applies,
+    trajectory_plan_dag_findings,
 )
 from .repair_registry import (
     InvariantStatus,
@@ -157,7 +171,11 @@ from .repair_registry import (
     RepairObservedState,
     automatic_repair_allowed,
 )
-from .runtime_artifacts import current_step_records, current_successful_step_records
+from .runtime_artifacts import (
+    current_step_records,
+    current_successful_step_records,
+    verified_run_evidence_path,
+)
 from .scalar_utils import _expected_numeric_annotations_for_step
 from .side_findings import SideFinding
 from .skills import ClinicalSkill
@@ -171,6 +189,446 @@ from .viability import (
 from .visual_qa import VLMVisualQAAdapter, VisualQAAuditor
 
 logger = logging.getLogger(__name__)
+
+
+class _EvidenceLineageResolutionError(RuntimeError):
+    """A typed plan input could not be bound to current verified evidence."""
+
+    def __init__(self, failures: Sequence[Mapping[str, Any]]) -> None:
+        self.failures = [dict(failure) for failure in failures]
+        super().__init__(
+            "; ".join(
+                f"{failure.get('input')}: {failure.get('reason')}"
+                for failure in self.failures
+            )
+        )
+
+
+_TYPED_INPUT_KINDS = frozenset(
+    {
+        "artifact",
+        "dataset",
+        "figure",
+        "log",
+        "manifest",
+        "model",
+        "statistic",
+        "table",
+    }
+)
+def _normalise_typed_product_name(value: Any) -> str:
+    parsed = _canonical_typed_product(f"artifact:{value}")
+    return parsed[1] if parsed is not None else ""
+
+
+def _typed_input_product(value: Any) -> Optional[Tuple[str, str]]:
+    """Return a canonical ``(kind, product)`` for a typed plan dependency."""
+
+    parsed = _canonical_typed_product(value)
+    if parsed is None or parsed[0] not in _TYPED_INPUT_KINDS:
+        return None
+    return parsed
+
+
+def _typed_artifact_name(value: Any) -> Optional[str]:
+    """Backward-compatible artifact-only view of a typed plan dependency."""
+
+    typed_product = _typed_input_product(value)
+    if typed_product is None or typed_product[0] != "artifact":
+        return None
+    return typed_product[1]
+
+
+def _evidence_record_field(record: Any, name: str) -> Any:
+    if isinstance(record, Mapping):
+        return record.get(name)
+    return getattr(record, name, None)
+
+
+def _registered_source_name(record: Any, verified_path: Path) -> Optional[str]:
+    """Recover the registered source name from ``<evidence_id>__<filename>``."""
+
+    evidence_id = str(_evidence_record_field(record, "evidence_id") or "")
+    prefix = f"{evidence_id}__"
+    if not evidence_id or not verified_path.name.startswith(prefix):
+        return None
+    return verified_path.name[len(prefix) :] or None
+
+
+def _declared_typed_product_paths(
+    step_summary: Any,
+    *,
+    typed_product: Tuple[str, str],
+) -> Tuple[bool, List[str]]:
+    """Return exact typed file mappings declared by the producer summary."""
+
+    if not isinstance(step_summary, Mapping):
+        return False, []
+    declared = False
+    paths: List[str] = []
+    for container_name in ("output_files", "outputs"):
+        container = step_summary.get(container_name)
+        if not isinstance(container, Mapping):
+            continue
+        for typed_key, value in container.items():
+            if _typed_input_product(typed_key) != typed_product:
+                continue
+            declared = True
+            if isinstance(value, str) and value.strip():
+                paths.append(value.strip())
+            elif isinstance(value, (list, tuple)):
+                paths.extend(
+                    str(item).strip()
+                    for item in value
+                    if isinstance(item, str) and item.strip()
+                )
+    return declared, list(dict.fromkeys(paths))
+
+
+def _declared_typed_artifact_paths(
+    step_summary: Any,
+    *,
+    artifact_name: str,
+) -> Tuple[bool, List[str]]:
+    """Backward-compatible wrapper for artifact-specific callers."""
+
+    return _declared_typed_product_paths(
+        step_summary,
+        typed_product=("artifact", artifact_name),
+    )
+
+
+def _lineage_failure_product_fields(
+    typed_product: Tuple[str, str],
+) -> Dict[str, str]:
+    kind, product_name = typed_product
+    fields = {"kind": kind, "product": product_name}
+    if kind == "artifact":
+        fields["artifact"] = product_name
+    return fields
+
+
+def _step_summary_contains_statistic(step_summary: Any, statistic_name: str) -> bool:
+    """Confirm a declared scalar is materialized in the current summary."""
+
+    def _walk(value: Any) -> bool:
+        if isinstance(value, Mapping):
+            declared_name = value.get("name") or value.get("statistic")
+            if (
+                declared_name is not None
+                and _normalise_typed_product_name(declared_name) == statistic_name
+                and any(key in value for key in ("value", "estimate", "result"))
+            ):
+                return True
+            for key, nested in value.items():
+                if (
+                    _normalise_typed_product_name(key) == statistic_name
+                    and nested is not None
+                    and not isinstance(nested, (Mapping, list, tuple))
+                ):
+                    return True
+                if _walk(nested):
+                    return True
+        elif isinstance(value, (list, tuple)):
+            return any(_walk(item) for item in value)
+        return False
+
+    return _walk(step_summary)
+
+
+def _resolve_typed_input_evidence(
+    *,
+    input_name: str,
+    plan: AnalysisPlan,
+    evidence_records: Sequence[Any],
+    per_step_records: Sequence[Mapping[str, Any]],
+    run_dir: Path,
+) -> Tuple[Optional[EvidenceRef], Optional[Dict[str, Any]]]:
+    """Resolve one typed input through the current execution authority.
+
+    The plan declaration identifies the producer; the latest outer step record
+    authorizes its evidence ids.  Basename aliases are deliberately excluded:
+    they are first-write-wins and can still point at a superseded resume
+    artifact.  Every candidate must instead be owned by the successful current
+    producer and pass the registered path/SHA check.
+    """
+
+    typed_product = _typed_input_product(input_name)
+    if typed_product is None:
+        return None, {"input": str(input_name), "reason": "invalid_typed_input"}
+    product_fields = _lineage_failure_product_fields(typed_product)
+
+    producer_ids = {
+        str(step.step_id)
+        for step in plan.steps
+        if any(
+            _typed_input_product(output) == typed_product
+            for output in (step.expected_outputs or [])
+        )
+    }
+    if not producer_ids:
+        return None, {
+            "input": str(input_name),
+            **product_fields,
+            "reason": "producer_not_declared",
+        }
+    if len(producer_ids) != 1:
+        return None, {
+            "input": str(input_name),
+            **product_fields,
+            "reason": "ambiguous_producer",
+            "producer_step_ids": sorted(producer_ids),
+        }
+
+    producer_id = next(iter(producer_ids))
+    latest_by_step = {
+        str(record.get("step_id") or ""): record
+        for record in current_step_records(per_step_records)
+    }
+    producer_record = latest_by_step.get(producer_id)
+    producer_status = str((producer_record or {}).get("status") or "").lower()
+    if producer_status != "ok":
+        return None, {
+            "input": str(input_name),
+            **product_fields,
+            "reason": "producer_not_successful",
+            "producer_step_id": producer_id,
+            "producer_status": producer_status or "missing",
+        }
+
+    active_ids = {
+        str(evidence_id)
+        for evidence_id in (producer_record or {}).get("evidence_ids", [])
+        if str(evidence_id).strip()
+    }
+    if typed_product[0] == "statistic":
+        step_summary = (producer_record or {}).get("step_summary")
+        if not _step_summary_contains_statistic(step_summary, typed_product[1]):
+            return None, {
+                "input": str(input_name),
+                **product_fields,
+                "reason": "statistic_not_materialized",
+                "producer_step_id": producer_id,
+            }
+        step_summary_evidence_id = str(
+            (producer_record or {}).get("step_summary_evidence_id") or ""
+        )
+        candidates: List[Any] = []
+        for record in evidence_records:
+            evidence_id = str(_evidence_record_field(record, "evidence_id") or "")
+            if (
+                evidence_id != step_summary_evidence_id
+                or evidence_id not in active_ids
+                or str(_evidence_record_field(record, "produced_by_step") or "")
+                != producer_id
+                or verified_run_evidence_path(run_dir, record) is None
+            ):
+                continue
+            candidates.append(record)
+        if len(candidates) != 1:
+            return None, {
+                "input": str(input_name),
+                **product_fields,
+                "reason": "no_verified_current_statistic",
+                "producer_step_id": producer_id,
+                "step_summary_evidence_id": step_summary_evidence_id or None,
+            }
+        record = candidates[0]
+        return (
+            EvidenceRef(
+                evidence_id=str(
+                    _evidence_record_field(record, "evidence_id") or ""
+                ),
+                kind=_evidence_record_field(record, "kind"),
+                description=_evidence_record_field(record, "description"),
+                relative_path=_evidence_record_field(record, "relative_path"),
+            ),
+            None,
+        )
+    typed_mapping_declared, declared_paths = _declared_typed_product_paths(
+        (producer_record or {}).get("step_summary"),
+        typed_product=typed_product,
+    )
+    if typed_mapping_declared and not declared_paths:
+        return None, {
+            "input": str(input_name),
+            **product_fields,
+            "reason": "typed_mapping_not_verified",
+            "producer_step_id": producer_id,
+        }
+    if len(declared_paths) > 1:
+        return None, {
+            "input": str(input_name),
+            **product_fields,
+            "reason": "ambiguous_typed_mapping",
+            "producer_step_id": producer_id,
+            "declared_paths": declared_paths,
+        }
+    declared_filename = Path(declared_paths[0]).name if declared_paths else None
+
+    candidates: List[Tuple[Any, Path]] = []
+    matching_current_ids: List[str] = []
+    for record in evidence_records:
+        evidence_id = str(_evidence_record_field(record, "evidence_id") or "")
+        if (
+            evidence_id not in active_ids
+            or str(_evidence_record_field(record, "produced_by_step") or "")
+            != producer_id
+        ):
+            continue
+        verified_path = verified_run_evidence_path(run_dir, record)
+        if verified_path is None:
+            continue
+        source_name = _registered_source_name(record, verified_path)
+        if source_name is None:
+            continue
+        if declared_filename is not None:
+            matches_product = source_name == declared_filename
+        else:
+            matches_product = (
+                _normalise_typed_product_name(source_name) == typed_product[1]
+            )
+        if not matches_product:
+            continue
+        matching_current_ids.append(evidence_id)
+        candidates.append((record, verified_path))
+
+    if not candidates:
+        return None, {
+            "input": str(input_name),
+            **product_fields,
+            "reason": (
+                "typed_mapping_not_verified"
+                if declared_filename is not None
+                else "no_verified_current_artifact"
+            ),
+            "producer_step_id": producer_id,
+            **(
+                {"declared_path": declared_paths[0]}
+                if declared_filename is not None
+                else {}
+            ),
+        }
+    if len(candidates) != 1:
+        return None, {
+            "input": str(input_name),
+            **product_fields,
+            "reason": "ambiguous_current_artifact",
+            "producer_step_id": producer_id,
+            "evidence_ids": sorted(matching_current_ids),
+        }
+
+    record, _ = candidates[0]
+    return (
+        EvidenceRef(
+            evidence_id=str(_evidence_record_field(record, "evidence_id") or ""),
+            kind=_evidence_record_field(record, "kind"),
+            description=_evidence_record_field(record, "description"),
+            relative_path=_evidence_record_field(record, "relative_path"),
+        ),
+        None,
+    )
+
+
+def _resolve_typed_artifact_evidence(
+    *,
+    input_name: str,
+    plan: AnalysisPlan,
+    evidence_records: Sequence[Any],
+    per_step_records: Sequence[Mapping[str, Any]],
+    run_dir: Path,
+) -> Tuple[Optional[EvidenceRef], Optional[Dict[str, Any]]]:
+    """Compatibility wrapper preserving the public artifact resolver."""
+
+    if _typed_artifact_name(input_name) is None:
+        return None, {"input": str(input_name), "reason": "invalid_artifact_input"}
+    return _resolve_typed_input_evidence(
+        input_name=input_name,
+        plan=plan,
+        evidence_records=evidence_records,
+        per_step_records=per_step_records,
+        run_dir=run_dir,
+    )
+
+
+def _resolved_typed_input_binding(
+    *,
+    input_name: str,
+    evidence_ref: EvidenceRef,
+    evidence_records: Sequence[Any],
+    run_dir: Path,
+) -> Optional[Dict[str, Any]]:
+    """Build the exact, digest-verified runtime binding for one typed input."""
+
+    typed_product = _typed_input_product(input_name)
+    if typed_product is None:
+        return None
+    record = next(
+        (
+            candidate
+            for candidate in evidence_records
+            if str(_evidence_record_field(candidate, "evidence_id") or "")
+            == evidence_ref.evidence_id
+        ),
+        None,
+    )
+    if record is None:
+        return None
+    verified_path = verified_run_evidence_path(run_dir, record)
+    if verified_path is None:
+        return None
+    run_root = Path(run_dir).resolve()
+    try:
+        run_relative_path = verified_path.relative_to(run_root).as_posix()
+    except ValueError:
+        return None
+    declared_kind, product_name = typed_product
+    return {
+        "evidence_id": evidence_ref.evidence_id,
+        "declared_kind": declared_kind,
+        "product": product_name,
+        "evidence_kind": str(_evidence_record_field(record, "kind") or ""),
+        "relative_path": run_relative_path,
+        "absolute_path": str(verified_path),
+        "sha256": str(_evidence_record_field(record, "sha256") or ""),
+        "produced_by_step": str(
+            _evidence_record_field(record, "produced_by_step") or ""
+        ),
+    }
+
+
+def _write_resolved_inputs_manifest(
+    *,
+    run_dir: Path,
+    step_id: str,
+    bindings: Mapping[str, Mapping[str, Any]],
+) -> Path:
+    """Persist bindings outside the writable step overlay for runtime use."""
+
+    safe_step_id = str(step_id or "")
+    if (
+        not safe_step_id
+        or safe_step_id in {".", ".."}
+        or Path(safe_step_id).name != safe_step_id
+        or "/" in safe_step_id
+        or "\\" in safe_step_id
+    ):
+        raise ValueError("step_id must be a single safe path component")
+    manifest_dir = Path(run_dir).resolve() / "resolved_inputs"
+    manifest_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = manifest_dir / f"{safe_step_id}.json"
+    payload = {
+        "schema_version": "1.0",
+        "step_id": safe_step_id,
+        "inputs": {str(key): dict(value) for key, value in bindings.items()},
+    }
+    temporary_path = manifest_path.with_suffix(".json.tmp")
+    temporary_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    temporary_path.replace(manifest_path)
+    return manifest_path
 
 
 class _InertPythonNodeStripper(ast.NodeTransformer):
@@ -214,6 +672,71 @@ def _python_repair_is_materially_changed(before: str, after: str) -> bool:
     if before_semantic is not None and before_semantic == after_semantic:
         return False
     return True
+
+
+def _quarantined_errors_superseded_by_current_policy(
+    *,
+    prior_errors: Sequence[ValidationFinding],
+    current_findings: Sequence[ValidationFinding],
+    context: ResearchContext,
+    script_text: str,
+    quarantined_script_sha256: str,
+) -> Optional[Tuple[List[ValidationFinding], List[Dict[str, Any]]]]:
+    """Prove that stored errors were retired by a deterministic policy change.
+
+    Absence of a finding from a new optional LLM audit is not evidence that an
+    old quarantine is stale. The only no-code-change exit is to replay the
+    current metadata-supported outcome reclassifier over every stored error,
+    while the complete current audit independently has no errors.
+    """
+
+    if hashlib.sha256(script_text.encode("utf-8")).hexdigest() != str(
+        quarantined_script_sha256 or ""
+    ):
+        return None
+    if not prior_errors or any(
+        finding.severity == "error" for finding in current_findings
+    ):
+        return None
+    if any(finding.severity != "error" for finding in prior_errors):
+        return None
+    reclassified = _downgrade_metadata_supported_outcome_findings(
+        findings=prior_errors,
+        context=context,
+        script_text=script_text,
+    )
+    if len(reclassified) != len(prior_errors):
+        return None
+
+    provenance: List[Dict[str, Any]] = []
+    for prior, current in zip(prior_errors, reclassified):
+        prior_detail = dict(prior.detail or {})
+        current_detail = dict(current.detail or {})
+        reason = current_detail.get("downgraded_reason")
+        same_finding = (
+            current.validator == prior.validator
+            and current.message == prior.message
+            and current.evidence_ids == prior.evidence_ids
+            and all(current_detail.get(key) == value for key, value in prior_detail.items())
+        )
+        if (
+            not same_finding
+            or "downgraded_reason" in prior_detail
+            or current.severity != "warning"
+            or not isinstance(reason, str)
+            or not reason.strip()
+        ):
+            return None
+        provenance.append(
+            {
+                "validator": prior.validator,
+                "message": prior.message,
+                "prior_severity": prior.severity,
+                "reclassified_severity": current.severity,
+                "downgraded_reason": reason.strip(),
+            }
+        )
+    return reclassified, provenance
 
 
 def _repair_publication_figure_in_staging(
@@ -311,6 +834,69 @@ def _actionable_validator_messages(
         for finding in group
         if finding.severity in {"warning", "error"} and finding.message
     ]
+
+
+_SUCCESS_REPLAN_REQUEST_FIELDS = (
+    "replan_requested",
+    "plan_revision_requested",
+)
+
+
+def _successful_step_requests_replan(record: Mapping[str, Any]) -> bool:
+    """Return whether a clean agent step explicitly requests plan adaptation.
+
+    The deterministic probe already receives one automatic replan and failed
+    model steps have their own bounded directed-replan path. Calling the LLM
+    replanner after every ordinary successful step adds latency and usually
+    produces a no-op. Preserve adaptive agent behavior through exact boolean
+    declarations in either the outer record or ``step_summary``; strings and
+    other truthy values are intentionally not accepted.
+    """
+
+    if str(record.get("status") or "") != "ok":
+        return False
+    containers: List[Mapping[str, Any]] = [record]
+    summary = record.get("step_summary")
+    if isinstance(summary, Mapping):
+        containers.append(summary)
+    return any(
+        container.get(field) is True
+        for container in containers
+        for field in _SUCCESS_REPLAN_REQUEST_FIELDS
+    )
+
+
+def _preserve_locked_robustness_specs_after_replan(
+    *,
+    current_plan: AnalysisPlan,
+    revised_plan: AnalysisPlan,
+    run_dir: Path,
+) -> tuple[AnalysisPlan, Optional[ValidationFinding]]:
+    """Keep probe/runtime replans from mutating the plan-time spec lock."""
+
+    locked_specs = robustness_specs_for_execution(
+        run_dir=run_dir,
+        plan=current_plan,
+    )
+    revised_specs = list(revised_plan.robustness_specs or [])
+    if robustness_specs_sha(revised_specs) == robustness_specs_sha(locked_specs):
+        return revised_plan, None
+    preserved = revised_plan.model_copy(
+        update={"robustness_specs": list(locked_specs)}
+    )
+    return preserved, ValidationFinding(
+        validator="replanner",
+        severity="warning",
+        message=(
+            "Replanner attempted to change the immutable plan-time robustness "
+            "specifications; preserved the verified lock and retained only the "
+            "other plan revisions."
+        ),
+        detail={
+            "reason": "preserve_locked_robustness_specs",
+            "locked_spec_ids": [spec.spec_id for spec in locked_specs],
+        },
+    )
 
 
 def _step_status_from_contract_findings(
@@ -432,6 +1018,8 @@ def _coder_context_with_locked_robustness_specs(
         "rows outside the locked analysis cohort must be materialised from "
         "os.environ['EASYICU_UNIVERSE_PARQUET']; COHORT_PARQUET is the locked "
         "analysis cohort."
+        "\n\n"
+        + ROBUSTNESS_EXECUTION_CONTRACT_GUIDANCE
     )
     prior_notes = str(context.notes or "").strip()
     enriched_notes = f"{prior_notes}\n\n{attachment}" if prior_notes else attachment
@@ -534,7 +1122,19 @@ def _sensitivity_csv_rows(paths: Sequence[Path]) -> List[Dict[str, str]]:
     for path in paths:
         try:
             with path.open("r", encoding="utf-8", newline="") as handle:
-                rows.extend(dict(row) for row in csv.DictReader(handle))
+                for raw_row in csv.DictReader(handle):
+                    row = dict(raw_row)
+                    # ``definition_id`` is the natural identifier in cohort
+                    # overlap/attrition tables, while the locked robustness
+                    # contract calls the same key ``spec_id``.  Normalize the
+                    # typed table role here; values are still checked against
+                    # the digest-bound lock and deterministic membership
+                    # replay below, so this cannot authorize an invented id.
+                    if not str(row.get("spec_id") or "").strip() and str(
+                        row.get("definition_id") or ""
+                    ).strip():
+                        row["spec_id"] = row["definition_id"]
+                    rows.append(row)
         except (OSError, csv.Error):
             continue
     return rows
@@ -554,6 +1154,11 @@ def _cohort_definition_sensitivity_contract_findings(
 
     if not _is_cohort_definition_sensitivity_result_step(step):
         return []
+    # Findings emitted here belong to one exact planner step.  Keep that
+    # ownership machine-readable so a successful retry/resume can supersede an
+    # older failure without parsing prose or treating the whole robustness
+    # subsystem as one global gate.
+    step_detail = {"step_id": str(step.step_id)}
     try:
         locked_specs = _read_locked_robustness_spec_dicts(run_dir)
     except Exception as exc:
@@ -562,7 +1167,10 @@ def _cohort_definition_sensitivity_contract_findings(
                 validator="robustness_spec_lock",
                 severity="error",
                 message=f"Locked robustness definitions are unavailable: {exc}",
-                detail={"lock_path": str(Path(run_dir) / "robustness_specs_locked.json")},
+                detail={
+                    **step_detail,
+                    "lock_path": str(Path(run_dir) / "robustness_specs_locked.json"),
+                },
             )
         ]
 
@@ -571,6 +1179,12 @@ def _cohort_definition_sensitivity_contract_findings(
         for spec in locked_specs
         if str(spec.get("spec_id") or "").strip()
     }
+    executed_result_issues = _executed_robustness_result_issues(
+        locked_by_id=locked_by_id,
+        step_summary=step_summary,
+        out_dir=out_dir,
+        context=context,
+    )
     reported_rows: List[Dict[str, Any]] = []
     raw_rows = step_summary.get("robustness_rows")
     if raw_rows is None and isinstance(step_summary.get("robustness_panel"), dict):
@@ -602,6 +1216,29 @@ def _cohort_definition_sensitivity_contract_findings(
     missing_ids = sorted(locked_ids - reported_ids)
     extra_ids = sorted(reported_ids - locked_ids - {"primary"})
     findings: List[ValidationFinding] = []
+    if executed_result_issues:
+        findings.append(
+            ValidationFinding(
+                validator="robustness_executed_result",
+                severity="error",
+                message=(
+                    "Each locked robustness specification must have exactly one "
+                    "typed executed-result row bound to its fitted model and "
+                    "coefficient evidence. Declaration and membership tables "
+                    "cannot substitute for execution. Issues="
+                    f"{executed_result_issues}."
+                ),
+                detail={
+                    **step_detail,
+                    "required_spec_ids": sorted(locked_by_id),
+                    "issues": executed_result_issues,
+                    "point_only_policy": (
+                        "Penalized point-only fits may be executed but must set "
+                        "reportable=false and interval_method=unavailable."
+                    ),
+                },
+            )
+        )
     missing_axis_ids: List[str] = []
     axis_mismatches: List[Dict[str, str]] = []
     for spec_id, spec in locked_by_id.items():
@@ -641,6 +1278,7 @@ def _cohort_definition_sensitivity_contract_findings(
                     )
                 ),
                 detail={
+                    **step_detail,
                     "locked_spec_ids": sorted(locked_ids),
                     "reported_spec_ids": sorted(reported_ids),
                     "missing_spec_ids": missing_ids,
@@ -681,6 +1319,7 @@ def _cohort_definition_sensitivity_contract_findings(
                     severity="error",
                     message=f"Could not replay locked cohort memberships: {exc}",
                     detail={
+                        **step_detail,
                         "universe_path": str(universe_path),
                         "cohort_path": str(cohort_path) if cohort_path else None,
                     },
@@ -693,26 +1332,7 @@ def _cohort_definition_sensitivity_contract_findings(
             for row in replay_rows
             if str(row.get("spec_id") or "")
         }
-        aliases = {
-            "universe_n": ("universe_n",),
-            "variant_membership_n": (
-                "variant_membership_n",
-                "retained_n",
-                "cohort_n",
-                "membership_n",
-            ),
-            "inflow_n": (
-                "inflow_n",
-                "entering_relative_to_primary_n",
-                "enter_n",
-            ),
-            "outflow_n": (
-                "outflow_n",
-                "leaving_relative_to_primary_n",
-                "leave_n",
-            ),
-            "overlap_n": ("overlap_n", "overlap_with_primary_n"),
-        }
+        aliases = ROBUSTNESS_COHORT_MEMBERSHIP_ALIASES
         for spec in cohort_specs:
             spec_id = spec.spec_id
             expected = replay_by_id.get(spec_id) or {}
@@ -789,6 +1409,7 @@ def _cohort_definition_sensitivity_contract_findings(
                         f"Issues={membership_issues}."
                     ),
                     detail={
+                        **step_detail,
                         "universe_path": str(universe_path),
                         "cohort_path": str(cohort_path),
                         "cohort_spec_ids": sorted(spec.spec_id for spec in cohort_specs),
@@ -1289,6 +1910,7 @@ def _plan_signature(
         (
             step.step_id,
             step.method,
+            tuple(step.inputs),
             tuple(step.expected_outputs),
             tuple(
                 role
@@ -2561,6 +3183,21 @@ def run_execute_phase(
                     )
                 )
 
+        revised, robustness_lock_finding = (
+            _preserve_locked_robustness_specs_after_replan(
+                current_plan=current_plan,
+                revised_plan=revised,
+                run_dir=run_dir,
+            )
+        )
+        if robustness_lock_finding is not None:
+            findings.append(robustness_lock_finding)
+        revised, trajectory_product_findings = augment_trajectory_plan_products(
+            plan=revised,
+            context=context,
+        )
+        findings.extend(trajectory_product_findings)
+
         # No-op detection on the *substantive* step DAG, not the full
         # model_dump. A verbose replanner can rewrite each step's ``intent``
         # prose without changing the analysis; that must not count as a
@@ -2632,6 +3269,7 @@ def run_execute_phase(
             )
         return revised
 
+    trajectory_plan_blocked = False
     probe_step_id = "00_probe"
     if pipeline._enable_probe_step and probe_step_id not in resumed_step_ids:
         probe_summary, probe_files = _build_probe_summary(
@@ -2670,11 +3308,55 @@ def run_execute_phase(
         }
         per_step_records.append(probe_record)
         _flush_partial_manifest()
+        trajectory_preflight = trajectory_plan_dag_findings(
+            plan=plan,
+            context=context,
+        )
+        trajectory_directive = None
+        if trajectory_preflight:
+            trajectory_directive = (
+                "Repair the agent-declared fixed-window trajectory plan DAG "
+                "without changing its scientific choices. Preserve legitimate "
+                "representation, candidate-selection, stability/freeze, and "
+                "characterization step boundaries; repair only missing/ambiguous "
+                "typed artifact edges, role declarations, and silent internal "
+                "window-grid omissions. Do not choose a clustering method, k, "
+                "eligibility threshold, or deterministic runner. Contract findings: "
+                + json.dumps(
+                    [
+                        {
+                            "message": finding.message,
+                            "detail": finding.detail,
+                        }
+                        for finding in trajectory_preflight
+                    ],
+                    ensure_ascii=False,
+                    default=str,
+                )
+            )
         plan = _maybe_replan(
             current_plan=plan,
             reason="probe_summary",
             probe_summary_payload=probe_summary,
             completed_records=[probe_record],
+            directive=trajectory_directive,
+            force=bool(trajectory_preflight),
+        )
+
+    final_trajectory_plan_findings = trajectory_plan_dag_findings(
+        plan=plan,
+        context=context,
+    )
+    if final_trajectory_plan_findings:
+        trajectory_plan_blocked = True
+        findings.extend(final_trajectory_plan_findings)
+        _flush_partial_manifest(
+            {
+                "trajectory_plan_contract_blocked": True,
+                "trajectory_plan_contract_error_count": len(
+                    final_trajectory_plan_findings
+                ),
+            }
         )
 
     shared_lock = threading.Lock()
@@ -2859,23 +3541,66 @@ def run_execute_phase(
                 metadata=metadata,
             )
 
-    def _evidence_refs_for_names(names: Sequence[str]) -> List[EvidenceRef]:
+    def _evidence_refs_for_names(
+        names: Sequence[str],
+    ) -> Tuple[List[EvidenceRef], List[str], Dict[str, Dict[str, Any]]]:
         refs: List[EvidenceRef] = []
+        typed_evidence_ids: List[str] = []
+        typed_bindings: Dict[str, Dict[str, Any]] = {}
         seen: set[str] = set()
+        failures: List[Dict[str, Any]] = []
         for name in names:
-            rec = evidence.get(str(name))
-            if rec is None or rec.evidence_id in seen:
-                continue
-            refs.append(
-                EvidenceRef(
-                    evidence_id=rec.evidence_id,
-                    kind=rec.kind,
-                    description=rec.description,
-                    relative_path=rec.relative_path,
+            value = str(name)
+            if _typed_input_product(value) is not None:
+                with shared_lock:
+                    records_snapshot = list(per_step_records)
+                evidence_snapshot = evidence.records()
+                ref, failure = _resolve_typed_input_evidence(
+                    input_name=value,
+                    plan=plan,
+                    evidence_records=evidence_snapshot,
+                    per_step_records=records_snapshot,
+                    run_dir=run_dir,
                 )
-            )
-            seen.add(rec.evidence_id)
-        return refs
+                if failure is not None:
+                    failures.append(failure)
+                    continue
+                if ref is not None and ref.evidence_id not in seen:
+                    refs.append(ref)
+                    seen.add(ref.evidence_id)
+                    typed_evidence_ids.append(ref.evidence_id)
+                if ref is not None:
+                    binding = _resolved_typed_input_binding(
+                        input_name=value,
+                        evidence_ref=ref,
+                        evidence_records=evidence_snapshot,
+                        run_dir=run_dir,
+                    )
+                    if binding is None:
+                        failures.append(
+                            {
+                                "input": value,
+                                "reason": "verified_binding_unavailable",
+                            }
+                        )
+                    else:
+                        typed_bindings[value] = binding
+                continue
+
+            rec = evidence.get(value)
+            if rec is not None and rec.evidence_id not in seen:
+                refs.append(
+                    EvidenceRef(
+                        evidence_id=rec.evidence_id,
+                        kind=rec.kind,
+                        description=rec.description,
+                        relative_path=rec.relative_path,
+                    )
+                )
+                seen.add(rec.evidence_id)
+        if failures:
+            raise _EvidenceLineageResolutionError(failures)
+        return refs, typed_evidence_ids, typed_bindings
 
     def _validator_messages(
         *finding_groups: Sequence[ValidationFinding],
@@ -2916,6 +3641,7 @@ def run_execute_phase(
         quarantined_repair_materially_changed = False
         quarantined_repair_succeeded = False
         quarantine_superseded_by_fallback = False
+        quarantine_policy_superseded = False
         pending_quarantined_errors: List[ValidationFinding] = []
         preexecution_runner_repair_name: Optional[str] = None
         step_current = step_order.get(step.step_id, 0) + 1
@@ -2967,7 +3693,56 @@ def run_execute_phase(
             current_step=step_current,
             total_steps=total_steps,
         )
-        existing_refs = _evidence_refs_for_names(step.inputs)
+        try:
+            (
+                existing_refs,
+                resolved_input_evidence_ids,
+                resolved_input_bindings,
+            ) = _evidence_refs_for_names(step.inputs)
+        except _EvidenceLineageResolutionError as exc:
+            step_record.update(
+                {
+                    "status": "blocked_dependency_evidence",
+                    "diagnostic_only": True,
+                    "generation_mode": "system",
+                    "evidence_lineage_failures": exc.failures,
+                }
+            )
+            lineage_finding = ValidationFinding(
+                validator="typed_artifact_evidence_lineage",
+                severity="error",
+                message=(
+                    f"Step {step.step_id} was blocked because one or more typed "
+                    "artifact inputs lack a unique, current, digest-verified "
+                    "producer output."
+                ),
+                detail={"step_id": step.step_id, "failures": exc.failures},
+            )
+            with shared_lock:
+                findings.append(lineage_finding)
+                per_step_records.append(step_record)
+                _flush_partial_manifest()
+            emit_progress(
+                "audit",
+                f"Blocked {step.step_id}; typed artifact evidence is unresolved.",
+                status="error",
+                run_id=run_id,
+                step_id=step.step_id,
+                current_step=step_current,
+                total_steps=total_steps,
+            )
+            return step_record
+        resolved_inputs_path = _write_resolved_inputs_manifest(
+            run_dir=run_dir,
+            step_id=step.step_id,
+            bindings=resolved_input_bindings,
+        )
+        step_record["resolved_inputs_path"] = str(
+            resolved_inputs_path.relative_to(run_dir)
+        )
+        step_record["resolved_input_evidence_ids"] = list(
+            resolved_input_evidence_ids
+        )
         local_runtime_state = supervisor.prepare_step_state(
             state=runtime_state,
             context=context,
@@ -3591,6 +4366,10 @@ else:
         def _concept_findings_for_code(script_text: str) -> List[ValidationFinding]:
             """Run the single pre-execution concept gate for one code digest."""
 
+            nonlocal quarantined_draft_active
+            nonlocal quarantine_policy_superseded
+            nonlocal pending_quarantined_errors
+
             code_findings = usage_auditor.audit(
                 context=context,
                 script_text=script_text,
@@ -3603,17 +4382,6 @@ else:
                     step=step,
                 )
             )
-            if pending_quarantined_errors:
-                existing_keys = {
-                    (finding.validator, finding.severity, finding.message)
-                    for finding in code_findings
-                }
-                code_findings.extend(
-                    finding
-                    for finding in pending_quarantined_errors
-                    if (finding.validator, finding.severity, finding.message)
-                    not in existing_keys
-                )
             try:
                 if pipeline._enable_llm_concept_audit and deterministic_fallback_used:
                     code_findings.append(
@@ -3663,6 +4431,56 @@ else:
                     except Exception:
                         pass
                 raise
+            if pending_quarantined_errors:
+                supersession = _quarantined_errors_superseded_by_current_policy(
+                    prior_errors=pending_quarantined_errors,
+                    current_findings=code_findings,
+                    context=context,
+                    script_text=script_text,
+                    quarantined_script_sha256=str(
+                        step_record.get("quarantined_draft_sha256") or ""
+                    ),
+                )
+                if supersession is not None:
+                    reclassified_findings, provenance = supersession
+                    existing_keys = {
+                        (finding.validator, finding.severity, finding.message)
+                        for finding in code_findings
+                    }
+                    code_findings.extend(
+                        finding
+                        for finding in reclassified_findings
+                        if (finding.validator, finding.severity, finding.message)
+                        not in existing_keys
+                    )
+                    quarantine_policy_superseded = True
+                    quarantined_draft_active = False
+                    pending_quarantined_errors = []
+                    step_record["quarantine_policy_superseded"] = True
+                    step_record["quarantine_policy_superseded_findings"] = provenance
+                    emit_progress(
+                        "audit",
+                        (
+                            "Retiring stored concept errors under the current "
+                            f"deterministic validator policy for {step.step_id}."
+                        ),
+                        status="warning",
+                        run_id=run_id,
+                        step_id=step.step_id,
+                        current_step=step_current,
+                        total_steps=total_steps,
+                    )
+                else:
+                    existing_keys = {
+                        (finding.validator, finding.severity, finding.message)
+                        for finding in code_findings
+                    }
+                    code_findings.extend(
+                        finding
+                        for finding in pending_quarantined_errors
+                        if (finding.validator, finding.severity, finding.message)
+                        not in existing_keys
+                    )
             return code_findings
 
         concept_repair_attempts = 0
@@ -4132,7 +4950,7 @@ else:
             )
             return step_record
 
-        if quarantined_repair_succeeded:
+        if quarantined_repair_succeeded or quarantine_policy_superseded:
             try:
                 clear_quarantined_concept_draft(
                     run_dir=run_dir,
@@ -4140,12 +4958,16 @@ else:
                 )
                 step_record["quarantined_requires_repair"] = False
                 step_record["quarantine_retired"] = True
+                if quarantine_policy_superseded:
+                    step_record["quarantine_retired_by"] = (
+                        "deterministic_validator_policy_supersession"
+                    )
             except ValueError as exc:
                 cleanup_finding = ValidationFinding(
                     validator="resume",
                     severity="error",
                     message=(
-                        "Concept-approved repair could not retire its stale "
+                        "Concept-approved code could not retire its stale "
                         f"quarantine safely for step {step.step_id}: {exc}"
                     ),
                     detail={"step_id": step.step_id},
@@ -4268,7 +5090,11 @@ else:
                 repair_attempts=repair_attempts,
             )
             _clear_output_dir(run_dir / "steps" / step.step_id / "outputs")
-            run_result = runner.run(step_id=step.step_id, code=code)
+            run_result = runner.run(
+                step_id=step.step_id,
+                code=code,
+                resolved_inputs_path=resolved_inputs_path,
+            )
             executed_code_digest = sha256_of_file(run_result.script_path)
             step_record["executed_code_sha256"] = executed_code_digest
             if (
@@ -4352,6 +5178,7 @@ else:
                 description=script_description,
                 source_path=run_result.script_path,
                 produced_by_step=step.step_id,
+                inputs=resolved_input_evidence_ids or None,
                 evidence_id=script_evidence_id,
                 producer="coder",
                 generation_mode=current_generation_mode,
@@ -4380,6 +5207,10 @@ else:
                         "quarantined_draft_sha256"
                     ),
                     "quarantined_repair_succeeded": quarantined_repair_succeeded,
+                    "quarantine_policy_superseded": quarantine_policy_superseded,
+                    "quarantine_policy_superseded_findings": step_record.get(
+                        "quarantine_policy_superseded_findings"
+                    ),
                     "llm_signature": llm_signature,
                 },
             )
@@ -4658,6 +5489,7 @@ else:
                     step=step,
                     step_summary=visual_step_summary,
                     completed_step_records=completed_records_snapshot,
+                    out_dir=run_result.out_dir,
                 )
                 early_contract_findings += (
                     _cohort_definition_sensitivity_contract_findings(
@@ -4985,6 +5817,10 @@ else:
                                 )
                             )
                             step_record["status"] = "repair_failed"
+                            step_record["contract_findings"] = [
+                                f.model_dump() for f in early_contract_findings
+                            ]
+                            step_record["step_summary"] = visual_step_summary
                             per_step_records.append(step_record)
                             _flush_partial_manifest()
                         emit_progress(
@@ -5382,6 +6218,12 @@ else:
                 encoding="utf-8",
             )
 
+        lineage_input_evidence_ids = list(
+            dict.fromkeys(
+                [*resolved_input_evidence_ids, *repair_source_evidence_ids]
+            )
+        )
+
         run_result.artefacts = sorted(
             p for p in run_result.out_dir.iterdir() if p.is_file()
         )
@@ -5429,7 +6271,7 @@ else:
                     description=f"Machine-readable summary for step {step.step_id}.",
                     source_path=art,
                     produced_by_step=step.step_id,
-                    inputs=repair_source_evidence_ids or None,
+                    inputs=lineage_input_evidence_ids or None,
                     script_evidence_id=script_record.evidence_id,
                     aliases=step_aliases,
                     producer="runner",
@@ -5448,7 +6290,7 @@ else:
                     description=f"Table {art.stem} from step {step.step_id}.",
                     source_path=art,
                     produced_by_step=step.step_id,
-                    inputs=repair_source_evidence_ids or None,
+                    inputs=lineage_input_evidence_ids or None,
                     script_evidence_id=script_record.evidence_id,
                     aliases=step_aliases,
                     producer="runner",
@@ -5471,7 +6313,7 @@ else:
                     description=f"Figure {art.stem} from step {step.step_id}.",
                     source_path=art,
                     produced_by_step=step.step_id,
-                    inputs=repair_source_evidence_ids or None,
+                    inputs=lineage_input_evidence_ids or None,
                     script_evidence_id=script_record.evidence_id,
                     aliases=step_aliases,
                     producer="runner",
@@ -5489,7 +6331,7 @@ else:
                     description=f"Auxiliary artefact {art.name}.",
                     source_path=art,
                     produced_by_step=step.step_id,
-                    inputs=repair_source_evidence_ids or None,
+                    inputs=lineage_input_evidence_ids or None,
                     script_evidence_id=script_record.evidence_id,
                     aliases=step_aliases,
                     producer="runner",
@@ -5593,7 +6435,7 @@ else:
                 ),
                 source_path=auto_contract_path,
                 produced_by_step=step.step_id,
-                inputs=repair_source_evidence_ids or None,
+                inputs=lineage_input_evidence_ids or None,
                 script_evidence_id=script_record.evidence_id,
                 aliases=_semantic_aliases_for(step, auto_contract_path),
                 producer="runner",
@@ -5635,6 +6477,7 @@ else:
             step=step,
             step_summary=step_summary,
             completed_step_records=completed_records_snapshot,
+            out_dir=run_result.out_dir,
         )
         contract_findings.extend(
             _cohort_definition_sensitivity_contract_findings(
@@ -5812,6 +6655,7 @@ else:
                     step=step,
                     step_summary=step_summary,
                     completed_step_records=completed_records_snapshot,
+                    out_dir=run_result.out_dir,
                 )
                 contract_findings.extend(
                     _cohort_definition_sensitivity_contract_findings(
@@ -5946,7 +6790,7 @@ else:
             if side_findings:
                 step_record["side_findings"] = side_findings
         step_record["step_summary"] = step_summary
-        evidence_refs_for_step = _evidence_refs_for_names(evidence_ids_for_step)
+        evidence_refs_for_step, _, _ = _evidence_refs_for_names(evidence_ids_for_step)
         validator_messages = _validator_messages(
             usage_findings,
             stat_findings,
@@ -6135,9 +6979,18 @@ else:
         )
         return step_record
 
-    steps_to_run = resume_controller.remaining_steps(
-        plan=plan,
-        executed_step_ids=set(resumed_step_ids),
+    steps_to_run = (
+        []
+        if trajectory_plan_blocked
+        else resume_controller.remaining_steps(
+            plan=plan,
+            executed_step_ids=set(resumed_step_ids),
+        )
+    )
+    has_typed_input_dependencies = any(
+        _typed_input_product(input_name) is not None
+        for step in steps_to_run
+        for input_name in (step.inputs or [])
     )
     for skipped_step_id in sorted(resumed_step_ids):
         emit_progress(
@@ -6158,11 +7011,23 @@ else:
                 ),
             )
         )
+    elif has_typed_input_dependencies and pipeline._max_concurrent_steps > 1:
+        findings.append(
+            ValidationFinding(
+                validator="typed_artifact_evidence_lineage",
+                severity="info",
+                message=(
+                    "Typed product dependencies are present, so step execution "
+                    "was forced to plan order before resolving producer evidence."
+                ),
+            )
+        )
 
     if (
         pipeline._max_concurrent_steps <= 1
         or len(steps_to_run) <= 1
         or pipeline._enable_replanning
+        or has_typed_input_dependencies
         or requested_stop_after_step_id is not None
     ):
 
@@ -6269,6 +7134,7 @@ else:
             if (
                 pipeline._enable_replanning
                 and record.get("status") == "ok"
+                and _successful_step_requests_replan(record)
                 and remaining_steps
             ):
                 plan = _maybe_replan(
@@ -6301,6 +7167,28 @@ else:
                                 message=f"Worker raised an unhandled exception: {exc!r}",
                             )
                         )
+
+    if (
+        not trajectory_plan_blocked
+        and trajectory_plan_contract_applies(plan=plan, context=context)
+    ):
+        run_level_trajectory_findings = trajectory_bundle_findings(
+            context=context,
+            plan=plan,
+            per_step_records=per_step_records,
+            evidence=evidence,
+            run_dir=run_dir,
+            cohort_path=cohort_path,
+        )
+        findings.extend(run_level_trajectory_findings)
+        _flush_partial_manifest(
+            {
+                "trajectory_bundle_error_count": sum(
+                    finding.severity == "error"
+                    for finding in run_level_trajectory_findings
+                )
+            }
+        )
 
     try:
         robustness_specs = robustness_specs_for_execution(run_dir=run_dir, plan=plan)

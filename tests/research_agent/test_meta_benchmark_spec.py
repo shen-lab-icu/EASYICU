@@ -219,3 +219,54 @@ def test_behavior_probe_fails_closed_with_a_structured_owner_reason():
         and finding.detail.get("family") == "survival"
         for finding in findings
     )
+
+
+def test_external_protocol_adapter_preserves_unseen_structured_coordinates():
+    """A new database/concept pair must not collapse to benchmark defaults."""
+
+    from tools.run_research_agent_bench import _external_item_from_row
+
+    item = _external_item_from_row(
+        row={
+            "database": "sicdb",
+            "primary_predictor": "novel_signal",
+            "operational_exposure_column": "novel_signal_first_6h",
+            "expected_step_substrings": ["eligibility", "model"],
+            "expected_artifact_substrings": ["result_table", "result_figure"],
+            "expected_finding_substrings": ["time-window audit"],
+            "kind": "descriptive_association",
+        },
+        key="unseen_structured_probe",
+        question="Evaluate the declared structured exposure and outcome.",
+        target="novel_endpoint",
+        cohort_columns=["novel_signal_first_6h", "novel_endpoint"],
+        cohort_size=50,
+    )
+
+    assert item.database == "sicdb"
+    assert item.primary_predictor == "novel_signal"
+    assert item.operational_exposure == "novel_signal_first_6h"
+    assert item.protocol_adapter["database"]["defaulted"] is False
+    assert item.protocol_adapter["operational_exposure"]["defaulted"] is False
+    assert item.expected_step_substrings == ["eligibility", "model"]
+    assert item.expected_artifact_substrings == ["result_table", "result_figure"]
+    assert item.expected_finding_substrings == ["time-window audit"]
+
+
+def test_companion_audit_metadata_generalizes_to_unseen_float_columns():
+    """Suffix semantics, not known concept names or integer dtype, own companions."""
+
+    from easyicu.research_agent.icu_rules import VariableKind, classify_variable
+
+    count = classify_variable("novel_signal_n", "float64", [0.0, 1.0, 3.0])
+    status = classify_variable(
+        "novel_signal_measured_6h", "float64", [0.0, 1.0, 1.0]
+    )
+
+    assert count.role.value == "meta"
+    assert count.kind == VariableKind.COUNT
+    assert count.unit is None and count.valid_range is None
+    assert status.role.value == "meta"
+    assert status.kind == VariableKind.BINARY
+    assert status.unit is None and status.valid_range == (0.0, 1.0)
+    assert status.is_ordinal is False and status.ordinal_levels is None

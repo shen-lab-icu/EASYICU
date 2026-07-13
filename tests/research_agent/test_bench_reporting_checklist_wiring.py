@@ -40,6 +40,7 @@ def _run_and_capture(monkeypatch, tmp_path, kind: str):
             captured.update(kwargs)
 
         def run(self, **kwargs):
+            captured["pipeline_run_kwargs"] = kwargs
             return SimpleNamespace(workdir=str(tmp_path))
 
     monkeypatch.setattr(rapkg, "ResearchAgentPipeline", CapturePipeline)
@@ -99,3 +100,48 @@ def test_explicit_pipeline_option_overrides_kind_default(monkeypatch, tmp_path):
         pipeline_options={"reporting_checklist_names": ["strobe"]},
     )
     assert captured.get("reporting_checklist_names") == ["strobe"]
+
+
+def test_external_execution_uses_database_and_operational_exposure_not_scoring_key(
+    monkeypatch, tmp_path
+):
+    item = _item("descriptive_association")
+    item.database = "eicu"
+    item.primary_predictor = "concept_level_scoring_key"
+    item.operational_exposure = "materialized_exposure_column"
+    item.gold_answer = {"numeric_targets": {"hidden_metric": {"lower": 0.0}}}
+    item.semantic_guardrails = ["Evaluator-only audit key."]
+
+    import easyicu.research_agent as rapkg
+    import tools.run_research_agent_bench as bench
+
+    captured: dict = {}
+
+    class CapturePipeline:
+        def __init__(self, **kwargs):
+            captured["init"] = kwargs
+
+        def run(self, **kwargs):
+            captured["run"] = kwargs
+            return SimpleNamespace(workdir=str(tmp_path))
+
+    monkeypatch.setattr(rapkg, "ResearchAgentPipeline", CapturePipeline)
+    monkeypatch.setattr(bench, "_score_arm", lambda **kwargs: {})
+
+    bench._run_one_arm(
+        item=item,
+        cohort=SimpleNamespace(
+            columns=["materialized_exposure_column", "death"]
+        ),
+        workdir=tmp_path,
+        disable_icu_context=False,
+        label="aware",
+        llm=object(),
+    )
+
+    assert captured["run"]["database"] == "eicu"
+    assert captured["run"]["primary_exposure"] == "materialized_exposure_column"
+    assert item.primary_predictor == "concept_level_scoring_key"
+    assert "gold_answer" not in captured["run"]
+    assert "semantic_guardrails" not in captured["run"]
+    assert captured["run"]["question"] == "Build a model."

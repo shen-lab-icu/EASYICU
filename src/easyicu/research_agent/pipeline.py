@@ -47,6 +47,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 import pandas as pd
+from pydantic import BaseModel, ConfigDict, Field
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +141,16 @@ from .cohort_schema import (
     materialize_locked_analysis_cohort,
     write_locked_cohort_definition,
 )
-from .robustness_panel import ensure_robustness_specs, write_locked_robustness_specs
+from .robustness_panel import (
+    ensure_robustness_specs,
+    load_locked_robustness_specs,
+    robustness_specs_sha,
+    write_locked_robustness_specs,
+)
+from .trajectory_plan_contract import (
+    augment_trajectory_plan_products,
+    trajectory_plan_dag_findings,
+)
 from .pipeline_report import (
     execution_gate_status,
     render_report,
@@ -271,6 +281,7 @@ from .literature import (
 )
 from .llm import (
     LLMClient,
+    LLMMessage,
     LLMRouter,
     MockLLMClient,
     llm_is_mockish,
@@ -298,6 +309,12 @@ from .schema import (
     TimeWindow,
     ValidationFinding,
     VariableRole,
+    ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES,
+    ADJUSTED_ASSOCIATION_CONTINUOUS_METHOD_FAMILIES,
+    PLANNED_MODEL_REQUIREMENTS_OUTPUT,
+    PLANNED_MODEL_REQUIREMENTS_OUTPUT_KIND,
+    PLANNED_MODEL_REQUIREMENTS_STEP_METHOD,
+    PlannedModelRequirement,
 )
 from .study_design import (
     build_study_design_brief,
@@ -340,30 +357,48 @@ def _resume_plan_candidate_paths(
     run_dir: Path,
     resume_state: Optional[Dict[str, Any]],
 ) -> List[Path]:
-    """Return saved resume plan candidates from most to least current."""
-    candidates: List[Path] = []
-    def _revision_key(path: Path) -> tuple[int, str]:
-        match = re.search(r"analysis_plan_revision_(\d+)\.json$", path.name)
-        revision = int(match.group(1)) if match else -1
-        return revision, path.name
+    """Return digest-verified immutable plan evidence, newest first.
 
-    candidates.extend(
-        sorted(
-            run_dir.glob("analysis_plan_revision_*.json"),
-            key=_revision_key,
-            reverse=True,
-        )
-    )
-    plan_path_value = (resume_state or {}).get("plan_path")
-    if plan_path_value:
-        manifest_path = Path(str(plan_path_value))
-        if not manifest_path.is_absolute():
-            manifest_path = run_dir / manifest_path
-        if manifest_path.exists():
-            candidates.append(manifest_path)
-    analysis_plan_path = run_dir / "analysis_plan.json"
-    if analysis_plan_path.exists():
-        candidates.append(analysis_plan_path)
+    Live ``analysis_plan*.json`` files are mutable runtime conveniences and can
+    be re-serialized under a newer schema during resume. They are never plan
+    authority. The evidence copies retain the planner/replanner bytes and are
+    usable only after path containment and SHA-256 verification.
+    """
+
+    del resume_state  # Evidence authority supersedes a mutable manifest path.
+    index_path = run_dir / "evidence" / "evidence_index.json"
+    if not index_path.is_file() or index_path.is_symlink():
+        return []
+    try:
+        records = json.loads(index_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if not isinstance(records, list):
+        return []
+
+    ranked: List[tuple[int, int, Path]] = []
+    for index, record in enumerate(records):
+        if not isinstance(record, dict):
+            continue
+        evidence_id = str(record.get("evidence_id") or "").strip()
+        if evidence_id == "analysis_plan":
+            revision = -1
+        else:
+            match = re.fullmatch(
+                r"analysis_plan_revision_(\d+)(?:_[0-9a-f]{8})?",
+                evidence_id,
+            )
+            if match is None:
+                continue
+            revision = int(match.group(1))
+        verified_path = verified_run_evidence_path(run_dir, record)
+        if verified_path is not None:
+            ranked.append((revision, index, verified_path))
+
+    candidates = [
+        path
+        for _revision, _index, path in sorted(ranked, reverse=True)
+    ]
 
     unique: List[Path] = []
     seen: set[Path] = set()
@@ -403,6 +438,479 @@ def _load_compatible_resume_plan(
         if plan.steps and completed_step_ids <= step_ids:
             return plan, candidate
     return None, None
+
+
+class LegacyResumePlanMigrationError(RuntimeError):
+    """A legacy resume plan could not be migrated without scientific drift."""
+
+
+def _normalise_plan_contract_token(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(value or "").lower()).strip("_")
+
+
+def _is_closed_adjusted_association_step(step: AnalysisStep) -> bool:
+    """Match the typed roster's exact method-and-product contract only."""
+
+    method_head = str(step.method or "").lower().split(" with ", 1)[0]
+    if (
+        _normalise_plan_contract_token(method_head)
+        != PLANNED_MODEL_REQUIREMENTS_STEP_METHOD
+    ):
+        return False
+    products = set()
+    for output in step.expected_outputs or []:
+        kind, separator, name = str(output or "").partition(":")
+        if separator:
+            products.add(
+                (
+                    _normalise_plan_contract_token(kind),
+                    _normalise_plan_contract_token(name),
+                )
+            )
+    return (
+        PLANNED_MODEL_REQUIREMENTS_OUTPUT_KIND,
+        PLANNED_MODEL_REQUIREMENTS_OUTPUT,
+    ) in products
+
+
+def _resume_completed_records_for_plan_migration(
+    *,
+    plan: AnalysisPlan,
+    resume_state: Optional[Dict[str, Any]],
+    resume_from_step_id: Optional[str],
+) -> List[Dict[str, Any]]:
+    """Return current successful records that remain completed after a cut."""
+
+    current_records = [
+        dict(record)
+        for record in current_step_records(
+            [
+                record
+                for record in ((resume_state or {}).get("per_step_records") or [])
+                if isinstance(record, dict) and record.get("step_id")
+            ]
+        )
+    ]
+    cut_step_id = str(resume_from_step_id or "").strip()
+    if not cut_step_id:
+        return [record for record in current_records if record.get("status") == "ok"]
+
+    step_order = {step.step_id: index for index, step in enumerate(plan.steps)}
+    if cut_step_id == "00_probe":
+        cut_index = -1
+    elif cut_step_id in step_order:
+        cut_index = step_order[cut_step_id]
+    else:
+        raise LegacyResumePlanMigrationError(
+            f"resume_from_step_id={cut_step_id!r} is not in the active analysis plan"
+        )
+
+    completed: List[Dict[str, Any]] = []
+    for record in current_records:
+        if record.get("status") != "ok":
+            continue
+        step_id = str(record.get("step_id") or "")
+        record_index = -1 if step_id == "00_probe" else step_order.get(step_id)
+        if record_index is not None and record_index < cut_index:
+            completed.append(record)
+    return completed
+
+
+def _legacy_resume_model_roster_targets(
+    *,
+    plan: AnalysisPlan,
+    completed_step_ids: set[str],
+) -> tuple[str, ...]:
+    """Select only remaining, exact closed-contract steps with an empty roster."""
+
+    return tuple(
+        step.step_id
+        for step in plan.steps
+        if step.step_id not in completed_step_ids
+        and _is_closed_adjusted_association_step(step)
+        and not step.model_requirements
+    )
+
+
+class _LegacyModelRosterStepPacket(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    step_id: str = Field(min_length=1)
+    model_requirements: List[PlannedModelRequirement] = Field(min_length=1)
+
+
+class _LegacyModelRosterPacket(BaseModel):
+    """Planner-owned roster patch with no surface for broader plan edits."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    steps: List[_LegacyModelRosterStepPacket] = Field(min_length=1)
+
+
+def _parse_legacy_model_roster_packet(
+    raw: str,
+    *,
+    target_step_ids: tuple[str, ...],
+) -> _LegacyModelRosterPacket:
+    packet = _LegacyModelRosterPacket.model_validate(json.loads(raw.strip()))
+    returned_step_ids = [step.step_id for step in packet.steps]
+    if returned_step_ids != list(target_step_ids):
+        raise ValueError(
+            "roster packet steps must exactly match the ordered target ids: "
+            f"expected={list(target_step_ids)!r}, returned={returned_step_ids!r}"
+        )
+    for step in packet.steps:
+        requirement_ids = [
+            requirement.requirement_id
+            for requirement in step.model_requirements
+        ]
+        if len(requirement_ids) != len(set(requirement_ids)):
+            raise ValueError(
+                f"duplicate requirement_id in roster packet for {step.step_id!r}"
+            )
+        primary_count = sum(
+            requirement.analysis_role == "primary"
+            for requirement in step.model_requirements
+        )
+        if primary_count != 1:
+            raise ValueError(
+                "each target step roster must contain exactly one "
+                "analysis_role='primary'; the Planner chooses which requirement "
+                f"is primary (step={step.step_id!r}, returned={primary_count})"
+            )
+    return packet
+
+
+def _project_legacy_model_roster_packet(
+    *,
+    plan: AnalysisPlan,
+    packet: _LegacyModelRosterPacket,
+) -> AnalysisPlan:
+    """Project only validated roster values onto an otherwise frozen plan."""
+
+    rosters = {
+        step.step_id: [requirement.model_dump(mode="json") for requirement in step.model_requirements]
+        for step in packet.steps
+    }
+    payload = plan.model_dump(mode="json")
+    for step_payload in payload["steps"]:
+        step_id = str(step_payload.get("step_id") or "")
+        if step_id in rosters:
+            step_payload["model_requirements"] = rosters[step_id]
+    return AnalysisPlan.model_validate(payload)
+
+
+def _next_analysis_plan_revision(
+    *,
+    run_dir: Path,
+    plan: AnalysisPlan,
+    evidence: EvidenceStore,
+) -> int:
+    revision = int(plan.revision) + 1
+    for path in run_dir.glob("analysis_plan_revision_*.json"):
+        match = re.fullmatch(r"analysis_plan_revision_(\d+)\.json", path.name)
+        if match:
+            revision = max(revision, int(match.group(1)) + 1)
+    while evidence.get(f"analysis_plan_revision_{revision}") is not None:
+        revision += 1
+    return revision
+
+
+def _restore_resume_plan_robustness_lock(
+    *,
+    plan: AnalysisPlan,
+    run_dir: Path,
+    evidence: EvidenceStore,
+    prompt_version: str,
+    llm_signature: str,
+) -> tuple[AnalysisPlan, Optional[Path]]:
+    """Project the verified plan-time robustness lock onto a resume plan.
+
+    A probe-time replanner from older runs could reword or drop robustness
+    specifications after the immutable lock was written. Execution correctly
+    rejects that drift, but resume must load a plan that agrees with the lock.
+    The lock remains the authority: this migration writes a new immutable plan
+    revision and never rewrites the locked specifications.
+    """
+
+    lock_path = Path(run_dir) / "robustness_specs_locked.json"
+    if not lock_path.is_file():
+        return plan, None
+    locked_specs = load_locked_robustness_specs(run_dir)
+    active_specs = list(plan.robustness_specs or [])
+    if robustness_specs_sha(active_specs) == robustness_specs_sha(locked_specs):
+        return plan, None
+
+    revision = _next_analysis_plan_revision(
+        run_dir=run_dir,
+        plan=plan,
+        evidence=evidence,
+    )
+    restored = plan.model_copy(
+        update={
+            "robustness_specs": list(locked_specs),
+            "revision": revision,
+        }
+    )
+    revision_path = run_dir / f"analysis_plan_revision_{revision}.json"
+    if revision_path.exists():
+        raise LegacyResumePlanMigrationError(
+            f"refusing to overwrite existing plan revision {revision_path.name}"
+        )
+    revision_path.write_text(restored.model_dump_json(indent=2), encoding="utf-8")
+    evidence.register_file(
+        kind="log",
+        description=(
+            "Resume migration restoring the immutable plan-time robustness "
+            "specification lock."
+        ),
+        source_path=revision_path,
+        evidence_id=f"analysis_plan_revision_{revision}",
+        producer="planner",
+        generation_mode="system",
+        prompt_pack_version=prompt_version,
+        metadata={
+            "reason": "restore_locked_robustness_specs",
+            "llm_signature": llm_signature,
+        },
+    )
+    return restored, revision_path
+
+
+def _migrate_resume_trajectory_products(
+    *,
+    plan: AnalysisPlan,
+    context: ResearchContext,
+    run_dir: Path,
+    evidence: EvidenceStore,
+    prompt_version: str,
+    llm_signature: str,
+) -> tuple[AnalysisPlan, Optional[Path], List[ValidationFinding]]:
+    """Apply schema-only trajectory products to a reused legacy plan.
+
+    Resume normally skips plan-shaping transforms to preserve step identities.
+    Canonical trajectory products are the safe exception: augmentation changes
+    neither step ids/order nor any scientific method, input, horizon, threshold,
+    or cluster choice. Older checkpoints may predate the role recognizer, so
+    treating their saved plan as already normalized silently removes the replay
+    contracts from resumed execution.
+    """
+
+    augmented, augmentation_findings = augment_trajectory_plan_products(
+        plan=plan,
+        context=context,
+    )
+    if augmented == plan:
+        return plan, None, augmentation_findings
+
+    revision = _next_analysis_plan_revision(
+        run_dir=run_dir,
+        plan=plan,
+        evidence=evidence,
+    )
+    augmented = augmented.model_copy(update={"revision": revision})
+    revision_path = run_dir / f"analysis_plan_revision_{revision}.json"
+    if revision_path.exists():
+        raise LegacyResumePlanMigrationError(
+            f"refusing to overwrite existing plan revision {revision_path.name}"
+        )
+    revision_path.write_text(augmented.model_dump_json(indent=2), encoding="utf-8")
+    evidence.register_file(
+        kind="log",
+        description=(
+            "Resume migration adding canonical trajectory replay products to "
+            "the existing agent-owned role DAG."
+        ),
+        source_path=revision_path,
+        evidence_id=f"analysis_plan_revision_{revision}",
+        producer="planner",
+        generation_mode="system",
+        prompt_pack_version=prompt_version,
+        metadata={
+            "reason": "resume_trajectory_schema_products",
+            "llm_signature": llm_signature,
+        },
+    )
+    return augmented, revision_path, augmentation_findings
+
+
+def _migrate_legacy_resume_model_requirements(
+    *,
+    plan: AnalysisPlan,
+    context: ResearchContext,
+    run_dir: Path,
+    resume_state: Optional[Dict[str, Any]],
+    resume_from_step_id: Optional[str],
+    role_resolver: Callable[[str], Any],
+    evidence: EvidenceStore,
+    prompt_version: str,
+    llm_signature: str,
+) -> tuple[AnalysisPlan, Optional[Path], tuple[str, ...]]:
+    """Ask the planner LLM to migrate an old empty typed-model roster.
+
+    The framework identifies only the schema surface that requires migration.
+    It never derives an outcome, exposure, analysis role, analysis set, or model
+    family from prose. Those scientific commitments must come back in a small,
+    strictly typed PlannerAgent packet. The framework projects only that roster
+    onto the frozen plan before a revision is written or registered.
+    """
+
+    completed_records = _resume_completed_records_for_plan_migration(
+        plan=plan,
+        resume_state=resume_state,
+        resume_from_step_id=resume_from_step_id,
+    )
+    completed_step_ids = {
+        str(record.get("step_id")) for record in completed_records
+    }
+    target_step_ids = _legacy_resume_model_roster_targets(
+        plan=plan,
+        completed_step_ids=completed_step_ids,
+    )
+    if not target_step_ids:
+        return plan, None, ()
+
+    target_steps = [
+        {
+            "step_id": step.step_id,
+            "intent": step.intent,
+            "method": step.method,
+            "inputs": list(step.inputs),
+            "expected_outputs": list(step.expected_outputs),
+            "icu_rule_refs": list(step.icu_rule_refs),
+        }
+        for step in plan.steps
+        if step.step_id in set(target_step_ids)
+    ]
+    required_fields = [
+        "requirement_id",
+        "outcome",
+        "outcome_type",
+        "method_family",
+        "exposure_source",
+        "analysis_role",
+        "analysis_set",
+        "required_for_step_success",
+    ]
+    format_reminder = (
+        "Return exactly {\"steps\": [{\"step_id\": <target id>, "
+        "\"model_requirements\": [<one or more complete requirement objects>]}]}. "
+        f"Every requirement object must contain all fields {required_fields!r}. "
+        "Allowed outcome_type: binary, continuous. Allowed analysis_role: "
+        "primary, secondary, sensitivity. Allowed analysis_set: source_aware, "
+        "complete_case. Primary/secondary requirements must set "
+        "required_for_step_success=true; only sensitivity may be false. Each "
+        "target step must contain exactly one analysis_role=primary; the Planner "
+        "chooses which requirement is primary and labels all others secondary "
+        "or sensitivity."
+    )
+    plan_payload = plan.model_dump(mode="json")
+    plan_level_commitments = {
+        key: plan_payload.get(key)
+        for key in (
+            "research_question",
+            "analysis_type",
+            "rationale",
+            "cohort",
+            "robustness_specs",
+        )
+    }
+    messages = [
+        LLMMessage(
+            role="system",
+            content=(
+                "You are the PlannerAgent's typed legacy-plan migration worker. "
+                "Choose the scientific model roster; the framework will only "
+                "validate and project it. Return JSON only. Never rewrite the "
+                "AnalysisPlan and never invent a default model when the supplied "
+                "plan and ResearchContext do not justify one."
+            ),
+        ),
+        LLMMessage(
+            role="user",
+            content=(
+                "Populate model_requirements for every target step. Each roster "
+                "entry is a complete PlannedModelRequirement. Choose outcome, "
+                "exposure_source, method_family, role, and analysis set from the "
+                "unchanged scientific commitments below. Emit a separate "
+                "requirement for every adjusted outcome/model pre-specified in "
+                "the target step intent; ResearchContext.target_outcome is not "
+                "an exhaustive roster and must not cause an intent-committed "
+                "secondary outcome/model to be omitted. The Planner decides the "
+                "roster count and contents; the framework does not infer either "
+                "from prose. For each target step, choose exactly one roster "
+                "entry as analysis_role=primary and label the other entries "
+                "secondary or sensitivity. Binary method_family "
+                f"must be one of {sorted(ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES)!r}; "
+                "continuous method_family must be one of "
+                f"{sorted(ADJUSTED_ASSOCIATION_CONTINUOUS_METHOD_FAMILIES)!r}. "
+                "Do not return plan fields, prose, or requirements for any other "
+                "step.\n\n"
+                f"REQUIRED JSON SHAPE:\n{format_reminder}\n\n"
+                "TARGET STEPS (verbatim from the saved planner plan):\n"
+                f"{json.dumps(target_steps, indent=2, ensure_ascii=False)}\n\n"
+                "READ-ONLY PLAN-LEVEL COMMITMENTS (context only; do not return "
+                "these fields):\n"
+                f"{json.dumps(plan_level_commitments, indent=2, ensure_ascii=False)}\n\n"
+                "RESEARCH CONTEXT:\n"
+                f"{context.model_dump_json(indent=2)}"
+            ),
+        ),
+    ]
+    try:
+        from .structured_retry import call_llm_with_structured_retry
+
+        packet = call_llm_with_structured_retry(
+            role_resolver("planner"),
+            messages,
+            parser=lambda raw: _parse_legacy_model_roster_packet(
+                raw,
+                target_step_ids=target_step_ids,
+            ),
+            role="legacy_model_roster_migration",
+            max_retries=2,
+            max_tokens=4096,
+            temperature=0.1,
+            format_reminder=format_reminder,
+        )
+    except Exception as exc:
+        raise LegacyResumePlanMigrationError(
+            "planner LLM failed while migrating legacy model_requirements; "
+            "resume stopped without a default model"
+        ) from exc
+    revised = _project_legacy_model_roster_packet(
+        plan=plan,
+        packet=packet,
+    )
+    revision = _next_analysis_plan_revision(
+        run_dir=run_dir,
+        plan=plan,
+        evidence=evidence,
+    )
+    revised = revised.model_copy(update={"revision": revision})
+    revision_path = run_dir / f"analysis_plan_revision_{revision}.json"
+    if revision_path.exists():
+        raise LegacyResumePlanMigrationError(
+            f"refusing to overwrite existing plan revision {revision_path.name}"
+        )
+    revision_path.write_text(revised.model_dump_json(indent=2), encoding="utf-8")
+    evidence.register_file(
+        kind="log",
+        description=(
+            "Planner-owned legacy resume migration for typed model requirements."
+        ),
+        source_path=revision_path,
+        evidence_id=f"analysis_plan_revision_{revision}",
+        producer="planner",
+        generation_mode="llm",
+        prompt_pack_version=prompt_version,
+        metadata={
+            "reason": "legacy_missing_model_requirements",
+            "target_step_ids": list(target_step_ids),
+            "llm_signature": llm_signature,
+        },
+    )
+    return revised, revision_path, target_step_ids
 
 
 def _load_resume_state(run_dir: Path) -> Optional[Dict[str, Any]]:
@@ -862,6 +1370,7 @@ class ResearchAgentPipeline:
         run_language: str,
         experiment_spec_path: Optional[Path],
         resume_state: Optional[Dict[str, Any]],
+        resume_from_step_id: Optional[str],
         emit_progress: Callable[..., None],
     ) -> _PlanPhaseResult:
         """Build context, attach memory, and emit an execution plan."""
@@ -1507,6 +2016,8 @@ class ResearchAgentPipeline:
         # whole analysis under new names. Reusing the saved plan keeps the
         # already-completed step_ids aligned and continues from the failed step.
         reused_prior_plan = False
+        reused_plan_path: Optional[Path] = None
+        migrated_plan_path: Optional[Path] = None
         if resume_state is not None:
             plan, _prior_plan_path = _load_compatible_resume_plan(
                 run_dir=run_dir,
@@ -1514,6 +2025,7 @@ class ResearchAgentPipeline:
             )
             if plan is not None and plan.steps:
                 reused_prior_plan = True
+                reused_plan_path = _prior_plan_path
                 plan_generation_mode = "resumed"
                 findings.append(
                     ValidationFinding(
@@ -1537,9 +2049,102 @@ class ResearchAgentPipeline:
                         },
                     )
                 )
+            else:
+                raise LegacyResumePlanMigrationError(
+                    "resume checkpoint has no digest-verified analysis plan "
+                    "evidence compatible with every completed step"
+                )
 
         if reused_prior_plan:
-            pass
+            plan, migrated_plan_path, migrated_step_ids = (
+                _migrate_legacy_resume_model_requirements(
+                    plan=plan,
+                    context=agent_context,
+                    run_dir=run_dir,
+                    resume_state=resume_state,
+                    resume_from_step_id=resume_from_step_id,
+                    role_resolver=role_resolver,
+                    evidence=evidence,
+                    prompt_version=prompt_version,
+                    llm_signature=llm_signature,
+                )
+            )
+            if migrated_plan_path is not None:
+                plan_generation_mode = "resumed_planner_migration"
+                findings.append(
+                    ValidationFinding(
+                        validator="planner_schema_migration",
+                        severity="warning",
+                        message=(
+                            "Migrated legacy remaining adjusted-association "
+                            "step(s) to the planner-owned typed model roster."
+                        ),
+                        detail={
+                            "target_step_ids": list(migrated_step_ids),
+                            "plan_path": str(
+                                migrated_plan_path.relative_to(run_dir)
+                            ),
+                        },
+                    )
+                )
+            plan, lock_restore_path = _restore_resume_plan_robustness_lock(
+                plan=plan,
+                run_dir=run_dir,
+                evidence=evidence,
+                prompt_version=prompt_version,
+                llm_signature=llm_signature,
+            )
+            if lock_restore_path is not None:
+                migrated_plan_path = lock_restore_path
+                plan_generation_mode = "resumed_planner_migration"
+                findings.append(
+                    ValidationFinding(
+                        validator="robustness_spec_lock",
+                        severity="warning",
+                        message=(
+                            "Resume restored the verified plan-time robustness "
+                            "specifications after an older replan drifted from "
+                            "the immutable lock."
+                        ),
+                        detail={
+                            "plan_path": str(
+                                lock_restore_path.relative_to(run_dir)
+                            ),
+                            "lock_path": "robustness_specs_locked.json",
+                        },
+                    )
+                )
+            plan, trajectory_migration_path, trajectory_migration_findings = (
+                _migrate_resume_trajectory_products(
+                    plan=plan,
+                    context=agent_context,
+                    run_dir=run_dir,
+                    evidence=evidence,
+                    prompt_version=prompt_version,
+                    llm_signature=llm_signature,
+                )
+            )
+            findings.extend(trajectory_migration_findings)
+            if trajectory_migration_path is not None:
+                migrated_plan_path = trajectory_migration_path
+                plan_generation_mode = "resumed_planner_migration"
+                findings.append(
+                    ValidationFinding(
+                        validator="plan_contract",
+                        severity="warning",
+                        message=(
+                            "Resume migrated an older trajectory plan to the "
+                            "canonical replay-product schema without changing "
+                            "scientific ownership or step identities."
+                        ),
+                        detail={
+                            "kind": "resume_trajectory_schema_migration",
+                            "plan_path": str(
+                                trajectory_migration_path.relative_to(run_dir)
+                            ),
+                        },
+                    )
+                )
         elif skill_obj is not None:
             plan_generation_mode = "deterministic_skill"
             issues = skill_obj.validate_against(pd.read_parquet(cohort_path))
@@ -1697,6 +2302,30 @@ class ResearchAgentPipeline:
             cap = self._max_total_steps
             plan, cap_findings = _cap_plan_preserving_figure_steps(plan=plan, cap=cap)
             findings.extend(cap_findings)
+            plan, trajectory_product_findings = augment_trajectory_plan_products(
+                plan=plan,
+                context=context,
+            )
+            findings.extend(trajectory_product_findings)
+            # The probe-aware replanner receives these structural issues before
+            # execution. Keep the initial snapshot advisory so a successfully
+            # repaired plan is not blocked by its superseded pre-probe shape.
+            findings.extend(
+                finding.model_copy(
+                    update={
+                        "validator": "plan_contract_pending",
+                        "severity": "warning",
+                        "detail": {
+                            **dict(finding.detail or {}),
+                            "pending_probe_replan": True,
+                        },
+                    }
+                )
+                for finding in trajectory_plan_dag_findings(
+                    plan=plan,
+                    context=context,
+                )
+            )
             plan = ensure_cohort_definition(plan)
             plan = ensure_robustness_specs(plan)
             # Final gate: if the plan implies a cohort but still has no
@@ -1725,8 +2354,13 @@ class ResearchAgentPipeline:
                     blueprint=analysis_blueprint,
                 )
             )
-        plan_path = run_dir / "analysis_plan.json"
-        plan_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
+        plan_path = (
+            migrated_plan_path
+            or reused_plan_path
+            or (run_dir / "analysis_plan.json")
+        )
+        if not reused_prior_plan:
+            plan_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
         if evidence.get("analysis_plan") is None:
             evidence.register_file(
                 kind="log",
@@ -2237,6 +2871,7 @@ class ResearchAgentPipeline:
                 run_language=run_language,
                 experiment_spec_path=experiment_spec_path,
                 resume_state=resume_state,
+                resume_from_step_id=resume_from_step_id,
                 emit_progress=_emit_progress,
             )
 
@@ -6760,9 +7395,13 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
         if isinstance(direct_summary, dict):
             for mapping_key in ("output_files", "aliases"):
                 mapping = direct_summary.get(mapping_key)
-                if not isinstance(mapping, dict):
+                if isinstance(mapping, dict):
+                    declared_items = mapping.items()
+                elif isinstance(mapping, list):
+                    declared_items = ((str(value), value) for value in mapping)
+                else:
                     continue
-                for alias, value in mapping.items():
+                for alias, value in declared_items:
                     if not any(
                         token in str(alias).lower()
                         for token in ("robustness", "sensitivity")
@@ -6817,6 +7456,13 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
     ):
         if col in source_data.columns:
             source_data[col] = pd.to_numeric(source_data[col], errors="coerce")
+    if "modeled_analytic_n" not in source_data.columns:
+        for count_alias in ("analysis_n", "n"):
+            if count_alias in source_data.columns:
+                source_data["modeled_analytic_n"] = pd.to_numeric(
+                    source_data[count_alias], errors="coerce"
+                )
+                break
     for count_col in ("modeled_analytic_n", "event_n", "membership_n"):
         if count_col not in source_data.columns:
             continue
@@ -6840,6 +7486,8 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
     estimated_mask = source_data[["point_estimate", "ci_low", "ci_high"]].notna().all(axis=1)
     if "converged" in source_data.columns:
         estimated_mask &= source_data["converged"].map(_truthy_figure_value)
+    if "reportable" in source_data.columns:
+        estimated_mask &= source_data["reportable"].map(_truthy_figure_value)
     if "independent_variant" in source_data.columns:
         independent = source_data["independent_variant"]
         estimated_mask &= ~independent.map(_explicit_false_figure_value)
@@ -6849,8 +7497,16 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
     ratio_df = plot_df[
         plot_df["effect_scale"].astype(str).str.upper().isin({"OR", "RR", "HR"})
     ].copy()
+    additive_scales = {
+        "RD",
+        "RISK_DIFFERENCE",
+        "MEAN_DIFFERENCE",
+        "MEDIAN_DIFFERENCE",
+        "CONDITIONAL_MEAN_DIFFERENCE",
+        "CONDITIONAL_MEDIAN_DIFFERENCE",
+    }
     rd_df = plot_df[
-        plot_df["effect_scale"].astype(str).str.upper().isin({"RD", "RISK_DIFFERENCE"})
+        plot_df["effect_scale"].astype(str).str.upper().isin(additive_scales)
     ].copy()
     plotted_indexes = ratio_df.index.union(rd_df.index)
     figure_source_data = source_data.loc[plotted_indexes].copy()
@@ -7062,12 +7718,27 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
         )
 
     if ax_rd is not None:
+        additive_values = sorted(
+            set(rd_df["effect_scale"].dropna().astype(str).str.upper())
+        )
+        if set(additive_values) <= {"RD", "RISK_DIFFERENCE"}:
+            additive_title = "Risk-difference sensitivity"
+            additive_xlabel = "Risk difference (95% CI)"
+        elif additive_values and all("MEDIAN" in value for value in additive_values):
+            additive_title = "Median-difference sensitivity"
+            additive_xlabel = "Adjusted median difference (95% CI)"
+        elif additive_values and all("MEAN" in value for value in additive_values):
+            additive_title = "Mean-difference sensitivity"
+            additive_xlabel = "Adjusted mean difference (95% CI)"
+        else:
+            additive_title = "Additive-scale sensitivity"
+            additive_xlabel = "Adjusted difference (95% CI)"
         panel_id = _next_panel_id()
         _plot_interval_panel(
             ax_rd,
             rd_df,
-            title="Risk-difference sensitivity",
-            xlabel="Risk difference (95% CI)",
+            title=additive_title,
+            xlabel=additive_xlabel,
             null_value=0.0,
             color=palette.get("green", "#008B5E"),
         )
@@ -7075,11 +7746,11 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
         contract_panels.append(
             {
                 "panel_id": panel_id,
-                "title": "Risk-difference sensitivity",
+                "title": additive_title,
                 "role": "robustness",
                 "claim": (
-                    "Converged, independently estimable risk differences are "
-                    "shown on their own additive scale."
+                    "Converged, reportable additive-scale sensitivity estimates "
+                    "are shown on their declared scale."
                 ),
                 "evidence_ids": source_evidence,
             }
@@ -7242,6 +7913,12 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
         json.dumps(existing_summary, indent=2, ensure_ascii=False, default=str),
         encoding="utf-8",
     )
+    if (
+        table_path.name == "robustness_summary.csv"
+        and _resolve_upstream_analysis_method(run_dir, current_step_id)
+        == "cohort_definition_sensitivity"
+    ):
+        return "sensitivity_publication_bundle_from_locked_summary_v1"
     return "sensitivity_publication_bundle_from_parent_outputs_v2"
 
 
@@ -7287,6 +7964,7 @@ _UPSTREAM_FAMILY_TO_RENDERER_KEY: dict[str, str] = {
 # matching would recreate the same accidental routing problem as step-id prose.
 _UPSTREAM_METHOD_TO_RENDERER_KEY: dict[str, str] = {
     "ordinal_exposure_derivation_and_quality_control": "ordered_distribution",
+    "cohort_definition_sensitivity": "sensitivity",
     "missingness": "missingness",
     "missingness_audit": "missingness",
     "missingness_measurement_audit": "missingness",
@@ -7476,6 +8154,7 @@ def _renderer_for_upstream_method(method: Optional[str]):
 
         return render_ordered_distribution_bundle_from_prior_outputs
     return {
+        "sensitivity": _render_sensitivity_publication_bundle_from_prior_outputs,
         "missingness": _render_missingness_publication_bundle_from_prior_outputs,
     }.get(key)
 
@@ -7602,6 +8281,12 @@ def deterministic_figure_repair_id_for_upstream(
         == "ordinal_exposure_derivation_and_quality_control"
     ):
         return "ordered_category_distribution_publication_bundle_v1"
+    if (
+        _resolve_upstream_analysis_method(run_dir, step_id)
+        == "cohort_definition_sensitivity"
+        and "robustness_summary.csv" in verified_tables
+    ):
+        return "sensitivity_publication_bundle_from_locked_summary_v1"
     if (
         _resolve_upstream_analysis_family(run_dir, step_id) == "cohort_definition"
         and {"cohort_flow.csv", "attrition.csv"} <= verified_tables

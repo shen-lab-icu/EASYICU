@@ -21,3 +21,25 @@ def test_temporal_alignment_engine_derives_time_window(ra):
     )
     assert constraints
     assert any(w.name.startswith("within_48h_after_icu_admission") for w in windows)
+
+
+def test_parser_records_explicit_relative_anchor_phrases(ra):
+    parser = ra.TimeWindowSemanticParser()
+    phrases = (
+        ("Bin measurements into six-hour windows from ICU admission.", "icu_admission"),
+        (
+            "Construct trajectories anchored at hospital admission.",
+            "hospital_admission",
+        ),
+        ("Express every window relative to event-onset.", "event_onset"),
+    )
+
+    for phrase, expected_anchor in phrases:
+        constraints = parser.parse(phrase)
+        matches = [
+            item for item in constraints if item.relation == "relative_to_anchor"
+        ]
+        assert len(matches) == 1
+        assert matches[0].anchor_event == expected_anchor
+        assert matches[0].start_hours is None
+        assert matches[0].end_hours is None

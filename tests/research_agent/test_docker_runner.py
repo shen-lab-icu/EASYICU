@@ -213,6 +213,35 @@ def test_build_command_has_safety_knobs(
     assert env_dict["MPLCONFIGDIR"] == "/tmp/matplotlib"
 
 
+def test_build_command_maps_resolved_inputs_manifest_into_container(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+    run_dir = tmp_path / "run"
+    runner = ra.DockerRunner(workdir=run_dir, cohort_parquet=cohort)
+    step_dir, script_path, out_dir = runner.prepare_step_dir("consume")
+    script_path.write_text("print('hi')\n", encoding="utf-8")
+    manifest = run_dir / "resolved_inputs" / "consume.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text('{"schema_version":"1.0"}\n', encoding="utf-8")
+
+    cmd = runner.build_command(
+        step_id="consume",
+        script_path=script_path,
+        out_dir=out_dir,
+        resolved_inputs_path=manifest,
+    )
+
+    env_pairs = [cmd[i + 1] for i, token in enumerate(cmd) if token == "-e"]
+    env_dict = dict(pair.split("=", 1) for pair in env_pairs)
+    assert env_dict["EASYICU_RESOLVED_INPUTS_JSON"] == (
+        "/easyicu-run/resolved_inputs/consume.json"
+    )
+
+
 def test_build_command_passes_through_advanced_flags(
     ra,
     tmp_path: Path,

@@ -22,6 +22,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional
 
+from .lock_authority import (
+    LockAuthorityError,
+    assert_lock_matches_evidence_anchor,
+    rehydrate_timestamp_only_legacy_lock,
+)
+
 
 # Framework-owned anchors stay deliberately small and generic. Disease- or
 # intervention-specific anchors such as "sepsis_onset" or "vent_start" are
@@ -351,13 +357,62 @@ def expand_named_cohort(name: str, registry: Optional[PatternRegistry] = None) -
 
 
 def cohort_definition_sha(definition: CohortDefinition) -> str:
+    # Round-trip through the parser so equivalent integer/float time-window
+    # literals (``24`` versus ``24.0``) have one durable scientific digest.
+    # Without this, a freshly written lock could fail its own next resume after
+    # JSON parsing normalised the offsets to floats.
+    canonical = CohortDefinition.from_dict(definition.to_dict()).to_dict()
     raw = json.dumps(
-        definition.to_dict(),
+        canonical,
         sort_keys=True,
         ensure_ascii=False,
         separators=(",", ":"),
     )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _load_locked_cohort_definition(run_dir: Path) -> CohortDefinition:
+    path = Path(run_dir) / COHORT_LOCK_FILENAME
+    if not path.exists():
+        raise CohortSchemaError("cohort_locked.json is missing")
+    if path.is_symlink() or not path.is_file():
+        raise CohortSchemaError("cohort definition lock must be a regular file")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise CohortSchemaError(f"cohort definition lock is unreadable: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise CohortSchemaError("cohort definition lock has an invalid payload")
+    raw_cohort = payload.get("cohort")
+    definition = coerce_cohort_definition(raw_cohort)
+    if definition is None:
+        raise CohortSchemaError("cohort definition lock has no cohort payload")
+    validate_cohort_definition(definition)
+    expected_sha = str(payload.get("cohort_sha256") or "").strip()
+    observed_sha = cohort_definition_sha(definition)
+    # Compatibility for locks written before cohort hashes canonicalised
+    # integer/float time-window offsets.  This does not weaken modern evidence
+    # authority: the complete lock bytes must still match the immutable anchor.
+    legacy_payload_sha = hashlib.sha256(
+        json.dumps(
+            raw_cohort,
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    if not expected_sha or expected_sha not in {observed_sha, legacy_payload_sha}:
+        raise CohortSchemaError("cohort definition lock hash mismatch")
+    try:
+        assert_lock_matches_evidence_anchor(
+            run_dir=run_dir,
+            lock_path=path,
+            evidence_id="cohort_locked",
+            label="cohort definition lock",
+        )
+    except LockAuthorityError as exc:
+        raise CohortSchemaError(str(exc)) from exc
+    return definition
 
 
 def write_locked_cohort_definition(
@@ -371,13 +426,63 @@ def write_locked_cohort_definition(
     definition = coerce_cohort_definition(getattr(plan, "cohort", None))
     if definition is None:
         definition = CohortDefinition(name="primary")
+    validate_cohort_definition(definition)
+    path = run_dir / COHORT_LOCK_FILENAME
+    if path.exists():
+        try:
+            repair = rehydrate_timestamp_only_legacy_lock(
+                run_dir=run_dir,
+                lock_path=path,
+                evidence_id="cohort_locked",
+                label="cohort definition lock",
+            )
+        except LockAuthorityError as exc:
+            raise CohortSchemaError(str(exc)) from exc
+        if repair is not None and evidence.get(
+            "cohort_lock_resume_rehydration"
+        ) is None:
+            evidence.register_json(
+                kind="log",
+                description=(
+                    "Resume compatibility repair: restored the cohort lock from "
+                    "its verified plan-time evidence anchor after a legacy "
+                    "timestamp-only rewrite."
+                ),
+                payload=repair,
+                filename="cohort_lock_resume_rehydration.json",
+                evidence_id="cohort_lock_resume_rehydration",
+                producer="planner",
+                generation_mode="system",
+                prompt_pack_version=prompt_pack_version,
+                metadata={"llm_signature": llm_signature},
+            )
+        locked_definition = _load_locked_cohort_definition(run_dir)
+        if cohort_definition_sha(definition) != cohort_definition_sha(
+            locked_definition
+        ):
+            raise CohortSchemaError(
+                "cohort definition changed after plan lock; refusing to overwrite "
+                "the pre-specified execution contract"
+            )
+        if evidence.get("cohort_locked") is None:
+            evidence.register_file(
+                kind="log",
+                description="Time-anchored cohort definition locked after planning.",
+                source_path=path,
+                evidence_id="cohort_locked",
+                aliases=["cohort_locked"],
+                producer="planner",
+                generation_mode="system",
+                prompt_pack_version=prompt_pack_version,
+                metadata={"llm_signature": llm_signature, "lock_reused": True},
+            )
+        return path
     payload = {
         "schema_version": "easyicu.cohort_definition/1",
         "locked_at": datetime.now(timezone.utc).isoformat(),
         "cohort_sha256": cohort_definition_sha(definition),
         "cohort": definition.to_dict(),
     }
-    path = run_dir / COHORT_LOCK_FILENAME
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     if evidence.get("cohort_locked") is None:
         evidence.register_file(
@@ -515,13 +620,8 @@ def assert_cohort_definition_locked(*, run_dir: Path, plan: Any) -> None:
     definition = coerce_cohort_definition(getattr(plan, "cohort", None))
     if definition is None:
         definition = CohortDefinition(name="primary")
-    path = run_dir / COHORT_LOCK_FILENAME
-    if not path.exists():
-        raise CohortSchemaError("cohort_locked.json is missing")
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    expected = str(payload.get("cohort_sha256") or "")
-    observed = cohort_definition_sha(definition)
-    if expected != observed:
+    locked_definition = _load_locked_cohort_definition(run_dir)
+    if cohort_definition_sha(locked_definition) != cohort_definition_sha(definition):
         raise CohortSchemaError(
             "cohort definition changed after plan lock; execute phase refuses "
             "to run an unlocked cohort"

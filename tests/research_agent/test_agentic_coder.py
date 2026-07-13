@@ -105,7 +105,11 @@ def test_returns_cli_authored_script(ra, monkeypatch):
     monkeypatch.setattr(subprocess, "run", _fake_run)
     # No method-compatibility violations for this snippet.
     import easyicu.research_agent.method_compatibility as mc
-    monkeypatch.setattr(mc, "detect_forbidden_pattern_usage", lambda code, ctx: [])
+    monkeypatch.setattr(
+        mc,
+        "detect_forbidden_pattern_usage",
+        lambda code, ctx, step=None: [],
+    )
 
     fallback = _FakeCoder()
     agent = AgenticCoderAgent(fallback, backend="codex")
@@ -130,10 +134,24 @@ def test_cohort_env_is_passed_through_to_subprocess(ra, monkeypatch):
 
     monkeypatch.setattr(subprocess, "run", _fake_run)
     import easyicu.research_agent.method_compatibility as mc
-    monkeypatch.setattr(mc, "detect_forbidden_pattern_usage", lambda code, ctx: [])
+    monkeypatch.setattr(
+        mc,
+        "detect_forbidden_pattern_usage",
+        lambda code, ctx, step=None: [],
+    )
 
     AgenticCoderAgent(_FakeCoder(), backend="codex").run(context=_ctx(ra), step=_step())
     assert captured["env"].get("COHORT_PARQUET") == "/tmp/cohort.parquet"
+
+
+def test_agentic_prompt_forbids_undeclared_figures(ra):
+    prompt = AgenticCoderAgent(_FakeCoder(), backend="codex")._build_prompt(
+        _ctx(ra), _step()
+    )
+
+    assert "DECLARED OUTPUT SCOPE (binding)" in prompt
+    assert "declares no figure product" in prompt
+    assert "Do not render, save, or register figures" in prompt
 
 
 def test_compatibility_violation_routes_through_fallback_repair(ra, monkeypatch):
@@ -148,7 +166,7 @@ def test_compatibility_violation_routes_through_fallback_repair(ra, monkeypatch)
     import easyicu.research_agent.method_compatibility as mc
     calls = {"n": 0}
 
-    def _detect(code, ctx):
+    def _detect(code, ctx, step=None):
         # Violate once, then pass after repair appended its marker.
         if "# repaired" in code:
             return []

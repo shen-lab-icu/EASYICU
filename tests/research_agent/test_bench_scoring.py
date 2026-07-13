@@ -178,6 +178,227 @@ def test_bench_item_to_task_surfaces_finding_substrings_as_hazard_key():
     assert task.gold_answer_status == "frozen"
 
 
+def test_external_protocol_adapter_preserves_structured_execution_and_rubric_fields():
+    from tools.run_research_agent_bench import (
+        _bench_item_to_task,
+        _external_item_from_row,
+    )
+
+    item = _external_item_from_row(
+        row={
+            "name": "Structured external task",
+            "database": "hirid",
+            "primary_predictor": "severity_signal",
+            "operational_exposure": "severity_signal_max",
+            "expected_or_direction": 1,
+            "expected_finding_substrings": ["required audit tag"],
+            "expected_step_substrings": ["cohort", "association"],
+            "expected_artifact_substrings": ["table_one", "effect_figure"],
+            "expected_outputs": ["table one", "effect figure"],
+            "semantic_guardrails": ["Keep the declared time origin."],
+            "evaluation_notes": ["Evaluator-side structured note."],
+            "target_databases": ["hirid"],
+            "required_warnings": ["structured warning"],
+            "gold_answer": {
+                "numeric_targets": {"primary_or": {"lower": 1.0, "upper": 2.0}},
+                "required_warnings": ["oracle warning"],
+                "forbidden_outputs": ["unsupported causal conclusion"],
+                "derivation": "Independent hidden reference.",
+            },
+            "gold_answer_status": "frozen",
+            "kind": "descriptive_association",
+            "difficulty": "hard",
+            "category": "evaluation",
+            "benchmark_family": "external_protocol",
+            "evidence_basis": "independent_reference",
+            "claim_scope": "capability_suite",
+            "protocol_version": "protocol/1",
+            "rubric_version": "rubric/1",
+        },
+        key="structured_task",
+        question="Estimate the declared structured association.",
+        target="event",
+        cohort_columns=["stay_id", "severity_signal_max", "event"],
+        cohort_size=120,
+    )
+
+    assert item.database == "hirid"
+    assert item.primary_predictor == "severity_signal"
+    assert item.operational_exposure == "severity_signal_max"
+    assert item.expected_step_substrings == ["cohort", "association"]
+    assert item.expected_artifact_substrings == ["table_one", "effect_figure"]
+    assert item.protocol_adapter["database"]["defaulted"] is False
+    assert item.protocol_adapter["operational_exposure"] == {
+        "value": "severity_signal_max",
+        "source_field": "operational_exposure",
+        "defaulted": False,
+        "declared_column_present": True,
+        "resolved_column_present": True,
+    }
+
+    task = _bench_item_to_task(item)
+    assert task.expected_outputs == ["table one", "effect figure"]
+    assert task.semantic_guardrails == ["Keep the declared time origin."]
+    assert task.evaluation_notes == ["Evaluator-side structured note."]
+    assert task.target_databases == ["hirid"]
+    assert task.difficulty == "advanced"
+    assert task.gold_answer_status == "frozen"
+    assert task.gold_answer is not None
+    assert task.gold_answer.numeric_targets["primary_or"].lower == 1.0
+    assert task.gold_answer.required_warnings == [
+        "oracle warning",
+        "required audit tag",
+        "structured warning",
+    ]
+
+
+def test_external_protocol_adapter_keeps_old_jsonl_runnable_with_visible_defaults():
+    from tools.run_research_agent_bench import _external_item_from_row
+
+    item = _external_item_from_row(
+        row={
+            "primary_predictor": "generic_score",
+            "expected_finding_substrings": "audit tag",
+        },
+        key="legacy_task",
+        question="Estimate an association.",
+        target="event",
+        cohort_columns=["generic_score", "event"],
+        cohort_size=12,
+    )
+
+    assert item.database == "bench"
+    assert item.operational_exposure == "generic_score"
+    assert item.primary_predictor == "generic_score"
+    assert item.expected_finding_substrings == ["audit tag"]
+    assert item.protocol_adapter["database"]["defaulted"] is True
+    assert item.protocol_adapter["operational_exposure"]["defaulted"] is True
+    assert item.protocol_adapter["operational_exposure"][
+        "resolved_column_present"
+    ] is True
+    defaults = {
+        (entry["field"], entry["status"])
+        for entry in item.protocol_adapter["diagnostics"]
+    }
+    assert ("database", "missing_defaulted") in defaults
+    assert ("operational_exposure", "missing_defaulted") in defaults
+    assert ("expected_finding_substrings", "coerced_scalar_to_list") in defaults
+
+
+def test_five_dim_scoring_uses_concept_key_and_activates_explicit_frozen_gold(
+    monkeypatch, tmp_path
+):
+    from types import SimpleNamespace
+
+    import easyicu.research_agent.evaluation_scorecard as scorecard
+    from tools.run_research_agent_bench import _five_dim_scorecard
+
+    captured: dict = {}
+
+    def fake_score_run_from_dir(task, run_dir, **kwargs):
+        captured["task"] = task
+        captured["run_dir"] = run_dir
+        captured.update(kwargs)
+        return SimpleNamespace(model_dump=lambda: {"task_id": task.task_id})
+
+    monkeypatch.setattr(scorecard, "score_run_from_dir", fake_score_run_from_dir)
+    item = SimpleNamespace(
+        key="structured_task",
+        name="Structured task",
+        research_question="Estimate a structured association.",
+        kind="descriptive_association",
+        primary_predictor="concept_scoring_key",
+        operational_exposure="materialized_column",
+        target_outcome="event",
+        expected_finding_substrings=[],
+        expected_artifact_substrings=[],
+        expected_outputs=[],
+        gold_answer={
+            "numeric_targets": {"primary_or": {"lower": 0.5, "upper": 2.0}}
+        },
+        gold_answer_status="frozen",
+    )
+
+    result = _five_dim_scorecard(
+        run_dir=tmp_path,
+        item=item,
+        or_value=1.2,
+        manifest={"findings": []},
+    )
+
+    assert result == {"task_id": "structured_task"}
+    assert captured["locked_reference_frozen"] is True
+    assert captured["exposure_concept"] == "concept_scoring_key"
+    assert captured["observed_metrics"] == {"primary_or": 1.2}
+
+
+def test_external_jsonl_runner_persists_protocol_adapter_contract(
+    monkeypatch, tmp_path
+):
+    import pandas as pd
+
+    import tools.run_research_agent_bench as bench
+
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame(
+        {"stay_id": [1, 2], "signal_max": [0.2, 0.9], "event": [0, 1]}
+    ).to_parquet(cohort_path, index=False)
+    jsonl_path = tmp_path / "items.jsonl"
+    jsonl_path.write_text(
+        json.dumps(
+            {
+                "key": "structured_external",
+                "question": "Estimate the declared structured association.",
+                "cohort_path": str(cohort_path),
+                "target_outcome": "event",
+                "database": "aumc",
+                "primary_predictor": "signal",
+                "operational_exposure": "signal_max",
+                "expected_step_substrings": ["association"],
+                "expected_artifact_substrings": ["effect_table"],
+                "expected_finding_substrings": ["window audit"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    captured: dict = {}
+
+    def fake_run_one_arm(**kwargs):
+        captured["item"] = kwargs["item"]
+        score = bench._skipped_arm(kwargs["label"])
+        score["status"] = "ok"
+        return score
+
+    monkeypatch.setattr(bench, "_make_llm", lambda **kwargs: object())
+    monkeypatch.setattr(bench, "_run_one_arm", fake_run_one_arm)
+
+    assert (
+        bench._run_ehrflowbench_jsonl(
+            jsonl_path=jsonl_path,
+            out_root=tmp_path / "results",
+            seed=7,
+            arms=["naive"],
+        )
+        == 0
+    )
+
+    result = json.loads(
+        (tmp_path / "results" / "ehrflowbench_results.json").read_text(
+            encoding="utf-8"
+        )
+    )["scores"][0]
+    assert captured["item"].database == "aumc"
+    assert captured["item"].operational_exposure == "signal_max"
+    assert result["database"] == "aumc"
+    assert result["expected_predictor"] == "signal"
+    assert result["operational_exposure"] == "signal_max"
+    assert result["protocol_adapter"]["database"]["defaulted"] is False
+    assert result["protocol_adapter"]["operational_exposure"][
+        "resolved_column_present"
+    ] is True
+
+
 def test_five_dim_scorecard_is_additive_and_robust(tmp_path):
     from types import SimpleNamespace
 

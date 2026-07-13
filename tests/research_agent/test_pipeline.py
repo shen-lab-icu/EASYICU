@@ -964,7 +964,7 @@ print(json.dumps(summary))
     assert blocked[-1]["outcome"] == "blocked_by_automatic_repair_policy"
 
 
-def test_figure_step_coder_failure_uses_parent_output_rescue(ra, tmp_path: Path):
+def test_generic_association_figure_coder_failure_fails_closed(ra, tmp_path: Path):
     class FigureCoderFailureLLM:
         name = "figure-coder-failure-llm"
 
@@ -985,8 +985,8 @@ def test_figure_step_coder_failure_uses_parent_output_rescue(ra, tmp_path: Path)
                                 "step_id": "03_primary_association",
                                 "intent": "Estimate the adjusted odds ratio.",
                                 "inputs": ["sepsis3", "death", "age"],
-                                "expected_outputs": ["statistic:primary_association"],
-                                "method": "logistic",
+                                "expected_outputs": ["statistic:primary_or"],
+                                "method": "logistic_regression",
                                 "icu_rule_refs": [],
                             },
                             {
@@ -995,7 +995,7 @@ def test_figure_step_coder_failure_uses_parent_output_rescue(ra, tmp_path: Path)
                                     "Render the publication figure(s) declared by "
                                     "step '03_primary_association'."
                                 ),
-                                "inputs": ["03_primary_association"],
+                                "inputs": ["statistic:primary_or"],
                                 "expected_outputs": ["figure:publication_figure"],
                                 "method": "publication_figure_generation",
                                 "icu_rule_refs": [],
@@ -1076,24 +1076,16 @@ print(json.dumps(summary))
     record = _step_record_by_id(
         partial["per_step_records"], "03_primary_association_figure"
     )
-    assert record["status"] == "ok"
-    assert (
-        record["deterministic_code_fallback"]
-        == "publication_figure_coder_failed"
+    parent_record = _step_record_by_id(
+        partial["per_step_records"], "03_primary_association"
     )
-    # One call creates the parent analysis; at least one later call gives the
-    # agent the figure step before deterministic rendering rescues its outage.
+    assert parent_record["status"] == "ok"
+    assert record["status"] == "coder_failed"
+    assert "deterministic_code_fallback" not in record
+    # One call creates the parent analysis; at least one later call still gives
+    # the agent its declared figure step before failing closed on the outage.
     assert llm.code_calls >= 2
-    assert (out_dir / "publication_figure.png").exists()
-    assert (out_dir / "publication_figure.svg").exists()
-    assert (out_dir / "publication_figure.figure_contract.json").exists()
-    assert (out_dir / "publication_figure_source_data.csv").exists()
-    assert not [
-        f for f in record.get("contract_findings", []) if f["severity"] == "error"
-    ]
-    assert not [
-        f for f in record.get("figure_source_findings", []) if f["severity"] == "error"
-    ]
+    assert not out_dir.exists() or not list(out_dir.glob("publication_figure*"))
 
 
 def test_promote_prior_publication_bundle_copies_real_figure_exports(tmp_path: Path):
@@ -4169,6 +4161,17 @@ def test_step_contract_findings_accepts_prefixed_clustering_metrics(ra):
         step_summary={
             "statistic:silhouette_score": 0.46,
             "statistic:cluster_count": 2,
+            "cluster_selection": {
+                "criterion": "silhouette_score",
+                "selection_rule": "maximum",
+                "direction": "maximize",
+                "selected_n_clusters": 2,
+                "candidates": [
+                    {"n_clusters": 1, "criterion_value": 0.0},
+                    {"n_clusters": 2, "criterion_value": 0.46},
+                ],
+                "rationale": "Maximum among evaluated candidates.",
+            },
         },
     )
 
@@ -5889,9 +5892,10 @@ def test_readiness_publication_ready_requires_article_display_suite(
         ],
     )
     evidence = EvidenceStore(tmp_path)
-    _register_publication_bundle_for_readiness(
+    publication_source_id = _register_publication_bundle_for_readiness(
         evidence,
         tmp_path,
+        source_step_id="02_model",
         contract={
             "figure_id": "easyicu_publication_figure",
             "core_claim": "Adjusted association estimate.",
@@ -5914,7 +5918,11 @@ def test_readiness_publication_ready_requires_article_display_suite(
         findings=[],
         per_step_records=[
             {"step_id": "01_table_one", "status": "ok"},
-            {"step_id": "02_model", "status": "ok"},
+            {
+                "step_id": "02_model",
+                "status": "ok",
+                "evidence_ids": [publication_source_id],
+            },
         ],
         evidence=evidence,
         run_dir=tmp_path,
@@ -5974,7 +5982,12 @@ def test_readiness_publication_ready_accepts_complete_display_suite(
         ],
     )
     evidence = EvidenceStore(tmp_path)
-    _register_complete_display_suite_for_readiness(evidence, tmp_path)
+    bound_evidence = _register_complete_display_suite_for_readiness(
+        evidence,
+        tmp_path,
+        table_step_id="01_table_one",
+        publication_source_step_id="02_model",
+    )
     bound_path = tmp_path / "manuscript_scaffold_bound.md"
     bound_path.write_text(_evidence_bound_demo_manuscript(), encoding="utf-8")
 
@@ -5983,8 +5996,16 @@ def test_readiness_publication_ready_accepts_complete_display_suite(
         plan=plan,
         findings=[],
         per_step_records=[
-            {"step_id": "01_table_one", "status": "ok"},
-            {"step_id": "02_model", "status": "ok"},
+            {
+                "step_id": "01_table_one",
+                "status": "ok",
+                "evidence_ids": bound_evidence["01_table_one"],
+            },
+            {
+                "step_id": "02_model",
+                "status": "ok",
+                "evidence_ids": bound_evidence["02_model"],
+            },
             {"step_id": "03_sensitivity", "status": "ok"},
         ],
         evidence=evidence,
@@ -6325,7 +6346,12 @@ def test_review_gallery_archives_covered_and_duplicate_supporting_figures(
         ],
     )
     evidence = EvidenceStore(tmp_path)
-    _register_complete_display_suite_for_readiness(evidence, tmp_path)
+    bound_evidence = _register_complete_display_suite_for_readiness(
+        evidence,
+        tmp_path,
+        table_step_id="01_table_one",
+        publication_source_step_id="02_model",
+    )
     write_support_contract(
         "03_old_primary_render",
         "publication_figure",
@@ -6358,8 +6384,16 @@ def test_review_gallery_archives_covered_and_duplicate_supporting_figures(
         plan=plan,
         findings=[],
         per_step_records=[
-            {"step_id": "01_table_one", "status": "ok"},
-            {"step_id": "02_model", "status": "ok"},
+            {
+                "step_id": "01_table_one",
+                "status": "ok",
+                "evidence_ids": bound_evidence["01_table_one"],
+            },
+            {
+                "step_id": "02_model",
+                "status": "ok",
+                "evidence_ids": bound_evidence["02_model"],
+            },
             {"step_id": "03_old_primary_render", "status": "ok"},
             {"step_id": "04_supporting_missingness", "status": "ok"},
             {"step_id": "05_duplicate_missingness", "status": "ok"},
@@ -7428,15 +7462,14 @@ def test_readiness_artifacts_block_outcome_leak_after_blocked_gate(
     )
     step_out = tmp_path / "steps" / "04_outcome_gate" / "outputs"
     step_out.mkdir(parents=True)
+    blocked_summary = {
+        "step_id": "04_outcome_gate",
+        "primary_analysis_authorized": False,
+        "grouped_death_analysis_executed": False,
+        "target_outcome": "death",
+    }
     (step_out / "step_summary.json").write_text(
-        json.dumps(
-            {
-                "step_id": "04_outcome_gate",
-                "primary_analysis_authorized": False,
-                "grouped_death_analysis_executed": False,
-                "target_outcome": "death",
-            }
-        ),
+        json.dumps(blocked_summary),
         encoding="utf-8",
     )
     evidence = EvidenceStore(tmp_path)
@@ -7452,7 +7485,11 @@ def test_readiness_artifacts_block_outcome_leak_after_blocked_gate(
         plan=plan,
         findings=[],
         per_step_records=[
-            {"step_id": "04_outcome_gate", "status": "ok", "step_summary": {}}
+            {
+                "step_id": "04_outcome_gate",
+                "status": "ok",
+                "step_summary": blocked_summary,
+            }
         ],
         evidence=evidence,
         run_dir=tmp_path,
@@ -8372,18 +8409,19 @@ def test_step_contract_repair_guidance_for_clustering_contract(ra):
         intent="Cluster shock physiology.",
         method="kmeans_clustering",
         expected_outputs=[
-            "statistic:silhouette_score",
+            "statistic:cluster_count",
+            "manifest:cluster_selection",
             "table:cluster_characteristics",
         ],
     )
 
     guidance = _step_contract_repair_guidance(
         step=step,
-        step_summary={"error": "silhouette_score missing"},
+        step_summary={"error": "cluster selection evidence missing"},
         code="labels = kmeans.fit_predict(X)",
     )
 
-    assert "silhouette_score" in guidance
+    assert "full `cluster_selection`" in guidance
     assert "cluster_characteristics.csv" in guidance
     assert "self-contained" in guidance
 
@@ -9678,7 +9716,8 @@ def test_advanced_plan_contract_preserves_explicit_kmeans_method(ra):
 
     assert [step.step_id for step in revised.steps] == ["05_kmeans_phenotyping"]
     assert revised.steps[0].method == "kmeans_clustering"
-    assert "statistic:silhouette_score" in revised.steps[0].expected_outputs
+    assert "manifest:cluster_selection" in revised.steps[0].expected_outputs
+    assert "statistic:silhouette_score" not in revised.steps[0].expected_outputs
 
 
 def test_clustering_contract_does_not_invent_mortality_characterization(ra):

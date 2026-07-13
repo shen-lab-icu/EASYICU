@@ -197,6 +197,7 @@ def test_only_closed_source_figure_renderers_are_structural_and_automatic() -> N
     for repair_id in (
         "ordered_category_distribution_publication_bundle_v1",
         "cohort_flow_publication_bundle_from_parent_outputs_v1",
+        "sensitivity_publication_bundle_from_locked_summary_v1",
     ):
         metadata = repair_metadata_for(repair_id)
         assert metadata.repair_class is RepairClass.STRUCTURAL, repair_id

@@ -39,6 +39,7 @@ from typing import Dict, List, Optional, Sequence
 
 from .schema import (
     AggregationRule,
+    AnalysisStep,
     ConceptDescriptor,
     ResearchContext,
     VariableRole,
@@ -47,6 +48,12 @@ from .audits.patterns import (
     _DISTANCE_BASED_ESTIMATORS,
     _LINEAR_PCA_ESTIMATORS,
 )
+from .trajectory_contract import (
+    is_continuous_trajectory_representation,
+    selected_trajectory_variables,
+    trajectory_zero_imputation_detected,
+)
+from .trajectory_plan_contract import trajectory_step_roles
 
 
 # ---------------------------------------------------------------------------
@@ -223,6 +230,8 @@ def _variable_kind(var: ConceptDescriptor) -> Optional[str]:
     binary and a Gaussian / Poisson model on it is wrong in different
     ways than a logistic model is right.
     """
+    if is_continuous_trajectory_representation(var):
+        return None
     if var.is_ordinal or var.role == VariableRole.ORDINAL_SCORE:
         return "ordinal"
     dtype = (var.dtype or "").lower()
@@ -328,7 +337,9 @@ def _variable_referenced_in_code(var_name: str, code_lower: str) -> bool:
 
 
 def detect_forbidden_pattern_usage(
-    code: str, context: ResearchContext
+    code: str,
+    context: ResearchContext,
+    step: Optional[AnalysisStep] = None,
 ) -> List[Dict[str, object]]:
     """Scan generated code for forbidden method patterns over constrained variables.
 
@@ -353,15 +364,26 @@ def detect_forbidden_pattern_usage(
     responsible for deciding whether to repair, fail-closed or
     proceed.
     """
-    if not code or not context.variables:
+    if not code:
         return []
     code_lower = code.lower()
     violations: List[Dict[str, object]] = []
+    selected_trajectory = {
+        variable.name
+        for variable in selected_trajectory_variables(
+            context=context,
+            script_text=code,
+            step=step,
+        )
+    }
     for var in context.variables:
         kind = _variable_kind(var)
         if not kind:
             continue
-        if not _variable_referenced_in_code(var.name, code_lower):
+        if (
+            var.name not in selected_trajectory
+            and not _variable_referenced_in_code(var.name, code_lower)
+        ):
             continue
         rule = FORBIDDEN_METHOD_BY_KIND.get(kind)
         if not rule:
@@ -378,6 +400,71 @@ def detect_forbidden_pattern_usage(
                 "preferred": rule["preferred"],
                 "rationale": rule["rationale"],
             })
+    if selected_trajectory and trajectory_zero_imputation_detected(
+        code,
+        trajectory_columns=selected_trajectory,
+    ):
+        violations.append(
+            {
+                "variable": ", ".join(sorted(selected_trajectory)),
+                "kind": "fixed_window_trajectory",
+                "matched_patterns": ["zero_imputation"],
+                "preferred": (
+                    "agent_declared_non_zero_missingness_representation",
+                    "observed_window_membership_rule",
+                ),
+                "rationale": (
+                    "An unobserved or trailing trajectory window is not an "
+                    "observed zero state."
+                ),
+            }
+        )
+    if step is not None:
+        roles = trajectory_step_roles(step)
+        downstream_roles = roles & {
+            "candidate_selection",
+            "stability_freeze",
+        }
+        if "representation" in roles and not downstream_roles:
+            role_patterns = [
+                pattern
+                for pattern in (
+                    "kmeans",
+                    "minibatchkmeans",
+                    "gaussianmixture",
+                    "agglomerativeclustering",
+                    "dbscan",
+                    "hdbscan",
+                    "fit_predict",
+                    "cluster_selection",
+                    "cluster_stability",
+                    "cluster_assignments",
+                    "cluster_profile",
+                    "cluster_outcome",
+                    "outcome_by_cluster",
+                )
+                if re.search(
+                    rf"(?<![a-z0-9]){re.escape(pattern)}(?![a-z0-9])",
+                    code_lower,
+                )
+            ]
+            if role_patterns:
+                violations.append(
+                    {
+                        "variable": step.step_id,
+                        "kind": "trajectory_role_scope",
+                        "matched_patterns": sorted(set(role_patterns)),
+                        "preferred": (
+                            "representation_artifact_only",
+                            "trajectory_membership",
+                        ),
+                        "rationale": (
+                            "The representation owner may transform and audit "
+                            "features, but cluster fitting/selection/stability and "
+                            "characterization belong to downstream agent-planned roles."
+                        ),
+                    }
+                )
     return violations
 
 
