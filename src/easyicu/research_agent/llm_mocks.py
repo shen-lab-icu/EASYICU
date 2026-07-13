@@ -611,6 +611,7 @@ def _mock_code_declared_figure(*, step_id: str, prompt: str) -> str:
     # rendering-only figure step; never reads COHORT_PARQUET or refits a model
     from __future__ import annotations
     import json
+    import math
     import os
     import shutil
     from pathlib import Path
@@ -630,17 +631,22 @@ def _mock_code_declared_figure(*, step_id: str, prompt: str) -> str:
     manifest_path = Path(os.environ["EASYICU_RESOLVED_INPUTS_JSON"])
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     source_candidates = []
-    for binding in manifest.get("inputs", {}).values():
+    for declared_product, binding in manifest.get("inputs", {}).items():
         relative_path = binding.get("relative_path")
         if relative_path:
-            source_candidates.append(
-                (run_dir / relative_path, binding.get("evidence_id"))
-            )
+            source_candidates.append({
+                "declared_product": declared_product,
+                "path": run_dir / relative_path,
+                "evidence_id": binding.get("evidence_id"),
+                "evidence_kind": binding.get("evidence_kind"),
+                "product": binding.get("product"),
+                "produced_by_step": binding.get("produced_by_step"),
+            })
 
     csv_sources = list(dict.fromkeys(
-        (path, evidence_id)
-        for path, evidence_id in source_candidates
-        if path.is_file() and path.suffix.lower() == ".csv"
+        (item["path"], item["evidence_id"])
+        for item in source_candidates
+        if item["path"].is_file() and item["path"].suffix.lower() == ".csv"
     ))
     if len(csv_sources) != 1:
         raise RuntimeError(
@@ -656,6 +662,70 @@ def _mock_code_declared_figure(*, step_id: str, prompt: str) -> str:
     if source.empty:
         raise RuntimeError(f"Registered upstream table is empty: {source_path}")
 
+    def _normalise(value):
+        return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+    def _named_scalars(payload, target):
+        values = []
+        if isinstance(payload, dict):
+            declared_name = payload.get("name") or payload.get("statistic")
+            if _normalise(declared_name) == target:
+                for field in ("value", "estimate", "result"):
+                    scalar = payload.get(field)
+                    if isinstance(scalar, (int, float)) and not isinstance(scalar, bool):
+                        values.append(float(scalar))
+            for key, child in payload.items():
+                if _normalise(key) == target:
+                    if isinstance(child, (int, float)) and not isinstance(child, bool):
+                        values.append(float(child))
+                if isinstance(child, (dict, list, tuple)):
+                    values.extend(_named_scalars(child, target))
+        elif isinstance(payload, (list, tuple)):
+            for child in payload:
+                values.extend(_named_scalars(child, target))
+        return values
+
+    statistic_rows = []
+    for item in source_candidates:
+        declared_product = str(item["declared_product"] or "")
+        if not declared_product.lower().startswith("statistic:"):
+            continue
+        statistic_path = item["path"]
+        if not statistic_path.is_file() or statistic_path.suffix.lower() != ".json":
+            raise RuntimeError(
+                f"Bound statistic {declared_product} has no readable JSON evidence"
+            )
+        product_name = str(
+            item.get("product") or declared_product.partition(":")[2]
+        ).strip()
+        payload = json.loads(statistic_path.read_text(encoding="utf-8"))
+        scalars = [
+            value
+            for value in _named_scalars(payload, _normalise(product_name))
+            if math.isfinite(value)
+        ]
+        unique_scalars = []
+        for value in scalars:
+            if not any(math.isclose(value, seen, rel_tol=1e-9, abs_tol=1e-9) for seen in unique_scalars):
+                unique_scalars.append(value)
+        if len(unique_scalars) != 1:
+            raise RuntimeError(
+                f"Bound statistic {declared_product} must resolve to one finite scalar; "
+                f"found {len(unique_scalars)}"
+            )
+        statistic_rows.append({
+            "statistic": product_name,
+            "value": unique_scalars[0],
+            "source_step_id": item.get("produced_by_step"),
+            "source_evidence_id": item.get("evidence_id"),
+        })
+
+    source_evidence_ids = list(dict.fromkeys(
+        str(item["evidence_id"])
+        for item in source_candidates
+        if item.get("evidence_id")
+    ))
+
     output_files = {}
     figure_files = []
     contract_files = []
@@ -664,6 +734,12 @@ def _mock_code_declared_figure(*, step_id: str, prompt: str) -> str:
         source_copy = out_dir / f"{product}.source.csv"
         shutil.copy2(source_path, source_copy)
         source_data_files.append(source_copy.name)
+        product_source_files = [source_copy.name]
+        if statistic_rows:
+            statistic_source = out_dir / f"{product}.statistics.source.csv"
+            pd.DataFrame(statistic_rows).to_csv(statistic_source, index=False)
+            source_data_files.append(statistic_source.name)
+            product_source_files.append(statistic_source.name)
 
         fig, axes = plt.subplots(1, 2, figsize=(9.2, 4.0))
         ax, audit_ax = axes
@@ -746,7 +822,7 @@ def _mock_code_declared_figure(*, step_id: str, prompt: str) -> str:
                     "title": product.replace("_", " ").title(),
                     "role": "descriptive_result",
                     "claim": "Values are rendered directly from the registered upstream table.",
-                    "evidence_ids": [source_evidence_id],
+                    "evidence_ids": source_evidence_ids,
                     "review_risk": "Interpretation remains owned by the upstream analysis step.",
                 },
                 {
@@ -754,12 +830,12 @@ def _mock_code_declared_figure(*, step_id: str, prompt: str) -> str:
                     "title": "Registered-table audit context",
                     "role": "audit",
                     "claim": "A second view exposes supporting values from the same registered table.",
-                    "evidence_ids": [source_evidence_id],
+                    "evidence_ids": source_evidence_ids,
                     "review_risk": "This panel adds no new estimand or model fit.",
                 }
             ],
             "export_formats": ["png", "svg"],
-            "source_data": [source_copy.name],
+            "source_data": product_source_files,
             "statistics_note": "No model fitting or cohort transformation occurs in this step.",
             "image_integrity_note": "The figure is drawn directly from copied upstream source data.",
         }
@@ -775,6 +851,9 @@ def _mock_code_declared_figure(*, step_id: str, prompt: str) -> str:
         "method": "registered_product_rendering",
         "render_only": True,
         "upstream_source": str(source_path.relative_to(run_dir)),
+        "upstream_sources": [
+            str(item["path"].relative_to(run_dir)) for item in source_candidates
+        ],
         "output_files": output_files,
         "figure_files": figure_files,
         "figure_contract_files": contract_files,

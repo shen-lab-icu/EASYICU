@@ -157,6 +157,12 @@ Code contract:
   for that file. If one canonical upstream table is present, render from
   that table alone and use audit/provenance tables only for short notes or
   metadata. Resolve the exact current upstream step outputs directory first.
+  Every typed result input remains part of the rendering authority contract:
+  do not ignore a bound `statistic:` input merely because its value also
+  appears in the table. Read the exact resolved statistic JSON, copy its one
+  unambiguous finite scalar into a labelled `statistic,value` source-data row,
+  and cite that binding's evidence ID in the FigureContract. Never infer or
+  recompute a missing statistic in the rendering step.
   The runner exposes the run root as `EASYICU_RUN_DIR`, the current evidence
   index as `EASYICU_EVIDENCE_DIR/evidence_index.json`, and the checkpoint as
   `EASYICU_MANIFEST_PARTIAL`; use these explicit handoff paths instead of
@@ -630,6 +636,9 @@ CLINICAL SCORE AND MISSINGNESS SEMANTICS:
   validate the measured flag itself even when the companion count is absent.
   A boolean, datetime, or timedelta count is not an integer observation count,
   and datetime/timedelta values are not valid measured flags.
+  Pandas dtype predicates such as `is_bool_dtype(...)` return one scalar
+  Python boolean. Negate such scalar predicates with `not`, never with `~`;
+  reserve `~` for elementwise boolean Series/array masks.
   Report invalid pairs separately, compare valid pairs with `(count > 0)`, and
   use `status="checked"`. Any invalid pair or flag/count discordance is a
   fail-closed provenance error, even when reported truthfully. The host will
