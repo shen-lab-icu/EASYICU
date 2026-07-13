@@ -207,6 +207,7 @@ def test_candidate_code_contract_consumes_one_upstream_coordinate_layer():
     assert "do not reapply cohort, anchor, or observed-window eligibility" in contract
     assert "Copy id_column into the cluster-selection manifest" in contract
     assert "cluster_selection.selected_model_id" in contract
+    assert "clustering_method/model_family" in contract
     assert "do not run bootstrap" in contract
     assert "do not write cluster profiles" in contract
 
@@ -243,6 +244,9 @@ def test_stability_code_contract_reuses_frozen_candidate_solution_only():
     assert "accept only one fitted candidate-model record" in contract
     assert "evidence_id plus selected_n_clusters" in contract
     assert "Fail closed if zero or multiple records match" in contract
+    assert "every fitted candidate record" in contract
+    assert "one identical normalized method family" in contract
+    assert "Never infer the method from" in contract
     assert "Do not compare candidate k values" in contract
     assert "same method and same k" in contract
     assert "at least two genuinely distinct resamples/refits" in contract
