@@ -428,6 +428,32 @@ _COMPANION_WINDOW_SUFFIX_RE = re.compile(
 )
 
 
+def companion_count_column_for_measured(name: str) -> Optional[str]:
+    """Return the structural count companion for a measured-status column.
+
+    The original spelling and any supported trailing time-window suffix are
+    preserved.  For example, ``signal_measured_6h`` pairs with
+    ``signal_n_6h`` and ``signal_measured_first_24h`` pairs with
+    ``signal_n_first_24h``.  Non-status names return ``None``.
+    """
+
+    raw_name = str(name or "").strip()
+    if not raw_name:
+        return None
+    window_match = _COMPANION_WINDOW_SUFFIX_RE.search(raw_name)
+    window_suffix = window_match.group(0) if window_match is not None else ""
+    structural_name = (
+        raw_name[: window_match.start()] if window_match is not None else raw_name
+    )
+    measured_suffix = "_measured"
+    if not structural_name.lower().endswith(measured_suffix):
+        return None
+    stem = structural_name[: -len(measured_suffix)]
+    if not stem:
+        return None
+    return f"{stem}_n{window_suffix}"
+
+
 def _companion_audit_hint(name: str) -> Optional[ConceptHint]:
     """Classify structural count/status companions before concept prefixes.
 
@@ -1814,6 +1840,7 @@ __all__ = [
     "ConceptHint",
     "MethodologicalPrinciple",
     "ConceptMethodologyProfile",
+    "companion_count_column_for_measured",
     "classify_variable",
     "aggregation_rule_for",
     "default_time_windows",

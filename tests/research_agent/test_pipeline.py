@@ -614,9 +614,7 @@ print(json.dumps(summary))
     ]
 
 
-def test_pipeline_repairs_fixed_cohort_drift_in_current_step(
-    ra, tmp_path: Path
-):
+def test_pipeline_repairs_fixed_cohort_drift_in_current_step(ra, tmp_path: Path):
     """An explicit fixed-cohort promise routes N drift to local code repair."""
 
     def summary_script(*, cohort_n: int, field: str) -> str:
@@ -676,9 +674,7 @@ print(json.dumps(summary))
                 return "# Title\n\n## Results\n\nThe cohort was retained.\n"
             return "{}"
 
-    cohort = pd.DataFrame(
-        {"age": [40, 50, 60, 70, 80], "death": [0, 1, 0, 1, 0]}
-    )
+    cohort = pd.DataFrame({"age": [40, 50, 60, 70, 80], "death": [0, 1, 0, 1, 0]})
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=FixedCohortRepairLLM(),
@@ -948,9 +944,7 @@ print(json.dumps(summary))
     assert record.get("code_repair_attempts", 0) == 0
     assert "map_min_per_10mmhg" in covariates
     assert "map_min_missing_indicator" in covariates
-    assert [
-        f for f in record.get("contract_findings", []) if f["severity"] == "error"
-    ]
+    assert [f for f in record.get("contract_findings", []) if f["severity"] == "error"]
 
     repair_ledger = json.loads(
         (run_dir / "repairs_applied.json").read_text(encoding="utf-8")
@@ -3201,8 +3195,7 @@ from sklearn.metrics import roc_auc_score, brier_score_loss, calibration_curve
     repaired = _deterministic_runner_repair(
         code=code,
         run_log=(
-            "ImportError: cannot import name 'calibration_curve' from "
-            "'sklearn.metrics'"
+            "ImportError: cannot import name 'calibration_curve' from 'sklearn.metrics'"
         ),
     )
     assert repaired is not None
@@ -3221,8 +3214,7 @@ from sklearn.metrics import roc_auc_score, brier_score_loss, calibration_curve
     repaired = _deterministic_runner_repair(
         code=code,
         run_log=(
-            "ImportError: cannot import name 'calibration_curve' from "
-            "'sklearn.metrics'"
+            "ImportError: cannot import name 'calibration_curve' from 'sklearn.metrics'"
         ),
         previous_repair="prediction_calibration_import_fix_v1",
     )
@@ -3482,7 +3474,7 @@ def test_step_contract_allows_declared_primary_cohort_definition(ra):
     ]
 
 
-def test_step_contract_requires_count_flag_consistency_for_component_qc(ra):
+def test_step_contract_does_not_duplicate_host_measurement_provenance_gate(ra):
     from easyicu.research_agent.pipeline import _step_contract_findings
 
     step = ra.schema.AnalysisStep(
@@ -3492,168 +3484,18 @@ def test_step_contract_requires_count_flag_consistency_for_component_qc(ra):
         expected_outputs=["table:stage_component_qc"],
         method="ordinal_exposure_derivation_and_quality_control",
     )
-    missing = _step_contract_findings(
+
+    findings = _step_contract_findings(
         step=step,
         step_summary={"status": "completed", "component_qc": {}},
     )
-    assert any(
-        f.detail.get("kind") == "component_count_consistency_missing"
-        for f in missing
-    )
 
-    checked = _step_contract_findings(
-        step=step,
-        step_summary={
-            "status": "completed",
-            "component_qc": {
-                "count_consistency_status": "checked",
-                "count_columns": ["stage_n"],
-                "count_flag_comparison_n": 100,
-                "count_flag_discordant_n": 0,
-                "count_consistency_by_measured_input": {
-                    "stage_measured": {
-                        "status": "checked",
-                        "count_column": "stage_n",
-                        "comparison_n": 100,
-                        "discordant_n": 0,
-                    }
-                },
-            },
-        },
-    )
     assert not [
-        f
-        for f in checked
-        if f.detail.get("kind") == "component_count_consistency_missing"
-    ]
-
-
-def test_step_contract_requires_count_scope_for_authoritative_and_components(ra):
-    from easyicu.research_agent.pipeline import _step_contract_findings
-
-    step = ra.schema.AnalysisStep(
-        step_id="04_exposure_derivation_qc",
-        intent="Audit an authoritative ordered stage and its components.",
-        inputs=[
-            "stage_max",
-            "stage_measured",
-            "stage_component_max",
-            "stage_component_measured",
-        ],
-        expected_outputs=["table:stage_component_qc"],
-        method="ordinal_exposure_derivation_and_quality_control",
-    )
-    partial = _step_contract_findings(
-        step=step,
-        step_summary={
-            "status": "completed",
-            "component_qc": {
-                "count_consistency_status": "checked",
-                "count_columns": ["stage_component_n"],
-                "missing_count_columns": [],
-                "count_flag_comparison_n": 100,
-                "count_flag_discordant_n": 0,
-                "count_consistency_by_measured_input": {
-                    "stage_component_measured": {
-                        "status": "checked",
-                        "count_column": "stage_component_n",
-                        "comparison_n": 100,
-                        "discordant_n": 0,
-                    }
-                },
-            },
-        },
-    )
-    assert any(
-        f.detail.get("kind") == "component_count_consistency_scope_incomplete"
-        and f.detail.get("uncovered_count_columns") == ["stage_n"]
-        for f in partial
-    )
-    assert any(
-        f.detail.get("kind") == "component_count_consistency_by_input_invalid"
-        and any(
-            entry.get("measured_input") == "stage_measured"
-            and entry.get("reason") == "missing_entry"
-            for entry in f.detail.get("invalid_entries", [])
+        finding
+        for finding in findings
+        if str(finding.detail.get("kind") or "").startswith(
+            "component_count_consistency"
         )
-        for f in partial
-    )
-
-    complete = _step_contract_findings(
-        step=step,
-        step_summary={
-            "status": "completed",
-            "component_qc": {
-                "count_consistency_status": "checked",
-                "count_columns": ["stage_n", "stage_component_n"],
-                "missing_count_columns": [],
-                "count_flag_comparison_n": 200,
-                "count_flag_discordant_n": 0,
-                "count_consistency_by_measured_input": {
-                    "stage_measured": {
-                        "status": "checked",
-                        "count_column": "stage_n",
-                        "comparison_n": 100,
-                        "discordant_n": 0,
-                    },
-                    "stage_component_measured": {
-                        "status": "checked",
-                        "count_column": "stage_component_n",
-                        "comparison_n": 100,
-                        "discordant_n": 0,
-                    },
-                },
-            },
-        },
-    )
-    assert not [
-        f
-        for f in complete
-        if f.detail.get("kind") == "component_count_consistency_scope_incomplete"
-    ]
-    assert not [
-        f
-        for f in complete
-        if f.detail.get("kind") == "component_count_consistency_by_input_invalid"
-    ]
-
-
-def test_step_contract_allows_explicit_unavailable_count_by_measured_input(ra):
-    from easyicu.research_agent.pipeline import _step_contract_findings
-
-    step = ra.schema.AnalysisStep(
-        step_id="04_component_qc",
-        intent="Audit source status.",
-        inputs=["stage_max", "stage_measured"],
-        expected_outputs=["table:component_qc"],
-        method="quality_control",
-    )
-    findings = _step_contract_findings(
-        step=step,
-        step_summary={
-            "status": "completed",
-            "component_qc": {
-                "count_consistency_status": "unavailable",
-                "count_columns": [],
-                "missing_count_columns": ["stage_n"],
-                "count_consistency_by_measured_input": {
-                    "stage_measured": {
-                        "status": "unavailable",
-                        "count_column": "stage_n",
-                        "reason": "missing_count_column",
-                    }
-                },
-            },
-        },
-    )
-    assert not [
-        f
-        for f in findings
-        if f.detail.get("kind")
-        in {
-            "component_count_consistency_scope_incomplete",
-            "component_count_consistency_by_input_invalid",
-        }
     ]
 
 
@@ -5852,9 +5694,7 @@ def _register_complete_display_suite_for_readiness(
     if table_step_id:
         bound.setdefault(table_step_id, []).append(table_record.evidence_id)
     if publication_source_step_id:
-        bound.setdefault(publication_source_step_id, []).append(
-            publication_source_id
-        )
+        bound.setdefault(publication_source_step_id, []).append(publication_source_id)
     return bound
 
 
@@ -7627,11 +7467,14 @@ def test_publication_bundle_requires_sources_from_current_checkpoint(
             "evidence_ids": [source_record.evidence_id],
         }
     ]
-    assert _publication_figure_bundle_ready(
-        evidence=evidence,
-        run_dir=tmp_path,
-        per_step_records=current,
-    )["publication_figure_bundle_ready"] is True
+    assert (
+        _publication_figure_bundle_ready(
+            evidence=evidence,
+            run_dir=tmp_path,
+            per_step_records=current,
+        )["publication_figure_bundle_ready"]
+        is True
+    )
 
     superseded = [
         *current,

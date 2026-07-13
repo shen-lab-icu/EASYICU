@@ -137,6 +137,88 @@ def test_required_model_contract_error_fail_closes_outer_step_and_run():
     ]
 
 
+def test_locked_measurement_data_quality_classifier_is_structural():
+    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.pipeline_execute import (
+        _locked_measurement_data_quality_issues,
+    )
+
+    findings = [
+        ValidationFinding(
+            validator="step_summary_integrity",
+            severity="error",
+            message="Locked data contain invalid pairs.",
+            detail={"issue": "measurement_provenance_invalid_pairs"},
+        ),
+        ValidationFinding(
+            validator="step_summary_integrity",
+            severity="error",
+            message="Locked data contain discordance.",
+            detail={"issue": "measurement_provenance_count_flag_discordance"},
+        ),
+        ValidationFinding(
+            validator="step_summary_integrity",
+            severity="error",
+            message="Generated code reported the wrong count.",
+            detail={"issue": "measurement_provenance_host_count_mismatch"},
+        ),
+        ValidationFinding(
+            validator="another_validator",
+            severity="error",
+            message="Same words, wrong authority.",
+            detail={"issue": "measurement_provenance_invalid_pairs"},
+        ),
+        ValidationFinding(
+            validator="step_summary_integrity",
+            severity="error",
+            message="The planned flag is absent from the locked cohort.",
+            detail={"issue": "measurement_provenance_measured_column_missing"},
+        ),
+        ValidationFinding(
+            validator="step_summary_integrity",
+            severity="error",
+            message="The companion column is ambiguous.",
+            detail={"issue": "measurement_provenance_count_column_ambiguous"},
+        ),
+    ]
+
+    assert _locked_measurement_data_quality_issues(findings) == [
+        "measurement_provenance_count_column_ambiguous",
+        "measurement_provenance_count_flag_discordance",
+        "measurement_provenance_invalid_pairs",
+        "measurement_provenance_measured_column_missing",
+    ]
+
+
+def test_locked_measurement_data_quality_terminates_before_code_repair():
+    from easyicu.research_agent import pipeline_execute
+
+    source = inspect.getsource(pipeline_execute.run_execute_phase)
+    route_start = source.index(
+        "locked_data_quality_issues = (", source.index("early_contract_errors = [")
+    )
+    route_end = source.index("if sealed_renderer_authorized_code_sha256", route_start)
+    terminal_route = source[route_start:route_end]
+
+    assert "measurement_provenance_repair_suppressed" in terminal_route
+    assert '"diagnostic_only": True' in terminal_route
+    assert '"locked_cohort_data_quality_failed"' in terminal_route
+    assert "return step_record" in terminal_route
+    assert "_deterministic_summary_repair" not in terminal_route
+    assert "deterministic_contract_repair" not in terminal_route
+    assert "coder.repair" not in terminal_route
+
+
+def test_locked_measurement_preflight_runs_before_every_coder_repair():
+    from easyicu.research_agent import pipeline_execute
+
+    source = inspect.getsource(pipeline_execute.run_execute_phase)
+    preflight = source.index("audit_locked_measurement_data_quality(")
+    first_coder_repair = source.index("coder.repair(")
+
+    assert preflight < first_coder_repair
+
+
 @pytest.mark.parametrize(
     ("step_id", "intent"),
     [
@@ -312,6 +394,29 @@ def test_execute_phase_routes_figure_contracts_through_early_repair_loop():
 
     assert "figure_contract_validator.audit(" in before_early_gate
     assert "figure_source_validator.audit(" in before_early_gate
+
+
+def test_execute_phase_host_verifies_measurement_provenance_at_every_contract_gate():
+    import ast
+
+    from easyicu.research_agent import pipeline_execute
+
+    tree = ast.parse(inspect.getsource(pipeline_execute.run_execute_phase))
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "audit"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "step_summary_integrity_validator"
+    ]
+
+    assert len(calls) == 3
+    for call in calls:
+        keywords = {keyword.arg: keyword.value for keyword in call.keywords}
+        assert isinstance(keywords.get("cohort_path"), ast.Name)
+        assert keywords["cohort_path"].id == "cohort_path"
 
 
 def test_plan_and_execute_result_dataclass_shapes_match_contracts_module():

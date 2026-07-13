@@ -962,6 +962,36 @@ def _step_status_from_contract_findings(
     return "contract_failed" if has_contract_error else "ok"
 
 
+_LOCKED_MEASUREMENT_DATA_QUALITY_ISSUES = frozenset(
+    {
+        "measurement_provenance_count_column_ambiguous",
+        "measurement_provenance_count_flag_discordance",
+        "measurement_provenance_host_replay_failed",
+        "measurement_provenance_host_source_missing",
+        "measurement_provenance_host_source_unreadable",
+        "measurement_provenance_invalid_measured_values",
+        "measurement_provenance_invalid_pairs",
+        "measurement_provenance_measured_column_missing",
+    }
+)
+
+
+def _locked_measurement_data_quality_issues(
+    contract_findings: Sequence[ValidationFinding],
+) -> List[str]:
+    """Identify locked-cohort facts that generated code cannot repair."""
+
+    return sorted(
+        {
+            str(finding.detail.get("issue"))
+            for finding in contract_findings
+            if finding.severity == "error"
+            and finding.validator == StepSummaryIntegrityValidator.name
+            and finding.detail.get("issue") in _LOCKED_MEASUREMENT_DATA_QUALITY_ISSUES
+        }
+    )
+
+
 def _step_requires_publication_figure_exports(step: AnalysisStep) -> bool:
     """Return whether ``step`` structurally owns a figure export contract.
 
@@ -3897,6 +3927,56 @@ def run_execute_phase(
             current_step=step_current,
             total_steps=total_steps,
         )
+        locked_measurement_findings = (
+            step_summary_integrity_validator.audit_locked_measurement_data_quality(
+                step=step,
+                cohort_path=cohort_path,
+            )
+        )
+        locked_measurement_issues = _locked_measurement_data_quality_issues(
+            locked_measurement_findings
+        )
+        if locked_measurement_issues:
+            step_record.update(
+                {
+                    "status": "contract_failed",
+                    "diagnostic_only": True,
+                    "measurement_provenance_preflight": True,
+                    "measurement_provenance_repair_suppressed": True,
+                    "measurement_provenance_terminal_reason": (
+                        "locked_cohort_data_quality_failed"
+                    ),
+                    "measurement_provenance_terminal_issues": (
+                        locked_measurement_issues
+                    ),
+                    "contract_findings": [
+                        finding.model_dump() for finding in locked_measurement_findings
+                    ],
+                    "step_summary": {},
+                    "llm_repair_used": False,
+                    "generation_mode": "system",
+                    "code_repair_attempts": 0,
+                    "contract_repair_attempts": 0,
+                }
+            )
+            with shared_lock:
+                findings.extend(locked_measurement_findings)
+                per_step_records.append(step_record)
+                _flush_partial_manifest()
+            emit_progress(
+                "contract",
+                (
+                    "Locked-cohort measurement provenance failed before code "
+                    f"generation for {step.step_id}; retained diagnostics "
+                    "without attempting a repair."
+                ),
+                status="error",
+                run_id=run_id,
+                step_id=step.step_id,
+                current_step=step_current,
+                total_steps=total_steps,
+            )
+            return step_record
         try:
             (
                 existing_refs,
@@ -6300,6 +6380,7 @@ else:
                     step=step,
                     step_summary=visual_step_summary,
                     resolved_input_bindings=resolved_input_bindings,
+                    cohort_path=cohort_path,
                 )
                 early_contract_findings += step_summary_fraction_validator.audit(
                     step=step,
@@ -6514,6 +6595,50 @@ else:
                     f for f in early_contract_findings if f.severity == "error"
                 ]
                 if early_contract_errors:
+                    locked_data_quality_issues = (
+                        _locked_measurement_data_quality_issues(early_contract_errors)
+                    )
+                    if locked_data_quality_issues:
+                        step_record.update(
+                            {
+                                "status": "contract_failed",
+                                "diagnostic_only": True,
+                                "measurement_provenance_repair_suppressed": True,
+                                "measurement_provenance_terminal_reason": (
+                                    "locked_cohort_data_quality_failed"
+                                ),
+                                "measurement_provenance_terminal_issues": (
+                                    locked_data_quality_issues
+                                ),
+                                "contract_findings": [
+                                    finding.model_dump()
+                                    for finding in early_contract_findings
+                                ],
+                                "step_summary": visual_step_summary,
+                                "llm_repair_used": llm_repair_used,
+                                "generation_mode": current_generation_mode,
+                                "code_repair_attempts": repair_attempts,
+                                "contract_repair_attempts": (contract_repair_attempts),
+                            }
+                        )
+                        with shared_lock:
+                            findings.extend(early_contract_findings)
+                            per_step_records.append(step_record)
+                            _flush_partial_manifest()
+                        emit_progress(
+                            "contract",
+                            (
+                                "Locked-cohort measurement provenance failed for "
+                                f"{step.step_id}; retained diagnostics without "
+                                "attempting a code repair."
+                            ),
+                            status="error",
+                            run_id=run_id,
+                            step_id=step.step_id,
+                            current_step=step_current,
+                            total_steps=total_steps,
+                        )
+                        return step_record
                     if sealed_renderer_authorized_code_sha256 is not None:
                         step_record.update(
                             {
@@ -7620,6 +7745,7 @@ else:
                 step=step,
                 step_summary=step_summary,
                 resolved_input_bindings=resolved_input_bindings,
+                cohort_path=cohort_path,
             )
         )
         contract_findings.extend(
@@ -7806,6 +7932,7 @@ else:
                         step=step,
                         step_summary=step_summary,
                         resolved_input_bindings=resolved_input_bindings,
+                        cohort_path=cohort_path,
                     )
                 )
                 contract_findings.extend(

@@ -41,7 +41,9 @@ def test_coder_prompt_keeps_fraction_units_and_zero_status_categories() -> None:
     assert "valid-observed distribution denominator" in coder_prompt
 
 
-def test_coder_prompt_bounds_probability_intervals_without_constraining_effects() -> None:
+def test_coder_prompt_bounds_probability_intervals_without_constraining_effects() -> (
+    None
+):
     from easyicu.research_agent.prompts import load_prompt_pack
 
     coder_prompt = load_prompt_pack()["coder"]
@@ -49,7 +51,9 @@ def test_coder_prompt_bounds_probability_intervals_without_constraining_effects(
     assert "confidence bound for one of those quantities" in coder_prompt
     assert "methods.ordered_trends.wilson_interval" in coder_prompt
     assert "floating-point boundary artefacts" in coder_prompt
-    assert "Never" in coder_prompt and "clip a genuinely invalid estimate" in coder_prompt
+    assert (
+        "Never" in coder_prompt and "clip a genuinely invalid estimate" in coder_prompt
+    )
     assert "does not apply to effect scales" in coder_prompt
     assert "risk ratios, odds ratios, hazard" in coder_prompt
 
@@ -141,22 +145,39 @@ def test_coder_prompt_applies_source_status_to_every_measurement_summary() -> No
     assert "because the summary value is finite or in range" in coder_prompt
 
 
-def test_coder_prompt_requires_independent_count_flag_qc_when_available() -> None:
+def test_coder_prompt_uses_one_host_replayed_count_flag_contract() -> None:
     from easyicu.research_agent.prompts import load_prompt_pack
 
     coder_prompt = load_prompt_pack()["coder"]
 
-    assert "QUALITY-CONTROL step" in coder_prompt
-    assert "auxiliary provenance field" in coder_prompt
-    assert "count_consistency_status" in coder_prompt
-    assert "count_flag_comparison_n" in coder_prompt
-    assert "count_flag_discordant_n" in coder_prompt
-    assert "missing_count_columns" in coder_prompt
-    assert "EVERY declared `<concept>_measured` family" in coder_prompt
-    assert "including the authoritative primary summary" in coder_prompt
-    assert "must cover every declared measured family" in coder_prompt
-    assert "count_consistency_by_measured_input" in coder_prompt
-    assert "keyed by the exact declared" in coder_prompt
+    assert "count_flag_comparison_n" not in coder_prompt
+    assert "count_flag_discordant_n" not in coder_prompt
+    assert "count_consistency_by_measured_input" not in coder_prompt
+    assert "need not duplicate this host-replayed audit" in coder_prompt
+
+
+def test_coder_prompt_requires_host_replayed_measurement_provenance_audit() -> None:
+    from easyicu.research_agent.prompts import load_prompt_pack
+
+    coder_prompt = load_prompt_pack()["coder"]
+    normalized = " ".join(coder_prompt.split())
+
+    assert "requirement is not limited to a component-QC step" in normalized
+    assert '`step_summary["measurement_provenance_audit"]["source"]`' in normalized
+    assert "one record under `checks`" in normalized
+    assert '`"COHORT_PARQUET"`' in normalized
+    assert "`invalid_pair_n`" in normalized
+    assert '`role="audit_only"`' in normalized
+    assert "fail-closed provenance error" in normalized
+    assert "reject omitted measured families, convenient" in normalized
+    assert "omitted from the planner's" in normalized
+    assert "provenance only" in normalized
+    assert "adjustment covariate, or new cohort rule" in normalized
+    assert "Figure-only steps and steps without" in normalized
+    assert "need not duplicate this host-replayed audit" in normalized
+    assert "Preserve any trailing time-window suffix" in normalized
+    assert "even when the companion count is absent" in normalized
+    assert "boolean, datetime, or timedelta count" in normalized
 
 
 def test_coder_prompt_separates_continuous_and_ordinal_source_status_rules() -> None:
