@@ -8991,6 +8991,8 @@ class FigureSourceDataValidator:
                 return "p_value"
             if tokens & {"mean", "median", "quantile"}:
                 return "location_summary"
+            if tokens & {"order", "position", "rank"}:
+                return "ordering"
             if tokens & {"ratio", "odds", "hazard"} or name in {
                 "or",
                 "hr",
@@ -9073,6 +9075,11 @@ class FigureSourceDataValidator:
                 "generic_value",
                 "other_numeric",
             } or upstream_family in {"generic_value", "other_numeric"}:
+                return False
+            # Ordering is presentation metadata, not a scientific value
+            # family. Only the explicit ``plot_*`` derivation below may bind
+            # it to a complete row-aligned upstream ordering vector.
+            if "ordering" in {source_family, upstream_family}:
                 return False
             if "count" in {source_family, upstream_family}:
                 return source_family == upstream_family
@@ -9275,6 +9282,7 @@ class FigureSourceDataValidator:
                 if not compatible_alias or source_family in {
                     "generic_value",
                     "other_numeric",
+                    "ordering",
                 }:
                     continue
                 if _derived_matches(
@@ -9427,6 +9435,23 @@ class FigureSourceDataValidator:
             for col in source_value_columns
             if col.startswith("plot_") and col not in verified_value_mappings
         ):
+            if _value_family(plot_col) == "ordering":
+                matching_order_columns = []
+                for upstream_col in sorted(upstream.columns):
+                    if _value_family(upstream_col) != "ordering":
+                        continue
+                    verified, _disagrees, _bad, _left, _right, _diff = (
+                        _numeric_comparison(plot_col, upstream_col)
+                    )
+                    if verified:
+                        matching_order_columns.append(upstream_col)
+                if len(matching_order_columns) == 1:
+                    verified_value_mappings[plot_col] = (
+                        f"derived:ordering({matching_order_columns[0]})"
+                    )
+                elif len(matching_order_columns) > 1:
+                    ambiguous_value_mappings[plot_col] = matching_order_columns
+                continue
             target = plot_col.removeprefix("plot_").removesuffix("_pct")
             if "ci_low" in target:
                 source_candidates = [

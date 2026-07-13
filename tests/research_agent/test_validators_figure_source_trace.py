@@ -915,6 +915,92 @@ def test_truthful_renamed_value_is_verified_by_row_aligned_vector(tmp_path: Path
     assert res.get("verified_value_mappings") == {"estimate": "mortality_rate"}, res
 
 
+def test_truthful_plot_order_is_verified_from_parent_order_vector(tmp_path: Path):
+    up = tmp_path / "outcome_by_stage.csv"
+    pd.DataFrame(
+        {
+            "stage": ["low", "mid", "high"],
+            "stage_order": [1, 2, 3],
+            "mortality_rate": [0.10, 0.20, 0.30],
+        }
+    ).to_csv(up, index=False)
+    source = pd.DataFrame(
+        {
+            "stage": ["low", "mid", "high"],
+            "stage_order": [1, 2, 3],
+            "plot_order": [1, 2, 3],
+            "estimate": [0.10, 0.20, 0.30],
+        }
+    )
+
+    res = FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=source,
+        source_path=tmp_path / "publication_figure_source_data.csv",
+        upstream_path=up,
+    )
+
+    assert res.get("ok") is True, res
+    assert res.get("verified_value_mappings", {}).get("plot_order") == (
+        "derived:ordering(stage_order)"
+    )
+
+
+def test_forged_plot_order_cannot_borrow_parent_order_semantics(tmp_path: Path):
+    up = tmp_path / "outcome_by_stage.csv"
+    pd.DataFrame(
+        {
+            "stage": ["low", "mid", "high"],
+            "stage_order": [1, 2, 3],
+            "mortality_rate": [0.10, 0.20, 0.30],
+        }
+    ).to_csv(up, index=False)
+    source = pd.DataFrame(
+        {
+            "stage": ["low", "mid", "high"],
+            "stage_order": [1, 2, 3],
+            "plot_order": [3, 2, 1],
+            "estimate": [0.10, 0.20, 0.30],
+        }
+    )
+
+    res = FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=source,
+        source_path=tmp_path / "publication_figure_source_data.csv",
+        upstream_path=up,
+    )
+
+    assert res.get("ok") is False, res
+    assert "plot_order" in res.get("unverified_source_value_columns", []), res
+
+
+def test_rank_estimate_cannot_borrow_verified_parent_order_vector(tmp_path: Path):
+    up = tmp_path / "outcome_by_group.csv"
+    pd.DataFrame(
+        {
+            "group": ["low", "mid", "high"],
+            "row_order": [1, 2, 3],
+            "mortality_rate": [0.10, 0.20, 0.30],
+        }
+    ).to_csv(up, index=False)
+    source = pd.DataFrame(
+        {
+            "group": ["low", "mid", "high"],
+            "row_order": [1, 2, 3],
+            "rank_estimate": [1, 2, 3],
+            "estimate": [0.10, 0.20, 0.30],
+        }
+    )
+
+    res = FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=source,
+        source_path=tmp_path / "publication_figure_source_data.csv",
+        upstream_path=up,
+    )
+
+    assert res.get("ok") is False, res
+    assert "rank_estimate" in res.get("unverified_source_value_columns", []), res
+
+
 def test_declared_rate_target_cannot_be_laundered_by_sibling_rate(tmp_path: Path):
     up = tmp_path / "outcome_by_group.csv"
     pd.DataFrame(
