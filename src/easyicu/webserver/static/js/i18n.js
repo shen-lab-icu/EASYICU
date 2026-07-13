@@ -128,15 +128,30 @@
       if (window.__euVizResetForDataMode) window.__euVizResetForDataMode();
       if (window.__euExtractReset) window.__euExtractReset();  // prev extraction belonged to the old source
       if (window.__euRender) window.__euRender();
+      // callers that navigate after a switch must wait for it: a cancelled
+      // confirm means onapply never fires, so no navigation happens either
+      if (opts && typeof opts.onapply === 'function') opts.onapply();
     };
-    if (window.EU_HASWORK && !(opts && opts.force) && window.euConfirm) {
+    // Honest confirm copy: switching cancels a running Cross-DB scan and stops
+    // tracking a running extraction/conversion — "nothing is deleted" alone
+    // hid that a 20-minute job dies with the flip.
+    const runningJobs = [];
+    try {
+      const xp = window.EU_CROSSDB_PROGRESS && window.EU_CROSSDB_PROGRESS.snapshot && window.EU_CROSSDB_PROGRESS.snapshot();
+      if (xp && (xp.starting || xp.jobId)) runningJobs.push(window.t('the running Cross-DB scan will be <b>cancelled</b>', '正在运行的跨库扫描会被<b>取消</b>'));
+    } catch (e) {}
+    try {
+      const continuity = window.EU_EXTRACTION_JOB_CONTINUITY;
+      if (continuity && continuity.isRunning && continuity.isRunning()) runningJobs.push(window.t('the running extraction/conversion job will stop being tracked and cannot resume', '正在运行的抽取/转换任务将不再被跟踪，无法续接'));
+    } catch (e) {}
+    if ((window.EU_HASWORK || runningJobs.length) && !(opts && opts.force) && window.euConfirm) {
       const to = m === 'real' ? window.t('Real', '真实') : window.t('Demo', '演示');
       window.euConfirm({
         icon: 'refresh', tone: 'warn',
         title: window.t('Switch data source?', '切换数据源?'),
         body: window.t(
           'Switching to <b>' + to + '</b> data marks your current cohort, extraction and review as <b>out&#8209;of&#8209;date</b> — you\u2019ll re-run them against the new source. Nothing already computed is deleted.',
-          '切换到<b>' + to + '</b>数据会把当前的队列、抽取与审阅标记为<b>过期</b> —— 需基于新数据源重新运行。已计算的结果不会被删除。'),
+          '切换到<b>' + to + '</b>数据会把当前的队列、抽取与审阅标记为<b>过期</b> —— 需基于新数据源重新运行。已计算的结果不会被删除。') + (runningJobs.length ? ' ' + window.t('Also: ', '另外：') + runningJobs.join(window.t('; ', '；')) + window.t('.', '。') : ''),
         ok: window.t('Switch \u00b7 mark stale', '切换 · 标记过期'),
         onok: apply,
       });

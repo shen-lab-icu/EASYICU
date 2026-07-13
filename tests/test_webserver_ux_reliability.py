@@ -60,7 +60,9 @@ def test_agent_provider_affordance_names_the_scaffold_and_has_no_fake_exports() 
 
     assert "Generate provider scaffold" in agent
     assert "it does not run a complete research analysis" in agent
-    assert 'class="btn" data-cpopen' in agent
+    # The dock-opening affordance moved to the shared topbar 'Page guide'
+    # button; the agent screen must not ship its own duplicate opener.
+    assert "data-cpopen" not in agent
     assert "Run full with provider" not in agent
     assert "A full agent analysis is a separate step" not in agent
     assert "t('Export ledger'" not in agent

@@ -77,14 +77,14 @@
           <p class="home-sub">${t('Start from what you already have: a paper or topic, a clear research question, or local ICU data. EasyICU keeps the study local and carries its context between modules.', '从你已有的内容开始：文章或主题、明确的研究问题，或本地 ICU 数据。EasyICU 全程在本地运行，并在模块之间延续同一研究上下文。')}</p>
           <div class="home-split">
             <div class="home-col col-copilot">
-              <div class="col-head"><div class="col-mk">${icon('spark', 17)}</div><div><div class="col-t">${t('I have a clear research question', '我有明确的研究问题')}</div><div class="col-sub">${t('Guided study · describe it in one sentence', '研究引导 · 用一句话描述')}</div></div><span class="col-badge">${t('Recommended', '推荐')}</span></div>
+              <div class="col-head"><div class="col-mk">${icon('spark', 17)}</div><div><div class="col-t">${t('I have a clear research question', '我有明确的研究问题')}</div><div class="col-sub">${t('Guided Copilot · describe it in one sentence', '研究引导 · 用一句话描述')}</div></div><span class="col-badge">${t('Recommended', '推荐')}</span></div>
               <div class="col-body">
-                <p class="col-lead">${t('Guided study collects the cohort, outcome, time window, modules, and export settings in the conversation before anything runs.', '研究引导会先在对话中收集队列、结局、时间窗、模块和导出设置，再开始运行。')}</p>
+                <p class="col-lead">${t('Guided Copilot collects the cohort, outcome, time window, modules, and export settings in the conversation before anything runs.', '研究引导会先在对话中收集队列、结局、时间窗、模块和导出设置，再开始运行。')}</p>
                 <div class="col-prompt">
                   <textarea class="hp-input" id="homeInput" rows="3" placeholder="${t('e.g. Among Sepsis-3 patients, does early lactate predict in-hospital mortality, and does adding it to SOFA improve the model?', '例如:在脓毒症(Sepsis-3)患者中,早期乳酸能否预测院内死亡?把它加入 SOFA 是否提升模型?')}" autocomplete="off" aria-label="${t('Describe your study', '描述你的研究')}">${escHtml(homeQuestionDraft)}</textarea>
                   <div class="hp-bar">
                     <span class="hp-hint">${icon('shield', 12)} ${t('local-only · nothing uploaded', '仅本地 · 不上传')}</span>
-                    <button type="button" class="hp-send" id="homeSend" aria-label="${t('Start Guided study', '开始研究引导')}">${icon('arrow', 17)}</button>
+                    <button type="button" class="hp-send" id="homeSend" aria-label="${t('Start Guided Copilot', '开始研究引导')}">${icon('arrow', 17)}</button>
                   </div>
                 </div>
                 <div class="col-chips">
@@ -213,7 +213,7 @@
         if (resumeRoute && !contextDismissed) {
           const branchNames = { predict: t('Sepsis mortality prediction', '脓毒症死亡率预测'), crossdb: t('Cross-database comparison', '跨数据库对比'), quality: t('Data-quality audit', '数据质量审计') };
           const routeNames = {
-            guided: t('Guided study', '研究引导'), ideas: t('Idea Mining', '想法挖掘'),
+            guided: t('Guided Copilot', '研究引导'), ideas: t('Idea Mining', '想法挖掘'),
             extraction: t('Data Extraction', '数据抽取'), patient: t('Patient Review', '患者审阅'),
             cohort: t('Cohort Statistics', '队列统计'), crossdb: t('Cross-DB Benchmark', '跨库基准'),
             agent: t('Agent Projects', '研究项目'),
@@ -266,6 +266,8 @@
   let exportProg = null;        // {current,total,module} latest extract progress
   let exportResult = null;      // terminal export summary {out_dir,files,total_rows,...}
   let exportErr = null;         // terminal export error
+  let exportCancelled = null;   // terminal user-requested cancel (partial result payload)
+  let exportCohortReport = null; // cohort report from the job's start event (selected / before-cap)
   let exportCancelRequested = false;
   let exportRunMode = 'custom';  // custom | recommended
   let exportRunModules = null;   // module keys used by the current/last run
@@ -434,6 +436,14 @@
     window.EU_STALE = true;
   }
   function repaint() { if (window.__euRender) window.__euRender(); }
+  // Background job events (SSE progress / continuity restore) must never
+  // trigger a full-shell re-render while the user works on another route —
+  // that wipes focus, IME composition, and uncommitted input there. Module
+  // state is already updated; this screen re-renders from state on revisit.
+  function backgroundRepaint() {
+    const raw = (location.hash || '#entry').slice(1).trim();
+    if (raw === 'extraction' || raw === 'icd') repaint();
+  }
   function escHtml(v) {
     return String(v == null ? '' : v).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
   }
@@ -480,6 +490,24 @@
   }
   function currentExportDir() {
     return exExportDir || (window.EU_SETTINGS && window.EU_SETTINGS.export_dir) || '';
+  }
+  // Consume the Copilot handoff config into real form state — the handoff was
+  // previously take()n and discarded, leaving the classic form blank despite
+  // everything the conversation had collected. exPath is deliberately NOT
+  // prefilled (see its declaration): the folder scan stays the authoritative
+  // source binding.
+  function applyGuidedPrefill(handoff) {
+    const cfg = handoff && handoff.config;
+    if (!cfg || typeof cfg !== 'object') return;
+    if (cfg.cohort_preset && COHORT_PRESETS.some(p => p[0] === cfg.cohort_preset)) exCohortPreset = cfg.cohort_preset;
+    if (Array.isArray(cfg.modules) && cfg.modules.length) {
+      const want = new Set(cfg.modules);
+      MODS.forEach(m => { m[3] = want.has(moduleKey(m)) || want.has(m[0]); });
+    }
+    if (cfg.format && EX_EXT[cfg.format]) exFormat = cfg.format;
+    if (cfg.export_dir) setExportDir(cfg.export_dir);
+    if (Number.isFinite(cfg.max_patients)) exMaxPatients = cfg.max_patients;
+    if (Number.isFinite(cfg.observation_window_hours) && cfg.observation_window_hours > 0) exWindowHours = cfg.observation_window_hours;
   }
   function setExportDir(path) {
     exExportDir = path || null;
@@ -549,7 +577,7 @@
     abandonExtractionContinuity();
     exportRunMode = runMode;
     exportRunModules = modules;
-    exportProg = null; exportResult = null; exportErr = null; exportJobId = null; exportCancelRequested = false;
+    exportProg = null; exportResult = null; exportErr = null; exportCancelled = null; exportCohortReport = null; exportJobId = null; exportCancelRequested = false;
     exView = 'running'; repaint();
     const database = (exScanResult && exScanResult.db_key) || 'miiv';
     const conceptSelection = selectedConceptPayload(modules);
@@ -1114,8 +1142,8 @@
     return `
     <div class="handoff">
       <span class="ho-ico">${icon('spark', 17)}</span>
-      <div class="ho-body"><b>${t('Prefer to talk it through?', '想用对话完成?')}</b> ${t('Guided study can pick the cohort, modules and export for you in plain conversation — same pipeline, same result.', '研究引导能用对话帮你选好队列、模块和导出 —— 同一条流水线,同样的结果。')}</div>
-      <button class="btn" data-nav="guided">${icon('spark', 13)} ${t('Start Guided study', '开始研究引导')} ${icon('arrow', 13)}</button>
+      <div class="ho-body"><b>${t('Prefer to talk it through?', '想用对话完成?')}</b> ${t('Guided Copilot can pick the cohort, modules and export for you in plain conversation — same pipeline, same result.', '研究引导能用对话帮你选好队列、模块和导出 —— 同一条流水线,同样的结果。')}</div>
+      <button class="btn" data-nav="guided">${icon('spark', 13)} ${t('Start Guided Copilot', '开始研究引导')} ${icon('arrow', 13)}</button>
     </div>`;
   }
 
@@ -1137,7 +1165,7 @@
             <span>${t('Cohort', '队列')} · <b>${t('first ICU stay', '首次 ICU')} · ${t('full window', '全窗口')}</b></span>
             <span>${t('Modules', '模块')} · <b>${CORE.length}</b></span>
             <span>${t('Concepts', '概念')} · <b>~${coreConceptN()}</b></span>
-            <span>${dataMode() === 'demo' ? t('Stays', '住院数') + ' · <b>10</b>' : t('Source', '来源') + ' · <b>' + t('local', '本地') + '</b>'}</span>
+            <span>${dataMode() === 'demo' ? t('Stays', '住院数') + ' · <b>10</b>' : t('Stays', '住院数') + ' · <b>' + escHtml(fmtSampleCap()) + '</b>'}</span>
           </div>
         </div>
         <div class="express-cta">
@@ -1266,7 +1294,7 @@
         exMerge = config.merge ? 'merged' : 'separate';
         exMaxPatients = Number(config.max_patients || 0);
         if (config.out_dir) exExportDir = config.out_dir;
-        exportProg = null; exportResult = null; exportErr = null; exportCancelRequested = false;
+        exportProg = null; exportResult = null; exportErr = null; exportCancelled = null; exportCohortReport = null; exportCancelRequested = false;
         exView = 'running';
       } else {
         convJobId = record.job_id;
@@ -1280,6 +1308,11 @@
       if (record.kind === 'extract') {
         if (exportJobId !== record.job_id) return;
         if (message.type === 'progress') exportProg = message;
+        else if (message.type === 'start') {
+          // The start event carries the resolved cohort report — the only
+          // honest source for 'sampled N of M' truncation disclosure.
+          exportCohortReport = message.cohort && typeof message.cohort === 'object' ? message.cohort : null;
+        }
         else if (message.type === 'cancel_requested') {
           exportCancelRequested = true;
           exportProg = { phase: 'cancel', message: t('Cancel requested. The current database read may finish before the job stops.', '已请求取消。当前数据库读取可能会先完成，然后任务停止。') };
@@ -1290,7 +1323,10 @@
             exView = 'done'; window.EU_STALE = false; window.EU_HASWORK = true;
             if (exportResult.out_dir) rememberExportPath(exportResult.out_dir).catch(() => null);
           } else if (message.status === 'cancelled') {
-            exportErr = t('Extraction cancelled before completion.', '抽取已在完成前取消。');
+            // A user-requested cancel is not a failure: keep the partial result
+            // payload (files already written + out_dir) so the terminal card can
+            // say exactly what remains on disk instead of a red error.
+            exportCancelled = message.result && typeof message.result === 'object' ? message.result : {};
           } else {
             exportErr = message.error || t('Extraction failed.', '抽取失败。');
           }
@@ -1308,19 +1344,19 @@
           }
         }
       }
-      repaint();
+      backgroundRepaint();
     },
     missing(record) {
       const message = continuityMessage(record, true);
       if (record.kind === 'extract') { exportJobId = null; exportErr = message; exView = 'running'; }
       else { convJobId = null; convErr = message; exReal = 'converting'; }
-      repaint();
+      backgroundRepaint();
     },
     connectionLost(record, error) {
       const message = continuityMessage(record, false, error);
       if (record.kind === 'extract') { exportErr = message; exView = 'running'; }
       else { convErr = message; exReal = 'converting'; }
-      repaint();
+      backgroundRepaint();
     },
   };
   function cohortExportSupport() {
@@ -1701,9 +1737,6 @@
         <div class="adv-body" ${exAdvExport ? '' : 'hidden'}>
           <div class="col gap-12">
             ${advRow(t('Merge mode', '合并方式'), `<div class="seg" data-ex-merge><button class="${exMerge === 'separate' ? 'active' : ''}" data-val="separate">${t('Separate', '分文件')}</button><button class="${exMerge === 'merged' ? 'active' : ''}" data-val="merged">${t('Merge one', '合并单文件')}</button></div>`)}
-            ${advRow(t('Filter by patient list', '按患者列表筛选'), switchEl(false))}
-            ${advRow(t('Include row index', '包含行索引'), switchEl(false))}
-            ${advRow(t('Timestamp filenames', '文件名加时间戳'), switchEl(true))}
           </div>
         </div>
       </div>
@@ -1733,7 +1766,43 @@
   }
 
   /* ---- running / done states ---- */
+  function cohortScaleNote() {
+    // Truncation transparency: a capped sample must never masquerade as the
+    // full cohort downstream (Patient Review / Agent read this export).
+    const rep = exportCohortReport;
+    if (!rep || dataMode() !== 'real') return '';
+    const sel = Number(rep.selected || 0);
+    const before = Number(rep.selected_before_cap || 0);
+    if (rep.max_patients_applied && before > sel) {
+      return t(`sampled ${sel.toLocaleString()} of ${before.toLocaleString()} matched stays (sample cap)`, `已从 ${before.toLocaleString()} 条匹配住院中采样 ${sel.toLocaleString()} 条（采样上限）`);
+    }
+    if (rep.max_patients_applied) {
+      return t(`first ${sel.toLocaleString()} stays (sample cap applied at selection)`, `前 ${sel.toLocaleString()} 条住院（选择时已应用采样上限）`);
+    }
+    return sel ? t(`${sel.toLocaleString()} stays · full matched cohort`, `${sel.toLocaleString()} 条住院 · 完整匹配队列`) : '';
+  }
+  function cancelledState() {
+    // Neutral terminal state for a user-requested cancel: not red, and honest
+    // about the partial module files the cooperative cancel left on disk.
+    const r = exportCancelled || {};
+    const files = Array.isArray(r.files) ? r.files : [];
+    const tot = (exportRunModules || modKeys()).length;
+    const where = r.out_dir ? `<span class="mono" style="font-size:11px;word-break:break-all;">${escHtml(r.out_dir)}</span>` : '';
+    const partial = files.length
+      ? t(`${files.length} of ${tot} module files were already written to`, `${files.length}/${tot} 个模块文件已写入`) + ' ' + where + t(' — keep them or delete the folder.', ' —— 可保留，也可删除该文件夹。')
+      : t('No module files had been written yet.', '尚未写入任何模块文件。');
+    return `
+    <div class="card pad" style="max-width:680px;margin:0 auto;">
+      <div class="load-strip">
+        <span style="color:var(--warn,#a66a00);">${icon('alert', 18)}</span>
+        <div class="grow"><div style="font-weight:600;font-size:13px;">${t('Extraction cancelled', '抽取已取消')}</div><div style="font-size:11.5px;color:var(--ink-4);margin-top:2px;">${t('Stopped at your request — this is not an error.', '按你的请求停止 —— 这不是错误。')}</div></div>
+      </div>
+      <div class="note mt-12" style="padding:11px 13px;"><div class="ico">${icon('folder', 15)}</div><div class="body"><div class="d" style="font-size:12px;margin:0;">${partial}</div></div></div>
+      <div class="row gap-8 mt-16"><button class="btn primary" data-ex-run="${exportRunMode}">${icon('refresh', 14)} ${t('Extract again', '重新抽取')}</button><button class="btn ghost" data-ex-reset>${t('Back', '返回')}</button></div>
+    </div>`;
+  }
   function runningState() {
+    if (exportCancelled) return cancelledState();
     const p = exportProg || {};
     const cur = p.current || 0, tot = p.total || 0;
     const pct = tot ? Math.round((cur / tot) * 100) : 0;
@@ -1753,6 +1822,7 @@
            <div class="row gap-8 mt-16"><button class="btn primary" data-ex-run="${exportRunMode}">${icon('refresh', 14)} ${t('Retry', '重试')}</button><button class="btn ghost" data-ex-reset>${t('Back', '返回')}</button></div>`
         : `<div style="height:8px;border-radius:999px;background:var(--surface-2,#eef0f4);overflow:hidden;margin:12px 0 8px;"><div style="height:100%;width:${pct}%;background:var(--accent,#2f7d6b);transition:width .25s;"></div></div>
            <div style="font-size:12px;color:var(--ink-3);min-height:18px;">${p.phase === 'cohort' || p.phase === 'cancel' ? `${escHtml(progressText)}` : `<span class="mono">${escHtml(progressText)}</span>`}</div>
+           ${cohortScaleNote() ? `<div style="font-size:11.5px;color:var(--ink-4);margin-top:4px;">${icon('cohort', 11)} ${escHtml(cohortScaleNote())}</div>` : ''}
            <div class="row mt-12" style="justify-content:flex-end;"><button class="btn sm ghost" data-ex-cancel ${exportCancelRequested || !exportJobId ? 'disabled' : ''}>${icon('alert', 13)} ${exportCancelRequested ? t('Cancel requested', '已请求取消') : t('Request cancel', '请求取消')}</button></div>`}
     </div>`;
   }
@@ -1771,7 +1841,9 @@
       <div class="state-hero success solid" style="max-width:720px;margin:0 auto;">
         <div class="glyph">${icon('check', 26, 2.6)}</div>
         <div class="st-t">${t('Extraction complete', '抽取完成')}</div>
-        <div class="st-d">${(r ? r.file_count : files.length)} ${t('concept files', '个概念文件')}${totalRows != null ? ` · ${Number(totalRows).toLocaleString()} ${t('rows total', '行(合计)')}` : ''} + <span class="mono">_manifest.json</span> ${t('written to', '已写入')} <span class="mono">${outDir}</span>. ${t('Everything stayed on your machine.', '全部留在你的机器上。')}</div>
+        <div class="st-d">${r
+          ? `${r.file_count} ${t('concept files', '个概念文件')}${totalRows != null ? ` · ${Number(totalRows).toLocaleString()} ${t('rows total', '行(合计)')}` : ''} + <span class="mono">_manifest.json</span> ${t('written to', '已写入')} <span class="mono">${outDir}</span>. ${cohortScaleNote() ? `${t('Cohort', '队列')}: ${escHtml(cohortScaleNote())}. ` : ''}${t('Everything stayed on your machine.', '全部留在你的机器上。')}`
+          : t('Seeded demo preview — no files were written to disk. The ledger below shows what a real run would produce; switch to Real to write an actual export.', '演示种子预览 —— 没有向磁盘写入任何文件。下方清单展示真实运行会产出什么；切换到真实模式才会写出实际导出。')}</div>
         <div class="st-actions">
           <button class="btn primary" data-nav="patient">${icon('patient', 14)} ${t('Open in Patient Review', '打开患者审阅')}</button>
           <button class="btn" data-study-handoff data-study-source="extraction" data-study-target="agent">${icon('agent', 14)} ${t('Hand off to Agent Projects', '交给研究项目')}</button>
@@ -1811,7 +1883,7 @@
     },
     render() {
       if (window.__euExtractFocusICD) { exAdvCohort = true; exCustomOpen = true; exCohortPreset = 'icd'; }
-      if (window.EU_GUIDED_HANDOFF && window.EU_GUIDED_HANDOFF.take) window.EU_GUIDED_HANDOFF.take('extraction');
+      if (window.EU_GUIDED_HANDOFF && window.EU_GUIDED_HANDOFF.take) applyGuidedPrefill(window.EU_GUIDED_HANDOFF.take('extraction'));
       const guidedNote = window.EU_GUIDED_HANDOFF && window.EU_GUIDED_HANDOFF.noteHtml ? window.EU_GUIDED_HANDOFF.noteHtml('extraction') : '';
       let body;
       const real = dataMode() === 'real';
@@ -1908,7 +1980,7 @@
         setTimeout(() => { const el = document.querySelector('.ex-export-destination'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 60);
       }));
       root.querySelectorAll('[data-ex-cancel]').forEach(b => b.addEventListener('click', cancelExportJob));
-      root.querySelectorAll('[data-ex-reset]').forEach(b => b.addEventListener('click', () => { abandonExtractionContinuity(); exView = 'home'; exportProg = null; exportResult = null; exportErr = null; exportJobId = null; exportCancelRequested = false; exportRunModules = null; repaint(); }));
+      root.querySelectorAll('[data-ex-reset]').forEach(b => b.addEventListener('click', () => { abandonExtractionContinuity(); exView = 'home'; exportProg = null; exportResult = null; exportErr = null; exportCancelled = null; exportCohortReport = null; exportJobId = null; exportCancelRequested = false; exportRunModules = null; repaint(); }));
       // custom disclosure
       const cust = root.querySelector('[data-ex-custom]');
       if (cust) cust.addEventListener('click', () => { exCustomOpen = !exCustomOpen; repaint(); setTimeout(() => { const el = root.querySelector('.ex2-custom'); if (el && exCustomOpen) el.scrollIntoView ? null : null; }, 0); });
@@ -2024,9 +2096,8 @@
       // format
       const fmt = root.querySelector('[data-ex-fmt]'); if (fmt) fmt.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; exFormat = b.dataset.val; repaint(); });
       const merge = root.querySelector('[data-ex-merge]'); if (merge) merge.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; exMerge = b.dataset.val; repaint(); });
-      // generic segs + switches (display only)
-      root.querySelectorAll('.adv-body [data-seg]').forEach(seg => seg.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; seg.querySelectorAll('button').forEach(x => x.classList.toggle('active', x === b)); }));
-      root.querySelectorAll('.adv-body .switch:not([data-ex-switch])').forEach(s => s.addEventListener('click', () => { s.classList.toggle('on'); s.setAttribute('aria-checked', s.classList.contains('on')); }));
+      // Rule for this card: every control visible at configure/confirm time must
+      // round-trip into the job payload — display-only switches were removed.
       // ICD disease-cohort filter (folded in from the former standalone screen)
       if (window.EUIcd && window.EUIcd.bind) window.EUIcd.bind(root);
       if (window.__euExtractFocusICD) window.__euExtractFocusICD = false;

@@ -49,6 +49,41 @@
     return { gate, checks, passed, blocked: !validPreflight, contractValid: validPreflight };
   }
 
+  // Bilingual names for the guided preflight gate check ids. When the gate
+  // blocks, the user must see WHICH check failed — a bare "3/6 checks" count
+  // next to an all-green task list told them nothing actionable.
+  function guidedGateCheckLabel(id) {
+    const labels = {
+      source_valid: t('Data source resolves to a registered export', '数据源解析为已注册导出'),
+      denominator_resolved: t('Cohort denominator resolved', '队列分母已解析'),
+      quality_audited: t('Feature quality audited', '特征质量已审计'),
+      no_bad_non_event_coverage: t('No disqualifying non-event coverage gap', '非事件覆盖无致命缺口'),
+      no_patient_rows_persisted: t('No patient rows persisted', '不落任何患者行级数据'),
+      human_signoff: t('Human sign-off', '人工签署'),
+    };
+    return labels[String(id || '')] || String(id || '').replace(/_/g, ' ');
+  }
+  function guidedGateCheckRows(gateState) {
+    const checks = (gateState && gateState.checks) || [];
+    if (!checks.length) {
+      return `<div class="gd-task failed"><span class="tk">${icon('alert', 10)}</span><span class="grow">${t('The gate returned no readable checks — fail closed, run treated as blocked.', '核验没有返回可读的检查项 —— 按失败关闭处理，运行视为受阻。')}</span></div>`;
+    }
+    return checks.map(c => {
+      const id = c && c.id;
+      const passed = c && c.passed === true;
+      const pending = id === 'human_signoff' && !passed;
+      const cls = passed ? 'done' : (pending ? 'queued' : 'failed');
+      const mark = passed ? icon('check', 10, 3) : (pending ? icon('clock', 9) : icon('alert', 10));
+      const suffix = passed ? '' : (pending ? ` <span style="color:var(--ink-4);">· ${t('pending review', '待审阅')}</span>` : ` <span style="color:var(--bad,#c0392b);font-weight:600;">· ${t('failed', '未通过')}</span>`);
+      return `<div class="gd-task ${cls}"><span class="tk">${mark}</span><span class="grow">${guidedGateCheckLabel(id)}${suffix}</span></div>`;
+    }).join('');
+  }
+  function guidedGateFailedNames(gateState) {
+    return ((gateState && gateState.checks) || [])
+      .filter(c => c && c.passed !== true && c.id !== 'human_signoff')
+      .map(c => guidedGateCheckLabel(c && c.id));
+  }
+
   /* ============== study panel model ============== */
   const STUDY = [
     ['question', 'Research question', 'spark', '研究问题'],
@@ -955,9 +990,12 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       if (p) p.outerHTML = '<span class="pill bad" id="gdRunPill"><span class="dot"></span>Verification blocked</span>';
       renderThread();
       const reason = gateState.gate.reason ? ` <span class="mono">${esc(gateState.gate.reason)}</span>` : '';
+      const failedNames = guidedGateFailedNames(gateState);
+      const failedEn = failedNames.length ? ` Failed checks: <strong>${failedNames.map(esc).join(' · ')}</strong>.` : '';
+      const failedZh = failedNames.length ? ` 未通过的检查：<strong>${failedNames.map(esc).join(' · ')}</strong>。` : '';
       pushBot(
-        `The run finished, but evidence verification blocked the Findings step.${reason} Artifacts were retained for review; the manuscript draft remains <strong>locked</strong>.`,
-        `运行已结束，但证据核验未通过，因此没有进入 Findings。${reason} Artifacts 已保留供复核；稿件草稿仍保持<strong>锁定</strong>。`,
+        `The run finished, but evidence verification blocked the Findings step.${reason}${failedEn} Artifacts were retained for review; the manuscript draft remains <strong>locked</strong>.`,
+        `运行已结束，但证据核验未通过，因此没有进入 Findings。${reason}${failedZh} Artifacts 已保留供复核；稿件草稿仍保持<strong>锁定</strong>。`,
       );
       chips = [['Review blocked checks', '@reviewBlocked'], ['Retry analysis', 'toRun'], ['Open Agent Projects', '@openAgent']];
       guidedRunChannel.clear(runToken);
@@ -1171,8 +1209,13 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         const pillCls = gateBlocked ? 'warn' : 'ok';
         const pillTxt = live ? (gateBlocked ? `Verification: ${gpassed}/${gchecks.length} checks` : 'Preflight complete') : 'Complete';
         const subTxt = live ? `preflight ${gateBlocked ? 'blocked' : 'passed'} · ${(live.artifacts || []).length} artifacts` : 'complete · 6 artifacts';
+        // Blocked runs list the actual gate checks (named, with pass/fail per
+        // row) — not the generic all-green task list that hid which check failed.
+        const progRows = live && gateBlocked
+          ? guidedGateCheckRows(gateState)
+          : tasks.map(([tk, d]) => `<div class="gd-task done"><span class="tk">${icon('check', 10, 3)}</span><span class="grow">${tk}</span><span class="tdur">${d}</span></div>`).join('');
         return cardShell('analysis', 'agent', 'Research Agent · run', subTxt, `
-          <div class="gd-prog">${tasks.map(([t, d]) => `<div class="gd-task done"><span class="tk">${icon('check', 10, 3)}</span><span class="grow">${t}</span><span class="tdur">${d}</span></div>`).join('')}</div>
+          <div class="gd-prog">${progRows}</div>
           <div class="run-strip mt-12" style="padding:8px 10px;"><span class="pill ${pillCls}"><span class="dot"></span>${pillTxt}</span><div class="grow runbar"><div class="runbar-fill" style="width:${barPct}%"></div></div></div>`, '');
       }
       return cardShell('analysis', 'agent', 'Research Agent · run', dataMode !== 'demo' ? 'registry-backed · local preflight' : 'demo pipeline · no tokens', `
@@ -1939,6 +1982,20 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   // Carry the study the user configured in Copilot into Agent Projects so the
   // full, reportable run does not start from an empty form. Mirrors the backend
   // _prefill_for shape so app.js's handoff banner surfaces the same design.
+  // Machine-readable config for the Copilot -> classic extraction exit. The
+  // banner shows the human hints; this is what the classic form actually
+  // consumes so the user does not re-enter what the conversation collected.
+  function guidedExtractionClassicConfig() {
+    return {
+      cohort_preset: (guidedExtract && guidedExtract.cohort) || '',
+      modules: guidedExtract && Array.isArray(guidedExtract.modules) ? guidedExtract.modules.slice() : [],
+      format: (guidedExtract && guidedExtract.format) || '',
+      export_dir: (guidedExtract && guidedExtract.exportDir) || '',
+      max_patients: guidedExtract && Number.isFinite(guidedExtract.maxPatients) ? guidedExtract.maxPatients : null,
+      source_path: (guidedExtract && guidedExtract.path) || '',
+      observation_window_hours: guidedDesignWindowHours(),
+    };
+  }
   function guidedAgentHandoffPrefill() {
     const collected = !!(guidedDesign && guidedDesign.collected);
     const windowLabel = window.EU_GUIDED_EXTRACT ? window.EU_GUIDED_EXTRACT.windowLabel(guidedDesign, t) : '';
@@ -3384,7 +3441,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
             ${guidedPipelineOpen ? t('Hide steps', '收起步骤') : t('Show all steps', '展开步骤')}
           </button>
         </div>
-        <div class="gd-pipeline-bar" aria-label="${t('Guided study progress', '研究引导进度')}"><span style="width:${pct}%;"></span></div>
+        <div class="gd-pipeline-bar" aria-label="${t('Guided Copilot progress', '研究引导进度')}"><span style="width:${pct}%;"></span></div>
         <div class="gd-pipeline-meta">
           <span><strong>${done}/${total}</strong> ${t('required steps done', '个必需步骤完成')}</span>
           <span>${t('Goal', '目标')} · ${DEPTH[depth].label}</span>
@@ -3929,7 +3986,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     if (restoredFlow && (guidedExtract || guidedIdea || guidedReview || guidedAgent)) {
       thread.push({ bot: true, html: bi(
         `Restored the saved setup for this folder. Continue editing here; required configuration stays inside Guided Copilot.`,
-        `已恢复这个文件夹里保存的配置。你可以继续在这里编辑；必需配置仍留在 Guided Copilot 内完成。`,
+        `已恢复这个文件夹里保存的配置。你可以继续在这里编辑；必需配置仍留在研究引导内完成。`,
       ) });
       if (restoredFlow === 'data_extraction' && guidedExtract) thread.push({ guidedExtraction: true });
       else if (restoredFlow === 'idea_mining' && guidedIdea) thread.push({ guidedIdea: true });
@@ -4115,7 +4172,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       pushUser(label || goal);
       pushBot(
         `Guided Copilot backend is unavailable, so I cannot create a reliable handoff yet.`,
-        `Guided Copilot 后端不可用，所以暂时不能创建可靠交接。`,
+        `研究引导后端不可用，所以暂时不能创建可靠交接。`,
       );
       renderThread();
       return;
@@ -4173,7 +4230,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         context: guidedBackendContext(),
       }).then(result => applyGuidedBackendReply(result, null))
         .catch(err => {
-          pushBot(`Guided Copilot could not classify that request: <span class="mono">${esc(err.message || String(err))}</span>`, `Guided Copilot 无法识别这个请求：<span class="mono">${esc(err.message || String(err))}</span>`);
+          pushBot(`Guided Copilot could not classify that request: <span class="mono">${esc(err.message || String(err))}</span>`, `研究引导无法识别这个请求：<span class="mono">${esc(err.message || String(err))}</span>`);
           renderThread();
         });
     });
@@ -4182,7 +4239,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   function guidedDraftPayload(label) {
     const src = activeExportSource();
     return {
-      title: label || (BRANCH[branch] && BRANCH[branch].chip) || 'Guided study draft',
+      title: label || (BRANCH[branch] && BRANCH[branch].chip) || 'Guided Copilot draft',
       folder_slug: slugifyDraftFolder(label || (BRANCH[branch] && BRANCH[branch].chip) || 'guided-study'),
       branch: branch || 'predict',
       depth: depth || 'full',
@@ -4246,7 +4303,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       rows.push({
         kind,
         project_dir: row.project_dir,
-        title: row.title || row.study_id || row.run_label || (kind === 'run' ? 'Agent run folder' : 'Guided study folder'),
+        title: row.title || row.study_id || row.run_label || (kind === 'run' ? 'Agent run folder' : 'Guided Copilot folder'),
         subtitle: kind === 'run'
           ? `${row.readiness_status || row.gate_status || 'analysis_only'} · ${row.artifact_count || 0} artifacts · ${fmtRunTime(row.updated_at)}`
           : `${row.status || 'metadata_only'} · ${row.depth || 'full'} · ${row.data_mode || 'local'} · ${fmtRunTime(row.updated_at || row.created_at)}`,
@@ -4618,7 +4675,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       bot: () => [
         bi(
           `Hi — I’m the EasyICU <strong>Guided Copilot</strong>. I can help you finish the common workflows here, but first every conversation is scoped to a local study folder.`,
-          `你好，我是 EasyICU <strong>引导式 Copilot</strong>。常用流程可以在这里完成，但每条对话都必须先绑定到本地研究文件夹。`,
+          `你好，我是 EasyICU <strong>研究引导</strong>。常用流程可以在这里完成，但每条对话都必须先绑定到本地研究文件夹。`,
         ),
         bi(renderGuidedGoalCards(), renderGuidedGoalCards()),
       ],
@@ -4636,7 +4693,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       bot: [
         bi(
           `Hi — I’m <strong>Guided Copilot</strong>, running a <strong>scripted demo walkthrough</strong>. Every number and artifact here is a seeded example, not a real result — switch to <strong>Real</strong> data any time to run your own study.`,
-          `你好，我是 <strong>Guided Copilot</strong>，当前是<strong>脚本化演示流程</strong>。这里的每个数字和产物都是示例种子数据，不是真实结果 —— 随时可切换到<strong>真实</strong>数据来运行你自己的研究。`,
+          `你好，我是<strong>研究引导</strong>，当前是<strong>脚本化演示流程</strong>。这里的每个数字和产物都是示例种子数据，不是真实结果 —— 随时可切换到<strong>真实</strong>数据来运行你自己的研究。`,
         ),
         bi(
           `First, <strong>how far do you want to go today?</strong> This just sets where I stop — you can always extend later.`,
@@ -4854,7 +4911,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
             </div>`;
     host.innerHTML = `
       <div class="gd-rail-sec in-list">${t('Study folders', '研究文件夹')} <button class="gd-refresh-mini" data-refreshdrafts title="${t('Refresh study folders', '刷新研究文件夹')}">${icon('refresh', 10)}</button></div>
-      <div class="gd-rail-note"><strong>${t('Conversation memory', '对话记忆')}</strong><span>${t('Open these to continue setup inside Guided Copilot.', '打开这里可继续 Guided Copilot 内的配置。')}</span></div>
+      <div class="gd-rail-note"><strong>${t('Conversation memory', '对话记忆')}</strong><span>${t('Open these to continue setup inside Guided Copilot.', '打开这里可继续研究引导内的配置。')}</span></div>
       ${draftHtml}`;
   }
 
@@ -4879,7 +4936,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         <div class="gd-top">
           <button class="gd-home-link" type="button" data-open="entry" aria-label="${t('Back to EasyICU home', '返回 EasyICU 首页')}" title="${t('Back to EasyICU home', '返回 EasyICU 首页')}">
             <span class="brand-mark">${icon('spark', 16)}</span>
-            <span><span class="gd-name">Guided Copilot</span><span class="gd-mode">${t('EasyICU · guided study', 'EasyICU · 研究引导')}</span></span>
+            <span><span class="gd-name">${t('Guided Copilot', '研究引导')}</span><span class="gd-mode">${t('EasyICU · conversational study planning', 'EasyICU · 对话式研究规划')}</span></span>
           </button>
           <span class="grow"></span>
           <button class="btn sm" data-open="entry">${icon('back', 13)} ${t('Exit', '退出')}</button>
@@ -4891,7 +4948,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
             <div class="gd-rail-sec">Workspace</div>
             <div class="gd-rail-list" id="gdSessions"></div>
             <div class="gd-rail-foot">
-              <div class="gd-rail-utils" aria-label="${t('Guided study utilities', '研究引导工具')}">
+              <div class="gd-rail-utils" aria-label="${t('Guided Copilot utilities', '研究引导工具')}">
                 <button class="gd-utilbtn" type="button" data-open="entry" title="${t('Home', '主页')}" aria-label="${t('Home', '主页')}">${icon('back', 14)}</button>
                 <button class="gd-utilbtn" type="button" data-open="settings" title="${t('Settings', '设置')}" aria-label="${t('Settings', '设置')}">${icon('gear', 14)}</button>
                 <button class="gd-utilbtn lang" type="button" data-lang-toggle title="${t('Switch language', '切换语言')}" aria-label="${t('Switch language', '切换语言')}">
@@ -4909,7 +4966,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
                 <input class="gd-input" id="gdInput" value="${attr(guidedComposerDraft)}" placeholder="${t('Reply, or tap an option above to continue…', '回复，或点击上方选项继续…')}" autocomplete="off" aria-label="${t('Message Guided Copilot', '给研究引导发送消息')}" />
                 <button type="button" class="gd-send" id="gdSend" aria-label="${t('Send message', '发送消息')}">${icon('arrow', 16)}</button>
               </div>
-              <div class="gd-foot-note">${t('Guided Copilot · local first · nothing leaves your machine', '引导式 Copilot · 本地优先 · 数据不离开你的电脑')}</div>
+              <div class="gd-foot-note">${t('Guided Copilot · local first · nothing leaves your machine', '研究引导 · 本地优先 · 数据不离开你的电脑')}</div>
             </div>
           </div>
           <aside class="gd-aside">
@@ -5046,7 +5103,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           if (tok === '@reviewLocalRun') { openGuidedRunReview(selectedGuidedRun, label); return; }
           if (tok === '@activeExport') { pushUser(label); dataMode = 'real'; go('realConfirm', label); return; }
           if (tok === '@folderquick') { quickCreateGuidedStarterFolder(); return; }
-          if (tok === '@foldernew') { pushUser(label || 'New / open study folder'); showGuidedDraftSetup('Guided study draft'); return; }
+          if (tok === '@foldernew') { pushUser(label || 'New / open study folder'); showGuidedDraftSetup('Guided Copilot draft'); return; }
           if (tok === '@hintN') { handleText('use 30 patients'); return; }
           go(tok, goEl.classList.contains('suggest-chip') ? label : null);
           return;
@@ -5374,7 +5431,22 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         }
         // exit / classic
         const openEl = e.target.closest('[data-open]');
-        if (openEl) { location.hash = '#' + openEl.dataset.open; return; }
+        if (openEl) {
+          const target = openEl.dataset.open;
+          // Copilot -> classic exits must carry the collected study config as a
+          // real prefill instead of dumping the user on a blank expert form.
+          if (target === 'extraction' && guidedExtract && window.EU_GUIDED_HANDOFF && window.EU_GUIDED_HANDOFF.set) {
+            window.EU_GUIDED_HANDOFF.set({
+              type: 'module_handoff', status: 'ready', goal: 'configure_extraction',
+              target_route: 'extraction',
+              prefill: guidedAgentHandoffPrefill(),
+              config: guidedExtractionClassicConfig(),
+              requires_user_confirm: true,
+            });
+          }
+          location.hash = '#' + target;
+          return;
+        }
         // clickable Study panel step → jump to / edit that step
         const stEl = e.target.closest('[data-study]');
         if (stEl) { jumpToStep(stEl.dataset.study); return; }

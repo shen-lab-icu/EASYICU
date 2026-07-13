@@ -95,6 +95,9 @@
     return rows;
   }
 
+  function resultsHtml(rows) {
+    return `<div class="dict-resultline">${t(rows.length + ' concept' + (rows.length === 1 ? '' : 's'), rows.length + ' 个概念')}${dictCat !== 'all' ? ` · ${groupNameOf(dictCat)}` : ''}${dictSearch ? ` · "${dictSearch.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))}"` : ''}</div>${tableHtml(rows)}`;
+  }
   function tableHtml(rows) {
     if (!rows.length) return `<div class="dict-empty">${icon('search', 22)}<div>${L('No matching concepts.', '未找到匹配的概念。')}</div></div>`;
     const coverageLabel = L('Database coverage', '数据库覆盖');
@@ -174,13 +177,12 @@
       <div class="dict-search">
         <span class="ds-ico">${icon('search', 16)}</span>
         <input id="dictSearchInput" type="text" placeholder="${t('Search by code, name or description… (e.g. hr, lactate, 乳酸)', '按代码、名称或说明搜索… (如 hr、lactate、乳酸)')}" value="${dictSearch.replace(/"/g, '&quot;')}" autocomplete="off" spellcheck="false" />
-        ${dictSearch ? `<button class="ds-clear" data-dict-clear>${icon('close', 14)}</button>` : ''}
+        <button class="ds-clear" data-dict-clear style="${dictSearch ? '' : 'display:none;'}">${icon('close', 14)}</button>
       </div>
 
       ${catChips()}
 
-      <div class="dict-resultline">${t(rows.length + ' concept' + (rows.length === 1 ? '' : 's'), rows.length + ' 个概念')}${dictCat !== 'all' ? ` · ${groupNameOf(dictCat)}` : ''}${dictSearch ? ` · "${dictSearch}"` : ''}</div>
-      ${tableHtml(rows)}
+      <div id="dictResults">${resultsHtml(rows)}</div>
       <div class="nextbar mt-16">
         <div class="nb-ico">${icon('arrow', 16)}</div>
         <div class="grow"><div class="nb-t">${t('Found the concepts you need?', '找到需要的概念了？')}</div><div class="nb-d">${t('These concepts become columns of your dataset — select their modules in Data Extraction.', '这些概念会成为你数据表的列 —— 到「数据抽取」勾选它们所属的模块。')}</div></div>
@@ -189,17 +191,26 @@
     },
     afterRender(root) {
       const input = root.querySelector('#dictSearchInput');
+      const clr = root.querySelector('[data-dict-clear]');
+      // Never replace the search input from its own input event: a full
+      // re-render destroys the IME composition buffer mid-pinyin and resets
+      // the caret. Keep the input node stable and repaint only the results.
+      const paintResults = () => {
+        const res = document.getElementById('dictResults');
+        if (res) res.innerHTML = resultsHtml(matchedRows());
+        if (clr) clr.style.display = dictSearch ? '' : 'none';
+      };
       if (input) {
         input.addEventListener('input', () => {
           dictSearch = input.value;
-          // re-render just the result region for snappy typing
-          window.__euRender();
-          const again = document.querySelector('#dictSearchInput');
-          if (again) { again.focus(); again.setSelectionRange(again.value.length, again.value.length); }
+          paintResults();
         });
       }
-      const clr = root.querySelector('[data-dict-clear]');
-      if (clr) clr.addEventListener('click', () => { dictSearch = ''; window.__euRender(); });
+      if (clr) clr.addEventListener('click', () => {
+        dictSearch = '';
+        if (input) { input.value = ''; input.focus(); }
+        paintResults();
+      });
       root.querySelectorAll('[data-dict-cat]').forEach(b => b.addEventListener('click', () => {
         dictCat = b.dataset.dictCat; window.__euRender();
       }));

@@ -27,9 +27,10 @@ def _node_binary() -> str | None:
 def test_extraction_job_continuity_has_one_explicit_owner() -> None:
     owner = _read("js/screens-extraction-job-continuity.js")
     extraction = _read("js/screens-extraction.js")
+    i18n = _read("js/i18n.js")
     index = _read("index.html")
 
-    owner_src = "js/screens-extraction-job-continuity.js?v=20260710-job-resume"
+    owner_src = "js/screens-extraction-job-continuity.js?v=20260712-job-state"
     assert owner_src in index
     assert index.index("js/screens-extraction.js?") < index.index(owner_src)
     assert index.index(owner_src) < index.index("js/screens-extraction-study-context.js?")
@@ -40,6 +41,7 @@ def test_extraction_job_continuity_has_one_explicit_owner() -> None:
         "new EventSource('/api/jobs/'",
         "function reconcile(",
         "function cleanRecord(",
+        "isRunning: () => !!(active && running)",
         "source_changed_before_tracking",
     ):
         assert marker in owner
@@ -48,6 +50,8 @@ def test_extraction_job_continuity_has_one_explicit_owner() -> None:
     assert "window.EU_EXTRACTION_JOB_HOST" in extraction
     assert "window.EU_EXTRACTION_JOB_CONTINUITY" in extraction
     assert "localStorage" not in extraction[extraction.index("window.EU_EXTRACTION_JOB_HOST") :]
+    assert "continuity.isRunning && continuity.isRunning()" in i18n
+    assert "EU_EXTRACTION_JOB_CONTINUITY.active()" not in i18n
 
     for foreign_marker in (
         "crossdb",

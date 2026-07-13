@@ -10,7 +10,7 @@
     section: 'tutorial', nav: 'tutorial',
     crumbs: ['Home', 'Get Started'],
     actionHtml() {
-      return `<button class="btn primary" data-nav="extraction">${icon('play', 13)} ${t('Start demo', '开始演示')}</button>`;
+      return `<button class="btn primary" data-help-startdemo type="button">${icon('play', 13)} ${t('Start demo', '开始演示')}</button>`;
     },
     rail() {
       const workflow = [
@@ -74,7 +74,7 @@
             'Plan, run, and review an auditable pipeline with the Research Agent. The manuscript draft stays locked until every evidence check passes and you confirm.',
             '使用 Research Agent 规划、运行并审阅可审计流程。只有证据检查全部通过并由你确认后，手稿草稿才会进入下一步。',
           ),
-          [[t('Open Agent Projects', '打开研究项目'), 'agent'], [t('Start Guided study', '开始研究引导'), 'guided']],
+          [[t('Open Agent Projects', '打开研究项目'), 'agent'], [t('Start Guided Copilot', '开始研究引导'), 'guided']],
           false,
         ],
       ];
@@ -132,7 +132,7 @@
             <p style="font-size:12.75px;color:var(--ink-3);line-height:1.6;margin:12px 0 0;">${t('No tokens, no setup, no patient data. The demo generates 10 mock ICU stays so every screen, table, and review check is fully explorable before you connect anything real.', '不需要 token、不需要配置、不需要患者数据。演示会生成 10 个模拟 ICU stay，让你在连接真实数据前先完整探索每个页面、表格和审阅检查。')}</p>
           </div>
           <div class="col gap-8" style="flex:none;">
-            <button class="btn primary lg" data-nav="extraction">${icon('play', 15)} ${t('Start demo', '开始演示')}</button>
+            <button class="btn primary lg" data-help-startdemo type="button">${icon('play', 15)} ${t('Start demo', '开始演示')}</button>
           </div>
         </div>
       </div>
@@ -167,6 +167,16 @@
       root.querySelectorAll('.faq-q').forEach(q => {
         q.addEventListener('click', () => q.closest('.faq-item').classList.toggle('open'));
       });
+      // 'Start demo' must deliver a demo: switch the data mode first (with the
+      // usual work-protection confirm), and only navigate once the switch
+      // actually applied — a cancelled confirm stays on Get Started.
+      root.querySelectorAll('[data-help-startdemo]').forEach(b => b.addEventListener('click', () => {
+        if (window.EU_DATA !== 'demo' && window.setDataMode) {
+          window.setDataMode('demo', { onapply: () => { location.hash = '#extraction'; } });
+          return;
+        }
+        location.hash = '#extraction';
+      }));
     },
   };
 

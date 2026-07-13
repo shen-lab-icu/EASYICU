@@ -172,13 +172,13 @@
   const CTX = {
     entry: {
       label: bi('Home', '首页'),
-      hi: bi(`This Page guide explains the current screen and offers safe shortcuts. Open Guided Copilot when you want a full conversational study plan.`, `页面指南会解释当前页面并提供安全快捷操作。需要完整对话式研究规划时，请打开 Guided Copilot。`),
-      chips: [[bi('Open Guided Copilot', '打开 Guided Copilot'), '@guided', 'act'], [bi('How does EasyICU work?', 'EasyICU 怎么工作？'), '@say:how'], [bi('Load a demo workspace', '加载演示工作区'), '@load', 'act']],
+      hi: bi(`This Page guide explains the current screen and offers safe shortcuts. Open Guided Copilot when you want a full conversational study plan.`, `页面指南会解释当前页面并提供安全快捷操作。需要完整对话式研究规划时，请打开研究引导。`),
+      chips: [[bi('Open Guided Copilot', '打开研究引导'), '@guided', 'act'], [bi('How does EasyICU work?', 'EasyICU 怎么工作？'), '@say:how'], [bi('Load a demo workspace', '加载演示工作区'), '@load', 'act']],
     },
     extraction: {
       label: bi('Data Extraction', '数据抽取'),
-      hi: bi(`You’re in Data Extraction. Use the page controls to configure cohort, modules, and export. This guide can explain the page or open Guided Copilot.`, `这里是数据抽取。请用页面控件配置队列、模块和导出。页面指南可以解释页面，或打开 Guided Copilot。`),
-      chips: [[bi('How does extraction work?', '抽取怎么工作？'), '@say:extract'], [bi('What gets exported?', '会导出什么？'), '@say:export'], [bi('Open Guided Copilot', '打开 Guided Copilot'), '@guided', 'act']],
+      hi: bi(`You’re in Data Extraction. Use the page controls to configure cohort, modules, and export. This guide can explain the page or open Guided Copilot.`, `这里是数据抽取。请用页面控件配置队列、模块和导出。页面指南可以解释页面，或打开研究引导。`),
+      chips: [[bi('How does extraction work?', '抽取怎么工作？'), '@say:extract'], [bi('What gets exported?', '会导出什么？'), '@say:export'], [bi('Open Guided Copilot', '打开研究引导'), '@guided', 'act']],
     },
     patient: {
       label: bi('Patient Review', '患者审阅'),
@@ -193,20 +193,35 @@
     crossdb: {
       label: bi('Cross-DB Benchmark', '跨库基准'),
       hi: bi(`Cross-DB Benchmark applies one cohort definition across ICU databases. I can load it or explain where databases diverge.`, `跨库比较会把同一个队列定义应用到多个 ICU 数据库。我可以加载比较，或解释哪些数据库差异最大。`),
-      chips: [[bi('Load the benchmark', '加载跨库比较'), '@loadcross', 'act'], [bi('Which databases overlap?', '哪些数据库有重叠？'), '@say:overlap'], [bi('Open Guided Copilot', '打开 Guided Copilot'), '@guided', 'act']],
+      chips: [[bi('Load the benchmark', '加载跨库比较'), '@loadcross', 'act'], [bi('Which databases overlap?', '哪些数据库有重叠？'), '@say:overlap'], [bi('Open Guided Copilot', '打开研究引导'), '@guided', 'act']],
     },
     agent: {
       label: bi('Agent Projects', '研究项目'),
       hi: bi(`The Research Agent runs an auditable pipeline and drafts findings — but the draft stays locked until checks pass. Want the run, or the reasoning?`, `Research Agent 会运行可审计 pipeline 并生成 findings 草稿，但检查通过前草稿保持锁定。你想看运行，还是想看核验逻辑？`),
-      chips: [[bi('Why is the draft locked?', '为什么草稿锁定？'), '@say:gate'], [bi('Show a completed run', '查看已完成 run'), '@agentrun', 'act'], [bi('Open Guided Copilot', '打开 Guided Copilot'), '@guided', 'act']],
+      chips: [[bi('Why is the draft locked?', '为什么草稿锁定？'), '@say:gate'], [bi('Show a completed run', '查看已完成 run'), '@agentrun', 'act'], [bi('Open Guided Copilot', '打开研究引导'), '@guided', 'act']],
     },
-    states: { label: bi('Workspace States', '工作区状态'), hi: bi(`This is the states reference — loading, empty, no-data, error, blocked, success. Use the shortcuts below or open Guided Copilot.`, `这里是工作区状态参考：加载、空、无数据、错误、阻断、成功。可用下方快捷操作，或打开 Guided Copilot。`), chips: [[bi('When do states show?', '状态什么时候出现？'), '@say:states'], [bi('Open Guided Copilot', '打开 Guided Copilot'), '@guided', 'act']] },
+    states: { label: bi('Workspace States', '工作区状态'), hi: bi(`This is the states reference — loading, empty, no-data, error, blocked, success. Use the shortcuts below or open Guided Copilot.`, `这里是工作区状态参考：加载、空、无数据、错误、阻断、成功。可用下方快捷操作，或打开研究引导。`), chips: [[bi('When do states show?', '状态什么时候出现？'), '@say:states'], [bi('Open Guided Copilot', '打开研究引导'), '@guided', 'act']] },
     settings: { label: bi('Settings', '设置'), hi: bi(`Settings are local-first and reversible. Ask me what any option does.`, `设置是本地优先且可回退的。你可以问任意选项的含义。`), chips: [[bi('Is my data uploaded?', '我的数据会上传吗？'), '@say:privacy'], [bi('Explain evidence checks', '解释证据核验'), '@say:gate']] },
-    tutorial: { label: bi('Get Started', '快速上手'), hi: bi(`Get Started orients you to the workflow. Open Guided Copilot for the full conversational path.`, `快速上手会介绍整个流程；完整对话式路径请打开 Guided Copilot。`), chips: [[bi('Open Guided Copilot', '打开 Guided Copilot'), '@guided', 'act'], [bi('How does EasyICU work?', 'EasyICU 怎么工作？'), '@say:how']] },
+    tutorial: { label: bi('Get Started', '快速上手'), hi: bi(`Get Started orients you to the workflow. Open Guided Copilot for the full conversational path.`, `快速上手会介绍整个流程；完整对话式路径请打开研究引导。`), chips: [[bi('Open Guided Copilot', '打开研究引导'), '@guided', 'act'], [bi('How does EasyICU work?', 'EasyICU 怎么工作？'), '@say:how']] },
+    ideas: {
+      label: bi('Idea Mining', '想法挖掘'),
+      hi: bi(`Idea Mining turns a paper, PDF, or topic into an evidence-bound idea ledger with a feasibility verdict. Mining decides what is worth running; Agent Projects runs confirmed analyses.`, `想法挖掘把文章、PDF 或主题变成证据绑定的 idea 台账，并给出可行性判定。挖掘决定什么值得做；确认后的分析由研究项目运行。`),
+      chips: [[bi('What do the feasibility tiers mean?', '可行性分层是什么意思？'), '@say:tiers'], [bi('Where does a passed idea go next?', '通过的想法下一步去哪？'), '@say:ideanext'], [bi('Open Guided Copilot', '打开研究引导'), '@guided', 'act']],
+    },
+    dictionary: {
+      label: bi('Data Dictionary', '数据字典'),
+      hi: bi(`The Data Dictionary lists every concept EasyICU can extract — names, units, and which of the six databases cover them.`, `数据字典列出 EasyICU 可抽取的全部概念：名称、单位，以及六个数据库各自的覆盖情况。`),
+      chips: [[bi('What is a concept?', '什么是概念？'), '@say:concept'], [bi('Open Guided Copilot', '打开研究引导'), '@guided', 'act']],
+    },
+    guided: {
+      label: bi('Guided Copilot', '研究引导'),
+      hi: bi(`You are already in Guided Copilot — the full conversational planner. Use the composer under the conversation.`, `你已经在研究引导中——完整的对话式研究规划就在这里。请使用对话下方的输入框。`),
+      chips: [[bi('How does EasyICU work?', 'EasyICU 怎么工作？'), '@say:how']],
+    },
   };
 
   const ANSWERS = {
-    how: bi(`EasyICU runs locally and moves a study through four stages: <strong>frame → extract → review → analyze & draft</strong>. This Page guide explains and links; Guided Copilot handles full conversational planning. Nothing is uploaded.`, `EasyICU 在本机运行，把研究推进为四步：<strong>定义问题 → 抽取 → 审阅 → 分析与草稿</strong>。页面指南负责解释和跳转；完整对话式规划由 Guided Copilot 承担。不会上传数据。`),
+    how: bi(`EasyICU runs locally and moves a study through four stages: <strong>frame → extract → review → analyze & draft</strong>. This Page guide explains and links; Guided Copilot handles full conversational planning. Nothing is uploaded.`, `EasyICU 在本机运行，把研究推进为四步：<strong>定义问题 → 抽取 → 审阅 → 分析与草稿</strong>。页面指南负责解释和跳转；完整对话式规划由研究引导承担。不会上传数据。`),
     extract: bi(`Extraction has a one-click <strong>recommended</strong> path — first ICU stay, full available ICU window with a 30-day cap, six core feature modules — that writes analysis-ready frames plus a reproducible manifest. Need more control? The <strong>Customize</strong> panel opens cohort criteria, feature modules, and export format. Either way, nothing runs on incomplete data.`, `抽取有一键<strong>推荐路径</strong>：首个 ICU stay、完整可用 ICU 窗口并设 30 天上限、核心特征模块，输出可分析数据表和可复现清单。需要更多控制时，<strong>自定义</strong>面板可以配置队列、模块和导出格式。`),
     export: bi(`An export bundle is the concept data plus a <strong>manifest.json</strong> — not the figures. Code, tables, and figures come from a Research Agent run, with an evidence ledger.`, `导出包包含概念数据和 <strong>manifest.json</strong> 清单，不是图件。代码、表格和图件来自 Research Agent run，并附证据台账。`),
     tabs: bi(`<ul class="mb-list"><li><strong>Data Tables</strong> — raw stay-level rows</li><li><strong>Time Series</strong> — hourly trajectories</li><li><strong>Patient Overview</strong> — one stay at a glance</li><li><strong>Data Quality</strong> — coverage, ranges, missingness</li></ul>`, `<ul class="mb-list"><li><strong>数据表</strong>：stay 级数据</li><li><strong>时间序列</strong>：小时级轨迹</li><li><strong>患者概览</strong>：单个 stay 一屏查看</li><li><strong>数据质量</strong>：覆盖率、范围和缺失</li></ul>`),
@@ -217,6 +232,9 @@
     gate: bi(`Drafting is a deliberate second stage. A claim may only be written once it traces to a logged artifact — denominators resolved, coverage above threshold, tables reproducing from the manifest — and a human signs off. That’s why the draft is locked until then.`, `草稿是有意延后的阶段。只有当声明能追溯到已记录产物，并且分母、覆盖率、表格复现和人工签署都通过后，才允许写入稿件。所以在此之前草稿保持锁定。`),
     states: bi(`Every data surface passes through the same six: loading (skeletons), empty (first run), no-data (0 results), error (recoverable), blocked (gated), success. The reference page lets you preview each.`, `每个数据界面都经过六种状态：加载、空、无数据、错误、阻断和成功。参考页可以预览这些状态。`),
     privacy: bi(`No. EasyICU is local-first and the guarantee is enforced — extraction, review, and analysis run on your machine. Only the agent’s plan text can ever leave, and only if you explicitly enable it. Never patient rows.`, `不会。EasyICU 是本地优先：抽取、审阅和分析都在你的机器上运行。只有你明确启用时，Agent 的计划文本才可能离开本机，患者行永远不会发送。`),
+    tiers: bi(`Feasibility answers four different questions, one tier each: can the idea be computed from concepts already in your export (ready now); is it in the dictionary but missing from this export (needs re-extraction); is it not derivable from this database at all (choose another database or question); and is the sample/coverage strong enough to be worth running. A held idea always states which tier blocked it and what to do next.`, `可行性评估分层回答四个不同的问题：想法能否用当前导出里已有的概念直接计算（可以直接做）；字典里有但当前导出缺（需要补抽取）；这个数据库根本推导不出来（换库或换问题）；以及样本量/覆盖率是否值得做。被搁置的想法都会写明卡在哪一层、下一步做什么。`),
+    ideanext: bi(`Once an idea passes feasibility, generate its plan, then "Freeze handoff for Agent" and "Create Agent project" — the seed carries your question, cohort, and evidence links into Agent Projects, where the confirmed analysis actually runs.`, `想法通过可行性评估后：先生成计划，然后"冻结交接"并"创建研究项目"——种子会把问题、队列和证据链接带进研究项目，确认后的分析在那里运行。`),
+    concept: bi(`A concept is EasyICU's database-neutral name for one clinical variable (e.g. lactate, MAP, SOFA). You analyze concepts, and EasyICU maps each one to the right tables and units in each of the six databases.`, `概念（concept）是 EasyICU 对一个临床变量的跨库统一命名（如乳酸、MAP、SOFA）。你面向概念做分析，EasyICU 负责把它映射到六个数据库各自的表和单位。`),
   };
 
   function routeOf() { const r = (location.hash || '#entry').slice(1); return CTX[r] ? r : (window.SCREENS && window.SCREENS[r] ? r : 'entry'); }
@@ -285,7 +303,7 @@
 
   function fallbackText(v) {
     const t = v.toLowerCase();
-    if (/\b(guided|whole|run it|do it for me|walk me)\b/.test(t)) { botSay(bi(`Opening Guided Copilot for the full conversational workflow.`, `正在打开 Guided Copilot，用于完整对话式流程。`), []); setTimeout(openGuided, 700); return; }
+    if (/\b(guided|whole|run it|do it for me|walk me)\b/.test(t)) { botSay(bi(`Opening Guided Copilot for the full conversational workflow.`, `正在打开研究引导，用于完整对话式流程。`), []); setTimeout(openGuided, 700); return; }
     if (/\b(load|demo|populate|show me data)\b/.test(t)) { const m = drive('@load'); botSay(m, ctxFor(routeOf()).chips); return; }
     if (/\b(privacy|upload|local|phi)\b/.test(t)) { botSay(ANSWERS.privacy, ctxFor(routeOf()).chips); return; }
     if (/\b(gate|lock|draft|sign)\b/.test(t)) { botSay(ANSWERS.gate, ctxFor(routeOf()).chips); return; }
@@ -294,7 +312,7 @@
     // restate fallback — never a dead end
     botSay(bi(
       `I’ll treat that as “<em>${esc(v)}</em>”. Page guide supports fixed shortcuts only. Pick an action below, or open Guided Copilot for free-form planning.`,
-      `我会把它理解为“<em>${esc(v)}</em>”。页面指南只支持固定快捷操作。请选择下方动作，或打开 Guided Copilot 做自由对话规划。`,
+      `我会把它理解为“<em>${esc(v)}</em>”。页面指南只支持固定快捷操作。请选择下方动作，或打开研究引导 做自由对话规划。`,
     ), ctxFor(routeOf()).chips);
   }
 
@@ -345,7 +363,16 @@
     if (!shouldHideFab(routeOf())) fab.hidden = false;
     try { localStorage.setItem('easyicu_dock', '0'); } catch (e) {}
   }
-  function toggle() { dock.classList.contains('open') ? close() : open(); }
+  function toggle() {
+    // On the Guided screen the full conversational Copilot IS the page —
+    // opening the mini dock on top of it creates a second, competing chat.
+    // ⌘K / the guide button there should focus the Guided composer instead.
+    if (routeOf() === 'guided') {
+      const composer = document.getElementById('gdInput');
+      if (composer) { composer.focus(); return; }
+    }
+    dock.classList.contains('open') ? close() : open();
+  }
 
   function refreshLanguage() {
     if (!dock || !fab) return;
@@ -361,8 +388,8 @@
     if (name) name.textContent = tx('Page guide', '页面指南');
     if (ctx) ctx.textContent = contextText(routeOf());
     if (expand) {
-      expand.setAttribute('title', tx('Open Guided Copilot', '打开 Guided Copilot'));
-      expand.setAttribute('aria-label', tx('Open Guided Copilot', '打开 Guided Copilot'));
+      expand.setAttribute('title', tx('Open Guided Copilot', '打开研究引导'));
+      expand.setAttribute('aria-label', tx('Open Guided Copilot', '打开研究引导'));
     }
     if (closeBtn) {
       closeBtn.setAttribute('title', tx('Close', '关闭'));
@@ -391,7 +418,7 @@
       <div class="cp-head">
         <div class="cp-mk">${icon('spark', 16)}</div>
         <div class="grow"><div class="cp-name">${tx('Page guide', '页面指南')}</div><div class="cp-ctx" id="cpCtx">${contextText(routeOf())}</div></div>
-        <button class="cp-iconbtn" id="cpExpand" title="${tx('Open Guided Copilot', '打开 Guided Copilot')}" aria-label="${tx('Open Guided Copilot', '打开 Guided Copilot')}">${icon('grid', 16)}</button>
+        <button class="cp-iconbtn" id="cpExpand" title="${tx('Open Guided Copilot', '打开研究引导')}" aria-label="${tx('Open Guided Copilot', '打开研究引导')}">${icon('grid', 16)}</button>
         <button class="cp-iconbtn" id="cpClose" title="${tx('Close', '关闭')}" aria-label="${tx('Close page guide', '关闭页面指南')}">${icon('stop', 15)}</button>
       </div>
       <div class="cp-scroll" id="cpScroll" role="log" aria-live="polite"></div>
@@ -424,7 +451,7 @@
       const b = e.target.closest('[data-cp]'); if (!b) return;
       const tok = b.dataset.cp; const label = b.textContent.trim();
       thread.push({ user: true, html: esc(label) }); render();
-      if (tok === '@guided') { botSay(bi(`Opening Guided Copilot…`, `正在打开 Guided Copilot…`), []); setTimeout(openGuided, 650); return; }
+      if (tok === '@guided') { botSay(bi(`Opening Guided Copilot…`, `正在打开研究引导…`), []); setTimeout(openGuided, 650); return; }
       if (tok.startsWith('@say:')) { botSay(ANSWERS[tok.split(':')[1]] || '…', ctxFor(routeOf()).chips); return; }
       const msg = drive(tok);
       if (msg) { botSay(msg, ctxFor(routeOf()).chips); return; }
