@@ -14,7 +14,7 @@
   const R = window.AGENT_RENDER || {};
   const {
     DEMO_STUDIES, BLOCK_FAMILIES, BLOCK_LIBRARY, NATURE_PACK,
-    runStatusLabel, runStatusHint, readableArtifactText, firstValue, fmtCount,
+    runStatusLabel, runStatusHint, gateCheckLabel, readableArtifactText, firstValue, fmtCount,
     artifactKind, artifactTitle, artifactCategory, artifactSummary, artifactRank, defaultArtifactName,
     thumb, scrubDataUrls, figureGallery, artifactStructuredView,
   } = R;
@@ -977,6 +977,12 @@
   function planList() {
     const s = study();
     const seedPlan = s.ideaSeed && Array.isArray(s.ideaSeed.analysis_plan) ? s.ideaSeed.analysis_plan : null;
+    const real = window.EU_DATA === 'real';
+    // Plan provenance rule: a seed plan (Idea Mining handoff) is the study's
+    // real plan; otherwise Real mode shows the actual preflight step list a
+    // run performs — never the seeded sepsis demo fixture presented as if it
+    // were this study's confirmed plan.
+    const demoFixture = !seedPlan && s.mode !== 'idea' && !real;
     const plan = seedPlan
       ? seedPlan.map(x => {
         const step = seedPlanStepDisplay(x);
@@ -989,6 +995,13 @@
         [t('Feasibility dry-run', '可行性试运行'), t('counts, coverage — no effect sizes', '计数、覆盖率 —— 不给效应量'), 'ready'],
         [t('Recommendation', '建议'), t('is a full study worth it?', '是否值得开展完整研究?'), 'ready'],
       ]
+      : real
+      ? [
+        [t('Export snapshot', '导出快照'), t('bind the active export · hash inputs', '绑定 active export · 记录输入哈希'), 'ready'],
+        [t('Cohort & quality summary', '队列与质量摘要'), t('denominators, coverage, quality flags', '分母、覆盖率与质量标记'), 'ready'],
+        [t('Bounded output artifacts', '有界输出产物'), t('tables · figures · run manifest', '表格 · 图件 · 运行清单'), 'ready'],
+        [t('Evidence verification & sign-off', '证据核验与签署'), t('claims stay locked until checks pass', '检查通过前结论保持锁定'), 'gated'],
+      ]
       : [
         [t('Cohort summary', '队列摘要'), t('n, demographics, outcome rates', 'n、人口学、结局率'), 'ready'],
         [t('Table 1', 'Table 1'), t('baseline by group', '分组基线特征'), 'ready'],
@@ -997,11 +1010,16 @@
         [t('ROC · Calibration', 'ROC · 校准'), t('discrimination + calibration', '区分度 + 校准度'), 'ready'],
         [t('Manuscript draft', '论文草稿'), t('methods + results', '方法 + 结果'), 'gated'],
       ];
+    const gatedN = plan.filter(row => row[2] === 'gated').length;
+    const readyN = plan.length - gatedN;
+    const planPill = s.mode === 'analysis'
+      ? `<span class="pill ok" style="height:20px;"><span class="dot"></span>${readyN} ${t('ready', '就绪')}${gatedN ? ` · ${gatedN} ${t('needs review', '待核验')}` : ''}</span>`
+      : `<span class="pill ok" style="height:20px;"><span class="dot"></span>${t('feasibility only', '仅可行性')}</span>`;
     return `
       <div class="card pad">
         <div class="row" style="justify-content:space-between;align-items:baseline;">
-          <div class="eyebrow">${t('Plan', '计划')} · ${plan.length} ${t('steps', '步')}</div>
-          ${s.mode === 'analysis' ? `<span class="pill ok" style="height:20px;"><span class="dot"></span>5 ${t('ready', '就绪')} · 1 ${t('needs review', '待核验')}</span>` : `<span class="pill ok" style="height:20px;"><span class="dot"></span>${t('feasibility only', '仅可行性')}</span>`}
+          <div class="eyebrow">${t('Plan', '计划')} · ${plan.length} ${t('steps', '步')}${demoFixture ? ` · <span style="color:var(--warn,#a66a00);">${t('demo example plan', '演示示例计划')}</span>` : (!seedPlan && s.mode !== 'idea' ? ` · ${t('preflight steps', '预检步骤')}` : '')}</div>
+          ${planPill}
         </div>
         <div class="planlist mt-12">
           ${plan.map(([ti, d, st], i) => `
@@ -1160,7 +1178,7 @@
         const human = id === 'human_signoff';
         const passed = check.passed === true;
         const state = passed ? 'passed' : (human ? 'pending' : 'failed');
-        const label = check.label || check.title || id.replace(/_/g, ' ');
+        const label = gateCheckLabel(check);
         return { label, passed, state };
       });
       const passed = rows.filter(row => row.passed).length;
@@ -1358,8 +1376,8 @@
       </div>
       <div class="handoff">
         <span class="ho-ico">${icon('spark', 17)}</span>
-        <div class="ho-body"><b>${t('Rather drive this study by chat?', '想用对话来推进这项研究?')}</b> ${t('Guided study walks the same plan → run → review → review-ready draft workflow conversationally, then hands the study back here.', '研究引导用对话走同一套 计划 → 运行 → 审阅 → 待核验草稿 的流程,完成后把研究交回这里。')}</div>
-        <button class="btn" data-nav="guided">${icon('spark', 13)} ${t('Continue in Guided study', '在研究引导中继续')} ${icon('arrow', 13)}</button>
+        <div class="ho-body"><b>${t('Rather drive this study by chat?', '想用对话来推进这项研究?')}</b> ${t('Guided Copilot walks the same plan → run → review → review-ready draft workflow conversationally, then hands the study back here.', '研究引导用对话走同一套 计划 → 运行 → 审阅 → 待核验草稿 的流程,完成后把研究交回这里。')}</div>
+        <button class="btn" data-nav="guided">${icon('spark', 13)} ${t('Continue in Guided Copilot', '在研究引导中继续')} ${icon('arrow', 13)}</button>
       </div>`;
   }
 
@@ -2370,7 +2388,10 @@
     section: 'agent', nav: 'agent',
     wide: true,
     get crumbs() { return [t('Home', '首页'), t('Agent Projects', '研究项目')]; },
-    get actionHtml() { return `<button class="btn" data-cpopen>${icon('help', 13)} ${t('Agent guide', '代理指南')}</button>`; },
+    /* No per-screen guide action: the removed button opened the SAME dock as
+       the topbar 'Page guide' button beside it, reading as a second
+       agent-specific help system that didn't exist. The dock already greets
+       agent-specifically via its CTX.agent entry. */
     rail() {
       const s = study();
       return `

@@ -259,6 +259,23 @@
     };
     return hints[key] || '';
   }
+  // Bilingual labels for the evidence-gate check ids (agent_runs.py). The
+  // sign-off checklist is the most consequential reading moment of the agent
+  // journey and must not fall back to English-only backend labels for zh users.
+  function gateCheckLabel(check) {
+    const id = String((check && (check.id || check.name)) || '').toLowerCase();
+    const labels = {
+      no_patient_rows_persisted: t('No patient rows persisted in agent artifacts', 'Agent 产物中不落任何患者行级数据'),
+      provider_opt_in: t('LLM provider path resolved before invocation', '外部模型调用前已确认授权路径'),
+      strict_evidence_bound_claims: t('All manuscript claims bind to known evidence', '所有稿件声明都绑定到已知证据'),
+      strict_evidence_bound_sentences: t('All manuscript sentences bind to known evidence', '所有稿件句子都绑定到已知证据'),
+      numeric_evidence_value_binding: t('All numeric manuscript claims match artifact values', '所有数值声明与产物数值一致'),
+      human_signoff: t('Human sign-off before manuscript claims', '稿件声明前需人工签署'),
+    };
+    if (labels[id]) return labels[id];
+    const raw = check && (check.label || check.title);
+    return raw ? String(raw) : id.replace(/_/g, ' ');
+  }
   function readableArtifactText(value) {
     return String(value || '')
       .replace(/\bgate_reportable\b/g, runStatusLabel('gate_reportable'))
@@ -595,7 +612,7 @@
 
   window.AGENT_RENDER = {
     DEMO_STUDIES, BLOCK_FAMILIES, BLOCK_LIBRARY, NATURE_PACK,
-    runStatusLabel, runStatusHint, readableArtifactText, firstValue, fmtCount,
+    runStatusLabel, runStatusHint, gateCheckLabel, readableArtifactText, firstValue, fmtCount,
     artifactKind, artifactTitle, artifactCategory, artifactSummary, artifactRank, defaultArtifactName,
     thumb, scrubDataUrls, figureGallery, artifactScalar, artifactKeyLabel,
     artifactSummaryRows, artifactTable, objectArrayRows, firstObjectArray, stepRowsFrom, artifactStructuredView,

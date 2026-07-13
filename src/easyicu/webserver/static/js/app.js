@@ -72,7 +72,7 @@
         lbl('Save to', '保存到', p.export_destination_hint ? shortPath(p.export_destination_hint) : ''),
       ].filter(Boolean).join(' · ');
       const ic = window.icon ? window.icon('spark', 14) : '';
-      return `<div class="note info" style="margin-bottom:14px;"><div class="ico">${ic}</div><div class="body"><span class="t">${T('Handed off from Guided Copilot.', '来自 Guided Copilot 的交接。')}</span> <span class="d" style="display:inline;">${bits || T('Continue the study you configured in Copilot.', '继续你在 Copilot 里配置的研究。')}</span></div><button class="btn sm ghost" data-guided-prefill-dismiss type="button" style="margin-left:auto;align-self:center;">${T('Dismiss', '关闭')}</button></div>`;
+      return `<div class="note info" style="margin-bottom:14px;"><div class="ico">${ic}</div><div class="body"><span class="t">${T('Handed off from Guided Copilot.', '来自研究引导的交接。')}</span> <span class="d" style="display:inline;">${bits || T('Continue the study you configured in Copilot.', '继续你在研究引导里配置的研究。')}</span></div><button class="btn sm ghost" data-guided-prefill-dismiss type="button" style="margin-left:auto;align-self:center;">${T('Dismiss', '关闭')}</button></div>`;
     },
     dismiss() { guidedHandoffNote = null; },
   };
@@ -164,7 +164,7 @@
       <div class="sec-label nav-sec">${t('Discovery & Plan', '发现与计划')}</div>
       <button type="button" class="cp-entry ${route === 'guided' ? 'on' : ''}" data-nav="guided">
         <span class="cp-ico">${icon('spark', 16)}</span>
-        <span class="cp-body"><span class="cp-t">${t('Guided study', '研究引导')}</span><span class="cp-d">${window.EU_HASWORK ? t('continue the current workflow by chat', '用对话继续当前流程') : t('plan a study by conversation', '用对话规划研究')}</span></span>
+        <span class="cp-body"><span class="cp-t">${t('Guided Copilot', '研究引导')}</span><span class="cp-d">${window.EU_HASWORK ? t('continue the current workflow by chat', '用对话继续当前流程') : t('plan a study by conversation', '用对话规划研究')}</span></span>
         <span class="cp-go">${icon('arrow', 14)}</span>
       </button>
       <button type="button" class="cp-entry ideas-entry ${route === 'ideas' ? 'on' : ''}" data-nav="ideas">
@@ -172,7 +172,7 @@
         <span class="cp-body"><span class="cp-t">${t('Idea Mining', '想法挖掘')}</span><span class="cp-d">${t('paper, PDF, or topic → feasible plan', '文章、PDF 或主题 → 可行计划')}</span></span>
         <span class="cp-go">${icon('arrow', 14)}</span>
       </button>
-      <div class="shared-note"><span class="ico">${icon('target', 11)}</span><span>${t('Paper or topic? Start with Idea Mining. Clear question? Start Guided study. Already have data? Start with Extract Data.', '有文章或主题，从想法挖掘开始；有明确问题，从研究引导开始；已有数据，从数据抽取开始。')}</span></div>
+      <div class="shared-note"><span class="ico">${icon('target', 11)}</span><span>${t('Paper or topic? Start with Idea Mining. Clear question? Start Guided Copilot. Already have data? Start with Extract Data.', '有文章或主题，从想法挖掘开始；有明确问题，从研究引导开始；已有数据，从数据抽取开始。')}</span></div>
       <div class="sec-label nav-sec">${t('Data & Review', '数据与审阅')}</div>
       <div class="wsnav">
         <button type="button" class="wsgroup-head ${wsOpen ? 'open' : ''} ${classicActive ? 'active' : ''}" data-ws-toggle aria-expanded="${wsOpen}" aria-controls="data-workspace-links">

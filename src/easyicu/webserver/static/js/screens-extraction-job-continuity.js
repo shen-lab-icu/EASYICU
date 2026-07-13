@@ -15,6 +15,7 @@
 
   let generation = 0;
   let active = null;
+  let running = false;
   let stream = null;
   let reconnectAttempts = 0;
 
@@ -111,6 +112,7 @@
     clearRecord();
     generation += 1;
     active = null;
+    running = false;
     const target = host();
     if (target && target.missing) target.missing(record);
   }
@@ -129,6 +131,7 @@
     }
     const target = host();
     if (!target || !target.applyEvent) return false;
+    running = snapshot.status === 'running';
     (Array.isArray(snapshot.events) ? snapshot.events : []).forEach(event => {
       if (event && event.type !== 'end' && isCurrent(record, requestGeneration)) {
         target.applyEvent(record, event);
@@ -183,7 +186,10 @@
       try { message = JSON.parse(event.data); } catch (e) { return; }
       const target = host();
       if (target && target.applyEvent) target.applyEvent(record, message);
-      if (message && message.type === 'end') closeStream();
+      if (message && message.type === 'end') {
+        running = false;
+        closeStream();
+      }
     };
     next.onerror = () => {
       if (!isCurrent(record, requestGeneration) || stream !== next) return;
@@ -205,6 +211,7 @@
     closeStream();
     reconnectAttempts = 0;
     active = null;
+    running = false;
     clearRecord();
   }
 
@@ -229,6 +236,7 @@
       return null;
     }
     active = record;
+    running = true;
     reconnectAttempts = 0;
     writeRecord(record);
     const target = host();
@@ -246,6 +254,7 @@
     generation += 1;
     closeStream();
     active = record;
+    running = true;
     reconnectAttempts = 0;
     writeRecord(record);
     const target = host();
@@ -259,6 +268,7 @@
     restore,
     abandon,
     isPending: ticket => !!ticket && ticket.generation === generation,
+    isRunning: () => !!(active && running),
     active: () => active ? JSON.parse(JSON.stringify(active)) : null,
   };
   window.EU_EXTRACTION_JOB_CONTINUITY = owner;

@@ -191,6 +191,14 @@ def _route_intro(route: str) -> Dict[str, str]:
             "en": "Settings are local-first. Only controls backed by native runtime logic are editable.",
             "zh": "设置是本地优先的。只有已由原生运行逻辑承接的控件可以编辑。",
         },
+        "ideas": {
+            "en": "Idea Mining turns a paper, PDF, or topic into an evidence-bound idea ledger with a feasibility verdict. Mining decides what is worth running; Agent Projects runs confirmed analyses.",
+            "zh": "想法挖掘把文章、PDF 或主题变成证据绑定的 idea 台账并给出可行性判定。挖掘决定什么值得做；确认后的分析由研究项目运行。",
+        },
+        "dictionary": {
+            "en": "The Data Dictionary lists every concept EasyICU can extract — names, units, and per-database coverage.",
+            "zh": "数据字典列出 EasyICU 可抽取的全部概念：名称、单位和各数据库覆盖情况。",
+        },
     }
     return intros.get(
         route,
@@ -263,6 +271,20 @@ def _chips_for_route(route: str) -> List[Dict[str, str]]:
                 "action": "explain_gate",
             },
         ],
+        "ideas": [
+            {
+                "label_en": "Open Idea Mining",
+                "label_zh": "打开想法挖掘",
+                "action": "open_ideas",
+            },
+        ],
+        "dictionary": [
+            {
+                "label_en": "Open Data Dictionary",
+                "label_zh": "打开数据字典",
+                "action": "open_dictionary",
+            },
+        ],
         "settings": [
             {
                 "label_en": "Open Settings",
@@ -276,7 +298,7 @@ def _chips_for_route(route: str) -> List[Dict[str, str]]:
             },
         ],
     }
-    return route_chips.get(route, common[:1]) + common
+    return route_chips.get(route, []) + common
 
 
 def _reply_for_intent(intent: str, route: str) -> Dict[str, Any]:
@@ -520,6 +542,8 @@ def execute_action(body: Dict[str, Any]) -> Dict[str, Any]:
         "open_crossdb": {"type": "navigate", "target": "crossdb"},
         "open_agent": {"type": "navigate", "target": "agent"},
         "open_settings": {"type": "navigate", "target": "settings"},
+        "open_ideas": {"type": "navigate", "target": "ideas"},
+        "open_dictionary": {"type": "navigate", "target": "dictionary"},
     }
     if action in allowed:
         return {

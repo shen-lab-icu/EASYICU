@@ -1656,6 +1656,7 @@
 .gd-task .tk{ width: 16px; height: 16px; border-radius: 50%; flex: none; display: grid; place-items: center; border: 1.5px solid var(--hair-2); color: var(--ink-4); }
 .gd-task.done .tk{ background: var(--ok); border-color: var(--ok); color: #fff; }
 .gd-task.running .tk{ border-color: var(--accent); }
+.gd-task.failed .tk{ background: color-mix(in srgb, var(--bad, #c0392b) 14%, transparent); border-color: var(--bad, #c0392b); color: var(--bad, #c0392b); }
 .gd-task.queued{ color: var(--ink-4); }
 .gd-task .grow{ flex: 1; }
 .gd-task .tdur{ font-family: var(--font-mono); font-size: 10px; color: var(--ink-4); }

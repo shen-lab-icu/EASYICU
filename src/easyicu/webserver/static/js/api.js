@@ -15,6 +15,20 @@
     return res.json();
   }
 
+  /* Backend validation errors ship a human sentence in detail.reason next to
+     the machine detail.error code. Clinicians should read the sentence, not
+     'path -> HTTP 400 · pdf_too_large' — so for 4xx the Error message is the
+     human reason (code as fallback) and the transport string moves to
+     err.technical; 5xx keeps the technical prefix (it IS the story there). */
+  function apiError(path, res, d) {
+    const technical = path + ' -> HTTP ' + res.status;
+    const reason = d && typeof d === 'object' ? (d.reason || '') : '';
+    const code = d && typeof d === 'object' ? (d.error || '') : (typeof d === 'string' ? d : '');
+    const human = reason || code;
+    const err = new Error(res.status < 500 && human ? human : technical + (human ? ' · ' + human : ''));
+    err.technical = technical; err.status = res.status; err.code = code || null;
+    return err;
+  }
   async function postJSON(path, body) {
     const res = await fetch(path, {
       method: 'POST',
@@ -22,13 +36,9 @@
       body: JSON.stringify(body || {}),
     });
     if (!res.ok) {
-      let detail = '';
-      try {
-        const payload = await res.json();
-        const d = payload && payload.detail;
-        detail = typeof d === 'string' ? d : (d && (d.error || JSON.stringify(d)));
-      } catch (e) {}
-      throw new Error(path + ' -> HTTP ' + res.status + (detail ? ' · ' + detail : ''));
+      let d = null;
+      try { const payload = await res.json(); d = payload && payload.detail; } catch (e) {}
+      throw apiError(path, res, d);
     }
     return res.json();
   }
@@ -39,13 +49,9 @@
       body: JSON.stringify(body || {}),
     });
     if (!res.ok) {
-      let detail = '';
-      try {
-        const payload = await res.json();
-        const d = payload && payload.detail;
-        detail = typeof d === 'string' ? d : (d && (d.error || JSON.stringify(d)));
-      } catch (e) {}
-      throw new Error(path + ' -> HTTP ' + res.status + (detail ? ' · ' + detail : ''));
+      let d = null;
+      try { const payload = await res.json(); d = payload && payload.detail; } catch (e) {}
+      throw apiError(path, res, d);
     }
     const disposition = res.headers.get('content-disposition') || '';
     const match = disposition.match(/filename="([^"]+)"/i);

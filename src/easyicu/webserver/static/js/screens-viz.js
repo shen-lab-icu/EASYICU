@@ -706,26 +706,27 @@
       <div class="note warn mt-12" data-patient-source-ready="false">
         <div class="ico">${icon('alert', 14)}</div>
         <div class="body">
-          <div class="t">No active local export is ready</div>
-          <div class="d">Add or choose an EasyICU export folder below, or run Data Extraction first.</div>
+          <div class="t">${t('No active local export is ready', '还没有可用的本地导出')}</div>
+          <div class="d">${t('Add or choose an EasyICU export folder below, or run Data Extraction first.', '请在下方添加或选择一个 EasyICU 导出文件夹，或先运行数据抽取。')}</div>
           <div class="d mono" style="margin-top:4px;">registered_sources=${fmtInt(sourceCount)}</div>
+          <div class="row mt-8"><button class="btn sm" data-nav="extraction" type="button">${icon('extract', 13)} ${t('Open Data Extraction', '打开数据抽取')}</button></div>
         </div>
       </div>`;
     }
     const patientReady = active.patient_ready !== false;
     const sum = active.summary || {};
     const readyLine = [
-      sum.entities != null ? `${fmtInt(sum.entities)} entities` : (sum.stays != null ? `${fmtInt(sum.stays)} stays` : null),
-      sum.modules != null ? `${fmtInt(sum.modules)} modules` : null,
-      sum.total_rows != null ? `${fmtInt(sum.total_rows)} rows` : null,
+      sum.entities != null ? `${fmtInt(sum.entities)} ${t('entities', '个实体')}` : (sum.stays != null ? `${fmtInt(sum.stays)} ${t('stays', '条住院')}` : null),
+      sum.modules != null ? `${fmtInt(sum.modules)} ${t('modules', '个模块')}` : null,
+      sum.total_rows != null ? `${fmtInt(sum.total_rows)} ${t('rows', '行')}` : null,
     ].filter(Boolean).join(' · ') || sourceLine(active);
     return `
       <div class="note ${patientReady ? 'ok' : 'warn'} mt-12" data-patient-source-ready="${patientReady ? 'true' : 'false'}">
         <div class="ico">${icon(patientReady ? 'check' : 'alert', 14)}</div>
         <div class="body">
-          <div class="t">${patientReady ? 'Ready to load local export' : 'Registered export needs review'}</div>
-          <div class="d"><b>${esc(active.label || active.database || 'Local export')}</b> · ${esc(readyLine)}</div>
-          <div class="d mono" style="margin-top:4px;">path_hash=${esc(active.path_hash || '—')} · local-only metadata</div>
+          <div class="t">${patientReady ? t('Ready to load local export', '本地导出已就绪，可以加载') : t('Registered export needs review', '已注册导出需要检查')}</div>
+          <div class="d"><b>${esc(active.label || active.database || t('Local export', '本地导出'))}</b> · ${esc(readyLine)}</div>
+          <div class="d mono" style="margin-top:4px;">path_hash=${esc(active.path_hash || '—')} · ${t('local-only metadata', '仅本地元数据')}</div>
         </div>
       </div>`;
   }
@@ -1473,7 +1474,19 @@
     window.EU_PATIENT_SOURCES = null;
   };
 
+  function activeVizRoute() {
+    const raw = (location.hash || '#entry').slice(1).trim();
+    if (raw === 'audit' || raw === 'sofareclass') return 'cohort';
+    if (raw === 'icd') return 'extraction';
+    return raw;
+  }
   function repaintScreen(id) {
+    // Background events (SSE progress, async loads resolving late) must never
+    // repaint a screen the user is not on: the full-shell re-render wipes
+    // focus, IME composition, and uncommitted input on unrelated routes.
+    // Module state is already updated; the target screen re-renders from
+    // state on the next visit.
+    if (id && activeVizRoute() !== id) return;
     if (window.__euRender) { window.__euRender(); return; }
     const app = document.getElementById('app');
     const content = app && app.querySelector('.content');

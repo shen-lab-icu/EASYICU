@@ -67,6 +67,7 @@ require(path.resolve(process.argv[2]));
   await owner.ready;
 
   assert.equal(began.at(-1).job_id, 'convert_1');
+  assert.equal(owner.isRunning(), true, 'a reconciled running snapshot is active');
   assert.equal(events.at(-1).event.current, 2);
   assert.equal(streams.at(-1).url, '/api/jobs/convert_1/events');
   assert.deepEqual(Object.keys(JSON.parse(storage.get(STORAGE_KEY))).sort(), ['config', 'job_id', 'kind', 'source']);
@@ -74,6 +75,7 @@ require(path.resolve(process.argv[2]));
 
   streams.at(-1).emit({ type: 'end', status: 'cancelled', result: { converted: 2, failed: 0 } });
   assert.equal(events.at(-1).event.status, 'cancelled');
+  assert.equal(owner.isRunning(), false, 'a terminal event is not still running');
   assert.equal(streams.at(-1).closed, true);
   assert.equal(storage.has(STORAGE_KEY), true, 'terminal metadata stays available for refresh restore');
   owner.abandon();
@@ -104,6 +106,7 @@ require(path.resolve(process.argv[2]));
     },
   });
   assert.ok(owner.attach(extractTicket, 'extract_2'));
+  assert.equal(owner.isRunning(), true, 'a newly attached job is running');
   const persisted = JSON.parse(storage.get(STORAGE_KEY));
   assert.deepEqual(Object.keys(persisted).sort(), ['config', 'job_id', 'kind', 'source']);
   assert.equal(persisted.config.modules.length, 64);
@@ -113,6 +116,7 @@ require(path.resolve(process.argv[2]));
 
   streams.at(-1).emit({ type: 'end', status: 'failed', error: 'disk full' });
   assert.equal(events.at(-1).event.status, 'failed');
+  assert.equal(owner.isRunning(), false, 'a failed job is terminal');
   assert.equal(storage.has(STORAGE_KEY), true);
 
   snapshots.set('extract_2', {
@@ -122,6 +126,7 @@ require(path.resolve(process.argv[2]));
   await owner.restore();
   assert.equal(events.at(-1).event.status, 'done', 'terminal restore must use the server snapshot');
   assert.equal(events.at(-1).event.result.total_rows, 42);
+  assert.equal(owner.isRunning(), false, 'a restored done snapshot is terminal');
 
   owner.abandon();
   storage.set(STORAGE_KEY, JSON.stringify({

@@ -118,8 +118,8 @@ def test_native_shell_language_icon_is_stateful() -> None:
     assert "window.setLang(val);" in settings_js
     assert "window.EU_LANG = val;" not in settings_js
     assert "window.EU_API.saveSetting('data_mode', m)" in i18n_js
-    assert "js/i18n.js?v=20260626-language-refresh-dock" in index_html
-    assert "js/api.js?v=20260710-patient-browse" in index_html
+    assert "js/i18n.js?v=20260712-ux-fixes" in index_html
+    assert "js/api.js?v=20260712-ux-fixes" in index_html
 
 
 def test_native_mobile_page_guide_fab_does_not_cover_bottom_nav() -> None:
@@ -144,8 +144,11 @@ def test_native_assistant_labels_disambiguate_page_guide_guided_copilot_and_agen
     assert "Page guide" in app_js
     assert "页面指南" in app_js
     assert "window.EUPageGuide || window.EUCopilot" in app_js
-    assert "Guided study" in app_js
-    assert "Agent guide" in agent_js
+    assert "t('Guided Copilot', '研究引导')" in app_js
+    # One guide surface, one name: the per-screen 'Agent guide' duplicate opened
+    # the same dock as the adjacent topbar 'Page guide' button and was removed.
+    assert "Agent guide" not in agent_js
+    assert "data-cpopen" not in agent_js
     assert "Open EasyICU page guide" in dock_js
     assert "打开 EasyICU 页面指南" in dock_js
     assert "Page guide" in dock_js
@@ -153,8 +156,8 @@ def test_native_assistant_labels_disambiguate_page_guide_guided_copilot_and_agen
     assert "Open Guided Copilot" in dock_js
     assert "当前页面 · 安全快捷操作 · 仅本地" in dock_js
     assert "label: bi('Cohort Statistics', '队列统计')" in dock_js
-    assert "Start Guided study" in extraction_js
-    assert "Continue in Guided study" in agent_js
+    assert "Start Guided Copilot" in extraction_js
+    assert "Continue in Guided Copilot" in agent_js
     assert "Open Page guide" in help_js
 
     assert "Quick help" not in app_js
@@ -169,11 +172,11 @@ def test_native_assistant_labels_disambiguate_page_guide_guided_copilot_and_agen
     assert "Open Copilot" not in help_js
 
     assert "css/dock.css?v=20260625-stage99" in index_html
-    assert "js/app.js?v=20260707-logic" in index_html
-    assert "js/copilot-dock.js?v=20260707-logic" in index_html
-    assert "js/screens-extraction.js?v=20260707-residuals2" in index_html
-    assert "js/screens-agent.js?v=20260707-logic" in index_html
-    assert "js/screens-help.js?v=20260707-logic" in index_html
+    assert "js/app.js?v=20260712-ux-fixes" in index_html
+    assert "js/copilot-dock.js?v=20260712-ux-fixes" in index_html
+    assert "js/screens-extraction.js?v=20260712-ux-fixes" in index_html
+    assert "js/screens-agent.js?v=20260712-ux-fixes" in index_html
+    assert "js/screens-help.js?v=20260712-ux-fixes" in index_html
 
 
 def test_agent_science_workbench_has_dedicated_owner_files_and_wiring() -> None:
@@ -312,8 +315,8 @@ def test_native_tutorial_screen_uses_active_language_without_mixed_copy() -> Non
     assert ">No tokens, no setup, no patient data. The demo generates" not in help_js
     assert "How a study moves through EasyICU</h2>" not in help_js
 
-    assert "js/app.js?v=20260707-logic" in index_html
-    assert "js/screens-help.js?v=20260707-logic" in index_html
+    assert "js/app.js?v=20260712-ux-fixes" in index_html
+    assert "js/screens-help.js?v=20260712-ux-fixes" in index_html
 
 
 def test_native_guided_and_page_guide_messages_are_bilingual() -> None:
@@ -324,9 +327,9 @@ def test_native_guided_and_page_guide_messages_are_bilingual() -> None:
     assert "function bi(en, zh)" in guided_js
     assert "function htmlOf(value)" in guided_js
     assert "htmlOf(t.html)" in guided_js
-    assert "你好，我是 <strong>Guided Copilot</strong>" in guided_js
+    assert "你好，我是<strong>研究引导</strong>" in guided_js
     assert "脚本化演示流程" in guided_js
-    assert "正在打开 Guided Copilot" in dock_js
+    assert "正在打开研究引导" in dock_js
     assert "页面指南会解释当前页面" in dock_js
     assert "页面指南只支持固定快捷操作" in dock_js
     assert "htmlOf(t.html)" in dock_js
@@ -338,8 +341,8 @@ def test_native_guided_and_page_guide_messages_are_bilingual() -> None:
         "js/screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "js/screens-guided.js?v=20260707-logic" in index_html
-    assert "js/copilot-dock.js?v=20260707-logic" in index_html
+    assert "js/screens-guided.js?v=20260712-ux-fixes" in index_html
+    assert "js/copilot-dock.js?v=20260712-ux-fixes" in index_html
 
 
 def test_native_page_guide_uses_backend_page_guide_contract() -> None:
@@ -380,8 +383,8 @@ def test_native_page_guide_uses_backend_page_guide_contract() -> None:
     assert "sendCopilotMessage" not in dock_js
     assert "runCopilotAction" not in dock_js
     assert "Page guide backend unavailable, using local fallback" in dock_js
-    assert "js/api.js?v=20260710-patient-browse" in index_html
-    assert "js/copilot-dock.js?v=20260707-logic" in index_html
+    assert "js/api.js?v=20260712-ux-fixes" in index_html
+    assert "js/copilot-dock.js?v=20260712-ux-fixes" in index_html
 
 
 def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questions() -> (
@@ -529,9 +532,9 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     guided_plan_css = _static_css("guided-idea-plan.css")
     redesign_css = _static_css("redesign.css")
 
-    assert "css/guided.css?v=20260707-design" in index_html
+    assert "css/guided.css?v=20260712-ux-fixes" in index_html
     assert "css/guided-idea-plan.css?v=20260627-ideas-feasibility-plan" in index_html
-    assert "js/api.js?v=20260710-patient-browse" in index_html
+    assert "js/api.js?v=20260712-ux-fixes" in index_html
     assert (
         "js/screens-guided-projects.js?v=20260626-guided-projects-split" in index_html
     )
@@ -627,7 +630,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert ".gdi-plan-details" in guided_plan_css
     assert ".gdi-feature-row.one" in guided_plan_css
     assert ".gdi-plan-details" not in redesign_css
-    assert "js/screens-guided.js?v=20260707-logic" in index_html
+    assert "js/screens-guided.js?v=20260712-ux-fixes" in index_html
 
 
 def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
@@ -642,7 +645,7 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     redesign_css = _static_css("redesign.css")
     index_html = _static_html("index.html")
 
-    assert "js/screens-agent.js?v=20260707-logic" in index_html
+    assert "js/screens-agent.js?v=20260712-ux-fixes" in index_html
     assert "css/agent.css?v=20260707-design" in index_html
     assert "css/agent-layout.css?v=20260702-agent-focus-layout" in index_html
     assert "css/agent-header.css?v=20260702-agent-compact-header" in index_html
@@ -789,7 +792,7 @@ def test_native_agent_research_blocks_are_project_owned() -> None:
     assert ".ag-lib-card" in agent_css
     assert ".ag-block-contract" in agent_css
     assert "css/agent.css?v=20260707-design" in index_html
-    assert "js/screens-agent.js?v=20260707-logic" in index_html
+    assert "js/screens-agent.js?v=20260712-ux-fixes" in index_html
 
     assert "ag-block-grid" not in app_js
     assert "Research Blocks" not in app_js
@@ -836,7 +839,7 @@ def test_native_agent_render_layer_is_split_into_owner_file() -> None:
     assert (
         render_pos < main_pos
     ), "screens-agent-render.js must load before screens-agent.js"
-    assert "js/screens-agent-render.js?v=20260707-residuals2" in index_html
+    assert "js/screens-agent-render.js?v=20260712-ux-fixes" in index_html
 
 
 def test_native_agent_overview_renders_object_idea_plan_steps() -> None:
@@ -1405,7 +1408,7 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     assert "css/ideas.css?v=20260630-gate-first-ideas" in index_html
     assert "css/shell.css?v=20260626-owner" in index_html
     assert "js/icons.js?v=20260625-stage84" in index_html
-    assert "js/app.js?v=20260707-logic" in index_html
+    assert "js/app.js?v=20260712-ux-fixes" in index_html
     assert "css/ideas-review.css?v=20260702-idea-review-handoff" in index_html
     assert "css/ideas-connectors.css?v=20260702-zotero-simple" in index_html
     assert "js/screens-ideas-zotero.js?v=20260702-zotero-origin" in index_html
@@ -2018,7 +2021,7 @@ def test_native_crossdb_restores_distribution_visuals() -> None:
     assert "xdb-density-svg" in viz_js
     assert "xdb-density-line" in viz_js
     assert "js/screens-viz-crossdb-setup.js?v=20260710-setup-owner" in index_html
-    assert "js/screens-viz.js?v=20260710-crossdb-setup-owner" in index_html
+    assert "js/screens-viz.js?v=20260712-ux-fixes" in index_html
     assert "css/crossdb.css?v=20260710-setup-owner" in index_html
     assert "crossdb-run-strip" in setup_js
     assert ".crossdb-run-strip" in crossdb_css
@@ -2088,7 +2091,7 @@ def test_native_cohort_snapshot_renders_real_clinical_profile() -> None:
     assert ".cprof-grid" in cohort_css
     assert ".cxh" not in cohort_css
     # Cache-bust bumped so the restored charts ship to existing clients.
-    assert "js/screens-viz.js?v=20260710-crossdb-setup-owner" in index_html
+    assert "js/screens-viz.js?v=20260712-ux-fixes" in index_html
 
 
 def test_native_cohort_groups_render_comparison_bar_chart() -> None:
@@ -2209,8 +2212,8 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".cov-badge.derived" in deepdive_css
     assert ".cov-badge.unaudited" in deepdive_css
     assert "data-catalog.js?v=20260625-stage93" in index_html
-    assert "api.js?v=20260710-patient-browse" in index_html
-    assert "screens-dict.js?v=20260707-logic" in index_html
+    assert "api.js?v=20260712-ux-fixes" in index_html
+    assert "screens-dict.js?v=20260712-ux-fixes" in index_html
     assert "deepdive.css?v=20260625-stage85" in index_html
 
 
@@ -2455,15 +2458,15 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert ".gdf-memory" in guided_css
     assert ".gdf-card" in guided_css
     assert ".gd-handoff-ready" in guided_css
-    assert "api.js?v=20260710-patient-browse" in index_html
+    assert "api.js?v=20260712-ux-fixes" in index_html
     assert "screens-guided-projects.js?v=20260626-guided-projects-split" in index_html
     assert (
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "screens-guided.js?v=20260707-logic" in index_html
-    assert "guided.css?v=20260707-design" in index_html
-    assert '<span class="gd-name">Guided Copilot</span>' in guided_js
+    assert "screens-guided.js?v=20260712-ux-fixes" in index_html
+    assert "guided.css?v=20260712-ux-fixes" in index_html
+    assert "gd-name\">${t('Guided Copilot', '研究引导')}</span>" in guided_js
     assert "Guided Copilot · local first · nothing leaves your machine" in guided_js
     assert "[t('Review Data', '审阅已有数据'), '@guidedGoal:review_data']" in guided_js
 
@@ -2668,7 +2671,7 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert index_html.index("js/screens-viz-patient-tables.js?") < index_html.index(
         "js/screens-viz.js?"
     )
-    assert "js/screens-viz.js?v=20260710-crossdb-setup-owner" in index_html
+    assert "js/screens-viz.js?v=20260712-ux-fixes" in index_html
     assert "bounded browser review', '浏览器有界审阅" in viz_js
     assert "function buildDemoPatientDrilldown" in viz_js
     assert "function demoTablePreviewRowContext" in viz_js
@@ -2836,7 +2839,7 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
     index_html = _static_html("index.html")
 
     assert "css/cohort.css?v=20260707-design" in index_html
-    assert "js/screens-viz.js?v=20260710-crossdb-setup-owner" in index_html
+    assert "js/screens-viz.js?v=20260712-ux-fixes" in index_html
     assert "let cohortView = 'idle';" in viz_js
     assert "let cohortFeatureScope = 'recommended';" in viz_js
     assert 'data-cohort-config-required="true"' in viz_js
@@ -3183,7 +3186,7 @@ def test_seeded_demo_pipeline_is_named_guided_copilot_and_labeled() -> None:
     assert "Research Copilot" not in guided_js
     assert "研究 Copilot" not in guided_js
     assert "scripted demo walkthrough" in guided_js
-    assert "你好，我是 <strong>Guided Copilot</strong>" in guided_js
+    assert "你好，我是<strong>研究引导</strong>" in guided_js
 
 
 def test_guided_frontdoor_offers_one_click_starter_folder() -> None:
