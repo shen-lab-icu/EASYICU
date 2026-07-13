@@ -113,6 +113,11 @@ def test_resume_migrates_all_unique_parent_tables_but_not_raw_artifacts(
             "log:analysis_notes",
         ]
     )
+    parent = plan.steps[0].model_copy(
+        update={"inputs": ["artifact:upstream_cohort", "age"]}
+    )
+    child = plan.steps[1].model_copy(update={"inputs": list(parent.inputs)})
+    plan = plan.model_copy(update={"steps": [parent, child]})
 
     migrated, revision_path, step_ids, _ = _migrate(
         tmp_path,

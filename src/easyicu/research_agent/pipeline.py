@@ -763,7 +763,6 @@ def _migrate_legacy_resume_figure_render_edges(
             or child_id != f"{parent_id}_figure"
             or str(child.method) != str(parent.method)
             or list(child.inputs or []) != list(parent.inputs or [])
-            or any(typed_product(raw) is not None for raw in child.inputs or [])
             or list(child.icu_rule_refs or [])
             != [*list(parent.icu_rule_refs or []), "visualization_rule"]
             or child.model_requirements
