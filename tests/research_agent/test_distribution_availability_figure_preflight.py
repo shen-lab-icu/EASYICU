@@ -24,6 +24,7 @@ from easyicu.research_agent.pipeline import (
     deterministic_figure_repair_id_for_upstream,
 )
 from easyicu.research_agent.schema import AnalysisStep
+from easyicu.research_agent.schema import ValidationFinding
 
 
 PARENT_STEP = "02_marker_audit"
@@ -136,13 +137,11 @@ def _write_parent(
     )
     measurement = pd.DataFrame(measurement_rows)
     if measurement_mutation == "open_partition":
-        measurement.loc[
-            measurement["source_status"].eq("no source"), "n"
-        ] = 1
+        measurement.loc[measurement["source_status"].eq("no source"), "n"] = 1
     elif measurement_mutation == "percentage_mismatch":
-        measurement.loc[
-            measurement["source_status"].eq("no source"), "percentage"
-        ] = 99.0
+        measurement.loc[measurement["source_status"].eq("no source"), "percentage"] = (
+            99.0
+        )
     elif measurement_mutation == "extra_status":
         measurement = pd.concat(
             [
@@ -294,7 +293,9 @@ def _write_parent(
                         "step_summary_evidence_id": summary_record.evidence_id,
                     }
                 ],
-                "evidence": [record.model_dump(mode="json") for record in evidence.records()],
+                "evidence": [
+                    record.model_dump(mode="json") for record in evidence.records()
+                ],
             }
         ),
         encoding="utf-8",
@@ -302,11 +303,15 @@ def _write_parent(
     return parent
 
 
-def test_verified_parent_contract_renders_without_outcome_products(tmp_path: Path) -> None:
+def test_verified_parent_contract_renders_without_outcome_products(
+    tmp_path: Path,
+) -> None:
     _write_parent(tmp_path)
     out = tmp_path / "steps" / FIGURE_STEP / "outputs"
 
-    assert deterministic_figure_repair_id_for_upstream(tmp_path, FIGURE_STEP) == REPAIR_ID
+    assert (
+        deterministic_figure_repair_id_for_upstream(tmp_path, FIGURE_STEP) == REPAIR_ID
+    )
     assert (
         _render_publication_bundle_from_prior_outputs_for_step(
             run_dir=tmp_path, current_step_id=FIGURE_STEP, out_dir=out
@@ -428,12 +433,8 @@ def test_latest_parent_record_cannot_borrow_an_older_planner_contract(
     )
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
-    assert _distribution_availability_parent_digest_seal(
-        tmp_path, FIGURE_STEP
-    ) is None
-    assert deterministic_figure_repair_id_for_upstream(
-        tmp_path, FIGURE_STEP
-    ) is None
+    assert _distribution_availability_parent_digest_seal(tmp_path, FIGURE_STEP) is None
+    assert deterministic_figure_repair_id_for_upstream(tmp_path, FIGURE_STEP) is None
 
 
 def test_figure_child_requires_typed_edge_or_exact_legacy_split(tmp_path: Path) -> None:
@@ -453,15 +454,9 @@ def test_figure_child_requires_typed_edge_or_exact_legacy_split(tmp_path: Path) 
     )
     unbound = typed_child.model_copy(update={"inputs": ["marker_value"]})
 
-    assert _distribution_availability_figure_step_matches_parent(
-        tmp_path, typed_child
-    )
-    assert _distribution_availability_figure_step_matches_parent(
-        tmp_path, legacy_split
-    )
-    assert not _distribution_availability_figure_step_matches_parent(
-        tmp_path, unbound
-    )
+    assert _distribution_availability_figure_step_matches_parent(tmp_path, typed_child)
+    assert _distribution_availability_figure_step_matches_parent(tmp_path, legacy_split)
+    assert not _distribution_availability_figure_step_matches_parent(tmp_path, unbound)
 
 
 @pytest.mark.parametrize(
@@ -519,24 +514,74 @@ def test_execution_parses_the_same_bytes_that_crossed_the_digest_seal(
         )
         == REPAIR_ID
     )
-    assert pd.read_csv(out / "distribution_panel_source_data.csv")[
-        "median_units"
-    ].iloc[0] == pytest.approx(2.5)
+    assert pd.read_csv(out / "distribution_panel_source_data.csv")["median_units"].iloc[
+        0
+    ] == pytest.approx(2.5)
 
 
-def test_pipeline_preflight_does_not_call_coder_for_verified_figure(
-    ra, tmp_path: Path
+@pytest.mark.parametrize(
+    ("sealed_case", "figure_outputs", "visual_message", "expected_status"),
+    [
+        (
+            "cosmetic_visual",
+            ["figure:marker_distribution", "figure:marker_availability"],
+            "Overlapping text elements detected; adjust spacing between annotations.",
+            "ok",
+        ),
+        (
+            "hard_visual",
+            ["figure:marker_distribution", "figure:marker_availability"],
+            "Rendered numeric annotations disagree with the expected source values.",
+            "execution_failed",
+        ),
+        (
+            "contract",
+            ["figure:marker_distribution", "figure:marker_availability"],
+            None,
+            "contract_failed",
+        ),
+        (
+            "parent_receipt",
+            ["figure:marker_distribution", "figure:marker_availability"],
+            None,
+            "contract_failed",
+        ),
+        (
+            "host_slot_denial",
+            [
+                "figure:marker_distribution",
+                "figure:marker_availability",
+                "figure:marker_third_role",
+            ],
+            None,
+            "repair_failed",
+        ),
+    ],
+)
+def test_sealed_renderer_authority_and_failure_policy(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    sealed_case: str,
+    figure_outputs: list[str],
+    visual_message: str | None,
+    expected_status: str,
 ) -> None:
     class PlannedAuditLLM:
         name = "planned-audit-llm"
 
         def __init__(self) -> None:
             self.code_calls = 0
+            self.repair_calls = 0
 
         def complete(self, messages, *, max_tokens=2048, temperature=0.2):
             del max_tokens, temperature
             user = next(
-                (message.content for message in reversed(messages) if message.role == "user"),
+                (
+                    message.content
+                    for message in reversed(messages)
+                    if message.role == "user"
+                ),
                 "",
             )
             upper = user.upper()
@@ -563,7 +608,7 @@ def test_pipeline_preflight_does_not_call_coder_for_verified_figure(
                                     "table:descriptive_distribution",
                                     "table:source_availability",
                                 ],
-                                "expected_outputs": ["figure:publication_figure"],
+                                "expected_outputs": figure_outputs,
                                 "method": "publication_figure_generation",
                                 "icu_rule_refs": [],
                             },
@@ -573,7 +618,7 @@ def test_pipeline_preflight_does_not_call_coder_for_verified_figure(
                 )
             if "WRITE THE PYTHON CODE" in upper:
                 self.code_calls += 1
-                return r'''
+                return r"""
 import json
 import os
 import pandas as pd
@@ -655,17 +700,94 @@ summary = {
 with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as handle:
     json.dump(summary, handle)
 print(json.dumps(summary))
-'''
+"""
+            if "REPAIR THE PYTHON CODE" in upper:
+                self.repair_calls += 1
+                raise AssertionError("sealed renderer must not call coder repair")
             if "INTERPRET THE RESULTS" in upper:
                 return "The planned descriptive audit completed."
             return "{}"
 
+    from easyicu.research_agent import pipeline_execute
+
+    class ControlledVisualAuditor:
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+
+        def audit_with_expected(self, **kwargs):
+            del kwargs
+            if visual_message is None:
+                return []
+            return [
+                ValidationFinding(
+                    validator="visual_qa",
+                    severity="error",
+                    message=visual_message,
+                    detail=(
+                        {"reason": "svg_text_overlap_spacing"}
+                        if sealed_case == "cosmetic_visual"
+                        else {}
+                    ),
+                )
+            ]
+
+        def audit(self, **kwargs):
+            del kwargs
+            return []
+
+    monkeypatch.setattr(
+        pipeline_execute,
+        "VisualQAAuditor",
+        ControlledVisualAuditor,
+    )
+
+    if sealed_case == "parent_receipt":
+        original_snapshot_reader = pipeline_execute.read_digest_bound_artifact_snapshot
+        host_snapshot_calls = 0
+
+        def mutate_parent_at_host_receipt(**kwargs):
+            nonlocal host_snapshot_calls
+            host_snapshot_calls += 1
+            if host_snapshot_calls == 1:
+                parent_out = Path(kwargs["parent_out"])
+                (parent_out / "descriptive_distribution.csv").write_text(
+                    "changed after sealed child execution\n",
+                    encoding="utf-8",
+                )
+            return original_snapshot_reader(**kwargs)
+
+        monkeypatch.setattr(
+            pipeline_execute,
+            "read_digest_bound_artifact_snapshot",
+            mutate_parent_at_host_receipt,
+        )
+
+    if sealed_case == "contract":
+
+        class ControlledContractValidator:
+            def audit(self, *, step, **kwargs):
+                del kwargs
+                if step.step_id != FIGURE_STEP:
+                    return []
+                return [
+                    ValidationFinding(
+                        validator="figure_contract",
+                        severity="error",
+                        message="Controlled hard figure-contract failure.",
+                    )
+                ]
+
+        monkeypatch.setattr(
+            pipeline_execute,
+            "FigureContractQualityValidator",
+            ControlledContractValidator,
+        )
     llm = PlannedAuditLLM()
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=llm,
         enable_literature=False,
-        enable_visual_qa=False,
+        enable_visual_qa=True,
         enable_publication_figure_skill=False,
         enable_llm_concept_audit=False,
         enable_memory=False,
@@ -676,7 +798,7 @@ print(json.dumps(summary))
         enable_causal_audit=False,
         enable_probe_step=False,
         enable_replanning=False,
-        max_code_repair_attempts=0,
+        max_code_repair_attempts=1,
         runner_kind="subprocess",
     )
     cohort = pd.DataFrame(
@@ -702,9 +824,83 @@ print(json.dumps(summary))
         for record in manifest["per_step_records"]
         if record.get("step_id") == FIGURE_STEP
     )
+    if sealed_case == "host_slot_denial":
+        assert llm.code_calls == 2
+        assert figure_record["status"] == expected_status
+        assert "sealed_renderer_repair" not in figure_record
+        assert "deterministic_code_fallback" not in figure_record
+        return
     assert llm.code_calls == 1
-    assert figure_record["status"] == "ok"
+    assert llm.repair_calls == 0
+    assert figure_record["status"] == expected_status
     assert figure_record["runner_repair"] == REPAIR_ID
     assert figure_record["deterministic_code_fallback"] == (
         "publication_figure_parent_outputs_preflight"
     )
+    assert figure_record["sealed_renderer_repair"] == REPAIR_ID
+    assert figure_record["post_execution_mutation_policy"] == "audit_only"
+    assert figure_record["code_repair_attempts"] == 0
+    assert figure_record["generation_mode"] == "fallback"
+    assert figure_record["llm_repair_used"] is False
+    assert figure_record["sealed_renderer_executed_code_matches_authority"] is True
+    assert (
+        figure_record["executed_code_sha256"]
+        == (figure_record["sealed_renderer_authorized_code_sha256"])
+    )
+    assert len(figure_record["sealed_renderer_implementation_sha256"]) == 64
+    assert (
+        "easyicu.research_agent.repair_registry"
+        in (figure_record["sealed_renderer_source_digests"])
+    )
+    assert set(figure_record["sealed_renderer_parent_digests"]) == {
+        "step_summary.json",
+        "descriptive_distribution.csv",
+        "source_availability.csv",
+    }
+    assert figure_record["sealed_renderer_authorized_product_slots"] == {
+        "figure:marker_distribution": "distribution",
+        "figure:marker_availability": "availability",
+    }
+    assert "repair_target_step_id" not in figure_record
+    if sealed_case == "cosmetic_visual":
+        assert figure_record["sealed_renderer_visual_repair_suppressed"] is True
+        assert figure_record["visual_qa_demoted"] is True
+        summary = figure_record["step_summary"]
+        assert summary["output_files"]["figure:marker_distribution"] == (
+            "distribution_availability.png"
+        )
+        assert summary["output_files"]["figure:marker_availability"] == (
+            "distribution_availability.png"
+        )
+        assert summary["planner_product_slot_bindings"] == {
+            "figure:marker_distribution": {
+                "slot": "distribution",
+                "panel_ids": ["A"],
+            },
+            "figure:marker_availability": {
+                "slot": "availability",
+                "panel_ids": ["B"],
+            },
+        }
+        assert (
+            summary["sealed_renderer_implementation_sha256"]
+            == (figure_record["sealed_renderer_implementation_sha256"])
+        )
+        assert (
+            summary["sealed_renderer_parent_digests"]
+            == (figure_record["sealed_renderer_parent_digests"])
+        )
+        assert figure_record["sealed_renderer_parent_receipt_verified"] is True
+    elif sealed_case == "hard_visual":
+        assert figure_record["sealed_renderer_visual_repair_suppressed"] is True
+        assert figure_record["sealed_renderer_terminal_reason"] == "visual_qa_failed"
+    elif sealed_case in {"contract", "parent_receipt"}:
+        assert figure_record["sealed_renderer_contract_repair_suppressed"] is True
+        assert figure_record["sealed_renderer_terminal_reason"] == (
+            "output_contract_failed"
+        )
+        if sealed_case == "parent_receipt":
+            assert figure_record["sealed_renderer_parent_receipt_verified"] is False
+    else:
+        assert figure_record["sealed_renderer_runtime_repair_suppressed"] is True
+        assert figure_record["sealed_renderer_terminal_reason"] == "runtime_failure"

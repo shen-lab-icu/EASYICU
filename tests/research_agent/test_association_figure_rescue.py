@@ -6,6 +6,7 @@ fails the whole run even though the parent step computed a valid odds ratio.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -16,8 +17,12 @@ from easyicu.research_agent.audits.validators import (
     FigureContractQualityValidator,
     FigureSourceDataValidator,
 )
+from easyicu.research_agent.declared_product_contract import (
+    bind_declared_figure_products,
+)
 from easyicu.research_agent.pipeline import (
     _context_axis_label,
+    _render_authorized_sealed_publication_bundle,
     _render_cohort_overlap_publication_bundle_from_prior_outputs as cohort_overlap_rescue,
     _render_missingness_publication_bundle_from_prior_outputs as missingness_rescue,
     _render_publication_bundle_from_prior_outputs_for_step as routed_rescue,
@@ -47,10 +52,7 @@ def test_context_axis_label_wraps_metric_group_pairs():
 
 def test_missingness_rescue_recomputes_percentages_from_counts(tmp_path: Path):
     parent = (
-        tmp_path
-        / "steps"
-        / "02_baseline_characteristics_and_data_quality"
-        / "outputs"
+        tmp_path / "steps" / "02_baseline_characteristics_and_data_quality" / "outputs"
     )
     parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(
@@ -256,12 +258,7 @@ def test_missingness_rescue_prefers_rich_measurement_process_over_attrition(
             "missing_pct": [99.0],
         }
     ).to_csv(parent / "complete_case_attrition.csv", index=False)
-    out = (
-        tmp_path
-        / "steps"
-        / "02_exposure_and_missingness_audit_figure"
-        / "outputs"
-    )
+    out = tmp_path / "steps" / "02_exposure_and_missingness_audit_figure" / "outputs"
 
     rid = missingness_rescue(
         run_dir=tmp_path,
@@ -370,12 +367,7 @@ def test_missingness_rescue_accepts_scope_section_rich_schema(tmp_path: Path):
             "missing_percentage": [99.0],
         }
     ).to_csv(parent / "complete_case_attrition.csv", index=False)
-    out = (
-        tmp_path
-        / "steps"
-        / "02_exposure_and_missingness_audit_figure"
-        / "outputs"
-    )
+    out = tmp_path / "steps" / "02_exposure_and_missingness_audit_figure" / "outputs"
 
     rid = missingness_rescue(
         run_dir=tmp_path,
@@ -490,7 +482,9 @@ def test_upstream_family_routes_token_free_primary_figure(tmp_path: Path):
     # family alone is not sufficient automatic-repair authority because the
     # renderer may have multiple effect tables/models to choose from.
     assert _resolve_upstream_analysis_family(tmp_path, step_id) == "association"
-    assert deterministic_figure_family_supported_for_upstream(tmp_path, step_id) is False
+    assert (
+        deterministic_figure_family_supported_for_upstream(tmp_path, step_id) is False
+    )
 
     out = tmp_path / "steps" / step_id / "outputs"
     rid = routed_rescue(run_dir=tmp_path, current_step_id=step_id, out_dir=out)
@@ -574,6 +568,7 @@ def test_rescue_handles_ci_lower_upper_variant(tmp_path: Path):
     )
     assert source_findings == []
 
+
 def test_rescue_handles_canonical_or_ci_columns(tmp_path: Path):
     # our deterministic fallback style: or_ci_low/or_ci_high
     _make_parent_step(
@@ -647,7 +642,9 @@ def test_rescue_promotes_prevalence_and_absolute_risk_context(tmp_path: Path):
         "descriptive_result",
         "primary_estimand",
     ]
-    assert contract["panels"][0]["metadata"]["chart_type"] == "dot_interval_absolute_risk"
+    assert (
+        contract["panels"][0]["metadata"]["chart_type"] == "dot_interval_absolute_risk"
+    )
     assert (out / "publication_figure_prevalence_source_data.csv").exists()
     assert (out / "publication_figure_absolute_risk_source_data.csv").exists()
     source_findings = FigureSourceDataValidator().audit(
@@ -784,10 +781,7 @@ def test_routed_rescue_prioritizes_primary_association_over_missingness(
     ).to_csv(parent / "outcome_by_sepsis3.csv", index=False)
 
     missingness_parent = (
-        tmp_path
-        / "steps"
-        / "02_baseline_characteristics_and_data_quality"
-        / "outputs"
+        tmp_path / "steps" / "02_baseline_characteristics_and_data_quality" / "outputs"
     )
     missingness_parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(
@@ -824,12 +818,7 @@ def test_routed_rescue_prioritizes_primary_association_over_missingness(
 def test_routed_association_prefers_complete_direct_parent_bundle_and_copies_contract_closure(
     tmp_path: Path,
 ):
-    parent = (
-        tmp_path
-        / "steps"
-        / "05_primary_missingness_aware_association"
-        / "outputs"
-    )
+    parent = tmp_path / "steps" / "05_primary_missingness_aware_association" / "outputs"
     parent.mkdir(parents=True)
     _write_parent_summary(
         tmp_path, "05_primary_missingness_aware_association", "association"
@@ -1011,27 +1000,142 @@ def test_association_renderer_keeps_primary_exposure_and_matching_sensitivity_wi
         }
     ).to_csv(unrelated / "first_alphabetical_or_table.csv", index=False)
 
-    parent = (
-        tmp_path
-        / "steps"
-        / "05_primary_missingness_aware_association"
-        / "outputs"
-    )
+    parent = tmp_path / "steps" / "05_primary_missingness_aware_association" / "outputs"
     parent.mkdir(parents=True)
     coefficients = pd.DataFrame(
         [
-            ("bili_full", "const", "intercept", None, "primary", "source_aware", 0.01, 0.005, 0.02),
-            ("bili_full", "bili_log1p", "exposure", "bili_max", "primary", "source_aware", 1.93, 1.86, 2.00),
-            ("bili_full", "bili_source", "availability", "bili_measured", "primary", "source_aware", 1.40, 1.32, 1.48),
-            ("bili_full", "age", "adjustment", "age", "primary", "source_aware", 1.03, 1.02, 1.04),
-            ("bili_cc", "const", "intercept", None, "sensitivity", "complete_case", 0.02, 0.01, 0.03),
-            ("bili_cc", "bili_log1p", "exposure", "bili_max", "sensitivity", "complete_case", 1.88, 1.81, 1.95),
-            ("bili_cc", "age", "adjustment", "age", "sensitivity", "complete_case", 1.02, 1.01, 1.03),
-            ("sofa_full", "const", "intercept", None, "secondary", "source_aware", 0.02, 0.01, 0.03),
-            ("sofa_full", "sofa_level_1", "exposure", "sofa2_liver_max", "secondary", "source_aware", 1.68, 1.56, 1.81),
-            ("sofa_full", "age", "adjustment", "age", "secondary", "source_aware", 1.03, 1.02, 1.04),
-            ("sofa_cc", "const", "intercept", None, "sensitivity", "complete_case", 0.02, 0.01, 0.03),
-            ("sofa_cc", "sofa_level_1", "exposure", "sofa2_liver_max", "sensitivity", "complete_case", 1.64, 1.53, 1.77),
+            (
+                "bili_full",
+                "const",
+                "intercept",
+                None,
+                "primary",
+                "source_aware",
+                0.01,
+                0.005,
+                0.02,
+            ),
+            (
+                "bili_full",
+                "bili_log1p",
+                "exposure",
+                "bili_max",
+                "primary",
+                "source_aware",
+                1.93,
+                1.86,
+                2.00,
+            ),
+            (
+                "bili_full",
+                "bili_source",
+                "availability",
+                "bili_measured",
+                "primary",
+                "source_aware",
+                1.40,
+                1.32,
+                1.48,
+            ),
+            (
+                "bili_full",
+                "age",
+                "adjustment",
+                "age",
+                "primary",
+                "source_aware",
+                1.03,
+                1.02,
+                1.04,
+            ),
+            (
+                "bili_cc",
+                "const",
+                "intercept",
+                None,
+                "sensitivity",
+                "complete_case",
+                0.02,
+                0.01,
+                0.03,
+            ),
+            (
+                "bili_cc",
+                "bili_log1p",
+                "exposure",
+                "bili_max",
+                "sensitivity",
+                "complete_case",
+                1.88,
+                1.81,
+                1.95,
+            ),
+            (
+                "bili_cc",
+                "age",
+                "adjustment",
+                "age",
+                "sensitivity",
+                "complete_case",
+                1.02,
+                1.01,
+                1.03,
+            ),
+            (
+                "sofa_full",
+                "const",
+                "intercept",
+                None,
+                "secondary",
+                "source_aware",
+                0.02,
+                0.01,
+                0.03,
+            ),
+            (
+                "sofa_full",
+                "sofa_level_1",
+                "exposure",
+                "sofa2_liver_max",
+                "secondary",
+                "source_aware",
+                1.68,
+                1.56,
+                1.81,
+            ),
+            (
+                "sofa_full",
+                "age",
+                "adjustment",
+                "age",
+                "secondary",
+                "source_aware",
+                1.03,
+                1.02,
+                1.04,
+            ),
+            (
+                "sofa_cc",
+                "const",
+                "intercept",
+                None,
+                "sensitivity",
+                "complete_case",
+                0.02,
+                0.01,
+                0.03,
+            ),
+            (
+                "sofa_cc",
+                "sofa_level_1",
+                "exposure",
+                "sofa2_liver_max",
+                "sensitivity",
+                "complete_case",
+                1.64,
+                1.53,
+                1.77,
+            ),
         ],
         columns=[
             "model_id",
@@ -1116,9 +1220,7 @@ def test_association_renderer_keeps_primary_exposure_and_matching_sensitivity_wi
 
 
 def test_rescue_returns_none_without_or_ci_table(tmp_path: Path):
-    _make_parent_step(
-        tmp_path, "prevalence.csv", {"group": ["a"], "rate": [0.3]}
-    )
+    _make_parent_step(tmp_path, "prevalence.csv", {"group": ["a"], "rate": [0.3]})
     out = tmp_path / "steps" / "03_fig" / "outputs"
     out.mkdir(parents=True, exist_ok=True)
     assert rescue(run_dir=tmp_path, current_step_id="03_fig", out_dir=out) is None
@@ -1189,9 +1291,7 @@ def test_graded_exposure_forest_keys_by_varying_level_not_constant_model(
 
 
 def test_ordinal_stage_gradient_figure_routes_to_association_renderer(tmp_path: Path):
-    parent = (
-        tmp_path / "steps" / "04_primary_stage_gradient_analysis" / "outputs"
-    )
+    parent = tmp_path / "steps" / "04_primary_stage_gradient_analysis" / "outputs"
     parent.mkdir(parents=True, exist_ok=True)
     _write_parent_summary(tmp_path, "04_primary_stage_gradient_analysis", "association")
     # the deterministic ordinal runner's canonical dose_response.csv shape
@@ -1209,9 +1309,7 @@ def test_ordinal_stage_gradient_figure_routes_to_association_renderer(tmp_path: 
         }
     ).to_csv(parent / "dose_response.csv", index=False)
 
-    out = (
-        tmp_path / "steps" / "04_primary_stage_gradient_analysis_figure" / "outputs"
-    )
+    out = tmp_path / "steps" / "04_primary_stage_gradient_analysis_figure" / "outputs"
     rid = routed_rescue(
         run_dir=tmp_path,
         current_step_id="04_primary_stage_gradient_analysis_figure",
@@ -1313,10 +1411,13 @@ def test_cohort_overlap_rescue_writes_traceable_multipanel_bundle(tmp_path: Path
     contract_path = out / "publication_figure.figure_contract.json"
     contract = json.loads(contract_path.read_text(encoding="utf-8"))
     assert [panel["panel_id"] for panel in contract["panels"]] == ["A", "B", "C"]
-    assert FigureContractQualityValidator().audit_contract_file(
-        contract_path,
-        manuscript_facing=True,
-    ) == []
+    assert (
+        FigureContractQualityValidator().audit_contract_file(
+            contract_path,
+            manuscript_facing=True,
+        )
+        == []
+    )
     source_findings = FigureSourceDataValidator().audit(
         step=AnalysisStep(
             step_id="04_alternative_eligibility_definitions_and_overlap_figure",
@@ -1359,7 +1460,13 @@ def test_cohort_overlap_rescue_shortens_sepsis3_derivable_definition_labels(
                 "Relax temperature requirement",
                 "Tighten ICU length-of-stay threshold",
             ],
-            "definition_type": ["primary", "alternative", "alternative", "alternative", "alternative"],
+            "definition_type": [
+                "primary",
+                "alternative",
+                "alternative",
+                "alternative",
+                "alternative",
+            ],
             "n_included": [100, 100, 112, 111, 70],
             "n_excluded": [20, 20, 8, 9, 50],
             "included_pct_of_rows": [83.3, 83.3, 93.3, 92.5, 58.3],
@@ -1420,7 +1527,11 @@ def test_sensitivity_rescue_writes_multipanel_contract_and_source_data(
         {
             "spec_id": ["primary", "alt_cohort", "risk_difference"],
             "axis": ["cohort", "cohort", "outcome"],
-            "display_label": ["Primary cohort", "Alternative cohort", "Risk difference"],
+            "display_label": [
+                "Primary cohort",
+                "Alternative cohort",
+                "Risk difference",
+            ],
             "effect_scale": ["OR", "OR", "RD"],
             "point_estimate": [1.12, 1.05, 0.03],
             "ci_low": [1.02, 0.95, 0.01],
@@ -1444,10 +1555,13 @@ def test_sensitivity_rescue_writes_multipanel_contract_and_source_data(
     contract = json.loads(contract_path.read_text(encoding="utf-8"))
     assert [panel["panel_id"] for panel in contract["panels"]] == ["A", "B", "C"]
     assert (out / "sensitivity_forest_source_data.csv").exists()
-    assert FigureContractQualityValidator().audit_contract_file(
-        contract_path,
-        manuscript_facing=True,
-    ) == []
+    assert (
+        FigureContractQualityValidator().audit_contract_file(
+            contract_path,
+            manuscript_facing=True,
+        )
+        == []
+    )
     source_findings = FigureSourceDataValidator().audit(
         step=AnalysisStep(
             step_id="05_sensitivity_comparison_figure",
@@ -1479,10 +1593,7 @@ def test_sensitivity_rescue_prefers_declared_summary_and_excludes_point_only_row
     tmp_path: Path,
 ):
     parent = (
-        tmp_path
-        / "steps"
-        / "07_cohort_definition_sensitivity_comparison"
-        / "outputs"
+        tmp_path / "steps" / "07_cohort_definition_sensitivity_comparison" / "outputs"
     )
     parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(
@@ -1524,6 +1635,34 @@ def test_sensitivity_rescue_prefers_declared_summary_and_excludes_point_only_row
         ),
         encoding="utf-8",
     )
+    sealed_paths = [
+        parent / "step_summary.json",
+        parent / "robustness_summary.csv",
+    ]
+    seal = {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sealed_paths
+    }
+    sealed_repair_id = "sensitivity_publication_bundle_from_locked_summary_v1"
+    sealed_out = (
+        tmp_path
+        / "steps"
+        / "07_cohort_definition_sensitivity_comparison_figure"
+        / "sealed_outputs"
+    )
+    assert (
+        _render_authorized_sealed_publication_bundle(
+            repair_id=sealed_repair_id,
+            run_dir=tmp_path,
+            current_step_id=("07_cohort_definition_sensitivity_comparison_figure"),
+            out_dir=sealed_out,
+            parent_artifact_digests=seal,
+        )
+        == sealed_repair_id
+    )
+    assert pd.read_csv(sealed_out / "sensitivity_forest_source_data.csv")[
+        "spec_id"
+    ].tolist() == ["alt_continuous"]
     out = (
         tmp_path
         / "steps"
@@ -1545,11 +1684,63 @@ def test_sensitivity_rescue_prefers_declared_summary_and_excludes_point_only_row
     excluded = pd.read_csv(out / "sensitivity_estimability_source_data.csv")
     assert excluded["spec_id"].tolist() == ["alt_binary"]
     contract = json.loads(
-        (out / "sensitivity_forest.figure_contract.json").read_text(
-            encoding="utf-8"
-        )
+        (out / "sensitivity_forest.figure_contract.json").read_text(encoding="utf-8")
     )
     assert contract["panels"][0]["title"] == "Median-difference sensitivity"
+    original_summary = json.loads(
+        (out / "step_summary.json").read_text(encoding="utf-8")
+    )
+    assert original_summary["figure_contract"] == (
+        "sensitivity_forest.figure_contract.json"
+    )
+    with pytest.raises(ValueError, match="host product-slot authorization"):
+        bind_declared_figure_products(
+            out_dir=out,
+            declared_products=["figure:robustness_grid", "figure:robustness_plot"],
+            authorized_product_slots={"figure:robustness_plot": "robustness_plot"},
+            renderer_repair_id=(
+                "sensitivity_publication_bundle_from_locked_summary_v1"
+            ),
+            renderer_implementation_sha256="d" * 64,
+            renderer_parent_digests={
+                "step_summary.json": "1" * 64,
+                "robustness_summary.csv": "2" * 64,
+            },
+        )
+    assert json.loads((out / "step_summary.json").read_text(encoding="utf-8")) == (
+        original_summary
+    )
+    assert bind_declared_figure_products(
+        out_dir=out,
+        declared_products=["figure:robustness_plot"],
+        authorized_product_slots={"figure:robustness_plot": "robustness_plot"},
+        renderer_repair_id=("sensitivity_publication_bundle_from_locked_summary_v1"),
+        renderer_implementation_sha256="d" * 64,
+        renderer_parent_digests={
+            "step_summary.json": "1" * 64,
+            "robustness_summary.csv": "2" * 64,
+        },
+    )
+    (parent / "robustness_summary.csv").write_text(
+        "spec_id,effect_scale,point_estimate,ci_low,ci_high\n"
+        "changed,odds_ratio,9,8,10\n",
+        encoding="utf-8",
+    )
+    assert (
+        _render_authorized_sealed_publication_bundle(
+            repair_id=sealed_repair_id,
+            run_dir=tmp_path,
+            current_step_id=("07_cohort_definition_sensitivity_comparison_figure"),
+            out_dir=(
+                tmp_path
+                / "steps"
+                / "07_cohort_definition_sensitivity_comparison_figure"
+                / "mutated_outputs"
+            ),
+            parent_artifact_digests=seal,
+        )
+        is None
+    )
 
 
 def test_sensitivity_exact_method_authorizes_only_verified_summary(monkeypatch):
@@ -1562,7 +1753,116 @@ def test_sensitivity_exact_method_authorizes_only_verified_summary(monkeypatch):
     )
     monkeypatch.setattr(
         pipeline_module,
-        "_resolve_upstream_figure_data_family",
+        "_resolve_upstream_manifest_analysis_request",
+        lambda run_dir, step_id: {
+            "step": {
+                "method": "cohort_definition_sensitivity",
+                "expected_outputs": ["table:robustness_summary"],
+            },
+            "analysis_family": "association_study",
+        },
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "_resolve_upstream_analysis_method",
+        lambda run_dir, step_id: "cohort_definition_sensitivity",
+    )
+    assert (
+        pipeline_module.deterministic_figure_repair_id_for_upstream(
+            Path("/unused"), "07_sensitivity_figure"
+        )
+        == "sensitivity_publication_bundle_from_locked_summary_v1"
+    )
+
+
+@pytest.mark.parametrize(
+    (
+        "planner_method",
+        "planner_outputs",
+        "reported_method",
+        "reported_family",
+        "verified_tables",
+    ),
+    (
+        (
+            "kaplan_meier_estimation",
+            ["table:kaplan_meier_curve_distribution"],
+            "ordinal_exposure_derivation_and_quality_control",
+            "survival",
+            {"severity_distribution.csv"},
+        ),
+        (
+            "mixed_effects_regression",
+            ["table:robustness_summary"],
+            "cohort_definition_sensitivity",
+            "association_study",
+            {"robustness_summary.csv"},
+        ),
+        (
+            "survival_analysis",
+            ["table:cohort_flow", "table:attrition"],
+            "survival_analysis",
+            "cohort_definition",
+            {"cohort_flow.csv", "attrition.csv"},
+        ),
+    ),
+)
+def test_sealed_selector_cannot_be_overridden_by_coder_summary(
+    monkeypatch,
+    planner_method,
+    planner_outputs,
+    reported_method,
+    reported_family,
+    verified_tables,
+):
+    import easyicu.research_agent.pipeline as pipeline_module
+
+    monkeypatch.setattr(
+        pipeline_module,
+        "_verified_direct_parent_table_names",
+        lambda run_dir, step_id: verified_tables,
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "_resolve_upstream_manifest_analysis_request",
+        lambda run_dir, step_id: {
+            "step": {
+                "method": planner_method,
+                "expected_outputs": planner_outputs,
+            },
+            "analysis_family": "association_study",
+        },
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "_resolve_upstream_analysis_method",
+        lambda run_dir, step_id: reported_method,
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "_resolve_upstream_analysis_family",
+        lambda run_dir, step_id: reported_family,
+    )
+
+    assert (
+        pipeline_module.deterministic_figure_repair_id_for_upstream(
+            Path("/unused"), "07_spoofed_figure"
+        )
+        is None
+    )
+
+
+def test_sealed_selector_requires_host_recorded_parent_request(monkeypatch):
+    import easyicu.research_agent.pipeline as pipeline_module
+
+    monkeypatch.setattr(
+        pipeline_module,
+        "_verified_direct_parent_table_names",
+        lambda run_dir, step_id: {"robustness_summary.csv"},
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "_resolve_upstream_manifest_analysis_request",
         lambda run_dir, step_id: None,
     )
     monkeypatch.setattr(
@@ -1570,15 +1870,13 @@ def test_sensitivity_exact_method_authorizes_only_verified_summary(monkeypatch):
         "_resolve_upstream_analysis_method",
         lambda run_dir, step_id: "cohort_definition_sensitivity",
     )
-    monkeypatch.setattr(
-        pipeline_module,
-        "_resolve_upstream_analysis_family",
-        lambda run_dir, step_id: "association_study",
-    )
 
-    assert pipeline_module.deterministic_figure_repair_id_for_upstream(
-        Path("/unused"), "07_sensitivity_figure"
-    ) == "sensitivity_publication_bundle_from_locked_summary_v1"
+    assert (
+        pipeline_module.deterministic_figure_repair_id_for_upstream(
+            Path("/unused"), "07_legacy_summary_only_figure"
+        )
+        is None
+    )
 
 
 def test_sensitivity_rescue_omits_empty_scale_and_separates_nonindependent_rows(
@@ -1621,17 +1919,15 @@ def test_sensitivity_rescue_omits_empty_scale_and_separates_nonindependent_rows(
 
     assert rid == "sensitivity_publication_bundle_from_parent_outputs_v2"
     contract = json.loads(
-        (out / "sensitivity_forest.figure_contract.json").read_text(
-            encoding="utf-8"
-        )
+        (out / "sensitivity_forest.figure_contract.json").read_text(encoding="utf-8")
     )
     assert [panel["title"] for panel in contract["panels"]] == [
         "Ratio-scale sensitivity",
         "Model denominator audit",
     ]
-    assert "Risk difference" not in (
-        out / "sensitivity_forest.svg"
-    ).read_text(encoding="utf-8")
+    assert "Risk difference" not in (out / "sensitivity_forest.svg").read_text(
+        encoding="utf-8"
+    )
     plotted = pd.read_csv(
         out / "sensitivity_forest_source_data.csv",
         float_precision="round_trip",
@@ -1769,9 +2065,9 @@ def test_structured_sensitivity_source_preserves_spec_model_trace_and_detects_ta
         "ci_high": 2.0,
     }
     pd.DataFrame([coefficient]).to_csv(parent / "coefficients.csv", index=False)
-    pd.DataFrame(
-        [{**coefficient, "spec_id": "alt_cohort", "odds_ratio": 1.8}]
-    ).to_csv(parent / "robustness_variant_coefficients.csv", index=False)
+    pd.DataFrame([{**coefficient, "spec_id": "alt_cohort", "odds_ratio": 1.8}]).to_csv(
+        parent / "robustness_variant_coefficients.csv", index=False
+    )
     (parent / "step_summary.json").write_text(
         json.dumps(
             {
@@ -1786,22 +2082,28 @@ def test_structured_sensitivity_source_preserves_spec_model_trace_and_detects_ta
         encoding="utf-8",
     )
     out = tmp_path / "steps" / "06_robustness_figure" / "outputs"
-    assert sensitivity_rescue(
-        run_dir=tmp_path,
-        current_step_id="06_robustness_figure",
-        out_dir=out,
-    ) == "sensitivity_publication_bundle_from_parent_outputs_v2"
+    assert (
+        sensitivity_rescue(
+            run_dir=tmp_path,
+            current_step_id="06_robustness_figure",
+            out_dir=out,
+        )
+        == "sensitivity_publication_bundle_from_parent_outputs_v2"
+    )
     step = AnalysisStep(
         step_id="06_robustness_figure",
         intent="Render the figure declared by step '06_robustness'.",
     )
     summary = json.loads((out / "step_summary.json").read_text(encoding="utf-8"))
-    assert FigureSourceDataValidator().audit(
-        step=step,
-        out_dir=out,
-        run_dir=tmp_path,
-        step_summary=summary,
-    ) == []
+    assert (
+        FigureSourceDataValidator().audit(
+            step=step,
+            out_dir=out,
+            run_dir=tmp_path,
+            step_summary=summary,
+        )
+        == []
+    )
 
     figure_source = out / "sensitivity_forest_source_data.csv"
     tampered = pd.read_csv(figure_source)

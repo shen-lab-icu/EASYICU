@@ -33,6 +33,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import csv
+import io
 import json
 import logging
 import math
@@ -182,9 +183,7 @@ from .audits.manuscript_claims import (  # noqa: E402,F401
     _extract_percent_claims_near,
 )
 
-_audit_manuscript_numeric_claims = (
-    audit_manuscript_numeric_claims  # noqa: F841 (legacy alias)
-)
+_audit_manuscript_numeric_claims = audit_manuscript_numeric_claims  # noqa: F841 (legacy alias)
 
 from .evidence import (
     EvidenceEnforcementError,
@@ -400,10 +399,7 @@ def _resume_plan_candidate_paths(
         if verified_path is not None:
             ranked.append((revision, index, verified_path))
 
-    candidates = [
-        path
-        for _revision, _index, path in sorted(ranked, reverse=True)
-    ]
+    candidates = [path for _revision, _index, path in sorted(ranked, reverse=True)]
 
     unique: List[Path] = []
     seen: set[Path] = set()
@@ -566,8 +562,7 @@ def _parse_legacy_model_roster_packet(
         )
     for step in packet.steps:
         requirement_ids = [
-            requirement.requirement_id
-            for requirement in step.model_requirements
+            requirement.requirement_id for requirement in step.model_requirements
         ]
         if len(requirement_ids) != len(set(requirement_ids)):
             raise ValueError(
@@ -594,7 +589,10 @@ def _project_legacy_model_roster_packet(
     """Project only validated roster values onto an otherwise frozen plan."""
 
     rosters = {
-        step.step_id: [requirement.model_dump(mode="json") for requirement in step.model_requirements]
+        step.step_id: [
+            requirement.model_dump(mode="json")
+            for requirement in step.model_requirements
+        ]
         for step in packet.steps
     }
     payload = plan.model_dump(mode="json")
@@ -765,9 +763,7 @@ def _migrate_legacy_resume_model_requirements(
         resume_state=resume_state,
         resume_from_step_id=resume_from_step_id,
     )
-    completed_step_ids = {
-        str(record.get("step_id")) for record in completed_records
-    }
+    completed_step_ids = {str(record.get("step_id")) for record in completed_records}
     target_step_ids = _legacy_resume_model_roster_targets(
         plan=plan,
         completed_step_ids=completed_step_ids,
@@ -798,8 +794,8 @@ def _migrate_legacy_resume_model_requirements(
         "required_for_step_success",
     ]
     format_reminder = (
-        "Return exactly {\"steps\": [{\"step_id\": <target id>, "
-        "\"model_requirements\": [<one or more complete requirement objects>]}]}. "
+        'Return exactly {"steps": [{"step_id": <target id>, '
+        '"model_requirements": [<one or more complete requirement objects>]}]}. '
         f"Every requirement object must contain all fields {required_fields!r}. "
         "Allowed outcome_type: binary, continuous. Allowed analysis_role: "
         "primary, secondary, sensitivity. Allowed analysis_set: source_aware, "
@@ -1033,12 +1029,9 @@ def _verified_legacy_stability_migration_profile(
         candidate_schema.get("representation_schema_evidence_id") or ""
     )
     representation_schema_record = evidence.get(representation_schema_evidence_id)
-    if (
-        representation_schema_record is None
-        or not str(representation_schema_record.relative_path).endswith(
-            "trajectory_representation_schema.json"
-        )
-    ):
+    if representation_schema_record is None or not str(
+        representation_schema_record.relative_path
+    ).endswith("trajectory_representation_schema.json"):
         return None
     representation_schema_path = verified_run_evidence_path(
         run_dir,
@@ -1062,12 +1055,9 @@ def _verified_legacy_stability_migration_profile(
         representation_schema.get("representation_evidence_id") or ""
     )
     representation_record = evidence.get(representation_evidence_id)
-    if (
-        representation_record is None
-        or not str(representation_record.relative_path).endswith(
-            ("trajectory_representation.parquet", "trajectory_representation.csv")
-        )
-    ):
+    if representation_record is None or not str(
+        representation_record.relative_path
+    ).endswith(("trajectory_representation.parquet", "trajectory_representation.csv")):
         return None
     representation_path = verified_run_evidence_path(run_dir, representation_record)
     if representation_path is None:
@@ -1114,9 +1104,7 @@ def _verified_legacy_stability_migration_profile(
         "representation_schema_sha256": representation_schema_record.sha256,
         "representation_evidence_id": representation_record.evidence_id,
         "representation_sha256": representation_record.sha256,
-        "candidate_assignments_evidence_id": (
-            candidate_assignments_record.evidence_id
-        ),
+        "candidate_assignments_evidence_id": (candidate_assignments_record.evidence_id),
         "candidate_assignments_sha256": candidate_assignments_record.sha256,
         "frozen_population_n": frozen_population_n,
         "selected_n_clusters": selected_n_clusters,
@@ -1285,7 +1273,7 @@ def _migrate_legacy_resume_trajectory_stability_spec(
         f'"method": "{TRAJECTORY_STABILITY_METHOD_HEAD}", '
         '"inputs": <exact supplied list>, "expected_outputs": <exact supplied '
         'list>, "trajectory_stability_spec": <complete object>}]}. If the '
-        'standard calculator is scientifically inappropriate, return exactly '
+        "standard calculator is scientifically inappropriate, return exactly "
         '{"steps": []}. The spec must contain exactly these fields: '
         f"{spec_fields!r}. Every JSON-Schema const value must be copied exactly, "
         "and every enum value must be selected exactly from its listed choices; "
@@ -1407,9 +1395,7 @@ def _load_resume_state(run_dir: Path) -> Optional[Dict[str, Any]]:
     try:
         loaded = json.loads(partial.read_text(encoding="utf-8"))
     except Exception as exc:
-        raise ValueError(
-            f"Cannot resume from corrupt checkpoint: {partial}"
-        ) from exc
+        raise ValueError(f"Cannot resume from corrupt checkpoint: {partial}") from exc
     if not isinstance(loaded, dict):
         raise ValueError(f"Cannot resume from non-object checkpoint: {partial}")
     return loaded
@@ -1527,9 +1513,7 @@ class ResearchAgentPipeline:
         self.workdir.mkdir(parents=True, exist_ok=True)
         self._llm = llm
         self._timeout_seconds = timeout_seconds
-        self._standard_executor_timeout_seconds = (
-            standard_executor_timeout_seconds
-        )
+        self._standard_executor_timeout_seconds = standard_executor_timeout_seconds
         self._python_executable = python_executable
         self._enable_literature = enable_literature
         self._enable_visual_qa = enable_visual_qa
@@ -1805,9 +1789,7 @@ class ResearchAgentPipeline:
                 ):
                     extra_env.setdefault(traj_alias, str(trajectory_path))
         effective_timeout_seconds = (
-            self._timeout_seconds
-            if timeout_seconds is None
-            else float(timeout_seconds)
+            self._timeout_seconds if timeout_seconds is None else float(timeout_seconds)
         )
         if self._runner_factory is not None:
             # A user-supplied factory (OpenHands, firecracker, ...) also needs
@@ -2412,9 +2394,7 @@ class ResearchAgentPipeline:
                     producer="study_design_scout",
                     generation_mode="deterministic_skill",
                 )
-            design_note = render_analysis_blueprint_for_prompt(
-                analysis_blueprint
-            )
+            design_note = render_analysis_blueprint_for_prompt(analysis_blueprint)
             agent_notes = (
                 f"{agent_context.notes}\n\n{design_note}"
                 if agent_context.notes
@@ -2582,9 +2562,7 @@ class ResearchAgentPipeline:
                         ),
                         detail={
                             "target_step_ids": list(migrated_step_ids),
-                            "plan_path": str(
-                                migrated_plan_path.relative_to(run_dir)
-                            ),
+                            "plan_path": str(migrated_plan_path.relative_to(run_dir)),
                         },
                     )
                 )
@@ -2608,9 +2586,7 @@ class ResearchAgentPipeline:
                             "the immutable lock."
                         ),
                         detail={
-                            "plan_path": str(
-                                lock_restore_path.relative_to(run_dir)
-                            ),
+                            "plan_path": str(lock_restore_path.relative_to(run_dir)),
                             "lock_path": "robustness_specs_locked.json",
                         },
                     )
@@ -2896,9 +2872,7 @@ class ResearchAgentPipeline:
                 )
             )
         plan_path = (
-            migrated_plan_path
-            or reused_plan_path
-            or (run_dir / "analysis_plan.json")
+            migrated_plan_path or reused_plan_path or (run_dir / "analysis_plan.json")
         )
         if not reused_prior_plan:
             plan_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
@@ -4196,12 +4170,11 @@ def _promote_prior_publication_bundle(
             figure_count = sum(1 for key in files if key.startswith("."))
             if figure_count == 0:
                 continue
-            if role_filter and not _publication_bundle_has_any_role(
-                files, role_filter
-            ):
+            if role_filter and not _publication_bundle_has_any_role(files, role_filter):
                 continue
-            if require_declared_sources and not _publication_bundle_has_resolvable_sources(
-                files
+            if (
+                require_declared_sources
+                and not _publication_bundle_has_resolvable_sources(files)
             ):
                 continue
             score = (
@@ -4664,7 +4637,9 @@ def _render_cohort_overlap_publication_bundle_from_prior_outputs(
         "moved_out_vs_primary_n",
     ):
         if col in source_attrition.columns:
-            source_attrition[col] = pd.to_numeric(source_attrition[col], errors="coerce")
+            source_attrition[col] = pd.to_numeric(
+                source_attrition[col], errors="coerce"
+            )
 
     def _cohort_definition_display_label(row: Mapping[str, Any]) -> str:
         definition_id = str(row.get("definition_id") or "").strip()
@@ -4691,7 +4666,15 @@ def _render_cohort_overlap_publication_bundle_from_prior_outputs(
     ]
 
     source_overlap = overlap.copy()
-    for col in ("n_a", "n_b", "intersection_n", "union_n", "jaccard", "a_in_b_pct", "b_in_a_pct"):
+    for col in (
+        "n_a",
+        "n_b",
+        "intersection_n",
+        "union_n",
+        "jaccard",
+        "a_in_b_pct",
+        "b_in_a_pct",
+    ):
         if col in source_overlap.columns:
             source_overlap[col] = pd.to_numeric(source_overlap[col], errors="coerce")
 
@@ -4772,7 +4755,9 @@ def _render_cohort_overlap_publication_bundle_from_prior_outputs(
     ax_delta.invert_yaxis()
     ax_delta.set_xlabel("ICU-stay count change")
     ax_delta.set_title("Movement relative to primary", loc="left", pad=4)
-    ax_delta.grid(axis="x", color=palette.get("neutral_light", "#D8D8D8"), linewidth=0.55)
+    ax_delta.grid(
+        axis="x", color=palette.get("neutral_light", "#D8D8D8"), linewidth=0.55
+    )
     ax_delta.legend(
         frameon=False,
         fontsize=6.2,
@@ -4803,13 +4788,19 @@ def _render_cohort_overlap_publication_bundle_from_prior_outputs(
     )
     ax_heat.set_xticks(range(len(definition_order)))
     ax_heat.set_xticklabels(
-        [_short_figure_label(label_map.get(item, item), limit=18) for item in definition_order],
+        [
+            _short_figure_label(label_map.get(item, item), limit=18)
+            for item in definition_order
+        ],
         rotation=45,
         ha="right",
     )
     ax_heat.set_yticks(range(len(definition_order)))
     ax_heat.set_yticklabels(
-        [_short_figure_label(label_map.get(item, item), limit=18) for item in definition_order]
+        [
+            _short_figure_label(label_map.get(item, item), limit=18)
+            for item in definition_order
+        ]
     )
     ax_heat.set_title("Pairwise cohort overlap", loc="left", pad=4)
     for row_idx in range(len(definition_order)):
@@ -4896,7 +4887,9 @@ def _render_cohort_overlap_publication_bundle_from_prior_outputs(
             "source_step_id": parent_step_id,
             "source_attrition_table": str(attrition_path),
             "source_overlap_table": str(overlap_path),
-            "source_equivalence_audit": str(audit_path) if audit_path.exists() else None,
+            "source_equivalence_audit": str(audit_path)
+            if audit_path.exists()
+            else None,
             "source_data_files": [
                 source_attrition_path.name,
                 source_overlap_path.name,
@@ -4920,6 +4913,7 @@ def _render_cohort_flow_publication_bundle_from_prior_outputs(
     run_dir: Path,
     current_step_id: str,
     out_dir: Path,
+    preverified_parent_artifacts: Optional[Mapping[str, bytes]] = None,
 ) -> Optional[str]:
     """Deterministically render a simple sequential cohort-flow contract.
 
@@ -4937,12 +4931,36 @@ def _render_cohort_flow_publication_bundle_from_prior_outputs(
     parent_outputs = steps_dir / parent_step_id / "outputs"
     flow_path = parent_outputs / "cohort_flow.csv"
     attrition_path = parent_outputs / "attrition.csv"
-    if not flow_path.exists() or not attrition_path.exists():
+    flow_payload = (
+        preverified_parent_artifacts.get("cohort_flow.csv")
+        if preverified_parent_artifacts is not None
+        else None
+    )
+    attrition_payload = (
+        preverified_parent_artifacts.get("attrition.csv")
+        if preverified_parent_artifacts is not None
+        else None
+    )
+    if preverified_parent_artifacts is None and (
+        not flow_path.exists() or not attrition_path.exists()
+    ):
+        return None
+    if preverified_parent_artifacts is not None and (
+        flow_payload is None
+        or attrition_payload is None
+        or "step_summary.json" not in preverified_parent_artifacts
+    ):
         return None
 
     try:
-        flow = pd.read_csv(flow_path)
-        attrition = pd.read_csv(attrition_path)
+        flow = pd.read_csv(
+            io.BytesIO(flow_payload) if flow_payload is not None else flow_path
+        )
+        attrition = pd.read_csv(
+            io.BytesIO(attrition_payload)
+            if attrition_payload is not None
+            else attrition_path
+        )
     except Exception:
         return None
 
@@ -5002,9 +5020,7 @@ def _render_cohort_flow_publication_bundle_from_prior_outputs(
     source_attrition = attrition.copy()
     source_attrition["source_table"] = attrition_path.name
     source_flow_path = out_dir / "publication_figure_source_data.csv"
-    source_attrition_path = (
-        out_dir / "publication_figure_attrition_source_data.csv"
-    )
+    source_attrition_path = out_dir / "publication_figure_attrition_source_data.csv"
     source_flow.to_csv(source_flow_path, index=False)
     source_attrition.to_csv(source_attrition_path, index=False)
 
@@ -5038,7 +5054,9 @@ def _render_cohort_flow_publication_bundle_from_prior_outputs(
     if n_stages == 1:
         y_positions = [0.50]
     else:
-        y_positions = [0.90 - index * 0.78 / (n_stages - 1) for index in range(n_stages)]
+        y_positions = [
+            0.90 - index * 0.78 / (n_stages - 1) for index in range(n_stages)
+        ]
     box_height = min(0.13, 0.52 / max(n_stages, 1))
     flow_rows = flow_plot.reset_index(drop=True).to_dict(orient="records")
     for index, (row, y_pos) in enumerate(zip(flow_rows, y_positions)):
@@ -5166,6 +5184,7 @@ def _render_cohort_flow_publication_bundle_from_prior_outputs(
                     "registered cohort-flow table."
                 ),
                 "evidence_ids": ["cohort_flow"],
+                "metadata": {"planner_product_slots": ["cohort_flow"]},
             },
             {
                 "panel_id": "B",
@@ -5176,6 +5195,7 @@ def _render_cohort_flow_publication_bundle_from_prior_outputs(
                     "the registered attrition table."
                 ),
                 "evidence_ids": ["attrition"],
+                "metadata": {"planner_product_slots": ["attrition_audit"]},
             },
         ],
         height_mm=height_mm,
@@ -5233,6 +5253,7 @@ def _render_cohort_flow_publication_bundle_from_prior_outputs(
             "n_exclusion_categories": int(len(excluded)),
             "figure_files": figure_files,
             "figure_path": "publication_figure.png",
+            "figure_contract": "publication_figure.figure_contract.json",
         }
     )
     step_summary_path.write_text(
@@ -5297,7 +5318,9 @@ def _render_missingness_publication_bundle_from_prior_outputs(
             frame,
             ("analysis_unavailable_n", "unavailable_n", "invalid_or_missing_n"),
         )
-        has_measured = _first_col(frame, ("measured_n", "measured_one_n", "n_nonmissing"))
+        has_measured = _first_col(
+            frame, ("measured_n", "measured_one_n", "n_nonmissing")
+        )
         has_pct = _first_col(
             frame,
             (
@@ -5312,7 +5335,11 @@ def _render_missingness_publication_bundle_from_prior_outputs(
         )
         if not (
             has_label
-            and (has_total and (has_missing or has_unavailable or has_measured) or has_pct)
+            and (
+                has_total
+                and (has_missing or has_unavailable or has_measured)
+                or has_pct
+            )
         ):
             continue
         name = csv_path.name.lower()
@@ -5474,8 +5501,8 @@ def _render_missingness_publication_bundle_from_prior_outputs(
     indicator_semantics_col = _first_col(source, ("indicator_semantics",))
     event_status_mask = pd.Series(False, index=source.index)
     if indicator_semantics_col is not None:
-        event_status_mask = source[indicator_semantics_col].astype(str).eq(
-            "binary_event_presence"
+        event_status_mask = (
+            source[indicator_semantics_col].astype(str).eq("binary_event_presence")
         )
         display_labels = display_labels.mask(
             event_status_mask,
@@ -5529,7 +5556,9 @@ def _render_missingness_publication_bundle_from_prior_outputs(
     if unavailable_pct_col is not None or unavailable_n_col is not None:
         source_data_payload["analysis_unavailable_pct"] = unavailable_pct
     if total_col is not None:
-        source_data_payload["n_total"] = pd.to_numeric(source[total_col], errors="coerce")
+        source_data_payload["n_total"] = pd.to_numeric(
+            source[total_col], errors="coerce"
+        )
         if rich_process_table:
             source_data_payload[total_col] = pd.to_numeric(
                 source[total_col],
@@ -5558,9 +5587,9 @@ def _render_missingness_publication_bundle_from_prior_outputs(
             errors="coerce",
         )
     if "event_count_column" in source.columns:
-        source_data_payload["event_count_column"] = source[
-            "event_count_column"
-        ].fillna("").astype(str)
+        source_data_payload["event_count_column"] = (
+            source["event_count_column"].fillna("").astype(str)
+        )
     source_data = pd.DataFrame(source_data_payload).dropna(
         subset=["missing_pct", "measured_pct"],
         how="all",
@@ -5592,9 +5621,10 @@ def _render_missingness_publication_bundle_from_prior_outputs(
 
     has_event_status_rows = bool(
         "indicator_semantics" in source_data.columns
-        and source_data["indicator_semantics"].astype(str).eq(
-            "binary_event_presence"
-        ).any()
+        and source_data["indicator_semantics"]
+        .astype(str)
+        .eq("binary_event_presence")
+        .any()
     )
     availability_title = (
         "Analytic availability" if has_event_status_rows else "Measurement availability"
@@ -5619,21 +5649,19 @@ def _render_missingness_publication_bundle_from_prior_outputs(
         and total_col is not None
         and {"n", "percentage"}.issubset(source_all.columns)
     ):
-        status_mask = (
-            source_all[section_col].astype(str).str.lower().eq("source_status")
-            & source_all[metric_col]
-            .astype(str)
-            .str.lower()
-            .isin(("mutually_exclusive_source_status", "source_status"))
+        status_mask = source_all[section_col].astype(str).str.lower().eq(
+            "source_status"
+        ) & source_all[metric_col].astype(str).str.lower().isin(
+            ("mutually_exclusive_source_status", "source_status")
         )
         status_rows = source_all.loc[status_mask].copy()
         if not status_rows.empty:
             status_source_data = pd.DataFrame(
                 {
                     "variable_name": status_rows[label_col].astype(str),
-                    "display_label": status_rows[label_col].astype(str).map(
-                        _publication_label
-                    ),
+                    "display_label": status_rows[label_col]
+                    .astype(str)
+                    .map(_publication_label),
                     "cohort_name": status_rows[cohort_col].astype(str),
                     "status_category": status_rows[category_col].astype(str),
                     "n": pd.to_numeric(status_rows["n"], errors="coerce"),
@@ -5904,7 +5932,9 @@ def _render_missingness_publication_bundle_from_prior_outputs(
     parent_evidence_id = table_path.stem
     availability_source_id = availability_source_path.stem
     status_source_id = status_source_path.stem
-    panel_a_title = "Measurement-source status" if rich_matrix_rendered else "Value missingness"
+    panel_a_title = (
+        "Measurement-source status" if rich_matrix_rendered else "Value missingness"
+    )
     panel_a_claim = (
         "Mutually exclusive source-status percentages are shown for each audited "
         "measurement summary and cohort."
@@ -6072,7 +6102,9 @@ def _render_phenotype_publication_bundle_from_prior_outputs(
             continue
         if outcome is None and "outcome_by_cluster" in name:
             outcome = (csv_path, frame)
-        if sizes is None and ("cluster_sizes" in name or "size" in frame.columns or "n" in frame.columns):
+        if sizes is None and (
+            "cluster_sizes" in name or "size" in frame.columns or "n" in frame.columns
+        ):
             sizes = (csv_path, frame)
     primary = outcome or sizes
     if primary is None:
@@ -6087,7 +6119,9 @@ def _render_phenotype_publication_bundle_from_prior_outputs(
     plot_df = frame.reset_index(drop=True)
     plot_df.insert(0, "source_row_index", plot_df.index.astype(int))
     n_col = _first_col(plot_df, ("n", "n_stays", "cluster_size", "size", "count"))
-    rate_col = _first_col(plot_df, ("mortality_rate", "outcome_rate", "event_rate", "rate"))
+    rate_col = _first_col(
+        plot_df, ("mortality_rate", "outcome_rate", "event_rate", "rate")
+    )
     ci_low_col = _first_col(plot_df, ("ci_low", "ci_lower", "lower"))
     ci_high_col = _first_col(plot_df, ("ci_high", "ci_upper", "upper"))
 
@@ -6104,7 +6138,9 @@ def _render_phenotype_publication_bundle_from_prior_outputs(
     if n_col is not None:
         source_payload["n"] = pd.to_numeric(plot_df[n_col], errors="coerce")
     if rate_col is not None:
-        source_payload["mortality_rate"] = pd.to_numeric(plot_df[rate_col], errors="coerce")
+        source_payload["mortality_rate"] = pd.to_numeric(
+            plot_df[rate_col], errors="coerce"
+        )
     if ci_low_col is not None:
         source_payload["ci_low"] = pd.to_numeric(plot_df[ci_low_col], errors="coerce")
     if ci_high_col is not None:
@@ -6157,12 +6193,26 @@ def _render_phenotype_publication_bundle_from_prior_outputs(
         rate_pct = rate * scale
         yerr = None
         if ci_low_col is not None and ci_high_col is not None:
-            lo = pd.to_numeric(plot_df[ci_low_col], errors="coerce").fillna(0).to_numpy() * scale
-            hi = pd.to_numeric(plot_df[ci_high_col], errors="coerce").fillna(0).to_numpy() * scale
-            yerr = np.vstack([np.clip(rate_pct - lo, 0, None), np.clip(hi - rate_pct, 0, None)])
+            lo = (
+                pd.to_numeric(plot_df[ci_low_col], errors="coerce").fillna(0).to_numpy()
+                * scale
+            )
+            hi = (
+                pd.to_numeric(plot_df[ci_high_col], errors="coerce")
+                .fillna(0)
+                .to_numpy()
+                * scale
+            )
+            yerr = np.vstack(
+                [np.clip(rate_pct - lo, 0, None), np.clip(hi - rate_pct, 0, None)]
+            )
         ax_out.bar(
-            x, rate_pct, yerr=yerr, color=palette.get("red", "#B2182B"),
-            width=0.62, capsize=3,
+            x,
+            rate_pct,
+            yerr=yerr,
+            color=palette.get("red", "#B2182B"),
+            width=0.62,
+            capsize=3,
         )
         ax_out.set_xticks(x, labels, fontsize=6.2)
         ax_out.set_ylabel("Outcome rate (%)")
@@ -6287,7 +6337,13 @@ def _render_descriptive_publication_bundle_from_prior_outputs(
         text = step_dir.name.lower()
         if not direct_parent_only and not any(
             token in text
-            for token in ("baseline", "table_one", "table1", "descriptive", "characteristic")
+            for token in (
+                "baseline",
+                "table_one",
+                "table1",
+                "descriptive",
+                "characteristic",
+            )
         ):
             continue
         outputs_dir = step_dir / "outputs"
@@ -6367,7 +6423,9 @@ def _render_descriptive_publication_bundle_from_prior_outputs(
                 "row_category": cat,
                 "display_label": display,
                 "is_continuous": bool(is_cont),
-                "overall_median": float(median_v) if pd.notna(median_v) else float("nan"),
+                "overall_median": float(median_v)
+                if pd.notna(median_v)
+                else float("nan"),
                 "overall_percentage": float(pct_v) if pd.notna(pct_v) else float("nan"),
                 "source_table": table_path.name,
                 "source_transform": "table_one_baseline_summary_v1",
@@ -6410,11 +6468,15 @@ def _render_descriptive_publication_bundle_from_prior_outputs(
         ax = fig.add_subplot(grid[0, col])
         y = list(range(len(cont_rows)))
         ax.barh(
-            y, cont_rows["overall_median"].to_numpy(),
-            color=palette.get("blue", "#0F4D92"), height=0.6,
+            y,
+            cont_rows["overall_median"].to_numpy(),
+            color=palette.get("blue", "#0F4D92"),
+            height=0.6,
         )
         ax.set_yticks(y)
-        ax.set_yticklabels([_short_figure_label(v, limit=28) for v in cont_rows["display_label"]])
+        ax.set_yticklabels(
+            [_short_figure_label(v, limit=28) for v in cont_rows["display_label"]]
+        )
         ax.invert_yaxis()
         ax.set_xlabel("Median (overall)")
         ax.set_title("Continuous characteristics", loc="left", pad=4)
@@ -6424,11 +6486,15 @@ def _render_descriptive_publication_bundle_from_prior_outputs(
         ax = fig.add_subplot(grid[0, col])
         y = list(range(len(cat_rows)))
         ax.barh(
-            y, cat_rows["overall_percentage"].clip(0, 100).to_numpy(),
-            color=palette.get("green", "#2E7D32"), height=0.6,
+            y,
+            cat_rows["overall_percentage"].clip(0, 100).to_numpy(),
+            color=palette.get("green", "#2E7D32"),
+            height=0.6,
         )
         ax.set_yticks(y)
-        ax.set_yticklabels([_short_figure_label(v, limit=28) for v in cat_rows["display_label"]])
+        ax.set_yticklabels(
+            [_short_figure_label(v, limit=28) for v in cat_rows["display_label"]]
+        )
         ax.invert_yaxis()
         ax.set_xlim(0, 100)
         ax.set_xlabel("Percentage (overall)")
@@ -6553,7 +6619,9 @@ def _as_percent(row: pd.Series, column: Optional[str]) -> Optional[float]:
     return value * 100.0 if abs(value) <= 1.0 else value
 
 
-def _event_count_column(frame: pd.DataFrame, denominator_col: Optional[str]) -> Optional[str]:
+def _event_count_column(
+    frame: pd.DataFrame, denominator_col: Optional[str]
+) -> Optional[str]:
     excluded = {
         "n",
         "n_total",
@@ -6574,7 +6642,13 @@ def _event_count_column(frame: pd.DataFrame, denominator_col: Optional[str]) -> 
 def _label_column(frame: pd.DataFrame) -> Optional[str]:
     return _find_column(
         frame,
-        exact=("label", "group_label", "exposure_label", "stratum_label", "category_label"),
+        exact=(
+            "label",
+            "group_label",
+            "exposure_label",
+            "stratum_label",
+            "category_label",
+        ),
         suffixes=("_label",),
     )
 
@@ -6636,8 +6710,12 @@ def _binary_group_label(column: str, value: Any) -> str:
 
 def _is_risk_difference_row(row: pd.Series, *values: Any) -> bool:
     haystack = " ".join([str(value or "") for value in values])
-    haystack = f"{haystack} {' '.join(str(value or '') for value in row.to_dict().values())}"
-    return "risk_difference" in haystack.lower() or "risk difference" in haystack.lower()
+    haystack = (
+        f"{haystack} {' '.join(str(value or '') for value in row.to_dict().values())}"
+    )
+    return (
+        "risk_difference" in haystack.lower() or "risk difference" in haystack.lower()
+    )
 
 
 def _context_axis_label(metric: Any, group: Any) -> str:
@@ -6678,9 +6756,7 @@ def _association_descriptive_context(
     has_outcome_risk = False
 
     def _canonical_exposure_token(value: Any) -> str:
-        token = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip(
-            "_"
-        )
+        token = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
         suffixes = (
             "_log1p_active",
             "_log1p",
@@ -6726,8 +6802,8 @@ def _association_descriptive_context(
                 ),
             )
             if exposure_col:
-                matches = frame[exposure_col].map(_canonical_exposure_token).eq(
-                    primary_token
+                matches = (
+                    frame[exposure_col].map(_canonical_exposure_token).eq(primary_token)
                 )
                 if matches.any():
                     frame = frame.loc[matches].copy()
@@ -6848,7 +6924,12 @@ def _association_descriptive_context(
                             or _find_column(
                                 frame,
                                 exact=("ci_low", "lower"),
-                                suffixes=("_ci_low_pct", "_ci_low", "_lower_pct", "_lower"),
+                                suffixes=(
+                                    "_ci_low_pct",
+                                    "_ci_low",
+                                    "_lower_pct",
+                                    "_lower",
+                                ),
                             ),
                         ),
                         "plot_ci_high_pct": _as_percent(
@@ -6876,7 +6957,9 @@ def _association_descriptive_context(
                 source_rows.append(record)
                 plot_rows.append(record)
             if source_rows:
-                source_path = out_dir / "publication_figure_absolute_risk_source_data.csv"
+                source_path = (
+                    out_dir / "publication_figure_absolute_risk_source_data.csv"
+                )
                 pd.DataFrame(source_rows).to_csv(source_path, index=False)
                 source_files.append(source_path.name)
                 has_outcome_risk = True
@@ -6930,9 +7013,7 @@ def _render_absolute_risk_publication_bundle_from_prior_outputs(
 
     candidates = [parent_outputs / "exposure_outcome_summary.csv"]
     candidates.extend(
-        path
-        for path in sorted(parent_outputs.glob("*.csv"))
-        if path not in candidates
+        path for path in sorted(parent_outputs.glob("*.csv")) if path not in candidates
     )
     table_path: Optional[Path] = None
     frame: Optional[pd.DataFrame] = None
@@ -6958,9 +7039,11 @@ def _render_absolute_risk_publication_bundle_from_prior_outputs(
 
     estimate_type = frame["estimate_type"].astype(str).str.lower()
     group_type = frame["group_type"].astype(str).str.lower()
-    group_value = frame.get(
-        "group_value", pd.Series("", index=frame.index, dtype="object")
-    ).astype(str).str.lower()
+    group_value = (
+        frame.get("group_value", pd.Series("", index=frame.index, dtype="object"))
+        .astype(str)
+        .str.lower()
+    )
 
     availability_mask = (
         estimate_type.eq("prevalence")
@@ -6985,9 +7068,7 @@ def _render_absolute_risk_publication_bundle_from_prior_outputs(
         ].copy()
         risk = pd.concat([risk, no_source], axis=0)
     else:
-        risk = frame.loc[
-            risk_mask & group_type.eq("source_state")
-        ].copy()
+        risk = frame.loc[risk_mask & group_type.eq("source_state")].copy()
 
     distribution = frame.loc[
         estimate_type.eq("continuous_distribution")
@@ -7025,13 +7106,9 @@ def _render_absolute_risk_publication_bundle_from_prior_outputs(
         traced_rows["source_transform"] = transform
         return traced_rows.reset_index(drop=True)
 
-    availability_source = traced(
-        availability, "observed_source_prevalence_rows_v1"
-    )
+    availability_source = traced(availability, "observed_source_prevalence_rows_v1")
     risk_source = traced(risk, "absolute_outcome_risk_rows_v1")
-    distribution_source = traced(
-        distribution, "continuous_distribution_rows_v1"
-    )
+    distribution_source = traced(distribution, "continuous_distribution_rows_v1")
     out_dir.mkdir(parents=True, exist_ok=True)
     availability_name = "absolute_risk_availability_source_data.csv"
     risk_name = "absolute_risk_outcome_source_data.csv"
@@ -7093,12 +7170,12 @@ def _render_absolute_risk_publication_bundle_from_prior_outputs(
         ax_risk = fig.add_subplot(grid[0, 1])
 
     availability_x = [
-        _as_percent(row, "prevalence_pct" if "prevalence_pct" in frame.columns else "prevalence")
+        _as_percent(
+            row, "prevalence_pct" if "prevalence_pct" in frame.columns else "prevalence"
+        )
         for _, row in availability.iterrows()
     ]
-    availability_lo = [
-        _as_percent(row, "ci_low") for _, row in availability.iterrows()
-    ]
+    availability_lo = [_as_percent(row, "ci_low") for _, row in availability.iterrows()]
     availability_hi = [
         _as_percent(row, "ci_high") for _, row in availability.iterrows()
     ]
@@ -7111,8 +7188,14 @@ def _render_absolute_risk_publication_bundle_from_prior_outputs(
         availability_x,
         y_availability,
         xerr=[
-            [max(0.0, x - (lo if lo is not None else x)) for x, lo in zip(availability_x, availability_lo)],
-            [max(0.0, (hi if hi is not None else x) - x) for x, hi in zip(availability_x, availability_hi)],
+            [
+                max(0.0, x - (lo if lo is not None else x))
+                for x, lo in zip(availability_x, availability_lo)
+            ],
+            [
+                max(0.0, (hi if hi is not None else x) - x)
+                for x, hi in zip(availability_x, availability_hi)
+            ],
         ],
         fmt="o",
         color=palette.get("teal", "#42949E"),
@@ -7131,7 +7214,12 @@ def _render_absolute_risk_publication_bundle_from_prior_outputs(
     add_panel_label(ax_availability, "A", x=0.0, y=1.08)
 
     risk_x = [
-        _as_percent(row, "outcome_risk_pct" if "outcome_risk_pct" in frame.columns else "outcome_risk")
+        _as_percent(
+            row,
+            "outcome_risk_pct"
+            if "outcome_risk_pct" in frame.columns
+            else "outcome_risk",
+        )
         for _, row in risk.iterrows()
     ]
     risk_lo = [_as_percent(row, "ci_low") for _, row in risk.iterrows()]
@@ -7151,8 +7239,14 @@ def _render_absolute_risk_publication_bundle_from_prior_outputs(
         risk_x,
         y_risk,
         xerr=[
-            [max(0.0, x - (lo if lo is not None else x)) for x, lo in zip(risk_x, risk_lo)],
-            [max(0.0, (hi if hi is not None else x) - x) for x, hi in zip(risk_x, risk_hi)],
+            [
+                max(0.0, x - (lo if lo is not None else x))
+                for x, lo in zip(risk_x, risk_lo)
+            ],
+            [
+                max(0.0, (hi if hi is not None else x) - x)
+                for x, hi in zip(risk_x, risk_hi)
+            ],
         ],
         fmt="o",
         color=palette.get("blue", "#0F4D92"),
@@ -7459,8 +7553,7 @@ def _render_association_publication_bundle_from_prior_outputs(
                 for contract in model_contracts
                 if isinstance(contract, dict)
                 and str(contract.get("analysis_role") or "").lower() == "primary"
-                and str(contract.get("exposure_role") or "primary").lower()
-                == "primary"
+                and str(contract.get("exposure_role") or "primary").lower() == "primary"
             ),
             None,
         )
@@ -7501,7 +7594,9 @@ def _render_association_publication_bundle_from_prior_outputs(
                 plot_df = plot_df.loc[selected_primary].copy()
     source_variable_col = lower_to_orig.get("source_variable")
     if source_variable_col is not None and primary_exposure:
-        selected_exposure = plot_df[source_variable_col].astype(str).eq(primary_exposure)
+        selected_exposure = (
+            plot_df[source_variable_col].astype(str).eq(primary_exposure)
+        )
         if selected_exposure.any():
             plot_df = plot_df.loc[selected_exposure].copy()
 
@@ -7554,10 +7649,7 @@ def _render_association_publication_bundle_from_prior_outputs(
     # Drop the intercept term; it is not an interpretable effect estimate.
     intercept_col = lower_to_orig.get("term", var_col)
     plot_df = plot_df[
-        ~plot_df[intercept_col]
-        .astype(str)
-        .str.lower()
-        .isin({"const", "intercept"})
+        ~plot_df[intercept_col].astype(str).str.lower().isin({"const", "intercept"})
     ]
     for _c in (or_col, lo_col, hi_col):
         plot_df = plot_df.assign(**{_c: pd.to_numeric(plot_df[_c], errors="coerce")})
@@ -7590,9 +7682,7 @@ def _render_association_publication_bundle_from_prior_outputs(
                 if analysis_set_col is not None
                 else row.get(model_id_col)
             )
-            qualified_labels.append(
-                f"{base_label} ({_publication_label(qualifier)})"
-            )
+            qualified_labels.append(f"{base_label} ({_publication_label(qualifier)})")
         full_display_labels = qualified_labels
     display_labels = [
         _short_figure_label(label.replace("Maximum ", "Max "), limit=32)
@@ -7664,21 +7754,35 @@ def _render_association_publication_bundle_from_prior_outputs(
         context_x = pd.to_numeric(
             context_df["plot_estimate_pct"], errors="coerce"
         ).to_numpy()
-        context_lo = pd.to_numeric(
-            context_df.get("plot_ci_low_pct", context_df["plot_estimate_pct"]),
-            errors="coerce",
-        ).fillna(pd.Series(context_x)).to_numpy()
-        context_hi = pd.to_numeric(
-            context_df.get("plot_ci_high_pct", context_df["plot_estimate_pct"]),
-            errors="coerce",
-        ).fillna(pd.Series(context_x)).to_numpy()
+        context_lo = (
+            pd.to_numeric(
+                context_df.get("plot_ci_low_pct", context_df["plot_estimate_pct"]),
+                errors="coerce",
+            )
+            .fillna(pd.Series(context_x))
+            .to_numpy()
+        )
+        context_hi = (
+            pd.to_numeric(
+                context_df.get("plot_ci_high_pct", context_df["plot_estimate_pct"]),
+                errors="coerce",
+            )
+            .fillna(pd.Series(context_x))
+            .to_numpy()
+        )
         y_context = list(range(len(context_labels)))
         ax_context.errorbar(
             context_x,
             y_context,
             xerr=[
-                [max(0.0, center - lower) for center, lower in zip(context_x, context_lo)],
-                [max(0.0, upper - center) for center, upper in zip(context_x, context_hi)],
+                [
+                    max(0.0, center - lower)
+                    for center, lower in zip(context_x, context_lo)
+                ],
+                [
+                    max(0.0, upper - center)
+                    for center, upper in zip(context_x, context_hi)
+                ],
             ],
             fmt="o",
             color=palette.get("teal", "#42949E"),
@@ -7687,7 +7791,9 @@ def _render_association_publication_bundle_from_prior_outputs(
             capsize=2.3,
             markersize=4.0,
         )
-        max_context = max([float(x) for x in context_hi if math.isfinite(float(x))] or [1.0])
+        max_context = max(
+            [float(x) for x in context_hi if math.isfinite(float(x))] or [1.0]
+        )
         ax_context.set_xlim(0, max(5.0, max_context + 8.0, max_context * 1.35))
         ax_context.set_yticks(y_context)
         ax_context.set_yticklabels(context_labels, fontsize=6.8)
@@ -7701,7 +7807,9 @@ def _render_association_publication_bundle_from_prior_outputs(
             alpha=0.8,
         )
         for row_idx, row in context_df.iterrows():
-            event_n = pd.to_numeric(pd.Series([row.get("plot_event_n")]), errors="coerce").iloc[0]
+            event_n = pd.to_numeric(
+                pd.Series([row.get("plot_event_n")]), errors="coerce"
+            ).iloc[0]
             denom = pd.to_numeric(
                 pd.Series([row.get("plot_denominator")]), errors="coerce"
             ).iloc[0]
@@ -7761,7 +7869,10 @@ def _render_association_publication_bundle_from_prior_outputs(
     ax.set_title(association_panel_title, loc="left", pad=4)
     if len(labels) <= 3:
         max_hi = max(float(value) for value in hi if math.isfinite(float(value)))
-        ax.set_xlim(left=max(0.01, min(float(value) for value in lo) * 0.96), right=max_hi * 1.28)
+        ax.set_xlim(
+            left=max(0.01, min(float(value) for value in lo) * 0.96),
+            right=max_hi * 1.28,
+        )
         for row_idx, (center, lower, upper) in enumerate(zip(or_vals, lo, hi)):
             ax.text(
                 float(upper) * 1.025,
@@ -7909,6 +8020,8 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
     run_dir: Path,
     current_step_id: str,
     out_dir: Path,
+    preverified_parent_artifacts: Optional[Mapping[str, bytes]] = None,
+    authorized_repair_id: Optional[str] = None,
 ) -> Optional[str]:
     """Deterministically rebuild a sensitivity figure from parent outputs."""
 
@@ -7917,22 +8030,44 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
         return None
 
     parent_step_id = current_step_id.removesuffix("_figure")
-    candidate_paths: List[Path] = []
+    candidate_sources: List[Tuple[Path, Union[Path, bytes]]] = []
     direct_outputs = steps_dir / parent_step_id / "outputs"
-    if (
-        parent_step_id
-        and parent_step_id != current_step_id
-        and direct_outputs.exists()
-    ):
+    if parent_step_id and parent_step_id != current_step_id and direct_outputs.exists():
         # A split rendering step must not silently borrow a similarly-shaped
         # table from an unrelated sensitivity step.  Search the direct parent
         # only when it exists.  Older plans whose rendering-step name does not
         # share the exact parent stem retain the conservative fallback below.
-        direct_candidates = sorted(direct_outputs.glob("*.csv"))
+        if preverified_parent_artifacts is None:
+            direct_candidates = [
+                (path, path) for path in sorted(direct_outputs.glob("*.csv"))
+            ]
+        elif authorized_repair_id == (
+            "sensitivity_publication_bundle_from_locked_summary_v1"
+        ):
+            payload = preverified_parent_artifacts.get("robustness_summary.csv")
+            if (
+                payload is None
+                or "step_summary.json" not in preverified_parent_artifacts
+            ):
+                return None
+            direct_candidates = [(direct_outputs / "robustness_summary.csv", payload)]
+        else:
+            direct_candidates = [
+                (direct_outputs / name, payload)
+                for name, payload in sorted(preverified_parent_artifacts.items())
+                if Path(name).name == name and Path(name).suffix.lower() == ".csv"
+            ]
         declared_names: set[str] = set()
         try:
+            summary_payload = (
+                preverified_parent_artifacts.get("step_summary.json")
+                if preverified_parent_artifacts is not None
+                else None
+            )
             direct_summary = json.loads(
-                (direct_outputs / "step_summary.json").read_text(encoding="utf-8")
+                summary_payload.decode("utf-8")
+                if summary_payload is not None
+                else (direct_outputs / "step_summary.json").read_text(encoding="utf-8")
             )
         except Exception:
             direct_summary = {}
@@ -7953,13 +8088,16 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
                         continue
                     if isinstance(value, str) and value.lower().endswith(".csv"):
                         declared_names.add(Path(value).name)
-        candidate_paths.extend(
+        candidate_sources.extend(
             sorted(
                 direct_candidates,
-                key=lambda path: (path.name not in declared_names, path.name),
+                key=lambda item: (
+                    item[0].name not in declared_names,
+                    item[0].name,
+                ),
             )
         )
-    else:
+    elif preverified_parent_artifacts is None:
         for step_dir in sorted(steps_dir.iterdir()):
             if not step_dir.is_dir() or step_dir.name == current_step_id:
                 continue
@@ -7967,15 +8105,20 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
                 continue
             outputs_dir = step_dir / "outputs"
             if outputs_dir.exists():
-                candidate_paths.extend(sorted(outputs_dir.glob("*.csv")))
+                candidate_sources.extend(
+                    (path, path) for path in sorted(outputs_dir.glob("*.csv"))
+                )
 
     parent: Optional[tuple[Path, pd.DataFrame]] = None
-    for csv_path in candidate_paths:
+    for csv_path, source in candidate_sources:
         try:
             # Preserve round-trippable confidence-limit values; the default
             # fast parser can change the final binary digit and create a false
             # source-trace mismatch on an otherwise identical table.
-            frame = pd.read_csv(csv_path, float_precision="round_trip")
+            frame = pd.read_csv(
+                io.BytesIO(source) if isinstance(source, bytes) else source,
+                float_precision="round_trip",
+            )
         except Exception:
             continue
         required = {"spec_id", "effect_scale", "point_estimate", "ci_low", "ci_high"}
@@ -8022,12 +8165,13 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
         source_data["converged"] = source_data["point_estimate"].notna()
     source_data["axis_label"] = source_data["axis"].map(_publication_label)
     source_data["plot_label"] = [
-        _sensitivity_plot_label(row)
-        for row in source_data.to_dict(orient="records")
+        _sensitivity_plot_label(row) for row in source_data.to_dict(orient="records")
     ]
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    estimated_mask = source_data[["point_estimate", "ci_low", "ci_high"]].notna().all(axis=1)
+    estimated_mask = (
+        source_data[["point_estimate", "ci_low", "ci_high"]].notna().all(axis=1)
+    )
     if "converged" in source_data.columns:
         estimated_mask &= source_data["converged"].map(_truthy_figure_value)
     if "reportable" in source_data.columns:
@@ -8091,8 +8235,7 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
         )
     if not rd_df.empty:
         rd_df["plot_label"] = [
-            _sensitivity_plot_label(row)
-            for row in rd_df.to_dict(orient="records")
+            _sensitivity_plot_label(row) for row in rd_df.to_dict(orient="records")
         ]
     n_df = figure_source_data.copy()
     if "modeled_analytic_n" in n_df.columns:
@@ -8326,7 +8469,9 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
         ax_n.set_yticklabels(
             [
                 _short_figure_label(label, limit=26)
-                for label in n_plot["plot_label"].fillna(n_plot["display_label"]).astype(str)
+                for label in n_plot["plot_label"]
+                .fillna(n_plot["display_label"])
+                .astype(str)
             ]
         )
         ax_n.invert_yaxis()
@@ -8392,6 +8537,15 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
             }
         )
 
+    for panel in contract_panels:
+        panel_role = str(panel.get("role") or "")
+        if panel_role == "robustness":
+            panel["metadata"] = {"planner_product_slots": ["robustness_plot"]}
+        elif panel_role == "audit":
+            panel["metadata"] = {
+                "planner_product_slots": ["robustness_denominator_audit"]
+            }
+
     contract = make_figure_contract(
         figure_id="sensitivity_forest",
         core_claim=(
@@ -8451,15 +8605,16 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
                 path.name for key, path in outputs.items() if key != "contract"
             ],
             "figure_path": "sensitivity_forest.png",
+            "figure_contract": "sensitivity_forest.figure_contract.json",
         }
     )
     step_summary_path.write_text(
         json.dumps(existing_summary, indent=2, ensure_ascii=False, default=str),
         encoding="utf-8",
     )
-    if (
-        table_path.name == "robustness_summary.csv"
-        and _resolve_upstream_analysis_method(run_dir, current_step_id)
+    if table_path.name == "robustness_summary.csv" and (
+        authorized_repair_id == "sensitivity_publication_bundle_from_locked_summary_v1"
+        or _resolve_upstream_analysis_method(run_dir, current_step_id)
         == "cohort_definition_sensitivity"
     ):
         return "sensitivity_publication_bundle_from_locked_summary_v1"
@@ -8543,10 +8698,16 @@ def _resolve_upstream_analysis_family(
     return str(fam).strip().lower() if fam else None
 
 
-def _resolve_upstream_manifest_step(
+def _resolve_upstream_manifest_analysis_request(
     run_dir: Path, current_step_id: str
 ) -> Optional[Dict[str, Any]]:
-    """Return the direct parent's structured AnalysisStep from the checkpoint."""
+    """Return the host-recorded direct-parent planning request.
+
+    This checkpoint object is written by the supervisor before the parent code
+    executes.  It is therefore the authority for sealed-renderer method and
+    family selection; a coder-authored ``step_summary.json`` may only confirm,
+    never replace, this request.
+    """
 
     parent = str(current_step_id or "").removesuffix("_figure")
     if not parent or parent == str(current_step_id):
@@ -8566,6 +8727,15 @@ def _resolve_upstream_manifest_step(
     if not isinstance(record, Mapping):
         return None
     request = record.get("analysis_request")
+    return dict(request) if isinstance(request, Mapping) else None
+
+
+def _resolve_upstream_manifest_step(
+    run_dir: Path, current_step_id: str
+) -> Optional[Dict[str, Any]]:
+    """Return the direct parent's structured AnalysisStep from the checkpoint."""
+
+    request = _resolve_upstream_manifest_analysis_request(run_dir, current_step_id)
     request_step = request.get("step") if isinstance(request, Mapping) else None
     return dict(request_step) if isinstance(request_step, Mapping) else None
 
@@ -8612,9 +8782,7 @@ def _resolve_upstream_figure_data_family(
         return None
     if not isinstance(summary, dict):
         return None
-    families = {
-        str(summary.get("figure_data_family") or "").strip().lower()
-    }
+    families = {str(summary.get("figure_data_family") or "").strip().lower()}
     contracts = summary.get("figure_data_contracts")
     if isinstance(contracts, list):
         families.update(
@@ -8690,9 +8858,7 @@ def _renderer_for_upstream_family(family: Optional[str]):
 def _renderer_for_upstream_method(method: Optional[str]):
     """Map an exact controlled parent method to a deterministic renderer."""
 
-    key = _UPSTREAM_METHOD_TO_RENDERER_KEY.get(
-        str(method or "").strip().lower()
-    )
+    key = _UPSTREAM_METHOD_TO_RENDERER_KEY.get(str(method or "").strip().lower())
     if key == "ordered_distribution":
         from .figures.ordered_distribution import (
             render_ordered_distribution_bundle_from_prior_outputs,
@@ -8782,9 +8948,7 @@ def _verified_direct_parent_artifact_digests(
             continue
         evidence_name = evidence_path.name
         logical_name = (
-            evidence_name.split("__", 1)[1]
-            if "__" in evidence_name
-            else evidence_name
+            evidence_name.split("__", 1)[1] if "__" in evidence_name else evidence_name
         )
         output_path = (
             Path(run_dir) / "steps" / parent_step_id / "outputs" / logical_name
@@ -8803,8 +8967,7 @@ def _verified_direct_parent_artifact_digests(
         elif (
             kind == "statistic"
             and logical_name == "step_summary.json"
-            and evidence_id
-            == str(parent_record.get("step_summary_evidence_id") or "")
+            and evidence_id == str(parent_record.get("step_summary_evidence_id") or "")
         ):
             verified_summary = True
             verified_digests[logical_name] = str(record.get("sha256") or "")
@@ -8851,19 +9014,42 @@ def _distribution_availability_parent_digest_seal(
     parent_step_id = str(figure_step_id or "").removesuffix("_figure")
     parent_out = Path(run_dir) / "steps" / parent_step_id / "outputs"
     try:
-        parent_summary = json.loads(
-            (parent_out / "step_summary.json").read_text("utf-8")
+        from .declared_product_contract import read_digest_bound_artifact_snapshot
+
+        snapshot = read_digest_bound_artifact_snapshot(
+            parent_out=parent_out,
+            artifact_digests=digests,
         )
-    except Exception:
+        parent_summary = json.loads(snapshot["step_summary.json"].decode("utf-8"))
+    except (KeyError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
         return None
     if not isinstance(parent_summary, Mapping):
         return None
+    distribution_contract = parent_summary.get("distribution")
+    measurement_contract = parent_summary.get("measurement_audit")
+    if not isinstance(distribution_contract, Mapping) or not isinstance(
+        measurement_contract, Mapping
+    ):
+        return None
+    selected_names = {
+        str(distribution_contract.get("table") or "").strip(),
+        str(measurement_contract.get("table") or "").strip(),
+    }
+    if (
+        len(selected_names) != 2
+        or any(
+            Path(name).name != name or not name.endswith(".csv")
+            for name in selected_names
+        )
+        or not selected_names <= set(snapshot)
+    ):
+        return None
+    selected_table_bytes = {name: snapshot[name] for name in selected_names}
     prepared = prepare_distribution_availability_inputs(
         parent_out=parent_out,
         parent_summary=parent_summary,
-        verified_table_names={
-            name for name in digests if name != "step_summary.json"
-        },
+        verified_table_names=set(selected_table_bytes),
+        preverified_table_bytes=selected_table_bytes,
     )
     if prepared is None:
         return None
@@ -8890,6 +9076,116 @@ def _distribution_availability_parent_digest_seal(
     return {name: digests[name] for name in sorted(required_names)}
 
 
+def _sealed_renderer_parent_digest_seal(
+    run_dir: Path,
+    figure_step_id: str,
+    repair_id: str,
+) -> Optional[dict[str, str]]:
+    """Return the exact evidence digests one sealed renderer may consume."""
+
+    distribution_id = (
+        "distribution_availability_publication_bundle_from_parent_outputs_v1"
+    )
+    if repair_id == distribution_id:
+        return _distribution_availability_parent_digest_seal(run_dir, figure_step_id)
+    digests = _verified_direct_parent_artifact_digests(run_dir, figure_step_id)
+    if not digests or "step_summary.json" not in digests:
+        return None
+    csv_names = {name for name in digests if Path(name).suffix.lower() == ".csv"}
+    if repair_id == "ordered_category_distribution_publication_bundle_v1":
+        required_names = {"step_summary.json", *csv_names}
+        if not csv_names:
+            return None
+    elif repair_id == "cohort_flow_publication_bundle_from_parent_outputs_v1":
+        required_names = {
+            "step_summary.json",
+            "cohort_flow.csv",
+            "attrition.csv",
+        }
+    elif repair_id == "sensitivity_publication_bundle_from_locked_summary_v1":
+        required_names = {"step_summary.json", "robustness_summary.csv"}
+    else:
+        return None
+    if not required_names <= set(digests):
+        return None
+    return {name: digests[name] for name in sorted(required_names)}
+
+
+def _render_authorized_sealed_publication_bundle(
+    *,
+    repair_id: str,
+    run_dir: Path,
+    current_step_id: str,
+    out_dir: Path,
+    parent_artifact_digests: Mapping[str, str],
+) -> Optional[str]:
+    """Render one host-selected closed adapter from one immutable byte snapshot.
+
+    This dispatcher never chooses a scientific method or probes alternative
+    renderers.  The host has already authorized the exact repair ID from the
+    direct parent's registered method/family and evidence digests.
+    """
+
+    from .declared_product_contract import read_digest_bound_artifact_snapshot
+
+    parent_step_id = str(current_step_id or "").removesuffix("_figure")
+    if not parent_step_id or parent_step_id == str(current_step_id or ""):
+        return None
+    parent_out = Path(run_dir) / "steps" / parent_step_id / "outputs"
+    try:
+        snapshot = read_digest_bound_artifact_snapshot(
+            parent_out=parent_out,
+            artifact_digests=parent_artifact_digests,
+        )
+    except ValueError:
+        return None
+    if "step_summary.json" not in snapshot:
+        return None
+
+    if repair_id == (
+        "distribution_availability_publication_bundle_from_parent_outputs_v1"
+    ):
+        from .figures.distribution_availability import (
+            render_distribution_availability_bundle_from_prior_outputs,
+        )
+
+        observed = render_distribution_availability_bundle_from_prior_outputs(
+            run_dir=run_dir,
+            current_step_id=current_step_id,
+            out_dir=out_dir,
+            preverified_parent_artifacts=snapshot,
+        )
+    elif repair_id == "ordered_category_distribution_publication_bundle_v1":
+        from .figures.ordered_distribution import (
+            render_ordered_distribution_bundle_from_prior_outputs,
+        )
+
+        observed = render_ordered_distribution_bundle_from_prior_outputs(
+            run_dir=run_dir,
+            current_step_id=current_step_id,
+            out_dir=out_dir,
+            preverified_parent_artifacts=snapshot,
+        )
+    elif repair_id == "cohort_flow_publication_bundle_from_parent_outputs_v1":
+        observed = _render_cohort_flow_publication_bundle_from_prior_outputs(
+            run_dir=run_dir,
+            current_step_id=current_step_id,
+            out_dir=out_dir,
+            preverified_parent_artifacts=snapshot,
+        )
+    elif repair_id == "sensitivity_publication_bundle_from_locked_summary_v1":
+        observed = _render_sensitivity_publication_bundle_from_prior_outputs(
+            run_dir=run_dir,
+            current_step_id=current_step_id,
+            out_dir=out_dir,
+            preverified_parent_artifacts=snapshot,
+            authorized_repair_id=repair_id,
+        )
+    else:
+        return None
+    return observed if observed == repair_id else None
+
+
 def _distribution_availability_figure_step_matches_parent(
     run_dir: Path,
     step: AnalysisStep,
@@ -8910,9 +9206,7 @@ def _distribution_availability_figure_step_matches_parent(
     from .figures.distribution_availability import CONTROLLED_METHOD
 
     required_inputs = {
-        ("table", Path(name).stem)
-        for name in seal
-        if name != "step_summary.json"
+        ("table", Path(name).stem) for name in seal if name != "step_summary.json"
     }
     child_typed_inputs = {
         parsed
@@ -8921,57 +9215,143 @@ def _distribution_availability_figure_step_matches_parent(
     }
     if required_inputs <= child_typed_inputs:
         return True
-    return (
-        str(step.method or "").strip().lower() == CONTROLLED_METHOD
-        and tuple(str(value) for value in (step.inputs or []))
-        == tuple(str(value) for value in (request_step.get("inputs") or []))
-    )
+    return str(step.method or "").strip().lower() == CONTROLLED_METHOD and tuple(
+        str(value) for value in (step.inputs or [])
+    ) == tuple(str(value) for value in (request_step.get("inputs") or []))
+
+
+def _sealed_renderer_figure_step_matches_parent(
+    run_dir: Path,
+    step: AnalysisStep,
+    renderer_repair_id: str,
+) -> bool:
+    """Require a Planner-owned structural edge for every sealed renderer.
+
+    Modern split steps consume the exact logical parent products required by
+    the renderer registry.  Legacy split steps repeat the parent method and
+    inputs exactly.  Merely using a ``*_figure`` sibling name is never enough.
+    """
+
+    from .declared_product_contract import typed_product
+    from .repair_registry import is_sealed_renderer_repair, repair_metadata_for
+
+    if not is_sealed_renderer_repair(renderer_repair_id):
+        return False
+    metadata = repair_metadata_for(renderer_repair_id)
+    request_step = _resolve_upstream_manifest_step(run_dir, step.step_id)
+    if not isinstance(request_step, Mapping):
+        return False
+    planner_method = str(request_step.get("method") or "").strip().lower()
+    if planner_method not in metadata.planner_methods:
+        return False
+
+    parent_products = {
+        parsed
+        for raw in (request_step.get("expected_outputs") or [])
+        if (parsed := typed_product(raw)) is not None
+        and parsed[0] in {"table", "artifact", "dataset"}
+    }
+    required_products: set[tuple[str, str]] = set()
+    for role_alternatives in metadata.planner_parent_output_role_groups:
+        matches = {
+            product
+            for product in parent_products
+            if any(
+                len(product[1].split("_")) >= len(suffix)
+                and tuple(product[1].split("_")[-len(suffix) :]) == tuple(suffix)
+                for suffix in role_alternatives
+            )
+        }
+        if not matches:
+            return False
+        required_products.update(matches)
+
+    child_typed_inputs = {
+        parsed
+        for raw in (step.inputs or [])
+        if (parsed := typed_product(raw)) is not None
+    }
+    if required_products <= child_typed_inputs:
+        return True
+    return str(step.method or "").strip().lower() == planner_method and tuple(
+        str(value) for value in (step.inputs or [])
+    ) == tuple(str(value) for value in (request_step.get("inputs") or []))
 
 
 def deterministic_figure_repair_id_for_upstream(
     run_dir: Path, step_id: str
 ) -> Optional[str]:
-    """Return one evidence-bound, science-neutral renderer repair id."""
+    """Return one Planner-authorized, evidence-bound renderer repair id.
+
+    Sealed preflight may replace the coder, so coder-written summary fields are
+    never routing authority.  The host-recorded parent planning request selects
+    one exact standard method family; registered table names and the closed
+    renderer schema then provide the structural evidence.  A summary method, if
+    present, is only an equality check against the Planner method.
+    """
 
     verified_tables = _verified_direct_parent_table_names(run_dir, step_id)
     if not verified_tables:
         return None
-
-    artifact_family = _resolve_upstream_figure_data_family(run_dir, step_id)
-    if artifact_family is not None:
-        # An explicit but unknown/ambiguous contract is authoritative and must
-        # fail closed; do not silently fall back to a name or whole-step family.
-        if artifact_family == "ordered_category_distribution" and (
-            _renderer_for_upstream_figure_data_family(artifact_family) is not None
-        ):
-            return "ordered_category_distribution_publication_bundle_v1"
+    request = _resolve_upstream_manifest_analysis_request(run_dir, step_id)
+    request_step = request.get("step") if isinstance(request, Mapping) else None
+    if not isinstance(request_step, Mapping):
         return None
-    if (
-        _resolve_upstream_analysis_method(run_dir, step_id)
-        == "ordinal_exposure_derivation_and_quality_control"
-    ):
-        return "ordered_category_distribution_publication_bundle_v1"
-    if (
-        _resolve_upstream_analysis_method(run_dir, step_id)
-        == "exposure_distribution_and_missingness_audit"
-    ):
-        from .figures.distribution_availability import (
-            REPAIR_ID as distribution_availability_repair_id,
+    from .declared_product_contract import typed_product
+
+    planner_table_tokens = {
+        tuple(part for part in parsed[1].split("_") if part)
+        for raw in (request_step.get("expected_outputs") or [])
+        if (parsed := typed_product(raw)) is not None
+        and parsed[0] in {"table", "artifact", "dataset"}
+    }
+
+    def _declares(role_suffixes: Sequence[Sequence[str]]) -> bool:
+        return any(
+            len(tokens) >= len(suffix) and tokens[-len(suffix) :] == tuple(suffix)
+            for tokens in planner_table_tokens
+            for suffix in role_suffixes
         )
 
-        seal = _distribution_availability_parent_digest_seal(run_dir, step_id)
-        return distribution_availability_repair_id if seal is not None else None
-    if (
-        _resolve_upstream_analysis_method(run_dir, step_id)
-        == "cohort_definition_sensitivity"
-        and "robustness_summary.csv" in verified_tables
+    planner_method = str(request_step.get("method") or "").strip().lower()
+    if not planner_method:
+        return None
+    reported_method = _resolve_upstream_analysis_method(run_dir, step_id)
+    if reported_method and reported_method != planner_method:
+        return None
+    from .repair_registry import sealed_renderer_metadata
+
+    candidates = [
+        metadata
+        for metadata in sealed_renderer_metadata()
+        if planner_method in metadata.planner_methods
+        and all(
+            _declares(role_alternatives)
+            for role_alternatives in metadata.planner_parent_output_role_groups
+        )
+    ]
+    if len(candidates) != 1:
+        return None
+    repair_id = candidates[0].repair_id
+    if repair_id == (
+        "distribution_availability_publication_bundle_from_parent_outputs_v1"
     ):
-        return "sensitivity_publication_bundle_from_locked_summary_v1"
-    if (
-        _resolve_upstream_analysis_family(run_dir, step_id) == "cohort_definition"
-        and {"cohort_flow.csv", "attrition.csv"} <= verified_tables
-    ):
-        return "cohort_flow_publication_bundle_from_parent_outputs_v1"
+        return (
+            repair_id
+            if _distribution_availability_parent_digest_seal(run_dir, step_id)
+            is not None
+            else None
+        )
+    if repair_id == "sensitivity_publication_bundle_from_locked_summary_v1":
+        return repair_id if "robustness_summary.csv" in verified_tables else None
+    if repair_id == "cohort_flow_publication_bundle_from_parent_outputs_v1":
+        return (
+            repair_id
+            if {"cohort_flow.csv", "attrition.csv"} <= verified_tables
+            else None
+        )
+    if repair_id == "ordered_category_distribution_publication_bundle_v1":
+        return repair_id
     return None
 
 
@@ -9022,9 +9402,7 @@ def _render_publication_bundle_from_prior_outputs_for_step(
     # mis-routed step still reaches the correct renderer rather than the coder).
     _upstream_family = _resolve_upstream_analysis_family(run_dir, current_step_id)
     _upstream_renderer = _renderer_for_upstream_family(_upstream_family)
-    _upstream_fallback = (
-        (_upstream_renderer,) if _upstream_renderer is not None else ()
-    )
+    _upstream_fallback = (_upstream_renderer,) if _upstream_renderer is not None else ()
     # Cohort sensitivity, overlap, and attrition/flow are sibling renderings of
     # one closed cohort-definition family.  A direct-parent family declaration
     # should outrank stochastic step text, but a sensitivity/overlap renderer
@@ -9409,9 +9787,7 @@ def _semantic_aliases_for(step: AnalysisStep, artefact: Path) -> List[str]:
             stripped = re.sub(r"^\d+[_-]+", "", step_id)
             if stripped and stripped != step_id:
                 out.append(stripped)
-        expected = " ".join(
-            str(item).lower() for item in (step.expected_outputs or [])
-        )
+        expected = " ".join(str(item).lower() for item in (step.expected_outputs or []))
         intent = (step.intent or "").lower()
         if _prediction_contract_applies(step):
             out.extend(

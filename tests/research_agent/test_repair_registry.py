@@ -8,11 +8,13 @@ from easyicu.research_agent import code_repair
 from easyicu.research_agent.repair_registry import (
     InvariantStatus,
     RepairClass,
+    RepairExecutionPolicy,
     RepairLedger,
     RepairObservedState,
     automatic_repair_allowed,
     assert_registry_invariants,
     evaluate_invariants,
+    is_sealed_renderer_repair,
     make_repair_provenance,
     repair_metadata_for,
 )
@@ -40,12 +42,12 @@ def test_dynamic_repair_id_patterns_are_classified() -> None:
         is RepairClass.SYNTACTIC
     )
     assert (
-        repair_metadata_for("undefined_helper_stub_to_json_serializable_v1").repair_class
+        repair_metadata_for(
+            "undefined_helper_stub_to_json_serializable_v1"
+        ).repair_class
         is RepairClass.METHOD_SUBSTITUTION
     )
-    assert not automatic_repair_allowed(
-        "undefined_helper_stub_to_json_serializable_v1"
-    )
+    assert not automatic_repair_allowed("undefined_helper_stub_to_json_serializable_v1")
 
 
 def test_retired_case_specific_repair_ids_are_not_registered() -> None:
@@ -173,13 +175,18 @@ def test_all_method_substitutions_are_auto_denied() -> None:
         "outcome_incidence_descriptive_repair_v1",
         "future_unreviewed_repair_v1",
     ):
-        assert repair_metadata_for(repair_id).repair_class is RepairClass.METHOD_SUBSTITUTION
+        assert (
+            repair_metadata_for(repair_id).repair_class
+            is RepairClass.METHOD_SUBSTITUTION
+        )
         assert not automatic_repair_allowed(repair_id)
 
 
 def test_every_generic_repair_entrypoint_crosses_central_authorization_gate() -> None:
-    source = Path(code_repair.__file__).with_name("pipeline_execute.py").read_text(
-        encoding="utf-8"
+    source = (
+        Path(code_repair.__file__)
+        .with_name("pipeline_execute.py")
+        .read_text(encoding="utf-8")
     )
 
     assert source.count("_deterministic_summary_repair(") == 3
@@ -202,7 +209,28 @@ def test_only_closed_source_figure_renderers_are_structural_and_automatic() -> N
     ):
         metadata = repair_metadata_for(repair_id)
         assert metadata.repair_class is RepairClass.STRUCTURAL, repair_id
-        assert automatic_repair_allowed(repair_id), repair_id
+        assert metadata.execution_policy is RepairExecutionPolicy.SEALED_RENDERER, (
+            repair_id
+        )
+        assert is_sealed_renderer_repair(repair_id), repair_id
+        assert metadata.figure_product_slots, repair_id
+        assert metadata.planner_methods, repair_id
+        assert metadata.planner_parent_output_role_groups, repair_id
+        assert metadata.implementation_modules, repair_id
+        assert "easyicu.research_agent.repair_registry" in (
+            metadata.implementation_modules
+        ), repair_id
+        assert not automatic_repair_allowed(repair_id), repair_id
+        assert automatic_repair_allowed(
+            repair_id,
+            sealed_renderer_wrapper=True,
+        ), repair_id
+
+    assert not is_sealed_renderer_repair("publication_bundle_promote_v1")
+    assert (
+        repair_metadata_for("publication_bundle_promote_v1").execution_policy
+        is RepairExecutionPolicy.MUTABLE
+    )
 
     for repair_id in (
         "publication_figure_renderer_from_parent_outputs_v1",
@@ -302,9 +330,7 @@ def test_salvage_step_summary_records_stdout_salvage_end_to_end(tmp_path: Path) 
     assert outcome is not None
     assert outcome.repair_id == "summary_salvage_stdout_json_v1"
     assert outcome.reset_artefacts is True
-    assert (
-        repair_metadata_for(outcome.repair_id).repair_class is RepairClass.STRUCTURAL
-    )
+    assert repair_metadata_for(outcome.repair_id).repair_class is RepairClass.STRUCTURAL
     # Salvage actually wrote the summary the registration step will read.
     assert (out_dir / "step_summary.json").exists()
 
@@ -323,7 +349,9 @@ def test_salvage_step_summary_records_stdout_salvage_end_to_end(tmp_path: Path) 
     assert payload["repairs"][0]["repair_class"] == RepairClass.STRUCTURAL.value
 
 
-def test_salvage_step_summary_does_not_select_from_result_tables(tmp_path: Path) -> None:
+def test_salvage_step_summary_does_not_select_from_result_tables(
+    tmp_path: Path,
+) -> None:
     from easyicu.research_agent.runner import RunResult
     from easyicu.research_agent.schema import AnalysisStep
     from easyicu.research_agent.summary_repair import salvage_step_summary

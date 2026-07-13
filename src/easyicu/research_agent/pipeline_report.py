@@ -642,6 +642,17 @@ _PUBLICATION_FIGURE_VISUAL_ERROR_VALIDATORS = {
     "visual_qa",
     "vlm_visual_qa",
 }
+_COSMETIC_VISUAL_REASON = "svg_text_overlap_spacing"
+_LEGACY_COSMETIC_VISUAL_MESSAGE = re.compile(
+    r"^svg figure '[^']+' has overlapping text elements; "
+    r"multi-panel labels, annotations or axis text need more spacing\.?$",
+    re.IGNORECASE,
+)
+_HARD_VISUAL_MESSAGE = re.compile(
+    r"\b(?:blank|clip(?:ped|ping)?|crop(?:ped|ping)?|missing|absent|"
+    r"unreadable|overflow|truncat(?:ed|ion)|numeric|mismatch|disagree)\b",
+    re.IGNORECASE,
+)
 
 
 def _is_cosmetic_visual_error(finding: ValidationFinding) -> bool:
@@ -659,8 +670,13 @@ def _is_cosmetic_visual_error(finding: ValidationFinding) -> bool:
     """
     if finding.severity != "error" or finding.validator != "visual_qa":
         return False
-    message = (finding.message or "").lower()
-    return "overlapping text elements" in message and "spacing" in message
+    message = str(finding.message or "").strip()
+    if _HARD_VISUAL_MESSAGE.search(message):
+        return False
+    detail = finding.detail if isinstance(finding.detail, Mapping) else {}
+    if str(detail.get("reason") or "").strip() == _COSMETIC_VISUAL_REASON:
+        return True
+    return _LEGACY_COSMETIC_VISUAL_MESSAGE.fullmatch(message) is not None
 
 
 def _publication_figure_bundle_ready(

@@ -10,6 +10,38 @@ import pytest
 from easyicu.research_agent.schema import ValidationFinding
 
 
+def test_mixed_overlap_and_clipping_visual_error_is_not_cosmetic() -> None:
+    from easyicu.research_agent.pipeline_execute import _is_cosmetic_visual_finding
+    from easyicu.research_agent.pipeline_report import _is_cosmetic_visual_error
+
+    finding = ValidationFinding(
+        validator="visual_qa",
+        severity="error",
+        message=(
+            "Overlapping text elements and clipped/missing axis labels; adjust spacing."
+        ),
+        detail={"reason": "svg_text_overlap_spacing"},
+    )
+
+    assert not _is_cosmetic_visual_finding(finding)
+    assert not _is_cosmetic_visual_error(finding)
+
+
+def test_closed_overlap_spacing_reason_remains_cosmetic() -> None:
+    from easyicu.research_agent.pipeline_execute import _is_cosmetic_visual_finding
+    from easyicu.research_agent.pipeline_report import _is_cosmetic_visual_error
+
+    finding = ValidationFinding(
+        validator="visual_qa",
+        severity="error",
+        message="Overlapping text elements detected; adjust spacing.",
+        detail={"reason": "svg_text_overlap_spacing"},
+    )
+
+    assert _is_cosmetic_visual_finding(finding)
+    assert _is_cosmetic_visual_error(finding)
+
+
 def _svg(*, overlap: bool) -> str:
     legend_x = 102 if overlap else 280
     padding = "x" * 1400
@@ -27,11 +59,13 @@ def _svg(*, overlap: bool) -> str:
 
 def _script(*, svg: str, include_table: bool) -> str:
     table_write = (
-        "(out / 'summary.csv').write_text('metric,value\\nn,3\\n', "
-        "encoding='utf-8')\n"
+        "(out / 'summary.csv').write_text('metric,value\\nn,3\\n', encoding='utf-8')\n"
         if include_table
         else ""
     )
+    summary = {"status": "ok", "contract_ok": include_table}
+    if include_table:
+        summary["output_files"] = {"table:summary": "summary.csv"}
     return (
         "import json, os\n"
         "from pathlib import Path\n"
@@ -40,7 +74,7 @@ def _script(*, svg: str, include_table: bool) -> str:
         f"(out / 'layout.svg').write_text({svg!r}, encoding='utf-8')\n"
         + table_write
         + "(out / 'step_summary.json').write_text("
-        f"json.dumps({{'status': 'ok', 'contract_ok': {include_table!r}}}), "
+        f"json.dumps({summary!r}), "
         "encoding='utf-8')\n"
     )
 
@@ -214,9 +248,9 @@ def test_visual_qa_stays_before_contract_gate() -> None:
     visual_except = source[
         source.index("except Exception as exc:", source.index("qa_log =")) :
     ]
-    assert visual_except.index("_demote_cosmetic_visual_findings") < visual_except.index(
-        "visual_qa_repair_failed"
-    )
+    assert visual_except.index(
+        "_demote_cosmetic_visual_findings"
+    ) < visual_except.index("visual_qa_repair_failed")
 
 
 def test_contract_budget_does_not_consume_visual_layout_budget(
@@ -324,9 +358,7 @@ def test_cosmetic_visual_repair_provider_failure_keeps_outputs(
     assert record["visual_repair_attempts"] == 1
     assert all(finding["severity"] != "error" for finding in record["visual_findings"])
     assert "deterministic_code_fallback" not in record
-    svg_path = (
-        Path(result.workdir) / "steps" / "01_summary" / "outputs" / "layout.svg"
-    )
+    svg_path = Path(result.workdir) / "steps" / "01_summary" / "outputs" / "layout.svg"
     assert svg_path.is_file()
     retained_svg = svg_path.read_text(encoding="utf-8")
     assert 'x="102"' in retained_svg

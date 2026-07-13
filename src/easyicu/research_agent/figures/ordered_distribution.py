@@ -10,11 +10,12 @@ from being paired with the valid-observed denominator.
 
 from __future__ import annotations
 
+import io
 import json
 import math
 import re
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence, Tuple
+from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
 import pandas as pd
 
@@ -73,13 +74,26 @@ def _nonnegative_integer(series: pd.Series) -> Optional[pd.Series]:
     return numeric.astype(int)
 
 
-def _candidate_table(parent_out: Path) -> Optional[Tuple[Path, pd.DataFrame, str, str]]:
+def _candidate_table(
+    parent_out: Path,
+    preverified_parent_artifacts: Optional[Mapping[str, bytes]] = None,
+) -> Optional[Tuple[Path, pd.DataFrame, str, str]]:
     candidates: list[Tuple[int, Path, pd.DataFrame, str, str]] = []
-    for path in sorted(parent_out.glob("*.csv")):
+    if preverified_parent_artifacts is None:
+        sources = [(path, path) for path in sorted(parent_out.glob("*.csv"))]
+    else:
+        sources = [
+            (parent_out / name, payload)
+            for name, payload in sorted(preverified_parent_artifacts.items())
+            if Path(name).name == name and Path(name).suffix.lower() == ".csv"
+        ]
+    for path, source in sources:
         if "source_data" in path.name.lower() or path.name == "cohort_flow.csv":
             continue
         try:
-            frame = pd.read_csv(path)
+            frame = pd.read_csv(
+                io.BytesIO(source) if isinstance(source, bytes) else source
+            )
         except Exception:
             continue
         level_col = _resolve_column(frame, _LEVEL_COLUMNS)
@@ -148,6 +162,7 @@ def _availability_distribution(
     level_col: str,
     count_col: str,
     observed_n: int,
+    preverified_parent_artifacts: Optional[Mapping[str, bytes]] = None,
 ) -> Optional[Tuple[pd.DataFrame, int]]:
     status_col = _resolve_column(frame, _STATUS_COLUMNS)
     if status_col is None:
@@ -214,9 +229,24 @@ def _availability_distribution(
         return None
 
     flow_path = parent_out / "cohort_flow.csv"
-    if flow_path.exists():
+    flow_payload = (
+        preverified_parent_artifacts.get("cohort_flow.csv")
+        if preverified_parent_artifacts is not None
+        else None
+    )
+    # Once the host supplies a digest-bound snapshot, that mapping is the
+    # complete input authority.  Do not let an optional file that appears on
+    # disk after sealing influence the rendered result.
+    flow_source = (
+        io.BytesIO(flow_payload)
+        if flow_payload is not None
+        else flow_path
+        if preverified_parent_artifacts is None and flow_path.exists()
+        else None
+    )
+    if flow_source is not None:
         try:
-            flow = pd.read_csv(flow_path)
+            flow = pd.read_csv(flow_source)
         except Exception:
             flow = pd.DataFrame()
         flow_n_col = _resolve_column(flow, ("n", "count", "retained_n"))
@@ -292,6 +322,7 @@ def render_ordered_distribution_bundle_from_prior_outputs(
     run_dir: Path,
     current_step_id: str,
     out_dir: Path,
+    preverified_parent_artifacts: Optional[Mapping[str, bytes]] = None,
 ) -> Optional[str]:
     """Render a two-panel ordered distribution from the exact parent outputs."""
 
@@ -301,7 +332,16 @@ def render_ordered_distribution_bundle_from_prior_outputs(
     parent_out = Path(run_dir) / "steps" / parent_step_id / "outputs"
     parent_summary_path = parent_out / "step_summary.json"
     try:
-        parent_summary = json.loads(parent_summary_path.read_text(encoding="utf-8"))
+        summary_payload = (
+            preverified_parent_artifacts.get("step_summary.json")
+            if preverified_parent_artifacts is not None
+            else None
+        )
+        parent_summary = json.loads(
+            summary_payload.decode("utf-8")
+            if summary_payload is not None
+            else parent_summary_path.read_text(encoding="utf-8")
+        )
     except Exception:
         return None
     if not isinstance(parent_summary, dict):
@@ -316,7 +356,7 @@ def render_ordered_distribution_bundle_from_prior_outputs(
     elif not method_is_legacy_adapter:
         return None
 
-    candidate = _candidate_table(parent_out)
+    candidate = _candidate_table(parent_out, preverified_parent_artifacts)
     if candidate is None:
         return None
     source_path, frame, level_col, count_col = candidate
@@ -373,6 +413,7 @@ def render_ordered_distribution_bundle_from_prior_outputs(
         level_col=level_col,
         count_col=count_col,
         observed_n=observed_n,
+        preverified_parent_artifacts=preverified_parent_artifacts,
     )
     if availability is None:
         return None
@@ -561,6 +602,7 @@ def render_ordered_distribution_bundle_from_prior_outputs(
                     "valid-observed denominator."
                 ),
                 "evidence_ids": [source_copy.name],
+                "metadata": {"planner_product_slots": ["distribution"]},
             },
             {
                 "panel_id": "B",
@@ -571,6 +613,7 @@ def render_ordered_distribution_bundle_from_prior_outputs(
                     "locked analysis cohort."
                 ),
                 "evidence_ids": [source_copy.name],
+                "metadata": {"planner_product_slots": ["availability"]},
             },
         ],
         source_data=[source_copy.name],
@@ -603,6 +646,7 @@ def render_ordered_distribution_bundle_from_prior_outputs(
         ],
         "source_data_files": [source_copy.name],
         "figure_path": f"{stem}.png",
+        "figure_contract": f"{stem}.figure_contract.json",
         "ordered_levels": [int(value) for value in plot["__level"].tolist()],
         "valid_observed_n": observed_n,
         "unavailable_n": unavailable_n,

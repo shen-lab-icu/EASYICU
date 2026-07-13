@@ -17,9 +17,14 @@ from easyicu.research_agent.figures.ordered_distribution import (
     render_ordered_distribution_bundle_from_prior_outputs,
 )
 from easyicu.research_agent.evidence import EvidenceStore
+from easyicu.research_agent.declared_product_contract import (
+    bind_declared_figure_products,
+)
 from easyicu.research_agent.pipeline import (
+    _render_authorized_sealed_publication_bundle,
     _render_publication_bundle_from_prior_outputs_for_step,
     _resolve_upstream_figure_data_family,
+    _sealed_renderer_figure_step_matches_parent,
     deterministic_figure_family_supported_for_upstream,
 )
 from easyicu.research_agent.schema import AnalysisStep
@@ -29,7 +34,13 @@ PARENT_STEP = "04_ordered_quality"
 FIGURE_STEP = f"{PARENT_STEP}_figure"
 
 
-def _write_generic_parent(run_dir: Path) -> Path:
+def _write_generic_parent(
+    run_dir: Path,
+    *,
+    table_name: str = "severity_distribution.csv",
+    planner_method: str = "ordinal_exposure_derivation_and_quality_control",
+    planner_outputs: list[str] | None = None,
+) -> Path:
     parent = run_dir / "steps" / PARENT_STEP / "outputs"
     parent.mkdir(parents=True, exist_ok=True)
     locked_n = 104
@@ -72,11 +83,11 @@ def _write_generic_parent(run_dir: Path) -> Path:
                 "fraction_of_valid_observed": None,
             }
         )
-    pd.DataFrame(rows).to_csv(parent / "severity_distribution.csv", index=False)
+    pd.DataFrame(rows).to_csv(parent / table_name, index=False)
     (parent / "step_summary.json").write_text(
         json.dumps(
             {
-                "method": "source_quality_audit",
+                "method": planner_method,
                 "analysis_family": "association_study",
                 "figure_data_family": "ordered_category_distribution",
                 "primary_exposure": "severity_band",
@@ -90,7 +101,7 @@ def _write_generic_parent(run_dir: Path) -> Path:
     table_record = evidence.register_file(
         kind="table",
         description="Ordered category distribution source.",
-        source_path=parent / "severity_distribution.csv",
+        source_path=parent / table_name,
         evidence_id="ordered_distribution_table",
         produced_by_step=PARENT_STEP,
         producer="coder",
@@ -112,6 +123,15 @@ def _write_generic_parent(run_dir: Path) -> Path:
                     {
                         "step_id": PARENT_STEP,
                         "status": "ok",
+                        "analysis_request": {
+                            "step": {
+                                "step_id": PARENT_STEP,
+                                "method": planner_method,
+                                "expected_outputs": planner_outputs
+                                or [f"table:{Path(table_name).stem}"],
+                            },
+                            "analysis_family": "association_study",
+                        },
                         "evidence_ids": [
                             table_record.evidence_id,
                             summary_record.evidence_id,
@@ -187,6 +207,7 @@ def test_explicit_artifact_contract_precedes_ordered_and_quality_name_tokens(
     )
 
     summary = json.loads((out / "step_summary.json").read_text(encoding="utf-8"))
+    assert summary["figure_contract"] == "severity_distribution.figure_contract.json"
     assert summary["valid_observed_n"] == 100
     assert summary["locked_analysis_cohort_n"] == 104
     assert summary["unavailable_n"] == 4
@@ -203,6 +224,104 @@ def test_explicit_artifact_contract_precedes_ordered_and_quality_name_tokens(
         == []
     )
     assert parent.is_dir()
+    assert bind_declared_figure_products(
+        out_dir=out,
+        declared_products=["figure:severity_distribution"],
+        authorized_product_slots={"figure:severity_distribution": "distribution"},
+        renderer_repair_id=("ordered_category_distribution_publication_bundle_v1"),
+        renderer_implementation_sha256="b" * 64,
+        renderer_parent_digests={
+            "step_summary.json": "1" * 64,
+            "severity_distribution.csv": "2" * 64,
+        },
+    )
+
+
+def test_authorized_ordered_renderer_rejects_parent_mutation(tmp_path: Path) -> None:
+    parent = _write_generic_parent(tmp_path)
+    seal = {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in (parent / "step_summary.json", parent / "severity_distribution.csv")
+    }
+    repair_id = "ordered_category_distribution_publication_bundle_v1"
+    out = tmp_path / "steps" / FIGURE_STEP / "sealed_outputs"
+
+    assert (
+        _render_authorized_sealed_publication_bundle(
+            repair_id=repair_id,
+            run_dir=tmp_path,
+            current_step_id=FIGURE_STEP,
+            out_dir=out,
+            parent_artifact_digests=seal,
+        )
+        == repair_id
+    )
+
+    (parent / "severity_distribution.csv").write_text(
+        "level,n\n0,999\n1,1\n",
+        encoding="utf-8",
+    )
+    assert (
+        _render_authorized_sealed_publication_bundle(
+            repair_id=repair_id,
+            run_dir=tmp_path,
+            current_step_id=FIGURE_STEP,
+            out_dir=tmp_path / "steps" / FIGURE_STEP / "mutated_outputs",
+            parent_artifact_digests=seal,
+        )
+        is None
+    )
+
+
+def test_authorized_ordered_renderer_ignores_unsealed_optional_file(
+    tmp_path: Path,
+) -> None:
+    parent = _write_generic_parent(tmp_path)
+    seal = {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in (parent / "step_summary.json", parent / "severity_distribution.csv")
+    }
+    repair_id = "ordered_category_distribution_publication_bundle_v1"
+    baseline_out = tmp_path / "steps" / FIGURE_STEP / "sealed_baseline"
+    assert (
+        _render_authorized_sealed_publication_bundle(
+            repair_id=repair_id,
+            run_dir=tmp_path,
+            current_step_id=FIGURE_STEP,
+            out_dir=baseline_out,
+            parent_artifact_digests=seal,
+        )
+        == repair_id
+    )
+
+    pd.DataFrame([{"step": "locked_analysis_cohort", "n": 999}]).to_csv(
+        parent / "cohort_flow.csv", index=False
+    )
+    after_out = tmp_path / "steps" / FIGURE_STEP / "sealed_after_unowned_file"
+    assert (
+        _render_authorized_sealed_publication_bundle(
+            repair_id=repair_id,
+            run_dir=tmp_path,
+            current_step_id=FIGURE_STEP,
+            out_dir=after_out,
+            parent_artifact_digests=seal,
+        )
+        == repair_id
+    )
+    for name in (
+        "severity_distribution_source_data.csv",
+        "severity_distribution.figure_contract.json",
+    ):
+        assert (after_out / name).read_bytes() == (baseline_out / name).read_bytes()
+    baseline_summary = json.loads(
+        (baseline_out / "step_summary.json").read_text(encoding="utf-8")
+    )
+    after_summary = json.loads(
+        (after_out / "step_summary.json").read_text(encoding="utf-8")
+    )
+    baseline_summary.pop("source_data_csv")
+    after_summary.pop("source_data_csv")
+    assert after_summary == baseline_summary
 
 
 @pytest.mark.parametrize(
@@ -335,9 +454,7 @@ def test_distribution_contract_cannot_claim_result_bearing_parent(
         encoding="utf-8",
     )
 
-    assert not deterministic_figure_family_supported_for_upstream(
-        tmp_path, FIGURE_STEP
-    )
+    assert not deterministic_figure_family_supported_for_upstream(tmp_path, FIGURE_STEP)
     out = tmp_path / "steps" / FIGURE_STEP / "outputs"
     assert (
         _render_publication_bundle_from_prior_outputs_for_step(
@@ -348,6 +465,56 @@ def test_distribution_contract_cannot_claim_result_bearing_parent(
         is None
     )
     assert not out.exists()
+
+
+def test_coder_figure_family_cannot_override_planner_method_for_sealed_route(
+    tmp_path: Path,
+) -> None:
+    _write_generic_parent(
+        tmp_path,
+        table_name="kaplan_meier_curve_distribution.csv",
+        planner_method="kaplan_meier_estimation",
+        planner_outputs=["table:kaplan_meier_curve_distribution"],
+    )
+
+    # The coder summary still claims the ordered artifact family, but sealed
+    # preflight must take its method authority from the Planner checkpoint.
+    assert (
+        _resolve_upstream_figure_data_family(tmp_path, FIGURE_STEP)
+        == "ordered_category_distribution"
+    )
+    assert not deterministic_figure_family_supported_for_upstream(tmp_path, FIGURE_STEP)
+
+
+def test_ordered_sealed_renderer_requires_structural_child_edge(tmp_path: Path) -> None:
+    _write_generic_parent(tmp_path)
+    repair_id = "ordered_category_distribution_publication_bundle_v1"
+    modern_child = AnalysisStep(
+        step_id=FIGURE_STEP,
+        intent="Render the Planner-owned ordered distribution.",
+        inputs=["table:severity_distribution"],
+        expected_outputs=["figure:severity_distribution"],
+        method="publication_figure_generation",
+    )
+    unrelated_child = modern_child.model_copy(
+        update={"inputs": ["table:unrelated_result"]}
+    )
+    legacy_child = modern_child.model_copy(
+        update={
+            "inputs": [],
+            "method": "ordinal_exposure_derivation_and_quality_control",
+        }
+    )
+
+    assert _sealed_renderer_figure_step_matches_parent(
+        tmp_path, modern_child, repair_id
+    )
+    assert _sealed_renderer_figure_step_matches_parent(
+        tmp_path, legacy_child, repair_id
+    )
+    assert not _sealed_renderer_figure_step_matches_parent(
+        tmp_path, unrelated_child, repair_id
+    )
 
 
 def test_renderer_and_prompt_remain_case_neutral() -> None:

@@ -26,6 +26,20 @@ class RepairClass(str, Enum):
     METHOD_SUBSTITUTION = "method_substitution"
 
 
+class RepairExecutionPolicy(str, Enum):
+    """Whether later generated code may replace an authorized repair.
+
+    Most repairs remain ordinary mutable code transforms.  A closed-source
+    figure renderer is different: its exact parent product, input digests, and
+    rendering-only scope were authorized before execution.  Letting a later
+    coder repair replace that adapter would silently hand scientific product
+    ownership back to generated code while retaining the renderer's provenance.
+    """
+
+    MUTABLE = "mutable"
+    SEALED_RENDERER = "sealed_renderer"
+
+
 class Repair(Protocol):
     """Minimal protocol future repair objects must satisfy."""
 
@@ -43,6 +57,11 @@ class RepairMetadata:
     introduces_numbers: bool = False
     requires_disclosure: bool = False
     selection_rule_required: bool = False
+    execution_policy: RepairExecutionPolicy = RepairExecutionPolicy.MUTABLE
+    figure_product_slots: Tuple[str, ...] = ()
+    planner_methods: Tuple[str, ...] = ()
+    planner_parent_output_role_groups: Tuple[Tuple[Tuple[str, ...], ...], ...] = ()
+    implementation_modules: Tuple[str, ...] = ()
     description: str = ""
     classification_source: str = "exact"
 
@@ -208,6 +227,11 @@ def _meta(
     introduces_numbers: bool = False,
     requires_disclosure: bool = False,
     selection_rule_required: bool = False,
+    execution_policy: RepairExecutionPolicy = RepairExecutionPolicy.MUTABLE,
+    figure_product_slots: Sequence[str] = (),
+    planner_methods: Sequence[str] = (),
+    planner_parent_output_role_groups: Sequence[Sequence[Sequence[str]]] = (),
+    implementation_modules: Sequence[str] = (),
     description: str = "",
 ) -> RepairMetadata:
     return RepairMetadata(
@@ -217,6 +241,14 @@ def _meta(
         introduces_numbers=introduces_numbers,
         requires_disclosure=requires_disclosure,
         selection_rule_required=selection_rule_required,
+        execution_policy=execution_policy,
+        figure_product_slots=tuple(figure_product_slots),
+        planner_methods=tuple(str(value) for value in planner_methods),
+        planner_parent_output_role_groups=tuple(
+            tuple(tuple(str(token) for token in suffix) for suffix in alternatives)
+            for alternatives in planner_parent_output_role_groups
+        ),
+        implementation_modules=tuple(implementation_modules),
         description=description,
     )
 
@@ -268,6 +300,98 @@ _STRUCTURAL_REPAIRS = {
     # fill strategy are untouched; the appended row only reports what the
     # script already does, with values computed from the existing dataframe.
     "age_covariate_no_measured_indicator_v1",
+}
+
+
+# These adapters have a closed direct-parent product, digest-bound inputs, and
+# rendering-only scope.  Their outputs may be audited or rejected, but their
+# code must never be replaced by a later LLM repair while the registry still
+# credits the structural renderer.
+_SEALED_RENDERER_REPAIRS = {
+    "ordered_category_distribution_publication_bundle_v1",
+    "distribution_availability_publication_bundle_from_parent_outputs_v1",
+    "cohort_flow_publication_bundle_from_parent_outputs_v1",
+    "sensitivity_publication_bundle_from_locked_summary_v1",
+}
+
+_SEALED_RENDERER_PRODUCT_SLOTS: Dict[str, Tuple[str, ...]] = {
+    "ordered_category_distribution_publication_bundle_v1": (
+        "distribution",
+        "availability",
+    ),
+    "distribution_availability_publication_bundle_from_parent_outputs_v1": (
+        "distribution",
+        "availability",
+    ),
+    "cohort_flow_publication_bundle_from_parent_outputs_v1": (
+        "cohort_flow",
+        "attrition_audit",
+    ),
+    "sensitivity_publication_bundle_from_locked_summary_v1": (
+        "robustness_plot",
+        "robustness_denominator_audit",
+    ),
+}
+
+# Sealed renderers are selected only from the host-recorded Planner contract.
+# Each outer tuple item is one required logical parent-output role; its inner
+# tuple lists exact terminal-token alternatives for that role.  No prose or
+# physical filename participates in this registry.
+_SEALED_RENDERER_PLANNER_METHODS: Dict[str, Tuple[str, ...]] = {
+    "ordered_category_distribution_publication_bundle_v1": (
+        "ordinal_exposure_derivation_and_quality_control",
+    ),
+    "distribution_availability_publication_bundle_from_parent_outputs_v1": (
+        "exposure_distribution_and_missingness_audit",
+    ),
+    "cohort_flow_publication_bundle_from_parent_outputs_v1": ("cohort_definition",),
+    "sensitivity_publication_bundle_from_locked_summary_v1": (
+        "cohort_definition_sensitivity",
+    ),
+}
+_SEALED_RENDERER_PARENT_OUTPUT_ROLE_GROUPS: Dict[
+    str, Tuple[Tuple[Tuple[str, ...], ...], ...]
+] = {
+    "ordered_category_distribution_publication_bundle_v1": ((("distribution",),),),
+    "distribution_availability_publication_bundle_from_parent_outputs_v1": (
+        (("distribution",),),
+        (
+            ("measurement", "audit"),
+            ("availability",),
+            ("measurement", "coverage"),
+            ("source", "coverage"),
+        ),
+    ),
+    "cohort_flow_publication_bundle_from_parent_outputs_v1": (
+        (("cohort", "flow"),),
+        (("attrition",),),
+    ),
+    "sensitivity_publication_bundle_from_locked_summary_v1": (
+        (("robustness", "summary"),),
+    ),
+}
+
+_COMMON_SEALED_RENDERER_MODULES = (
+    "easyicu.research_agent.pipeline",
+    "easyicu.research_agent.declared_product_contract",
+    "easyicu.research_agent.repair_registry",
+    "easyicu.research_agent.publication_figures",
+)
+_SEALED_RENDERER_IMPLEMENTATION_MODULES: Dict[str, Tuple[str, ...]] = {
+    "ordered_category_distribution_publication_bundle_v1": (
+        *_COMMON_SEALED_RENDERER_MODULES,
+        "easyicu.research_agent.figures.ordered_distribution",
+    ),
+    "distribution_availability_publication_bundle_from_parent_outputs_v1": (
+        *_COMMON_SEALED_RENDERER_MODULES,
+        "easyicu.research_agent.figures.distribution_availability",
+    ),
+    "cohort_flow_publication_bundle_from_parent_outputs_v1": (
+        *_COMMON_SEALED_RENDERER_MODULES,
+    ),
+    "sensitivity_publication_bundle_from_locked_summary_v1": (
+        *_COMMON_SEALED_RENDERER_MODULES,
+    ),
 }
 
 _CONTRACT_FILL_REPAIRS: set[str] = set()
@@ -333,6 +457,19 @@ REPAIR_METADATA: Dict[str, RepairMetadata] = {
             repair_id,
             RepairClass.STRUCTURAL,
             invariants=STRUCTURAL_INVARIANTS,
+            execution_policy=(
+                RepairExecutionPolicy.SEALED_RENDERER
+                if repair_id in _SEALED_RENDERER_REPAIRS
+                else RepairExecutionPolicy.MUTABLE
+            ),
+            figure_product_slots=_SEALED_RENDERER_PRODUCT_SLOTS.get(repair_id, ()),
+            planner_methods=_SEALED_RENDERER_PLANNER_METHODS.get(repair_id, ()),
+            planner_parent_output_role_groups=(
+                _SEALED_RENDERER_PARENT_OUTPUT_ROLE_GROUPS.get(repair_id, ())
+            ),
+            implementation_modules=_SEALED_RENDERER_IMPLEMENTATION_MODULES.get(
+                repair_id, ()
+            ),
         )
         for repair_id in _STRUCTURAL_REPAIRS
     },
@@ -395,6 +532,13 @@ def repair_metadata_for(repair_id: str) -> RepairMetadata:
                 introduces_numbers=metadata.introduces_numbers,
                 requires_disclosure=metadata.requires_disclosure,
                 selection_rule_required=metadata.selection_rule_required,
+                execution_policy=metadata.execution_policy,
+                figure_product_slots=metadata.figure_product_slots,
+                planner_methods=metadata.planner_methods,
+                planner_parent_output_role_groups=(
+                    metadata.planner_parent_output_role_groups
+                ),
+                implementation_modules=metadata.implementation_modules,
                 description=metadata.description,
                 classification_source=f"pattern:{metadata.repair_id}",
             )
@@ -409,7 +553,12 @@ def repair_metadata_for(repair_id: str) -> RepairMetadata:
     )
 
 
-def automatic_repair_allowed(repair_id: str, *, step: Any = None) -> bool:
+def automatic_repair_allowed(
+    repair_id: str,
+    *,
+    step: Any = None,
+    sealed_renderer_wrapper: bool = False,
+) -> bool:
     """Whether a deterministic repair may run without analyst authorization.
 
     Unknown IDs inherit the conservative METHOD_SUBSTITUTION classification and
@@ -419,9 +568,33 @@ def automatic_repair_allowed(repair_id: str, *, step: Any = None) -> bool:
 
     del step
     metadata = repair_metadata_for(repair_id)
+    if (
+        metadata.execution_policy is RepairExecutionPolicy.SEALED_RENDERER
+        and not sealed_renderer_wrapper
+    ):
+        return False
     return bool(
         metadata.repair_class is not RepairClass.METHOD_SUBSTITUTION
         or repair_id in AUTOMATIC_METHOD_SUBSTITUTION_ALLOWLIST
+    )
+
+
+def is_sealed_renderer_repair(repair_id: str) -> bool:
+    """Return whether *repair_id* is an immutable closed-source renderer."""
+
+    metadata = repair_metadata_for(repair_id)
+    return (
+        metadata.classification_source == "exact"
+        and metadata.repair_class is RepairClass.STRUCTURAL
+        and metadata.execution_policy is RepairExecutionPolicy.SEALED_RENDERER
+    )
+
+
+def sealed_renderer_metadata() -> Tuple[RepairMetadata, ...]:
+    """Return the closed renderer registry in deterministic id order."""
+
+    return tuple(
+        REPAIR_METADATA[repair_id] for repair_id in sorted(_SEALED_RENDERER_REPAIRS)
     )
 
 
@@ -444,6 +617,44 @@ def assert_repair_metadata_invariants(metadata: RepairMetadata) -> None:
         raise AssertionError(
             f"{metadata.repair_id} is STRUCTURAL but declares no invariants."
         )
+    if metadata.execution_policy is RepairExecutionPolicy.SEALED_RENDERER:
+        if metadata.repair_class is not RepairClass.STRUCTURAL:
+            raise AssertionError(
+                f"{metadata.repair_id} is a sealed renderer but is not STRUCTURAL."
+            )
+        if metadata.introduces_numbers:
+            raise AssertionError(
+                f"{metadata.repair_id} is a sealed renderer but introduces numbers."
+            )
+        if not metadata.figure_product_slots or len(
+            metadata.figure_product_slots
+        ) != len(set(metadata.figure_product_slots)):
+            raise AssertionError(
+                f"{metadata.repair_id} is a sealed renderer without unique "
+                "figure product slots."
+            )
+        if not metadata.planner_methods or len(metadata.planner_methods) != len(
+            set(metadata.planner_methods)
+        ):
+            raise AssertionError(
+                f"{metadata.repair_id} is a sealed renderer without unique "
+                "Planner methods."
+            )
+        if not metadata.planner_parent_output_role_groups or any(
+            not alternatives
+            for alternatives in metadata.planner_parent_output_role_groups
+        ):
+            raise AssertionError(
+                f"{metadata.repair_id} is a sealed renderer without complete "
+                "Planner parent-output roles."
+            )
+        if not metadata.implementation_modules or len(
+            metadata.implementation_modules
+        ) != len(set(metadata.implementation_modules)):
+            raise AssertionError(
+                f"{metadata.repair_id} is a sealed renderer without unique "
+                "implementation modules."
+            )
 
 
 def assert_registry_invariants() -> None:
@@ -579,6 +790,7 @@ __all__ = [
     "InvariantStatus",
     "Repair",
     "RepairClass",
+    "RepairExecutionPolicy",
     "RepairLedger",
     "RepairMetadata",
     "RepairObservedState",
@@ -587,6 +799,8 @@ __all__ = [
     "assert_registry_invariants",
     "assert_repair_metadata_invariants",
     "evaluate_invariants",
+    "is_sealed_renderer_repair",
     "make_repair_provenance",
     "repair_metadata_for",
+    "sealed_renderer_metadata",
 ]

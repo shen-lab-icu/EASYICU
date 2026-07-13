@@ -8,7 +8,6 @@ defines bins, or changes the cohort.
 
 from __future__ import annotations
 
-import hashlib
 import io
 import json
 import math
@@ -19,6 +18,7 @@ from typing import Any, Collection, Mapping, Optional
 
 import pandas as pd
 
+from ..declared_product_contract import read_digest_bound_artifact_snapshot
 from ..publication_figures import (
     add_panel_label,
     apply_publication_style,
@@ -63,55 +63,6 @@ def _safe_csv_name(value: Any) -> Optional[str]:
     return name
 
 
-def _artifacts_from_digest_seal(
-    parent_out: Path,
-    seal: Mapping[str, str],
-) -> Optional[dict[str, bytes]]:
-    """Read and recheck one immutable three-file parent snapshot.
-
-    The sandbox cannot safely repeat the host's ``Path.resolve`` authority
-    check.  The trusted preflight therefore supplies exact digests for the
-    summary and its two selected CSVs.  Read each file once, verify those
-    bytes, and keep parsing the same bytes so a later path replacement cannot
-    cross the seal.
-    """
-
-    names = {str(name) for name in seal}
-    csv_names = {name for name in names if name != "step_summary.json"}
-    if (
-        "step_summary.json" not in names
-        or len(names) != 3
-        or len(csv_names) != 2
-        or any(_safe_csv_name(name) is None for name in csv_names)
-        or any(
-            directory.is_symlink()
-            for directory in (parent_out.parent.parent, parent_out.parent, parent_out)
-        )
-    ):
-        return None
-    snapshot: dict[str, bytes] = {}
-    for raw_name, raw_digest in seal.items():
-        name = str(raw_name)
-        digest = str(raw_digest).strip().lower()
-        path = parent_out / name
-        if (
-            Path(name).name != name
-            or len(digest) != 64
-            or any(char not in "0123456789abcdef" for char in digest)
-            or path.is_symlink()
-            or not path.is_file()
-        ):
-            return None
-        try:
-            payload = path.read_bytes()
-        except OSError:
-            return None
-        if hashlib.sha256(payload).hexdigest() != digest:
-            return None
-        snapshot[name] = payload
-    return snapshot
-
-
 def _unique_metric_name(
     names: Collection[Any], base: str, *, unit: str
 ) -> Optional[str]:
@@ -127,11 +78,7 @@ def _unique_metric_name(
     normalized_unit = _normalise(unit)
     if normalized_unit:
         allowed.add(f"{base}_{normalized_unit}")
-    matches = [
-        str(name)
-        for name in names
-        if _normalise(name) in allowed
-    ]
+    matches = [str(name) for name in names if _normalise(name) in allowed]
     return matches[0] if len(matches) == 1 else None
 
 
@@ -213,7 +160,9 @@ def prepare_distribution_availability_inputs(
     exposure = parent_summary.get("primary_exposure")
     distribution = parent_summary.get("distribution")
     measurement = parent_summary.get("measurement_audit")
-    if not all(isinstance(item, Mapping) for item in (exposure, distribution, measurement)):
+    if not all(
+        isinstance(item, Mapping) for item in (exposure, distribution, measurement)
+    ):
         return None
     exposure = dict(exposure)
     distribution = dict(distribution)
@@ -263,9 +212,7 @@ def prepare_distribution_availability_inputs(
     metric_columns: dict[str, str] = {}
     summary_metric_names: dict[str, str] = {}
     for base in _METRICS:
-        table_name = _unique_metric_name(
-            distribution_frame.columns, base, unit=unit
-        )
+        table_name = _unique_metric_name(distribution_frame.columns, base, unit=unit)
         summary_name = _unique_metric_name(distribution.keys(), base, unit=unit)
         if (
             table_name is None
@@ -290,8 +237,8 @@ def prepare_distribution_availability_inputs(
         "valid_observed",
         f"valid_observed_{normalized_exposure}",
     }
-    normalized_categories = distribution_candidates["category"].fillna("").map(
-        _normalise
+    normalized_categories = (
+        distribution_candidates["category"].fillna("").map(_normalise)
     )
     # The parent's structured distribution product is ordered.  Requiring its
     # first distribution row to be the uniquely bound valid-observed row keeps
@@ -344,9 +291,11 @@ def prepare_distribution_availability_inputs(
             return None
         metric_values[base] = value
     if not (
-        metric_values["min"] <= metric_values["q25"]
+        metric_values["min"]
+        <= metric_values["q25"]
         <= metric_values["median"]
-        <= metric_values["q75"] <= metric_values["max"]
+        <= metric_values["q75"]
+        <= metric_values["max"]
     ):
         return None
 
@@ -355,7 +304,11 @@ def prepare_distribution_availability_inputs(
     if not isinstance(schema_raw, list) or not isinstance(counts_raw, Mapping):
         return None
     status_schema = tuple(str(value).strip() for value in schema_raw)
-    if not status_schema or any(not value for value in status_schema) or len(set(status_schema)) != len(status_schema):
+    if (
+        not status_schema
+        or any(not value for value in status_schema)
+        or len(set(status_schema)) != len(status_schema)
+    ):
         return None
     status_rows = measurement_frame.loc[
         measurement_frame["row_type"].fillna("").map(_normalise).eq("source_status")
@@ -374,10 +327,17 @@ def prepare_distribution_availability_inputs(
     declared_status_variable = str(
         measurement.get("source_status_variable") or ""
     ).strip()
-    if declared_status_variable and status_variables.iloc[0] != declared_status_variable:
+    if (
+        declared_status_variable
+        and status_variables.iloc[0] != declared_status_variable
+    ):
         return None
     status_rows = (
-        status_rows.assign(__status_order=statuses.map({value: index for index, value in enumerate(status_schema)}))
+        status_rows.assign(
+            __status_order=statuses.map(
+                {value: index for index, value in enumerate(status_schema)}
+            )
+        )
         .sort_values("__status_order")
         .drop(columns="__status_order")
     )
@@ -386,7 +346,10 @@ def prepare_distribution_availability_inputs(
     status_denominator = pd.to_numeric(status_rows["denominator_n"], errors="coerce")
     status_percentage = pd.to_numeric(status_rows["percentage"], errors="coerce")
     status_fraction = pd.to_numeric(status_rows["fraction"], errors="coerce")
-    if any(series.isna().any() for series in (status_n, status_denominator, status_percentage, status_fraction)):
+    if any(
+        series.isna().any()
+        for series in (status_n, status_denominator, status_percentage, status_fraction)
+    ):
         return None
     parsed_counts = [_nonnegative_integer(value) for value in status_n]
     parsed_denominators = [_nonnegative_integer(value) for value in status_denominator]
@@ -424,7 +387,9 @@ def prepare_distribution_availability_inputs(
     ):
         return None
 
-    label = str(exposure.get("display_label") or exposure.get("label") or exposure_column)
+    label = str(
+        exposure.get("display_label") or exposure.get("label") or exposure_column
+    )
     return DistributionAvailabilityInputs(
         distribution_path=distribution_path,
         measurement_path=measurement_path,
@@ -447,6 +412,7 @@ def render_distribution_availability_bundle_from_prior_outputs(
     current_step_id: str,
     out_dir: Path,
     preverified_parent_digests: Optional[Mapping[str, str]] = None,
+    preverified_parent_artifacts: Optional[Mapping[str, bytes]] = None,
 ) -> Optional[str]:
     """Render the exact direct parent's verified descriptive audit product."""
 
@@ -455,7 +421,28 @@ def render_distribution_availability_bundle_from_prior_outputs(
         return None
     parent_out = Path(run_dir) / "steps" / parent_step_id / "outputs"
     preverified_table_bytes: Optional[dict[str, bytes]] = None
-    if preverified_parent_digests is None:
+    if preverified_parent_artifacts is not None:
+        names = {str(name) for name in preverified_parent_artifacts}
+        csv_names = {name for name in names if name != "step_summary.json"}
+        if (
+            "step_summary.json" not in names
+            or len(names) != 3
+            or len(csv_names) != 2
+            or any(_safe_csv_name(name) is None for name in csv_names)
+        ):
+            return None
+        snapshot = dict(preverified_parent_artifacts)
+        try:
+            summary = json.loads(snapshot["step_summary.json"].decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        preverified_table_bytes = {
+            name: payload
+            for name, payload in snapshot.items()
+            if name != "step_summary.json"
+        }
+        verified = set(preverified_table_bytes)
+    elif preverified_parent_digests is None:
         from ..pipeline import _distribution_availability_parent_digest_seal
 
         host_seal = _distribution_availability_parent_digest_seal(
@@ -469,10 +456,21 @@ def render_distribution_availability_bundle_from_prior_outputs(
         except Exception:
             return None
     else:
-        snapshot = _artifacts_from_digest_seal(
-            parent_out, preverified_parent_digests
-        )
-        if snapshot is None:
+        names = {str(name) for name in preverified_parent_digests}
+        csv_names = {name for name in names if name != "step_summary.json"}
+        if (
+            "step_summary.json" not in names
+            or len(names) != 3
+            or len(csv_names) != 2
+            or any(_safe_csv_name(name) is None for name in csv_names)
+        ):
+            return None
+        try:
+            snapshot = read_digest_bound_artifact_snapshot(
+                parent_out=parent_out,
+                artifact_digests=preverified_parent_digests,
+            )
+        except ValueError:
             return None
         try:
             summary = json.loads(snapshot["step_summary.json"].decode("utf-8"))
@@ -521,7 +519,9 @@ def render_distribution_availability_bundle_from_prior_outputs(
         1, 2, figsize=(183 / 25.4, 88 / 25.4), gridspec_kw={"width_ratios": [1.0, 1.35]}
     )
     values = prepared.metric_values
-    ax_a.hlines(0, values["min"], values["max"], color=palette["neutral"], linewidth=1.2)
+    ax_a.hlines(
+        0, values["min"], values["max"], color=palette["neutral"], linewidth=1.2
+    )
     ax_a.hlines(0, values["q25"], values["q75"], color=palette["blue"], linewidth=7.0)
     ax_a.plot(values["median"], 0, "o", color=palette["baseline"], markersize=4.5)
     ax_a.set_yticks([])
@@ -531,10 +531,13 @@ def render_distribution_availability_bundle_from_prior_outputs(
     ax_a.set_xlabel(axis_label)
     ax_a.set_title("Observed exposure distribution", loc="left", pad=4)
     ax_a.text(
-        values["median"], 0.13,
+        values["median"],
+        0.13,
         f"median {values['median']:g}  (IQR {values['q25']:g}–{values['q75']:g})\n"
         f"n={prepared.observed_n:,}",
-        ha="center", va="bottom", fontsize=6.5,
+        ha="center",
+        va="bottom",
+        fontsize=6.5,
     )
     ax_a.grid(axis="x", color=palette["neutral_light"], linewidth=0.55)
     add_panel_label(ax_a, "A", x=-0.08, y=1.03)
@@ -555,7 +558,9 @@ def render_distribution_availability_bundle_from_prior_outputs(
             min(float(percentage) + 1.0, 96.0),
             bar.get_y() + bar.get_height() / 2,
             f"{float(percentage):.1f}% (n={int(count):,})",
-            va="center", ha="left" if percentage < 94 else "right", fontsize=6.3,
+            va="center",
+            ha="left" if percentage < 94 else "right",
+            fontsize=6.3,
         )
     add_panel_label(ax_b, "B", x=-0.12, y=1.03)
     fig.subplots_adjust(left=0.08, right=0.98, bottom=0.20, top=0.86, wspace=0.42)
@@ -577,6 +582,7 @@ def render_distribution_availability_bundle_from_prior_outputs(
                 "role": "descriptive_result",
                 "claim": "Median, interquartile range, and range among observed records.",
                 "evidence_ids": [distribution_source.name],
+                "metadata": {"planner_product_slots": ["distribution"]},
             },
             {
                 "panel_id": "B",
@@ -584,6 +590,7 @@ def render_distribution_availability_bundle_from_prior_outputs(
                 "role": "data_quality",
                 "claim": "Predeclared source-status counts reconcile to the analysis cohort.",
                 "evidence_ids": [availability_source.name],
+                "metadata": {"planner_product_slots": ["availability"]},
             },
         ],
         source_data=[distribution_source.name, availability_source.name],
@@ -608,7 +615,10 @@ def render_distribution_availability_bundle_from_prior_outputs(
         "rendering_only": True,
         "status": "completed",
         "source_step_id": parent_step_id,
-        "source_tables": [prepared.distribution_path.name, prepared.measurement_path.name],
+        "source_tables": [
+            prepared.distribution_path.name,
+            prepared.measurement_path.name,
+        ],
         "source_data_files": [distribution_source.name, availability_source.name],
         "figure_files": figure_files,
         "figure_path": f"{stem}.png",
