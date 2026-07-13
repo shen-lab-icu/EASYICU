@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import matplotlib.image as mpimg
 import pandas as pd
 import pytest
 
@@ -320,6 +321,9 @@ def test_verified_parent_contract_renders_without_outcome_products(
     )
     for suffix in ("png", "svg", "pdf", "tiff"):
         assert (out / f"distribution_availability.{suffix}").is_file()
+    image = mpimg.imread(out / "distribution_availability.png")
+    height, width = image.shape[:2]
+    assert width / height >= 1.8
     contract_path = out / "distribution_availability.figure_contract.json"
     assert contract_path.is_file()
     assert (
