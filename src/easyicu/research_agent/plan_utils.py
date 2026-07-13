@@ -30,11 +30,20 @@ import json
 import math
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from pydantic import ValidationError
 
-from .declared_product_contract import declared_product_contract_findings
+from .declared_product_contract import (
+    declared_product_contract_findings,
+    effect_adjustment_family,
+    effect_bearing_name,
+    effect_bearing_product,
+    effect_estimand_tier,
+    effect_measure_family,
+    effect_role_family,
+    typed_product,
+)
 from .icu_rules import (
     detect_outcome_as_predictor,
     detect_overadjustment,
@@ -150,7 +159,9 @@ def _step_is_figure_only(step: AnalysisStep) -> bool:
     if not _step_expects_figure(step):
         return False
     return not any(
-        not _output_declares_figure(output) for output in step.expected_outputs or []
+        not _output_declares_figure(output)
+        and not _output_declares_auxiliary_log(output)
+        for output in step.expected_outputs or []
     )
 
 
@@ -468,6 +479,10 @@ def _normalised_structured_output_names(
         value = str(raw or "").strip().lower()
         if not value:
             continue
+        parsed = typed_product(value)
+        if parsed is not None and parsed[0] in _STRUCTURED_CONTRACT_OUTPUT_KINDS:
+            names.add(parsed[1])
+            continue
         kind, separator, product = value.partition(":")
         if separator and kind not in _STRUCTURED_CONTRACT_OUTPUT_KINDS:
             continue
@@ -637,55 +652,33 @@ _EFFECT_CONTRACT_METHODS = frozenset(
         "cohort_definition_sensitivity",
     }
 )
-_EFFECT_CONTRACT_PRODUCTS = frozenset(
-    {
-        "adjusted_association",
-        "adjusted_associations",
-        "adjusted_association_model",
-        "adjusted_association_models",
-        "adjusted_association_estimate",
-        "adjusted_association_estimates",
-        "adjusted_association_primary",
-        "adjusted_logistic_regression_primary",
-        "adjusted_or_ci",
-        "primary_association",
-        "primary_association_estimate",
-        "primary_adjusted_association",
-        "primary_adjusted_association_estimate",
-        "primary_adjusted_association_estimates",
-        "primary_effect",
-        "primary_effect_estimate",
-        "primary_effect_estimates",
-        "association_estimate",
-        "association_estimates",
-        "adjusted_effect",
-        "adjusted_effect_estimates",
-        "causal_effect",
-        "primary_estimate",
-        "primary_or",
-        "adjusted_or",
-        "odds_ratio",
-        "adjusted_odds_ratio",
-        "adjusted_odds_ratios",
-        "primary_hr",
-        "hazard_ratio",
-        "risk_ratio",
-        "risk_difference",
-        "coefficient",
-        "coefficients",
-        "overall_effect",
-        "subgroup_effects",
-        "interaction_pvalue",
+_EFFECT_RESULT_OUTPUT_KINDS = frozenset(
+    {"artifact", "dataset", "manifest", "model", "statistic", "table"}
+)
+
+
+def _typed_effect_result_identities(
+    outputs: Sequence[str],
+) -> set[Tuple[str, str]]:
+    """Return typed result products governed by the shared effect vocabulary."""
+
+    return {
+        parsed
+        for raw in (outputs or [])
+        if (parsed := typed_product(raw)) is not None
+        and parsed[0] in _EFFECT_RESULT_OUTPUT_KINDS
+        and effect_bearing_product(raw)
     }
-)
-_EFFECT_CONTRACT_PRODUCT_PREFIXES = (
-    "association_estimate_",
-    "adjusted_odds_ratio_",
-    "odds_ratio_",
-    "hazard_ratio_",
-    "risk_ratio_",
-    "risk_difference_",
-)
+
+
+def _has_closed_effect_contract_product(outputs: Sequence[str] | str) -> bool:
+    """Accept typed effect results plus legacy bare structured product names."""
+
+    values = [outputs] if isinstance(outputs, str) else list(outputs or [])
+    return bool(_typed_effect_result_identities(values)) or any(
+        effect_bearing_name(name)
+        for name in _normalised_structured_output_names(outputs)
+    )
 
 _PREDICTION_CONTRACT_METHODS = frozenset(
     {
@@ -799,12 +792,8 @@ def _effect_contract_applies(step: AnalysisStep) -> bool:
 
     return _normalised_method_head(
         str(step.method or "")
-    ) in _EFFECT_CONTRACT_METHODS and (
-        _has_closed_contract_product(
-            step.expected_outputs or [],
-            products=_EFFECT_CONTRACT_PRODUCTS,
-            product_prefixes=_EFFECT_CONTRACT_PRODUCT_PREFIXES,
-        )
+    ) in _EFFECT_CONTRACT_METHODS and _has_closed_effect_contract_product(
+        step.expected_outputs or []
     )
 
 
@@ -1260,6 +1249,7 @@ _FIGURE_METHODS = frozenset(
         "visualisation",
         "plotting",
         "publication_figure",
+        "publication_figure_generation",
         "render_figure",
         "figure_generation",
         "chart_generation",
@@ -1283,6 +1273,233 @@ def _output_declares_figure(output: str) -> bool:
         return True
     words = set(filter(None, re.split(r"[^a-z0-9]+", token)))
     return bool(words & {"figure", "plot", "chart", "heatmap"})
+
+
+def _output_declares_auxiliary_log(output: str) -> bool:
+    """Return whether an output is an explicitly typed, non-scientific log."""
+
+    parsed = typed_product(output)
+    return parsed is not None and parsed[0] == "log"
+
+
+_RENDER_SOURCE_OUTPUT_KINDS = frozenset(
+    {"artifact", "dataset", "model", "statistic", "table"}
+)
+
+
+def _typed_render_source_outputs(outputs: Sequence[str]) -> List[str]:
+    """Return exact typed parent products that a render child may consume."""
+
+    render_inputs: List[str] = []
+    for raw in outputs or []:
+        value = str(raw or "").strip()
+        parsed = typed_product(value)
+        if parsed is not None and parsed[0] in _RENDER_SOURCE_OUTPUT_KINDS:
+            render_inputs.append(value)
+    return render_inputs
+
+
+def _typed_render_source_identities(outputs: Sequence[str]) -> set[Tuple[str, str]]:
+    """Return canonical typed identities eligible as scientific render inputs."""
+
+    return {
+        parsed
+        for raw in (outputs or [])
+        if (parsed := typed_product(raw)) is not None
+        and parsed[0] in _RENDER_SOURCE_OUTPUT_KINDS
+    }
+
+
+def _effect_figure_semantics_supported_by_inputs(
+    *,
+    figure_outputs: Sequence[str],
+    effect_input_products: set[Tuple[str, str]],
+) -> bool:
+    """Return whether each effect figure is supported by one bound table.
+
+    Scientific authority is conjunctive and input-local.  A renderer may not
+    borrow an OR scale from one sibling product, an ``adjusted`` qualifier from
+    another, and a subgroup role from a third.  Every planned effect figure
+    must have at least one *actually bound* effect table whose explicit scale,
+    role, and adjustment qualifiers support that figure.  A generic figure may
+    use a generic effect table, but may not relabel a subgroup/interaction-only
+    table as an overall effect.
+    """
+
+    effect_figures = [
+        raw
+        for raw in figure_outputs
+        if (parsed := typed_product(raw)) is not None
+        and parsed[0] == "figure"
+        and effect_bearing_product(raw)
+    ]
+    if not effect_figures:
+        return True
+
+    table_inputs = {
+        product for product in effect_input_products if product[0] == "table"
+    }
+    if not table_inputs:
+        return False
+
+    declarations = [f"{kind}:{name}" for kind, name in table_inputs]
+    for figure_output in effect_figures:
+        output_measure = effect_measure_family(figure_output)
+        output_role = effect_role_family(figure_output)
+        output_tier = effect_estimand_tier(figure_output)
+        output_adjustment = effect_adjustment_family(figure_output)
+        supported = False
+        for declaration in declarations:
+            input_measure = effect_measure_family(declaration)
+            input_role = effect_role_family(declaration)
+            input_tier = effect_estimand_tier(declaration)
+            input_adjustment = effect_adjustment_family(declaration)
+            if output_measure is not None and input_measure != output_measure:
+                continue
+            if output_role is not None:
+                if input_role != output_role:
+                    continue
+            elif input_role is not None:
+                # A specialized-only source cannot silently become an overall
+                # or otherwise generic effect display.
+                continue
+            if output_tier is not None:
+                if input_tier != output_tier:
+                    continue
+            elif input_tier in {"secondary", "sensitivity", "corroborative"}:
+                # Primary is the default estimand tier for an otherwise generic
+                # effect figure. Supporting-only estimates may not silently be
+                # promoted into that default role.
+                continue
+            if (
+                output_adjustment is not None
+                and input_adjustment != output_adjustment
+            ):
+                continue
+            supported = True
+            break
+        if not supported:
+            return False
+    return True
+
+
+def _effect_figure_source_authorized(
+    *,
+    step: AnalysisStep,
+    completed_step_records: Optional[Sequence[Dict[str, Any]]],
+    resolved_input_bindings: Optional[Mapping[str, Mapping[str, Any]]] = None,
+) -> bool:
+    """Authorize only a figure name rendered from a successful effect parent.
+
+    A render child never becomes an effect-method owner. This narrow host-side
+    authority permits its planned/registered *figure* name only when the child
+    is structurally linked to the latest successful direct parent through an
+    exact typed effect-result input. Numeric summaries and non-figure effect
+    products remain governed by the ordinary effect-method authorization.
+    """
+
+    step_id = str(step.step_id or "")
+    output_products = [typed_product(raw) for raw in (step.expected_outputs or [])]
+    if (
+        _normalised_method_head(str(step.method or "")) not in _FIGURE_METHODS
+        or not output_products
+        or any(product is None for product in output_products)
+        or not any(product[0] == "figure" for product in output_products if product)
+        or any(
+            product[0] not in {"figure", "log"}
+            for product in output_products
+            if product
+        )
+        or not completed_step_records
+        or not resolved_input_bindings
+    ):
+        return False
+
+    child_inputs: List[Tuple[Tuple[str, str], str]] = []
+    producer_by_product: Dict[Tuple[str, str], str] = {}
+    for raw in step.inputs or []:
+        raw_input = str(raw or "")
+        parsed = typed_product(raw_input)
+        if parsed is None or parsed[0] not in _RENDER_SOURCE_OUTPUT_KINDS:
+            return False
+        binding = resolved_input_bindings.get(raw_input)
+        if not isinstance(binding, Mapping):
+            return False
+        binding_product = typed_product(
+            f"{binding.get('declared_kind', '')}:{binding.get('product', '')}"
+        )
+        if (
+            binding_product != parsed
+            or not str(binding.get("evidence_id") or "").strip()
+            or re.fullmatch(
+                r"[0-9a-fA-F]{64}", str(binding.get("sha256") or "").strip()
+            )
+            is None
+        ):
+            return False
+        producer_id = str(binding.get("produced_by_step") or "").strip()
+        if not producer_id:
+            return False
+        prior_producer = producer_by_product.get(parsed)
+        if prior_producer is not None and prior_producer != producer_id:
+            return False
+        producer_by_product[parsed] = producer_id
+        child_inputs.append((parsed, producer_id))
+
+    if not child_inputs:
+        return False
+    latest_records: Dict[str, Mapping[str, Any]] = {}
+    for record in completed_step_records:
+        if isinstance(record, Mapping):
+            record_step_id = str(record.get("step_id") or "").strip()
+            if record_step_id:
+                latest_records[record_step_id] = record
+
+    effect_input_products: set[Tuple[str, str]] = set()
+    for child_product, parent_step_id in child_inputs:
+        if step_id == parent_step_id:
+            return False
+        parent_record = latest_records.get(parent_step_id)
+        if (
+            parent_record is None
+            or str(parent_record.get("status") or "").strip().lower() != "ok"
+        ):
+            return False
+        analysis_request = parent_record.get("analysis_request")
+        raw_parent_step = (
+            analysis_request.get("step")
+            if isinstance(analysis_request, Mapping)
+            else None
+        )
+        if not isinstance(raw_parent_step, Mapping):
+            return False
+        try:
+            parent_step = AnalysisStep.model_validate(raw_parent_step)
+        except (TypeError, ValueError, ValidationError):
+            return False
+        parent_render_products = _typed_render_source_identities(
+            parent_step.expected_outputs or []
+        )
+        if (
+            str(parent_step.step_id) != parent_step_id
+            or child_product not in parent_render_products
+        ):
+            return False
+        parent_effect_products = _typed_effect_result_identities(
+            parent_step.expected_outputs or []
+        )
+        if child_product in parent_effect_products:
+            if not effect_output_authorized(parent_step):
+                return False
+            effect_input_products.add(child_product)
+
+    return bool(
+        any(kind == "table" for kind, _product in effect_input_products)
+        and _effect_figure_semantics_supported_by_inputs(
+            figure_outputs=step.expected_outputs or [],
+            effect_input_products=effect_input_products,
+        )
+    )
 
 
 _PUBLICATION_FIGURE_TRIGGER_TOKENS = (
@@ -1325,10 +1542,19 @@ def _split_table_and_figure_outputs_in_plan(
 
     new_steps: List[AnalysisStep] = []
     findings: List[ValidationFinding] = []
+    existing_step_ids = {str(step.step_id) for step in plan.steps}
+    typed_product_producers: Dict[Tuple[str, str], Set[str]] = {}
+    for candidate in plan.steps:
+        for output in candidate.expected_outputs or []:
+            parsed = typed_product(output)
+            if parsed is not None:
+                typed_product_producers.setdefault(parsed, set()).add(
+                    str(candidate.step_id)
+                )
 
     for step in plan.steps:
         outputs = list(step.expected_outputs or [])
-        method = (step.method or "").lower()
+        method = _normalised_method_head(str(step.method or ""))
         if method in {
             "association_robustness",
             "bias_audit_association",
@@ -1348,21 +1574,40 @@ def _split_table_and_figure_outputs_in_plan(
             continue
         figure_outputs = [out for out in outputs if _output_declares_figure(out)]
         non_figure_outputs = [out for out in outputs if out not in figure_outputs]
-        # Only split when the step is genuinely mixed — at least one
-        # non-figure analytic payload (table, statistic, log, model, ...)
-        # alongside a figure. Splitting a figure-only step would create
-        # an empty stub that the coder cannot anchor to a parent
-        # artefact, so we require the non-figure outputs to look like
-        # real deliverables. ``model:*`` is included because regression
-        # / prediction / association steps frequently bundle a model
-        # object with a companion figure, and the agent forgets to draw
-        # the figure when both are demanded in the same script.
-        has_non_figure_payload = any(
-            (out or "").lower().startswith(("table:", "statistic:", "log:", "model:"))
-            or (out or "").lower() in {"table", "statistic", "log", "model"}
-            for out in non_figure_outputs
+        # Split only when the figure has a typed parent data/model product to
+        # consume. A log is a sidecar, not render source data; splitting a
+        # ``figure + log`` step would create an empty-input child that can only
+        # guess or scan unrelated evidence.
+        render_source_outputs = _typed_render_source_outputs(non_figure_outputs)
+        render_source_identities = {
+            parsed
+            for output in render_source_outputs
+            if (parsed := typed_product(output)) is not None
+        }
+        sources_have_unique_parent = all(
+            typed_product_producers.get(identity) == {str(step.step_id)}
+            for identity in render_source_identities
         )
-        if not figure_outputs or not has_non_figure_payload:
+        has_render_source_table = any(
+            (parsed := typed_product(output)) is not None and parsed[0] == "table"
+            for output in render_source_outputs
+        )
+        effect_figure_requested = any(
+            effect_bearing_product(output) for output in figure_outputs
+        )
+        effect_source_products = _typed_effect_result_identities(
+            render_source_outputs
+        )
+        effect_figure_supported = _effect_figure_semantics_supported_by_inputs(
+            figure_outputs=figure_outputs,
+            effect_input_products=effect_source_products,
+        )
+        if (
+            not figure_outputs
+            or not has_render_source_table
+            or not sources_have_unique_parent
+            or (effect_figure_requested and not effect_figure_supported)
+        ):
             new_steps.append(step)
             continue
         # Keep the original step with the non-figure outputs.
@@ -1372,6 +1617,9 @@ def _split_table_and_figure_outputs_in_plan(
         new_steps.append(non_figure_step)
         # Synthesise a follow-up figure-only step.
         figure_step_id = f"{step.step_id}_figure"
+        if figure_step_id in existing_step_ids:
+            new_steps[-1] = step
+            continue
         figure_intent = (
             f"Render the publication figure(s) declared by step "
             f"'{step.step_id}' ({', '.join(figure_outputs)}). Treat this as "
@@ -1392,9 +1640,9 @@ def _split_table_and_figure_outputs_in_plan(
         figure_step = AnalysisStep(
             step_id=figure_step_id,
             intent=figure_intent,
-            inputs=list(step.inputs or []),
+            inputs=render_source_outputs,
             expected_outputs=figure_outputs,
-            method=(step.method or "visualization"),
+            method="visualization",
             icu_rule_refs=list(step.icu_rule_refs or []) + ["visualization_rule"],
         )
         new_steps.append(figure_step)
@@ -1463,22 +1711,57 @@ def _ensure_publication_figure_step_in_plan(
     ):
         return plan, []
 
+    # A host guard may request a missing display deliverable, but it must not
+    # choose a scientific result by scanning arbitrary run files.  Bind the
+    # renderer only to planner-declared table products with a unique producer.
+    producer_ids: Dict[Tuple[str, str], Set[str]] = {}
+    ordered_table_outputs: List[Tuple[Tuple[str, str], str]] = []
+    for candidate in plan.steps or []:
+        for raw_output in candidate.expected_outputs or []:
+            parsed = typed_product(raw_output)
+            if parsed is None or parsed[0] != "table":
+                continue
+            producer_ids.setdefault(parsed, set()).add(str(candidate.step_id))
+            ordered_table_outputs.append((parsed, str(raw_output)))
+    render_inputs: List[str] = []
+    seen_inputs: Set[Tuple[str, str]] = set()
+    for identity, raw_output in ordered_table_outputs:
+        if identity in seen_inputs or len(producer_ids.get(identity, set())) != 1:
+            continue
+        seen_inputs.add(identity)
+        render_inputs.append(raw_output)
+    if not render_inputs:
+        return plan, [
+            ValidationFinding(
+                validator="plan_contract",
+                severity="error",
+                message=(
+                    "The plan requires a publication figure but declares no "
+                    "uniquely produced typed table that a rendering-only step "
+                    "can consume. The planner must declare the intended figure "
+                    "and its exact typed source instead of asking the runtime "
+                    "to scan prior outputs and choose a scientific result."
+                ),
+                detail={"reason": "missing_typed_figure_source"},
+            )
+        ]
+
     next_index = len(plan.steps or []) + 1
     fallback_step = AnalysisStep(
         step_id=f"{next_index:02d}_publication_figure_fallback",
         intent=(
-            "Render a publication-ready figure that summarises the "
-            "analytics produced by the previous steps. Read the latest "
-            "step_summary.json files under the run directory, pick the "
-            "most informative numeric structure (e.g. mortality by "
-            "stratum, correlation values, model performance), and save "
+            "Render a publication-ready overview using only the exact typed "
+            "table inputs bound by the host. Do not scan the run directory, "
+            "choose a different result, fit a model, or calculate a new "
+            "estimand. Copy every plotted value into a matching source-data "
+            "CSV and declare that CSV in the figure contract, then save "
             "the figure as both PNG and SVG with the same stem into "
             "``os.environ['STEP_OUT_DIR']`` (set by the runner). Record "
             "every produced path in step_summary.json under "
             "``figure_files``."
         ),
         method="visualization",
-        inputs=[],
+        inputs=render_inputs,
         expected_outputs=["figure:overview"],
         icu_rule_refs=["visualization_rule"],
     )
@@ -3075,6 +3358,7 @@ def _step_contract_findings(
     step: AnalysisStep,
     step_summary: Dict[str, Any],
     completed_step_records: Optional[Sequence[Dict[str, Any]]] = None,
+    resolved_input_bindings: Optional[Mapping[str, Mapping[str, Any]]] = None,
     out_dir: Optional[Path] = None,
 ) -> List[ValidationFinding]:
     if not isinstance(step_summary, dict) or not step_summary:
@@ -3140,14 +3424,22 @@ def _step_contract_findings(
     # the substring matches ``primary_association``/``model_training``/``cluster``
     # below would falsely demand effect/prediction/clustering metrics from a
     # render-only step that legitimately has no such fields in its summary.
-    figure_only_step = bool(step.expected_outputs) and all(
+    figure_only_step = bool(step.expected_outputs) and any(
         _output_declares_figure(out) for out in step.expected_outputs
+    ) and all(
+        _output_declares_figure(out) or _output_declares_auxiliary_log(out)
+        for out in step.expected_outputs
     )
     findings.extend(
         declared_product_contract_findings(
             step=step,
             step_summary=step_summary,
             effect_method_authorized=effect_output_authorized(step),
+            effect_figure_source_authorized=_effect_figure_source_authorized(
+                step=step,
+                completed_step_records=completed_step_records,
+                resolved_input_bindings=resolved_input_bindings,
+            ),
             out_dir=out_dir,
         )
     )

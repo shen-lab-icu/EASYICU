@@ -70,30 +70,55 @@ _EFFECT_PRODUCT_BASES = frozenset(
         "adjusted_effect",
         "adjusted_effect_estimate",
         "adjusted_effect_estimates",
+        "adjusted_association",
+        "adjusted_associations",
         "adjusted_association_estimate",
         "adjusted_association_estimates",
+        "adjusted_hr",
         "adjusted_odds_ratio",
         "adjusted_odds_ratios",
         "adjusted_or",
+        "adjusted_rd",
+        "adjusted_rr",
         "association_estimate",
         "association_estimates",
         "causal_effect",
         "coefficient",
         "coefficients",
+        "effect_estimate",
+        "effect_estimates",
+        "effect_forest",
         "hazard_ratio",
         "interaction_pvalue",
         "odds_ratio",
+        "or_estimate",
+        "or_estimates",
+        "or_forest",
         "overall_effect",
         "primary_association",
         "primary_association_estimate",
         "primary_effect",
+        "primary_estimate",
         "primary_hr",
         "primary_or",
+        "primary_rd",
+        "primary_rr",
+        "relative_risk",
+        "rd_estimate",
+        "rd_estimates",
+        "rd_forest",
+        "rr_estimate",
+        "rr_estimates",
+        "rr_forest",
         "risk_difference",
         "risk_ratio",
+        "hr_estimate",
+        "hr_estimates",
+        "hr_forest",
         "subgroup_effect",
         "subgroup_effects",
         "treatment_effect",
+        "adjusted_logistic_regression_primary",
     }
 )
 
@@ -570,7 +595,7 @@ def _summary_scalar_products(value: Any) -> set[tuple[str, str]]:
                 if isinstance(child, Mapping) or isinstance(child, (list, tuple)):
                     visit(child)
                     continue
-                valid = child is not None and child != ""
+                valid = child is not None and child != "" and not _is_file_path(child)
                 if isinstance(child, float):
                     valid = math.isfinite(child)
                 if valid and key:
@@ -640,6 +665,19 @@ def _registered_products(
                             (kind, role_name) for kind in _file_kinds(path) if role_name
                         )
                 for path in paths:
+                    # A JSON file registered under an exact matching typed log
+                    # role is an auxiliary sidecar, not four extra scientific
+                    # products merely because JSON is a multi-purpose format.
+                    # Keep suffix inference for every scientific role and for
+                    # mismatched log filenames so an innocuous key cannot
+                    # launder an effect-bearing output path.
+                    if (
+                        role is not None
+                        and role[0] == "log"
+                        and role[0] in _file_kinds(path)
+                        and _file_stem(path) == role[1]
+                    ):
+                        continue
                     add_path(path, explicit_figure_list=explicit_figure_list)
             return
         for path in _iter_paths(value):
@@ -682,10 +720,191 @@ def _has_product_registry(value: Any) -> bool:
 
 def _effect_bearing_name(name: str) -> bool:
     normalised = _normalise(name)
-    return any(
-        normalised == base or normalised.startswith(f"{base}_")
-        for base in _EFFECT_PRODUCT_BASES
-    )
+    # Input/design audits and provenance sidecars may name the effect they
+    # inspect, but they are not authority to estimate or register that effect.
+    # Any numeric effect nested inside such a summary is still caught by the
+    # scalar-path walk below; this exemption applies only to the typed product
+    # role itself.
+    if any(
+        normalised.endswith(f"_{suffix}")
+        for suffix in (
+            "audit",
+            "contract",
+            "definition",
+            "diagnostic",
+            "diagnostics",
+            "input_audit",
+            "lineage",
+            "provenance",
+            "trace",
+        )
+    ):
+        return False
+    return any(_contains_product_role(normalised, base) for base in _EFFECT_PRODUCT_BASES)
+
+
+def _contains_product_role(name: str, role: str) -> bool:
+    """Match a normalized multi-token role at any underscore boundary."""
+
+    return name == role or f"_{role}_" in f"_{name}_"
+
+
+def effect_bearing_product(value: object) -> bool:
+    """Return whether a typed product name denotes a scientific effect."""
+
+    parsed = typed_product(value)
+    return parsed is not None and _effect_bearing_name(parsed[1])
+
+
+def effect_bearing_name(value: object) -> bool:
+    """Return whether an untyped/canonical product name denotes an effect."""
+
+    return _effect_bearing_name(str(value or ""))
+
+
+_EFFECT_MEASURE_PREFIXES: Mapping[str, tuple[str, ...]] = {
+    "odds_ratio": (
+        "odds_ratio",
+        "adjusted_odds_ratio",
+        "adjusted_odds_ratios",
+        "primary_or",
+        "adjusted_or",
+        "or_estimate",
+        "or_estimates",
+        "or_forest",
+    ),
+    "risk_ratio": (
+        "risk_ratio",
+        "relative_risk",
+        "primary_rr",
+        "adjusted_rr",
+        "rr_estimate",
+        "rr_estimates",
+        "rr_forest",
+    ),
+    "hazard_ratio": (
+        "hazard_ratio",
+        "primary_hr",
+        "adjusted_hr",
+        "hr_estimate",
+        "hr_estimates",
+        "hr_forest",
+    ),
+    "risk_difference": (
+        "risk_difference",
+        "primary_rd",
+        "adjusted_rd",
+        "rd_estimate",
+        "rd_estimates",
+        "rd_forest",
+    ),
+    "coefficient": ("coefficient", "coefficients"),
+}
+
+# These abbreviations are meaningful only when they are the complete typed
+# product/column name.  Boundary matching would misclassify ordinary ICU
+# products such as ``hr_trajectory`` (heart rate), ``rr_distribution``
+# (respiratory rate), or prose-like ``included_or_excluded_counts``.
+_EXACT_EFFECT_MEASURE_NAMES: Mapping[str, str] = {
+    "or": "odds_ratio",
+    "rr": "risk_ratio",
+    "hr": "hazard_ratio",
+    "rd": "risk_difference",
+}
+
+
+def effect_measure_family(value: object) -> str | None:
+    """Return an explicit effect scale encoded in a typed product name."""
+
+    parsed = typed_product(value)
+    if parsed is None:
+        return None
+    name = parsed[1]
+    exact_family = _EXACT_EFFECT_MEASURE_NAMES.get(name)
+    if exact_family is not None:
+        return exact_family
+    for family, prefixes in _EFFECT_MEASURE_PREFIXES.items():
+        if any(_contains_product_role(name, prefix) for prefix in prefixes):
+            return family
+    return None
+
+
+_EFFECT_ROLE_PREFIXES: Mapping[str, tuple[str, ...]] = {
+    "interaction": ("interaction", "interaction_pvalue"),
+    "subgroup": ("subgroup", "subgroup_effect", "subgroup_effects"),
+    "treatment": ("treatment", "treatment_effect"),
+    "causal": ("causal", "causal_effect"),
+}
+
+
+def effect_role_family(value: object) -> str | None:
+    """Return a non-interchangeable scientific effect role, if explicit."""
+
+    parsed = typed_product(value)
+    if parsed is None:
+        return None
+    name = parsed[1]
+    for family, prefixes in _EFFECT_ROLE_PREFIXES.items():
+        if any(_contains_product_role(name, prefix) for prefix in prefixes):
+            return family
+    return None
+
+
+_EFFECT_ESTIMAND_TIER_PREFIXES: Mapping[str, tuple[str, ...]] = {
+    "primary": ("primary",),
+    "secondary": ("secondary",),
+    "sensitivity": ("sensitivity", "robust", "robustness"),
+    "corroborative": ("corroborative",),
+}
+
+
+def effect_estimand_tier(value: object) -> str | None:
+    """Return a non-interchangeable primary/supporting estimand tier."""
+
+    parsed = typed_product(value)
+    if parsed is None:
+        return None
+    name = parsed[1]
+    for tier, prefixes in _EFFECT_ESTIMAND_TIER_PREFIXES.items():
+        if any(_contains_product_role(name, prefix) for prefix in prefixes):
+            return tier
+    return None
+
+
+def effect_adjustment_family(value: object) -> str | None:
+    """Return an explicit adjusted versus crude/unadjusted qualifier."""
+
+    parsed = typed_product(value)
+    if parsed is None:
+        return None
+    name = parsed[1]
+    if _contains_product_role(name, "adjusted"):
+        return "adjusted"
+    if any(
+        _contains_product_role(name, qualifier)
+        for qualifier in ("unadjusted", "crude")
+    ):
+        return "unadjusted"
+    return None
+
+
+_AUXILIARY_LOG_SUFFIXES = (
+    "_audit",
+    "_contract",
+    "_diagnostic",
+    "_diagnostics",
+    "_lineage",
+    "_process",
+    "_provenance",
+    "_render_trace",
+    "_rendering_trace",
+    "_trace",
+)
+
+
+def _auxiliary_log_name(name: str) -> bool:
+    normalised = _normalise(name)
+    return any(normalised.endswith(suffix) for suffix in _AUXILIARY_LOG_SUFFIXES)
 
 
 def _effect_summary_paths(summary: Mapping[str, Any]) -> list[str]:
@@ -703,6 +922,7 @@ def _effect_summary_paths(summary: Mapping[str, Any]) -> list[str]:
                     and _effect_bearing_name(key)
                     and child is not None
                     and child != ""
+                    and not _is_file_path(child)
                 ):
                     paths.append(path)
         elif isinstance(node, (list, tuple)):
@@ -737,6 +957,7 @@ def declared_product_contract_findings(
     step: AnalysisStep,
     step_summary: Mapping[str, Any],
     effect_method_authorized: bool,
+    effect_figure_source_authorized: bool = False,
     out_dir: Path | None = None,
 ) -> list[ValidationFinding]:
     """Validate declared-product realization and scientific output scope."""
@@ -819,12 +1040,26 @@ def declared_product_contract_findings(
 
     if not effect_method_authorized:
         declared_effects = sorted(
-            f"{kind}:{name}" for kind, name in declared if _effect_bearing_name(name)
+            f"{kind}:{name}"
+            for kind, name in declared
+            if _effect_bearing_name(name)
+            and not (kind == "log" and _auxiliary_log_name(name))
+            and not (effect_figure_source_authorized and kind == "figure")
         )
         registered_effects = sorted(
             f"{kind}:{name}"
             for kind, name in registered
-            if kind != "log" and _effect_bearing_name(name)
+            if _effect_bearing_name(name)
+            and not (
+                kind == "log"
+                and (kind, name) in declared
+                and _auxiliary_log_name(name)
+            )
+            and not (
+                effect_figure_source_authorized
+                and kind == "figure"
+                and (kind, name) in declared
+            )
         )
         summary_effects = _effect_summary_paths(step_summary)
         if declared_effects or registered_effects or summary_effects:
@@ -833,9 +1068,10 @@ def declared_product_contract_findings(
                     validator="declared_product_contract",
                     severity="error",
                     message=(
-                        f"Step {step.step_id} uses a non-effect method but "
-                        "declared or registered effect-bearing scientific output. "
-                        "Move effect estimation to an agent-planned effect-method owner."
+                        f"Step {step.step_id} lacks a closed effect-output contract "
+                        "but declared or registered effect-bearing scientific output. "
+                        "Use an agent-planned effect-method owner with a typed, "
+                        "machine-readable effect result."
                     ),
                     detail={
                         "kind": "unauthorized_effect_product",
@@ -854,5 +1090,11 @@ def declared_product_contract_findings(
 __all__ = [
     "bind_declared_figure_products",
     "declared_product_contract_findings",
+    "effect_adjustment_family",
+    "effect_bearing_name",
+    "effect_bearing_product",
+    "effect_estimand_tier",
+    "effect_measure_family",
+    "effect_role_family",
     "typed_product",
 ]
