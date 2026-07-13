@@ -205,6 +205,8 @@ def test_candidate_code_contract_consumes_one_upstream_coordinate_layer():
 
     assert "scaled_representation_column" in contract
     assert "do not reapply cohort, anchor, or observed-window eligibility" in contract
+    assert "Copy id_column into the cluster-selection manifest" in contract
+    assert "cluster_selection.selected_model_id" in contract
     assert "do not run bootstrap" in contract
     assert "do not write cluster profiles" in contract
 
@@ -234,6 +236,13 @@ def test_stability_code_contract_reuses_frozen_candidate_solution_only():
     assert "do not read COHORT_PARQUET" in contract
     assert "exact representation_columns in the same order" in contract
     assert "copy the selected candidate labels" in contract
+    assert "exactly one shared column" in contract
+    assert "complete and unique in both tables" in contract
+    assert "full identifier sets are equal" in contract
+    assert "Never select an identifier by its name" in contract
+    assert "accept only one fitted candidate-model record" in contract
+    assert "evidence_id plus selected_n_clusters" in contract
+    assert "Fail closed if zero or multiple records match" in contract
     assert "Do not compare candidate k values" in contract
     assert "same method and same k" in contract
     assert "at least two genuinely distinct resamples/refits" in contract
