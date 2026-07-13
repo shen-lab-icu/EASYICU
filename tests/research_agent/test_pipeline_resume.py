@@ -193,6 +193,42 @@ def test_resume_controller_does_not_reuse_ok_superseded_by_failure(
     assert applied.per_step_records == []
 
 
+def test_resume_recomputes_plan_revision_findings_instead_of_carrying_them(
+    tmp_path: Path,
+) -> None:
+    state = {
+        "findings": [
+            ValidationFinding(
+                validator="plan_contract_pending",
+                severity="warning",
+                message="Old trajectory role was pending before probe replan.",
+                detail={"kind": "trajectory_role_missing", "role": "representation"},
+            ).model_dump(mode="json"),
+            ValidationFinding(
+                validator="plan_contract",
+                severity="error",
+                message="Old trajectory plan was missing a role.",
+                detail={"kind": "trajectory_role_missing", "role": "candidate_selection"},
+            ).model_dump(mode="json"),
+            ValidationFinding(
+                validator="statistical_validator",
+                severity="warning",
+                message="Independent analytical warning remains relevant.",
+            ).model_dump(mode="json"),
+        ]
+    }
+
+    applied = ResumeController(
+        plan=_plan(),
+        run_dir=tmp_path,
+        resume_state=state,
+    ).apply()
+
+    assert [finding.validator for finding in applied.findings] == [
+        "statistical_validator"
+    ]
+
+
 def test_pipeline_resume_is_a_leaf_module() -> None:
     path = (
         Path(__file__).resolve().parents[2]
@@ -705,6 +741,24 @@ def test_resume_controller_remaining_steps_respects_stop_point(tmp_path: Path):
     )
 
     assert [step.step_id for step in remaining] == ["02_model"]
+
+
+def test_resume_controller_remaining_steps_respects_explicit_start_point(
+    tmp_path: Path,
+):
+    controller = ResumeController(
+        plan=_plan(),
+        run_dir=tmp_path,
+        resume_state={"per_step_records": []},
+        resume_from_step_id="02_model",
+    )
+
+    remaining = controller.remaining_steps(
+        plan=_plan(),
+        executed_step_ids=set(),
+    )
+
+    assert [step.step_id for step in remaining] == ["02_model", "03_figure"]
 
 
 def test_resume_controller_rejects_unknown_resume_or_stop_step(tmp_path: Path):

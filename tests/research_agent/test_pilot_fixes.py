@@ -72,6 +72,30 @@ def test_dedupe_findings_preserves_order(ra):
     assert [f.message for f in out] == ["first", "second"]
 
 
+def test_dedupe_findings_keeps_different_step_owners_separate(ra):
+    from easyicu.research_agent.audits.validators import dedupe_findings
+    schema = ra.schema
+    raw = [
+        schema.ValidationFinding(
+            validator="v",
+            severity="error",
+            message="same contract failure",
+            detail={"step_id": "step_a"},
+        ),
+        schema.ValidationFinding(
+            validator="v",
+            severity="error",
+            message="same contract failure",
+            detail={"step_id": "step_b"},
+        ),
+    ]
+
+    out = dedupe_findings(raw)
+
+    assert len(out) == 2
+    assert [finding.detail["step_id"] for finding in out] == ["step_a", "step_b"]
+
+
 # -------------------------- E2: claim cap --------------------------
 
 def test_register_step_summary_numerics_respects_max_leaves(ra, tmp_path: Path):
@@ -178,6 +202,17 @@ def test_plan_signature_detects_substantive_change():
     base = _two_step_plan("Define the cohort.", method="logit")
     changed_method = _two_step_plan("Define the cohort.", method="cox")
     assert _plan_signature(base) != _plan_signature(changed_method)
+
+
+def test_plan_signature_detects_artifact_edge_or_source_input_change():
+    """Repairing a scientific DAG edge/window input is a real revision."""
+    from easyicu.research_agent.pipeline_execute import _plan_signature
+
+    base = _two_step_plan("Define the cohort.")
+    changed = base.model_copy(deep=True)
+    changed.steps[1].inputs = ["artifact:trajectory_features", "window_h6_12"]
+
+    assert _plan_signature(base) != _plan_signature(changed)
 
 
 def test_plan_signature_detects_estimand_role_change():

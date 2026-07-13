@@ -78,6 +78,31 @@ def _safe_path_component(value: str, *, label: str) -> str:
     return text
 
 
+def _validated_resolved_inputs_path(
+    value: Optional[Path],
+    *,
+    workdir: Path,
+) -> Optional[Path]:
+    """Accept only a regular, non-symlink manifest inside the run root."""
+
+    if value is None:
+        return None
+    candidate = Path(value).expanduser()
+    if candidate.is_symlink():
+        raise ValueError("resolved_inputs_path must not be a symlink")
+    try:
+        resolved = candidate.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise ValueError("resolved_inputs_path must exist") from exc
+    if not resolved.is_file():
+        raise ValueError("resolved_inputs_path must be a regular file")
+    try:
+        resolved.relative_to(Path(workdir).resolve())
+    except ValueError as exc:
+        raise ValueError("resolved_inputs_path must be inside the run workdir") from exc
+    return resolved
+
+
 def _sandbox_quote(path: Path | str) -> str:
     return str(path).replace("\\", "\\\\").replace('"', '\\"')
 
@@ -172,7 +197,23 @@ class CodeRunner:
                 f"Cohort parquet does not exist: {self.cohort_parquet}"
             )
         self.timeout_seconds = timeout_seconds
-        self.python_executable = python_executable or sys.executable
+        selected_python = str(python_executable or sys.executable)
+        python_path = Path(selected_python).expanduser()
+        if python_path.is_absolute():
+            try:
+                # Resolve symlinked *directory* ancestors (for example a
+                # worktree-local ``.venv`` link) so sandbox-exec sees the same
+                # runtime path that its profile allows.  Preserve the final
+                # ``bin/python`` entry point: resolving that symlink all the
+                # way to a base interpreter would discard virtualenv prefix
+                # discovery and could silently run with the wrong packages.
+                resolved_parent = python_path.parent.resolve(strict=True)
+                normalized_python = resolved_parent / python_path.name
+                if normalized_python.exists():
+                    selected_python = str(normalized_python)
+            except (OSError, RuntimeError):
+                pass
+        self.python_executable = selected_python
         self.extra_env = dict(extra_env or {})
         self.network_policy = (network_policy or "none").lower()
         self.allow_unsafe_host_fallback = (
@@ -275,8 +316,18 @@ class CodeRunner:
             return [unshare, "-n", "--", *base]
         return base
 
-    def run(self, *, step_id: str, code: str) -> RunResult:
+    def run(
+        self,
+        *,
+        step_id: str,
+        code: str,
+        resolved_inputs_path: Optional[Path] = None,
+    ) -> RunResult:
         step_id = _safe_path_component(step_id, label="step_id")
+        resolved_inputs_path = _validated_resolved_inputs_path(
+            resolved_inputs_path,
+            workdir=self.workdir,
+        )
         step_dir = self.workdir / "steps" / step_id
         step_dir.mkdir(parents=True, exist_ok=True)
         script_path = step_dir / "analysis.py"
@@ -366,6 +417,8 @@ class CodeRunner:
         env["JOBLIB_MULTIPROCESSING"] = "0"
         env["KMP_INIT_AT_FORK"] = "FALSE"
         env.update(self.extra_env)
+        if resolved_inputs_path is not None:
+            env["EASYICU_RESOLVED_INPUTS_JSON"] = str(resolved_inputs_path)
 
         timed_out = False
         started = time.monotonic()
@@ -875,9 +928,14 @@ class DockerRunner:
         script_path: Path,
         out_dir: Path,
         runtime_image: Optional[str] = None,
+        resolved_inputs_path: Optional[Path] = None,
     ) -> List[str]:
         """Compose the ``docker run`` argv for a single step."""
         step_id = _safe_path_component(step_id, label="step_id")
+        resolved_inputs_path = _validated_resolved_inputs_path(
+            resolved_inputs_path,
+            workdir=self.workdir,
+        )
         container_step_dir = self._container_step_dir(step_id)
         cmd: List[str] = [
             self.docker_executable,
@@ -958,6 +1016,13 @@ class DockerRunner:
             "XDG_CACHE_HOME": "/tmp/.cache",
         }
         env.update(rewritten_extra_env)
+        if resolved_inputs_path is not None:
+            relative_manifest = resolved_inputs_path.relative_to(
+                self.workdir.resolve()
+            )
+            env["EASYICU_RESOLVED_INPUTS_JSON"] = (
+                f"{self.CONTAINER_RUN_ROOT}/{relative_manifest.as_posix()}"
+            )
         for key, value in env.items():
             cmd.extend(["-e", f"{key}={value}"])
 
@@ -1119,8 +1184,18 @@ class DockerRunner:
     # Main entry point
     # ------------------------------------------------------------------
 
-    def run(self, *, step_id: str, code: str) -> RunResult:
+    def run(
+        self,
+        *,
+        step_id: str,
+        code: str,
+        resolved_inputs_path: Optional[Path] = None,
+    ) -> RunResult:
         step_id = _safe_path_component(step_id, label="step_id")
+        resolved_inputs_path = _validated_resolved_inputs_path(
+            resolved_inputs_path,
+            workdir=self.workdir,
+        )
         # Same forward-reference hoisting as CodeRunner; see code_hygiene
         # docstring for the qwen3-coder-30b regression that motivates it.
         code = reorder_forward_references(code)
@@ -1149,6 +1224,7 @@ class DockerRunner:
             script_path=script_path,
             out_dir=out_dir,
             runtime_image=str(runtime_provenance["image_id"]),
+            resolved_inputs_path=resolved_inputs_path,
         )
 
         timed_out = False

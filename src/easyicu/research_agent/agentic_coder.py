@@ -65,7 +65,13 @@ class AgenticCoderAgent:
 
     # -- prompt -------------------------------------------------------------
     def _build_prompt(self, context: ResearchContext, step: AnalysisStep) -> str:
-        from .agents import _format_context
+        from .agents import (
+            _declared_output_scope_contract,
+            _format_context,
+            _typed_input_scope_contract,
+        )
+        from .trajectory_contract import trajectory_phenotyping_code_contract
+        from .trajectory_plan_contract import trajectory_role_code_contract
 
         return (
             f"You are authoring ONE self-contained Python analysis script for "
@@ -84,7 +90,13 @@ class AgenticCoderAgent:
             "executes cleanly and produces the expected outputs.\n"
             "- The script must be runnable standalone with `python "
             f"{_SCRIPT_NAME}`; keep all imports inside it.\n\n"
-            "RESEARCH CONTEXT:\n" + _format_context(context)
+            + _declared_output_scope_contract(step)
+            + _typed_input_scope_contract(step)
+            + "\n"
+            "RESEARCH CONTEXT:\n"
+            + _format_context(context)
+            + trajectory_phenotyping_code_contract(context=context, step=step)
+            + trajectory_role_code_contract(context=context, step=step)
         )
 
     def _argv(self, workdir: str) -> List[str]:
@@ -166,7 +178,7 @@ class AgenticCoderAgent:
 
         self.last_compatibility_repair_attempts = 0
         for attempt in range(1, _MAX_PRE_EXEC_COMPATIBILITY_REPAIRS + 1):
-            violations = detect_forbidden_pattern_usage(code, context)
+            violations = detect_forbidden_pattern_usage(code, context, step)
             self.last_compatibility_violations = violations
             if not violations:
                 break

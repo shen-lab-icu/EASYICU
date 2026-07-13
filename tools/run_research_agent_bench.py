@@ -56,7 +56,8 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Sequence
 
 if TYPE_CHECKING:
     from easyicu.research_agent.pipeline_profiles import SubmissionProfile
@@ -549,29 +550,85 @@ def _bench_item_to_task(item):
     """Adapt a ``tests.bench`` BenchItem to a minimal ``ICUAgentBenchTask``.
 
     This lets the §M1 five-dimension Tier-1 scorecard be computed from a run's
-    readiness artifacts for the legacy bench items too. Result-validity stays
-    *unscored* (no locked reference is frozen for these items); the item's
-    ``expected_finding_substrings`` are surfaced as the audit-hazard answer key
-    (required warnings). Kept deliberately thin — the scorecard is additive and
-    does not replace the legacy OR/substring scoring yet.
+    readiness artifacts for legacy and external bench items too. Legacy items
+    without an explicit frozen gold contract remain unscored for numeric result
+    validity; external protocol rows may carry that contract structurally. The
+    item's ``expected_finding_substrings`` remain a backward-compatible
+    audit-hazard answer key. The scorecard is additive and does not replace the
+    legacy OR/substring diagnostics.
     """
     from easyicu.research_agent.icu_agent_bench import (  # type: ignore
         ICUAgentBenchGoldAnswer,
         ICUAgentBenchTask,
     )
 
-    warns = [w for w in (getattr(item, "expected_finding_substrings", []) or []) if w]
-    gold = ICUAgentBenchGoldAnswer(required_warnings=warns) if warns else None
+    def _items(value: Any) -> List[str]:
+        if isinstance(value, str):
+            value = [value]
+        if not isinstance(value, (list, tuple)):
+            return []
+        return [str(entry).strip() for entry in value if str(entry).strip()]
+
+    warns = _items(getattr(item, "expected_finding_substrings", []))
+    required_warnings = _items(getattr(item, "required_warnings", []))
+    explicit_gold = getattr(item, "gold_answer", None)
+    gold = None
+    if explicit_gold is not None:
+        gold = (
+            explicit_gold
+            if isinstance(explicit_gold, ICUAgentBenchGoldAnswer)
+            else ICUAgentBenchGoldAnswer.model_validate(explicit_gold)
+        )
+    elif any(
+        (
+            warns,
+            required_warnings,
+            getattr(item, "numeric_targets", None),
+            getattr(item, "forbidden_outputs", None),
+        )
+    ):
+        gold = ICUAgentBenchGoldAnswer(
+            numeric_targets=dict(getattr(item, "numeric_targets", {}) or {}),
+            required_warnings=list(dict.fromkeys([*warns, *required_warnings])),
+            forbidden_outputs=_items(getattr(item, "forbidden_outputs", [])),
+            derivation=str(getattr(item, "gold_derivation", "") or ""),
+            data_fixture=(getattr(item, "data_fixture", None) or None),
+        )
+    if gold is not None and (warns or required_warnings):
+        merged_warnings = list(
+            dict.fromkeys([*gold.required_warnings, *warns, *required_warnings])
+        )
+        if merged_warnings != gold.required_warnings:
+            gold = gold.model_copy(update={"required_warnings": merged_warnings})
+
+    explicit_outputs = _items(getattr(item, "expected_outputs", []))
+    legacy_outputs = _items(getattr(item, "expected_artifact_substrings", []))
+    semantic_guardrails = _items(getattr(item, "semantic_guardrails", []))
+    if not semantic_guardrails:
+        semantic_guardrails = list(dict.fromkeys([*warns, *required_warnings]))
+    gold_status = str(getattr(item, "gold_answer_status", "") or "").strip().lower()
+    if gold_status not in {"planned", "frozen"}:
+        gold_status = "frozen" if gold is not None else "planned"
+    difficulty = str(getattr(item, "difficulty", "") or "").strip().lower()
+    if difficulty not in {"basic", "intermediate", "advanced"}:
+        difficulty = "intermediate"
+    category = str(getattr(item, "category", "") or "").strip().lower()
+    if category not in {"evaluation", "self_check"}:
+        category = "evaluation"
     return ICUAgentBenchTask(
         task_id=getattr(item, "key", "bench_item"),
         kind=getattr(item, "kind", "descriptive_association")
         or "descriptive_association",
         title=getattr(item, "name", getattr(item, "key", "bench item")),
         objective=getattr(item, "research_question", ""),
-        expected_outputs=list(getattr(item, "expected_artifact_substrings", []) or []),
-        semantic_guardrails=warns,
+        expected_outputs=explicit_outputs or legacy_outputs,
+        semantic_guardrails=semantic_guardrails,
+        evaluation_notes=_items(getattr(item, "evaluation_notes", [])),
+        target_databases=_items(getattr(item, "target_databases", [])),
         gold_answer=gold,
-        gold_answer_status="frozen" if gold else "planned",
+        gold_answer_status=gold_status,
+        difficulty=difficulty,
+        category=category,
     )
 
 
@@ -589,8 +646,9 @@ def _five_dim_scorecard(*, run_dir: Path, item, or_value, manifest) -> Dict[str,
         observed_warnings = [
             str(f.get("message", "")) for f in manifest.get("findings", [])
         ]
+        task = _bench_item_to_task(item)
         card = score_run_from_dir(
-            _bench_item_to_task(item),
+            task,
             run_dir,
             observed_metrics=(
                 {"primary_or": or_value} if or_value is not None else None
@@ -599,8 +657,14 @@ def _five_dim_scorecard(*, run_dir: Path, item, or_value, manifest) -> Dict[str,
             # The bench item declares its primary predictor + outcome; pass them
             # so the gold-free overadjustment / treatment-mediator / outcome-
             # leakage checks run in the runner path too (declared, never inferred).
+            # Scoring stays keyed to the declared benchmark concept.  The
+            # separately declared operational column is execution-only and is
+            # passed to ``pipeline.run(primary_exposure=...)`` below.
             exposure_concept=(getattr(item, "primary_predictor", "") or None),
             outcome_concept=(getattr(item, "target_outcome", "") or None),
+            locked_reference_frozen=bool(
+                task.gold_answer_status == "frozen" and task.gold_answer is not None
+            ),
         )
         return card.model_dump()
     except Exception as exc:  # pragma: no cover - additive diagnostic only
@@ -906,13 +970,19 @@ def _run_one_arm(
             f"(step-level checkpoint) for {item.key}/{label}"
         )
     started = time.monotonic()
+    database = str(getattr(item, "database", "") or "bench").strip() or "bench"
+    operational_exposure = (
+        getattr(item, "operational_exposure", None)
+        or getattr(item, "primary_predictor", None)
+        or None
+    )
     result = pipeline.run(
         question=item.research_question,
         cohort=cohort,
         cohort_name=f"bench_{item.key}",
-        database="bench",
+        database=database,
         target_outcome=item.target_outcome,
-        primary_exposure=(item.primary_predictor or None),
+        primary_exposure=operational_exposure,
         inclusion_criteria=item.inclusion_criteria,
         resume_run_id=resolved_resume_run_id,
         resume_from_step_id=resume_from_step_id,
@@ -2381,6 +2451,297 @@ def _pipeline_options_with_trajectory(
     return options
 
 
+_EXTERNAL_DIFFICULTY_ALIASES = {
+    "easy": "basic",
+    "medium": "intermediate",
+    "hard": "advanced",
+}
+
+
+def _external_string_list(
+    row: Mapping[str, Any],
+    field: str,
+    diagnostics: List[Dict[str, Any]],
+) -> List[str]:
+    """Read one declared list field without mining values from prose."""
+
+    value = row.get(field)
+    if value is None:
+        return []
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return []
+        diagnostics.append(
+            {
+                "field": field,
+                "status": "coerced_scalar_to_list",
+                "source_type": "str",
+            }
+        )
+        return [stripped]
+    if isinstance(value, (list, tuple)):
+        return [str(entry).strip() for entry in value if str(entry).strip()]
+    diagnostics.append(
+        {
+            "field": field,
+            "status": "invalid_type_defaulted",
+            "source_type": type(value).__name__,
+            "default": [],
+        }
+    )
+    return []
+
+
+def _external_item_from_row(
+    *,
+    row: Mapping[str, Any],
+    key: str,
+    question: str,
+    target: str,
+    cohort_columns: Sequence[Any],
+    cohort_size: int,
+) -> SimpleNamespace:
+    """Build one external item from structured protocol fields.
+
+    The adapter never derives database, exposure, or rubric decisions from the
+    natural-language question.  Older JSONL exports remain runnable via explicit
+    defaults recorded in ``protocol_adapter`` so a development run cannot
+    silently masquerade as a fully declared protocol.
+    """
+
+    diagnostics: List[Dict[str, Any]] = []
+
+    database_source = "database" if str(row.get("database") or "").strip() else None
+    database = str(row.get("database") or "").strip()
+    if not database:
+        database = "bench"
+        diagnostics.append(
+            {
+                "field": "database",
+                "status": "missing_defaulted",
+                "default": database,
+            }
+        )
+
+    scoring_source = next(
+        (
+            field
+            for field in ("primary_predictor", "scoring_predictor")
+            if str(row.get(field) or "").strip()
+        ),
+        None,
+    )
+    scoring_predictor = (
+        str(row.get(scoring_source) or "").strip() if scoring_source else ""
+    )
+
+    operational_source = next(
+        (
+            field
+            for field in (
+                "operational_exposure",
+                "operational_exposure_column",
+                "primary_exposure",
+                "exposure_column",
+            )
+            if str(row.get(field) or "").strip()
+        ),
+        None,
+    )
+    operational_exposure = (
+        str(row.get(operational_source) or "").strip()
+        if operational_source
+        else ""
+    )
+    if not scoring_predictor and operational_exposure:
+        scoring_predictor = operational_exposure
+        diagnostics.append(
+            {
+                "field": "primary_predictor",
+                "status": "missing_defaulted",
+                "default_from": operational_source,
+                "default": scoring_predictor,
+            }
+        )
+    if not operational_exposure and scoring_predictor:
+        operational_exposure = scoring_predictor
+        diagnostics.append(
+            {
+                "field": "operational_exposure",
+                "status": "missing_defaulted",
+                "default_from": scoring_source,
+                "default": operational_exposure,
+            }
+        )
+    if not operational_exposure:
+        diagnostics.append(
+            {
+                "field": "operational_exposure",
+                "status": "missing_no_default_available",
+                "default": None,
+            }
+        )
+    cohort_column_names = {str(column) for column in cohort_columns}
+    operational_column_present = (
+        operational_exposure in cohort_column_names if operational_exposure else None
+    )
+    if operational_exposure and not operational_column_present:
+        diagnostics.append(
+            {
+                "field": "operational_exposure",
+                "status": "column_not_present",
+                "value": operational_exposure,
+                "source_field": operational_source,
+            }
+        )
+
+    try:
+        expected_direction = int(row.get("expected_or_direction") or 0)
+    except (TypeError, ValueError):
+        expected_direction = 0
+        diagnostics.append(
+            {
+                "field": "expected_or_direction",
+                "status": "invalid_value_defaulted",
+                "default": 0,
+            }
+        )
+
+    difficulty_raw = str(row.get("difficulty") or "").strip().lower()
+    difficulty = _EXTERNAL_DIFFICULTY_ALIASES.get(difficulty_raw, difficulty_raw)
+    if difficulty not in {"basic", "intermediate", "advanced"}:
+        difficulty = "intermediate"
+        diagnostics.append(
+            {
+                "field": "difficulty",
+                "status": "missing_or_invalid_defaulted",
+                "default": difficulty,
+            }
+        )
+
+    category = str(row.get("category") or "").strip().lower()
+    if category not in {"evaluation", "self_check"}:
+        category = "evaluation"
+        if row.get("category") not in (None, ""):
+            diagnostics.append(
+                {
+                    "field": "category",
+                    "status": "invalid_value_defaulted",
+                    "default": category,
+                }
+            )
+
+    gold_answer = row.get("gold_answer")
+    if gold_answer is not None and not isinstance(gold_answer, Mapping):
+        diagnostics.append(
+            {
+                "field": "gold_answer",
+                "status": "invalid_type_defaulted",
+                "source_type": type(gold_answer).__name__,
+                "default": None,
+            }
+        )
+        gold_answer = None
+
+    gold_status = str(row.get("gold_answer_status") or "").strip().lower()
+    if gold_status and gold_status not in {"planned", "frozen"}:
+        diagnostics.append(
+            {
+                "field": "gold_answer_status",
+                "status": "invalid_value_defaulted",
+                "default": "frozen" if gold_answer is not None else "planned",
+            }
+        )
+        gold_status = ""
+
+    expected_findings = _external_string_list(
+        row, "expected_finding_substrings", diagnostics
+    )
+    expected_steps = _external_string_list(
+        row, "expected_step_substrings", diagnostics
+    )
+    expected_artifacts = _external_string_list(
+        row, "expected_artifact_substrings", diagnostics
+    )
+
+    protocol_adapter = {
+        "schema_version": "easyicu.external_benchmark_adapter/1",
+        "database": {
+            "value": database,
+            "source_field": database_source,
+            "defaulted": database_source is None,
+        },
+        "scoring_predictor": {
+            "value": scoring_predictor or None,
+            "source_field": scoring_source,
+            "defaulted": scoring_source is None,
+        },
+        "operational_exposure": {
+            "value": operational_exposure or None,
+            "source_field": operational_source,
+            "defaulted": operational_source is None,
+            "declared_column_present": (
+                operational_column_present
+                if operational_source is not None
+                else None
+            ),
+            "resolved_column_present": operational_column_present,
+        },
+        "diagnostics": diagnostics,
+    }
+
+    return SimpleNamespace(
+        key=key,
+        name=str(row.get("name") or key),
+        research_question=str(question),
+        target_outcome=str(target),
+        database=database,
+        primary_predictor=scoring_predictor,
+        operational_exposure=operational_exposure or None,
+        expected_or_direction=expected_direction,
+        expected_finding_substrings=expected_findings,
+        expected_step_substrings=expected_steps,
+        expected_artifact_substrings=expected_artifacts,
+        expected_outputs=_external_string_list(row, "expected_outputs", diagnostics),
+        semantic_guardrails=_external_string_list(
+            row, "semantic_guardrails", diagnostics
+        ),
+        evaluation_notes=_external_string_list(row, "evaluation_notes", diagnostics),
+        target_databases=_external_string_list(row, "target_databases", diagnostics),
+        required_warnings=_external_string_list(row, "required_warnings", diagnostics),
+        forbidden_outputs=_external_string_list(row, "forbidden_outputs", diagnostics),
+        numeric_targets=dict(row.get("numeric_targets") or {})
+        if isinstance(row.get("numeric_targets"), Mapping)
+        else {},
+        gold_answer=dict(gold_answer) if isinstance(gold_answer, Mapping) else None,
+        gold_answer_status=gold_status,
+        gold_derivation=str(row.get("gold_derivation") or ""),
+        data_fixture=(str(row.get("data_fixture") or "").strip() or None),
+        inclusion_criteria=_external_string_list(
+            row, "inclusion_criteria", diagnostics
+        ),
+        candidate_variables=_external_string_list(
+            row, "candidate_variables", diagnostics
+        ),
+        kind=str(row.get("kind") or "descriptive_association"),
+        difficulty=difficulty,
+        category=category,
+        benchmark_family=str(row.get("benchmark_family") or "external"),
+        evidence_basis=str(row.get("evidence_basis") or "external_import"),
+        claim_scope=str(row.get("claim_scope") or "external_import_only"),
+        notes=(str(row.get("notes") or "").strip() or None),
+        interpretation_note=(
+            str(row.get("interpretation_note") or "").strip() or None
+        ),
+        protocol_version=(str(row.get("protocol_version") or "").strip() or None),
+        rubric_version=(str(row.get("rubric_version") or "").strip() or None),
+        protocol_adapter=protocol_adapter,
+        cohort_size=int(cohort_size),
+        cohort_columns=[str(column) for column in cohort_columns],
+    )
+
+
 def _run_ehrflowbench_jsonl(
     *,
     jsonl_path: Path,
@@ -2399,7 +2760,6 @@ def _run_ehrflowbench_jsonl(
     allow_mock_aware: bool = False,
 ) -> int:
     """Run an external EHRFlowBench-style JSONL export when available."""
-    from types import SimpleNamespace
     import pandas as pd
 
     _enforce_mock_aware_provider(
@@ -2491,22 +2851,11 @@ def _run_ehrflowbench_jsonl(
                     }
                 )
                 continue
-        item = SimpleNamespace(
+        item = _external_item_from_row(
+            row=row,
             key=key,
-            name=str(row.get("name") or key),
-            research_question=str(question),
-            target_outcome=str(target),
-            primary_predictor=str(row.get("primary_predictor") or ""),
-            expected_or_direction=int(row.get("expected_or_direction") or 0),
-            expected_finding_substrings=list(
-                row.get("expected_finding_substrings") or []
-            ),
-            inclusion_criteria=list(row.get("inclusion_criteria") or []),
-            # Optional task kind so the five-dim scorecard routes the right
-            # reporting checklist (prediction->TRIPOD, clustering/trajectory->
-            # internal phenotype core) instead of always assuming an
-            # association. Absent -> descriptive_association (back-compat).
-            kind=str(row.get("kind") or "descriptive_association"),
+            question=str(question),
+            target=str(target),
             cohort_size=int(len(cohort)),
             cohort_columns=list(cohort.columns),
         )
@@ -2663,12 +3012,17 @@ def _run_one_item_from_cohort(
         "name": item.name,
         "research_question": item.research_question,
         "expected_predictor": item.primary_predictor,
+        "operational_exposure": getattr(item, "operational_exposure", None),
+        "database": getattr(item, "database", "bench"),
         "expected_or_direction": item.expected_or_direction,
         "benchmark_family": getattr(item, "benchmark_family", "external"),
         "difficulty": getattr(item, "difficulty", "external"),
         "evidence_basis": getattr(item, "evidence_basis", "external_import"),
         "claim_scope": getattr(item, "claim_scope", "external_import_only"),
         "interpretation_note": getattr(item, "interpretation_note", None),
+        "protocol_version": getattr(item, "protocol_version", None),
+        "rubric_version": getattr(item, "rubric_version", None),
+        "protocol_adapter": getattr(item, "protocol_adapter", None),
         "cohort_size": int(cohort_size),
     }
     if "naive" in selected:

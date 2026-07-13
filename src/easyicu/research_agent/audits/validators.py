@@ -55,11 +55,18 @@ from ..schema import (
     VariableRole,
 )
 from ..llm import LLMClient, LLMMessage
+from .outcome_semantics import (
+    _finding_claims_mortality_horizon_mismatch,
+    _script_copies_named_full_stay_window,
+    _script_has_conflicting_mortality_semantics,
+    _script_uses_bound_outcome,
+)
 from ..runtime_artifacts import (
     current_run_evidence_records,
     current_successful_step_records,
     verified_run_evidence_path,
 )
+from ..trajectory_contract import trajectory_phenotyping_artifact_findings
 
 
 # ---------------------------------------------------------------------------
@@ -774,6 +781,7 @@ class LLMConceptAuditor:
                 "pitfalls": v.pitfalls,
                 "clinical_caveats": v.clinical_caveats,
                 "cross_database_notes": v.cross_database_notes,
+                "analysis_window": v.analysis_window,
                 "missingness": (
                     v.missingness.model_dump(mode="json")
                     if v.missingness is not None else None
@@ -806,6 +814,14 @@ class LLMConceptAuditor:
             "the variable metadata to ICU mortality, hospital mortality or a "
             "fixed follow-up horizon, do not raise an error unless the script "
             "contradicts that binding or mixes incompatible outcome definitions.\n\n"
+            "A named `full_stay` window is an administrative analysis span: it "
+            "starts at ICU admission and ends at discharge, with `end_hours` "
+            "serving only as an upper safety cap (the default cap is 720 hours). "
+            "Copying that planner-locked window into provenance does not turn a "
+            "metadata-bound ICU/hospital mortality flag into 30-day mortality. "
+            "Call it a fixed-horizon outcome only when the script actually labels "
+            "or constructs 28/30-day mortality, uses another mortality column, or "
+            "derives the event from event-time/follow-up data.\n\n"
             "Return JSON only: "
             '{"findings":[{"severity":"info|warning|error",'
             '"message":"short finding","detail":{"optional":"context"}}]}. '
@@ -813,6 +829,13 @@ class LLMConceptAuditor:
             f"Step: {step.step_id if step else '(unknown)'}\n"
             f"Step intent: {step.intent if step else '(unknown)'}\n"
             f"Target outcome: {context.target_outcome}\n"
+            "Named time windows:\n"
+            + json.dumps(
+                [window.model_dump(mode="json") for window in context.time_windows],
+                ensure_ascii=False,
+                default=str,
+            )
+            + "\n"
             "Variables:\n"
             + json.dumps(variables, ensure_ascii=False, default=str)
             + "\n\nScript:\n"
@@ -905,6 +928,8 @@ def _downgrade_metadata_supported_outcome_findings(
     descriptor = context.variable(outcome)
     if descriptor is None or not descriptor.source_concept:
         return list(findings)
+    if str(getattr(descriptor.role, "value", descriptor.role)) != "outcome":
+        return list(findings)
     source = descriptor.source_concept.lower()
     if source not in {
         "icu_mortality",
@@ -914,45 +939,21 @@ def _downgrade_metadata_supported_outcome_findings(
     }:
         return list(findings)
 
-    code = (script_text or "").lower()
-    contradictory_tokens_by_source = {
-        "icu_mortality": (
-            "hospital_death",
-            "death_hosp",
-            "hospital_mortality",
-            "hospital mortality",
-            "in-hospital mortality",
-            "28-day mortality",
-            "30-day mortality",
-        ),
-        "hospital_mortality": (
-            "death_icu",
-            "icu_mortality",
-            "icu mortality",
-            "28-day mortality",
-            "30-day mortality",
-        ),
-        "mortality_28d": (
-            "death_icu",
-            "icu_mortality",
-            "icu mortality",
-            "hospital_death",
-            "hospital_mortality",
-            "hospital mortality",
-            "30-day mortality",
-        ),
-        "mortality_30d": (
-            "death_icu",
-            "icu_mortality",
-            "icu mortality",
-            "hospital_death",
-            "hospital_mortality",
-            "hospital mortality",
-            "28-day mortality",
-        ),
-    }
-    if any(token in code for token in contradictory_tokens_by_source[source]):
+    if not _script_uses_bound_outcome(script_text=script_text, outcome=outcome):
         return list(findings)
+    if _script_has_conflicting_mortality_semantics(
+        script_text=script_text,
+        outcome=outcome,
+        source=source,
+    ):
+        return list(findings)
+    copies_full_stay = source in {"icu_mortality", "hospital_mortality"} and (
+        _script_copies_named_full_stay_window(
+            context=context,
+            script_text=script_text,
+            outcome=outcome,
+        )
+    )
 
     ambiguity_tokens = (
         "icu vs hospital mortality confusion",
@@ -972,14 +973,26 @@ def _downgrade_metadata_supported_outcome_findings(
                     json.dumps(finding.detail or {}, ensure_ascii=False, default=str),
                 ]
             ).lower()
-            if any(token in text for token in ambiguity_tokens):
+            ambiguity = any(token in text for token in ambiguity_tokens)
+            horizon_mismatch = (
+                copies_full_stay
+                and _finding_claims_mortality_horizon_mismatch(text)
+            )
+            if ambiguity or horizon_mismatch:
                 detail = dict(finding.detail or {})
                 detail.setdefault(
                     "downgraded_reason",
                     (
                         f"Target outcome '{outcome}' is bound to "
                         f"{descriptor.source_concept} in ResearchContext and "
-                        "the script does not reference a conflicting mortality definition."
+                        + (
+                            "the script only copies the named full_stay "
+                            "administrative window without constructing a "
+                            "fixed-horizon mortality endpoint."
+                            if horizon_mismatch
+                            else "the script does not reference a conflicting "
+                            "mortality definition."
+                        )
                     ),
                 )
                 downgraded.append(
@@ -2280,7 +2293,50 @@ class PrimaryModelContractValidator:
         combined.update(contract)
         if "model_family" not in combined and combined.get("family") is not None:
             combined["model_family"] = combined.get("family")
+        cls._apply_nested_ridge_convergence_alias(
+            contract=contract,
+            metadata=combined,
+        )
         return combined
+
+    @classmethod
+    def _apply_nested_ridge_convergence_alias(
+        cls,
+        *,
+        contract: Mapping[str, Any],
+        metadata: Dict[str, Any],
+    ) -> None:
+        """Map model-bound sklearn ridge diagnostics to the controlled fields."""
+
+        if (
+            "convergence_method" in metadata
+            or "optimizer_success" in metadata
+            or cls._as_bool(metadata.get("penalized")) is not True
+        ):
+            return
+        fit_method = cls._normalise(metadata.get("fit_method"))
+        penalty = cls._normalise(metadata.get("penalty"))
+        if not (
+            re.search(r"(?:^|_)ridge(?:_|$)", fit_method)
+            or penalty == "ridge"
+        ):
+            return
+        diagnostics = contract.get("diagnostics")
+        if not isinstance(diagnostics, Mapping):
+            return
+        model_id = str(contract.get("model_id") or "").strip()
+        diagnostics_model_id = str(diagnostics.get("model_id") or "").strip()
+        if diagnostics_model_id and diagnostics_model_id != model_id:
+            return
+        iterations = cls._as_nonnegative_int(diagnostics.get("ridge_iterations"))
+        if (
+            cls._as_bool(diagnostics.get("ridge_converged")) is not True
+            or iterations is None
+            or iterations < 1
+        ):
+            return
+        metadata["convergence_method"] = "optimizer_success"
+        metadata["optimizer_success"] = True
 
     @classmethod
     def _declared_outcome_type(
@@ -4618,6 +4674,15 @@ class StatisticalValidator:
         # independently replayed from the locked cohort before publication.
         findings.extend(
             ordered_stratified_numeric_findings(
+                cohort_path=cohort_path,
+                step=step,
+                out_dir=out_dir,
+                step_summary=step_summary,
+            )
+        )
+        findings.extend(
+            trajectory_phenotyping_artifact_findings(
+                context=context,
                 cohort_path=cohort_path,
                 step=step,
                 out_dir=out_dir,
@@ -7952,7 +8017,7 @@ __all__ = [
 def dedupe_findings(
     findings: Sequence[ValidationFinding],
 ) -> List[ValidationFinding]:
-    """Collapse byte-identical ``(validator, severity, message)`` findings.
+    """Collapse byte-identical findings within the same authority scope.
 
     The pilot run on 2026-05-15 surfaced the same
     ``concept_usage_auditor`` message recorded 5 times in a single run
@@ -7963,14 +8028,18 @@ def dedupe_findings(
     and merges ``evidence_ids`` across the collapsed group so no
     reference is lost.
 
-    Findings that already declare a non-empty ``detail`` are still
-    merged: their detail is shallow-copied and the duplicate count
-    overwrites only the dedicated key.
+    Findings that already declare a non-empty ``detail`` are still merged when
+    their owner scope matches: ``detail.step_id`` participates in the dedupe
+    key.  This prevents the same prose emitted by two independent steps from
+    being collapsed under the first step's authority and then incorrectly
+    retired when only that first step succeeds.  Other detail remains
+    shallow-copied and the duplicate count overwrites only the dedicated key.
     """
     seen: Dict[tuple, int] = {}
     out: List[ValidationFinding] = []
     for f in findings:
-        key = (f.validator, f.severity, f.message)
+        owner_step_id = str((f.detail or {}).get("step_id") or "").strip() or None
+        key = (f.validator, f.severity, f.message, owner_step_id)
         if key not in seen:
             seen[key] = len(out)
             out.append(f)

@@ -422,12 +422,82 @@ _CONCEPT_HINTS: Dict[str, ConceptHint] = {
 }
 
 
+_COMPANION_WINDOW_SUFFIX_RE = re.compile(
+    r"_(?:first_)?\d+(?:h|d)$",
+    re.IGNORECASE,
+)
+
+
+def _companion_audit_hint(name: str) -> Optional[ConceptHint]:
+    """Classify structural count/status companions before concept prefixes.
+
+    Wide ICU cohorts commonly pair a value column with an observation count or
+    measurement-status field.  Those companions describe provenance, not the
+    underlying physiological quantity.  Letting ``<concept>_n`` inherit the
+    base concept's unit/range, or ``<score>_measured`` inherit ordinal levels,
+    gives the planner contradictory structured metadata.
+
+    The rule is deliberately suffix-structural and concept-neutral.  Explicit
+    entries in ``_CONCEPT_HINTS`` still win, so a future curated concept can
+    override this generic fallback without weakening it.
+    """
+
+    key = str(name or "").strip().lower()
+    structural_key = _COMPANION_WINDOW_SUFFIX_RE.sub("", key)
+    if structural_key.endswith("_n"):
+        return ConceptHint(
+            role=VariableRole.META,
+            kind=VariableKind.COUNT,
+            aggregation_default=AggregationRule.SUM,
+            pitfalls=(
+                "Auxiliary observation-count/provenance field; use it to audit "
+                "source availability, not as a physiological value or automatic "
+                "adjustment covariate.",
+            ),
+        )
+
+    structural_tokens = set(structural_key.split("_"))
+    measurement_status = structural_key.endswith("_measured") or (
+        structural_key.endswith("_flag")
+        and any(
+            marker in structural_tokens
+            for marker in (
+                "measured",
+                "measurement",
+                "source",
+                "available",
+                "availability",
+                "observed",
+                "observation",
+            )
+        )
+    )
+    if measurement_status:
+        return ConceptHint(
+            role=VariableRole.META,
+            kind=VariableKind.BINARY,
+            valid_range=(0.0, 1.0),
+            aggregation_default=AggregationRule.MAX_LAST,
+            pitfalls=(
+                "Auxiliary measurement/source-status flag; use it for data-"
+                "availability audits, not as the measured physiological value "
+                "or an automatic adjustment covariate.",
+            ),
+        )
+    return None
+
+
 def _lookup_hint(name: str) -> Optional[ConceptHint]:
     """Find the longest matching prefix hint for ``name`` (case-insensitive)."""
     key = name.lower()
     # exact match first
     if key in _CONCEPT_HINTS:
         return _CONCEPT_HINTS[key]
+    # Structural audit companions must not inherit the base concept's clinical
+    # unit, physiological range, or ordinal scale through prefix matching.
+    companion_hint = _companion_audit_hint(key)
+    if companion_hint is not None:
+        return companion_hint
     # longest prefix match second
     candidates = sorted(
         (k for k in _CONCEPT_HINTS if _matches_concept_prefix(key, k)),

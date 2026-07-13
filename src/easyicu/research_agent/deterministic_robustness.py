@@ -83,6 +83,7 @@ _MEMBERSHIP_COLUMNS = [
     "universe_n",
     "primary_membership_n",
     "variant_membership_n",
+    "overlap_n",
     "inflow_n",
     "outflow_n",
     "membership_delta_n",
@@ -472,17 +473,23 @@ def _run_robustness_preflight(
         sep=".",
     )
 
-    matrix.to_csv(out_dir / "robustness_matrix.csv", index=False)
-    membership_frame.to_csv(out_dir / "membership_change_summary.csv", index=False)
-    membership_frame.to_csv(
-        out_dir / "cohort_overlap_and_attrition.csv",
-        index=False,
+    matrix_path = out_dir / "robustness_matrix.csv"
+    matrix.to_csv(matrix_path, index=False)
+    shutil.copyfile(matrix_path, out_dir / "sensitivity_comparison.csv")
+    membership_path = out_dir / "membership_change_summary.csv"
+    membership_frame.to_csv(membership_path, index=False)
+    shutil.copyfile(membership_path, out_dir / "cohort_overlap_and_attrition.csv")
+    shutil.copyfile(
+        membership_path,
+        out_dir / "cohort_definition_overlap_attrition.csv",
     )
     outcome_frame.to_csv(out_dir / "outcome_label_executability.csv", index=False)
     summary_frame.to_csv(out_dir / "robustness_summary.csv", index=False)
-    specification_frame.to_csv(
-        out_dir / "sensitivity_specification_grid.csv",
-        index=False,
+    specification_path = out_dir / "sensitivity_specification_grid.csv"
+    specification_frame.to_csv(specification_path, index=False)
+    shutil.copyfile(
+        specification_path,
+        out_dir / "sensitivity_specification_matrix.csv",
     )
     missingness_notes = {"strategies": missing_rows, "warnings": warnings}
     (out_dir / "missingness_strategy_notes.json").write_text(
@@ -558,10 +565,14 @@ def _run_robustness_preflight(
     ]
     output_files = {
         "robustness_matrix": "robustness_matrix.csv",
-        "sensitivity_comparison": "robustness_matrix.csv",
+        "sensitivity_comparison": "sensitivity_comparison.csv",
         "membership_change_summary": "membership_change_summary.csv",
         "cohort_overlap_and_attrition": "cohort_overlap_and_attrition.csv",
+        "cohort_definition_overlap_attrition": (
+            "cohort_definition_overlap_attrition.csv"
+        ),
         "sensitivity_specification_grid": "sensitivity_specification_grid.csv",
+        "sensitivity_specification_matrix": "sensitivity_specification_matrix.csv",
         "robustness_summary": "robustness_summary.csv",
         "outcome_label_executability": "outcome_label_executability.csv",
         "missingness_strategy_notes": "missingness_strategy_notes.txt",
@@ -1794,6 +1805,7 @@ def _membership_audit(
             "universe_n": universe_n,
             "primary_membership_n": primary_n,
             "variant_membership_n": primary_n,
+            "overlap_n": primary_n,
             "inflow_n": 0,
             "outflow_n": 0,
             "membership_delta_n": 0,
@@ -1813,6 +1825,7 @@ def _membership_audit(
                     "universe_n": universe_n,
                     "primary_membership_n": primary_n,
                     "variant_membership_n": primary_n,
+                    "overlap_n": primary_n,
                     "inflow_n": 0,
                     "outflow_n": 0,
                     "membership_delta_n": 0,
@@ -1830,6 +1843,7 @@ def _membership_audit(
                     "universe_n": None,
                     "primary_membership_n": primary_n,
                     "variant_membership_n": None,
+                    "overlap_n": None,
                     "inflow_n": None,
                     "outflow_n": None,
                     "membership_delta_n": None,
@@ -1857,9 +1871,11 @@ def _membership_audit(
                 variant_ids = set(variant[id_col].dropna())
                 inflow_n = len(variant_ids - primary_ids)
                 outflow_n = len(primary_ids - variant_ids)
+                overlap_n = primary_n - outflow_n
             else:
                 inflow_n = None
                 outflow_n = None
+                overlap_n = None
             rows.append(
                 {
                     "spec_id": spec.spec_id,
@@ -1868,6 +1884,7 @@ def _membership_audit(
                     "universe_n": universe_n,
                     "primary_membership_n": primary_n,
                     "variant_membership_n": variant_n,
+                    "overlap_n": overlap_n,
                     "inflow_n": inflow_n,
                     "outflow_n": outflow_n,
                     "membership_delta_n": variant_n - primary_n,
@@ -1884,6 +1901,7 @@ def _membership_audit(
                     "universe_n": universe_n,
                     "primary_membership_n": primary_n,
                     "variant_membership_n": None,
+                    "overlap_n": None,
                     "inflow_n": None,
                     "outflow_n": None,
                     "membership_delta_n": None,

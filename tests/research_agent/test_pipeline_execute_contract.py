@@ -71,6 +71,30 @@ def test_critic_messages_exclude_info_but_keep_warnings_and_errors():
     assert messages == ["Review this warning.", "Repair this error."]
 
 
+@pytest.mark.parametrize(
+    ("record", "expected"),
+    [
+        ({"status": "ok", "step_summary": {}}, False),
+        ({"status": "ok", "replan_requested": True}, True),
+        (
+            {
+                "status": "ok",
+                "step_summary": {"plan_revision_requested": True},
+            },
+            True,
+        ),
+        ({"status": "ok", "step_summary": {"replan_requested": "true"}}, False),
+        ({"status": "contract_failed", "replan_requested": True}, False),
+    ],
+)
+def test_success_replanning_requires_an_exact_agent_request(record, expected):
+    from easyicu.research_agent.pipeline_execute import (
+        _successful_step_requests_replan,
+    )
+
+    assert _successful_step_requests_replan(record) is expected
+
+
 def test_required_model_contract_error_fail_closes_outer_step_and_run():
     from easyicu.research_agent.contracts import ValidationFinding
     from easyicu.research_agent.pipeline_execute import (

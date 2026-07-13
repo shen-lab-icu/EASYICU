@@ -483,6 +483,45 @@ def test_write_locked_robustness_specs_reuses_existing_lock_on_resume(
     assert locked.read_text(encoding="utf-8") == before
 
 
+def test_robustness_lock_resume_rehydrates_only_legacy_timestamp_drift(
+    ra,
+    tmp_path: Path,
+) -> None:
+    from types import SimpleNamespace
+
+    from easyicu.research_agent.robustness_panel import (
+        default_robustness_specs,
+        write_locked_robustness_specs,
+    )
+
+    plan = SimpleNamespace(robustness_specs=default_robustness_specs())
+    evidence = ra.EvidenceStore(tmp_path)
+    locked = write_locked_robustness_specs(
+        run_dir=tmp_path,
+        plan=plan,
+        evidence=evidence,
+        prompt_pack_version="test",
+        llm_signature="mock",
+    )
+    anchored = locked.read_bytes()
+    payload = json.loads(locked.read_text(encoding="utf-8"))
+    payload["locked_at"] = "2099-01-01T00:00:00+00:00"
+    locked.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    write_locked_robustness_specs(
+        run_dir=tmp_path,
+        plan=plan,
+        evidence=evidence,
+        prompt_pack_version="test",
+        llm_signature="mock",
+    )
+
+    assert locked.read_bytes() == anchored
+    repair = evidence.get("robustness_lock_resume_rehydration")
+    assert repair is not None
+    assert repair.metadata["llm_signature"] == "mock"
+
+
 def test_plan_payload_normalizer_drops_extra_robustness_spec_keys(ra) -> None:
     from easyicu.research_agent.agents import _normalise_plan_payload
     from easyicu.research_agent.robustness_panel import default_robustness_specs

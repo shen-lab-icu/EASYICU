@@ -830,6 +830,68 @@ def _step_id_referenced_in_finding(finding: ValidationFinding) -> Optional[str]:
     return None
 
 
+_LEGACY_UNSCOPED_STEP_VALIDATOR_METHODS: Dict[str, frozenset[str]] = {
+    # These validators are emitted exclusively by the exact, non-figure
+    # cohort-definition-sensitivity result contract.  Older checkpoints did
+    # not include ``detail.step_id``; retain this closed migration registry so
+    # a repaired step can supersede those historical findings without turning
+    # unrelated run-level robustness warnings into step-owned state.
+    "robustness_spec_lock": frozenset({"cohort_definition_sensitivity"}),
+    "robustness_executed_result": frozenset({"cohort_definition_sensitivity"}),
+    "robustness_cohort_membership": frozenset(
+        {"cohort_definition_sensitivity"}
+    ),
+}
+
+
+def _normalised_method_head(method: Any) -> str:
+    """Return the exact scientific owner from ``<head>_with_<rider>``."""
+
+    normalized = re.sub(
+        r"[^a-z0-9]+", "_", str(method or "").strip().lower()
+    ).strip("_")
+    return normalized.split("_with_", 1)[0]
+
+
+def _legacy_unscoped_finding_owner_step_id(
+    finding: ValidationFinding,
+    *,
+    plan: Optional[AnalysisPlan],
+) -> Optional[str]:
+    """Resolve a legacy unscoped finding only when ownership is unambiguous.
+
+    Modern step validators write ``detail.step_id`` directly.  This helper is
+    deliberately a closed migration path for old persisted checkpoints: the
+    validator must have one registered exact method owner and the current plan
+    must contain exactly one matching non-figure result step.  Zero or multiple
+    candidates remain active (fail closed).
+    """
+
+    if plan is None or _step_id_referenced_in_finding(finding):
+        return None
+    owner_methods = _LEGACY_UNSCOPED_STEP_VALIDATOR_METHODS.get(
+        str(finding.validator or "")
+    )
+    if not owner_methods:
+        return None
+    candidates = {
+        str(step.step_id)
+        for step in (plan.steps or [])
+        if str(step.step_id or "")
+        and _normalised_method_head(step.method) in owner_methods
+        # Mirror the source validator's ownership predicate: it never runs on
+        # a step that declares any figure product, including mixed
+        # table+figure contracts.
+        and not any(
+            _output_declares_figure(str(output or ""))
+            for output in (step.expected_outputs or [])
+        )
+    }
+    if len(candidates) != 1:
+        return None
+    return next(iter(candidates))
+
+
 def _successful_step_ids(per_step_records: Sequence[Dict[str, Any]]) -> set:
     """Step ids whose FINAL recorded status was ``"ok"``.
 
@@ -1495,6 +1557,7 @@ def _partition_findings_by_supersession(
     findings: Sequence[ValidationFinding],
     *,
     success_step_ids: set,
+    plan: Optional[AnalysisPlan] = None,
     known_step_ids: Optional[set] = None,
     gate_state: Optional[Dict[str, bool]] = None,
     latest_publication_audit: Optional[Dict[str, Any]] = None,
@@ -1507,7 +1570,7 @@ def _partition_findings_by_supersession(
        recognised message pattern) and that step_id is in
        ``success_step_ids`` — the step ultimately succeeded so its
        earlier failure findings are stale.
-    2. It references a step_id that is no longer in the plan-of-
+    2. It explicitly references a step_id that is no longer in the plan-of-
        record (i.e. not in ``known_step_ids``). This is the
        "replanned away" axis: the replanner dropped the failing
        step and the substitute step ran instead. The original
@@ -1524,6 +1587,11 @@ def _partition_findings_by_supersession(
        errors. This keeps repaired figure exports from being blocked
        by stale resume-era QA findings while preserving the historical
        finding in the audit trail.
+    5. A legacy persisted finding lacks a step id, but its validator belongs to
+       the closed migration registry and the current plan has exactly one
+       matching non-figure owner step and no unresolved explicitly scoped error
+       from the same validator.  It is then treated exactly like an explicitly
+       scoped finding.  Ambiguous or currently failing ownership remains active.
 
     The classification is purely deterministic — same inputs always
     yield the same partition. The superseded set is returned
@@ -1533,13 +1601,38 @@ def _partition_findings_by_supersession(
     gate_state = gate_state or {}
     active: List[ValidationFinding] = []
     superseded: List[ValidationFinding] = []
+    # Precompute this across the whole batch so legacy classification is
+    # deterministic regardless of finding order.  A scoped error on a known,
+    # not-yet-successful step is current authority for that validator family;
+    # while it exists, do not retire an unscoped historical sibling merely
+    # because another owner step succeeded.
+    unresolved_scoped_error_validators = {
+        str(f.validator or "")
+        for f in findings
+        if f.severity == "error"
+        and (sid := _step_id_referenced_in_finding(f)) is not None
+        and sid not in success_step_ids
+        and (known_step_ids is None or sid in known_step_ids)
+    }
     for f in findings:
-        sid = _step_id_referenced_in_finding(f)
+        explicit_sid = _step_id_referenced_in_finding(f)
+        legacy_sid = None
+        if (
+            not explicit_sid
+            and str(f.validator or "")
+            not in unresolved_scoped_error_validators
+        ):
+            legacy_sid = _legacy_unscoped_finding_owner_step_id(f, plan=plan)
+        sid = explicit_sid or legacy_sid
         if sid:
             if sid in success_step_ids:
                 superseded.append(f)
                 continue
-            if known_step_ids is not None and sid not in known_step_ids:
+            if (
+                explicit_sid
+                and known_step_ids is not None
+                and sid not in known_step_ids
+            ):
                 # Step was replanned away — its failure is no longer
                 # part of the plan-of-record.
                 superseded.append(f)
@@ -1704,6 +1797,7 @@ def _compute_readiness_gates(
     active_findings, superseded_findings = _partition_findings_by_supersession(
         findings,
         success_step_ids=success_step_ids,
+        plan=plan,
         known_step_ids=known_step_ids,
         gate_state=current_gate_state,
         latest_publication_audit=latest_publication_audit,

@@ -223,6 +223,62 @@ def _mock_plan_json(ctx: ResearchContext) -> str:
         rationale_note="Use the predictor's ICU-aware aggregation default and the first_24h anchor when applicable.",
         analysis_type_key=analysis_type.key,
     )
+    # The deterministic mock coder implements the generic association branch
+    # as logistic regression.  Keep the mock plan's method contract equally
+    # specific so an effect-producing step is owned by an authorised method
+    # instead of the old ambiguous ``logistic_or_KM`` placeholder.
+    steps = [
+        step.model_copy(update={"method": "logistic_regression"})
+        if step.step_id == "04_primary_association"
+        else step
+        for step in steps
+    ]
+    # Mock plans make the data dependency explicit before the shared plan
+    # shaper runs.  This lets render-only children consume the exact typed
+    # table registered by their science parent through resolved_inputs.
+    separated_steps: List[AnalysisStep] = []
+    for step in steps:
+        outputs = list(step.expected_outputs or [])
+        figure_outputs = [
+            output for output in outputs if str(output).lower().startswith("figure:")
+        ]
+        non_figure_outputs = [
+            output for output in outputs if output not in figure_outputs
+        ]
+        split_mock_step = bool(figure_outputs and non_figure_outputs) and (
+            step.step_id == "04_primary_association"
+            or "missingness" in step.step_id
+        )
+        if not split_mock_step:
+            separated_steps.append(step)
+            continue
+        separated_steps.append(
+            step.model_copy(update={"expected_outputs": non_figure_outputs})
+        )
+        typed_table_inputs = [
+            output
+            for output in non_figure_outputs
+            if str(output).lower().startswith(
+                ("table:", "artifact:", "dataset:", "model:")
+            )
+        ]
+        separated_steps.append(
+            AnalysisStep(
+                step_id=f"{step.step_id}_figure",
+                intent=(
+                    f"Render {', '.join(figure_outputs)} from the registered "
+                    f"typed outputs of '{step.step_id}' without recomputing science."
+                ),
+                inputs=typed_table_inputs,
+                expected_outputs=figure_outputs,
+                # The shared declared-product gate authorises an effect-named
+                # rendering product through the parent effect method.  The
+                # generated script itself remains render-only.
+                method=step.method,
+                icu_rule_refs=list(step.icu_rule_refs or []) + ["visualization_rule"],
+            )
+        )
+    steps = separated_steps
 
     if ctx.cross_database_validation:
         steps.append(
@@ -369,10 +425,30 @@ def _mock_code_for_step(ctx: ResearchContext, prompt: str) -> str:
     descriptive boilerplate.
     """
     step_id = _extract_step_id(prompt) or "step"
+    expected_outputs = _extract_expected_outputs(prompt)
+    protocol_output = next(
+        (
+            output
+            for output in expected_outputs
+            if output.lower().startswith("log:")
+        ),
+        "log:protocol_notes",
+    )
     outcome = ctx.target_outcome or _pick_outcome(ctx) or "death"
     score_var = _pick_score(ctx)
 
-    if "primary_association" in step_id:
+    # Split figure steps inherit the parent id plus ``_figure``.  Route them
+    # before any science-step matcher so a primary-association figure cannot
+    # accidentally refit the model or reread the cohort.
+    if step_id.endswith("_figure"):
+        return _mock_code_declared_figure(step_id=step_id, prompt=prompt)
+    if "publication_figure_generation" in step_id:
+        return _mock_code_publication_figure(
+            ctx=ctx,
+            step_id=step_id,
+            outcome=outcome,
+        )
+    if re.search(r"(?:^|_)primary_association$", step_id):
         primary_pred = _pick_primary_predictor(ctx, outcome=outcome) or score_var or "age"
         return _mock_code_primary_association(
             ctx=ctx,
@@ -392,13 +468,6 @@ def _mock_code_for_step(ctx: ResearchContext, prompt: str) -> str:
             step_id=step_id,
             outcome=outcome,
         )
-    if "publication_figure_generation" in step_id:
-        return _mock_code_publication_figure(
-            ctx=ctx,
-            step_id=step_id,
-            outcome=outcome,
-        )
-
     # Inline script as a triple-quoted heredoc — note: keep this tight; the
     # runner persists it byte-for-byte and hashes it as evidence.
     code = textwrap.dedent(
@@ -413,9 +482,6 @@ def _mock_code_for_step(ctx: ResearchContext, prompt: str) -> str:
         from pathlib import Path
         import pandas as pd
         import numpy as np
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
 
         cohort_path = os.environ["COHORT_PARQUET"]
         out_dir = Path(os.environ["STEP_OUT_DIR"])
@@ -442,7 +508,7 @@ def _mock_code_for_step(ctx: ResearchContext, prompt: str) -> str:
                 do_outcome_incidence = True
                 do_missingness = True
 
-        summary = {{}}
+        summary = {{"output_files": {{}}}}
 
         if do_protocol_only:
             protocol_lines = [
@@ -453,6 +519,7 @@ def _mock_code_for_step(ctx: ResearchContext, prompt: str) -> str:
             ]
             (out_dir / "protocol_notes.md").write_text("\\n".join(protocol_lines), encoding="utf-8")
             summary["protocol_notes_path"] = "protocol_notes.md"
+            summary["output_files"][{protocol_output!r}] = "protocol_notes.md"
 
         # ---- Table 1: cohort summary, ICU-aware ----
         if do_table_one:
@@ -492,6 +559,7 @@ def _mock_code_for_step(ctx: ResearchContext, prompt: str) -> str:
             table_one = pd.DataFrame(rows)
             table_one.to_csv(out_dir / "table_one.csv", index=False)
             summary["table_one_path"] = "table_one.csv"
+            summary["output_files"]["table:table_one"] = "table_one.csv"
 
         # ---- Outcome incidence ----
         if do_outcome_incidence and outcome_col is not None:
@@ -505,6 +573,7 @@ def _mock_code_for_step(ctx: ResearchContext, prompt: str) -> str:
                 "outcome_rate": inc,
             }}]).to_csv(out_dir / "outcome_incidence.csv", index=False)
             summary["outcome_incidence_path"] = "outcome_incidence.csv"
+            summary["output_files"]["table:outcome_incidence"] = "outcome_incidence.csv"
 
         # ---- Missingness audit ----
         if do_missingness:
@@ -518,20 +587,7 @@ def _mock_code_for_step(ctx: ResearchContext, prompt: str) -> str:
             }})
             miss.to_csv(out_dir / "missingness.csv", index=False)
             summary["missingness_path"] = "missingness.csv"
-            try:
-                miss_plot = miss.sort_values("frac_missing", ascending=False).head(12)
-                fig, ax = plt.subplots(figsize=(5.2, max(2.8, 0.35 * len(miss_plot))))
-                ax.barh(miss_plot["variable"], miss_plot["frac_missing"], color="#7aa6d1")
-                ax.invert_yaxis()
-                ax.set_xlabel("Fraction missing")
-                ax.set_ylabel("Variable")
-                ax.set_title("Missingness audit")
-                fig.tight_layout()
-                fig.savefig(out_dir / "missingness_heatmap.png", dpi=160)
-                plt.close(fig)
-                summary["missingness_figure_path"] = "missingness_heatmap.png"
-            except Exception:
-                pass
+            summary["output_files"]["table:missingness"] = "missingness.csv"
 
         # ---- Persist machine-readable summary ----
         with open(out_dir / "step_summary.json", "w", encoding="utf-8") as f:
@@ -540,6 +596,203 @@ def _mock_code_for_step(ctx: ResearchContext, prompt: str) -> str:
         '''
     ).strip() + "\n"
     return code
+
+
+def _mock_code_declared_figure(*, step_id: str, prompt: str) -> str:
+    """Render a split figure step from registered upstream products only."""
+
+    products = [
+        output.partition(":")[2].lower()
+        for output in _extract_expected_outputs(prompt)
+        if output.lower().startswith("figure:")
+    ]
+    products = list(dict.fromkeys(product for product in products if product))
+    if not products:
+        products = ["publication_figure"]
+    template = r'''
+    # AUTO-GENERATED by easyicu.research_agent.MockLLMClient
+    # rendering-only figure step; never reads COHORT_PARQUET or refits a model
+    from __future__ import annotations
+    import json
+    import os
+    import shutil
+    from pathlib import Path
+
+    import numpy as np
+    import pandas as pd
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    step_id = __STEP_ID__
+    figure_products = __FIGURE_PRODUCTS__
+    out_dir = Path(os.environ["STEP_OUT_DIR"])
+    out_dir.mkdir(parents=True, exist_ok=True)
+    run_dir = Path(os.environ["EASYICU_RUN_DIR"])
+
+    manifest_path = Path(os.environ["EASYICU_RESOLVED_INPUTS_JSON"])
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    source_candidates = []
+    for binding in manifest.get("inputs", {}).values():
+        relative_path = binding.get("relative_path")
+        if relative_path:
+            source_candidates.append(
+                (run_dir / relative_path, binding.get("evidence_id"))
+            )
+
+    csv_sources = list(dict.fromkeys(
+        (path, evidence_id)
+        for path, evidence_id in source_candidates
+        if path.is_file() and path.suffix.lower() == ".csv"
+    ))
+    if len(csv_sources) != 1:
+        raise RuntimeError(
+            f"Expected exactly one registered upstream CSV for render-only step "
+            f"{step_id}; found {len(csv_sources)}"
+        )
+    source_path, source_evidence_id = csv_sources[0]
+    if not source_evidence_id:
+        raise RuntimeError(
+            f"Registered upstream CSV has no evidence id for render-only step {step_id}"
+        )
+    source = pd.read_csv(source_path)
+    if source.empty:
+        raise RuntimeError(f"Registered upstream table is empty: {source_path}")
+
+    output_files = {}
+    figure_files = []
+    contract_files = []
+    source_data_files = []
+    for product in figure_products:
+        source_copy = out_dir / f"{product}.source.csv"
+        shutil.copy2(source_path, source_copy)
+        source_data_files.append(source_copy.name)
+
+        fig, axes = plt.subplots(1, 2, figsize=(9.2, 4.0))
+        ax, audit_ax = axes
+        if {"variable", "odds_ratio"} <= set(source.columns):
+            plot = source[source["variable"].astype(str) != "intercept"].copy()
+            y = np.arange(len(plot))
+            if {"or_lower", "or_upper"} <= set(plot.columns):
+                estimate = pd.to_numeric(plot["odds_ratio"], errors="coerce")
+                lower = pd.to_numeric(plot["or_lower"], errors="coerce")
+                upper = pd.to_numeric(plot["or_upper"], errors="coerce")
+                xerr = [np.maximum(0, estimate - lower), np.maximum(0, upper - estimate)]
+            else:
+                estimate = pd.to_numeric(plot["odds_ratio"], errors="coerce")
+                xerr = None
+            ax.errorbar(estimate, y, xerr=xerr, fmt="o", color="#2a6f97")
+            ax.axvline(1.0, linestyle="--", color="grey", linewidth=0.8)
+            ax.set_yticks(y, plot["variable"].astype(str))
+            ax.set_xlabel("Odds ratio")
+            ax.set_title("Adjusted association")
+            audit_values = pd.to_numeric(
+                plot.get("p_value", pd.Series(np.nan, index=plot.index)),
+                errors="coerce",
+            )
+            audit_ax.barh(plot["variable"].astype(str), audit_values, color="#c97c5d")
+            audit_ax.axvline(0.05, linestyle="--", color="grey", linewidth=0.8)
+            audit_ax.set_xlabel("P value")
+            audit_ax.set_title("Model-table audit context")
+        elif {"variable", "frac_missing"} <= set(source.columns):
+            plot = source.sort_values("frac_missing", ascending=True).tail(12)
+            ax.barh(
+                plot["variable"].astype(str),
+                pd.to_numeric(plot["frac_missing"], errors="coerce"),
+                color="#7aa6d1",
+            )
+            ax.set_xlabel("Fraction missing")
+            ax.set_title("Missingness audit")
+            count_values = pd.to_numeric(
+                plot.get("n_missing", pd.Series(0, index=plot.index)),
+                errors="coerce",
+            )
+            audit_ax.barh(plot["variable"].astype(str), count_values, color="#c97c5d")
+            audit_ax.set_xlabel("Missing rows")
+            audit_ax.set_title("Missing-count context")
+        else:
+            numeric = source.select_dtypes(include=["number"])
+            if numeric.empty:
+                raise RuntimeError(
+                    f"Registered upstream table has no plottable numeric column: {source_path}"
+                )
+            values = pd.to_numeric(numeric.iloc[:20, 0], errors="coerce")
+            ax.plot(np.arange(len(values)), values, marker="o", color="#2a6f97")
+            ax.set_xlabel("Row")
+            ax.set_ylabel(str(numeric.columns[0]))
+            ax.set_title(product.replace("_", " ").title())
+            audit_column = numeric.columns[min(1, len(numeric.columns) - 1)]
+            audit_values = pd.to_numeric(
+                numeric[audit_column].iloc[:20], errors="coerce"
+            )
+            audit_ax.plot(
+                np.arange(len(audit_values)), audit_values, marker="o", color="#c97c5d"
+            )
+            audit_ax.set_xlabel("Row")
+            audit_ax.set_ylabel(str(audit_column))
+            audit_ax.set_title("Registered-table context")
+        fig.tight_layout()
+
+        png_path = out_dir / f"{product}.png"
+        svg_path = out_dir / f"{product}.svg"
+        fig.savefig(png_path, dpi=200)
+        fig.savefig(svg_path)
+        plt.close(fig)
+
+        contract = {
+            "figure_id": product,
+            "title": product.replace("_", " ").title(),
+            "core_claim": "Rendering of the registered upstream table without scientific recomputation.",
+            "panels": [
+                {
+                    "panel_id": "A",
+                    "title": product.replace("_", " ").title(),
+                    "role": "descriptive_result",
+                    "claim": "Values are rendered directly from the registered upstream table.",
+                    "evidence_ids": [source_evidence_id],
+                    "review_risk": "Interpretation remains owned by the upstream analysis step.",
+                },
+                {
+                    "panel_id": "B",
+                    "title": "Registered-table audit context",
+                    "role": "audit",
+                    "claim": "A second view exposes supporting values from the same registered table.",
+                    "evidence_ids": [source_evidence_id],
+                    "review_risk": "This panel adds no new estimand or model fit.",
+                }
+            ],
+            "export_formats": ["png", "svg"],
+            "source_data": [source_copy.name],
+            "statistics_note": "No model fitting or cohort transformation occurs in this step.",
+            "image_integrity_note": "The figure is drawn directly from copied upstream source data.",
+        }
+        contract_path = out_dir / f"{product}.figure_contract.json"
+        contract_path.write_text(
+            json.dumps(contract, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        output_files[f"figure:{product}"] = png_path.name
+        figure_files.extend([png_path.name, svg_path.name])
+        contract_files.append(contract_path.name)
+
+    summary = {
+        "method": "registered_product_rendering",
+        "render_only": True,
+        "upstream_source": str(source_path.relative_to(run_dir)),
+        "output_files": output_files,
+        "figure_files": figure_files,
+        "figure_contract_files": contract_files,
+        "source_data_files": source_data_files,
+    }
+    (out_dir / "step_summary.json").write_text(
+        json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    print(json.dumps(summary, indent=2, ensure_ascii=False))
+    '''
+    return (
+        textwrap.dedent(template)
+        .replace("__STEP_ID__", json.dumps(step_id))
+        .replace("__FIGURE_PRODUCTS__", json.dumps(products))
+    )
 
 
 def _mock_code_primary_association(
@@ -574,9 +827,6 @@ def _mock_code_primary_association(
 
         import numpy as np
         import pandas as pd
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
 
         cohort_path = os.environ["COHORT_PARQUET"]
         out_dir = Path(os.environ["STEP_OUT_DIR"])
@@ -666,6 +916,9 @@ def _mock_code_primary_association(
                         "primary_or": None,
                         "skipped": True,
                         "reason": str(exc),
+                        "output_files": {{
+                            "table:primary_association": "primary_association.csv"
+                        }},
                     }}, f, indent=2, ensure_ascii=False)
                 print("(primary_association skipped):", exc)
                 raise SystemExit(0)
@@ -698,157 +951,6 @@ def _mock_code_primary_association(
         primary_or_lo = float(np.exp(ci_lo[names.index(predictor_col)]))
         primary_or_hi = float(np.exp(ci_hi[names.index(predictor_col)]))
 
-        # Two-panel manuscript figure (panel A: adjusted OR forest; panel B:
-        # absolute outcome risk by exposure group) plus a self-declared
-        # figure contract. The 2026-07 figure-contract gate requires
-        # result-bearing figures to expose >= 2 data-backed panels, so the
-        # mock models a compliant coder rather than relying on the runner's
-        # single-panel fallback contract.
-        try:
-            plot_rows = coef_df[coef_df["variable"] != "intercept"].reset_index(drop=True)
-
-            # ---- Panel B source data: absolute outcome risk by exposure ----
-            risk_df = sub[[predictor_col, outcome_col]].copy()
-            uniq_vals = pd.unique(risk_df[predictor_col].dropna())
-            if len(uniq_vals) <= 4:
-                risk_df["exposure_group"] = risk_df[predictor_col].astype(str)
-            else:
-                try:
-                    risk_df["exposure_group"] = pd.qcut(
-                        risk_df[predictor_col], q=4, duplicates="drop"
-                    ).astype(str)
-                except ValueError:
-                    median_v = float(risk_df[predictor_col].median())
-                    risk_df["exposure_group"] = np.where(
-                        risk_df[predictor_col] <= median_v,
-                        "at or below median",
-                        "above median",
-                    )
-            z95 = 1.959963984540054
-            risk_rows = []
-            for group_label, values in risk_df.groupby("exposure_group", observed=True)[outcome_col]:
-                events = int(values.astype(int).sum())
-                n_group = int(values.shape[0])
-                rate = events / n_group if n_group else float("nan")
-                if n_group:
-                    centre = (rate + z95 * z95 / (2 * n_group)) / (1 + z95 * z95 / n_group)
-                    half = (
-                        z95
-                        * np.sqrt(rate * (1 - rate) / n_group + z95 * z95 / (4 * n_group * n_group))
-                        / (1 + z95 * z95 / n_group)
-                    )
-                    lo_b, hi_b = max(0.0, centre - half), min(1.0, centre + half)
-                else:
-                    lo_b, hi_b = float("nan"), float("nan")
-                risk_rows.append({{
-                    "exposure_group": str(group_label),
-                    "n": n_group,
-                    "events": events,
-                    "event_rate": rate,
-                    "rate_ci_lower": lo_b,
-                    "rate_ci_upper": hi_b,
-                }})
-            risk_summary = pd.DataFrame(risk_rows)
-            risk_summary.to_csv(out_dir / "absolute_risk_by_exposure.csv", index=False)
-
-            fig, (ax_a, ax_b) = plt.subplots(
-                1, 2, figsize=(10, max(3.2, 0.6 + 0.5 * len(plot_rows)))
-            )
-            ys = np.arange(len(plot_rows))
-            ax_a.errorbar(
-                plot_rows["odds_ratio"], ys,
-                xerr=[plot_rows["odds_ratio"] - plot_rows["or_lower"],
-                      plot_rows["or_upper"] - plot_rows["odds_ratio"]],
-                fmt="o", color="#1f77b4",
-            )
-            ax_a.axvline(1.0, linestyle="--", color="grey", linewidth=0.8)
-            ax_a.set_yticks(ys)
-            ax_a.set_yticklabels(plot_rows["variable"])
-            ax_a.set_xlabel(f"Odds ratio for {{outcome_col}}")
-            ax_a.set_title(f"A. Adjusted association ({{backend}})")
-
-            xs_b = np.arange(len(risk_summary))
-            rates_b = risk_summary["event_rate"].to_numpy(dtype=float)
-            err_lo = rates_b - risk_summary["rate_ci_lower"].to_numpy(dtype=float)
-            err_hi = risk_summary["rate_ci_upper"].to_numpy(dtype=float) - rates_b
-            ax_b.errorbar(xs_b, rates_b, yerr=[err_lo, err_hi], fmt="o", color="#d62728")
-            ax_b.set_xticks(xs_b)
-            ax_b.set_xticklabels(risk_summary["exposure_group"], rotation=20, ha="right")
-            ax_b.set_ylabel(f"Observed {{outcome_col}} rate")
-            ax_b.set_title("B. Absolute outcome risk by exposure")
-            fig.tight_layout()
-            fig.savefig(out_dir / "primary_association_curve.png", dpi=160)
-            plt.close(fig)
-            _figure_saved = True
-
-            predictor_label = str(predictor_col).replace("_", " ")
-            outcome_label = str(outcome_col).replace("_", " ")
-            contract = {{
-                "figure_id": "primary_association_curve",
-                "title": "Adjusted association with absolute outcome risk context",
-                "core_claim": (
-                    f"The adjusted odds ratio for {{predictor_label}} was "
-                    f"{{primary_or:.2f}} (95% CI {{primary_or_lo:.2f}} to "
-                    f"{{primary_or_hi:.2f}}), shown next to the absolute "
-                    f"{{outcome_label}} risk by exposure group."
-                ),
-                "panels": [
-                    {{
-                        "panel_id": "A",
-                        "title": "Adjusted odds ratios with 95% confidence intervals",
-                        "role": "primary_estimand",
-                        "claim": (
-                            "This forest-style panel reports the adjusted odds "
-                            f"ratio for {{predictor_label}} alongside the "
-                            "covariate estimates from the same fitted model."
-                        ),
-                        "evidence_ids": [],
-                        "review_risk": (
-                            "Confirm the adjusted estimates against the "
-                            "coefficient table before citing them in text."
-                        ),
-                    }},
-                    {{
-                        "panel_id": "B",
-                        "title": "Absolute outcome risk by exposure group",
-                        "role": "descriptive_result",
-                        "claim": (
-                            f"This panel shows the observed {{outcome_label}} "
-                            "event rate with 95% score intervals across "
-                            "exposure groups, giving absolute-risk context "
-                            "for the adjusted estimate."
-                        ),
-                        "evidence_ids": [],
-                        "review_risk": (
-                            "Group boundaries come from observed quartiles; "
-                            "review them before clinical interpretation."
-                        ),
-                    }},
-                ],
-                "export_formats": ["png"],
-                "source_data": [
-                    "primary_association.csv",
-                    "absolute_risk_by_exposure.csv",
-                ],
-                "statistics_note": (
-                    "Logistic regression with normal-approximation intervals; "
-                    "absolute risks use score intervals on observed rates."
-                ),
-                "image_integrity_note": (
-                    "Both panels are drawn directly from the tabulated source "
-                    "data in this step; no values were invented or altered."
-                ),
-            }}
-            with open(
-                out_dir / "primary_association_curve.figure_contract.json",
-                "w",
-                encoding="utf-8",
-            ) as f:
-                json.dump(contract, f, indent=2, ensure_ascii=False)
-        except Exception:
-            # Plot is decorative; never fail the step over it.
-            _figure_saved = False
-
         # ---- Outcome incidence (cheap and the validator cross-checks it) ----
         outcome_rate = float(df[outcome_col].dropna().astype(int).mean()) if outcome_col in df.columns else None
 
@@ -862,18 +964,10 @@ def _mock_code_primary_association(
             "primary_or": primary_or,
             "primary_or_ci": [primary_or_lo, primary_or_hi],
             "primary_association_path": "primary_association.csv",
+            "output_files": {{
+                "table:primary_association": "primary_association.csv"
+            }},
         }}
-        if _figure_saved:
-            summary["figure_files"] = ["primary_association_curve.png"]
-            summary["figure_path"] = "primary_association_curve.png"
-            summary["figure_contract_files"] = [
-                "primary_association_curve.figure_contract.json"
-            ]
-            summary["source_data_files"] = [
-                "primary_association.csv",
-                "absolute_risk_by_exposure.csv",
-            ]
-            summary["absolute_risk_path"] = "absolute_risk_by_exposure.csv"
         with open(out_dir / "step_summary.json", "w", encoding="utf-8") as f:
             json.dump(summary, f, indent=2, ensure_ascii=False, default=str)
         print(json.dumps(summary, indent=2, ensure_ascii=False, default=str))
@@ -1528,6 +1622,15 @@ def _extract_step_id(prompt: str) -> Optional[str]:
         return m.group(1)
     m = re.search(r"\b(step\s+)?(\d{2,3}_[\w-]+)\b", prompt)
     return m.group(2) if m else None
+
+
+def _extract_expected_outputs(prompt: str) -> List[str]:
+    """Read the coder prompt's exact typed output declarations."""
+
+    match = re.search(r"Expected outputs:\s*\[([^\n]*)\]", prompt)
+    if match is None:
+        return []
+    return re.findall(r"['\"]([^'\"]+:[^'\"]+)['\"]", match.group(1))
 
 
 def _mock_interpretation(ctx: ResearchContext, prompt: str) -> str:

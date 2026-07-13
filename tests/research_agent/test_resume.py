@@ -17,6 +17,7 @@ These tests pin two contracts:
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -31,6 +32,8 @@ from easyicu.research_agent.pipeline import (
     _load_compatible_resume_plan,
     _load_resume_state,
 )
+from easyicu.research_agent.evidence import EvidenceStore
+from easyicu.research_agent.runtime_artifacts import verified_run_evidence_path
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
 
@@ -198,11 +201,30 @@ def test_resume_prefers_latest_compatible_plan_revision(tmp_path: Path):
             ),
         ],
     )
-    (run_dir / "analysis_plan.json").write_text(
+    original_path = run_dir / "analysis_plan.json"
+    original_path.write_text(
         original.model_dump_json(indent=2), encoding="utf-8"
     )
-    (run_dir / "analysis_plan_revision_2.json").write_text(
+    revision_path = run_dir / "analysis_plan_revision_2.json"
+    revision_path.write_text(
         revision.model_dump_json(indent=2), encoding="utf-8"
+    )
+    evidence = EvidenceStore(run_dir)
+    evidence.register_file(
+        kind="log",
+        description="Original plan.",
+        source_path=original_path,
+        evidence_id="analysis_plan",
+        producer="planner",
+        generation_mode="llm",
+    )
+    evidence.register_file(
+        kind="log",
+        description="Revised plan.",
+        source_path=revision_path,
+        evidence_id="analysis_plan_revision_2",
+        producer="replanner",
+        generation_mode="llm",
     )
     resume_state = {
         "plan_path": "analysis_plan.json",
@@ -218,7 +240,10 @@ def test_resume_prefers_latest_compatible_plan_revision(tmp_path: Path):
         resume_state=resume_state,
     )
 
-    assert path == run_dir / "analysis_plan_revision_2.json"
+    assert path == verified_run_evidence_path(
+        run_dir,
+        evidence.get("analysis_plan_revision_2"),
+    )
     assert [step.step_id for step in plan.steps][-2:] == [
         "05_sensitivity",
         "05_sensitivity_figure",
@@ -984,6 +1009,361 @@ def test_quarantined_repair_materiality_rejects_inert_edits(after: str) -> None:
     )
 
 
+def test_resume_retires_unchanged_draft_after_deterministic_policy_supersession(
+    ra, tmp_path: Path, monkeypatch
+) -> None:
+    """A validator-policy fix may retire its own stale error without code churn."""
+
+    from easyicu.research_agent.audits.validators import LLMConceptAuditor
+    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.runner import CodeRunner
+
+    audit_state = {"old_policy": True}
+
+    def policy_transition_audit(self, *, context, script_text, step):
+        del self, context, script_text
+        if not audit_state["old_policy"]:
+            return []
+        finding = _stored_horizon_error(ra)
+        return [
+            finding.model_copy(
+                update={"detail": {**(finding.detail or {}), "step_id": step.step_id}}
+            )
+        ]
+
+    monkeypatch.setattr(LLMConceptAuditor, "audit", policy_transition_audit)
+
+    draft_code = """
+import json
+import os
+import pandas as pd
+
+OUTCOME_OVERRIDE = {
+    "concept_id": "death",
+    "time_window": {
+        "anchor": "icu_admit",
+        "start_offset_hours": 0.0,
+        "end_offset_hours": 720.0,
+    },
+    "aggregation": "first",
+    "op": "==",
+    "value": 1,
+}
+df = pd.read_parquet(os.environ["COHORT_PARQUET"])
+y = df["death"]
+out = os.environ["STEP_OUT_DIR"]
+summary = {"status": "ok", "n": int(len(y))}
+pd.DataFrame([summary]).to_csv(
+    os.path.join(out, "cohort_summary.csv"), index=False
+)
+with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
+    json.dump(summary, f)
+"""
+
+    class PolicyTransitionLLM:
+        name = "quarantine-policy-transition"
+
+        def __init__(self):
+            self.write_calls = 0
+            self.repair_calls = 0
+
+        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
+            del max_tokens, temperature
+            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
+            upper = user.upper()
+            if "ICU-AWARE RESEARCH PLAN" in upper:
+                return json.dumps(
+                    {
+                        "research_question": (
+                            "Summarize the cohort for in-hospital mortality."
+                        ),
+                        "steps": [
+                            {
+                                "step_id": "01_summary",
+                                "intent": "Produce a descriptive cohort summary.",
+                                "inputs": ["death"],
+                                "expected_outputs": ["table:cohort_summary"],
+                                "method": "descriptive_summary",
+                                "icu_rule_refs": [],
+                            }
+                        ],
+                        "rationale": "single-step policy transition test",
+                    }
+                )
+            if "REPAIR THE PYTHON CODE" in upper:
+                self.repair_calls += 1
+                raise RuntimeError("simulated old-policy repair outage")
+            if "WRITE THE PYTHON CODE" in upper:
+                self.write_calls += 1
+                return draft_code
+            if "INTERPRET THE RESULTS" in upper:
+                return "The cohort summary is available {evidence:cohort_summary}."
+            if "MANUSCRIPT SCAFFOLD" in upper:
+                return "# Title\n\n## Results\n\nSummary {evidence:cohort_summary}."
+            return "{}"
+
+    cohort = pd.DataFrame({"stay_id": [1, 2, 3], "death": [0, 1, 0]})
+    first_llm = PolicyTransitionLLM()
+    first_pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=first_llm,
+        enable_literature=False,
+        enable_visual_qa=False,
+        enable_latex=False,
+        enable_llm_concept_audit=True,
+        enable_deterministic_code_fallback=False,
+        enable_deterministic_runner_repair=False,
+    )
+    first = first_pipeline.run(
+        question="Summarize the cohort for in-hospital mortality.",
+        cohort=cohort,
+        cohort_name="policy_supersession",
+        database="synthetic",
+        target_outcome="death",
+        stop_after_step_id="01_summary",
+        stop_after_analysis=True,
+    )
+    run_dir = Path(first.workdir)
+    assert first_llm.write_calls == 1
+    assert first_llm.repair_calls == 1
+    assert (run_dir / "steps" / "01_summary" / ".quarantine").is_dir()
+
+    audit_state["old_policy"] = False
+    quarantine_absent_at_runner = []
+    original_run = CodeRunner.run
+
+    def run_after_policy_supersession(self, *, step_id, code):
+        quarantine_absent_at_runner.append(
+            not (run_dir / "steps" / step_id / ".quarantine").exists()
+        )
+        return original_run(self, step_id=step_id, code=code)
+
+    monkeypatch.setattr(CodeRunner, "run", run_after_policy_supersession)
+    resumed_llm = PolicyTransitionLLM()
+    resumed_pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=resumed_llm,
+        enable_literature=False,
+        enable_visual_qa=False,
+        enable_latex=False,
+        enable_llm_concept_audit=True,
+        enable_deterministic_code_fallback=False,
+        enable_deterministic_runner_repair=False,
+        runner_kind="subprocess",
+    )
+    resumed_pipeline.run(
+        question="Summarize the cohort for in-hospital mortality.",
+        cohort=cohort,
+        cohort_name="policy_supersession",
+        database="synthetic",
+        target_outcome="death",
+        resume_run_id=first.run_id,
+        resume_from_step_id="01_summary",
+        stop_after_step_id="01_summary",
+        stop_after_analysis=True,
+    )
+
+    partial = json.loads(
+        (run_dir / "manifest_partial.json").read_text(encoding="utf-8")
+    )
+    record = next(
+        item
+        for item in partial["per_step_records"]
+        if item.get("step_id") == "01_summary"
+    )
+    assert resumed_llm.write_calls == 0
+    assert resumed_llm.repair_calls == 0
+    assert quarantine_absent_at_runner == [True]
+    assert record["status"] == "ok"
+    assert record["resumed_quarantined_draft"] is True
+    assert record["quarantined_repair_succeeded"] is False
+    assert record["quarantine_policy_superseded"] is True
+    assert record["quarantine_policy_superseded_findings"][0][
+        "downgraded_reason"
+    ]
+    assert record["quarantine_retired_by"] == (
+        "deterministic_validator_policy_supersession"
+    )
+    assert record["quarantine_retired"] is True
+    assert record["quarantined_requires_repair"] is False
+    assert not (run_dir / "steps" / "01_summary" / ".quarantine").exists()
+
+
+def _policy_supersession_context_and_script(ra):
+    context = ra.build_research_context(
+        research_question=(
+            "Is an early exposure associated with in-hospital mortality?"
+        ),
+        cohort=pd.DataFrame(
+            {
+                "stay_id": [1, 2, 3],
+                "exposure": [0.0, 1.0, 2.0],
+                "death": [0, 1, 0],
+            }
+        ),
+        cohort_name="policy_supersession",
+        database="synthetic",
+        target_outcome="death",
+    )
+    script = """
+OUTCOME_OVERRIDE = {
+    "concept_id": "death",
+    "time_window": {
+        "anchor": "icu_admit",
+        "start_offset_hours": 0.0,
+        "end_offset_hours": 720.0,
+    },
+    "aggregation": "first",
+    "op": "==",
+    "value": 1,
+}
+y = df["death"]
+"""
+    return context, script
+
+
+def _stored_horizon_error(ra):
+    del ra
+    from easyicu.research_agent.contracts import ValidationFinding
+
+    return ValidationFinding(
+        validator="llm_concept_auditor",
+        severity="error",
+        message=(
+            "The fixed-window death alternative is incompatible with the "
+            "bound hospital-mortality outcome."
+        ),
+        detail={
+            "context": (
+                "The script copies a 0–720 hour window but consumes the "
+                "hospital mortality flag without deriving 30-day mortality "
+                "from event time."
+            )
+        },
+    )
+
+
+def test_quarantine_policy_supersession_reclassifies_the_stored_error(ra) -> None:
+    from easyicu.research_agent.pipeline_execute import (
+        _quarantined_errors_superseded_by_current_policy,
+    )
+
+    context, script = _policy_supersession_context_and_script(ra)
+    result = _quarantined_errors_superseded_by_current_policy(
+        prior_errors=[_stored_horizon_error(ra)],
+        current_findings=[],
+        context=context,
+        script_text=script,
+        quarantined_script_sha256=hashlib.sha256(
+            script.encode("utf-8")
+        ).hexdigest(),
+    )
+
+    assert result is not None
+    reclassified, provenance = result
+    assert reclassified[0].severity == "warning"
+    assert reclassified[0].message == _stored_horizon_error(ra).message
+    assert reclassified[0].detail["downgraded_reason"]
+    assert provenance == [
+        {
+            "validator": "llm_concept_auditor",
+            "message": _stored_horizon_error(ra).message,
+            "prior_severity": "error",
+            "reclassified_severity": "warning",
+            "downgraded_reason": reclassified[0].detail["downgraded_reason"],
+        }
+    ]
+    assert (
+        _quarantined_errors_superseded_by_current_policy(
+            prior_errors=[_stored_horizon_error(ra)],
+            current_findings=[],
+            context=context,
+            script_text=script + "\n# changed after quarantine\n",
+            quarantined_script_sha256=hashlib.sha256(
+                script.encode("utf-8")
+            ).hexdigest(),
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "current_findings",
+    [
+        [],
+        [
+            {
+                "validator": "llm_concept_auditor",
+                "severity": "warning",
+                "message": "A different warning.",
+            }
+        ],
+        [
+            {
+                "validator": "llm_concept_auditor",
+                "severity": "warning",
+                "message": "The ordinary warning version of the old error.",
+            }
+        ],
+    ],
+    ids=["missing", "different-warning", "ordinary-warning"],
+)
+def test_quarantine_policy_supersession_does_not_trust_fresh_audit_absence_or_warnings(
+    ra, current_findings
+) -> None:
+    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.pipeline_execute import (
+        _quarantined_errors_superseded_by_current_policy,
+    )
+
+    context, script = _policy_supersession_context_and_script(ra)
+    ineligible_prior = ValidationFinding(
+        validator="llm_concept_auditor",
+        severity="error",
+        message="Displayed percentage is not reconciled to its denominator.",
+    )
+    result = _quarantined_errors_superseded_by_current_policy(
+        prior_errors=[ineligible_prior],
+        current_findings=[
+            ValidationFinding.model_validate(finding)
+            for finding in current_findings
+        ],
+        context=context,
+        script_text=script,
+        quarantined_script_sha256=hashlib.sha256(
+            script.encode("utf-8")
+        ).hexdigest(),
+    )
+
+    assert result is None
+
+
+def test_quarantine_policy_supersession_requires_zero_current_errors(ra) -> None:
+    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.pipeline_execute import (
+        _quarantined_errors_superseded_by_current_policy,
+    )
+
+    context, script = _policy_supersession_context_and_script(ra)
+    result = _quarantined_errors_superseded_by_current_policy(
+        prior_errors=[_stored_horizon_error(ra)],
+        current_findings=[
+            ValidationFinding(
+                validator="concept_usage",
+                severity="error",
+                message="A current deterministic error remains.",
+            )
+        ],
+        context=context,
+        script_text=script,
+        quarantined_script_sha256=hashlib.sha256(
+            script.encode("utf-8")
+        ).hexdigest(),
+    )
+
+    assert result is None
+
+
 def test_resume_reuses_locked_plan_instead_of_replanning(
     ra, synthetic_cohort, tmp_path: Path
 ):
@@ -999,6 +1379,7 @@ def test_resume_reuses_locked_plan_instead_of_replanning(
     first = _run_full(ra, synthetic_cohort, tmp_path)
     run_dir = Path(first.workdir)
     plan_path = run_dir / "analysis_plan.json"
+    plan_bytes_before = plan_path.read_bytes()
     step_ids_before = [s["step_id"] for s in json.loads(
         plan_path.read_text(encoding="utf-8"))["steps"]]
     assert step_ids_before, "first run produced no plan steps"
@@ -1051,6 +1432,10 @@ def test_resume_reuses_locked_plan_instead_of_replanning(
         f"{step_ids_before} -> {step_ids_after}"
     )
     assert "88_resume_should_ignore_this" not in step_ids_after
+    assert plan_path.read_bytes() == plan_bytes_before, (
+        "ordinary resume must read immutable plan evidence without "
+        "re-serializing the mutable analysis_plan.json"
+    )
 
     manifest = json.loads(Path(second.manifest_path).read_text(encoding="utf-8"))
     assert any(

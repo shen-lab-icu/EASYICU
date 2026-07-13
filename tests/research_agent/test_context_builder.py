@@ -102,6 +102,39 @@ def test_missingness_test_is_not_run_when_panel_is_too_small(ra):
     assert lact.missingness.missingness_test == "not_run"
 
 
+def test_context_marks_generic_count_and_measurement_companions_as_audit_metadata(ra):
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4],
+            "creat_max": [0.8, 1.4, np.nan, 2.1],
+            "creat_n": [2, 1, 0, 3],
+            "hr_measured": [1, 1, 0, 1],
+            "sofa2_measurement_flag": [1, 1, 0, 1],
+        }
+    )
+    ctx = ra.build_research_context(
+        research_question="Audit availability for several generic ICU variables.",
+        cohort=df,
+        cohort_name="c",
+        database="synthetic",
+    )
+
+    count = ctx.variable("creat_n")
+    measured = ctx.variable("hr_measured")
+    ordinal_flag = ctx.variable("sofa2_measurement_flag")
+    value = ctx.variable("creat_max")
+
+    assert count is not None and count.role.value == "meta"
+    assert count.unit is None and count.valid_range is None
+    assert count.is_ordinal is False and count.ordinal_levels is None
+    assert measured is not None and measured.role.value == "meta"
+    assert measured.unit is None and measured.valid_range == [0.0, 1.0]
+    assert ordinal_flag is not None and ordinal_flag.role.value == "meta"
+    assert ordinal_flag.is_ordinal is False and ordinal_flag.ordinal_levels is None
+    assert value is not None and value.role.value == "lab"
+    assert value.unit == "mg/dL"
+
+
 def test_default_time_windows_attached(ra):
     df = pd.DataFrame({
         "stay_id": [1, 2],

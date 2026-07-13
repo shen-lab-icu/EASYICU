@@ -255,11 +255,22 @@ def test_preflight_emits_renderer_contract_and_nonindependent_scalar_outcomes(
     assert set(cohort_rows["membership_source"]) == {"universe"}
     assert cohort_rows["membership_executable"].astype(bool).all()
     assert cohort_rows["variant_membership_n"].notna().all()
+    assert (
+        cohort_rows["overlap_n"]
+        == cohort_rows["primary_membership_n"] - cohort_rows["outflow_n"]
+    ).all()
+    assert (
+        cohort_rows["overlap_n"]
+        == cohort_rows["variant_membership_n"] - cohort_rows["inflow_n"]
+    ).all()
 
     summary = json.loads((out_dir / "step_summary.json").read_text())
     assert summary["status"] == "blocked"
     assert "did not emit verifiable estimates" in summary["blocking_reason"]
-    assert summary["aliases"]["sensitivity_comparison"] == "robustness_matrix.csv"
+    assert (
+        summary["aliases"]["sensitivity_comparison"]
+        == "sensitivity_comparison.csv"
+    )
     assert (
         summary["aliases"]["cohort_overlap_and_attrition"]
         == "cohort_overlap_and_attrition.csv"
@@ -267,6 +278,14 @@ def test_preflight_emits_renderer_contract_and_nonindependent_scalar_outcomes(
     assert (
         summary["aliases"]["sensitivity_specification_grid"]
         == "sensitivity_specification_grid.csv"
+    )
+    assert (
+        summary["aliases"]["cohort_definition_overlap_attrition"]
+        == "cohort_definition_overlap_attrition.csv"
+    )
+    assert (
+        summary["aliases"]["sensitivity_specification_matrix"]
+        == "sensitivity_specification_matrix.csv"
     )
     assert summary["aliases"]["primary_or"] == "primary_or.json"
     assert summary["aliases"]["complete_case_n"] == "complete_case_n.json"
@@ -283,6 +302,15 @@ def test_preflight_emits_renderer_contract_and_nonindependent_scalar_outcomes(
     assert (out_dir / "cohort_overlap_and_attrition.csv").exists()
     assert (out_dir / "sensitivity_specification_grid.csv").exists()
     assert (out_dir / "missingness_strategy_notes.txt").exists()
+    assert (out_dir / "sensitivity_comparison.csv").read_bytes() == (
+        out_dir / "robustness_matrix.csv"
+    ).read_bytes()
+    assert (out_dir / "cohort_definition_overlap_attrition.csv").read_bytes() == (
+        out_dir / "membership_change_summary.csv"
+    ).read_bytes()
+    assert (out_dir / "sensitivity_specification_matrix.csv").read_bytes() == (
+        out_dir / "sensitivity_specification_grid.csv"
+    ).read_bytes()
     assert json.loads((out_dir / "primary_or.json").read_text())["value"] == 1.8
     assert json.loads((out_dir / "complete_case_n.json").read_text())["value"] is None
 

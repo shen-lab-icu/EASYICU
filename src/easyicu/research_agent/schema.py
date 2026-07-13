@@ -117,6 +117,7 @@ class TemporalConstraint(BaseModel):
         "before_event",
         "worst_before_event",
         "after_event",
+        "relative_to_anchor",
         "unspecified",
     ] = "unspecified"
     anchor_event: str = Field(
@@ -158,6 +159,86 @@ class MissingnessProfile(BaseModel):
     )
     missingness_test_p_value: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     notes: Optional[str] = None
+
+
+class FixedWindowTrajectoryMetadata(BaseModel):
+    """Machine-readable semantics for one wide fixed-window trajectory column.
+
+    The column name establishes only a family and relative time bin.  It does
+    not establish the clinical anchor, which remains an agent/run declaration.
+    ``source_scale`` preserves the underlying concept semantics while
+    ``representation_kind`` distinguishes a raw discrete state from a
+    fractional within-window summary that can be treated as a continuous
+    representation by downstream method-compatibility checks.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    family: str
+    window_start_hours: float
+    window_end_hours: float
+    window_width_hours: float = Field(gt=0.0)
+    time_axis: Literal["relative_hours"] = "relative_hours"
+    anchor: Optional[str] = None
+    source_scale: Literal[
+        "continuous",
+        "ordinal",
+        "binary",
+        "categorical",
+        "count",
+        "unknown",
+    ] = "unknown"
+    representation_kind: Literal[
+        "fractional_window_summary",
+        "continuous_window_summary",
+        "discrete_window_state",
+        "unknown_window_representation",
+    ]
+    observed_fractional_values: bool = False
+
+
+class ClusterSelectionCandidate(BaseModel):
+    """One agent-evaluated candidate in a clustering selection manifest."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    n_clusters: int = Field(ge=1)
+    criterion_value: float = Field(allow_inf_nan=False)
+
+
+class ClusterSelectionManifest(BaseModel):
+    """Agent-owned, replayable evidence for selecting a cluster count.
+
+    The schema records the candidates and the agent's rule. Validation can
+    verify a declared minimum/maximum; elbow and multi-criteria choices remain
+    scientific judgments and therefore require an explicit rationale instead.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    criterion: str = Field(min_length=1)
+    selection_rule: Literal["minimum", "maximum", "elbow", "multi_criteria"]
+    direction: Literal["minimize", "maximize", "not_applicable"]
+    selected_n_clusters: int = Field(ge=1)
+    candidates: List[ClusterSelectionCandidate] = Field(min_length=2)
+    rationale: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _validate_selection_shape(self) -> "ClusterSelectionManifest":
+        candidate_k = [item.n_clusters for item in self.candidates]
+        if len(set(candidate_k)) != len(candidate_k):
+            raise ValueError("candidate n_clusters values must be unique")
+        if self.selected_n_clusters not in set(candidate_k):
+            raise ValueError("selected_n_clusters must be one of the candidates")
+        if self.selection_rule == "minimum" and self.direction != "minimize":
+            raise ValueError("minimum selection requires direction=minimize")
+        if self.selection_rule == "maximum" and self.direction != "maximize":
+            raise ValueError("maximum selection requires direction=maximize")
+        if self.selection_rule in {"elbow", "multi_criteria"} and not str(
+            self.rationale or ""
+        ).strip():
+            raise ValueError("elbow/multi_criteria selection requires rationale")
+        return self
 
 
 class ConceptDescriptor(BaseModel):
@@ -227,6 +308,14 @@ class ConceptDescriptor(BaseModel):
     temporal_resolution: Optional[str] = Field(
         default=None,
         description="Sampling granularity or windowing resolution, e.g. hourly, stay-level, event-level.",
+    )
+    fixed_window_trajectory: Optional[FixedWindowTrajectoryMetadata] = Field(
+        default=None,
+        description=(
+            "Parsed wide-trajectory family/time-bin/representation metadata for "
+            "columns named <family>_h<start>_<end>. The anchor is left unset "
+            "unless a run-level contract declares it."
+        ),
     )
     source_databases: List[str] = Field(default_factory=list)
     pitfalls: List[str] = Field(
@@ -1234,6 +1323,9 @@ __all__ = [
     "TimeWindow",
     "TemporalConstraint",
     "MissingnessProfile",
+    "FixedWindowTrajectoryMetadata",
+    "ClusterSelectionCandidate",
+    "ClusterSelectionManifest",
     "ConceptDescriptor",
     "CohortDescriptor",
     "ResearchContext",

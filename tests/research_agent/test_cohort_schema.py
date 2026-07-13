@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -259,6 +260,128 @@ def test_cohort_locked_recorded_in_manifest(ra, tmp_path: Path) -> None:
     )
     assert manifest.cohort_locked_path == COHORT_LOCK_FILENAME
     assert manifest.cohort_locked_sha == digest
+
+
+def test_cohort_lock_reuses_existing_bytes_on_resume(ra, tmp_path: Path) -> None:
+    from easyicu.research_agent.cohort_schema import (
+        CohortDefinition,
+        write_locked_cohort_definition,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan
+
+    plan = AnalysisPlan(
+        research_question="Does a predictor associate with an outcome?",
+        cohort=CohortDefinition(name="primary", inclusion=(_age_predicate(0, 24),)),
+        steps=[],
+    )
+    evidence = ra.EvidenceStore(tmp_path)
+    path = write_locked_cohort_definition(
+        run_dir=tmp_path,
+        plan=plan,
+        evidence=evidence,
+        prompt_pack_version="test",
+        llm_signature="mock",
+    )
+    before = path.read_bytes()
+
+    reused = write_locked_cohort_definition(
+        run_dir=tmp_path,
+        plan=plan,
+        evidence=evidence,
+        prompt_pack_version="test",
+        llm_signature="mock",
+    )
+
+    assert reused == path
+    assert path.read_bytes() == before
+
+
+def test_cohort_lock_resume_rehydrates_only_legacy_timestamp_drift(
+    ra,
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.cohort_schema import (
+        CohortDefinition,
+        write_locked_cohort_definition,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan
+
+    plan = AnalysisPlan(
+        research_question="Does a predictor associate with an outcome?",
+        cohort=CohortDefinition(name="primary", inclusion=(_age_predicate(0, 24),)),
+        steps=[],
+    )
+    evidence = ra.EvidenceStore(tmp_path)
+    path = write_locked_cohort_definition(
+        run_dir=tmp_path,
+        plan=plan,
+        evidence=evidence,
+        prompt_pack_version="test",
+        llm_signature="mock",
+    )
+    anchored = path.read_bytes()
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["locked_at"] = "2099-01-01T00:00:00+00:00"
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    write_locked_cohort_definition(
+        run_dir=tmp_path,
+        plan=plan,
+        evidence=evidence,
+        prompt_pack_version="test",
+        llm_signature="mock",
+    )
+
+    assert path.read_bytes() == anchored
+    repair = evidence.get("cohort_lock_resume_rehydration")
+    assert repair is not None
+    assert repair.metadata["llm_signature"] == "mock"
+
+
+def test_cohort_lock_resume_does_not_rehydrate_scientific_drift(
+    ra,
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.cohort_schema import (
+        CohortDefinition,
+        CohortSchemaError,
+        coerce_cohort_definition,
+        cohort_definition_sha,
+        write_locked_cohort_definition,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan
+
+    plan = AnalysisPlan(
+        research_question="Does a predictor associate with an outcome?",
+        cohort=CohortDefinition(name="primary", inclusion=(_age_predicate(0, 24),)),
+        steps=[],
+    )
+    evidence = ra.EvidenceStore(tmp_path)
+    path = write_locked_cohort_definition(
+        run_dir=tmp_path,
+        plan=plan,
+        evidence=evidence,
+        prompt_pack_version="test",
+        llm_signature="mock",
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["cohort"]["inclusion"][0]["value"] = 65
+    changed = coerce_cohort_definition(payload["cohort"])
+    assert changed is not None
+    payload["cohort_sha256"] = cohort_definition_sha(changed)
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    with pytest.raises(CohortSchemaError, match="plan-time evidence anchor"):
+        write_locked_cohort_definition(
+            run_dir=tmp_path,
+            plan=plan,
+            evidence=evidence,
+            prompt_pack_version="test",
+            llm_signature="mock",
+        )
+    assert json.loads(path.read_text(encoding="utf-8"))["cohort"]["inclusion"][0][
+        "value"
+    ] == 65
 
 
 def test_assert_cohort_definition_locked_catches_post_lock_mutation(

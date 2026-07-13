@@ -39,6 +39,16 @@ _PATTERNS = [
         ),
     ),
     (
+        "relative_to_anchor",
+        re.compile(
+            rf"\b(?:from|anchored{_WS}(?:at|to)|relative{_WS}to){_WS}"
+            rf"(?:the{_WS})?(?P<anchor>"
+            rf"icu(?:\s|_|-)+admission|hospital(?:\s|_|-)+admission|"
+            rf"event(?:\s|_|-)+onset)\b",
+            re.I,
+        ),
+    ),
+    (
         "before_event",
         re.compile(
             rf"\bbefore{_WS}(?P<anchor>vasopressor|vasopressors|intubation|rrt|ventilation)\b",
@@ -49,7 +59,8 @@ _PATTERNS = [
 
 
 def _normalise_anchor(anchor: str) -> str:
-    anchor = anchor.strip().lower().replace("  ", " ")
+    anchor = anchor.strip().lower().replace("-", " ").replace("_", " ")
+    anchor = re.sub(r"\s+", " ", anchor)
     if anchor in {"icu admission", "admission"}:
         return "icu_admission"
     if anchor == "hospital admission":
@@ -79,7 +90,11 @@ class TimeWindowSemanticParser:
                         0.0 if relation in {"first_window", "within_after"} else None
                     ),
                     end_hours=(
-                        hours if relation in {"first_window", "within_after"} else 0.0
+                        hours
+                        if relation in {"first_window", "within_after"}
+                        else None
+                        if relation == "relative_to_anchor"
+                        else 0.0
                     ),
                     aggregation_hint=(
                         "worst" if relation == "worst_before_event" else None

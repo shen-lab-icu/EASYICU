@@ -42,6 +42,11 @@ from .analysis_types import (
     locked_analysis_type_guide,
     planner_analysis_type_guide,
 )
+from .trajectory_contract import trajectory_phenotyping_code_contract
+from .trajectory_plan_contract import (
+    trajectory_planner_contract_guide,
+    trajectory_role_code_contract,
+)
 from .method_capabilities import coder_method_capability_block
 from .cohort_schema import ALLOWED_CTAS_AGGREGATIONS, known_concept_ids
 from .icu_rules import (
@@ -170,10 +175,20 @@ def _format_variable(v: ConceptDescriptor) -> str:
     rng = f" range={v.valid_range}" if v.valid_range else ""
     unit = f" unit={v.unit}" if v.unit else ""
     obs = _format_observed_domain(v.observed_domain)
+    trajectory = ""
+    if v.fixed_window_trajectory is not None:
+        metadata = v.fixed_window_trajectory
+        trajectory = (
+            f" trajectory_family={metadata.family}"
+            f" time_bin=[{metadata.window_start_hours:g},{metadata.window_end_hours:g})h"
+            f" source_scale={metadata.source_scale}"
+            f" representation={metadata.representation_kind}"
+            f" anchor={metadata.anchor or 'unspecified_agent_must_declare'}"
+        )
     return (
         f"- {v.name} | role={v.role.value} dtype={v.dtype}{unit}{rng}{obs}"
         f" agg_default={_ctas_aggregation_hint(v.aggregation_default)}"
-        f"{miss}{pit}"
+        f"{trajectory}{miss}{pit}"
     )
 
 
@@ -411,6 +426,11 @@ def _build_planner_user_prompt(context: ResearchContext) -> str:
         + locked_analysis_type_guide(infer_analysis_type(context))
         + "\n\n"
         + planner_analysis_type_guide()
+        + "\n\n"
+        + trajectory_planner_contract_guide(
+            context=context,
+            analysis_type=infer_analysis_type(context).key,
+        )
         + "\n\n"
         "OUTPUT FORMAT — VERY IMPORTANT:\n"
         "Return *only* a single JSON object matching the "
@@ -765,6 +785,11 @@ class ReplannerAgent(PlannerAgent):
                     "AnalysisPlan schema. Keep completed steps unchanged and "
                     "revise only the remaining steps when the probe summary or "
                     "completed step outputs justify it.\n\n"
+                    + trajectory_planner_contract_guide(
+                        context=context,
+                        analysis_type=current_plan.analysis_type,
+                    )
+                    + "\n\n"
                     f"CURRENT PLAN:\n{current_plan.model_dump_json(indent=2)}\n\n"
                     f"PROBE SUMMARY:\n{_clip_json(probe_summary or {}, char_budget=_REPLANNER_PROBE_CHAR_BUDGET)}\n\n"
                     f"COMPLETED STEP RECORDS:\n{json.dumps(completed, ensure_ascii=False, default=str)}\n\n"
@@ -1208,12 +1233,18 @@ class RuntimeSupervisor:
             step=step,
             evidence_refs=evidence_refs,
         )
-        visualization_request = self.visualization.build_request(
-            context=context,
-            semantics=state.semantics or self.clinical_semantics.run(context=context),
-            step=step,
-            evidence_refs=evidence_refs,
-        )
+        visualization_request = None
+        if any(
+            str(item or "").strip().lower().startswith("figure:")
+            for item in step.expected_outputs
+        ):
+            visualization_request = self.visualization.build_request(
+                context=context,
+                semantics=state.semantics
+                or self.clinical_semantics.run(context=context),
+                step=step,
+                evidence_refs=evidence_refs,
+            )
         return state.model_copy(
             update={
                 "current_step": step,
@@ -1305,6 +1336,69 @@ _MAX_PRE_EXEC_COMPATIBILITY_REPAIRS = 2
 _CODER_MAX_TOKENS = 8192
 
 
+def _declared_output_scope_contract(step: AnalysisStep) -> str:
+    """Keep code generation inside the plan's typed product boundary.
+
+    Figure outputs are split into rendering-only steps before execution.  A
+    science step that redraws them anyway duplicates work and creates a second,
+    undeclared evidence owner.  Required runtime metadata and source-data
+    companions remain allowed; only undeclared scientific products are barred.
+    """
+
+    outputs = [str(item or "").strip() for item in step.expected_outputs]
+    has_figure = any(item.lower().startswith("figure:") for item in outputs)
+    lines = [
+        "DECLARED OUTPUT SCOPE (binding):",
+        "- Create only the scientific products named in Expected outputs, plus "
+        "required step_summary.json and necessary source-data or diagnostic companions.",
+    ]
+    if has_figure:
+        lines.append(
+            "- Figure rendering is allowed only for the explicitly declared figure products."
+        )
+    else:
+        lines.append(
+            "- This step declares no figure product. Do not render, save, or register "
+            "figures; leave presentation to a separately declared figure step."
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _typed_input_scope_contract(step: AnalysisStep) -> str:
+    """Bind planned upstream products to their run-authoritative files."""
+
+    supported_kinds = {
+        "artifact",
+        "dataset",
+        "figure",
+        "log",
+        "manifest",
+        "model",
+        "statistic",
+        "table",
+    }
+    typed_inputs = []
+    for item in step.inputs or []:
+        kind, separator, product = str(item or "").strip().partition(":")
+        if separator and kind.strip().lower() in supported_kinds and product.strip():
+            typed_inputs.append(str(item))
+    if not typed_inputs:
+        return ""
+    return (
+        "TYPED INPUT BINDING (binding):\n"
+        "- This step has typed upstream inputs. At instrumented execution, read "
+        "the JSON manifest at os.environ['EASYICU_RESOLVED_INPUTS_JSON'].\n"
+        "- Look up each typed input by its exact kind:name key in manifest['inputs']. "
+        "Read its exact file as Path(os.environ['EASYICU_RUN_DIR']) / "
+        "binding['relative_path']; the manifest also supplies evidence_id and sha256.\n"
+        "- Do not glob EASYICU_EVIDENCE_DIR, choose a file by mtime or basename, "
+        "follow a legacy alias, or reconstruct a declared upstream product from "
+        "COHORT_PARQUET. COHORT_PARQUET remains the source only for untyped raw "
+        "variables or steps with no typed upstream input.\n"
+        f"- Exact typed inputs for this step: {typed_inputs}\n"
+    )
+
+
 class CoderAgent:
     """Generates a self-contained Python analysis script for one step.
 
@@ -1346,7 +1440,14 @@ class CoderAgent:
                     "Model requirements: "
                     f"{json.dumps([item.model_dump(mode='json') for item in step.model_requirements], ensure_ascii=False)}\n"
                     f"Method: {step.method or '(unspecified — choose conservatively)'}\n\n"
+                    + _declared_output_scope_contract(step)
+                    + _typed_input_scope_contract(step)
                     + coder_method_capability_block()
+                    + trajectory_phenotyping_code_contract(
+                        context=context,
+                        step=step,
+                    )
+                    + trajectory_role_code_contract(context=context, step=step)
                     + "\n\n"
                     "OUTPUT FORMAT — VERY IMPORTANT:\n"
                     "Return *only* a complete, runnable Python script. A "
@@ -1375,7 +1476,7 @@ class CoderAgent:
         # post-hoc validator can record the issue in the audit trail.
         self.last_compatibility_repair_attempts = 0
         for attempt in range(1, _MAX_PRE_EXEC_COMPATIBILITY_REPAIRS + 1):
-            violations = detect_forbidden_pattern_usage(code, context)
+            violations = detect_forbidden_pattern_usage(code, context, step)
             self.last_compatibility_violations = violations
             if not violations:
                 break
@@ -1424,6 +1525,14 @@ class CoderAgent:
                     "Model requirements: "
                     f"{json.dumps([item.model_dump(mode='json') for item in step.model_requirements], ensure_ascii=False)}\n"
                     f"Method: {step.method or '(unspecified)'}\n\n"
+                    + _declared_output_scope_contract(step)
+                    + _typed_input_scope_contract(step)
+                    + trajectory_phenotyping_code_contract(
+                        context=context,
+                        step=step,
+                    )
+                    + trajectory_role_code_contract(context=context, step=step)
+                    + "\n\n"
                     "The previous script failed at execution time. Return "
                     "only a complete replacement Python script that follows "
                     "the original code contract and writes the same expected "
