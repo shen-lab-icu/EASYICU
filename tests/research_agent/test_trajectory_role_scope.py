@@ -236,6 +236,10 @@ def test_stability_code_contract_reuses_frozen_candidate_solution_only():
 
     assert "EASYICU_RESOLVED_INPUTS_JSON" in contract
     assert "typed schema manifests as authoritative" in contract
+    assert "Apply each schema to its own contract" in contract
+    assert "Never require representation coordinates" in contract
+    assert "exact model family, fit_method" in contract
+    assert "Do not substitute a complete-data estimator" in contract
     assert "do not read COHORT_PARQUET" in contract
     assert "exact representation_columns in the same order" in contract
     assert "copy the selected candidate labels" in contract
