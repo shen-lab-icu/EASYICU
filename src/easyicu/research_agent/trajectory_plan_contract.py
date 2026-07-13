@@ -33,8 +33,14 @@ _ROLE_ORDER = (
 )
 
 _ROLE_CANONICAL_OUTPUTS: Mapping[str, Tuple[str, ...]] = {
-    "representation": ("table:trajectory_membership",),
-    "candidate_selection": ("manifest:cluster_selection",),
+    "representation": (
+        "table:trajectory_membership",
+        "manifest:trajectory_representation_schema",
+    ),
+    "candidate_selection": (
+        "manifest:cluster_selection",
+        "manifest:candidate_cluster_solution_schema",
+    ),
     "stability_freeze": (
         "manifest:trajectory_missingness_policy",
         "table:cluster_assignments",
@@ -1179,6 +1185,29 @@ def augment_trajectory_plan_products(
     ):
         input_additions[stability_owner].append("manifest:cluster_selection")
 
+    representation_owner = evaluation.role_owners["representation"]
+    candidate = next(
+        item for item in normalized.steps if item.step_id == candidate_owner
+    )
+    if representation_owner != candidate_owner and (
+        "manifest:trajectory_representation_schema" not in (candidate.inputs or [])
+    ):
+        input_additions[candidate_owner].append(
+            "manifest:trajectory_representation_schema"
+        )
+    if representation_owner != stability_owner and (
+        "manifest:trajectory_representation_schema" not in (stability.inputs or [])
+    ):
+        input_additions[stability_owner].append(
+            "manifest:trajectory_representation_schema"
+        )
+    if candidate_owner != stability_owner and (
+        "manifest:candidate_cluster_solution_schema" not in (stability.inputs or [])
+    ):
+        input_additions[stability_owner].append(
+            "manifest:candidate_cluster_solution_schema"
+        )
+
     if not additions and not input_additions and normalized == plan:
         return plan, normalization_findings
     revised_steps = [
@@ -1252,10 +1281,12 @@ def trajectory_planner_contract_guide(
         "Never mix a scientific role with figure outputs. Methods may use any "
         "accurate method-family name, but role products must use this canonical "
         "replay schema:\n"
-        "- representation: declare the chosen representation artifact and "
-        "`table:trajectory_membership`;\n"
+        "- representation: declare the chosen representation artifact, "
+        "`table:trajectory_membership`, and "
+        "`manifest:trajectory_representation_schema`;\n"
         "- candidate selection: declare a candidate fit/assignment artifact and "
-        "`manifest:cluster_selection`;\n"
+        "both `manifest:cluster_selection` and "
+        "`manifest:candidate_cluster_solution_schema`;\n"
         "- stability/freeze: declare the frozen-solution assignment artifact, "
         "`manifest:trajectory_missingness_policy`, `table:cluster_assignments`, "
         "`table:cluster_stability`, and "
@@ -1315,6 +1346,11 @@ def trajectory_role_code_contract(
             "min_observed_windows, profile_columns, "
             "profile_summary_statistic (mean or median), time_axis='relative_hours', "
             "anchor, anchor_provenance, anchor_source, and trailing_na_policy. "
+            "Also write trajectory_representation_schema.json with those exact "
+            "agent-chosen fields plus id_column, representation_columns in model "
+            "order, and frozen_population_n. This typed manifest is the downstream "
+            "authority for representation semantics; do not make later roles infer "
+            "them from filenames, column substrings, or prose. "
             "Do not impute unobserved trajectory cells with zero. This role only "
             "builds the representation: do not fit clusters, select k, freeze "
             "assignments, characterize profiles, or analyze outcomes here."
@@ -1361,6 +1397,12 @@ def trajectory_role_code_contract(
             "Give every candidate model record a stable model_id and copy the chosen "
             "record's id into cluster_selection.selected_model_id. Also copy the exact "
             "clustering_method/model_family into the cluster-selection manifest. "
+            "Consume trajectory_representation_schema.json and write "
+            "candidate_cluster_solution_schema.json with its exact id_column and "
+            "representation_columns plus clustering_method/model_family, "
+            "selected_n_clusters, selected_model_id, assignment_column, criterion, "
+            "direction, and selected criterion value. This manifest records the "
+            "agent's already-made selection; it must not introduce a new choice. "
             "The agent owns the method, criterion, and k."
             + role_boundary
         )
@@ -1372,7 +1414,10 @@ def trajectory_role_code_contract(
         sections.append(
             "STABILITY/FREEZE ROLE: read only the exact files bound in "
             "EASYICU_RESOLVED_INPUTS_JSON for the declared upstream representation, "
-            "cluster-selection manifest, and candidate fit/assignment artifacts. "
+            "trajectory-representation schema, cluster-selection manifest, candidate "
+            "solution schema, and candidate fit/assignment artifacts. Treat the two "
+            "typed schema manifests as authoritative and fail closed if either is "
+            "missing or disagrees with the bound data. "
             "The upstream representation rows and identifiers are the frozen "
             "eligible population: do not read COHORT_PARQUET, scan raw fixed-window "
             "or trajectory columns, or reapply cohort, anchor, observed-window, "

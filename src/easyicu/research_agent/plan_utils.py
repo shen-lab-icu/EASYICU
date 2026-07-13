@@ -3069,6 +3069,8 @@ def _step_contract_findings(
         "failed",
         "execution_failed",
         "contract_failed",
+        "fail_closed",
+        "failed_closed",
         "repair_failed",
     }:
         findings.append(

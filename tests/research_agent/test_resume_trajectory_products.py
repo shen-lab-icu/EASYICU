@@ -171,7 +171,12 @@ def test_resume_writes_schema_only_trajectory_revision(tmp_path):
     cluster = migrated.steps[1]
     characterize = migrated.steps[2]
     assert "table:trajectory_membership" in representation.expected_outputs
+    assert (
+        "manifest:trajectory_representation_schema"
+        in representation.expected_outputs
+    )
     assert "manifest:trajectory_missingness_policy" in cluster.expected_outputs
+    assert "manifest:candidate_cluster_solution_schema" in cluster.expected_outputs
     assert "table:cluster_stability_assignments" in cluster.expected_outputs
     assert "table:trajectory_profiles" in characterize.expected_outputs
     assert evidence.get("analysis_plan_revision_3") is not None
@@ -226,6 +231,12 @@ def test_resume_migrates_redundant_split_role_outputs_before_execution(tmp_path)
     assert "table:cluster_number_selection" not in stability.expected_outputs
     assert "table:cluster_sizes" not in stability.expected_outputs
     assert "manifest:cluster_selection" in stability.inputs
+    assert "manifest:trajectory_representation_schema" in stability.inputs
+    assert "manifest:candidate_cluster_solution_schema" in stability.inputs
+    candidate = next(
+        step for step in migrated.steps if step.step_id == "candidate_selection"
+    )
+    assert "manifest:trajectory_representation_schema" in candidate.inputs
     assert "table:cluster_sizes" not in characterize.inputs
     assert evaluate_trajectory_plan_dag(
         plan=migrated,
