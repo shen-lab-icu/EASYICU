@@ -8508,6 +8508,7 @@ _UPSTREAM_FAMILY_TO_RENDERER_KEY: dict[str, str] = {
 # matching would recreate the same accidental routing problem as step-id prose.
 _UPSTREAM_METHOD_TO_RENDERER_KEY: dict[str, str] = {
     "ordinal_exposure_derivation_and_quality_control": "ordered_distribution",
+    "exposure_distribution_and_missingness_audit": "distribution_availability",
     "cohort_definition_sensitivity": "sensitivity",
     "missingness": "missingness",
     "missingness_audit": "missingness",
@@ -8550,22 +8551,23 @@ def _resolve_upstream_manifest_step(
     parent = str(current_step_id or "").removesuffix("_figure")
     if not parent or parent == str(current_step_id):
         return None
-    manifest_path = Path(run_dir) / "manifest_partial.json"
-    try:
-        manifest = json.loads(manifest_path.read_text("utf-8"))
-    except Exception:
+    manifest = load_run_artifact_authority(run_dir)
+    if not isinstance(manifest, Mapping):
         return None
     records = manifest.get("per_step_records") if isinstance(manifest, dict) else None
     if not isinstance(records, list):
         return None
-    for record in reversed(records):
-        if not isinstance(record, dict) or str(record.get("step_id") or "") != parent:
-            continue
-        request = record.get("analysis_request")
-        request_step = request.get("step") if isinstance(request, dict) else None
-        if isinstance(request_step, dict):
-            return dict(request_step)
-    return None
+    current = {
+        str(record.get("step_id") or ""): record
+        for record in current_step_records(records)
+        if isinstance(record, Mapping)
+    }
+    record = current.get(parent)
+    if not isinstance(record, Mapping):
+        return None
+    request = record.get("analysis_request")
+    request_step = request.get("step") if isinstance(request, Mapping) else None
+    return dict(request_step) if isinstance(request_step, Mapping) else None
 
 
 def _resolve_upstream_analysis_method(
@@ -8697,6 +8699,12 @@ def _renderer_for_upstream_method(method: Optional[str]):
         )
 
         return render_ordered_distribution_bundle_from_prior_outputs
+    if key == "distribution_availability":
+        from .figures.distribution_availability import (
+            render_distribution_availability_bundle_from_prior_outputs,
+        )
+
+        return render_distribution_availability_bundle_from_prior_outputs
     return {
         "sensitivity": _render_sensitivity_publication_bundle_from_prior_outputs,
         "missingness": _render_missingness_publication_bundle_from_prior_outputs,
@@ -8718,11 +8726,11 @@ def _renderer_for_upstream_figure_data_family(family: Optional[str]):
     return None
 
 
-def _verified_direct_parent_table_names(
+def _verified_direct_parent_artifact_digests(
     run_dir: Path,
     figure_step_id: str,
-) -> Optional[set[str]]:
-    """Return digest-bound direct-parent tables from the current checkpoint.
+) -> Optional[dict[str, str]]:
+    """Return digest-bound direct-parent tables and summary from the checkpoint.
 
     ``None`` means the figure does not have one exact ``*_figure`` parent or
     the modern outer ledger cannot prove that parent is currently successful.
@@ -8760,7 +8768,7 @@ def _verified_direct_parent_table_names(
         for record in (raw_evidence if isinstance(raw_evidence, list) else [])
         if isinstance(record, Mapping) and str(record.get("evidence_id") or "")
     }
-    verified_names: set[str] = set()
+    verified_digests: dict[str, str] = {}
     verified_summary = False
     for evidence_id in active_ids:
         record = evidence_by_id.get(evidence_id)
@@ -8791,7 +8799,7 @@ def _verified_direct_parent_table_names(
             continue
         kind = str(record.get("kind") or "").strip().lower()
         if kind == "table":
-            verified_names.add(logical_name)
+            verified_digests[logical_name] = str(record.get("sha256") or "")
         elif (
             kind == "statistic"
             and logical_name == "step_summary.json"
@@ -8799,7 +8807,125 @@ def _verified_direct_parent_table_names(
             == str(parent_record.get("step_summary_evidence_id") or "")
         ):
             verified_summary = True
-    return verified_names if verified_summary else None
+            verified_digests[logical_name] = str(record.get("sha256") or "")
+    return verified_digests if verified_summary else None
+
+
+def _verified_direct_parent_table_names(
+    run_dir: Path,
+    figure_step_id: str,
+) -> Optional[set[str]]:
+    """Return the verified table-name projection of the parent digest seal."""
+
+    digests = _verified_direct_parent_artifact_digests(run_dir, figure_step_id)
+    if digests is None:
+        return None
+    return {name for name in digests if name != "step_summary.json"}
+
+
+def _distribution_availability_parent_digest_seal(
+    run_dir: Path,
+    figure_step_id: str,
+) -> Optional[dict[str, str]]:
+    """Seal only the three parent files selected by the closed renderer contract.
+
+    A parent may legitimately publish other tables or parquet products.  They
+    are neither renderer inputs nor CSVs, so including them in the child seal
+    would make an unrelated artifact capable of disabling this renderer.
+    """
+
+    request_step = _resolve_upstream_manifest_step(run_dir, figure_step_id)
+    if not isinstance(request_step, Mapping):
+        return None
+    from .figures.distribution_availability import (
+        CONTROLLED_METHOD,
+        prepare_distribution_availability_inputs,
+    )
+
+    if str(request_step.get("method") or "").strip().lower() != CONTROLLED_METHOD:
+        return None
+
+    digests = _verified_direct_parent_artifact_digests(run_dir, figure_step_id)
+    if not digests or "step_summary.json" not in digests:
+        return None
+    parent_step_id = str(figure_step_id or "").removesuffix("_figure")
+    parent_out = Path(run_dir) / "steps" / parent_step_id / "outputs"
+    try:
+        parent_summary = json.loads(
+            (parent_out / "step_summary.json").read_text("utf-8")
+        )
+    except Exception:
+        return None
+    if not isinstance(parent_summary, Mapping):
+        return None
+    prepared = prepare_distribution_availability_inputs(
+        parent_out=parent_out,
+        parent_summary=parent_summary,
+        verified_table_names={
+            name for name in digests if name != "step_summary.json"
+        },
+    )
+    if prepared is None:
+        return None
+    from .declared_product_contract import typed_product
+
+    declared_tables = {
+        parsed[1]
+        for raw in (request_step.get("expected_outputs") or [])
+        if (parsed := typed_product(raw)) is not None and parsed[0] == "table"
+    }
+    required_table_products = {
+        prepared.distribution_path.stem,
+        prepared.measurement_path.stem,
+    }
+    if not required_table_products <= declared_tables:
+        return None
+    required_names = {
+        "step_summary.json",
+        prepared.distribution_path.name,
+        prepared.measurement_path.name,
+    }
+    if not required_names <= set(digests):
+        return None
+    return {name: digests[name] for name in sorted(required_names)}
+
+
+def _distribution_availability_figure_step_matches_parent(
+    run_dir: Path,
+    step: AnalysisStep,
+) -> bool:
+    """Require a structural child edge before the automatic renderer runs.
+
+    Modern plans bind the two parent tables as typed inputs.  Older planner
+    packets represented a split analysis/figure pair by repeating the exact
+    controlled method and inputs on the ``*_figure`` child.  Either structure
+    is evidence of planner ownership; prose and step-name keywords are not.
+    """
+
+    seal = _distribution_availability_parent_digest_seal(run_dir, step.step_id)
+    request_step = _resolve_upstream_manifest_step(run_dir, step.step_id)
+    if seal is None or not isinstance(request_step, Mapping):
+        return False
+    from .declared_product_contract import typed_product
+    from .figures.distribution_availability import CONTROLLED_METHOD
+
+    required_inputs = {
+        ("table", Path(name).stem)
+        for name in seal
+        if name != "step_summary.json"
+    }
+    child_typed_inputs = {
+        parsed
+        for raw in (step.inputs or [])
+        if (parsed := typed_product(raw)) is not None
+    }
+    if required_inputs <= child_typed_inputs:
+        return True
+    return (
+        str(step.method or "").strip().lower() == CONTROLLED_METHOD
+        and tuple(str(value) for value in (step.inputs or []))
+        == tuple(str(value) for value in (request_step.get("inputs") or []))
+    )
 
 
 def deterministic_figure_repair_id_for_upstream(
@@ -8825,6 +8951,16 @@ def deterministic_figure_repair_id_for_upstream(
         == "ordinal_exposure_derivation_and_quality_control"
     ):
         return "ordered_category_distribution_publication_bundle_v1"
+    if (
+        _resolve_upstream_analysis_method(run_dir, step_id)
+        == "exposure_distribution_and_missingness_audit"
+    ):
+        from .figures.distribution_availability import (
+            REPAIR_ID as distribution_availability_repair_id,
+        )
+
+        seal = _distribution_availability_parent_digest_seal(run_dir, step_id)
+        return distribution_availability_repair_id if seal is not None else None
     if (
         _resolve_upstream_analysis_method(run_dir, step_id)
         == "cohort_definition_sensitivity"
@@ -8860,6 +8996,7 @@ def _render_publication_bundle_from_prior_outputs_for_step(
     current_step_id: str,
     out_dir: Path,
     step_text: str = "",
+    preverified_parent_digests: Optional[Mapping[str, str]] = None,
 ) -> Optional[str]:
     """Route by the direct parent's artifact, exact method, or family contract."""
 
@@ -8939,10 +9076,21 @@ def _render_publication_bundle_from_prior_outputs_for_step(
             return promoted
 
     for renderer in renderers:
+        renderer_kwargs: Dict[str, Any] = {}
+        if preverified_parent_digests is not None:
+            from .figures.distribution_availability import (
+                render_distribution_availability_bundle_from_prior_outputs,
+            )
+
+            if renderer is render_distribution_availability_bundle_from_prior_outputs:
+                renderer_kwargs["preverified_parent_digests"] = dict(
+                    preverified_parent_digests
+                )
         repair_id = renderer(
             run_dir=run_dir,
             current_step_id=current_step_id,
             out_dir=out_dir,
+            **renderer_kwargs,
         )
         if repair_id is not None:
             return repair_id

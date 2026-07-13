@@ -108,6 +108,8 @@ from .ordered_stratified_contract import ordered_stratified_numeric_findings
 from .pipeline import (
     _build_probe_summary,
     _clear_output_dir,
+    _distribution_availability_parent_digest_seal,
+    _distribution_availability_figure_step_matches_parent,
     deterministic_figure_family_supported_for_upstream,
     deterministic_figure_repair_id_for_upstream,
     _has_figure_exports,
@@ -4024,6 +4026,19 @@ def run_execute_phase(
                 or exact_repair_id is None
             ):
                 return None
+            sealed_parent_digests: Optional[Dict[str, str]] = None
+            if exact_repair_id == (
+                "distribution_availability_publication_bundle_from_parent_outputs_v1"
+            ):
+                if not _distribution_availability_figure_step_matches_parent(
+                    run_dir, step
+                ):
+                    return None
+                sealed_parent_digests = _distribution_availability_parent_digest_seal(
+                    run_dir, step.step_id
+                )
+                if not sealed_parent_digests:
+                    return None
             candidate_code = """
 import json
 import os
@@ -4041,6 +4056,7 @@ repair_id = _render_publication_bundle_from_prior_outputs_for_step(
     run_dir=run_dir,
     current_step_id=current_step_id,
     out_dir=out_dir,
+    preverified_parent_digests=__PREVERIFIED_PARENT_DIGESTS__,
 )
 
 expected_repair_id = __EXPECTED_REPAIR_ID__
@@ -4060,6 +4076,14 @@ else:
 """
             candidate_code = candidate_code.replace(
                 "__EXPECTED_REPAIR_ID__", repr(exact_repair_id)
+            )
+            candidate_code = candidate_code.replace(
+                "__PREVERIFIED_PARENT_DIGESTS__",
+                repr(
+                    dict(sorted(sealed_parent_digests.items()))
+                    if sealed_parent_digests is not None
+                    else None
+                ),
             )
             repair_id = exact_repair_id
             authorized = _authorize_automatic_repair(
@@ -4252,15 +4276,26 @@ else:
                 "trajectory_stability_spec_preflight", preflight=True
             )
         )
-        quarantined_resume_draft = (
+        preflight_figure_code = (
             None
             if preflight_trajectory_stability_code is not None
+            else _deterministic_publication_figure_code(
+                "publication_figure_parent_outputs_preflight"
+            )
+        )
+        quarantined_resume_draft = (
+            None
+            if (
+                preflight_trajectory_stability_code is not None
+                or preflight_figure_code is not None
+            )
             else resume_controller.quarantined_concept_draft_for_step(step.step_id)
         )
         resume_summary_repair_code = (
             None
             if (
                 preflight_trajectory_stability_code is not None
+                or preflight_figure_code is not None
                 or quarantined_resume_draft is not None
             )
             else _resume_summary_repair_code()
@@ -4268,6 +4303,7 @@ else:
         preflight_resumed_code = None
         if (
             preflight_trajectory_stability_code is None
+            and preflight_figure_code is None
             and quarantined_resume_draft is None
             and resume_summary_repair_code is None
             and (
@@ -4287,6 +4323,21 @@ else:
                             "Using the deterministic calculator for the complete "
                             "planner-owned trajectory stability specification in "
                             f"step {step.step_id}."
+                        ),
+                        detail={"step_id": step.step_id},
+                    )
+                )
+        elif preflight_figure_code is not None:
+            code = preflight_figure_code
+            with shared_lock:
+                findings.append(
+                    ValidationFinding(
+                        validator="coder",
+                        severity="info",
+                        message=(
+                            "Using deterministic publication-figure renderer "
+                            f"for figure step {step.step_id} before requesting "
+                            "new coder code."
                         ),
                         detail={"step_id": step.step_id},
                     )
