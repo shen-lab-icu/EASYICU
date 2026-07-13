@@ -324,6 +324,10 @@ def test_verified_parent_contract_renders_without_outcome_products(
     image = mpimg.imread(out / "distribution_availability.png")
     height, width = image.shape[:2]
     assert width / height >= 1.8
+    svg = (out / "distribution_availability.svg").read_text("utf-8")
+    assert "source present but summary missing" not in svg
+    assert "source present but" in svg
+    assert "summary missing" in svg
     contract_path = out / "distribution_availability.figure_contract.json"
     assert contract_path.is_file()
     assert (

@@ -12,6 +12,7 @@ import io
 import json
 import math
 import re
+import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Collection, Mapping, Optional
@@ -99,6 +100,19 @@ def _nonnegative_integer(value: Any) -> Optional[int]:
 
 def _same(left: float, right: float, *, tolerance: float = 1e-9) -> bool:
     return math.isclose(left, right, rel_tol=1e-9, abs_tol=tolerance)
+
+
+def _wrapped_axis_label(value: Any, *, width: int = 22) -> str:
+    """Wrap display-only category text without changing the source contract."""
+
+    label = str(value).strip()
+    lines = textwrap.wrap(
+        label,
+        width=width,
+        break_long_words=False,
+        break_on_hyphens=False,
+    )
+    return "\n".join(lines) if lines else label
 
 
 def _read_selected_columns(
@@ -548,7 +562,9 @@ def render_distribution_availability_bundle_from_prior_outputs(
     positions = range(len(prepared.status_schema))
     bars = ax_b.barh(positions, percentages, color=palette["blue_soft"], height=0.58)
     ax_b.set_yticks(list(positions))
-    ax_b.set_yticklabels(prepared.status_schema)
+    ax_b.set_yticklabels(
+        [_wrapped_axis_label(status) for status in prepared.status_schema]
+    )
     ax_b.invert_yaxis()
     ax_b.set_xlim(0, 100)
     ax_b.set_xlabel("Analysis cohort (%)")
