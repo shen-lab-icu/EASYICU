@@ -1389,23 +1389,39 @@ class CrossStepRegisteredOutputValidator:
 
 
 class StepSummaryFractionValidator:
-    """Enforce the unit encoded by machine-summary ``*fraction*`` fields."""
+    """Enforce [0, 1] for probability-like machine-summary fields."""
 
     name = "step_summary_fraction_scale"
 
     @classmethod
     def _invalid_fraction_values(
         cls, summary: Dict[str, Any]
-    ) -> List[tuple[str, float]]:
-        invalid: List[tuple[str, float]] = []
+    ) -> List[tuple[str, float, str]]:
+        invalid: List[tuple[str, float, str]] = []
 
         def normalise_key(value: Any) -> str:
             return re.sub(
                 r"[^a-z0-9]+", "_", str(value).strip().lower()
             ).strip("_")
 
-        def is_fraction_field(key: Any) -> bool:
-            """Identify fields whose *value* is contractually a fraction.
+        effect_scale_names = {
+            "risk_ratio",
+            "relative_risk",
+            "odds_ratio",
+            "hazard_ratio",
+            "risk_difference",
+        }
+
+        def is_effect_scale_field(key: Any) -> bool:
+            name = normalise_key(key)
+            ci_base = re.sub(r"_(?:ci_)?(?:low|high|lower|upper)$", "", name)
+            return ci_base in effect_scale_names or any(
+                ci_base.endswith(f"_{effect_scale}")
+                for effect_scale in effect_scale_names
+            )
+
+        def bounded_field_kind(key: Any) -> Optional[str]:
+            """Identify fields whose *value* is contractually in [0, 1].
 
             Do not propagate merely because a structural or methodological key
             contains the substring ``fraction``.  Names such as
@@ -1419,15 +1435,38 @@ class StepSummaryFractionValidator:
             if not name or any(
                 token in name for token in ("pct", "percent", "percentage")
             ):
-                return False
+                return None
             if name.startswith("fractional_") or name == "fractional":
-                return False
+                return None
             if name.endswith(("_numerator", "_denominator")):
-                return False
-            if name in {"attributable_fraction", "population_attributable_fraction"}:
+                return None
+            ci_base = re.sub(r"_(?:ci_)?(?:low|high|lower|upper)$", "", name)
+            if is_effect_scale_field(key):
+                return None
+            if ci_base == "at_risk" or ci_base.endswith("_at_risk"):
+                # Survival risk-set counts/statuses are not probabilities.
+                return None
+            if ci_base in {
+                "attributable_fraction",
+                "population_attributable_fraction",
+            }:
                 # These effect measures can legitimately be negative.
-                return False
-            return name == "fraction" or name.endswith("_fraction")
+                return None
+            if ci_base == "fraction" or ci_base.endswith("_fraction"):
+                return "fraction"
+            if ci_base == "probability" or ci_base.endswith("_probability"):
+                return "probability"
+            if ci_base == "prevalence" or ci_base.endswith("_prevalence"):
+                return "prevalence"
+            if ci_base.startswith("prevalence_ci"):
+                return "prevalence"
+            if ci_base == "risk" or ci_base.endswith("_risk"):
+                if ci_base in {"excess_risk", "attributable_risk"} or ci_base.endswith(
+                    ("_excess_risk", "_attributable_risk")
+                ):
+                    return None
+                return "risk"
+            return None
 
         structural_children = {
             "count",
@@ -1439,43 +1478,63 @@ class StepSummaryFractionValidator:
             "total_n",
         }
         scalar_value_children = {"estimate", "fraction", "value"}
+        generic_ci_children = {"ci_low", "ci_high", "ci_lower", "ci_upper"}
 
         def visit(
             value: Any,
             path: tuple[str, ...] = (),
-            fraction_context: bool = False,
+            bounded_context: Optional[str] = None,
         ) -> None:
             if isinstance(value, dict):
                 normalised_children = {normalise_key(key) for key in value}
                 has_explicit_value_child = bool(
                     normalised_children & scalar_value_children
                 )
+                sibling_kinds = {
+                    kind
+                    for key in value
+                    if (kind := bounded_field_kind(key)) is not None
+                }
+                sibling_context = (
+                    next(iter(sibling_kinds)) if len(sibling_kinds) == 1 else None
+                )
+                has_effect_scale_sibling = any(
+                    is_effect_scale_field(key) for key in value
+                )
                 for key, child in value.items():
                     normalised = normalise_key(key)
-                    key_is_fraction = is_fraction_field(key)
-                    inherited_context = fraction_context
+                    key_context = bounded_field_kind(key)
+                    inherited_context = bounded_context
                     if inherited_context and has_explicit_value_child:
-                        inherited_context = normalised in scalar_value_children
+                        inherited_context = (
+                            inherited_context
+                            if normalised in scalar_value_children
+                            else None
+                        )
                     if inherited_context and normalised in structural_children:
-                        inherited_context = False
+                        inherited_context = None
+                    if normalised in generic_ci_children and (
+                        sibling_context or bounded_context
+                    ) and not has_effect_scale_sibling:
+                        key_context = sibling_context or bounded_context
                     visit(
                         child,
                         (*path, str(key)),
-                        inherited_context or key_is_fraction,
+                        inherited_context or key_context,
                     )
                 return
             if isinstance(value, list):
                 for index, child in enumerate(value):
-                    visit(child, (*path, str(index)), fraction_context)
+                    visit(child, (*path, str(index)), bounded_context)
                 return
-            if not fraction_context or isinstance(value, bool) or value is None:
+            if not bounded_context or isinstance(value, bool) or value is None:
                 return
             try:
                 number = float(value)
             except (TypeError, ValueError):
                 return
-            if not pd.notna(number) or number < 0.0 or number > 1.0:
-                invalid.append((".".join(path), number))
+            if not math.isfinite(number) or number < 0.0 or number > 1.0:
+                invalid.append((".".join(path), number, bounded_context))
 
         visit(summary)
         return invalid
@@ -1487,23 +1546,31 @@ class StepSummaryFractionValidator:
         step_summary: Dict[str, Any],
     ) -> List[ValidationFinding]:
         findings: List[ValidationFinding] = []
-        for path, value in self._invalid_fraction_values(step_summary):
+        for path, value, metric_kind in self._invalid_fraction_values(step_summary):
+            roundoff_sized_overflow = bool(
+                math.isfinite(value)
+                and (value > 1.0 or value < 0.0)
+                and min(abs(value), abs(value - 1.0)) <= 1e-12
+            )
             findings.append(
                 ValidationFinding(
                     validator=self.name,
                     severity="error",
                     message=(
-                        f"Fraction-scale mismatch in step {step.step_id}: "
-                        f"{path}={value} is outside [0, 1]. Store proportions "
-                        "under fraction-valued fields; divide percentages by "
-                        "100 or rename an explicitly percent-valued field."
+                        f"Bounded {metric_kind} mismatch in step {step.step_id}: "
+                        f"{path}={value} is outside [0, 1]. Do not retain even "
+                        "roundoff-sized overflow in a registered summary; "
+                        "normalize deterministically before writing the output."
                     ),
                     detail={
+                        "issue": "bounded_metric_out_of_range",
                         "step_id": step.step_id,
                         "summary_path": path,
+                        "metric_kind": metric_kind,
                         "reported_value": value,
                         "expected_min": 0.0,
                         "expected_max": 1.0,
+                        "roundoff_sized_overflow": roundoff_sized_overflow,
                     },
                 )
             )

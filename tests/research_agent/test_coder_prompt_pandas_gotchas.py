@@ -41,6 +41,19 @@ def test_coder_prompt_keeps_fraction_units_and_zero_status_categories() -> None:
     assert "valid-observed distribution denominator" in coder_prompt
 
 
+def test_coder_prompt_bounds_probability_intervals_without_constraining_effects() -> None:
+    from easyicu.research_agent.prompts import load_prompt_pack
+
+    coder_prompt = load_prompt_pack()["coder"]
+
+    assert "confidence bound for one of those quantities" in coder_prompt
+    assert "methods.ordered_trends.wilson_interval" in coder_prompt
+    assert "floating-point boundary artefacts" in coder_prompt
+    assert "Never" in coder_prompt and "clip a genuinely invalid estimate" in coder_prompt
+    assert "does not apply to effect scales" in coder_prompt
+    assert "risk ratios, odds ratios, hazard" in coder_prompt
+
+
 def test_coder_prompt_controls_ordered_stratified_tools_and_reporting() -> None:
     from easyicu.research_agent.prompts import load_prompt_pack
 

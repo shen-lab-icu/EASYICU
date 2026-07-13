@@ -81,6 +81,7 @@ from .audits.validators import (
     StepSummaryFractionValidator,
     _downgrade_metadata_supported_outcome_findings,
 )
+from .audits.step_summary_integrity import StepSummaryIntegrityValidator
 from .code_repair import (
     _deterministic_runner_repair,
     _deterministic_summary_repair,
@@ -2909,6 +2910,7 @@ def run_execute_phase(
     cross_step_reconciliation_trace_validator = CrossStepReconciliationTraceValidator()
     cross_step_source_status_validator = CrossStepSourceStatusValidator()
     step_summary_fraction_validator = StepSummaryFractionValidator()
+    step_summary_integrity_validator = StepSummaryIntegrityValidator()
     primary_model_contract_validator = PrimaryModelContractValidator()
     statistical_guard = StatisticalGuard()
     runtime_state = supervisor.bootstrap_state(run_id=run_id, context=context)
@@ -6294,6 +6296,11 @@ else:
                         out_dir=run_result.out_dir,
                     )
                 )
+                early_contract_findings += step_summary_integrity_validator.audit(
+                    step=step,
+                    step_summary=visual_step_summary,
+                    resolved_input_bindings=resolved_input_bindings,
+                )
                 early_contract_findings += step_summary_fraction_validator.audit(
                     step=step,
                     step_summary=visual_step_summary,
@@ -7609,6 +7616,13 @@ else:
             )
         )
         contract_findings.extend(
+            step_summary_integrity_validator.audit(
+                step=step,
+                step_summary=step_summary,
+                resolved_input_bindings=resolved_input_bindings,
+            )
+        )
+        contract_findings.extend(
             step_summary_fraction_validator.audit(
                 step=step,
                 step_summary=step_summary,
@@ -7785,6 +7799,13 @@ else:
                         step=step,
                         step_summary=step_summary,
                         out_dir=run_result.out_dir,
+                    )
+                )
+                contract_findings.extend(
+                    step_summary_integrity_validator.audit(
+                        step=step,
+                        step_summary=step_summary,
+                        resolved_input_bindings=resolved_input_bindings,
                     )
                 )
                 contract_findings.extend(
