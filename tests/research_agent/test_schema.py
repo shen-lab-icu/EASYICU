@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 
 def test_research_context_round_trip(ra):
     ctx = ra.ResearchContext(
@@ -69,3 +71,14 @@ def test_pipeline_result_model(ra):
     )
     paths = res.as_paths()
     assert "context" in paths and paths["context"].name == "context.json"
+
+
+def test_analysis_plan_rejects_duplicate_step_ids(ra):
+    with pytest.raises(ValueError, match="step_id values must be unique"):
+        ra.AnalysisPlan(
+            research_question="Test duplicate execution identity.",
+            steps=[
+                ra.AnalysisStep(step_id="01_model", intent="First owner."),
+                ra.AnalysisStep(step_id="01_model", intent="Conflicting owner."),
+            ],
+        )
