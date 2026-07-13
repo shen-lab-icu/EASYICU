@@ -531,12 +531,13 @@ def render_distribution_availability_bundle_from_prior_outputs(
     ax_a.set_xlabel(axis_label)
     ax_a.set_title("Observed exposure distribution", loc="left", pad=4)
     ax_a.text(
-        values["median"],
-        0.13,
+        0.5,
+        0.72,
         f"median {values['median']:g}  (IQR {values['q25']:g}–{values['q75']:g})\n"
         f"n={prepared.observed_n:,}",
+        transform=ax_a.transAxes,
         ha="center",
-        va="bottom",
+        va="center",
         fontsize=6.5,
     )
     ax_a.grid(axis="x", color=palette["neutral_light"], linewidth=0.55)
