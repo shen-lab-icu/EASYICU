@@ -30,6 +30,7 @@ import hashlib
 import importlib
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -46,6 +47,7 @@ from typing import (
     Mapping,
     Optional,
     Sequence,
+    Set,
     Tuple,
 )
 
@@ -252,6 +254,32 @@ _TYPED_INPUT_KINDS = frozenset(
     }
 )
 
+# Typed products describe the logical contract while EvidenceStore kinds describe
+# the physical evidence class.  Most pairs are exact.  The three adapters below
+# are deliberate and closed: tabular datasets are stored as tables, serialized
+# models/manifests as logs, and generic artifacts may be either a table or a log.
+# Code and figures are never compatible with a generic scientific artifact.
+_TYPED_INPUT_EVIDENCE_KINDS: Mapping[str, frozenset[str]] = {
+    "artifact": frozenset({"log", "table"}),
+    "dataset": frozenset({"table"}),
+    "figure": frozenset({"figure"}),
+    "log": frozenset({"log"}),
+    "manifest": frozenset({"log"}),
+    "model": frozenset({"log"}),
+    "statistic": frozenset({"statistic"}),
+    "table": frozenset({"table"}),
+}
+
+
+def _evidence_kind_matches_typed_product(
+    record: Any,
+    typed_product: Tuple[str, str],
+) -> bool:
+    evidence_kind = str(_evidence_record_field(record, "kind") or "").strip().lower()
+    return evidence_kind in _TYPED_INPUT_EVIDENCE_KINDS.get(
+        typed_product[0], frozenset()
+    )
+
 
 def _normalise_typed_product_name(value: Any) -> str:
     parsed = _canonical_typed_product(f"artifact:{value}")
@@ -345,32 +373,268 @@ def _lineage_failure_product_fields(
     return fields
 
 
-def _step_summary_contains_statistic(step_summary: Any, statistic_name: str) -> bool:
-    """Confirm a declared scalar is materialized in the current summary."""
+def _step_summary_statistic_values(
+    step_summary: Any,
+    statistic_name: str,
+) -> List[float]:
+    """Return finite scalar values bound to one exact statistic name."""
 
-    def _walk(value: Any) -> bool:
+    values: List[float] = []
+
+    def _append(value: Any) -> None:
+        if isinstance(value, bool) or isinstance(value, (Mapping, list, tuple)):
+            return
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return
+        if math.isfinite(numeric):
+            values.append(numeric)
+
+    def _walk(value: Any) -> None:
         if isinstance(value, Mapping):
             declared_name = value.get("name") or value.get("statistic")
-            if (
-                declared_name is not None
-                and _normalise_typed_product_name(declared_name) == statistic_name
-                and any(key in value for key in ("value", "estimate", "result"))
+            if declared_name is not None and (
+                _normalise_typed_product_name(declared_name) == statistic_name
             ):
-                return True
+                for result_key in ("value", "estimate", "result"):
+                    if result_key in value:
+                        _append(value[result_key])
             for key, nested in value.items():
                 if (
                     _normalise_typed_product_name(key) == statistic_name
                     and nested is not None
                     and not isinstance(nested, (Mapping, list, tuple))
                 ):
-                    return True
-                if _walk(nested):
-                    return True
+                    _append(nested)
+                _walk(nested)
         elif isinstance(value, (list, tuple)):
-            return any(_walk(item) for item in value)
-        return False
+            for item in value:
+                _walk(item)
 
-    return _walk(step_summary)
+    _walk(step_summary)
+    return values
+
+
+def _step_scientific_signature(step: AnalysisStep) -> Tuple[Any, ...]:
+    """Fingerprint every Planner-owned field that can change execution.
+
+    The current schema still carries exposure/outcome definitions, time windows,
+    covariates, and missingness policy in ``intent``.  Until those coordinates
+    are fully structured, ordinary semantic paraphrases cannot safely be
+    distinguished from a changed estimand.  Only case/whitespace normalization
+    is ignored.
+    """
+
+    return (
+        step.step_id,
+        step.method,
+        tuple(step.inputs),
+        tuple(step.expected_outputs),
+        " ".join(str(step.intent or "").split()).casefold(),
+        tuple(step.icu_rule_refs),
+        tuple(
+            role
+            for role in (
+                "primary",
+                "secondary",
+                "sensitivity",
+                "corroborative",
+            )
+            if re.search(rf"\b{role}\b", (step.intent or "").lower())
+        ),
+        tuple(
+            (
+                requirement.requirement_id,
+                requirement.outcome,
+                requirement.outcome_type,
+                requirement.method_family,
+                requirement.exposure_source,
+                requirement.analysis_role,
+                requirement.analysis_set,
+                requirement.required_for_step_success,
+            )
+            for requirement in step.model_requirements
+        ),
+        (
+            json.dumps(
+                step.trajectory_stability_spec.model_dump(mode="json"),
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            if step.trajectory_stability_spec is not None
+            else None
+        ),
+    )
+
+
+def _normalise_scientific_text(value: Any) -> Optional[str]:
+    """Normalize cosmetic prose differences without erasing scientific edits."""
+
+    if value is None:
+        return None
+    return " ".join(str(value).split()).casefold()
+
+
+def _plan_scientific_scope_signature(plan: AnalysisPlan) -> Tuple[Optional[str], ...]:
+    """Fingerprint Planner-owned science that applies to every plan step.
+
+    ``revision`` is deliberately absent: it records plan history, not a change
+    in the research question, analysis family, cohort, robustness contract, or
+    rationale. Structured values use canonical JSON so the signature remains
+    stable when it is serialized into a step record and loaded on resume.
+    """
+
+    plan_payload = plan.model_dump(
+        mode="json",
+        include={"cohort", "robustness_specs"},
+    )
+    return (
+        _normalise_scientific_text(plan.research_question),
+        _normalise_scientific_text(plan.analysis_type),
+        json.dumps(
+            plan_payload.get("cohort"),
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        json.dumps(
+            plan_payload.get("robustness_specs", []),
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        _normalise_scientific_text(plan.rationale),
+    )
+
+
+def _serializable_plan_scientific_scope_signature(
+    plan: AnalysisPlan,
+) -> List[Optional[str]]:
+    """Return the plan-level signature in manifest-safe form."""
+
+    return list(_plan_scientific_scope_signature(plan))
+
+
+def _preserve_completed_step_snapshots_after_replan(
+    *,
+    current_plan: AnalysisPlan,
+    revised_plan: AnalysisPlan,
+    completed_records: Sequence[Mapping[str, Any]],
+) -> Tuple[AnalysisPlan, List[ValidationFinding]]:
+    """Keep already-executed Planner steps immutable across replans.
+
+    A replanner may change future work, but it cannot retroactively change the
+    scientific request that produced registered evidence. The host-recorded
+    ``analysis_request.step`` snapshot and the current plan-level scientific
+    scope are execution authority. Replacing either would launder stale evidence
+    or permanently block every downstream typed consumer, so restore them before
+    accepting the revised DAG.
+    """
+
+    current_ids = {str(step.step_id) for step in current_plan.steps}
+    snapshots: Dict[str, AnalysisStep] = {}
+    completed_current_records = [
+        record
+        for record in current_successful_step_records(completed_records)
+        if str(record.get("step_id") or "").strip() in current_ids
+    ]
+    for record in completed_current_records:
+        step_id = str(record.get("step_id") or "").strip()
+        analysis_request = record.get("analysis_request")
+        raw_step = (
+            analysis_request.get("step")
+            if isinstance(analysis_request, Mapping)
+            else None
+        )
+        if step_id not in current_ids or not isinstance(raw_step, Mapping):
+            continue
+        try:
+            snapshot = AnalysisStep.model_validate(raw_step)
+        except (TypeError, ValueError):
+            continue
+        if str(snapshot.step_id) == step_id:
+            snapshots[step_id] = snapshot
+    changed_ids: List[str] = []
+    revised_steps: List[AnalysisStep] = []
+    revised_ids: Set[str] = set()
+    for step in revised_plan.steps:
+        step_id = str(step.step_id)
+        snapshot = snapshots.get(step_id)
+        if snapshot is not None:
+            revised_ids.add(step_id)
+            if step.model_dump(mode="json") != snapshot.model_dump(mode="json"):
+                changed_ids.append(step_id)
+            revised_steps.append(snapshot)
+        else:
+            revised_steps.append(step)
+            revised_ids.add(step_id)
+
+    reinserted_ids: List[str] = []
+    current_positions = {
+        str(step.step_id): index for index, step in enumerate(current_plan.steps)
+    }
+    for step_id in sorted(
+        snapshots,
+        key=lambda value: current_positions.get(value, len(current_positions)),
+    ):
+        if step_id in revised_ids:
+            continue
+        insert_at = min(
+            current_positions.get(step_id, len(revised_steps)), len(revised_steps)
+        )
+        revised_steps.insert(insert_at, snapshots[step_id])
+        revised_ids.add(step_id)
+        reinserted_ids.append(step_id)
+
+    current_scope = _plan_scientific_scope_signature(current_plan)
+    revised_scope = _plan_scientific_scope_signature(revised_plan)
+    restored_plan_scope = bool(completed_current_records) and (
+        revised_scope != current_scope
+    )
+    restored_plan_scope_fields: List[str] = []
+    if restored_plan_scope:
+        for field_name in (
+            "research_question",
+            "analysis_type",
+            "cohort",
+            "robustness_specs",
+            "rationale",
+        ):
+            if getattr(revised_plan, field_name) != getattr(current_plan, field_name):
+                restored_plan_scope_fields.append(field_name)
+
+    if not changed_ids and not reinserted_ids and not restored_plan_scope:
+        return revised_plan, []
+    update: Dict[str, Any] = {"steps": revised_steps}
+    if restored_plan_scope:
+        update.update(
+            {
+                "research_question": current_plan.research_question,
+                "analysis_type": current_plan.analysis_type,
+                "cohort": current_plan.cohort,
+                "robustness_specs": current_plan.robustness_specs,
+                "rationale": current_plan.rationale,
+            }
+        )
+    preserved = revised_plan.model_copy(update=update)
+    return preserved, [
+        ValidationFinding(
+            validator="replanner",
+            severity="warning",
+            message=(
+                "Replanner attempted to change completed execution authority; "
+                "restored the host-recorded step snapshots and plan-level "
+                "scientific scope so registered evidence remains bound to "
+                "immutable scientific requests."
+            ),
+            detail={
+                "restored_changed_step_ids": sorted(set(changed_ids)),
+                "reinserted_step_ids": reinserted_ids,
+                "restored_plan_scope": restored_plan_scope,
+                "restored_plan_scope_fields": restored_plan_scope_fields,
+                "reason": "completed_step_snapshot_immutable",
+            },
+        )
+    ]
 
 
 def _resolve_typed_input_evidence(
@@ -433,6 +697,57 @@ def _resolve_typed_input_evidence(
             "producer_status": producer_status or "missing",
         }
 
+    active_producer_step = next(
+        step for step in plan.steps if str(step.step_id) == producer_id
+    )
+    analysis_request = (producer_record or {}).get("analysis_request")
+    executed_step_payload = (
+        analysis_request.get("step") if isinstance(analysis_request, Mapping) else None
+    )
+    if not isinstance(executed_step_payload, Mapping):
+        return None, {
+            "input": str(input_name),
+            **product_fields,
+            "reason": "producer_plan_snapshot_missing",
+            "producer_step_id": producer_id,
+        }
+    try:
+        executed_step = AnalysisStep.model_validate(executed_step_payload)
+    except (TypeError, ValueError):
+        return None, {
+            "input": str(input_name),
+            **product_fields,
+            "reason": "producer_plan_snapshot_invalid",
+            "producer_step_id": producer_id,
+        }
+    if _step_scientific_signature(executed_step) != _step_scientific_signature(
+        active_producer_step
+    ):
+        return None, {
+            "input": str(input_name),
+            **product_fields,
+            "reason": "producer_plan_snapshot_mismatch",
+            "producer_step_id": producer_id,
+        }
+
+    recorded_scope_signature = (producer_record or {}).get("plan_scientific_signature")
+    if not isinstance(recorded_scope_signature, (list, tuple)):
+        return None, {
+            "input": str(input_name),
+            **product_fields,
+            "reason": "producer_plan_scope_snapshot_missing",
+            "producer_step_id": producer_id,
+        }
+    if list(recorded_scope_signature) != (
+        _serializable_plan_scientific_scope_signature(plan)
+    ):
+        return None, {
+            "input": str(input_name),
+            **product_fields,
+            "reason": "producer_plan_scope_snapshot_mismatch",
+            "producer_step_id": producer_id,
+        }
+
     active_ids = {
         str(evidence_id)
         for evidence_id in (producer_record or {}).get("evidence_ids", [])
@@ -440,17 +755,31 @@ def _resolve_typed_input_evidence(
     }
     if typed_product[0] == "statistic":
         step_summary = (producer_record or {}).get("step_summary")
-        if not _step_summary_contains_statistic(step_summary, typed_product[1]):
+        recorded_values = _step_summary_statistic_values(
+            step_summary,
+            typed_product[1],
+        )
+        recorded_unique_values = sorted(set(recorded_values))
+        if not recorded_unique_values:
             return None, {
                 "input": str(input_name),
                 **product_fields,
                 "reason": "statistic_not_materialized",
                 "producer_step_id": producer_id,
             }
+        if len(recorded_unique_values) != 1:
+            return None, {
+                "input": str(input_name),
+                **product_fields,
+                "reason": "statistic_record_value_ambiguous",
+                "producer_step_id": producer_id,
+                "recorded_values": recorded_unique_values,
+            }
         step_summary_evidence_id = str(
             (producer_record or {}).get("step_summary_evidence_id") or ""
         )
         candidates: List[Any] = []
+        incompatible_evidence_kinds: Set[str] = set()
         for record in evidence_records:
             evidence_id = str(_evidence_record_field(record, "evidence_id") or "")
             if (
@@ -461,16 +790,88 @@ def _resolve_typed_input_evidence(
                 or verified_run_evidence_path(run_dir, record) is None
             ):
                 continue
+            if not _evidence_kind_matches_typed_product(record, typed_product):
+                incompatible_evidence_kinds.add(
+                    str(_evidence_record_field(record, "kind") or "missing")
+                )
+                continue
             candidates.append(record)
         if len(candidates) != 1:
             return None, {
                 "input": str(input_name),
                 **product_fields,
-                "reason": "no_verified_current_statistic",
+                "reason": (
+                    "evidence_kind_mismatch"
+                    if incompatible_evidence_kinds and not candidates
+                    else "no_verified_current_statistic"
+                ),
                 "producer_step_id": producer_id,
                 "step_summary_evidence_id": step_summary_evidence_id or None,
+                **(
+                    {
+                        "declared_kind": typed_product[0],
+                        "observed_evidence_kinds": sorted(incompatible_evidence_kinds),
+                    }
+                    if incompatible_evidence_kinds and not candidates
+                    else {}
+                ),
             }
         record = candidates[0]
+        verified_summary_path = verified_run_evidence_path(run_dir, record)
+        try:
+            evidence_summary = json.loads(
+                verified_summary_path.read_text(encoding="utf-8")
+            )
+        except (AttributeError, OSError, TypeError, ValueError):
+            return None, {
+                "input": str(input_name),
+                **product_fields,
+                "reason": "statistic_evidence_payload_invalid",
+                "producer_step_id": producer_id,
+            }
+        if not isinstance(evidence_summary, Mapping):
+            return None, {
+                "input": str(input_name),
+                **product_fields,
+                "reason": "statistic_evidence_payload_not_mapping",
+                "producer_step_id": producer_id,
+            }
+        evidence_values = _step_summary_statistic_values(
+            evidence_summary,
+            typed_product[1],
+        )
+        evidence_unique_values = sorted(set(evidence_values))
+        if not evidence_unique_values:
+            return None, {
+                "input": str(input_name),
+                **product_fields,
+                "reason": "statistic_evidence_value_missing",
+                "producer_step_id": producer_id,
+            }
+        if len(evidence_unique_values) != 1:
+            return None, {
+                "input": str(input_name),
+                **product_fields,
+                "reason": "statistic_evidence_value_ambiguous",
+                "producer_step_id": producer_id,
+                "evidence_values": evidence_unique_values,
+            }
+        recorded_value = recorded_unique_values[0]
+        evidence_value = evidence_unique_values[0]
+        if not math.isclose(
+            recorded_value,
+            evidence_value,
+            rel_tol=1e-12,
+            abs_tol=1e-12,
+        ):
+            return None, {
+                "input": str(input_name),
+                **product_fields,
+                "reason": "statistic_evidence_payload_mismatch",
+                "producer_step_id": producer_id,
+                "recorded_value": recorded_value,
+                "evidence_value": evidence_value,
+            }
         return (
             EvidenceRef(
                 evidence_id=str(_evidence_record_field(record, "evidence_id") or ""),
@@ -503,6 +904,7 @@ def _resolve_typed_input_evidence(
 
     candidates: List[Tuple[Any, Path]] = []
     matching_current_ids: List[str] = []
+    incompatible_evidence_kinds: Set[str] = set()
     for record in evidence_records:
         evidence_id = str(_evidence_record_field(record, "evidence_id") or "")
         if (
@@ -525,6 +927,11 @@ def _resolve_typed_input_evidence(
             )
         if not matches_product:
             continue
+        if not _evidence_kind_matches_typed_product(record, typed_product):
+            incompatible_evidence_kinds.add(
+                str(_evidence_record_field(record, "kind") or "missing")
+            )
+            continue
         matching_current_ids.append(evidence_id)
         candidates.append((record, verified_path))
 
@@ -533,11 +940,23 @@ def _resolve_typed_input_evidence(
             "input": str(input_name),
             **product_fields,
             "reason": (
-                "typed_mapping_not_verified"
-                if declared_filename is not None
-                else "no_verified_current_artifact"
+                "evidence_kind_mismatch"
+                if incompatible_evidence_kinds
+                else (
+                    "typed_mapping_not_verified"
+                    if declared_filename is not None
+                    else "no_verified_current_artifact"
+                )
             ),
             "producer_step_id": producer_id,
+            **(
+                {
+                    "declared_kind": typed_product[0],
+                    "observed_evidence_kinds": sorted(incompatible_evidence_kinds),
+                }
+                if incompatible_evidence_kinds
+                else {}
+            ),
             **(
                 {"declared_path": declared_paths[0]}
                 if declared_filename is not None
@@ -608,6 +1027,8 @@ def _resolved_typed_input_binding(
         None,
     )
     if record is None:
+        return None
+    if not _evidence_kind_matches_typed_product(record, typed_product):
         return None
     verified_path = verified_run_evidence_path(run_dir, record)
     if verified_path is None:
@@ -2092,55 +2513,17 @@ def _ensure_step_figure_contract(
 
 def _plan_signature(
     plan: AnalysisPlan,
-) -> Tuple[Tuple[Any, ...], ...]:
-    """Substantive fingerprint of a plan's step DAG, ignoring ordinary prose.
+) -> Tuple[Any, ...]:
+    """Substantive fingerprint of a plan's step DAG and scientific requests.
 
-    Two plans with the same step DAG are usually analytically identical even if
-    the replanner reworded each step's ``intent``. Structured model requirements
-    and primary/secondary/sensitivity/corroborative role markers are exceptions:
-    changing either changes the estimand hierarchy and must not be suppressed as
-    a no-op revision.
+    Intent remains authoritative because several estimand coordinates are not
+    yet structured in :class:`AnalysisStep`; only case and whitespace changes
+    are cosmetic. Structured model requirements, ICU rules, trajectory specs,
+    typed DAG edges, and result roles are also included.
     """
-    return tuple(
-        (
-            step.step_id,
-            step.method,
-            tuple(step.inputs),
-            tuple(step.expected_outputs),
-            tuple(
-                role
-                for role in (
-                    "primary",
-                    "secondary",
-                    "sensitivity",
-                    "corroborative",
-                )
-                if re.search(rf"\b{role}\b", (step.intent or "").lower())
-            ),
-            tuple(
-                (
-                    requirement.requirement_id,
-                    requirement.outcome,
-                    requirement.outcome_type,
-                    requirement.method_family,
-                    requirement.exposure_source,
-                    requirement.analysis_role,
-                    requirement.analysis_set,
-                    requirement.required_for_step_success,
-                )
-                for requirement in step.model_requirements
-            ),
-            (
-                json.dumps(
-                    step.trajectory_stability_spec.model_dump(mode="json"),
-                    sort_keys=True,
-                    separators=(",", ":"),
-                )
-                if step.trajectory_stability_spec is not None
-                else None
-            ),
-        )
-        for step in plan.steps
+    return (
+        _plan_scientific_scope_signature(plan),
+        tuple(_step_scientific_signature(step) for step in plan.steps),
     )
 
 
@@ -3326,6 +3709,14 @@ def run_execute_phase(
                 )
             )
             return current_plan
+        revised, immutable_step_findings = (
+            _preserve_completed_step_snapshots_after_replan(
+                current_plan=current_plan,
+                revised_plan=revised,
+                completed_records=completed_records or [],
+            )
+        )
+        findings.extend(immutable_step_findings)
         # Guard against the replanner silently dropping the primary
         # result-bearing MODEL step (the estimand) while inserting an
         # audit/reconciliation step. Run this before figure preservation so the re-attached
@@ -3409,11 +3800,19 @@ def run_execute_phase(
             context=context,
         )
         findings.extend(trajectory_product_findings)
+        revised, post_transform_snapshot_findings = (
+            _preserve_completed_step_snapshots_after_replan(
+                current_plan=current_plan,
+                revised_plan=revised,
+                completed_records=completed_records or [],
+            )
+        )
+        findings.extend(post_transform_snapshot_findings)
 
-        # No-op detection on the *substantive* step DAG, not the full
-        # model_dump. A verbose replanner can rewrite each step's ``intent``
-        # prose without changing the analysis; that must not count as a
-        # revision or burn the convergence budget.
+        # No-op detection uses the scientific signature rather than the full
+        # model_dump. Only casing/whitespace changes in intent are cosmetic;
+        # semantic prose remains authoritative until every estimand coordinate
+        # has a structured schema field.
         if _plan_signature(revised) == _plan_signature(current_plan):
             _replan_state["noop_streak"] += 1
             cap_noop = pipeline._max_consecutive_noop_replans
@@ -3857,6 +4256,9 @@ def run_execute_phase(
         step_record: Dict[str, Any] = {
             "step_id": step.step_id,
             "intent": step.intent,
+            "plan_scientific_signature": (
+                _serializable_plan_scientific_scope_signature(plan)
+            ),
         }
         coder_context = _coder_context_with_locked_robustness_specs(
             context=agent_context,

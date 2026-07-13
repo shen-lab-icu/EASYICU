@@ -184,15 +184,37 @@ def _two_step_plan(intent_a: str, *, method: str = "logit"):
     )
 
 
-def test_plan_signature_ignores_intent_prose():
-    """A replanner that only reworded step intent is a no-op."""
+def test_plan_signature_normalizes_only_intent_case_and_whitespace():
+    """Cosmetic casing/spacing is a no-op; semantic prose is still authority."""
     from easyicu.research_agent.pipeline_execute import _plan_signature
 
     base = _two_step_plan("Define the adult ICU cohort.")
-    reworded = _two_step_plan("Build the adult intensive-care cohort.")
-    # Different prose, identical step DAG -> same substantive signature.
+    reworded = _two_step_plan("  DEFINE   THE ADULT ICU COHORT. ")
     assert base.model_dump() != reworded.model_dump()
     assert _plan_signature(base) == _plan_signature(reworded)
+
+
+def test_plan_signature_detects_scientific_intent_change():
+    from easyicu.research_agent.pipeline_execute import _plan_signature
+
+    mortality = _two_step_plan(
+        "Use ICU mortality after baseline lactate in the first 24 hours."
+    )
+    readmission = _two_step_plan(
+        "Use 30-day readmission after baseline creatinine in the first 48 hours."
+    )
+
+    assert _plan_signature(mortality) != _plan_signature(readmission)
+
+
+def test_plan_signature_detects_icu_rule_change():
+    from easyicu.research_agent.pipeline_execute import _plan_signature
+
+    base = _two_step_plan("Define the adult ICU cohort.")
+    changed = base.model_copy(deep=True)
+    changed.steps[0].icu_rule_refs = ["time_zero_before_exposure"]
+
+    assert _plan_signature(base) != _plan_signature(changed)
 
 
 def test_plan_signature_detects_substantive_change():

@@ -790,6 +790,9 @@ class AnalysisPlan(BaseModel):
 
     @model_validator(mode="after")
     def _validate_robustness_specs(self) -> "AnalysisPlan":
+        step_ids = [str(step.step_id) for step in self.steps]
+        if len(step_ids) != len(set(step_ids)):
+            raise ValueError("analysis plan step_id values must be unique")
         if self.robustness_specs:
             try:
                 validate_robustness_specs(self.robustness_specs)

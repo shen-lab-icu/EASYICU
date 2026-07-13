@@ -2,8 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from easyicu.research_agent.cohort_schema import CohortDefinition
 from easyicu.research_agent.evidence import EvidenceStore
 from easyicu.research_agent.pipeline_execute import (
+    _plan_scientific_scope_signature,
+    _plan_signature,
+    _preserve_completed_step_snapshots_after_replan,
     _resolve_typed_input_evidence,
     _resolve_typed_artifact_evidence,
     _resolved_typed_input_binding,
@@ -38,6 +44,10 @@ def _plan(*, duplicate_producer: bool = False) -> AnalysisPlan:
     return AnalysisPlan(research_question="Test typed evidence lineage.", steps=steps)
 
 
+def _scope_signature(plan: AnalysisPlan) -> list[str | None]:
+    return list(_plan_scientific_scope_signature(plan))
+
+
 def _register(
     store: EvidenceStore,
     tmp_path: Path,
@@ -45,18 +55,123 @@ def _register(
     suffix: str = ".parquet",
     payload: str = "current",
     evidence_id: str = "analysis_dataset",
+    kind: str = "table",
 ):
     source = tmp_path / "source" / f"analysis_dataset{suffix}"
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text(payload, encoding="utf-8")
     return store.register_file(
-        kind="table",
+        kind=kind,
         description="Typed upstream analysis dataset.",
         source_path=source,
         evidence_id=evidence_id,
         produced_by_step="producer",
         on_sha_change="new_id",
     )
+
+
+def _plan_for_typed_product(product: str) -> AnalysisPlan:
+    return AnalysisPlan(
+        research_question="Test typed evidence kind authority.",
+        steps=[
+            AnalysisStep(
+                step_id="producer",
+                intent="Produce one typed product.",
+                expected_outputs=[product],
+            ),
+            AnalysisStep(
+                step_id="consumer",
+                intent="Consume the typed product.",
+                inputs=[product],
+            ),
+        ],
+    )
+
+
+def test_replan_restores_completed_execution_snapshot() -> None:
+    current = _plan()
+    revised_producer = current.steps[0].model_copy(
+        update={
+            "intent": "Change outcome, exposure, and analysis window.",
+            "icu_rule_refs": ["different_rule"],
+        }
+    )
+    revised = current.model_copy(
+        update={"steps": [revised_producer, *current.steps[1:]]}
+    )
+
+    preserved, findings = _preserve_completed_step_snapshots_after_replan(
+        current_plan=current,
+        revised_plan=revised,
+        completed_records=[
+            {
+                "step_id": "producer",
+                "status": "ok",
+                "analysis_request": {"step": current.steps[0].model_dump(mode="json")},
+            }
+        ],
+    )
+
+    assert preserved.steps[0] == current.steps[0]
+    assert findings
+    assert findings[0].detail["reason"] == "completed_step_snapshot_immutable"
+
+
+def test_plan_signature_detects_plan_level_cohort_change() -> None:
+    base = _plan().model_copy(update={"cohort": CohortDefinition(name="adult_primary")})
+    changed = base.model_copy(
+        update={"cohort": CohortDefinition(name="adult_sensitivity")}
+    )
+
+    assert _plan_signature(base) != _plan_signature(changed)
+    assert _plan_signature(base) == _plan_signature(
+        base.model_copy(update={"revision": base.revision + 1})
+    )
+
+
+def test_replan_restores_plan_scientific_scope_after_completed_step() -> None:
+    current = _plan().model_copy(
+        update={
+            "analysis_type": "adjusted_association",
+            "cohort": CohortDefinition(name="adult_primary"),
+            "rationale": "Estimate the prespecified primary association.",
+        }
+    )
+    revised = current.model_copy(
+        update={
+            "research_question": "Estimate an unrelated outcome.",
+            "analysis_type": "prediction_model",
+            "cohort": CohortDefinition(name="different_population"),
+            "rationale": "Replace the original estimand.",
+            "revision": current.revision + 1,
+        }
+    )
+
+    preserved, findings = _preserve_completed_step_snapshots_after_replan(
+        current_plan=current,
+        revised_plan=revised,
+        completed_records=[
+            {
+                "step_id": "producer",
+                "status": "ok",
+                "analysis_request": {"step": current.steps[0].model_dump(mode="json")},
+            }
+        ],
+    )
+
+    assert preserved.research_question == current.research_question
+    assert preserved.analysis_type == current.analysis_type
+    assert preserved.cohort == current.cohort
+    assert preserved.robustness_specs == current.robustness_specs
+    assert preserved.rationale == current.rationale
+    assert preserved.revision == revised.revision
+    assert findings[0].detail["restored_plan_scope"] is True
+    assert set(findings[0].detail["restored_plan_scope_fields"]) == {
+        "research_question",
+        "analysis_type",
+        "cohort",
+        "rationale",
+    }
 
 
 def _resolve(
@@ -66,11 +181,22 @@ def _resolve(
     records: list[dict],
     plan: AnalysisPlan | None = None,
 ):
+    active_plan = plan or _plan()
+    step_by_id = {step.step_id: step for step in active_plan.steps}
+    snapshotted_records = []
+    for raw_record in records:
+        record = dict(raw_record)
+        producer = step_by_id.get(str(record.get("step_id") or ""))
+        if producer is not None and "analysis_request" not in record:
+            record["analysis_request"] = {"step": producer.model_dump(mode="json")}
+        if producer is not None and "plan_scientific_signature" not in record:
+            record["plan_scientific_signature"] = _scope_signature(active_plan)
+        snapshotted_records.append(record)
     return _resolve_typed_artifact_evidence(
         input_name="artifact:analysis_dataset",
-        plan=plan or _plan(),
+        plan=active_plan,
         evidence_records=store.records(),
-        per_step_records=records,
+        per_step_records=snapshotted_records,
         run_dir=tmp_path,
     )
 
@@ -96,6 +222,108 @@ def test_typed_artifact_resolves_verified_current_producer_output(
     assert failure is None
     assert ref is not None
     assert ref.evidence_id == current.evidence_id
+
+
+@pytest.mark.parametrize(
+    ("declared_product", "evidence_kind", "suffix"),
+    [
+        ("table:analysis_dataset", "table", ".csv"),
+        ("dataset:analysis_dataset", "table", ".parquet"),
+        ("artifact:analysis_dataset", "table", ".parquet"),
+        ("artifact:analysis_dataset", "log", ".json"),
+        ("model:analysis_dataset", "log", ".pkl"),
+        ("manifest:analysis_dataset", "log", ".json"),
+        ("figure:analysis_dataset", "figure", ".png"),
+        ("log:analysis_dataset", "log", ".txt"),
+    ],
+)
+def test_typed_input_accepts_only_closed_compatible_evidence_kinds(
+    tmp_path: Path,
+    declared_product: str,
+    evidence_kind: str,
+    suffix: str,
+) -> None:
+    store = EvidenceStore(tmp_path)
+    current = _register(store, tmp_path, suffix=suffix, kind=evidence_kind)
+    plan = _plan_for_typed_product(declared_product)
+
+    ref, failure = _resolve_typed_input_evidence(
+        input_name=declared_product,
+        plan=plan,
+        evidence_records=store.records(),
+        per_step_records=[
+            {
+                "step_id": "producer",
+                "status": "ok",
+                "evidence_ids": [current.evidence_id],
+                "step_summary": {
+                    "output_files": {
+                        declared_product: f"analysis_dataset{suffix}",
+                    }
+                },
+                "analysis_request": {"step": plan.steps[0].model_dump(mode="json")},
+                "plan_scientific_signature": _scope_signature(plan),
+            }
+        ],
+        run_dir=tmp_path,
+    )
+
+    assert failure is None
+    assert ref is not None
+    assert ref.kind == evidence_kind
+
+
+@pytest.mark.parametrize(
+    ("declared_product", "evidence_kind", "suffix"),
+    [
+        ("table:analysis_dataset", "code", ".csv"),
+        ("table:analysis_dataset", "log", ".csv"),
+        ("table:analysis_dataset", "figure", ".csv"),
+        ("dataset:analysis_dataset", "log", ".parquet"),
+        ("model:analysis_dataset", "table", ".pkl"),
+        ("artifact:analysis_dataset", "code", ".json"),
+        ("artifact:analysis_dataset", "figure", ".json"),
+        ("manifest:analysis_dataset", "table", ".json"),
+        ("figure:analysis_dataset", "table", ".png"),
+        ("log:analysis_dataset", "table", ".txt"),
+    ],
+)
+def test_typed_input_rejects_incompatible_evidence_kind(
+    tmp_path: Path,
+    declared_product: str,
+    evidence_kind: str,
+    suffix: str,
+) -> None:
+    store = EvidenceStore(tmp_path)
+    current = _register(store, tmp_path, suffix=suffix, kind=evidence_kind)
+    plan = _plan_for_typed_product(declared_product)
+
+    ref, failure = _resolve_typed_input_evidence(
+        input_name=declared_product,
+        plan=plan,
+        evidence_records=store.records(),
+        per_step_records=[
+            {
+                "step_id": "producer",
+                "status": "ok",
+                "evidence_ids": [current.evidence_id],
+                "step_summary": {
+                    "output_files": {
+                        declared_product: f"analysis_dataset{suffix}",
+                    }
+                },
+                "analysis_request": {"step": plan.steps[0].model_dump(mode="json")},
+                "plan_scientific_signature": _scope_signature(plan),
+            }
+        ],
+        run_dir=tmp_path,
+    )
+
+    assert ref is None
+    assert failure is not None
+    assert failure["reason"] == "evidence_kind_mismatch"
+    assert failure["declared_kind"] == declared_product.split(":", 1)[0]
+    assert failure["observed_evidence_kinds"] == [evidence_kind]
 
 
 def test_resume_uses_latest_authority_not_first_write_alias(tmp_path: Path) -> None:
@@ -335,11 +563,19 @@ def test_typed_table_uses_current_resume_authority_and_writes_exact_manifest(
         plan=plan,
         evidence_records=store.records(),
         per_step_records=[
-            {"step_id": "producer", "status": "ok", "evidence_ids": [old.evidence_id]},
+            {
+                "step_id": "producer",
+                "status": "ok",
+                "evidence_ids": [old.evidence_id],
+                "analysis_request": {"step": plan.steps[0].model_dump(mode="json")},
+                "plan_scientific_signature": _scope_signature(plan),
+            },
             {
                 "step_id": "producer",
                 "status": "ok",
                 "evidence_ids": [current.evidence_id],
+                "analysis_request": {"step": plan.steps[0].model_dump(mode="json")},
+                "plan_scientific_signature": _scope_signature(plan),
             },
         ],
         run_dir=tmp_path,
@@ -357,9 +593,7 @@ def test_typed_table_uses_current_resume_authority_and_writes_exact_manifest(
     assert binding is not None
     assert binding["evidence_id"] == current.evidence_id
     assert binding["sha256"] == current.sha256
-    assert Path(binding["absolute_path"]).read_text(encoding="utf-8").endswith(
-        "x,1\n"
-    )
+    assert Path(binding["absolute_path"]).read_text(encoding="utf-8").endswith("x,1\n")
 
     manifest_path = _write_resolved_inputs_manifest(
         run_dir=tmp_path,
@@ -380,7 +614,7 @@ def test_typed_statistic_binds_current_verified_step_summary(tmp_path: Path) -> 
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text('{"primary_or": 1.25}\n', encoding="utf-8")
     summary = store.register_file(
-        kind="log",
+        kind="statistic",
         description="Current machine-readable step summary.",
         source_path=summary_path,
         evidence_id="producer_step_summary",
@@ -413,6 +647,8 @@ def test_typed_statistic_binds_current_verified_step_summary(tmp_path: Path) -> 
                 "evidence_ids": [summary.evidence_id],
                 "step_summary_evidence_id": summary.evidence_id,
                 "step_summary": {"primary_or": 1.25},
+                "analysis_request": {"step": plan.steps[0].model_dump(mode="json")},
+                "plan_scientific_signature": _scope_signature(plan),
             }
         ],
         run_dir=tmp_path,
@@ -421,3 +657,272 @@ def test_typed_statistic_binds_current_verified_step_summary(tmp_path: Path) -> 
     assert failure is None
     assert ref is not None
     assert ref.evidence_id == summary.evidence_id
+
+
+@pytest.mark.parametrize(
+    ("evidence_payload", "reason"),
+    [
+        ("[]\n", "statistic_evidence_payload_not_mapping"),
+        ('{"other_metric": 1.25}\n', "statistic_evidence_value_missing"),
+        (
+            '{"primary_or": 1.25, "statistics": '
+            '[{"name": "primary_or", "value": 1.30}]}\n',
+            "statistic_evidence_value_ambiguous",
+        ),
+        ('{"primary_or": 0.81}\n', "statistic_evidence_payload_mismatch"),
+    ],
+)
+def test_typed_statistic_requires_value_bound_evidence_payload(
+    tmp_path: Path,
+    evidence_payload: str,
+    reason: str,
+) -> None:
+    store = EvidenceStore(tmp_path)
+    summary_path = tmp_path / "source" / "step_summary.json"
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.write_text(evidence_payload, encoding="utf-8")
+    summary = store.register_file(
+        kind="statistic",
+        description="Current machine-readable step summary.",
+        source_path=summary_path,
+        evidence_id="producer_step_summary",
+        produced_by_step="producer",
+    )
+    plan = AnalysisPlan(
+        research_question="Test typed statistic payload authority.",
+        steps=[
+            AnalysisStep(
+                step_id="producer",
+                intent="Estimate an association.",
+                expected_outputs=["statistic:primary_or"],
+            ),
+            AnalysisStep(
+                step_id="consumer",
+                intent="Consume the association estimate.",
+                inputs=["statistic:primary_or"],
+            ),
+        ],
+    )
+
+    ref, failure = _resolve_typed_input_evidence(
+        input_name="statistic:primary_or",
+        plan=plan,
+        evidence_records=store.records(),
+        per_step_records=[
+            {
+                "step_id": "producer",
+                "status": "ok",
+                "evidence_ids": [summary.evidence_id],
+                "step_summary_evidence_id": summary.evidence_id,
+                "step_summary": {"primary_or": 1.25},
+                "analysis_request": {"step": plan.steps[0].model_dump(mode="json")},
+                "plan_scientific_signature": _scope_signature(plan),
+            }
+        ],
+        run_dir=tmp_path,
+    )
+
+    assert ref is None
+    assert failure is not None
+    assert failure["reason"] == reason
+
+
+def test_typed_input_rejects_missing_plan_scope_snapshot(tmp_path: Path) -> None:
+    store = EvidenceStore(tmp_path)
+    current = _register(store, tmp_path)
+    plan = _plan()
+
+    ref, failure = _resolve_typed_input_evidence(
+        input_name="artifact:analysis_dataset",
+        plan=plan,
+        evidence_records=store.records(),
+        per_step_records=[
+            {
+                "step_id": "producer",
+                "status": "ok",
+                "evidence_ids": [current.evidence_id],
+                "analysis_request": {"step": plan.steps[0].model_dump(mode="json")},
+            }
+        ],
+        run_dir=tmp_path,
+    )
+
+    assert ref is None
+    assert failure is not None
+    assert failure["reason"] == "producer_plan_scope_snapshot_missing"
+
+
+def test_typed_input_rejects_plan_level_cohort_mismatch(tmp_path: Path) -> None:
+    store = EvidenceStore(tmp_path)
+    current = _register(store, tmp_path)
+    executed_plan = _plan().model_copy(
+        update={"cohort": CohortDefinition(name="adult_primary")}
+    )
+    active_plan = executed_plan.model_copy(
+        update={"cohort": CohortDefinition(name="different_population")}
+    )
+
+    ref, failure = _resolve_typed_input_evidence(
+        input_name="artifact:analysis_dataset",
+        plan=active_plan,
+        evidence_records=store.records(),
+        per_step_records=[
+            {
+                "step_id": "producer",
+                "status": "ok",
+                "evidence_ids": [current.evidence_id],
+                "analysis_request": {
+                    "step": executed_plan.steps[0].model_dump(mode="json")
+                },
+                "plan_scientific_signature": _scope_signature(executed_plan),
+            }
+        ],
+        run_dir=tmp_path,
+    )
+
+    assert ref is None
+    assert failure is not None
+    assert failure["reason"] == "producer_plan_scope_snapshot_mismatch"
+
+
+def test_typed_input_rejects_completed_producer_intent_rephrasing(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(tmp_path)
+    current = _register(store, tmp_path)
+    executed_plan = _plan()
+    active_producer = executed_plan.steps[0].model_copy(
+        update={"intent": "Write the same reusable analysis artifact."}
+    )
+    active_plan = executed_plan.model_copy(
+        update={"steps": [active_producer, *executed_plan.steps[1:]]}
+    )
+
+    ref, failure = _resolve_typed_input_evidence(
+        input_name="artifact:analysis_dataset",
+        plan=active_plan,
+        evidence_records=store.records(),
+        per_step_records=[
+            {
+                "step_id": "producer",
+                "status": "ok",
+                "evidence_ids": [current.evidence_id],
+                "analysis_request": {
+                    "step": executed_plan.steps[0].model_dump(mode="json")
+                },
+                "plan_scientific_signature": _scope_signature(executed_plan),
+            }
+        ],
+        run_dir=tmp_path,
+    )
+
+    assert ref is None
+    assert failure is not None
+    assert failure["reason"] == "producer_plan_snapshot_mismatch"
+
+
+def test_typed_input_allows_only_case_and_whitespace_normalization(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(tmp_path)
+    current = _register(store, tmp_path)
+    executed_plan = _plan()
+    active_producer = executed_plan.steps[0].model_copy(
+        update={"intent": "  PRODUCE   A REUSABLE ANALYSIS ARTIFACT.  "}
+    )
+    active_plan = executed_plan.model_copy(
+        update={"steps": [active_producer, *executed_plan.steps[1:]]}
+    )
+
+    ref, failure = _resolve_typed_input_evidence(
+        input_name="artifact:analysis_dataset",
+        plan=active_plan,
+        evidence_records=store.records(),
+        per_step_records=[
+            {
+                "step_id": "producer",
+                "status": "ok",
+                "evidence_ids": [current.evidence_id],
+                "analysis_request": {
+                    "step": executed_plan.steps[0].model_dump(mode="json")
+                },
+                "plan_scientific_signature": _scope_signature(executed_plan),
+            }
+        ],
+        run_dir=tmp_path,
+    )
+
+    assert failure is None
+    assert ref is not None
+
+
+def test_typed_input_rejects_completed_producer_rule_mutated_by_replan(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(tmp_path)
+    current = _register(store, tmp_path)
+    executed_plan = _plan()
+    active_producer = executed_plan.steps[0].model_copy(
+        update={"icu_rule_refs": ["time_zero_before_exposure"]}
+    )
+    active_plan = executed_plan.model_copy(
+        update={"steps": [active_producer, *executed_plan.steps[1:]]}
+    )
+
+    ref, failure = _resolve_typed_input_evidence(
+        input_name="artifact:analysis_dataset",
+        plan=active_plan,
+        evidence_records=store.records(),
+        per_step_records=[
+            {
+                "step_id": "producer",
+                "status": "ok",
+                "evidence_ids": [current.evidence_id],
+                "analysis_request": {
+                    "step": executed_plan.steps[0].model_dump(mode="json")
+                },
+                "plan_scientific_signature": _scope_signature(executed_plan),
+            }
+        ],
+        run_dir=tmp_path,
+    )
+
+    assert ref is None
+    assert failure is not None
+    assert failure["reason"] == "producer_plan_snapshot_mismatch"
+
+
+def test_typed_input_rejects_completed_producer_science_mutated_by_replan(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(tmp_path)
+    current = _register(store, tmp_path)
+    executed_plan = _plan()
+    active_producer = executed_plan.steps[0].model_copy(
+        update={"method": "different_scientific_method"}
+    )
+    active_plan = executed_plan.model_copy(
+        update={"steps": [active_producer, *executed_plan.steps[1:]]}
+    )
+
+    ref, failure = _resolve_typed_input_evidence(
+        input_name="artifact:analysis_dataset",
+        plan=active_plan,
+        evidence_records=store.records(),
+        per_step_records=[
+            {
+                "step_id": "producer",
+                "status": "ok",
+                "evidence_ids": [current.evidence_id],
+                "analysis_request": {
+                    "step": executed_plan.steps[0].model_dump(mode="json")
+                },
+                "plan_scientific_signature": _scope_signature(executed_plan),
+            }
+        ],
+        run_dir=tmp_path,
+    )
+
+    assert ref is None
+    assert failure is not None
+    assert failure["reason"] == "producer_plan_snapshot_mismatch"
