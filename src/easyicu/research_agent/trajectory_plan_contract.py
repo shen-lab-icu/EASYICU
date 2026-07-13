@@ -1359,7 +1359,8 @@ def trajectory_role_code_contract(
             "labels. Copy id_column into the cluster-selection manifest and candidate "
             "model metadata so a downstream stability owner never has to guess it. "
             "Give every candidate model record a stable model_id and copy the chosen "
-            "record's id into cluster_selection.selected_model_id. "
+            "record's id into cluster_selection.selected_model_id. Also copy the exact "
+            "clustering_method/model_family into the cluster-selection manifest. "
             "The agent owns the method, criterion, and k."
             + role_boundary
         )
@@ -1391,6 +1392,12 @@ def trajectory_role_code_contract(
             "with the frozen selection; derive a provenance id from the bound candidate-"
             "models evidence_id plus selected_n_clusters and record that derivation. "
             "Fail closed if zero or multiple records match. "
+            "Read clustering_method from the selection manifest. For a legacy manifest "
+            "without it, accept a method family only when the bound candidate-model "
+            "artifact's top-level metadata and every fitted candidate record resolve "
+            "to one identical normalized method family; record that legacy derivation "
+            "and fail closed on absence or disagreement. Never infer the method from "
+            "step ids, filenames, or prose. "
             "Do not compare candidate k values or choose a new method, k, coordinate "
             "layer, population, or reference assignment. If any required upstream "
             "field is absent or inconsistent, fail closed in step_summary.json "
