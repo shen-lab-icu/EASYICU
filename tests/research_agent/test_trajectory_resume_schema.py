@@ -204,6 +204,8 @@ def _legacy_records(tmp_path, *, conflicting_id: bool = False):
                         "fit_status": "fitted",
                         "converged": True,
                         "model_family": "diagonal_gaussian_mixture",
+                        "fit_method": "complete_data_em_gaussian_mixture",
+                        "covariance_type": "diag",
                         "criterion_value": 10.0,
                     },
                     {
@@ -211,6 +213,8 @@ def _legacy_records(tmp_path, *, conflicting_id: bool = False):
                         "fit_status": "fitted",
                         "converged": True,
                         "model_family": "diagonal_gaussian_mixture",
+                        "fit_method": "complete_data_em_gaussian_mixture",
+                        "covariance_type": "diag",
                         "criterion_value": 12.0,
                     },
                 ],
@@ -324,8 +328,10 @@ def test_resume_materializes_digest_bound_replay_schemas(tmp_path):
     assert representation_schema["representation_columns"] == ["z0", "z1"]
     assert representation_schema["frozen_population_n"] == 3
     assert candidate_schema["selected_n_clusters"] == 2
+    assert candidate_schema["schema_version"].endswith("/2")
     assert candidate_schema["assignment_column"] == "cluster_label_k2"
     assert candidate_schema["model_family"] == "diagonal_gaussian_mixture"
+    assert candidate_schema["fit_method"] == "complete_data_em_gaussian_mixture"
     assert candidate_schema["selected_model_id"].endswith("::n_clusters_2")
     assert next(
         record for record in records if record["step_id"] == "representation"

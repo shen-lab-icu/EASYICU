@@ -810,12 +810,18 @@ def _candidate_schema_payload(
             "candidate_model_evidence_id_plus_selected_n_clusters"
         )
     payload = {
-        "schema_version": "easyicu.candidate_cluster_solution_schema/1",
+        "schema_version": "easyicu.candidate_cluster_solution_schema/2",
         "migration_source": "legacy_candidate_outputs",
         "id_column": id_column,
         "representation_columns": representation_columns,
         "clustering_method": clustering_method,
         "model_family": model_family,
+        "fit_method": _one_string(
+            [selected_model.get("fit_method")], field="fit_method"
+        ),
+        "covariance_type": _one_string(
+            [selected_model.get("covariance_type")], field="covariance_type"
+        ),
         "selected_n_clusters": selected_k,
         "selected_model_id": selected_model_id,
         "selected_model_id_derivation": selected_model_id_derivation,
@@ -923,12 +929,37 @@ def materialize_legacy_trajectory_replay_schemas(
                 raise _LegacyTrajectorySchemaError(
                     "a resumed candidate owner lacks a current representation schema"
                 )
-            if not _schema_already_active(
+            candidate_schema_active = _schema_already_active(
                 record=candidate_record,
                 evidence=evidence,
                 run_dir=run_dir,
                 stem=_CANDIDATE_SCHEMA,
-            ):
+            )
+            if candidate_schema_active:
+                active_record, active_path = _active_file(
+                    record=candidate_record,
+                    evidence=evidence,
+                    run_dir=run_dir,
+                    stem=_CANDIDATE_SCHEMA,
+                )
+                active_payload = _read_json(
+                    active_path, label="candidate cluster solution schema"
+                )
+                if active_payload.get("schema_version") != (
+                    "easyicu.candidate_cluster_solution_schema/2"
+                ):
+                    candidate_record["evidence_ids"] = [
+                        evidence_id
+                        for evidence_id in candidate_record.get("evidence_ids", [])
+                        if str(evidence_id) != active_record.evidence_id
+                    ]
+                    superseded = list(
+                        candidate_record.get("resume_schema_superseded") or []
+                    )
+                    superseded.append(active_record.evidence_id)
+                    candidate_record["resume_schema_superseded"] = superseded
+                    candidate_schema_active = False
+            if not candidate_schema_active:
                 candidate_payload, inputs = _candidate_schema_payload(
                     record=candidate_record,
                     representation_schema=payload,
