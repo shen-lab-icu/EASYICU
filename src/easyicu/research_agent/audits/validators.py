@@ -6843,13 +6843,42 @@ class FigureSourceDataValidator:
                 continue
 
             declared_sources = contract.get("source_data")
-            source_names = (
+            raw_source_names = (
                 [declared_sources]
                 if isinstance(declared_sources, str)
                 else list(declared_sources)
                 if isinstance(declared_sources, (list, tuple, set))
-                else []
+                else ([] if declared_sources is None else [declared_sources])
             )
+            invalid_source_descriptors = [
+                {
+                    "index": index,
+                    "value_type": type(value).__name__,
+                }
+                for index, value in enumerate(raw_source_names)
+                if not isinstance(value, str)
+            ]
+            if invalid_source_descriptors:
+                findings.append(
+                    ValidationFinding(
+                        validator=cls.name,
+                        severity="error",
+                        message=(
+                            f"Figure contract '{contract_path.name}' must declare "
+                            "source_data as local CSV basename strings."
+                        ),
+                        detail={
+                            "step_id": step.step_id,
+                            "figure_product": raw_product,
+                            "invalid_source_data_descriptors": (
+                                invalid_source_descriptors
+                            ),
+                            "reason": "invalid_contract_source_data",
+                        },
+                    )
+                )
+                continue
+            source_names = [str(value) for value in raw_source_names]
             local_sources: List[Path] = []
             unsafe_sources: List[str] = []
             for value in source_names:

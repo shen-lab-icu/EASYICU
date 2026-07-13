@@ -245,11 +245,35 @@ def test_coder_prompt_prevents_resume_evidence_polluting_figure_rendering() -> N
     assert "never rank all historical resume records together" in coder_prompt
     assert "<figure_stem>_source_data.csv" in coder_prompt
     assert "matching PNG, SVG, PDF, and TIFF" in coder_prompt
+    assert "one local CSV basename" in coder_prompt
+    assert "Never put a dict" in coder_prompt
+    assert "absolute path, or path metadata" in coder_prompt
     assert "EASYICU_RUN_DIR" in coder_prompt
     assert "EASYICU_MANIFEST_PARTIAL" in coder_prompt
     assert "100 * count / denominator" in coder_prompt
     assert "conditional on valid-observed records" in coder_prompt
     assert "Never" in coder_prompt and '"sums to 100"' in coder_prompt
+
+
+def test_figure_contract_repair_guidance_requires_flat_local_source_names() -> None:
+    from easyicu.research_agent.plan_utils import _step_contract_repair_guidance
+    from easyicu.research_agent.schema import AnalysisStep
+
+    guidance = _step_contract_repair_guidance(
+        step=AnalysisStep(
+            step_id="02_render",
+            intent="Render the planned source-backed result.",
+            inputs=["table:result"],
+            expected_outputs=["figure:result"],
+            method="visualization",
+        ),
+        step_summary={"figure_files": ["result.png"]},
+        code="contract = {'source_data': [{'path': 'result_source_data.csv'}]}",
+    )
+
+    assert "one local CSV basename string" in guidance
+    assert "flat list of local CSV basename strings" in guidance
+    assert "Never write a dict" in guidance
 
 
 def test_coder_prompt_uses_canonical_positional_source_trace_columns() -> None:

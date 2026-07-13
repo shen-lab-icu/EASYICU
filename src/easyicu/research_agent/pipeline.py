@@ -257,6 +257,8 @@ from .plan_utils import (
     _cohort_definition_is_empty,
     _ensure_audit_panel_step_in_plan,
     _ensure_publication_figure_step_in_plan,
+    _effect_figure_semantics_supported_by_inputs,
+    _effect_figure_semantics_supported_by_model_roster,
     _enforce_advanced_plan_contract,
     _plan_expects_analysis_cohort,
     _infer_primary_predictor_from_context,
@@ -266,11 +268,13 @@ from .plan_utils import (
     _preserve_figure_steps_after_replan,
     _question_primary_predictor_is_vasopressor_or_unknown,
     _research_question_implies_figure,
+    _render_only_figure_step_intent,
     _split_table_and_figure_outputs_in_plan,
     _step_contract_findings,
     _step_contract_repair_guidance,
     _step_expects_figure,
     _step_produces_figure,
+    effect_output_authorized,
 )
 from .experiment_spec import ExperimentSpec, dump_experiment_spec
 from .figure_skill import PublicationFigureSkill
@@ -678,6 +682,212 @@ def _restore_resume_plan_robustness_lock(
         },
     )
     return restored, revision_path
+
+
+def _migrate_legacy_resume_figure_render_edges(
+    *,
+    plan: AnalysisPlan,
+    run_dir: Path,
+    resume_state: Optional[Dict[str, Any]],
+    resume_from_step_id: Optional[str],
+    evidence: EvidenceStore,
+    prompt_version: str,
+    llm_signature: str,
+) -> tuple[AnalysisPlan, Optional[Path], tuple[str, ...]]:
+    """Restore exact typed parent edges on legacy system-split figure steps.
+
+    Older framework-generated render children copied the parent's raw inputs and
+    scientific method. Current source-data authority requires a host-resolved
+    typed edge. This migration is intentionally narrower than ordinary plan
+    shaping: it recognizes only the full legacy splitter fingerprint and binds
+    the child to every globally unique table/statistic declared by its direct
+    parent. Raw artifacts, datasets, and models remain excluded so rendering
+    cannot reopen the scientific analysis. Any ambiguity remains fail-closed for
+    the Planner.
+    """
+
+    from .declared_product_contract import (
+        effect_bearing_product,
+        typed_product,
+    )
+
+    completed_records = _resume_completed_records_for_plan_migration(
+        plan=plan,
+        resume_state=resume_state,
+        resume_from_step_id=resume_from_step_id,
+    )
+    completed_step_ids = {
+        str(record.get("step_id") or "") for record in completed_records
+    }
+    if len(plan.steps) < 2:
+        return plan, None, ()
+
+    step_order = {str(step.step_id): index for index, step in enumerate(plan.steps)}
+    cut_step_id = str(resume_from_step_id or "").strip()
+    cut_index: Optional[int] = None
+    if cut_step_id:
+        if cut_step_id == "00_probe":
+            cut_index = 0
+        elif cut_step_id in step_order:
+            cut_index = step_order[cut_step_id]
+        else:
+            raise LegacyResumePlanMigrationError(
+                f"resume_from_step_id={cut_step_id!r} is not in the active analysis plan"
+            )
+
+    producer_ids: Dict[tuple[str, str], set[str]] = {}
+    for producer_step in plan.steps:
+        for output in producer_step.expected_outputs or []:
+            parsed = typed_product(output)
+            if parsed is not None and parsed[0] in {"statistic", "table"}:
+                producer_ids.setdefault(parsed, set()).add(
+                    str(producer_step.step_id)
+                )
+
+    revised_steps = list(plan.steps)
+    migrated_step_ids: List[str] = []
+    for index in range(1, len(plan.steps)):
+        parent = plan.steps[index - 1]
+        child = plan.steps[index]
+        parent_id = str(parent.step_id)
+        child_id = str(child.step_id)
+        child_is_in_resume_window = cut_index is None or index >= cut_index
+        parent_is_available_or_scheduled = (
+            parent_id in completed_step_ids
+            or (cut_index is not None and index - 1 >= cut_index)
+        )
+        if (
+            not child_is_in_resume_window
+            or not parent_is_available_or_scheduled
+            or child_id in completed_step_ids
+            or child_id != f"{parent_id}_figure"
+            or str(child.method) != str(parent.method)
+            or list(child.inputs or []) != list(parent.inputs or [])
+            or any(typed_product(raw) is not None for raw in child.inputs or [])
+            or list(child.icu_rule_refs or [])
+            != [*list(parent.icu_rule_refs or []), "visualization_rule"]
+            or child.model_requirements
+            or child.trajectory_stability_spec is not None
+        ):
+            continue
+
+        parent_outputs = list(parent.expected_outputs or [])
+        if any(
+            (parsed := typed_product(raw)) is not None and parsed[0] == "figure"
+            for raw in parent_outputs
+        ):
+            continue
+
+        figure_outputs: List[str] = []
+        child_contract_valid = True
+        for raw in child.expected_outputs or []:
+            parsed = typed_product(raw)
+            if parsed is None:
+                child_contract_valid = False
+                break
+            if parsed[0] == "figure":
+                figure_outputs.append(str(raw))
+            elif parsed[0] != "log":
+                child_contract_valid = False
+                break
+        figure_identities = [typed_product(raw) for raw in figure_outputs]
+        if (
+            not child_contract_valid
+            or not figure_outputs
+            or len(figure_identities) != len(set(figure_identities))
+            or child.intent
+            != _render_only_figure_step_intent(
+                source_step_id=parent_id,
+                figure_outputs=figure_outputs,
+            )
+        ):
+            continue
+
+        source_tokens = [
+            str(raw)
+            for raw in parent_outputs
+            if (parsed := typed_product(raw)) is not None
+            and parsed[0] in {"statistic", "table"}
+        ]
+        source_identities = {
+            parsed
+            for raw in source_tokens
+            if (parsed := typed_product(raw)) is not None
+        }
+        source_names = [identity[1] for identity in source_identities]
+        if (
+            not source_tokens
+            or len(source_identities) != len(source_tokens)
+            or len(source_names) != len(set(source_names))
+            or any(
+                producer_ids.get(identity) != {parent_id}
+                for identity in source_identities
+            )
+        ):
+            continue
+
+        if any(effect_bearing_product(raw) for raw in figure_outputs) and (
+            not effect_output_authorized(parent)
+            or not (
+                _effect_figure_semantics_supported_by_inputs(
+                    figure_outputs=figure_outputs,
+                    effect_input_products=source_identities,
+                )
+                or _effect_figure_semantics_supported_by_model_roster(
+                    step=parent,
+                    figure_outputs=figure_outputs,
+                    effect_input_products=source_identities,
+                )
+            )
+        ):
+            continue
+
+        revised_steps[index] = child.model_copy(
+            update={
+                "inputs": source_tokens,
+                "method": "visualization",
+            }
+        )
+        migrated_step_ids.append(child_id)
+
+    if not migrated_step_ids:
+        return plan, None, ()
+
+    revision = _next_analysis_plan_revision(
+        run_dir=run_dir,
+        plan=plan,
+        evidence=evidence,
+    )
+    migrated = plan.model_copy(
+        update={
+            "steps": revised_steps,
+            "revision": revision,
+        }
+    )
+    revision_path = run_dir / f"analysis_plan_revision_{revision}.json"
+    if revision_path.exists():
+        raise LegacyResumePlanMigrationError(
+            f"refusing to overwrite existing plan revision {revision_path.name}"
+        )
+    revision_path.write_text(migrated.model_dump_json(indent=2), encoding="utf-8")
+    evidence.register_file(
+        kind="log",
+        description=(
+            "Resume migration restoring exact typed parent edges on legacy "
+            "framework-split rendering steps."
+        ),
+        source_path=revision_path,
+        evidence_id=f"analysis_plan_revision_{revision}",
+        producer="planner",
+        generation_mode="system",
+        prompt_pack_version=prompt_version,
+        metadata={
+            "reason": "resume_legacy_figure_render_edges",
+            "target_step_ids": migrated_step_ids,
+            "llm_signature": llm_signature,
+        },
+    )
+    return migrated, revision_path, tuple(migrated_step_ids)
 
 
 def _migrate_resume_trajectory_products(
@@ -2618,6 +2828,39 @@ class ResearchAgentPipeline:
                             "kind": "resume_trajectory_schema_migration",
                             "plan_path": str(
                                 trajectory_migration_path.relative_to(run_dir)
+                            ),
+                        },
+                    )
+                )
+            (
+                plan,
+                figure_edge_migration_path,
+                figure_edge_step_ids,
+            ) = _migrate_legacy_resume_figure_render_edges(
+                plan=plan,
+                run_dir=run_dir,
+                resume_state=resume_state,
+                resume_from_step_id=resume_from_step_id,
+                evidence=evidence,
+                prompt_version=prompt_version,
+                llm_signature=llm_signature,
+            )
+            if figure_edge_migration_path is not None:
+                migrated_plan_path = figure_edge_migration_path
+                plan_generation_mode = "resumed_planner_migration"
+                findings.append(
+                    ValidationFinding(
+                        validator="planner_schema_migration",
+                        severity="warning",
+                        message=(
+                            "Resume restored exact typed parent edges on "
+                            "legacy framework-split rendering steps."
+                        ),
+                        detail={
+                            "kind": "legacy_figure_render_edge",
+                            "target_step_ids": list(figure_edge_step_ids),
+                            "plan_path": str(
+                                figure_edge_migration_path.relative_to(run_dir)
                             ),
                         },
                     )

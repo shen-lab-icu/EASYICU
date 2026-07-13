@@ -34,6 +34,7 @@ import math
 import os
 import re
 import shutil
+import stat
 import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -212,6 +213,9 @@ logger = logging.getLogger(__name__)
 
 _STANDARD_EXECUTOR_INTERNAL_PENDING_ARTIFACTS = frozenset(
     {".cluster_stability_assignments.pending.csv"}
+)
+_FIGURE_CONTRACT_SOURCE_DATA_SCHEMA_REPAIR_ID = (
+    "figure_contract_source_data_schema_v1"
 )
 
 
@@ -2509,6 +2513,169 @@ def _ensure_step_figure_contract(
         encoding="utf-8",
     )
     return contract_path
+
+
+def _figure_contract_source_data_canonicalization_candidate(
+    *,
+    contract_path: Path,
+    out_dir: Path,
+) -> Optional[Tuple[str, str, List[str]]]:
+    """Return an exact legacy-descriptor -> flat-basename JSON rewrite.
+
+    ``make_figure_contract`` accepts small path mappings as an in-memory input
+    compatibility layer but persists canonical ``List[str]`` source data.
+    Some legacy agent scripts wrote those mappings directly to JSON.  This
+    representation-only migration is deliberately strict: every populated path
+    alias must agree, every source must be an existing ordinary local CSV in
+    the exact step output directory, and non-empty evidence references are not
+    discarded.  Anything else is left untouched for the validator to block.
+    """
+
+    output_root = Path(out_dir).resolve()
+    candidate_path = Path(contract_path)
+    try:
+        if (
+            candidate_path.parent.resolve() != output_root
+            or candidate_path.resolve(strict=True).parent != output_root
+            or not candidate_path.is_file()
+            or candidate_path.is_symlink()
+            or candidate_path.stat().st_nlink != 1
+        ):
+            return None
+        before = candidate_path.read_text(encoding="utf-8")
+        payload = json.loads(before)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+
+    raw_sources = payload.get("source_data")
+    if isinstance(raw_sources, Mapping):
+        source_items: List[Any] = [raw_sources]
+    elif isinstance(raw_sources, list):
+        source_items = list(raw_sources)
+    else:
+        return None
+    if not source_items or not any(isinstance(item, Mapping) for item in source_items):
+        return None
+
+    path_keys = ("file", "filename", "path", "relative_path")
+    canonical_names: List[str] = []
+    for item in source_items:
+        if isinstance(item, str):
+            source_name = item.strip()
+        elif isinstance(item, Mapping):
+            if item.get("evidence_id") not in (None, "") or item.get(
+                "evidence_ids"
+            ) not in (None, "", []):
+                return None
+            populated: List[str] = []
+            for key in path_keys:
+                value = item.get(key)
+                if value in (None, ""):
+                    continue
+                if not isinstance(value, str) or not value.strip():
+                    return None
+                populated.append(value.strip())
+            if len(set(populated)) != 1:
+                return None
+            source_name = populated[0]
+        else:
+            return None
+        if (
+            not source_name
+            or Path(source_name).name != source_name
+            or "/" in source_name
+            or "\\" in source_name
+            or Path(source_name).suffix.lower() != ".csv"
+        ):
+            return None
+        source_path = output_root / source_name
+        try:
+            if (
+                source_path.resolve(strict=True).parent != output_root
+                or not source_path.is_file()
+                or source_path.is_symlink()
+                or source_path.stat().st_nlink != 1
+            ):
+                return None
+        except OSError:
+            return None
+        canonical_names.append(source_name)
+
+    canonical_payload = dict(payload)
+    canonical_payload["source_data"] = canonical_names
+    after = json.dumps(canonical_payload, indent=2, ensure_ascii=False) + "\n"
+    if before == after:
+        return None
+    return before, after, canonical_names
+
+
+def _install_figure_contract_source_data_canonicalization(
+    *,
+    contract_path: Path,
+    expected_before: str,
+    canonical_text: str,
+) -> None:
+    """Atomically install one pre-authorized contract-schema rewrite.
+
+    The generated step controls its output directory, so a predictable temp
+    path is unsafe: it could be pre-created as a symlink before the host writes.
+    ``mkstemp`` gives us an exclusive random regular file.  The destination is
+    also reopened without following symlinks and must still match the exact
+    content reviewed by the authorization boundary.
+    """
+
+    contract_path = Path(contract_path)
+    parent = contract_path.parent
+    read_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    contract_fd = os.open(contract_path, read_flags)
+    try:
+        opened_stat = os.fstat(contract_fd)
+        if not stat.S_ISREG(opened_stat.st_mode) or opened_stat.st_nlink != 1:
+            raise ValueError("figure contract must remain one ordinary file")
+        with os.fdopen(contract_fd, "r", encoding="utf-8") as handle:
+            contract_fd = -1
+            observed_before = handle.read()
+        if observed_before != expected_before:
+            raise ValueError("figure contract changed after canonicalization review")
+
+        temporary_fd, temporary_name = tempfile.mkstemp(
+            prefix=f".{contract_path.name}.",
+            suffix=".schema.tmp",
+            dir=parent,
+        )
+        temporary_path = Path(temporary_name)
+        try:
+            with os.fdopen(temporary_fd, "w", encoding="utf-8") as handle:
+                handle.write(canonical_text)
+                handle.flush()
+                os.fsync(handle.fileno())
+            current_stat = os.stat(contract_path, follow_symlinks=False)
+            if (
+                not stat.S_ISREG(current_stat.st_mode)
+                or current_stat.st_nlink != 1
+                or current_stat.st_dev != opened_stat.st_dev
+                or current_stat.st_ino != opened_stat.st_ino
+            ):
+                raise ValueError("figure contract identity changed before replace")
+            os.replace(temporary_path, contract_path)
+            try:
+                directory_fd = os.open(
+                    parent,
+                    os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+                )
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+            except OSError:
+                pass
+        finally:
+            temporary_path.unlink(missing_ok=True)
+    finally:
+        if contract_fd >= 0:
+            os.close(contract_fd)
 
 
 def _plan_signature(
@@ -6842,6 +7009,55 @@ else:
                 # them only after evidence registration produces a terminal
                 # contract_failed record with no opportunity to repair the
                 # generated rendering script.
+                for contract_path in sorted(
+                    run_result.out_dir.glob("*.figure_contract.json")
+                ):
+                    schema_candidate = (
+                        _figure_contract_source_data_canonicalization_candidate(
+                            contract_path=contract_path,
+                            out_dir=run_result.out_dir,
+                        )
+                    )
+                    if schema_candidate is None:
+                        continue
+                    before_contract, after_contract, source_names = schema_candidate
+                    repair_id = _FIGURE_CONTRACT_SOURCE_DATA_SCHEMA_REPAIR_ID
+                    if not _automatic_repair_authorized(
+                        repair_id,
+                        step=step,
+                        source="figure_contract_schema_canonicalization",
+                        before_code=before_contract,
+                        after_code=after_contract,
+                    ):
+                        continue
+                    _install_figure_contract_source_data_canonicalization(
+                        contract_path=contract_path,
+                        expected_before=before_contract,
+                        canonical_text=after_contract,
+                    )
+                    step_record.setdefault(
+                        "figure_contract_schema_canonicalizations", []
+                    ).append(
+                        {
+                            "contract": contract_path.name,
+                            "source_data": list(source_names),
+                            "repair_id": repair_id,
+                        }
+                    )
+                    _record_repair(
+                        repair_id=repair_id,
+                        step_id=str(step.step_id),
+                        trigger={
+                            "source": "figure_contract_schema_canonicalization",
+                            "contract": contract_path.name,
+                        },
+                        transformation=(
+                            "Canonicalized an exact local source-data descriptor "
+                            "to the persistent flat FigureContract basename schema."
+                        ),
+                        before_code=before_contract,
+                        after_code=after_contract,
+                    )
                 early_contract_findings += figure_contract_validator.audit(
                     step=step,
                     out_dir=run_result.out_dir,

@@ -61,6 +61,7 @@ from .scalar_utils import (
     _flatten_scalar_dict,
 )
 from .schema import (
+    ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES,
     AnalysisPlan,
     AnalysisStep,
     ClusterSelectionManifest,
@@ -1283,12 +1284,17 @@ def _output_declares_auxiliary_log(output: str) -> bool:
 
 
 _RENDER_SOURCE_OUTPUT_KINDS = frozenset(
-    {"artifact", "dataset", "model", "statistic", "table"}
+    {"statistic", "table"}
 )
 
 
 def _typed_render_source_outputs(outputs: Sequence[str]) -> List[str]:
-    """Return exact typed parent products that a render child may consume."""
+    """Return exact finalized parent result products a render child may consume.
+
+    Raw artifacts, datasets, and models stay on the scientific parent.  A
+    rendering-only child receives only finalized table/statistic products so it
+    cannot silently reopen cohort, exposure, outcome, or model decisions.
+    """
 
     render_inputs: List[str] = []
     for raw in outputs or []:
@@ -1383,6 +1389,81 @@ def _effect_figure_semantics_supported_by_inputs(
     return True
 
 
+def _effect_figure_semantics_supported_by_model_roster(
+    *,
+    step: AnalysisStep,
+    figure_outputs: Sequence[str],
+    effect_input_products: set[Tuple[str, str]],
+) -> bool:
+    """Authorize a primary adjusted-effect render from a typed model roster.
+
+    The legacy adjusted-association product name is intentionally generic, but
+    a non-empty ``model_requirements`` roster is Planner-owned and fixes the
+    single primary model.  It can therefore support only a generic/primary
+    adjusted-effect figure (or an explicit OR for a binary logistic primary),
+    never a subgroup, interaction, secondary, sensitivity, HR, RR, or RD claim.
+    """
+
+    if ("table", "adjusted_association_estimates") not in effect_input_products:
+        return False
+    primary_requirements = [
+        requirement
+        for requirement in step.model_requirements or []
+        if requirement.analysis_role == "primary"
+    ]
+    if len(primary_requirements) != 1:
+        return False
+    primary = primary_requirements[0]
+    primary_method = re.sub(
+        r"[^a-z0-9]+", "_", str(primary.method_family or "").lower()
+    ).strip("_")
+    for output in figure_outputs:
+        if not effect_bearing_product(output):
+            continue
+        if effect_role_family(output) is not None:
+            return False
+        if effect_estimand_tier(output) not in {None, "primary"}:
+            return False
+        if effect_adjustment_family(output) not in {None, "adjusted"}:
+            return False
+        measure = effect_measure_family(output)
+        if measure is None:
+            continue
+        if not (
+            measure == "odds_ratio"
+            and primary.outcome_type == "binary"
+            and primary_method in ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES
+        ):
+            return False
+    return True
+
+
+def _render_only_figure_step_intent(
+    *,
+    source_step_id: str,
+    figure_outputs: Sequence[str],
+) -> str:
+    """Return the exact framework-authored intent for a split render child."""
+
+    return (
+        f"Render the publication figure(s) declared by step "
+        f"'{source_step_id}' ({', '.join(figure_outputs)}). Treat this as "
+        "a rendering-only step: first read the table/statistic outputs "
+        f"produced by '{source_step_id}' from the registered evidence files "
+        "or from that step's outputs directory. Do not redefine the "
+        "cohort, exposure, outcome, missing-data policy, or model inside "
+        "this figure step; if the upstream table cannot support the "
+        "requested figure, write a step_summary.json explaining the "
+        "missing source-data contract instead of re-analysing "
+        "``os.environ['COHORT_PARQUET']``. Save PNG and SVG copies of "
+        "every figure with matching stems into "
+        "``os.environ['STEP_OUT_DIR']``. Always write a valid "
+        "step_summary.json into ``STEP_OUT_DIR`` listing each produced "
+        "file under ``figure_files`` even if rendering fails — use a "
+        "try/except so the step never aborts before writing the summary."
+    )
+
+
 def _effect_figure_source_authorized(
     *,
     step: AnalysisStep,
@@ -1417,6 +1498,7 @@ def _effect_figure_source_authorized(
 
     child_inputs: List[Tuple[Tuple[str, str], str]] = []
     producer_by_product: Dict[Tuple[str, str], str] = {}
+    effect_parent_steps: Dict[str, AnalysisStep] = {}
     for raw in step.inputs or []:
         raw_input = str(raw or "")
         parsed = typed_product(raw_input)
@@ -1492,12 +1574,23 @@ def _effect_figure_source_authorized(
             if not effect_output_authorized(parent_step):
                 return False
             effect_input_products.add(child_product)
+            effect_parent_steps[parent_step_id] = parent_step
 
     return bool(
         any(kind == "table" for kind, _product in effect_input_products)
-        and _effect_figure_semantics_supported_by_inputs(
-            figure_outputs=step.expected_outputs or [],
-            effect_input_products=effect_input_products,
+        and (
+            _effect_figure_semantics_supported_by_inputs(
+                figure_outputs=step.expected_outputs or [],
+                effect_input_products=effect_input_products,
+            )
+            or (
+                len(effect_parent_steps) == 1
+                and _effect_figure_semantics_supported_by_model_roster(
+                    step=next(iter(effect_parent_steps.values())),
+                    figure_outputs=step.expected_outputs or [],
+                    effect_input_products=effect_input_products,
+                )
+            )
         )
     )
 
@@ -1601,6 +1694,10 @@ def _split_table_and_figure_outputs_in_plan(
         effect_figure_supported = _effect_figure_semantics_supported_by_inputs(
             figure_outputs=figure_outputs,
             effect_input_products=effect_source_products,
+        ) or _effect_figure_semantics_supported_by_model_roster(
+            step=step,
+            figure_outputs=figure_outputs,
+            effect_input_products=effect_source_products,
         )
         if (
             not figure_outputs
@@ -1620,22 +1717,9 @@ def _split_table_and_figure_outputs_in_plan(
         if figure_step_id in existing_step_ids:
             new_steps[-1] = step
             continue
-        figure_intent = (
-            f"Render the publication figure(s) declared by step "
-            f"'{step.step_id}' ({', '.join(figure_outputs)}). Treat this as "
-            "a rendering-only step: first read the table/statistic outputs "
-            f"produced by '{step.step_id}' from the registered evidence files "
-            "or from that step's outputs directory. Do not redefine the "
-            "cohort, exposure, outcome, missing-data policy, or model inside "
-            "this figure step; if the upstream table cannot support the "
-            "requested figure, write a step_summary.json explaining the "
-            "missing source-data contract instead of re-analysing "
-            "``os.environ['COHORT_PARQUET']``. Save PNG and SVG copies of "
-            "every figure with matching stems into "
-            "``os.environ['STEP_OUT_DIR']``. Always write a valid "
-            "step_summary.json into ``STEP_OUT_DIR`` listing each produced "
-            "file under ``figure_files`` even if rendering fails — use a "
-            "try/except so the step never aborts before writing the summary."
+        figure_intent = _render_only_figure_step_intent(
+            source_step_id=str(step.step_id),
+            figure_outputs=figure_outputs,
         )
         figure_step = AnalysisStep(
             step_id=figure_step_id,
@@ -4022,6 +4106,13 @@ def _step_contract_repair_guidance(
             "This step declares a figure output. Save a real figure file such as PNG/SVG/"
             "PDF/TIFF and record its path in step_summary.json using a key such as "
             "`figure_path`, `figure_file`, or `figure_files`."
+        )
+        guidance.append(
+            "In every top-level FigureContract, `source_data` must be one local CSV "
+            "basename string or a flat list of local CSV basename strings from the "
+            "current step output directory. Never write a dict, list of dicts, "
+            "evidence object, absolute path, or path metadata there; put evidence ids "
+            "in panel `evidence_ids` and other provenance in step_summary metadata."
         )
     if not guidance:
         guidance.append(

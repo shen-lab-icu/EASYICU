@@ -266,6 +266,11 @@ Code contract:
   `nature-figure` workflow. Use the actual EasyICU contract field names:
   `figure_id`, `core_claim`, `panels`, `source_data`,
   and per panel `panel_id`, `title`, `role`, `claim`, `evidence_ids`.
+  At the contract top level, write `source_data` as one local CSV basename
+  string or a flat list of local CSV basename strings. Never put a dict,
+  list of dicts, evidence object, absolute path, or path metadata in this
+  field; keep evidence ids in panel `evidence_ids` and other provenance in
+  step-summary metadata.
   If the context includes an `ARTICLE FIGURE STRATEGY`, choose panel
   `role` values from its required visual roles when possible
   (for example `descriptive_result`, `primary_estimand`,

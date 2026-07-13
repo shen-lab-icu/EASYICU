@@ -1926,6 +1926,42 @@ def test_effect_figure_exact_bundle_with_truthful_source_data_passes(tmp_path: P
     assert [finding for finding in findings if finding.severity == "error"] == []
 
 
+def test_effect_figure_validator_rejects_noncanonical_source_descriptors(
+    tmp_path: Path,
+):
+    _parent, figure_out, records, bindings = _effect_figure_bundle_fixture(tmp_path)
+    (figure_out / "primary_or_forest.png").write_bytes(b"png")
+    contract_path = figure_out / "primary_or_forest.figure_contract.json"
+    _write_two_panel_contract(
+        contract_path,
+        figure_id="primary_or_forest",
+        source_data=["publication_figure_source_data.csv"],
+    )
+    contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    contract["source_data"] = [
+        {
+            "file": "publication_figure_source_data.csv",
+            "path": "publication_figure_source_data.csv",
+        }
+    ]
+    contract_path.write_text(json.dumps(contract), encoding="utf-8")
+
+    findings = FigureSourceDataValidator().audit(
+        step=_effect_figure_step(),
+        out_dir=figure_out,
+        run_dir=tmp_path,
+        step_summary={
+            "output_files": {"figure:primary_or_forest": "primary_or_forest.png"}
+        },
+        completed_step_records=records,
+        resolved_input_bindings=bindings,
+    )
+
+    errors = [finding for finding in findings if finding.severity == "error"]
+    assert errors
+    assert errors[0].detail["reason"] == "invalid_contract_source_data"
+
+
 def test_honest_decoy_bundle_cannot_authenticate_registered_forged_figure(
     tmp_path: Path,
 ):
