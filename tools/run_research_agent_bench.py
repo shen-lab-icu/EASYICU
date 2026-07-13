@@ -1544,6 +1544,7 @@ def _benchmark_pipeline_options(
     strict_evidence: bool = False,
     submission_profile: Optional["SubmissionProfile"] = None,
     runner_kind: Optional[str] = None,
+    enable_retrospective_trajectory_stability_design: bool = False,
 ) -> Dict[str, Any]:
     options: Dict[str, Any] = {}
     if submission_profile:
@@ -1577,6 +1578,8 @@ def _benchmark_pipeline_options(
         options["writer_digest_widened"] = True
     if llm_seed is not None:
         options["llm_seed"] = int(llm_seed)
+    if enable_retrospective_trajectory_stability_design:
+        options["enable_retrospective_trajectory_stability_design"] = True
     return options
 
 
@@ -1889,6 +1892,15 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--allow-retrospective-stability-design",
+        action="store_true",
+        help=(
+            "Development-only: on an explicit step resume, let PlannerAgent add "
+            "a typed trajectory-stability design to an older saved plan. This "
+            "is forbidden for submission-profile/canonical runs."
+        ),
+    )
+    parser.add_argument(
         "--stop-after-step-id",
         default=None,
         help=(
@@ -2069,6 +2081,21 @@ def main() -> int:
     )
     if resume_from_step_id and not explicit_resume_run_id:
         raise SystemExit("--resume-from-step-id requires --resume-run-id.")
+    allow_retrospective_stability_design = bool(
+        getattr(args, "allow_retrospective_stability_design", False)
+    )
+    if allow_retrospective_stability_design and (
+        not explicit_resume_run_id or not resume_from_step_id
+    ):
+        raise SystemExit(
+            "--allow-retrospective-stability-design requires both "
+            "--resume-run-id and --resume-from-step-id."
+        )
+    if allow_retrospective_stability_design and submission_profile is not None:
+        raise SystemExit(
+            "--allow-retrospective-stability-design is development-only and "
+            "cannot be used with --submission-profile."
+        )
     if explicit_resume_run_id and args.models and len(args.models) != 1:
         raise SystemExit("--resume-run-id cannot be combined with multiple models.")
     runner_kind = _enforce_submission_profile_runner(
@@ -2096,6 +2123,9 @@ def main() -> int:
         strict_evidence=bool(args.strict_evidence),
         submission_profile=submission_profile,
         runner_kind=runner_kind,
+        enable_retrospective_trajectory_stability_design=(
+            allow_retrospective_stability_design
+        ),
     )
 
     if args.ehrflowbench_jsonl:

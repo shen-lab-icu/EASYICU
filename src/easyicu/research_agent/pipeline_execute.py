@@ -165,6 +165,10 @@ from .trajectory_plan_contract import (
     trajectory_plan_contract_applies,
     trajectory_plan_dag_findings,
 )
+from .trajectory_stability_executor import (
+    trajectory_stability_executor_code,
+    trajectory_stability_executor_owns_step,
+)
 from .trajectory_resume_schema import materialize_legacy_trajectory_replay_schemas
 from .repair_registry import (
     InvariantStatus,
@@ -1936,6 +1940,15 @@ def _plan_signature(
                 )
                 for requirement in step.model_requirements
             ),
+            (
+                json.dumps(
+                    step.trajectory_stability_spec.model_dump(mode="json"),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                if step.trajectory_stability_spec is not None
+                else None
+            ),
         )
         for step in plan.steps
     )
@@ -3512,11 +3525,14 @@ def run_execute_phase(
         *,
         repair_attempts: int,
         fallback_used: bool,
+        standard_executor_used: bool = False,
         runner_repair_name: Optional[str] = None,
         resumed_code_reuse: bool = False,
         concept_repair_used: bool = False,
         llm_repair_used: bool = False,
     ) -> str:
+        if standard_executor_used:
+            return "deterministic_standard"
         if fallback_used:
             return "fallback"
         # Report the code that actually executed, not merely where its first
@@ -3773,6 +3789,7 @@ def run_execute_phase(
         step_record["semantics_family"] = local_runtime_state.analysis_family
 
         deterministic_fallback_used = False
+        deterministic_standard_executor_used = False
 
         def _use_quarantined_draft(draft: QuarantinedConceptDraft) -> str:
             nonlocal resumed_quarantined_draft_used
@@ -4175,23 +4192,65 @@ else:
             )
             return missingness_measurement_audit_code()
 
+        def _trajectory_stability_preflight_supported() -> bool:
+            return trajectory_stability_executor_owns_step(step, plan=plan)
+
+        def _deterministic_trajectory_stability_code(
+            reason: str,
+            *,
+            preflight: bool = False,
+        ) -> Optional[str]:
+            nonlocal deterministic_standard_executor_used
+            if deterministic_standard_executor_used or (
+                preflight and not _trajectory_stability_preflight_supported()
+            ):
+                return None
+            if not _trajectory_stability_preflight_supported():
+                return None
+            deterministic_standard_executor_used = True
+            step_record["deterministic_standard_selection_reason"] = reason
+            step_record["deterministic_standard_analysis"] = (
+                "trajectory_cluster_stability"
+            )
+            emit_progress(
+                "coder",
+                f"Using planner-specified trajectory stability executor for {step.step_id}.",
+                run_id=run_id,
+                step_id=step.step_id,
+                current_step=step_current,
+                total_steps=total_steps,
+                fallback_reason=reason,
+            )
+            return trajectory_stability_executor_code(step, plan=plan)
+
         # ``--resume-from-step-id`` means the selected step is intentionally
         # rerun. Completed predecessors stay checkpointed, but the selected
         # step does not reuse its old script before the current coder/
         # deterministic-standard path unless the operator explicitly enables
         # the diagnostic fast path. Reused code still runs through every
         # current execution audit and repair gate.
+        preflight_trajectory_stability_code = (
+            _deterministic_trajectory_stability_code(
+                "trajectory_stability_spec_preflight", preflight=True
+            )
+        )
         quarantined_resume_draft = (
-            resume_controller.quarantined_concept_draft_for_step(step.step_id)
+            None
+            if preflight_trajectory_stability_code is not None
+            else resume_controller.quarantined_concept_draft_for_step(step.step_id)
         )
         resume_summary_repair_code = (
             None
-            if quarantined_resume_draft is not None
+            if (
+                preflight_trajectory_stability_code is not None
+                or quarantined_resume_draft is not None
+            )
             else _resume_summary_repair_code()
         )
         preflight_resumed_code = None
         if (
-            quarantined_resume_draft is None
+            preflight_trajectory_stability_code is None
+            and quarantined_resume_draft is None
             and resume_summary_repair_code is None
             and (
             requested_resume_from_step_id != step.step_id
@@ -4199,7 +4258,22 @@ else:
             )
         ):
             preflight_resumed_code = resume_controller.prior_code_for_step(step.step_id)
-        if quarantined_resume_draft is not None:
+        if preflight_trajectory_stability_code is not None:
+            code = preflight_trajectory_stability_code
+            with shared_lock:
+                findings.append(
+                    ValidationFinding(
+                        validator="coder",
+                        severity="info",
+                        message=(
+                            "Using the deterministic calculator for the complete "
+                            "planner-owned trajectory stability specification in "
+                            f"step {step.step_id}."
+                        ),
+                        detail={"step_id": step.step_id},
+                    )
+                )
+        elif quarantined_resume_draft is not None:
             code = _use_quarantined_draft(quarantined_resume_draft)
         elif resume_summary_repair_code is not None:
             code = resume_summary_repair_code
@@ -4394,19 +4468,27 @@ else:
                 )
             )
             try:
-                if pipeline._enable_llm_concept_audit and deterministic_fallback_used:
+                if pipeline._enable_llm_concept_audit and (
+                    deterministic_fallback_used
+                    or deterministic_standard_executor_used
+                ):
+                    generation_mode = (
+                        "deterministic_standard"
+                        if deterministic_standard_executor_used
+                        else "deterministic_fallback"
+                    )
                     code_findings.append(
                         ValidationFinding(
                             validator="llm_concept_auditor",
                             severity="info",
                             message=(
-                                f"Skipped optional LLM concept audit for deterministic "
-                                f"fallback code in step {step.step_id}; deterministic "
-                                "audits still ran."
+                                "Skipped optional LLM concept audit for trusted "
+                                f"{generation_mode} code in step {step.step_id}; "
+                                "deterministic audits still ran."
                             ),
                             detail={
                                 "step_id": step.step_id,
-                                "generation_mode": "deterministic_fallback",
+                                "generation_mode": generation_mode,
                             },
                         )
                     )
@@ -4527,6 +4609,50 @@ else:
                 with shared_lock:
                     findings.extend(usage_findings)
                 break
+
+            if deterministic_standard_executor_used:
+                terminal_finding = ValidationFinding(
+                    validator="trajectory_stability_executor",
+                    severity="error",
+                    message=(
+                        "The trusted trajectory stability adapter failed the "
+                        "pre-execution deterministic concept gate; execution was "
+                        "blocked without coder repair."
+                    ),
+                    detail={
+                        "step_id": step.step_id,
+                        "reason": "preexecution_concept_gate_failed",
+                    },
+                )
+                terminal_findings = [terminal_finding, *usage_findings]
+                step_record.update(
+                    {
+                        "status": "deterministic_standard_blocked",
+                        "diagnostic_only": True,
+                        "standard_executor_terminal_reason": (
+                            "preexecution_concept_gate_failed"
+                        ),
+                        "contract_findings": [
+                            finding.model_dump() for finding in terminal_findings
+                        ],
+                        "llm_repair_used": False,
+                        "generation_mode": "deterministic_standard",
+                    }
+                )
+                with shared_lock:
+                    findings.extend(terminal_findings)
+                    per_step_records.append(step_record)
+                    _flush_partial_manifest()
+                emit_progress(
+                    "audit",
+                    f"Trusted standard adapter blocked for {step.step_id}.",
+                    status="error",
+                    run_id=run_id,
+                    step_id=step.step_id,
+                    current_step=step_current,
+                    total_steps=total_steps,
+                )
+                return step_record
 
             # Tier A — deterministic mechanical repair. For a closed set of
             # objectively-flagged ICU anti-patterns (e.g. silent fillna(0) on
@@ -4998,6 +5124,15 @@ else:
         # provenance and generation-mode labels.
         runtime_repair_attempts = 0
         runner_repair_name: Optional[str] = preexecution_runner_repair_name
+        is_trajectory_stability_standard = bool(
+            step.trajectory_stability_spec is not None
+            and step_record.get("deterministic_standard_analysis")
+            == "trajectory_cluster_stability"
+        )
+        standard_executor_terminal_block = False
+        standard_executor_terminal_reason: Optional[str] = None
+        standard_executor_terminal_summary: Dict[str, Any] = {}
+        standard_executor_terminal_findings: List[ValidationFinding] = []
         while True:
             code = reorder_forward_references(code)
             candidate_code_digest = sha256_of_bytes(code.encode("utf-8"))
@@ -5081,6 +5216,7 @@ else:
             current_generation_mode = _script_generation_mode(
                 repair_attempts=repair_attempts,
                 fallback_used=deterministic_fallback_used,
+                standard_executor_used=deterministic_standard_executor_used,
                 runner_repair_name=runner_repair_name,
                 resumed_code_reuse=resumed_code_reuse_used,
                 concept_repair_used=concept_repair_used,
@@ -5090,6 +5226,7 @@ else:
                 "llm": "generated script",
                 "resumed_code_reuse": "resumed script",
                 "fallback": "fallback script",
+                "deterministic_standard": "standard executor script",
             }.get(current_generation_mode, "repaired script")
             emit_progress(
                 "runner",
@@ -5172,6 +5309,11 @@ else:
                 script_description = (
                     f"Deterministic fallback analysis script for step {step.step_id}."
                 )
+            elif current_generation_mode == "deterministic_standard":
+                script_description = (
+                    "Planner-selected deterministic standard executor adapter for "
+                    f"step {step.step_id}."
+                )
             else:
                 total_repair_attempts = repair_attempts + concept_repair_attempts
                 script_description = (
@@ -5191,7 +5333,11 @@ else:
                 produced_by_step=step.step_id,
                 inputs=resolved_input_evidence_ids or None,
                 evidence_id=script_evidence_id,
-                producer="coder",
+                producer=(
+                    "standard_executor"
+                    if current_generation_mode == "deterministic_standard"
+                    else "coder"
+                ),
                 generation_mode=current_generation_mode,
                 prompt_pack_version=prompt_version,
                 metadata={
@@ -5275,6 +5421,10 @@ else:
                         selection_rule=salvage_outcome.selection_rule,
                     )
                 if not run_result.artefacts:
+                    if is_trajectory_stability_standard:
+                        standard_executor_terminal_block = True
+                        standard_executor_terminal_reason = "missing_executor_outputs"
+                        break
                     fallback_code = _deterministic_fallback_code("no_artefacts")
                     if fallback_code is not None:
                         code = fallback_code
@@ -5293,6 +5443,17 @@ else:
                         visual_step_summary = vloaded
                     else:
                         visual_step_summary = {"raw": vloaded}
+                if is_trajectory_stability_standard:
+                    terminal_status = (
+                        str(visual_step_summary.get("status") or "").strip().lower()
+                    )
+                    if terminal_status != "ok":
+                        standard_executor_terminal_block = True
+                        standard_executor_terminal_reason = "executor_reported_" + (
+                            terminal_status or "missing_status"
+                        )
+                        standard_executor_terminal_summary = dict(visual_step_summary)
+                        break
                 step_figures = [
                     art
                     for art in run_result.artefacts
@@ -5621,6 +5782,18 @@ else:
                     f for f in early_contract_findings if f.severity == "error"
                 ]
                 if early_contract_errors:
+                    if is_trajectory_stability_standard:
+                        standard_executor_terminal_block = True
+                        standard_executor_terminal_reason = (
+                            "executor_output_contract_failed"
+                        )
+                        standard_executor_terminal_summary = dict(
+                            visual_step_summary
+                        )
+                        standard_executor_terminal_findings = list(
+                            early_contract_findings
+                        )
+                        break
                     if pipeline._enable_deterministic_runner_repair:
                         before_repair_code = code
                         summary_repair = _deterministic_summary_repair(
@@ -5892,6 +6065,10 @@ else:
                 run_log = log_path.read_text(encoding="utf-8", errors="replace")
             else:
                 run_log = (run_result.stdout or "") + "\n" + (run_result.stderr or "")
+            if is_trajectory_stability_standard:
+                standard_executor_terminal_block = True
+                standard_executor_terminal_reason = "executor_runtime_failure"
+                break
             if pipeline._enable_deterministic_runner_repair:
                 before_repair_code = code
                 plugin_repair = pipeline._case_plugin_registry.repair_code(
@@ -6271,6 +6448,7 @@ else:
             generation_mode = _script_generation_mode(
                 repair_attempts=repair_attempts,
                 fallback_used=deterministic_fallback_used,
+                standard_executor_used=deterministic_standard_executor_used,
                 runner_repair_name=runner_repair_name,
                 resumed_code_reuse=resumed_code_reuse_used,
                 concept_repair_used=concept_repair_used,
@@ -6290,7 +6468,7 @@ else:
                     metadata={
                         "script_evidence_id": script_record.evidence_id,
                         "figure_role": figure_role or "analysis_figure",
-                        "diagnostic_only": False,
+                        "diagnostic_only": standard_executor_terminal_block,
                         **repair_evidence_metadata,
                     },
                 )
@@ -6308,6 +6486,7 @@ else:
                     generation_mode=generation_mode,
                     metadata={
                         "script_evidence_id": script_record.evidence_id,
+                        "diagnostic_only": standard_executor_terminal_block,
                         **repair_evidence_metadata,
                     },
                 )
@@ -6332,7 +6511,7 @@ else:
                     metadata={
                         "script_evidence_id": script_record.evidence_id,
                         "figure_role": figure_role or "analysis_figure",
-                        "diagnostic_only": False,
+                        "diagnostic_only": standard_executor_terminal_block,
                         **repair_evidence_metadata,
                     },
                 )
@@ -6349,6 +6528,7 @@ else:
                     generation_mode=generation_mode,
                     metadata={
                         "script_evidence_id": script_record.evidence_id,
+                        "diagnostic_only": standard_executor_terminal_block,
                         **repair_evidence_metadata,
                     },
                 )
@@ -6371,7 +6551,11 @@ else:
                 step_summary = {"raw": loaded}
         if step_summary_record_id is not None:
             step_record["step_summary_evidence_id"] = step_summary_record_id
-        if step_summary and step_summary_record_id is not None:
+        if (
+            step_summary
+            and step_summary_record_id is not None
+            and not standard_executor_terminal_block
+        ):
             # Value-level provenance (A-track): every numeric leaf in the
             # step's summary is registered as a NumericClaim so the
             # manuscript binder can reverse-link numbers in prose to the
@@ -6424,6 +6608,74 @@ else:
                     step.step_id,
                     exc,
                 )
+        if standard_executor_terminal_block:
+            terminal_summary = (
+                step_summary if step_summary else standard_executor_terminal_summary
+            )
+            terminal_finding = ValidationFinding(
+                validator="trajectory_stability_executor",
+                severity="error",
+                message=(
+                    "The planner-specified trajectory stability computation failed "
+                    "closed; its diagnostic outputs were preserved and no coder, "
+                    "fallback method, seed change, or cluster-count change was used."
+                ),
+                detail={
+                    "step_id": step.step_id,
+                    "reason": standard_executor_terminal_reason,
+                    "executor_errors": (
+                        terminal_summary.get("errors")
+                        if isinstance(terminal_summary, Mapping)
+                        else None
+                    ),
+                },
+            )
+            terminal_findings = [
+                terminal_finding,
+                *standard_executor_terminal_findings,
+            ]
+            evidence_ids_for_step = list(dict.fromkeys(evidence_ids_for_step))
+            step_record.update(
+                {
+                    "status": "deterministic_standard_blocked",
+                    "diagnostic_only": True,
+                    "standard_executor_terminal_reason": (
+                        standard_executor_terminal_reason
+                    ),
+                    "step_summary": terminal_summary,
+                    "contract_findings": [
+                        finding.model_dump() for finding in terminal_findings
+                    ],
+                    "evidence_ids": evidence_ids_for_step,
+                    "llm_repair_used": False,
+                    "generation_mode": _script_generation_mode(
+                        repair_attempts=repair_attempts,
+                        fallback_used=deterministic_fallback_used,
+                        standard_executor_used=(
+                            deterministic_standard_executor_used
+                        ),
+                        runner_repair_name=runner_repair_name,
+                        resumed_code_reuse=resumed_code_reuse_used,
+                        concept_repair_used=concept_repair_used,
+                        llm_repair_used=False,
+                    ),
+                }
+            )
+            with shared_lock:
+                findings.extend(terminal_findings)
+                per_step_records.append(step_record)
+                _flush_partial_manifest()
+            emit_progress(
+                "runner",
+                f"Trajectory stability failed closed for {step.step_id}.",
+                status="error",
+                run_id=run_id,
+                step_id=step.step_id,
+                current_step=step_current,
+                total_steps=total_steps,
+                reason=standard_executor_terminal_reason,
+            )
+            return step_record
         auto_contract_path = _ensure_step_figure_contract(
             step=step,
             out_dir=run_result.out_dir,
@@ -6434,6 +6686,7 @@ else:
             generation_mode = _script_generation_mode(
                 repair_attempts=repair_attempts,
                 fallback_used=deterministic_fallback_used,
+                standard_executor_used=deterministic_standard_executor_used,
                 runner_repair_name=runner_repair_name,
                 resumed_code_reuse=resumed_code_reuse_used,
                 concept_repair_used=concept_repair_used,
@@ -6783,6 +7036,7 @@ else:
         step_record["generation_mode"] = _script_generation_mode(
             repair_attempts=repair_attempts,
             fallback_used=deterministic_fallback_used,
+            standard_executor_used=deterministic_standard_executor_used,
             runner_repair_name=runner_repair_name,
             resumed_code_reuse=resumed_code_reuse_used,
             concept_repair_used=concept_repair_used,

@@ -605,6 +605,75 @@ class PlannedModelRequirement(BaseModel):
         return self
 
 
+class TrajectoryStabilitySpec(BaseModel):
+    """Planner-owned design for a trajectory-cluster stability computation.
+
+    The execution layer may compute this design, but it must not choose the
+    resampling scheme, amount of resampling, randomisation policy, comparison
+    metric, or label-alignment rule.  The selected clustering model, cluster
+    count, representation, and missing-data fit are inherited from the typed
+    upstream trajectory manifests rather than repeated here.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    resampling_method: Literal["subsample_without_replacement"]
+    n_resamples: int = Field(ge=2, le=500)
+    sample_fraction: Optional[float] = Field(default=None, gt=0.0, lt=1.0)
+    sample_size: Optional[int] = Field(default=None, ge=2)
+    sample_fraction_rounding: Literal["floor"]
+    base_seed: int = Field(ge=0, le=2_147_483_647)
+    seed_derivation: Literal["numpy_seedsequence_spawn_uint32_v1"]
+    cross_resample_membership: Literal["distinct_membership_required"]
+    stability_metric: Literal["adjusted_rand_index"]
+    stability_aggregation: Literal["mean"]
+    metric_label_source: Literal["raw_refit_labels_label_invariant"]
+    evaluation_scope: Literal["sampled_overlap"]
+    label_alignment: Literal["hungarian_maximum_overlap"]
+    label_alignment_reference: Literal["frozen_candidate_assignments"]
+    label_alignment_tie_break: Literal["minimum_rank_distance_then_lexicographic_v1"]
+    final_assignment_policy: Literal["copy_selected_candidate_labels"]
+    minimum_successful_resamples: int = Field(ge=2)
+    failed_refit_policy: Literal["record_once_no_retry"]
+    refit_engine: Literal["easyicu_observed_data_diag_gmm_v1"]
+    refit_initialization: Literal["random_balanced_assignments"]
+    refit_max_iter: int = Field(ge=10, le=10_000)
+    refit_tolerance: float = Field(gt=0.0, le=0.1)
+    refit_regularization: float = Field(gt=0.0, le=1.0)
+    minimum_mean_stability: Optional[float] = Field(
+        default=None,
+        ge=-1.0,
+        le=1.0,
+        description=(
+            "Optional planner-owned mean adjusted-Rand threshold. Null reports "
+            "stability without making a binary accept/reject decision."
+        ),
+    )
+    decision_mode: Literal["report_only", "minimum_mean_threshold"]
+    threshold_failure_action: Literal["fail_closed_require_planner_revision"]
+
+    @model_validator(mode="after")
+    def _closed_resampling_design(self) -> "TrajectoryStabilitySpec":
+        if (self.sample_fraction is None) == (self.sample_size is None):
+            raise ValueError(
+                "trajectory stability requires exactly one of sample_fraction "
+                "or sample_size"
+            )
+        if self.minimum_successful_resamples != self.n_resamples:
+            raise ValueError(
+                "v1 trajectory stability requires every planned refit to succeed; "
+                "minimum_successful_resamples must equal n_resamples"
+            )
+        if self.decision_mode == "report_only":
+            if self.minimum_mean_stability is not None:
+                raise ValueError(
+                    "report_only stability must not declare a binary threshold"
+                )
+        elif self.minimum_mean_stability is None:
+            raise ValueError("minimum_mean_threshold requires minimum_mean_stability")
+        return self
+
+
 class AnalysisStep(BaseModel):
     """One step in a planner-emitted analysis plan."""
 
@@ -630,6 +699,14 @@ class AnalysisStep(BaseModel):
             "adjusted-association contract only. Required entries must be matched "
             "by execution model contracts; an empty roster preserves the legacy "
             "step contract and is required for other analysis families."
+        ),
+    )
+    trajectory_stability_spec: Optional[TrajectoryStabilitySpec] = Field(
+        default=None,
+        description=(
+            "Optional PlannerAgent-owned resampling design for a dedicated "
+            "trajectory stability/freeze step. The standard executor is "
+            "eligible only when this complete typed packet is present."
         ),
     )
 

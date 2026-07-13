@@ -463,7 +463,8 @@ def _build_planner_user_prompt(context: ResearchContext) -> str:
         '      "expected_outputs": ["table:table_one"],\n'
         '      "method": "descriptive",\n'
         '      "icu_rule_refs": ["aggregation_rule_for"],\n'
-        '      "model_requirements": []\n'
+        '      "model_requirements": [],\n'
+        '      "trajectory_stability_spec": null\n'
         "    }\n"
         "  ],\n"
         '  "robustness_specs": [\n'
@@ -567,7 +568,8 @@ class PlannerAgent:
                 "research_question (string), cohort (object or null), "
                 "steps (array of objects "
                 "each with step_id, intent, inputs, expected_outputs, "
-                "method, icu_rule_refs, and optional model_requirements), "
+                "method, icu_rule_refs, optional model_requirements, and optional "
+                "trajectory_stability_spec), "
                 "rationale (string). "
                 "All string values must be plain ASCII or UTF-8 quoted strings; "
                 "do not use special Unicode whitespace inside values."
@@ -2088,6 +2090,7 @@ def _normalise_plan_payload(
         "method",
         "icu_rule_refs",
         "model_requirements",
+        "trajectory_stability_spec",
     }
     allowed_model_requirement = {
         "requirement_id",

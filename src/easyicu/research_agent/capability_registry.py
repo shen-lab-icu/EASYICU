@@ -188,7 +188,7 @@ CAPABILITY_REGISTRY: Tuple[FamilyCapability, ...] = (
         family="phenotyping",
         label="Phenotyping / clustering",
         primary_analysis="llm_coded",
-        primary_estimand="LLM-coded cluster solution + stability; outcome-by-cluster kept descriptive (not causal)",
+        primary_estimand="Agent-planned cluster solution; outcome-by-cluster kept descriptive (not causal)",
         primary_runner=None,
         primary_runner_module=None,
         figure="deterministic",
@@ -202,7 +202,10 @@ CAPABILITY_REGISTRY: Tuple[FamilyCapability, ...] = (
             "Cluster heatmap + stability + outcome-by-cluster figure is "
             "deterministic from registered clustering products. The clustering "
             "method, feature representation, and k-selection remain agent-owned; "
-            "the former SOFA-specific KMeans script is not advertised or routed "
+            "a dedicated typed trajectory-stability step may use the supporting "
+            "calculator only after the planner has fixed every resampling, refit, "
+            "alignment, and decision parameter. "
+            "The former SOFA-specific KMeans script is not advertised or routed "
             "as a general auxiliary capability."
         ),
     ),
@@ -252,6 +255,22 @@ AUXILIARY_DETERMINISTIC_RUNNERS: Tuple[AuxiliaryRunner, ...] = (
             "Blocks with a reason when no <concept>_measured columns resolve. "
             "The figure step renders the registered audit product via the "
             "data_quality->missingness renderer."
+        ),
+    ),
+    AuxiliaryRunner(
+        name="trajectory_cluster_stability",
+        entrypoint="trajectory_stability_executor_code",
+        module="trajectory_stability_executor",
+        purpose=(
+            "Compute a complete planner-owned, digest-bound trajectory-cluster "
+            "stability specification without selecting the representation, model, "
+            "cluster count, resampling design, seed policy, or decision threshold."
+        ),
+        fail_closed=(
+            "Requires one dedicated stability owner, exact typed upstream products, "
+            "and the closed supported refit contract. Unsupported or failed refits "
+            "remain diagnostic and never fall back to coder repair, another method, "
+            "another seed policy, or another cluster count."
         ),
     ),
 )

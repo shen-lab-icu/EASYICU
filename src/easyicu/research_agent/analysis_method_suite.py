@@ -538,6 +538,28 @@ _PHENOTYPING = MethodSuite(
             reporting_items=("internal_phenotype P5",),
         ),
         AnalysisMethod(
+            key="trajectory_cluster_stability",
+            name="Typed trajectory-cluster stability refits",
+            purpose=(
+                "Replay an agent-specified subsampling/refit design for one already "
+                "selected trajectory model and cluster count."
+            ),
+            tier="standard_supporting",
+            implementation="deterministic",
+            produces=(
+                "digest-bound stability specification, refit ledger, adjusted-Rand "
+                "table, aligned assignments, and freeze/report decision"
+            ),
+            runner="trajectory_cluster_stability",
+            reporting_items=("internal_phenotype P5",),
+            notes=(
+                "The planner owns every scientific and randomization choice. The "
+                "executor supports only the closed observed-data diagonal-GMM "
+                "contract and fails closed outside it; general cluster stability "
+                "remains agent-coded."
+            ),
+        ),
+        AnalysisMethod(
             key="cluster_sizes",
             name="Cluster sizes + degenerate-cluster flag",
             purpose="Report each group's size and flag near-empty clusters.",
