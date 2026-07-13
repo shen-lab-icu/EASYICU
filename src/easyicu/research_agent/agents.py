@@ -1429,6 +1429,17 @@ def _typed_input_scope_contract(step: AnalysisStep) -> str:
         "follow a legacy alias, or reconstruct a declared upstream product from "
         "COHORT_PARQUET. COHORT_PARQUET remains the source only for untyped raw "
         "variables or steps with no typed upstream input.\n"
+        "- In step_summary.json, record one input_bindings row per typed input "
+        "that the script attempts to consume. Copy its exact input_key, "
+        "evidence_id, and sha256; report loaded as a boolean and, for each loaded "
+        "tabular input, its row_count. Do not duplicate a contradictory loaded "
+        "or row-count claim elsewhere in the summary.\n"
+        "- If a block claims status='checked' for a subset reconciliation between "
+        "two typed tables, name the exact reference_artifact and subset_artifact "
+        "input keys, non-empty key_columns, every shared non-key column under "
+        "value_columns_checked, and value_mismatch_n=0 only after actually "
+        "comparing them. The host repeats that key-and-value comparison. If it "
+        "was not performed, do not call the reconciliation checked.\n"
         f"- Exact typed inputs for this step: {typed_inputs}\n"
     )
 

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from .base import Audit, AuditReport, AuditSeverity
 from .patterns import AnalysisPatternAuditor
+from .step_summary_integrity import StepSummaryIntegrityValidator
 from .validators import (
     ClinicalConstraintValidator,
     CohortAuditor,
@@ -68,6 +69,7 @@ __all__ = [
     "StatisticalGuard",
     "StatisticalValidator",
     "StepSummaryFractionValidator",
+    "StepSummaryIntegrityValidator",
     "parse_llm_concept_audit_response",
     # patterns
     "AnalysisPatternAuditor",

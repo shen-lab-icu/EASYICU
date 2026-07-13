@@ -329,6 +329,14 @@ Code contract:
   `fraction` are proportions in [0, 1], while explicitly named `_pct`,
   `percent`, or `percentage` fields may use [0, 100]. Never copy a percentage
   value directly into a fraction-valued field.
+- Every finite probability, absolute risk, prevalence, survival probability,
+  and confidence bound for one of those quantities must remain inside [0, 1].
+  For a binomial risk or prevalence interval, use the vetted
+  `easyicu.research_agent.methods.ordered_trends.wilson_interval` helper, which
+  normalises floating-point boundary artefacts before serialization. Never
+  clip a genuinely invalid estimate to make it pass a range check. This rule
+  does not apply to effect scales such as risk ratios, odds ratios, hazard
+  ratios, or risk differences.
 - When reporting a source-status count map, always include the complete four
   category schema: valid observed; no source; measured/source present but
   summary missing; and contradictory/invalid. Preserve zero-frequency

@@ -179,7 +179,6 @@ def test_typed_model_requirement_roster_also_authorizes_effect_output(ra):
 
 
 def test_coder_prompt_binds_typed_inputs_to_resolved_manifest(ra):
-    llm = _RecordingLLM()
     step = ra.AnalysisStep(
         step_id="consume",
         intent="Consume the declared upstream table.",
@@ -188,13 +187,16 @@ def test_coder_prompt_binds_typed_inputs_to_resolved_manifest(ra):
         method="descriptive_summary",
     )
 
-    CoderAgent(llm).run(context=_context(ra), step=step)
-
-    prompt = llm.messages[-1].content
-    assert "TYPED INPUT BINDING (binding)" in prompt
-    assert "EASYICU_RESOLVED_INPUTS_JSON" in prompt
-    assert "Do not glob EASYICU_EVIDENCE_DIR" in prompt
-    assert "reconstruct a declared upstream product" in prompt
+    prompts = _ordinary_run_repair_and_agentic_prompts(ra=ra, step=step)
+    for prompt in prompts:
+        assert "TYPED INPUT BINDING (binding)" in prompt
+        assert "EASYICU_RESOLVED_INPUTS_JSON" in prompt
+        assert "Do not glob EASYICU_EVIDENCE_DIR" in prompt
+        assert "reconstruct a declared upstream product" in prompt
+        assert "one input_bindings row per typed input" in prompt
+        assert "for each loaded tabular input, its row_count" in prompt
+        assert "every shared non-key column" in prompt
+        assert "The host repeats that key-and-value comparison" in prompt
 
 
 def test_runtime_only_builds_visualization_request_for_figure_step(ra):
