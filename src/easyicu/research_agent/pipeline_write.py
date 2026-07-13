@@ -65,7 +65,7 @@ from .reporting_checklist import (
     choose_checklist,
 )
 from .reviewer import run_reviewer_round
-from .schema import EvidenceRef, ManuscriptDraftPacket
+from .schema import CritiqueReport, EvidenceRef, ManuscriptDraftPacket
 from .side_findings import collect_side_findings
 from .visual_qa import VLMVisualQAAdapter, VisualQAAuditor
 from .pdf_render import render_pdf_for_run
@@ -190,6 +190,80 @@ def _has_substantive_manuscript_text(text: str) -> bool:
     return any(re.search(r"[A-Za-z0-9]", line) for line in prose_lines)
 
 
+def _blocked_manuscript_critique(
+    reason: str,
+    *,
+    unsupported_claims: Sequence[str] = (),
+    suggested_repairs: Sequence[str] = (),
+) -> CritiqueReport:
+    """Build an explicit non-passing review when no valid review is possible."""
+
+    return CritiqueReport(
+        status="blocked",
+        reviewer="PipelineCritiqueFailSafe",
+        concerns=[reason],
+        unsupported_claims=list(unsupported_claims),
+        suggested_repairs=list(suggested_repairs)
+        or ["Resolve the blocking condition and rerun manuscript review."],
+    )
+
+
+def _review_manuscript_with_fail_safe(
+    critic: CriticAgent,
+    *,
+    scaffold: str,
+    available_evidence_ids: Sequence[str],
+) -> Tuple[CritiqueReport, Optional[str]]:
+    """Review a manuscript without ever converting a critic failure to pass."""
+
+    try:
+        return (
+            critic.review_manuscript(
+                scaffold=scaffold,
+                available_evidence_ids=available_evidence_ids,
+            ),
+            None,
+        )
+    except Exception as exc:
+        exception_type = type(exc).__name__
+        return (
+            _blocked_manuscript_critique(
+                "CriticAgent could not complete manuscript review "
+                f"({exception_type}); no passing review decision is available.",
+                suggested_repairs=[
+                    "Restore the manuscript critic and rerun review before treating "
+                    "the manuscript as ready."
+                ],
+            ),
+            exception_type,
+        )
+
+
+def _persist_manuscript_critique(
+    *,
+    critique: CritiqueReport,
+    run_dir: Path,
+    evidence: Any,
+    producer: str,
+) -> Path:
+    """Persist the critique contract on success, failure, and skipped writes."""
+
+    critique_path = run_dir / "manuscript_critique.json"
+    critique_path.write_text(critique.model_dump_json(indent=2), encoding="utf-8")
+    if evidence.get("manuscript_critique") is None:
+        evidence.register_file(
+            kind="log",
+            description=(
+                "Structured manuscript critique or explicit blocked fail-safe decision."
+            ),
+            source_path=critique_path,
+            evidence_id="manuscript_critique",
+            producer=producer,
+            generation_mode="system",
+        )
+    return critique_path
+
+
 def run_write_phase(
     pipeline,
     *,
@@ -214,6 +288,20 @@ def run_write_phase(
     runtime_state = execute_result.runtime_state
     per_step_records = execute_result.per_step_records
     critic = CriticAgent(role_resolver("analyzer"))
+
+    def blocked_write_result(bound_path: Path, reason: str) -> _WritePhaseResult:
+        critique = _blocked_manuscript_critique(reason)
+        _persist_manuscript_critique(
+            critique=critique,
+            run_dir=run_dir,
+            evidence=evidence,
+            producer="pipeline",
+        )
+        return _WritePhaseResult(
+            literature=None,
+            bound_path=bound_path,
+            manuscript_critique=critique,
+        )
 
     execution_gate = execution_gate_status(
         plan=execute_result.plan,
@@ -270,7 +358,11 @@ def run_write_phase(
                 "step outputs and resume from the next step when ready.\n",
                 encoding="utf-8",
             )
-            return _WritePhaseResult(literature=None, bound_path=bound_path)
+            return blocked_write_result(
+                bound_path,
+                "Manuscript review was not run because execution paused before "
+                "all planned analysis steps completed.",
+            )
         else:
             findings.append(
                 ValidationFinding(
@@ -294,7 +386,11 @@ def run_write_phase(
                 "`claim_ledger.csv` for the diagnostic record.\n",
                 encoding="utf-8",
             )
-            return _WritePhaseResult(literature=None, bound_path=bound_path)
+            return blocked_write_result(
+                bound_path,
+                "Manuscript review was not run because the analysis execution "
+                "gate did not pass.",
+            )
 
     if stop_after_analysis:
         emit_progress(
@@ -312,7 +408,11 @@ def run_write_phase(
             "is ready.\n",
             encoding="utf-8",
         )
-        return _WritePhaseResult(literature=None, bound_path=bound_path)
+        return blocked_write_result(
+            bound_path,
+            "Manuscript review was not run because manuscript drafting was "
+            "explicitly paused after analysis.",
+        )
 
     literature: Optional[LiteratureBundle] = None
     if pipeline._enable_publication_figure_skill:
@@ -824,7 +924,8 @@ def run_write_phase(
     )
     findings.extend(manuscript_numeric_findings)
 
-    manuscript_critique = critic.review_manuscript(
+    manuscript_critique, critic_review_error = _review_manuscript_with_fail_safe(
+        critic,
         scaffold=bound,
         available_evidence_ids=evidence.resolvable_names(),
     )
@@ -870,21 +971,26 @@ def run_write_phase(
                 ],
             }
         )
-    critique_path = run_dir / "manuscript_critique.json"
-    critique_path.write_text(
-        manuscript_critique.model_dump_json(indent=2),
-        encoding="utf-8",
+    _persist_manuscript_critique(
+        critique=manuscript_critique,
+        run_dir=run_dir,
+        evidence=evidence,
+        producer="pipeline" if critic_review_error else "critic",
     )
-    if evidence.get("manuscript_critique") is None:
-        evidence.register_file(
-            kind="log",
-            description="Structured manuscript critique after evidence binding.",
-            source_path=critique_path,
-            evidence_id="manuscript_critique",
-            producer="critic",
-            generation_mode="system",
+    if critic_review_error is not None:
+        findings.append(
+            ValidationFinding(
+                validator="critic_agent",
+                severity="error",
+                message=(
+                    "CriticAgent failed during manuscript review; a blocked "
+                    "fail-safe critique was persisted instead of a passing result."
+                ),
+                evidence_ids=["manuscript_critique"],
+                detail={"exception_type": critic_review_error},
+            )
         )
-    if manuscript_critique.status in {"needs_revision", "blocked"}:
+    elif manuscript_critique.status in {"needs_revision", "blocked"}:
         findings.append(
             ValidationFinding(
                 validator="critic_agent",
