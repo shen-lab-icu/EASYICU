@@ -7970,6 +7970,7 @@ def test_critic_accepts_bound_markdown_evidence_links_but_blocks_hidden_missing_
     assert clean.status == "pass"
     assert clean.unsupported_claims == []
     assert clean.missing_evidence_refs == []
+    assert clean.suggested_repairs == []
 
     blocked = critic.review_manuscript(
         scaffold=(
@@ -7982,6 +7983,35 @@ def test_critic_accepts_bound_markdown_evidence_links_but_blocks_hidden_missing_
 
     assert blocked.status == "blocked"
     assert blocked.missing_evidence_refs == ["table_one"]
+    assert blocked.suggested_repairs
+
+
+def test_step_critic_does_not_recommend_repairs_after_a_clean_pass(ra):
+    critic = ra.CriticAgent()
+    step = ra.AnalysisStep(
+        step_id="cohort_summary",
+        intent="Describe the locked cohort.",
+        expected_outputs=["table:cohort_summary"],
+        method="descriptive_summary",
+    )
+
+    clean = critic.review_step(
+        step=step,
+        step_summary={"status": "ok", "n_rows": 12},
+        evidence_refs=[ra.EvidenceRef(evidence_id="table_cohort_summary")],
+        findings=[],
+    )
+    assert clean.status == "pass"
+    assert clean.suggested_repairs == []
+
+    blocked = critic.review_step(
+        step=step,
+        step_summary={"status": "ok", "n_rows": 12},
+        evidence_refs=[],
+        findings=[],
+    )
+    assert blocked.status == "blocked"
+    assert blocked.suggested_repairs
 
 
 def test_critic_does_not_flag_footnote_provenance_block(ra):

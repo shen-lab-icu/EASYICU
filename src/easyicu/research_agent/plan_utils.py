@@ -640,9 +640,23 @@ _EFFECT_CONTRACT_METHODS = frozenset(
 )
 _EFFECT_CONTRACT_PRODUCTS = frozenset(
     {
+        "adjusted_association",
+        "adjusted_associations",
+        "adjusted_association_model",
+        "adjusted_association_models",
+        "adjusted_association_estimate",
+        "adjusted_association_estimates",
+        "adjusted_association_primary",
+        "adjusted_logistic_regression_primary",
         "adjusted_or_ci",
         "primary_association",
         "primary_association_estimate",
+        "primary_adjusted_association",
+        "primary_adjusted_association_estimate",
+        "primary_adjusted_association_estimates",
+        "primary_effect",
+        "primary_effect_estimate",
+        "primary_effect_estimates",
         "association_estimate",
         "association_estimates",
         "adjusted_effect",
@@ -762,6 +776,22 @@ def _has_closed_contract_product(
     names = _normalised_structured_output_names(expected_outputs)
     return bool(names & products) or any(
         name.startswith(tuple(product_prefixes)) for name in names if product_prefixes
+    )
+
+
+def effect_output_authorized(step: AnalysisStep) -> bool:
+    """Return whether the plan authorizes this step to own effect outputs.
+
+    This is the single authorization predicate shared by pre-execution coder
+    prompts and post-execution product validation.  Authority requires an exact
+    effect-method head *and* a closed, typed effect product, or a non-empty
+    planner-owned model-requirement roster (whose schema already fixes both the
+    method and product). Free-text intent and inferred analysis-family labels
+    never grant authority.
+    """
+
+    return _effect_contract_applies(step) or bool(
+        getattr(step, "model_requirements", None)
     )
 
 
@@ -3118,11 +3148,7 @@ def _step_contract_findings(
         declared_product_contract_findings(
             step=step,
             step_summary=step_summary,
-            effect_method_authorized=(
-                _normalised_method_head(str(step.method or ""))
-                in _EFFECT_CONTRACT_METHODS
-                or bool(step.model_requirements)
-            ),
+            effect_method_authorized=effect_output_authorized(step),
             out_dir=out_dir,
         )
     )
