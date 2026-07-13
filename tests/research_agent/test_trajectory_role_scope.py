@@ -11,6 +11,9 @@ from easyicu.research_agent.schema import (
     CohortDescriptor,
     ResearchContext,
 )
+from easyicu.research_agent.trajectory_plan_contract import (
+    trajectory_role_code_contract,
+)
 
 
 def _context() -> ResearchContext:
@@ -153,3 +156,54 @@ def test_candidate_role_accepts_replayable_agent_selection():
     )
 
     assert not any(finding.severity == "error" for finding in findings)
+
+
+def test_candidate_only_role_rejects_bootstrap_stability_output():
+    findings = declared_product_contract_findings(
+        step=_candidate_step(),
+        step_summary={
+            "status": "ok",
+            "output_files": [
+                "candidate_cluster_models.json",
+                "cluster_selection.json",
+                "bootstrap_stability.csv",
+            ],
+            "cluster_selection": {
+                "criterion": "bic",
+                "selection_rule": "minimum",
+                "direction": "minimize",
+                "selected_n_clusters": 2,
+                "candidates": [
+                    {"n_clusters": 2, "criterion_value": 10.0},
+                    {"n_clusters": 3, "criterion_value": 12.0},
+                ],
+                "rationale": "The minimum finite BIC was selected.",
+            },
+        },
+        effect_method_authorized=False,
+    )
+
+    assert any(
+        finding.detail.get("kind") == "trajectory_role_product_out_of_scope"
+        and "stability_freeze"
+        in finding.detail.get("unauthorized_products_by_role", {})
+        for finding in findings
+    )
+
+
+def test_candidate_code_contract_consumes_one_upstream_coordinate_layer():
+    step = _candidate_step().model_copy(
+        update={
+            "inputs": [
+                "artifact:trajectory_representation",
+                "table:scaling_summary",
+            ]
+        }
+    )
+
+    contract = trajectory_role_code_contract(context=_context(), step=step)
+
+    assert "scaled_representation_column" in contract
+    assert "do not reapply cohort, anchor, or observed-window eligibility" in contract
+    assert "do not run bootstrap" in contract
+    assert "do not write cluster profiles" in contract
