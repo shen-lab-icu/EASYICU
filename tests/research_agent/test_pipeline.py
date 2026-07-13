@@ -5900,9 +5900,10 @@ def test_readiness_publication_ready_requires_article_display_suite(
         ],
     )
     evidence = EvidenceStore(tmp_path)
-    _register_publication_bundle_for_readiness(
+    publication_source_id = _register_publication_bundle_for_readiness(
         evidence,
         tmp_path,
+        source_step_id="02_model",
         contract={
             "figure_id": "easyicu_publication_figure",
             "core_claim": "Adjusted association estimate.",
@@ -5925,7 +5926,11 @@ def test_readiness_publication_ready_requires_article_display_suite(
         findings=[],
         per_step_records=[
             {"step_id": "01_table_one", "status": "ok"},
-            {"step_id": "02_model", "status": "ok"},
+            {
+                "step_id": "02_model",
+                "status": "ok",
+                "evidence_ids": [publication_source_id],
+            },
         ],
         evidence=evidence,
         run_dir=tmp_path,
@@ -5985,7 +5990,12 @@ def test_readiness_publication_ready_accepts_complete_display_suite(
         ],
     )
     evidence = EvidenceStore(tmp_path)
-    _register_complete_display_suite_for_readiness(evidence, tmp_path)
+    bound_evidence = _register_complete_display_suite_for_readiness(
+        evidence,
+        tmp_path,
+        table_step_id="01_table_one",
+        publication_source_step_id="02_model",
+    )
     bound_path = tmp_path / "manuscript_scaffold_bound.md"
     bound_path.write_text(_evidence_bound_demo_manuscript(), encoding="utf-8")
 
@@ -5994,8 +6004,16 @@ def test_readiness_publication_ready_accepts_complete_display_suite(
         plan=plan,
         findings=[],
         per_step_records=[
-            {"step_id": "01_table_one", "status": "ok"},
-            {"step_id": "02_model", "status": "ok"},
+            {
+                "step_id": "01_table_one",
+                "status": "ok",
+                "evidence_ids": bound_evidence["01_table_one"],
+            },
+            {
+                "step_id": "02_model",
+                "status": "ok",
+                "evidence_ids": bound_evidence["02_model"],
+            },
             {"step_id": "03_sensitivity", "status": "ok"},
         ],
         evidence=evidence,
@@ -6336,7 +6354,12 @@ def test_review_gallery_archives_covered_and_duplicate_supporting_figures(
         ],
     )
     evidence = EvidenceStore(tmp_path)
-    _register_complete_display_suite_for_readiness(evidence, tmp_path)
+    bound_evidence = _register_complete_display_suite_for_readiness(
+        evidence,
+        tmp_path,
+        table_step_id="01_table_one",
+        publication_source_step_id="02_model",
+    )
     write_support_contract(
         "03_old_primary_render",
         "publication_figure",
@@ -6369,8 +6392,16 @@ def test_review_gallery_archives_covered_and_duplicate_supporting_figures(
         plan=plan,
         findings=[],
         per_step_records=[
-            {"step_id": "01_table_one", "status": "ok"},
-            {"step_id": "02_model", "status": "ok"},
+            {
+                "step_id": "01_table_one",
+                "status": "ok",
+                "evidence_ids": bound_evidence["01_table_one"],
+            },
+            {
+                "step_id": "02_model",
+                "status": "ok",
+                "evidence_ids": bound_evidence["02_model"],
+            },
             {"step_id": "03_old_primary_render", "status": "ok"},
             {"step_id": "04_supporting_missingness", "status": "ok"},
             {"step_id": "05_duplicate_missingness", "status": "ok"},
@@ -7439,15 +7470,14 @@ def test_readiness_artifacts_block_outcome_leak_after_blocked_gate(
     )
     step_out = tmp_path / "steps" / "04_outcome_gate" / "outputs"
     step_out.mkdir(parents=True)
+    blocked_summary = {
+        "step_id": "04_outcome_gate",
+        "primary_analysis_authorized": False,
+        "grouped_death_analysis_executed": False,
+        "target_outcome": "death",
+    }
     (step_out / "step_summary.json").write_text(
-        json.dumps(
-            {
-                "step_id": "04_outcome_gate",
-                "primary_analysis_authorized": False,
-                "grouped_death_analysis_executed": False,
-                "target_outcome": "death",
-            }
-        ),
+        json.dumps(blocked_summary),
         encoding="utf-8",
     )
     evidence = EvidenceStore(tmp_path)
@@ -7463,7 +7493,11 @@ def test_readiness_artifacts_block_outcome_leak_after_blocked_gate(
         plan=plan,
         findings=[],
         per_step_records=[
-            {"step_id": "04_outcome_gate", "status": "ok", "step_summary": {}}
+            {
+                "step_id": "04_outcome_gate",
+                "status": "ok",
+                "step_summary": blocked_summary,
+            }
         ],
         evidence=evidence,
         run_dir=tmp_path,
