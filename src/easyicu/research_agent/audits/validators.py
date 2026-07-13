@@ -27,14 +27,24 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import itertools
 import json
 import math
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Set
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 import pandas as pd
 
+from ..analysis_method_suite import figure_product_source_obligations
+from ..declared_product_contract import (
+    effect_adjustment_family,
+    effect_bearing_product,
+    effect_estimand_tier,
+    effect_measure_family,
+    effect_role_family,
+    typed_product,
+)
 from ..replication.paper import compare_metric_values
 from ..ordered_stratified_contract import ordered_stratified_numeric_findings
 from ..schema import (
@@ -5102,6 +5112,140 @@ class FigureSourceDataValidator:
         "source_row_index",
         "_source_row_index",
     )
+    _TABULAR_SUFFIXES = frozenset({".csv", ".tsv", ".parquet", ".feather"})
+    _PURE_RENDER_METHODS = frozenset(
+        {
+            "chart_generation",
+            "figure",
+            "figure_generation",
+            "plotting",
+            "publication_figure",
+            "publication_figure_generation",
+            "render_figure",
+            "visualisation",
+            "visualization",
+        }
+    )
+    _PREDICTION_METHODS = frozenset(
+        {
+            "classification_model",
+            "model_validation",
+            "prediction",
+            "prediction_model",
+            "risk_prediction",
+        }
+    )
+    _PREDICTION_SOURCE_ROLES = frozenset(
+        {
+            "auc",
+            "auroc",
+            "brier",
+            "c_statistic",
+            "calibration",
+            "calibration_curve",
+            "calibration_intercept",
+            "calibration_slope",
+            "decision_curve",
+            "discrimination",
+            "false_positive_rate",
+            "fpr",
+            "horizon_performance",
+            "model_performance",
+            "observed_risk",
+            "predicted_probability",
+            "predicted_risk",
+            "prediction",
+            "prediction_performance",
+            "predictions",
+            "risk_prediction",
+            "risk_predictions",
+            "risk_score",
+            "roc",
+            "roc_curve",
+            "true_positive_rate",
+            "tpr",
+            "validation_performance",
+        }
+    )
+    _PREDICTED_VALUE_ROLES = frozenset(
+        {
+            "predicted_probability",
+            "predicted_risk",
+            "prediction",
+            "risk_prediction",
+            "risk_score",
+        }
+    )
+    _PREDICTED_PROBABILITY_ROLES = frozenset(
+        {
+            "predicted_probability",
+            "predicted_risk",
+            "prediction",
+            "risk_prediction",
+        }
+    )
+    _PREDICTED_SCORE_ROLES = frozenset({"risk_score"})
+    _OBSERVED_OUTCOME_ROLES = frozenset(
+        {
+            "event",
+            "label",
+            "observed_outcome",
+            "outcome",
+            "target",
+            "y_true",
+        }
+    )
+    _OBSERVED_CALIBRATION_ROLES = frozenset(
+        {
+            "observed_probability",
+            "observed_rate",
+            "observed_risk",
+        }
+    )
+    _PREDICTION_PERFORMANCE_METRICS = frozenset(
+        {
+            "auc",
+            "auroc",
+            "brier",
+            "brier_score",
+            "c_statistic",
+            "calibration_intercept",
+            "calibration_slope",
+            "discrimination",
+            "roc_auc",
+        }
+    )
+    _PREDICTION_TIME_ROLES = frozenset(
+        {
+            "horizon",
+            "landmark",
+            "prediction_horizon",
+            "prediction_time",
+            "time_horizon",
+        }
+    )
+    _FALSE_POSITIVE_RATE_ROLES = frozenset({"false_positive_rate", "fpr"})
+    _TRUE_POSITIVE_RATE_ROLES = frozenset({"true_positive_rate", "tpr"})
+    _UNIT_INTERVAL_PREDICTION_METRICS = frozenset(
+        {
+            "auc",
+            "auroc",
+            "brier",
+            "brier_score",
+            "c_statistic",
+            "discrimination",
+            "roc_auc",
+        }
+    )
+    _DISCRIMINATION_PREDICTION_METRICS = frozenset(
+        {
+            "auc",
+            "auroc",
+            "c_statistic",
+            "discrimination",
+            "roc_auc",
+        }
+    )
 
     @staticmethod
     def _normalise(value: Any) -> str:
@@ -5122,6 +5266,1651 @@ class FigureSourceDataValidator:
             return None
         return numeric if math.isfinite(numeric) else None
 
+    @classmethod
+    def _read_tabular(cls, path: Path) -> pd.DataFrame:
+        """Read every tabular format accepted by the typed-evidence registry."""
+
+        suffix = Path(path).suffix.lower()
+        if suffix == ".csv":
+            return pd.read_csv(path)
+        if suffix == ".tsv":
+            return pd.read_csv(path, sep="\t")
+        if suffix == ".parquet":
+            return pd.read_parquet(path)
+        if suffix == ".feather":
+            return pd.read_feather(path)
+        raise ValueError(f"unsupported tabular suffix: {suffix or '<none>'}")
+
+    @classmethod
+    def _normalised_method_head(cls, method: Any) -> str:
+        normalised = cls._normalise(method)
+        return normalised.split("_with_", 1)[0]
+
+    @classmethod
+    def _figure_result_family(
+        cls,
+        *,
+        step: AnalysisStep,
+        figure_product: str,
+    ) -> Optional[str]:
+        parsed = typed_product(figure_product)
+        if parsed is None or parsed[0] != "figure":
+            return None
+        obligations = set(figure_product_source_obligations(figure_product))
+        if effect_bearing_product(figure_product) or any(
+            item.startswith("effect:") for item in obligations
+        ):
+            return "effect"
+        if any(item.startswith("prediction:") for item in obligations):
+            return "prediction"
+        if cls._normalised_method_head(step.method) in cls._PREDICTION_METHODS:
+            return "prediction"
+        return None
+
+    @classmethod
+    def _figure_source_obligations(
+        cls,
+        *,
+        step: AnalysisStep,
+        figure_product: str,
+    ) -> Set[str]:
+        obligations = set(figure_product_source_obligations(figure_product))
+        if obligations:
+            return obligations
+        family = cls._figure_result_family(
+            step=step,
+            figure_product=figure_product,
+        )
+        if family == "effect":
+            return {"effect"}
+        if family == "prediction":
+            return {"prediction:performance"}
+        return set()
+
+    @classmethod
+    def _planned_result_families(cls, step: AnalysisStep) -> Set[str]:
+        families: Set[str] = set()
+        for raw in step.expected_outputs or []:
+            family = cls._figure_result_family(step=step, figure_product=str(raw))
+            if family is not None:
+                families.add(family)
+        return families
+
+    @staticmethod
+    def _role_present(value: Any, role: str) -> bool:
+        normalised = re.sub(
+            r"[^a-z0-9]+", "_", str(value or "").strip().lower()
+        ).strip("_")
+        return normalised == role or f"_{role}_" in f"_{normalised}_"
+
+    @classmethod
+    def _column_role_present(cls, column: Any, role: str) -> bool:
+        """Match a declared semantic column role without substring capture.
+
+        Product identifiers and long-form metric labels may carry namespace
+        riders, but tabular columns are the actual replay schema.  Treating a
+        token anywhere in a column name as its value role makes metadata such
+        as ``auroc_ci_method`` or ``prediction_horizon_hours`` masquerade as a
+        numeric value column.
+        """
+
+        return cls._normalise(column) == cls._normalise(role)
+
+    @classmethod
+    def _time_column_role_present(cls, column: Any, role: str) -> bool:
+        normalised = cls._normalise(column)
+        expected = cls._normalise(role)
+        if normalised == expected:
+            return True
+        unit_suffixes = {
+            "day",
+            "days",
+            "hour",
+            "hours",
+            "minute",
+            "minutes",
+            "month",
+            "months",
+            "week",
+            "weeks",
+            "year",
+            "years",
+        }
+        if not normalised.startswith(f"{expected}_"):
+            return False
+        return normalised.removeprefix(f"{expected}_") in unit_suffixes
+
+    @classmethod
+    def _prediction_metric_column_roles(
+        cls,
+        column: Any,
+    ) -> List[Tuple[str, str, str]]:
+        """Return structured metric roles as ``(role, group, value_kind)``.
+
+        A closed set of value/bound suffixes keeps numeric metric payloads
+        auditable while excluding prose metadata such as ``*_ci_method``.
+        Interval bounds are validated but never establish performance without
+        a point estimate.
+        """
+
+        normalised = cls._normalise(column)
+        contexts = {
+            "development",
+            "external",
+            "internal",
+            "test",
+            "train",
+            "validation",
+        }
+        point_suffixes = {"estimate", "point_estimate", "value"}
+        lower_suffixes = {
+            "ci_low",
+            "ci_lower",
+            "confidence_interval_low",
+            "confidence_interval_lower",
+            "lcl",
+            "lower",
+        }
+        upper_suffixes = {
+            "ci_high",
+            "ci_upper",
+            "confidence_interval_high",
+            "confidence_interval_upper",
+            "ucl",
+            "upper",
+        }
+        matches: List[Tuple[str, str, str]] = []
+        for role in sorted(cls._PREDICTION_PERFORMANCE_METRICS, key=len, reverse=True):
+            candidates = [("", normalised)]
+            prefix, separator, remainder = normalised.partition("_")
+            if separator and prefix in contexts:
+                candidates.append((prefix, remainder))
+            for context, candidate in candidates:
+                group = f"{context}:{role}" if context else role
+                if candidate == role:
+                    matches.append((role, group, "point"))
+                    break
+                role_prefix = f"{role}_"
+                if not candidate.startswith(role_prefix):
+                    continue
+                suffix = candidate.removeprefix(role_prefix)
+                if suffix in point_suffixes:
+                    matches.append((role, group, "point"))
+                    break
+                if suffix in lower_suffixes:
+                    matches.append((role, group, "lower"))
+                    break
+                if suffix in upper_suffixes:
+                    matches.append((role, group, "upper"))
+                    break
+        return matches
+
+    @classmethod
+    def _has_row_paired_prediction_outcome(
+        cls,
+        frame: pd.DataFrame,
+        predictor_columns: Sequence[str],
+        outcome_columns: Sequence[str],
+        *,
+        require_both_classes: bool,
+    ) -> bool:
+        for predictor in predictor_columns:
+            for outcome in outcome_columns:
+                paired = frame[[predictor, outcome]].dropna()
+                if paired.empty:
+                    continue
+                if not cls._finite_numeric_values(paired[predictor]):
+                    continue
+                if not cls._finite_numeric_values(paired[outcome]):
+                    continue
+                if require_both_classes and not cls._series_is_binary_outcome(
+                    paired[outcome]
+                ):
+                    continue
+                return True
+        return False
+
+    @classmethod
+    def _has_complete_numeric_rows(
+        cls,
+        frame: pd.DataFrame,
+        column_groups: Sequence[Sequence[str]],
+        *,
+        minimum_rows: int = 1,
+        require_distinct_first: bool = False,
+    ) -> bool:
+        if not column_groups or any(not group for group in column_groups):
+            return False
+        for columns in itertools.product(*column_groups):
+            paired = frame[list(columns)].dropna()
+            if len(paired) < minimum_rows:
+                continue
+            if not all(
+                cls._finite_numeric_values(paired[column]) for column in columns
+            ):
+                continue
+            if require_distinct_first:
+                first_values = cls._finite_numeric_values(paired[columns[0]])
+                if len(set(first_values)) < 2:
+                    continue
+            return True
+        return False
+
+    @staticmethod
+    def _series_has_finite_numeric(series: pd.Series) -> bool:
+        numeric = pd.to_numeric(series, errors="coerce")
+        return any(
+            math.isfinite(float(value))
+            for value in numeric.dropna().tolist()
+        )
+
+    @staticmethod
+    def _finite_numeric_values(series: pd.Series) -> List[float]:
+        raw = series.dropna()
+        if raw.empty:
+            return []
+        numeric = pd.to_numeric(raw, errors="coerce")
+        if numeric.isna().any():
+            return []
+        values = [float(value) for value in numeric.tolist()]
+        if not values or not all(math.isfinite(value) for value in values):
+            return []
+        return values
+
+    @classmethod
+    def _series_in_unit_interval(cls, series: pd.Series) -> bool:
+        values = cls._finite_numeric_values(series)
+        return bool(values) and all(0.0 <= value <= 1.0 for value in values)
+
+    @classmethod
+    def _series_is_binary_outcome(cls, series: pd.Series) -> bool:
+        values = cls._finite_numeric_values(series)
+        if not values:
+            return False
+        has_zero = any(math.isclose(value, 0.0, abs_tol=1e-12) for value in values)
+        has_one = any(math.isclose(value, 1.0, abs_tol=1e-12) for value in values)
+        return has_zero and has_one and all(
+            math.isclose(value, 0.0, abs_tol=1e-12)
+            or math.isclose(value, 1.0, abs_tol=1e-12)
+            for value in values
+        )
+
+    @classmethod
+    def _matching_domain_columns(
+        cls,
+        frame: pd.DataFrame,
+        roles: Set[str] | frozenset[str],
+        predicate: Callable[[pd.Series], bool],
+    ) -> List[str]:
+        matching = [
+            str(column)
+            for column in frame.columns
+            if any(cls._column_role_present(column, role) for role in roles)
+        ]
+        if not matching or not all(predicate(frame[column]) for column in matching):
+            return []
+        return matching
+
+    @classmethod
+    def _prediction_metric_values_valid(
+        cls,
+        metric: Any,
+        series: pd.Series,
+    ) -> bool:
+        metric_name = cls._normalise(metric)
+        values = cls._finite_numeric_values(series)
+        if not values:
+            return False
+        if any(
+            cls._role_present(metric_name, role)
+            for role in cls._UNIT_INTERVAL_PREDICTION_METRICS
+        ):
+            return all(0.0 <= value <= 1.0 for value in values)
+        return any(
+            cls._role_present(metric_name, role)
+            for role in cls._PREDICTION_PERFORMANCE_METRICS
+        )
+
+    @classmethod
+    def _prediction_metric_interval_valid(
+        cls,
+        *,
+        metric: str,
+        point: pd.Series,
+        lower: pd.Series,
+        upper: pd.Series,
+    ) -> bool:
+        lower_present = lower.notna()
+        upper_present = upper.notna()
+        if not lower_present.equals(upper_present) or not bool(lower_present.any()):
+            return False
+        if not bool(point[lower_present].notna().all()):
+            return False
+        point_slice = point[lower_present]
+        lower_slice = lower[lower_present]
+        upper_slice = upper[upper_present]
+        if not all(
+            cls._prediction_metric_values_valid(metric, values)
+            for values in (point_slice, lower_slice, upper_slice)
+        ):
+            return False
+        point_values = cls._finite_numeric_values(point_slice)
+        lower_values = cls._finite_numeric_values(lower_slice)
+        upper_values = cls._finite_numeric_values(upper_slice)
+        return bool(point_values) and all(
+            low <= estimate <= high
+            for estimate, low, high in zip(
+                point_values,
+                lower_values,
+                upper_values,
+            )
+        )
+
+    @classmethod
+    def _matching_finite_columns(
+        cls,
+        frame: pd.DataFrame,
+        roles: Set[str] | frozenset[str],
+    ) -> List[str]:
+        matching = [
+            str(column)
+            for column in frame.columns
+            if any(cls._column_role_present(column, role) for role in roles)
+        ]
+        if not matching or not all(
+            bool(cls._finite_numeric_values(frame[column])) for column in matching
+        ):
+            return []
+        return matching
+
+    @classmethod
+    def _prediction_source_obligations(
+        cls,
+        *,
+        product: str,
+        frame: Optional[pd.DataFrame],
+        statistic_value: Optional[float] = None,
+    ) -> Set[str]:
+        """Return replayable prediction display obligations for one source."""
+
+        parsed_product = typed_product(product)
+        product_supported = any(
+            cls._role_present(product, role)
+            for role in cls._PREDICTION_SOURCE_ROLES
+        )
+        if not product_supported:
+            return set()
+        if parsed_product is not None and parsed_product[0] == "statistic":
+            metric_role = next(
+                (
+                    role
+                    for role in cls._PREDICTION_PERFORMANCE_METRICS
+                    if cls._role_present(product, role)
+                ),
+                None,
+            )
+            if metric_role is None:
+                return set()
+            if statistic_value is not None and not (
+                cls._prediction_metric_values_valid(
+                    metric_role,
+                    pd.Series([statistic_value]),
+                )
+            ):
+                return set()
+            return {"prediction:performance"}
+        if frame is None:
+            return set()
+
+        obligations: Set[str] = set()
+        probability_columns = cls._matching_domain_columns(
+            frame,
+            cls._PREDICTED_PROBABILITY_ROLES,
+            cls._series_in_unit_interval,
+        )
+        score_columns = cls._matching_finite_columns(
+            frame,
+            cls._PREDICTED_SCORE_ROLES,
+        )
+        observed_outcome_columns = cls._matching_domain_columns(
+            frame,
+            cls._OBSERVED_OUTCOME_ROLES,
+            cls._series_is_binary_outcome,
+        )
+        probability_outcome_paired = cls._has_row_paired_prediction_outcome(
+            frame,
+            probability_columns,
+            observed_outcome_columns,
+            require_both_classes=True,
+        )
+        score_outcome_paired = cls._has_row_paired_prediction_outcome(
+            frame,
+            score_columns,
+            observed_outcome_columns,
+            require_both_classes=True,
+        )
+        if probability_outcome_paired:
+            # Patient-level predictions plus observed outcomes are sufficient to
+            # replay discrimination, calibration, aggregate performance, and DCA.
+            obligations.update(
+                {
+                    "prediction:calibration",
+                    "prediction:decision",
+                    "prediction:performance",
+                    "prediction:roc",
+                }
+            )
+        elif score_outcome_paired:
+            # An arbitrary continuous score can replay rank discrimination, but
+            # it is not a calibrated probability and cannot authorize calibration,
+            # Brier, or decision-curve displays.
+            obligations.update({"prediction:performance", "prediction:roc"})
+
+        observed_calibration_columns = cls._matching_domain_columns(
+            frame,
+            cls._OBSERVED_CALIBRATION_ROLES,
+            cls._series_in_unit_interval,
+        )
+        if cls._has_complete_numeric_rows(
+            frame,
+            (probability_columns, observed_calibration_columns),
+            minimum_rows=2,
+            require_distinct_first=True,
+        ):
+            obligations.add("prediction:calibration")
+
+        false_positive_rate_columns = cls._matching_domain_columns(
+            frame,
+            cls._FALSE_POSITIVE_RATE_ROLES,
+            cls._series_in_unit_interval,
+        )
+        true_positive_rate_columns = cls._matching_domain_columns(
+            frame,
+            cls._TRUE_POSITIVE_RATE_ROLES,
+            cls._series_in_unit_interval,
+        )
+        threshold_columns = cls._matching_finite_columns(
+            frame,
+            frozenset({"threshold"}),
+        )
+        if cls._has_complete_numeric_rows(
+            frame,
+            (
+                threshold_columns,
+                false_positive_rate_columns,
+                true_positive_rate_columns,
+            ),
+            minimum_rows=2,
+            require_distinct_first=True,
+        ):
+            obligations.add("prediction:roc")
+        net_benefit_columns = cls._matching_finite_columns(
+            frame,
+            frozenset({"net_benefit"}),
+        )
+        probability_threshold_columns = cls._matching_domain_columns(
+            frame,
+            frozenset({"threshold"}),
+            cls._series_in_unit_interval,
+        )
+        if cls._has_complete_numeric_rows(
+            frame,
+            (probability_threshold_columns, net_benefit_columns),
+            minimum_rows=2,
+            require_distinct_first=True,
+        ):
+            obligations.add("prediction:decision")
+
+        performance_rows: Set[Any] = set()
+        discrimination_rows: Set[Any] = set()
+        performance_payload_valid = True
+        performance_payload_has_valid_value = False
+        metric_payloads: Dict[str, Dict[str, Any]] = {}
+        generic_metric_intervals: Dict[str, List[str]] = {
+            "lower": [],
+            "upper": [],
+        }
+        for column in frame.columns:
+            parsed_interval = cls._confidence_interval_bound(column)
+            if parsed_interval is not None and not parsed_interval[0]:
+                generic_metric_intervals[parsed_interval[1]].append(str(column))
+        for column in frame.columns:
+            matching_metrics = cls._prediction_metric_column_roles(column)
+            if not matching_metrics:
+                continue
+            column_valid = all(
+                cls._prediction_metric_values_valid(metric, frame[column])
+                for metric, _group, _kind in matching_metrics
+            )
+            if not column_valid:
+                performance_payload_valid = False
+                continue
+            for metric, group, kind in matching_metrics:
+                payload = metric_payloads.setdefault(
+                    group,
+                    {"role": metric, "point": [], "lower": [], "upper": []},
+                )
+                payload[kind].append(str(column))
+                if kind != "point":
+                    continue
+                performance_payload_has_valid_value = True
+                point_rows = set(frame[column].dropna().index.tolist())
+                performance_rows.update(point_rows)
+                if metric in cls._DISCRIMINATION_PREDICTION_METRICS:
+                    discrimination_rows.update(point_rows)
+        if generic_metric_intervals["lower"] or generic_metric_intervals["upper"]:
+            point_payloads = [
+                payload for payload in metric_payloads.values() if payload["point"]
+            ]
+            if len(point_payloads) == 1 and not (
+                point_payloads[0]["lower"] or point_payloads[0]["upper"]
+            ):
+                point_payloads[0]["lower"].extend(
+                    generic_metric_intervals["lower"]
+                )
+                point_payloads[0]["upper"].extend(
+                    generic_metric_intervals["upper"]
+                )
+            elif point_payloads:
+                performance_payload_valid = False
+        for payload in metric_payloads.values():
+            has_interval = bool(payload["lower"] or payload["upper"])
+            if not has_interval:
+                continue
+            if not (
+                len(payload["point"]) == 1
+                and len(payload["lower"]) == 1
+                and len(payload["upper"]) == 1
+            ):
+                performance_payload_valid = False
+                continue
+            if not cls._prediction_metric_interval_valid(
+                metric=str(payload["role"]),
+                point=frame[payload["point"][0]],
+                lower=frame[payload["lower"][0]],
+                upper=frame[payload["upper"][0]],
+            ):
+                performance_payload_valid = False
+        label_columns = [
+            column
+            for column in frame.columns
+            if cls._normalise(column) in {"metric", "name", "statistic"}
+        ]
+        value_columns = [
+            column
+            for column in frame.columns
+            if cls._normalise(column) in {"estimate", "result", "value"}
+        ]
+        long_interval_columns = generic_metric_intervals
+        for label_column in label_columns:
+            for row_index, metric_label in frame[label_column].items():
+                metric_role = next(
+                    (
+                        role
+                        for role in cls._PREDICTION_PERFORMANCE_METRICS
+                        if cls._normalise(metric_label) == role
+                    ),
+                    None,
+                )
+                if metric_role is None:
+                    continue
+                present_values = [
+                    value_column
+                    for value_column in value_columns
+                    if pd.notna(frame.at[row_index, value_column])
+                ]
+                row_valid = bool(present_values) and all(
+                    cls._prediction_metric_values_valid(
+                        metric_role,
+                        frame.loc[[row_index], value_column],
+                    )
+                    for value_column in present_values
+                )
+                present_lower = [
+                    column
+                    for column in long_interval_columns["lower"]
+                    if pd.notna(frame.at[row_index, column])
+                ]
+                present_upper = [
+                    column
+                    for column in long_interval_columns["upper"]
+                    if pd.notna(frame.at[row_index, column])
+                ]
+                if present_lower or present_upper:
+                    row_valid = row_valid and (
+                        len(present_values) == 1
+                        and len(present_lower) == 1
+                        and len(present_upper) == 1
+                        and cls._prediction_metric_interval_valid(
+                            metric=metric_role,
+                            point=frame.loc[[row_index], present_values[0]],
+                            lower=frame.loc[[row_index], present_lower[0]],
+                            upper=frame.loc[[row_index], present_upper[0]],
+                        )
+                    )
+                if row_valid:
+                    performance_payload_has_valid_value = True
+                    performance_rows.add(row_index)
+                    if metric_role in cls._DISCRIMINATION_PREDICTION_METRICS:
+                        discrimination_rows.add(row_index)
+                else:
+                    performance_payload_valid = False
+
+        if performance_payload_has_valid_value and performance_payload_valid:
+            obligations.add("prediction:performance")
+        elif not performance_payload_valid:
+            # A valid sibling must not launder an out-of-domain value carrying
+            # the same semantic metric role in the same source-data payload.
+            obligations.discard("prediction:performance")
+
+        candidate_time_columns = [
+            column
+            for column in frame.columns
+            if any(
+                cls._time_column_role_present(column, role)
+                for role in cls._PREDICTION_TIME_ROLES
+            )
+        ]
+        valid_time_varying_discrimination = False
+        for time_column in candidate_time_columns:
+            time_values = cls._finite_numeric_values(frame[time_column])
+            if len(set(time_values)) < 2:
+                continue
+
+            paired_metric_values = cls._finite_numeric_values(
+                frame.loc[list(discrimination_rows), time_column]
+                if discrimination_rows
+                else pd.Series(dtype=float)
+            )
+            if len(set(paired_metric_values)) >= 2:
+                valid_time_varying_discrimination = True
+                break
+
+            replayable_raw_horizons: Set[float] = set()
+            for horizon_value, group in frame.dropna(
+                subset=[time_column]
+            ).groupby(time_column):
+                probability_replay = cls._has_row_paired_prediction_outcome(
+                    group,
+                    probability_columns,
+                    observed_outcome_columns,
+                    require_both_classes=True,
+                )
+                score_replay = cls._has_row_paired_prediction_outcome(
+                    group,
+                    score_columns,
+                    observed_outcome_columns,
+                    require_both_classes=True,
+                )
+                if probability_replay or score_replay:
+                    numeric_horizon = cls._as_float(horizon_value)
+                    if numeric_horizon is not None:
+                        replayable_raw_horizons.add(numeric_horizon)
+            if len(replayable_raw_horizons) >= 2:
+                valid_time_varying_discrimination = True
+                break
+
+        if (
+            "prediction:performance" in obligations
+            and valid_time_varying_discrimination
+        ):
+            obligations.add("prediction:time_varying_discrimination")
+        return obligations
+
+    @staticmethod
+    def _effect_semantics_support_figure(
+        *,
+        semantic_signals: Sequence[str],
+        figure_product: str,
+    ) -> bool:
+        """Require one source to preserve the figure's scientific semantics."""
+
+        output_measure = effect_measure_family(figure_product)
+        output_role = effect_role_family(figure_product)
+        registered_roles = {
+            obligation.split(":", 1)[1]
+            for obligation in figure_product_source_obligations(figure_product)
+            if obligation.startswith("effect:")
+        }
+        output_tier = effect_estimand_tier(figure_product)
+        output_adjustment = effect_adjustment_family(figure_product)
+        input_measures = {
+            family
+            for signal in semantic_signals
+            if (family := effect_measure_family(signal)) is not None
+        }
+        input_roles = {
+            family
+            for signal in semantic_signals
+            if (family := effect_role_family(signal)) is not None
+        }
+        input_tiers = {
+            family
+            for signal in semantic_signals
+            if (family := effect_estimand_tier(signal)) is not None
+        }
+        input_adjustments = {
+            family
+            for signal in semantic_signals
+            if (family := effect_adjustment_family(signal)) is not None
+        }
+        if output_measure is not None and output_measure not in input_measures:
+            return False
+        required_roles = ({output_role} if output_role is not None else set()) | (
+            registered_roles
+        )
+        if registered_roles and not input_measures:
+            # A specialised effect display (for example subgroup or interaction)
+            # must preserve both its role and an explicit effect scale. A generic
+            # ``estimate`` column is not enough to establish forest-plot meaning.
+            return False
+        if required_roles:
+            if not required_roles.issubset(input_roles):
+                return False
+        elif input_roles:
+            return False
+        if output_tier is not None:
+            if output_tier not in input_tiers:
+                return False
+        elif input_tiers & {"secondary", "sensitivity", "corroborative"}:
+            return False
+        if (
+            output_adjustment is not None
+            and output_adjustment not in input_adjustments
+        ):
+            return False
+        return True
+
+    @classmethod
+    def _confidence_interval_bound(
+        cls,
+        column: Any,
+    ) -> Optional[Tuple[str, str]]:
+        normalised = cls._normalise(column)
+        patterns = (
+            r"^(?P<prefix>.*?)(?:_)?(?:ci|confidence_interval)_"
+            r"(?P<bound>low|lower|lcl|high|upper|ucl)$",
+            r"^(?P<prefix>.*?)(?:_)?(?P<bound>low|lower|lcl|high|upper|ucl)_"
+            r"(?:ci|confidence_interval)$",
+            r"^(?P<prefix>.*?)(?:_)?(?P<bound>lcl|ucl)$",
+            r"^(?P<prefix>.*?)(?:_)?(?P<bound>lower|upper)$",
+        )
+        for pattern in patterns:
+            matched = re.fullmatch(pattern, normalised)
+            if matched is None:
+                continue
+            bound = matched.group("bound")
+            side = "lower" if bound in {"low", "lower", "lcl"} else "upper"
+            return matched.group("prefix").strip("_"), side
+        return None
+
+    @classmethod
+    def _ratio_intervals_valid(
+        cls,
+        frame: pd.DataFrame,
+        ratio_point_columns: Sequence[str],
+    ) -> bool:
+        interval_columns: Dict[str, Dict[str, List[str]]] = {}
+        for column in frame.columns:
+            parsed = cls._confidence_interval_bound(column)
+            if parsed is None:
+                continue
+            prefix, side = parsed
+            interval_columns.setdefault(
+                prefix,
+                {"lower": [], "upper": []},
+            )[side].append(str(column))
+        normalised_points = {
+            str(column): cls._normalise(column) for column in ratio_point_columns
+        }
+
+        def matched_ratio_points(prefix: str) -> List[str]:
+            prefix_family = effect_measure_family(f"table:{prefix}")
+            return [
+                column
+                for column, normalised in normalised_points.items()
+                if normalised == prefix
+                or (
+                    prefix_family is not None
+                    and effect_measure_family(f"table:{normalised}")
+                    == prefix_family
+                )
+            ]
+
+        explicitly_covered_points = {
+            column
+            for prefix in interval_columns
+            if prefix
+            for column in matched_ratio_points(prefix)
+        }
+        for prefix, sides in interval_columns.items():
+            if prefix:
+                matched_points = matched_ratio_points(prefix)
+            else:
+                matched_points = [
+                    column
+                    for column in normalised_points
+                    if column not in explicitly_covered_points
+                ]
+            if not matched_points:
+                # A signed interval for another estimand in the same table is
+                # not a ratio-scale interval and must not poison the ratio.
+                continue
+            if len(matched_points) != 1:
+                return False
+            if len(sides["lower"]) != 1 or len(sides["upper"]) != 1:
+                return False
+            point_column = matched_points[0]
+            lower_column = sides["lower"][0]
+            upper_column = sides["upper"][0]
+            point_raw = frame[point_column]
+            lower_raw = frame[lower_column]
+            upper_raw = frame[upper_column]
+            lower_present = lower_raw.notna()
+            upper_present = upper_raw.notna()
+            if not lower_present.equals(upper_present) or not bool(lower_present.any()):
+                return False
+            if not bool(point_raw[lower_present].notna().all()):
+                return False
+            point = pd.to_numeric(point_raw[lower_present], errors="coerce")
+            lower = pd.to_numeric(lower_raw[lower_present], errors="coerce")
+            upper = pd.to_numeric(upper_raw[upper_present], errors="coerce")
+            if point.isna().any() or lower.isna().any() or upper.isna().any():
+                return False
+            point_values = [float(value) for value in point.tolist()]
+            lower_values = [float(value) for value in lower.tolist()]
+            upper_values = [float(value) for value in upper.tolist()]
+            if not all(
+                math.isfinite(estimate)
+                and math.isfinite(low)
+                and math.isfinite(high)
+                and 0.0 < low <= estimate <= high
+                for estimate, low, high in zip(
+                    point_values,
+                    lower_values,
+                    upper_values,
+                )
+            ):
+                return False
+        return True
+
+    @classmethod
+    def _source_supports_result_family(
+        cls,
+        *,
+        product: str,
+        frame: Optional[pd.DataFrame] = None,
+        family: Optional[str],
+        figure_products: Sequence[str] = (),
+    ) -> bool:
+        """Return whether a typed value source can authenticate the figure family.
+
+        The source product and its immutable table schema are host-owned.  Figure
+        contract prose and panel roles are intentionally not consulted.
+        """
+
+        if family is None:
+            return True
+        parsed_product = typed_product(product)
+        columns = list(frame.columns) if frame is not None else []
+        if family == "prediction":
+            source_obligations = cls._prediction_source_obligations(
+                product=product,
+                frame=frame,
+            )
+            if not source_obligations:
+                return False
+            if not figure_products:
+                return True
+            return all(
+                {
+                    obligation
+                    for obligation in (
+                        figure_product_source_obligations(figure)
+                        or ("prediction:performance",)
+                    )
+                    if obligation.startswith("prediction:")
+                }.issubset(source_obligations)
+                for figure in figure_products
+            )
+        if family != "effect":
+            return True
+
+        if not effect_bearing_product(product):
+            return False
+        if parsed_product is not None and parsed_product[0] == "statistic":
+            semantic_signals = [product]
+            return all(
+                cls._effect_semantics_support_figure(
+                    semantic_signals=semantic_signals,
+                    figure_product=figure,
+                )
+                for figure in figure_products
+                if effect_bearing_product(figure)
+                or any(
+                    obligation.startswith("effect:")
+                    for obligation in figure_product_source_obligations(figure)
+                )
+            )
+        if frame is None:
+            return False
+        typed_columns = [f"table:{column}" for column in columns]
+        generic_value_columns = {
+            "coef",
+            "coefficient",
+            "effect",
+            "effect_estimate",
+            "estimate",
+            "point_estimate",
+            "value",
+        }
+        finite_effect_columns = [
+            signal
+            for signal, column in zip(typed_columns, columns)
+            if (
+                effect_bearing_product(signal)
+                or effect_measure_family(signal) is not None
+                or cls._normalise(column) in generic_value_columns
+            )
+            and cls._series_has_finite_numeric(frame[column])
+        ]
+        if not finite_effect_columns:
+            return False
+        source_measure = effect_measure_family(product)
+        ratio_families = {"hazard_ratio", "odds_ratio", "risk_ratio"}
+        ratio_point_columns: List[str] = []
+        for signal, column in zip(typed_columns, columns):
+            column_measure = effect_measure_family(signal)
+            if column_measure not in ratio_families and not (
+                source_measure in ratio_families
+                and cls._normalise(column) in generic_value_columns
+            ):
+                continue
+            ratio_point_columns.append(str(column))
+            values = cls._finite_numeric_values(frame[column])
+            if not values or any(value <= 0.0 for value in values):
+                return False
+        if ratio_point_columns and not cls._ratio_intervals_valid(
+            frame,
+            ratio_point_columns,
+        ):
+            return False
+        semantic_signals = [
+            product,
+            *(
+                signal
+                for signal in finite_effect_columns
+                if effect_bearing_product(signal)
+                or effect_measure_family(signal) is not None
+            ),
+        ]
+        effect_figures = [
+            figure
+            for figure in figure_products
+            if effect_bearing_product(figure)
+            or any(
+                obligation.startswith("effect:")
+                for obligation in figure_product_source_obligations(figure)
+            )
+        ]
+        if not effect_figures:
+            return True
+        return all(
+            cls._effect_semantics_support_figure(
+                semantic_signals=semantic_signals,
+                figure_product=figure,
+            )
+            for figure in effect_figures
+        )
+
+    @classmethod
+    def _source_supports_figures(
+        cls,
+        *,
+        step: AnalysisStep,
+        product: str,
+        frame: Optional[pd.DataFrame],
+        figure_products: Sequence[str],
+        require_all: bool,
+    ) -> bool:
+        checks = [
+            cls._source_supports_result_family(
+                product=product,
+                frame=frame,
+                family=cls._figure_result_family(
+                    step=step,
+                    figure_product=figure,
+                ),
+                figure_products=[figure],
+            )
+            for figure in figure_products
+        ]
+        if not checks:
+            return True
+        return all(checks) if require_all else any(checks)
+
+    @classmethod
+    def _extract_statistic_value(
+        cls,
+        step_summary: Any,
+        product_name: str,
+    ) -> Optional[float]:
+        """Extract one unambiguous finite scalar for an exact statistic product."""
+
+        target = cls._normalise(product_name)
+        candidates: List[float] = []
+
+        def visit(value: Any) -> None:
+            if isinstance(value, Mapping):
+                declared_name = value.get("name") or value.get("statistic")
+                if declared_name is not None and cls._normalise(declared_name) == target:
+                    for field in ("value", "estimate", "result"):
+                        numeric = cls._as_float(value.get(field))
+                        if numeric is not None:
+                            candidates.append(numeric)
+                for key, child in value.items():
+                    if cls._normalise(key) == target:
+                        numeric = cls._as_float(child)
+                        if numeric is not None:
+                            candidates.append(numeric)
+                    if isinstance(child, (Mapping, list, tuple)):
+                        visit(child)
+            elif isinstance(value, (list, tuple)):
+                for child in value:
+                    visit(child)
+
+        visit(step_summary)
+        if not candidates:
+            return None
+        first = candidates[0]
+        if any(
+            not math.isclose(item, first, rel_tol=1e-9, abs_tol=1e-9)
+            for item in candidates[1:]
+        ):
+            return None
+        return first
+
+    @classmethod
+    def _source_contains_statistic(
+        cls,
+        source_df: pd.DataFrame,
+        *,
+        product_name: str,
+        expected: float,
+    ) -> bool:
+        target = cls._normalise(product_name)
+
+        def values_match(series: pd.Series) -> bool:
+            raw = series.dropna()
+            if raw.empty:
+                return False
+            values = pd.to_numeric(raw, errors="coerce")
+            if values.isna().any():
+                return False
+            return all(
+                math.isfinite(float(value))
+                and math.isclose(
+                    float(value), expected, rel_tol=1e-9, abs_tol=1e-9
+                )
+                for value in values
+            )
+
+        target_family = cls._statistic_family(target)
+        for column in source_df.columns:
+            column_name = cls._normalise(column)
+            if column_name != target and (
+                target_family is None
+                or cls._statistic_family(column_name) != target_family
+            ):
+                continue
+            if values_match(source_df[column]):
+                return True
+
+        label_columns = [
+            column
+            for column in source_df.columns
+            if cls._normalise(column) in {"metric", "name", "product", "statistic"}
+        ]
+        value_columns = [
+            column
+            for column in source_df.columns
+            if cls._normalise(column) in {"estimate", "result", "value"}
+        ]
+        for label_column in label_columns:
+            normalised_labels = source_df[label_column].map(cls._normalise)
+            matching_rows = normalised_labels.eq(target)
+            if target_family is not None:
+                matching_rows |= normalised_labels.map(
+                    cls._statistic_family
+                ).eq(target_family)
+            if not matching_rows.any():
+                continue
+            for value_column in value_columns:
+                if values_match(source_df.loc[matching_rows, value_column]):
+                    return True
+        return False
+
+    @classmethod
+    def _statistic_family(cls, value: Any) -> Optional[str]:
+        normalised = cls._normalise(value)
+        effect_family = effect_measure_family(f"statistic:{normalised}")
+        if effect_family is not None:
+            return f"effect:{effect_family}"
+        for family, aliases in {
+            "auroc": {"auc", "auroc", "c_statistic", "roc_auc"},
+            "brier": {"brier", "brier_score"},
+            "calibration_intercept": {"calibration_intercept"},
+            "calibration_slope": {"calibration_slope"},
+        }.items():
+            if normalised in aliases:
+                return f"prediction:{family}"
+        return None
+
+    @classmethod
+    def _statistic_payload_issue(
+        cls,
+        source_df: pd.DataFrame,
+        *,
+        required_statistics: Mapping[str, tuple[str, float]],
+    ) -> Optional[Dict[str, Any]]:
+        """Return the first unbound numeric cell in a statistic-only source.
+
+        Finding one truthful scalar must not authenticate unrelated plotted
+        numbers in the same source-data file.  Table-backed sources are checked
+        by the table comparator instead; this helper governs the scalar-only
+        fallback.
+        """
+
+        required = [
+            (
+                cls._normalise(product_name),
+                cls._statistic_family(product_name),
+                expected,
+            )
+            for product_name, expected in required_statistics.values()
+        ]
+
+        def matching_expected(label: Any) -> List[float]:
+            normalised = cls._normalise(label)
+            family = cls._statistic_family(normalised)
+            return [
+                expected
+                for target, target_family, expected in required
+                if normalised == target
+                or (
+                    family is not None
+                    and target_family is not None
+                    and family == target_family
+                )
+            ]
+
+        def agrees(value: Any, expected_values: Sequence[float]) -> bool:
+            numeric = cls._as_float(value)
+            return numeric is not None and any(
+                math.isclose(
+                    numeric, expected, rel_tol=1e-9, abs_tol=1e-9
+                )
+                for expected in expected_values
+            )
+
+        label_columns = [
+            column
+            for column in source_df.columns
+            if cls._normalise(column) in {"metric", "name", "product", "statistic"}
+        ]
+        value_columns = [
+            column
+            for column in source_df.columns
+            if cls._normalise(column) in {"estimate", "result", "value"}
+        ]
+        verified_cells: Set[tuple[Any, Any]] = set()
+        if label_columns and value_columns:
+            for row_index, row in source_df.iterrows():
+                expected_values = [
+                    expected
+                    for label_column in label_columns
+                    for expected in matching_expected(row[label_column])
+                ]
+                for value_column in value_columns:
+                    if pd.isna(row[value_column]):
+                        continue
+                    if not agrees(row[value_column], expected_values):
+                        return {
+                            "reason": "unbound_statistic_value",
+                            "column": str(value_column),
+                            "row": str(row_index),
+                            "value": row[value_column],
+                        }
+                    verified_cells.add((row_index, value_column))
+
+        exempt_columns = {
+            *cls._KEY_COLUMNS,
+            *cls._POSITIONAL_ROW_INDEX_COLUMNS,
+            "source_step_id",
+            "source_table",
+        }
+        for column in source_df.columns:
+            normalised_column = cls._normalise(column)
+            if column in label_columns or normalised_column in exempt_columns:
+                continue
+            for row_index, value in source_df[column].items():
+                if (row_index, column) in verified_cells or pd.isna(value):
+                    continue
+                numeric = cls._as_float(value)
+                if numeric is None:
+                    continue
+                expected_values = matching_expected(column)
+                if not agrees(numeric, expected_values):
+                    return {
+                        "reason": "unbound_statistic_value",
+                        "column": str(column),
+                        "row": str(row_index),
+                        "value": numeric,
+                    }
+        return None
+
+    @staticmethod
+    def _iter_string_values(value: Any) -> List[str]:
+        values: List[str] = []
+        if isinstance(value, str):
+            if value.strip():
+                values.append(value.strip())
+        elif isinstance(value, Mapping):
+            for child in value.values():
+                values.extend(FigureSourceDataValidator._iter_string_values(child))
+        elif isinstance(value, (list, tuple, set)):
+            for child in value:
+                values.extend(FigureSourceDataValidator._iter_string_values(child))
+        return values
+
+    @classmethod
+    def _registered_figure_paths(
+        cls,
+        *,
+        step: AnalysisStep,
+        step_summary: Mapping[str, Any],
+        out_dir: Path,
+    ) -> Dict[tuple[str, str], List[Path]]:
+        """Resolve exact planned figure roles to their registered files.
+
+        A directory-wide contract/source-data scan is insufficient: an honest
+        decoy bundle must never authenticate a different file registered under
+        the Planner's figure role.  Exact typed registry keys are authoritative;
+        a same-name file fallback is retained for legacy summaries.
+        """
+
+        declared = {
+            parsed
+            for raw in (step.expected_outputs or [])
+            if (parsed := typed_product(raw)) is not None and parsed[0] == "figure"
+        }
+        resolved: Dict[tuple[str, str], List[Path]] = {
+            product: [] for product in declared
+        }
+
+        def candidate_paths(value: Any) -> List[Path]:
+            paths: List[Path] = []
+            for raw_path in cls._iter_string_values(value):
+                suffix = Path(raw_path).suffix.lower()
+                if suffix not in {".png", ".svg", ".pdf", ".tif", ".tiff"}:
+                    continue
+                relative = Path(raw_path)
+                candidate = relative if relative.is_absolute() else out_dir / relative
+                paths.append(candidate)
+            return paths
+
+        for container_key in ("output_files", "outputs"):
+            container = step_summary.get(container_key)
+            if not isinstance(container, Mapping):
+                continue
+            for raw_role, value in container.items():
+                role = typed_product(raw_role)
+                if role in declared:
+                    resolved[role].extend(candidate_paths(value))
+
+        legacy_paths: List[Path] = []
+        for key in ("figure_files", "figure_file", "figure_path"):
+            legacy_paths.extend(candidate_paths(step_summary.get(key)))
+        for product in declared:
+            if resolved[product]:
+                continue
+            resolved[product].extend(
+                path for path in legacy_paths if path.stem == product[1]
+            )
+
+        return {
+            product: list(dict.fromkeys(paths))
+            for product, paths in resolved.items()
+        }
+
+    @classmethod
+    def _registered_same_step_tables(
+        cls,
+        *,
+        step: AnalysisStep,
+        step_summary: Mapping[str, Any],
+        out_dir: Path,
+        run_dir: Path,
+        excluded_paths: Sequence[Path] = (),
+    ) -> Dict[Path, str]:
+        """Return distinct planned tabular outputs available to a mixed step.
+
+        A figure's own contract-declared source CSV is never eligible as the
+        upstream value source.  Otherwise the writable output could register the
+        same file as both ``table:*`` and ``*source_data.csv`` and authenticate
+        arbitrary values by comparing the file with itself.
+        """
+
+        declared = {
+            parsed: f"{parsed[0]}:{parsed[1]}"
+            for raw in (step.expected_outputs or [])
+            if (parsed := typed_product(raw)) is not None
+            and parsed[0] in {"artifact", "dataset", "table"}
+        }
+        excluded = {
+            path.resolve()
+            for path in excluded_paths
+            if path.exists()
+        }
+        result_families = cls._planned_result_families(step)
+        tables: Dict[Path, str] = {}
+        for container_key in ("output_files", "outputs"):
+            container = step_summary.get(container_key)
+            if not isinstance(container, Mapping):
+                continue
+            for raw_role, value in container.items():
+                role = typed_product(raw_role)
+                if role not in declared:
+                    continue
+                for raw_path in cls._iter_string_values(value):
+                    if Path(raw_path).suffix.lower() not in cls._TABULAR_SUFFIXES:
+                        continue
+                    relative = Path(raw_path)
+                    candidate = relative if relative.is_absolute() else out_dir / relative
+                    if (
+                        cls._safe_regular_run_file(candidate, run_dir=run_dir)
+                        and candidate.parent.resolve() == out_dir.resolve()
+                        and candidate.resolve() not in excluded
+                    ):
+                        try:
+                            frame = cls._read_tabular(candidate)
+                        except Exception:
+                            continue
+                        product = declared[role]
+                        if not any(
+                            cls._source_supports_result_family(
+                                product=product,
+                                frame=frame,
+                                family=family,
+                            )
+                            for family in result_families
+                        ) and result_families:
+                            continue
+                        tables[candidate.resolve()] = product
+        return tables
+
+    @classmethod
+    def _declared_bundle_source_tables(
+        cls,
+        *,
+        step: AnalysisStep,
+        step_summary: Mapping[str, Any],
+        out_dir: Path,
+        run_dir: Path,
+        resolved_input_bindings: Optional[Mapping[str, Mapping[str, Any]]],
+    ) -> tuple[Optional[Dict[Path, Set[str]]], List[ValidationFinding]]:
+        """Bind each planned numeric figure to its exact local source bundle.
+
+        ``None`` means the step has no typed planned figure and the legacy
+        source-data scan may be used.  A returned mapping is authoritative: it
+        binds each local source table to the exact planned figure product(s)
+        whose contract declared it, so one honest family cannot launder another.
+        """
+
+        planned = {
+            parsed: str(raw)
+            for raw in (step.expected_outputs or [])
+            if (parsed := typed_product(raw)) is not None and parsed[0] == "figure"
+        }
+        if not planned:
+            return None, []
+
+        declared_input_kinds = {
+            parsed[0]
+            for raw in (step.inputs or [])
+            if (parsed := typed_product(raw)) is not None
+        }
+        declared_input_kinds.update(
+            str(binding.get("declared_kind") or "").strip().lower()
+            for binding in (resolved_input_bindings or {}).values()
+            if isinstance(binding, Mapping)
+        )
+        declared_result_kinds = {
+            parsed[0]
+            for raw in (step.expected_outputs or [])
+            if (parsed := typed_product(raw)) is not None
+            and parsed[0] != "figure"
+        }
+        has_data_input = bool(
+            (declared_input_kinds | declared_result_kinds)
+            & {"artifact", "dataset", "model", "statistic", "table"}
+        )
+        has_untyped_input = any(
+            typed_product(raw) is None for raw in (step.inputs or [])
+        )
+        planned_result_families = cls._planned_result_families(step)
+        method_head = cls._normalised_method_head(step.method)
+        compute_and_render = bool(planned) and method_head not in cls._PURE_RENDER_METHODS
+        host_requires_source = bool(
+            has_data_input
+            or has_untyped_input
+            or planned_result_families
+            or compute_and_render
+        )
+        registered = cls._registered_figure_paths(
+            step=step,
+            step_summary=step_summary,
+            out_dir=out_dir,
+        )
+        source_tables: Dict[Path, Set[str]] = {}
+        findings: List[ValidationFinding] = []
+
+        for product, raw_product in planned.items():
+            paths = registered.get(product, [])
+            if not paths:
+                findings.append(
+                    ValidationFinding(
+                        validator=cls.name,
+                        severity="error",
+                        message=(
+                            f"Figure step '{step.step_id}' did not bind planned "
+                            f"figure {raw_product!r} to an exact output file."
+                        ),
+                        detail={
+                            "step_id": step.step_id,
+                            "figure_product": raw_product,
+                            "reason": "missing_declared_figure_registration",
+                        },
+                    )
+                )
+                continue
+
+            stems = {path.stem for path in paths}
+            if len(stems) != 1:
+                findings.append(
+                    ValidationFinding(
+                        validator=cls.name,
+                        severity="error",
+                        message=(
+                            f"Planned figure {raw_product!r} is registered to "
+                            "multiple unrelated file stems; one figure bundle "
+                            "must share a single stem across export formats."
+                        ),
+                        detail={
+                            "step_id": step.step_id,
+                            "figure_product": raw_product,
+                            "figure_stems": sorted(stems),
+                            "reason": "ambiguous_declared_figure_bundle",
+                        },
+                    )
+                )
+                continue
+            stem = next(iter(stems))
+            contract_path = out_dir / f"{stem}.figure_contract.json"
+            contract: Any = None
+            contract_is_safe = (
+                cls._safe_regular_run_file(contract_path, run_dir=run_dir)
+                and contract_path.parent.resolve() == out_dir.resolve()
+            )
+            if contract_is_safe:
+                try:
+                    contract = json.loads(contract_path.read_text(encoding="utf-8"))
+                except Exception:
+                    contract = None
+            panels = contract.get("panels") if isinstance(contract, Mapping) else []
+            result_like = bool(
+                isinstance(contract, dict)
+                and FigureContractQualityValidator._is_result_like_contract(
+                    contract,
+                    panels if isinstance(panels, list) else [],
+                )
+            )
+            unsafe_exports = [
+                path.name
+                for path in paths
+                if not cls._safe_regular_run_file(path, run_dir=run_dir)
+                or path.parent.resolve() != out_dir.resolve()
+            ]
+            if unsafe_exports:
+                findings.append(
+                    ValidationFinding(
+                        validator=cls.name,
+                        severity="error",
+                        message=(
+                            f"Planned figure bundle '{stem}' contains an unsafe "
+                            "or missing registered export."
+                        ),
+                        detail={
+                            "step_id": step.step_id,
+                            "figure_product": raw_product,
+                            "unsafe_figure_exports": sorted(unsafe_exports),
+                            "reason": "unsafe_declared_figure_path",
+                        },
+                    )
+                )
+                continue
+            if not isinstance(contract, Mapping) or not contract_is_safe:
+                findings.append(
+                    ValidationFinding(
+                        validator=cls.name,
+                        severity="error",
+                        message=(
+                            f"Planned figure bundle '{stem}' has no readable, "
+                            "same-stem .figure_contract.json file."
+                        ),
+                        detail={
+                            "step_id": step.step_id,
+                            "figure_product": raw_product,
+                            "figure_stem": stem,
+                            "reason": "missing_figure_contract",
+                        },
+                    )
+                )
+                continue
+            figure_id = cls._normalise(contract.get("figure_id"))
+            if figure_id and figure_id != cls._normalise(stem):
+                findings.append(
+                    ValidationFinding(
+                        validator=cls.name,
+                        severity="error",
+                        message=(
+                            f"Figure contract '{contract_path.name}' identifies "
+                            "a different figure than its registered export."
+                        ),
+                        detail={
+                            "step_id": step.step_id,
+                            "figure_product": raw_product,
+                            "figure_stem": stem,
+                            "contract_figure_id": contract.get("figure_id"),
+                            "reason": "figure_contract_export_mismatch",
+                        },
+                    )
+                )
+                continue
+
+            requires_source = host_requires_source or result_like
+            if not requires_source:
+                continue
+
+            declared_sources = contract.get("source_data")
+            source_names = (
+                [declared_sources]
+                if isinstance(declared_sources, str)
+                else list(declared_sources)
+                if isinstance(declared_sources, (list, tuple, set))
+                else []
+            )
+            local_sources: List[Path] = []
+            unsafe_sources: List[str] = []
+            for value in source_names:
+                name = str(value or "").strip()
+                if not name or Path(name).suffix.lower() != ".csv":
+                    continue
+                if Path(name).name != name or "/" in name or "\\" in name:
+                    unsafe_sources.append(name)
+                    continue
+                source_path = out_dir / name
+                if (
+                    not cls._safe_regular_run_file(source_path, run_dir=run_dir)
+                    or source_path.parent.resolve() != out_dir.resolve()
+                ):
+                    unsafe_sources.append(name)
+                    continue
+                local_sources.append(source_path)
+            if unsafe_sources:
+                findings.append(
+                    ValidationFinding(
+                        validator=cls.name,
+                        severity="error",
+                        message=(
+                            f"Figure contract '{contract_path.name}' declares "
+                            "unsafe or missing local source-data files."
+                        ),
+                        detail={
+                            "step_id": step.step_id,
+                            "figure_product": raw_product,
+                            "unsafe_source_data": sorted(set(unsafe_sources)),
+                            "reason": "invalid_contract_source_data",
+                        },
+                    )
+                )
+                continue
+            if not local_sources:
+                findings.append(
+                    ValidationFinding(
+                        validator=cls.name,
+                        severity="error",
+                        message=(
+                            f"Result figure bundle '{stem}' has no local CSV "
+                            "declared in contract.source_data."
+                        ),
+                        detail={
+                            "step_id": step.step_id,
+                            "figure_product": raw_product,
+                            "figure_stem": stem,
+                            "reason": "missing_source_data",
+                        },
+                    )
+                )
+                continue
+            canonical_figure = f"{product[0]}:{product[1]}"
+            for source_path in local_sources:
+                source_tables.setdefault(source_path.resolve(), set()).add(
+                    canonical_figure
+                )
+
+        return source_tables, findings
+
     def audit(
         self,
         *,
@@ -5130,14 +6919,147 @@ class FigureSourceDataValidator:
         run_dir: Path,
         step_summary: Dict[str, Any],
         completed_step_records: Optional[Sequence[Dict[str, Any]]] = None,
+        resolved_input_bindings: Optional[
+            Mapping[str, Mapping[str, Any]]
+        ] = None,
     ) -> List[ValidationFinding]:
         if not self._is_rendering_step(step=step, step_summary=step_summary):
             return []
-        source_tables = sorted(out_dir.glob(self._SOURCE_DATA_GLOB))
+        figure_products = [
+            f"{parsed[0]}:{parsed[1]}"
+            for raw in (step.expected_outputs or [])
+            if (parsed := typed_product(raw)) is not None and parsed[0] == "figure"
+        ]
+        declared_sources, bundle_findings = self._declared_bundle_source_tables(
+            step=step,
+            step_summary=step_summary,
+            out_dir=out_dir,
+            run_dir=run_dir,
+            resolved_input_bindings=resolved_input_bindings,
+        )
+        if bundle_findings:
+            return bundle_findings
+        if declared_sources is None:
+            source_tables = sorted(out_dir.glob(self._SOURCE_DATA_GLOB))
+            source_figure_products = {
+                path.resolve(): set(figure_products) for path in source_tables
+            }
+        else:
+            source_tables = sorted(declared_sources)
+            source_figure_products = {
+                path.resolve(): set(products)
+                for path, products in declared_sources.items()
+            }
         if not source_tables:
             return []
 
-        upstream_step_ids = self._upstream_step_ids(step=step, step_summary=step_summary)
+        result_families = self._planned_result_families(step)
+        same_step_tables = self._registered_same_step_tables(
+            step=step,
+            step_summary=step_summary,
+            out_dir=out_dir,
+            run_dir=run_dir,
+            excluded_paths=source_tables,
+        )
+        same_step_statistics: Dict[str, tuple[str, float]] = {}
+        for raw_output in step.expected_outputs or []:
+            product = typed_product(raw_output)
+            if product is None or product[0] != "statistic":
+                continue
+            canonical = f"{product[0]}:{product[1]}"
+            if result_families and not any(
+                self._source_supports_result_family(
+                    product=canonical,
+                    family=family,
+                )
+                for family in result_families
+            ):
+                continue
+            value = self._extract_statistic_value(step_summary, product[1])
+            if value is not None:
+                same_step_statistics[f"same_step:{canonical}"] = (
+                    product[1],
+                    value,
+                )
+
+        bound_input_bindings: Dict[str, Mapping[str, Any]] = {}
+        if resolved_input_bindings is None:
+            upstream_step_ids = self._upstream_step_ids(
+                step=step,
+                step_summary=step_summary,
+            )
+            if same_step_tables or same_step_statistics:
+                upstream_step_ids.add(str(step.step_id))
+        else:
+            upstream_step_ids: Set[str] = set()
+            invalid_bindings: List[str] = []
+            for raw_input, binding in resolved_input_bindings.items():
+                if not isinstance(binding, Mapping):
+                    invalid_bindings.append(str(raw_input))
+                    continue
+                declared_kind = str(
+                    binding.get("declared_kind") or ""
+                ).strip().lower()
+                producer_id = str(binding.get("produced_by_step") or "").strip()
+                evidence_id = str(binding.get("evidence_id") or "").strip()
+                digest = str(binding.get("sha256") or "").strip()
+                product = str(binding.get("product") or "").strip()
+                parsed_input = typed_product(raw_input)
+                if (
+                    declared_kind
+                    not in {"artifact", "dataset", "model", "statistic", "table"}
+                    or parsed_input != (declared_kind, self._normalise(product))
+                    or
+                    not self._safe_step_id(producer_id)
+                    or not evidence_id
+                    or not product
+                    or re.fullmatch(r"[0-9a-fA-F]{64}", digest) is None
+                ):
+                    invalid_bindings.append(str(raw_input))
+                    continue
+                bound_input_bindings[str(raw_input)] = binding
+                upstream_step_ids.add(producer_id)
+            if same_step_tables or same_step_statistics:
+                upstream_step_ids.add(str(step.step_id))
+            if invalid_bindings:
+                return [
+                    ValidationFinding(
+                        validator=self.name,
+                        severity="error",
+                        message=(
+                            f"Figure step '{step.step_id}' has invalid "
+                            "host-resolved typed input bindings; source-data "
+                            "provenance cannot be authenticated."
+                        ),
+                        detail={
+                            "step_id": step.step_id,
+                            "invalid_resolved_inputs": sorted(invalid_bindings),
+                            "reason": "invalid_resolved_input_binding",
+                        },
+                    )
+                ]
+            declared_upstream_ids = self._explicit_upstream_step_ids(step_summary)
+            contradictory_ids = declared_upstream_ids - upstream_step_ids
+            if contradictory_ids:
+                return [
+                    ValidationFinding(
+                        validator=self.name,
+                        severity="error",
+                        message=(
+                            f"Figure step '{step.step_id}' reports upstream "
+                            "steps that disagree with its host-resolved typed "
+                            "bindings."
+                        ),
+                        detail={
+                            "step_id": step.step_id,
+                            "declared_upstream_step_ids": sorted(
+                                declared_upstream_ids
+                            ),
+                            "resolved_upstream_step_ids": sorted(upstream_step_ids),
+                            "reason": "resolved_upstream_binding_mismatch",
+                        },
+                    )
+                ]
         unsafe_step_ids = sorted(
             step_id
             for step_id in upstream_step_ids
@@ -5180,10 +7102,146 @@ class FigureSourceDataValidator:
             step_id for step_id in upstream_step_ids if self._safe_step_id(step_id)
         }
 
-        authoritative_tables = self._authoritative_table_paths(
+        authoritative_evidence = self._authoritative_table_evidence(
             run_dir=run_dir,
             completed_step_records=completed_step_records,
         )
+        authoritative_tables = (
+            None
+            if authoritative_evidence is None
+            else {
+                item["path"]
+                for item in authoritative_evidence.values()
+            }
+        )
+        if same_step_tables and authoritative_tables is not None:
+            authoritative_tables.update(same_step_tables)
+
+        required_table_paths: Set[Path] = set()
+        required_statistics: Dict[str, tuple[str, float]] = dict(
+            same_step_statistics
+        )
+        table_products: Dict[Path, str] = dict(same_step_tables)
+        table_frames: Dict[Path, pd.DataFrame] = {}
+        bound_tabular_paths: Set[Path] = set()
+        unsupported_value_inputs: List[str] = []
+        if resolved_input_bindings is not None:
+            invalid_bound_evidence: List[str] = []
+            current_records = {
+                str(record.get("step_id") or "").strip(): record
+                for record in current_successful_step_records(
+                    completed_step_records or []
+                )
+            }
+            for raw_input, binding in bound_input_bindings.items():
+                declared_kind = str(
+                    binding.get("declared_kind") or ""
+                ).strip().lower()
+                evidence_id = str(binding.get("evidence_id") or "").strip()
+                producer_id = str(binding.get("produced_by_step") or "").strip()
+                product_name = self._normalise(binding.get("product"))
+                canonical_product = f"{declared_kind}:{product_name}"
+                bound_path = Path(str(binding.get("absolute_path") or ""))
+                expected_sha = str(binding.get("sha256") or "").strip().lower()
+                if declared_kind == "table":
+                    item = (
+                        authoritative_evidence.get(evidence_id)
+                        if authoritative_evidence is not None
+                        else None
+                    )
+                    if (
+                        item is None
+                        or item["sha256"] != expected_sha
+                        or item["produced_by_step"] != producer_id
+                    ):
+                        invalid_bound_evidence.append(raw_input)
+                        continue
+                    bound_path = item["path"]
+                elif (
+                    not self._safe_regular_run_file(bound_path, run_dir=run_dir)
+                    or self._sha256_file(bound_path) != expected_sha
+                ):
+                    invalid_bound_evidence.append(raw_input)
+                    continue
+                if declared_kind == "statistic":
+                    record = current_records.get(producer_id)
+                    if (
+                        record is None
+                        or evidence_id
+                        != str(record.get("step_summary_evidence_id") or "").strip()
+                        or evidence_id
+                        not in {
+                            str(item)
+                            for item in (record.get("evidence_ids") or [])
+                        }
+                    ):
+                        invalid_bound_evidence.append(raw_input)
+                        continue
+                    value = self._extract_statistic_value(
+                        record.get("step_summary"), product_name
+                    )
+                    if value is None:
+                        invalid_bound_evidence.append(raw_input)
+                        continue
+                    if not result_families or any(
+                        self._source_supports_result_family(
+                            product=canonical_product,
+                            family=family,
+                        )
+                        for family in result_families
+                    ):
+                        required_statistics[raw_input] = (product_name, value)
+                    else:
+                        unsupported_value_inputs.append(raw_input)
+                    continue
+                if declared_kind == "model":
+                    unsupported_value_inputs.append(raw_input)
+                    continue
+
+                if bound_path.suffix.lower() not in self._TABULAR_SUFFIXES:
+                    unsupported_value_inputs.append(raw_input)
+                    continue
+                try:
+                    frame = self._read_tabular(bound_path)
+                except Exception:
+                    invalid_bound_evidence.append(raw_input)
+                    continue
+                if result_families and not any(
+                    self._source_supports_result_family(
+                        product=canonical_product,
+                        frame=frame,
+                        family=family,
+                    )
+                    for family in result_families
+                ):
+                    unsupported_value_inputs.append(raw_input)
+                    continue
+                resolved_path = bound_path.resolve()
+                bound_tabular_paths.add(resolved_path)
+                required_table_paths.add(resolved_path)
+                table_products[resolved_path] = canonical_product
+                table_frames[resolved_path] = frame
+            if invalid_bound_evidence:
+                return [
+                    ValidationFinding(
+                        validator=self.name,
+                        severity="error",
+                        message=(
+                            f"Figure step '{step.step_id}' has typed bindings "
+                            "that do not resolve to current hash-verified evidence."
+                        ),
+                        detail={
+                            "step_id": step.step_id,
+                            "invalid_resolved_inputs": sorted(
+                                invalid_bound_evidence
+                            ),
+                            "reason": "resolved_input_evidence_mismatch",
+                        },
+                    )
+                ]
+            bound_tabular_paths.update(same_step_tables)
+            required_table_paths.update(same_step_tables)
+            authoritative_tables = set(bound_tabular_paths)
         if completed_step_records is not None:
             current_parent_ids = {
                 str(record.get("step_id") or "").strip()
@@ -5191,7 +7249,14 @@ class FigureSourceDataValidator:
                     completed_step_records
                 )
             }
-            stale_parent_ids = sorted(upstream_step_ids - current_parent_ids)
+            same_step_ids = (
+                {str(step.step_id)}
+                if same_step_tables or same_step_statistics
+                else set()
+            )
+            stale_parent_ids = sorted(
+                upstream_step_ids - current_parent_ids - same_step_ids
+            )
             if stale_parent_ids:
                 return [
                     ValidationFinding(
@@ -5214,7 +7279,13 @@ class FigureSourceDataValidator:
             upstream_step_ids=upstream_step_ids,
             authoritative_tables=authoritative_tables,
         )
-        if not upstream_tables:
+        for bound_path in bound_tabular_paths:
+            if bound_path not in upstream_tables:
+                upstream_tables.append(bound_path)
+        for same_step_table in same_step_tables:
+            if same_step_table not in upstream_tables:
+                upstream_tables.append(same_step_table)
+        if not upstream_tables and not required_statistics:
             return [
                 ValidationFinding(
                     validator=self.name,
@@ -5222,19 +7293,117 @@ class FigureSourceDataValidator:
                         "error" if authoritative_tables is not None else "warning"
                     ),
                     message=(
-                        f"Figure step '{step.step_id}' wrote source data, but no "
-                        "current, hash-verified upstream source table was found for "
-                        f"{sorted(upstream_step_ids)}."
+                        f"Figure step '{step.step_id}' has no replayable, "
+                        "hash-verified upstream table or statistic source for its result "
+                        "figure. Model files and non-tabular artifacts cannot "
+                        "authenticate plotted values by themselves."
                     ),
                     detail={
                         "step_id": step.step_id,
                         "upstream_step_ids": sorted(upstream_step_ids),
                         "source_tables": [p.name for p in source_tables],
+                        "unsupported_value_inputs": sorted(
+                            set(unsupported_value_inputs)
+                        ),
+                        "reason": "non_replayable_figure_input",
                     },
                 )
             ]
 
         findings: List[ValidationFinding] = []
+        matched_table_paths: Set[Path] = set()
+        matched_statistics: Set[str] = set()
+        required_figure_obligations: Dict[str, Set[str]] = {
+            figure: self._figure_source_obligations(
+                step=step,
+                figure_product=figure,
+            )
+            for figure in figure_products
+            if self._figure_result_family(
+                step=step,
+                figure_product=figure,
+            )
+            is not None
+        }
+        matched_figure_obligations: Dict[str, Set[str]] = {
+            figure: set() for figure in required_figure_obligations
+        }
+
+        def credit_table_source(source_path: Path, table_paths: Set[Path]) -> None:
+            for table_path in table_paths:
+                resolved = table_path.resolve()
+                product = table_products.get(resolved, f"table:{table_path.stem}")
+                frame = table_frames.get(resolved)
+                if frame is None:
+                    try:
+                        frame = self._read_tabular(resolved)
+                    except Exception:
+                        continue
+                    table_frames[resolved] = frame
+                for figure in source_figure_products.get(
+                    source_path.resolve(), set()
+                ):
+                    if figure not in required_figure_obligations:
+                        continue
+                    family = self._figure_result_family(
+                        step=step,
+                        figure_product=figure,
+                    )
+                    if family == "prediction":
+                        matched_figure_obligations[figure].update(
+                            required_figure_obligations[figure]
+                            & self._prediction_source_obligations(
+                                product=product,
+                                frame=frame,
+                            )
+                        )
+                    elif self._source_supports_figures(
+                        step=step,
+                        product=product,
+                        frame=frame,
+                        figure_products=[figure],
+                        require_all=True,
+                    ):
+                        matched_figure_obligations[figure].update(
+                            required_figure_obligations[figure]
+                        )
+
+        def credit_statistic_source(
+            source_path: Path,
+            statistic_ids: Set[str],
+        ) -> None:
+            for statistic_id in statistic_ids:
+                product_name, expected = required_statistics[statistic_id]
+                product = f"statistic:{product_name}"
+                for figure in source_figure_products.get(
+                    source_path.resolve(), set()
+                ):
+                    if figure not in required_figure_obligations:
+                        continue
+                    family = self._figure_result_family(
+                        step=step,
+                        figure_product=figure,
+                    )
+                    if family == "prediction":
+                        matched_figure_obligations[figure].update(
+                            required_figure_obligations[figure]
+                            & self._prediction_source_obligations(
+                                product=product,
+                                frame=None,
+                                statistic_value=expected,
+                            )
+                        )
+                    elif self._source_supports_figures(
+                        step=step,
+                        product=product,
+                        frame=None,
+                        figure_products=[figure],
+                        require_all=True,
+                    ):
+                        matched_figure_obligations[figure].update(
+                            required_figure_obligations[figure]
+                        )
+
         for source_path in source_tables:
             if not self._safe_regular_run_file(source_path, run_dir=run_dir):
                 findings.append(
@@ -5356,22 +7525,70 @@ class FigureSourceDataValidator:
                     upstream_step_ids=upstream_step_ids,
                 )
             )
-            # A faithful figure is often built from a table produced by a step
-            # OTHER than the _figure-suffix sibling (E2: the association forest's
-            # per-level ORs live in 00_probe/lactate_group_odds_ratios.csv and the
-            # intensity profile in 03_.../lactate_measurement_intensity_profile.csv).
-            # _upstream_step_ids only resolves the sibling step, so without also
-            # resolving the figure's self-declared ``source_table`` filenames across
-            # the whole run, the true parent is never a comparison candidate and a
-            # genuinely-traceable figure is rejected (compared instead against an
-            # unrelated sibling-step table). The subset + numeric-equality checks
-            # still run against the resolved parent, so a fabricated figure (whose
-            # values do not match the table it names) still fails — no weakening.
+            source_statistic_matches: Set[str] = set()
+            for statistic_id, (product_name, expected_value) in (
+                required_statistics.items()
+            ):
+                if self._source_contains_statistic(
+                    source_df,
+                    product_name=product_name,
+                    expected=expected_value,
+                ):
+                    source_statistic_matches.add(statistic_id)
+            source_matched_table_paths: Set[Path] = set()
+
+            def finalize_source_match() -> bool:
+                if source_matched_table_paths:
+                    matched_table_paths.update(source_matched_table_paths)
+                    credit_table_source(source_path, source_matched_table_paths)
+                    if source_statistic_matches:
+                        matched_statistics.update(source_statistic_matches)
+                        credit_statistic_source(
+                            source_path, source_statistic_matches
+                        )
+                    return True
+                if not source_statistic_matches:
+                    return False
+                statistic_issue = self._statistic_payload_issue(
+                    source_df,
+                    required_statistics=required_statistics,
+                )
+                if statistic_issue is not None:
+                    findings.append(
+                        ValidationFinding(
+                            validator=self.name,
+                            severity="error",
+                            message=(
+                                f"Figure source-data table '{source_path.name}' "
+                                "contains numeric result payload that is not "
+                                "bound to a verified statistic."
+                            ),
+                            detail={
+                                "step_id": step.step_id,
+                                "source_table": source_path.name,
+                                **statistic_issue,
+                            },
+                        )
+                    )
+                    return False
+                matched_statistics.update(source_statistic_matches)
+                credit_statistic_source(source_path, source_statistic_matches)
+                return True
+
+            # A faithful figure may bind a table produced by any exact typed
+            # parent, not merely a step-id naming convention.  ``source_table``
+            # remains a binding claim: when present, only that basename (and,
+            # when supplied, that exact source_step_id) may authenticate rows.
             declared_tables = self._resolve_declared_source_tables_across_run(
                 run_dir=run_dir,
                 source_df=source_df,
                 current_out_dir=out_dir,
                 authoritative_tables=authoritative_tables,
+                allowed_step_ids=(
+                    upstream_step_ids
+                    if resolved_input_bindings is not None
+                    else None
+                ),
             )
             candidate_tables = list(upstream_tables)
             for path in declared_tables:
@@ -5492,16 +7709,27 @@ class FigureSourceDataValidator:
                             }
                         )
                         continue
-                    group_comparisons = [
-                        self._compare_source_to_upstream(
-                            source_df=group_df,
-                            source_path=source_path,
-                            upstream_path=upstream_path,
+                    group_comparison_pairs = [
+                        (
+                            upstream_path,
+                            self._compare_source_to_upstream(
+                                source_df=group_df,
+                                source_path=source_path,
+                                upstream_path=upstream_path,
+                            ),
                         )
                         for upstream_path in group_tables
                     ]
+                    group_comparisons = [
+                        item for _, item in group_comparison_pairs
+                    ]
                     comparisons.extend(group_comparisons)
                     if any(item.get("ok") for item in group_comparisons):
+                        source_matched_table_paths.update(
+                            path.resolve()
+                            for path, item in group_comparison_pairs
+                            if item.get("ok")
+                        )
                         # Keep only failures from groups that have no matching
                         # declared parent.  A duplicate basename in another step
                         # may legitimately be the referenced parent.
@@ -5515,23 +7743,53 @@ class FigureSourceDataValidator:
                     item for item in comparisons if not item.get("ok")
                 ]
                 if not failed_comparisons:
-                    continue
+                    if finalize_source_match():
+                        continue
                 comparisons = failed_comparisons
             else:
                 ordered_upstream_tables = self._prioritize_declared_source_tables(
                     source_df=source_df,
                     upstream_tables=candidate_tables,
                 )
-                comparisons = [
-                    self._compare_source_to_upstream(
-                        source_df=source_df,
-                        source_path=source_path,
-                        upstream_path=upstream_path,
+                comparison_pairs = [
+                    (
+                        upstream_path,
+                        self._compare_source_to_upstream(
+                            source_df=source_df,
+                            source_path=source_path,
+                            upstream_path=upstream_path,
+                        ),
                     )
                     for upstream_path in ordered_upstream_tables
                 ]
-                if any(item.get("ok") for item in comparisons):
+                comparisons = [item for _, item in comparison_pairs]
+                successful_paths = {
+                    path.resolve()
+                    for path, item in comparison_pairs
+                    if item.get("ok")
+                }
+                if successful_paths:
+                    source_matched_table_paths.update(successful_paths)
+                if finalize_source_match():
                     continue
+            if not comparisons:
+                findings.append(
+                    ValidationFinding(
+                        validator=self.name,
+                        severity="error",
+                        message=(
+                            f"Figure source-data table '{source_path.name}' does "
+                            "not reproduce any bound table or statistic value."
+                        ),
+                        detail={
+                            "step_id": step.step_id,
+                            "source_table": source_path.name,
+                            "required_statistics": sorted(required_statistics),
+                            "reason": "no_verifiable_figure_values",
+                        },
+                    )
+                )
+                continue
             actionable = [
                 item for item in comparisons if item.get("reason") != "no_shared_key"
             ]
@@ -5554,6 +7812,62 @@ class FigureSourceDataValidator:
                             for p in ordered_upstream_tables
                         ],
                         "best_mismatch": best,
+                    },
+                )
+            )
+        missing_table_paths = required_table_paths - matched_table_paths
+        missing_statistics = set(required_statistics) - matched_statistics
+        if missing_table_paths or missing_statistics:
+            findings.append(
+                ValidationFinding(
+                    validator=self.name,
+                    severity="error",
+                    message=(
+                        f"Figure step '{step.step_id}' source-data bundle does "
+                        "not cover every bound result source. Each typed parent "
+                        "must be independently value-verified."
+                    ),
+                    detail={
+                        "step_id": step.step_id,
+                        "missing_bound_tables": sorted(
+                            path.name for path in missing_table_paths
+                        ),
+                        "missing_bound_statistics": sorted(missing_statistics),
+                        "reason": "incomplete_source_lineage_coverage",
+                    },
+                )
+            )
+        missing_figure_sources = {
+            figure: {
+                "declared_sources": sorted(
+                    path.name
+                    for path, products in source_figure_products.items()
+                    if figure in products
+                ),
+                "missing_obligations": sorted(
+                    required_obligations
+                    - matched_figure_obligations.get(figure, set())
+                ),
+            }
+            for figure, required_obligations in required_figure_obligations.items()
+            if not required_obligations.issubset(
+                matched_figure_obligations.get(figure, set())
+            )
+        }
+        if missing_figure_sources:
+            findings.append(
+                ValidationFinding(
+                    validator=self.name,
+                    severity="error",
+                    message=(
+                        f"Figure step '{step.step_id}' has a planned result "
+                        "figure whose own source bundle is not backed by a "
+                        "semantically compatible, value-verified product."
+                    ),
+                    detail={
+                        "step_id": step.step_id,
+                        "missing_figure_sources": missing_figure_sources,
+                        "reason": "missing_figure_family_source",
                     },
                 )
             )
@@ -5850,15 +8164,64 @@ class FigureSourceDataValidator:
     def _is_rendering_step(
         cls, *, step: AnalysisStep, step_summary: Dict[str, Any]
     ) -> bool:
-        if bool((step_summary or {}).get("rendering_only")):
+        if bool(
+            (step_summary or {}).get("rendering_only")
+            or (step_summary or {}).get("render_only")
+        ):
             return True
-        haystack = f"{step.step_id} {step.method} {step.intent}".lower()
-        return "figure" in haystack or "render" in haystack
+        if any(
+            (parsed := typed_product(raw)) is not None and parsed[0] == "figure"
+            for raw in (step.expected_outputs or [])
+        ):
+            return True
+        method = cls._normalise(step.method)
+        if method in {
+            "chart_generation",
+            "figure",
+            "figure_generation",
+            "plotting",
+            "publication_figure",
+            "publication_figure_generation",
+            "render_figure",
+            "visualisation",
+            "visualization",
+        }:
+            return True
+        return any(
+            Path(value).suffix.lower()
+            in {".png", ".svg", ".pdf", ".tif", ".tiff"}
+            for value in cls._iter_string_values(step_summary or {})
+        )
 
     @classmethod
     def _upstream_step_ids(
         cls, *, step: AnalysisStep, step_summary: Dict[str, Any]
     ) -> Set[str]:
+        found = cls._explicit_upstream_step_ids(step_summary)
+
+        text = f"{step.intent}\n{step.method}\n{json.dumps(step_summary or {}, default=str)}"
+        for match in re.finditer(r"\bstep\s*['\"]([A-Za-z0-9_.:-]+)['\"]", text):
+            candidate = match.group(1).strip()
+            if candidate and candidate != step.step_id:
+                found.add(candidate)
+
+        step_id = str(step.step_id)
+        for suffix in (
+            "_figure",
+            "_publication_figure",
+            "_figure_generation",
+            "_render_figure",
+        ):
+            if step_id.endswith(suffix) and len(step_id) > len(suffix):
+                found.add(step_id[: -len(suffix)])
+        return found
+
+    @classmethod
+    def _explicit_upstream_step_ids(
+        cls, step_summary: Mapping[str, Any]
+    ) -> Set[str]:
+        """Return structured producer claims without prose/name inference."""
+
         found: Set[str] = set()
         for key in (
             "upstream_step_id",
@@ -5876,22 +8239,6 @@ class FigureSourceDataValidator:
             value = (step_summary or {}).get(key)
             if isinstance(value, (list, tuple, set)):
                 found.update(str(item).strip() for item in value if str(item).strip())
-
-        text = f"{step.intent}\n{step.method}\n{json.dumps(step_summary or {}, default=str)}"
-        for match in re.finditer(r"\bstep\s*['\"]([A-Za-z0-9_.:-]+)['\"]", text):
-            candidate = match.group(1).strip()
-            if candidate and candidate != step.step_id:
-                found.add(candidate)
-
-        step_id = str(step.step_id)
-        for suffix in (
-            "_figure",
-            "_publication_figure",
-            "_figure_generation",
-            "_render_figure",
-        ):
-            if step_id.endswith(suffix) and len(step_id) > len(suffix):
-                found.add(step_id[: -len(suffix)])
         return found
 
     @staticmethod
@@ -5955,18 +8302,18 @@ class FigureSourceDataValidator:
         return digest.hexdigest()
 
     @classmethod
-    def _authoritative_table_paths(
+    def _authoritative_table_evidence(
         cls,
         *,
         run_dir: Path,
         completed_step_records: Optional[Sequence[Dict[str, Any]]],
-    ) -> Optional[Set[Path]]:
-        """Resolve active table evidence back to immutable step outputs.
+    ) -> Optional[Dict[str, Dict[str, Any]]]:
+        """Resolve active table evidence ids back to immutable step outputs.
 
         ``None`` is the explicit legacy signal: no modern per-step authority is
         available, so old run fixtures may use the contained filesystem scan.
-        A modern run returns a set (possibly empty); only current successful,
-        hash-matching table artifacts are then eligible as figure parents.
+        A modern run returns a mapping (possibly empty); only current
+        successful, hash-matching table artifacts are eligible as parents.
         """
 
         evidence_records = current_run_evidence_records(
@@ -5986,7 +8333,7 @@ class FigureSourceDataValidator:
             else None
         )
         root = Path(run_dir).resolve()
-        authorised: Set[Path] = set()
+        authorised: Dict[str, Dict[str, Any]] = {}
         for record in evidence_records:
             if str(record.get("kind") or "").strip().lower() != "table":
                 continue
@@ -5997,6 +8344,9 @@ class FigureSourceDataValidator:
             ):
                 continue
             expected_sha = str(record.get("sha256") or "").strip().lower()
+            evidence_id = str(record.get("evidence_id") or "").strip()
+            if not evidence_id:
+                continue
             evidence_path = verified_run_evidence_path(root, record)
             if evidence_path is None:
                 continue
@@ -6013,7 +8363,11 @@ class FigureSourceDataValidator:
                 cls._safe_regular_run_file(output_path, run_dir=root)
                 and cls._sha256_file(output_path) == expected_sha
             ):
-                authorised.add(output_path.resolve())
+                authorised[evidence_id] = {
+                    "path": output_path.resolve(),
+                    "sha256": expected_sha,
+                    "produced_by_step": step_id,
+                }
         return authorised
 
     @classmethod
@@ -6035,7 +8389,7 @@ class FigureSourceDataValidator:
                 continue
             for path in sorted(outputs.iterdir()):
                 if (
-                    path.suffix.lower() != ".csv"
+                    path.suffix.lower() not in cls._TABULAR_SUFFIXES
                     or not cls._safe_regular_run_file(path, run_dir=root)
                 ):
                     continue
@@ -6089,6 +8443,7 @@ class FigureSourceDataValidator:
         source_df: pd.DataFrame,
         current_out_dir: Path,
         authoritative_tables: Optional[Set[Path]] = None,
+        allowed_step_ids: Optional[Set[str]] = None,
     ) -> List[Path]:
         """Locate the figure's self-declared ``source_table`` parents anywhere.
 
@@ -6120,10 +8475,18 @@ class FigureSourceDataValidator:
         current_resolved = current_out_dir.resolve()
         resolved: List[Path] = []
         seen: Set[Path] = set()
-        for path in sorted(steps_dir.glob("*/outputs/*.csv")):
+        for path in sorted(steps_dir.glob("*/outputs/*")):
             if (
+                path.suffix.lower() not in cls._TABULAR_SUFFIXES
+                or
                 path.name not in declared_names
                 or not cls._safe_regular_run_file(path, run_dir=run_dir)
+            ):
+                continue
+            if (
+                allowed_step_ids is not None
+                and cls._table_step_id(path, run_dir=run_dir)
+                not in allowed_step_ids
             ):
                 continue
             if path.parent.resolve() == current_resolved:
@@ -6145,7 +8508,7 @@ class FigureSourceDataValidator:
         upstream_path: Path,
     ) -> Dict[str, Any]:
         try:
-            upstream_df = pd.read_csv(upstream_path)
+            upstream_df = cls._read_tabular(upstream_path)
         except Exception as exc:
             return {
                 "ok": False,
