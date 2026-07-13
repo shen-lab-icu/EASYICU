@@ -4,7 +4,10 @@ from pathlib import Path
 
 from easyicu.research_agent.evidence import EvidenceStore
 from easyicu.research_agent.pipeline_execute import (
+    _resolve_typed_input_evidence,
     _resolve_typed_artifact_evidence,
+    _resolved_typed_input_binding,
+    _write_resolved_inputs_manifest,
 )
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
@@ -285,3 +288,136 @@ def test_invalid_or_multiple_exact_typed_mappings_fail_closed(
         assert ref is None
         assert failure is not None
         assert failure["reason"] == reason
+
+
+def test_typed_table_uses_current_resume_authority_and_writes_exact_manifest(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(tmp_path)
+    source = tmp_path / "source" / "scaling_summary.csv"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("feature,mean\nx,0\n", encoding="utf-8")
+    old = store.register_file(
+        kind="table",
+        description="Old scaling summary.",
+        source_path=source,
+        evidence_id="scaling_summary",
+        produced_by_step="producer",
+        on_sha_change="new_id",
+    )
+    source.write_text("feature,mean\nx,1\n", encoding="utf-8")
+    current = store.register_file(
+        kind="table",
+        description="Current scaling summary.",
+        source_path=source,
+        evidence_id="scaling_summary",
+        produced_by_step="producer",
+        on_sha_change="new_id",
+    )
+    plan = AnalysisPlan(
+        research_question="Test typed table lineage.",
+        steps=[
+            AnalysisStep(
+                step_id="producer",
+                intent="Produce scaling metadata.",
+                expected_outputs=["table:scaling_summary"],
+            ),
+            AnalysisStep(
+                step_id="consumer",
+                intent="Consume current scaling metadata.",
+                inputs=["table:scaling_summary"],
+            ),
+        ],
+    )
+
+    ref, failure = _resolve_typed_input_evidence(
+        input_name="table:scaling_summary",
+        plan=plan,
+        evidence_records=store.records(),
+        per_step_records=[
+            {"step_id": "producer", "status": "ok", "evidence_ids": [old.evidence_id]},
+            {
+                "step_id": "producer",
+                "status": "ok",
+                "evidence_ids": [current.evidence_id],
+            },
+        ],
+        run_dir=tmp_path,
+    )
+
+    assert failure is None
+    assert ref is not None
+    assert ref.evidence_id == current.evidence_id
+    binding = _resolved_typed_input_binding(
+        input_name="table:scaling_summary",
+        evidence_ref=ref,
+        evidence_records=store.records(),
+        run_dir=tmp_path,
+    )
+    assert binding is not None
+    assert binding["evidence_id"] == current.evidence_id
+    assert binding["sha256"] == current.sha256
+    assert Path(binding["absolute_path"]).read_text(encoding="utf-8").endswith(
+        "x,1\n"
+    )
+
+    manifest_path = _write_resolved_inputs_manifest(
+        run_dir=tmp_path,
+        step_id="consumer",
+        bindings={"table:scaling_summary": binding},
+    )
+    payload = __import__("json").loads(manifest_path.read_text(encoding="utf-8"))
+    manifest_binding = payload["inputs"]["table:scaling_summary"]
+    assert manifest_binding["evidence_id"] == current.evidence_id
+    assert tmp_path / manifest_binding["relative_path"] == Path(
+        manifest_binding["absolute_path"]
+    )
+
+
+def test_typed_statistic_binds_current_verified_step_summary(tmp_path: Path) -> None:
+    store = EvidenceStore(tmp_path)
+    summary_path = tmp_path / "source" / "step_summary.json"
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.write_text('{"primary_or": 1.25}\n', encoding="utf-8")
+    summary = store.register_file(
+        kind="log",
+        description="Current machine-readable step summary.",
+        source_path=summary_path,
+        evidence_id="producer_step_summary",
+        produced_by_step="producer",
+    )
+    plan = AnalysisPlan(
+        research_question="Test typed statistic lineage.",
+        steps=[
+            AnalysisStep(
+                step_id="producer",
+                intent="Estimate an association.",
+                expected_outputs=["statistic:primary_or"],
+            ),
+            AnalysisStep(
+                step_id="consumer",
+                intent="Consume the association estimate.",
+                inputs=["statistic:primary_or"],
+            ),
+        ],
+    )
+
+    ref, failure = _resolve_typed_input_evidence(
+        input_name="statistic:primary_or",
+        plan=plan,
+        evidence_records=store.records(),
+        per_step_records=[
+            {
+                "step_id": "producer",
+                "status": "ok",
+                "evidence_ids": [summary.evidence_id],
+                "step_summary_evidence_id": summary.evidence_id,
+                "step_summary": {"primary_or": 1.25},
+            }
+        ],
+        run_dir=tmp_path,
+    )
+
+    assert failure is None
+    assert ref is not None
+    assert ref.evidence_id == summary.evidence_id
