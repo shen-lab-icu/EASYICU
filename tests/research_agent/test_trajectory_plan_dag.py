@@ -314,6 +314,98 @@ def test_one_scientific_step_may_own_candidate_selection_and_stability():
     assert evaluation.role_owners["stability_freeze"] == "04_candidate_models"
 
 
+def test_split_stability_owner_cannot_claim_selection_or_characterization_products():
+    context = _context({"unseen_index": [(0, 4), (4, 8), (8, 12)]})
+    plan = _free_named_split_plan(context)
+    stability = next(step for step in plan.steps if step.step_id == "05_freeze")
+    stability.expected_outputs.extend(
+        [
+            "table:cluster_number_selection",
+            "table:cluster_sizes",
+        ]
+    )
+    characterization = next(
+        step for step in plan.steps if step.step_id == "06_describe"
+    )
+    characterization.expected_outputs.append("table:cluster_sizes")
+
+    evaluation = evaluate_trajectory_plan_dag(plan=plan, context=context)
+
+    mismatches = [
+        finding.detail
+        for finding in evaluation.findings
+        if (finding.detail or {}).get("kind")
+        == "trajectory_role_product_owner_mismatch"
+    ]
+    assert {
+        (item["typed_product"], item["expected_owner_step_id"])
+        for item in mismatches
+    } >= {
+        ("table:cluster_number_selection", "04_candidate_models"),
+        ("table:cluster_sizes", "06_describe"),
+    }
+    duplicate = next(
+        finding
+        for finding in evaluation.findings
+        if (finding.detail or {}).get("kind")
+        == "trajectory_typed_product_producer_ambiguous"
+    )
+    assert duplicate.detail["typed_product"] == "table:cluster_sizes"
+    assert duplicate.detail["producer_step_ids"] == ["05_freeze", "06_describe"]
+
+
+def test_augmentation_migrates_only_redundant_split_role_outputs():
+    context = _context({"unseen_index": [(0, 4), (4, 8), (8, 12)]})
+    plan = _free_named_split_plan(context)
+    stability = next(step for step in plan.steps if step.step_id == "05_freeze")
+    stability.expected_outputs.extend(
+        ["table:cluster_number_selection", "table:cluster_sizes"]
+    )
+    characterization = next(
+        step for step in plan.steps if step.step_id == "06_describe"
+    )
+    characterization.expected_outputs.append("table:cluster_sizes")
+
+    revised, findings = augment_trajectory_plan_products(
+        plan=plan,
+        context=context,
+    )
+
+    migrated_stability = next(
+        step for step in revised.steps if step.step_id == "05_freeze"
+    )
+    migrated_characterization = next(
+        step for step in revised.steps if step.step_id == "06_describe"
+    )
+    assert "table:cluster_number_selection" not in migrated_stability.expected_outputs
+    assert "table:cluster_sizes" not in migrated_stability.expected_outputs
+    assert migrated_characterization.expected_outputs.count("table:cluster_sizes") == 1
+    assert "table:cluster_sizes" not in migrated_characterization.inputs
+    assert evaluate_trajectory_plan_dag(plan=revised, context=context).findings == ()
+    assert any(
+        finding.detail.get("kind")
+        == "trajectory_redundant_split_role_outputs_removed"
+        for finding in findings
+    )
+
+
+def test_typed_table_cannot_be_consumed_from_the_same_step():
+    context = _context({"unseen_index": [(0, 4), (4, 8), (8, 12)]})
+    plan = _free_named_split_plan(context)
+    characterization = next(
+        step for step in plan.steps if step.step_id == "06_describe"
+    )
+    characterization.inputs.append("table:cluster_sizes")
+    characterization.expected_outputs.append("table:cluster_sizes")
+
+    evaluation = evaluate_trajectory_plan_dag(plan=plan, context=context)
+
+    assert (
+        "trajectory_typed_product_producer_not_preceding_consumer"
+        in _kinds(evaluation)
+    )
+
+
 def test_upstream_panel_manifest_is_required_and_its_raw_windows_are_audited():
     context = _context({"unseen_index": [(0, 5), (5, 10), (10, 15)]})
     plan = _free_named_split_plan(
@@ -532,9 +624,14 @@ def test_plan_augmentation_distributes_only_schema_products_to_role_owners():
     assert [step.method for step in revised.steps] == [
         step["method"] for step in original["steps"]
     ]
-    assert [step.inputs for step in revised.steps] == [
-        step["inputs"] for step in original["steps"]
-    ]
+    original_inputs = {
+        step["step_id"]: step["inputs"] for step in original["steps"]
+    }
+    for step in revised.steps:
+        expected_inputs = list(original_inputs[step.step_id])
+        if step.step_id == "05_stability":
+            expected_inputs.append("manifest:cluster_selection")
+        assert step.inputs == expected_inputs
     outputs = {step.step_id: step.expected_outputs for step in revised.steps}
     assert "table:trajectory_membership" in outputs["03_representation"]
     assert "manifest:cluster_selection" in outputs["04_candidates"]
