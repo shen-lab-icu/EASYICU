@@ -148,8 +148,12 @@ from .robustness_panel import (
     write_locked_robustness_specs,
 )
 from .trajectory_plan_contract import (
+    STABILITY_EXECUTOR_INPUTS,
+    STABILITY_EXECUTOR_OUTPUTS,
+    TRAJECTORY_STABILITY_METHOD_HEAD,
     augment_trajectory_plan_products,
     trajectory_plan_dag_findings,
+    trajectory_step_roles,
 )
 from .pipeline_report import (
     execution_gate_status,
@@ -307,6 +311,7 @@ from .schema import (
     ResearchContext,
     ReplicationDeviationReport,
     TimeWindow,
+    TrajectoryStabilitySpec,
     ValidationFinding,
     VariableRole,
     ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES,
@@ -913,6 +918,484 @@ def _migrate_legacy_resume_model_requirements(
     return revised, revision_path, target_step_ids
 
 
+class _LegacyTrajectoryStabilityStepPacket(BaseModel):
+    """Narrow PlannerAgent packet for a previously untyped stability design."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    step_id: str = Field(min_length=1)
+    method: str = Field(min_length=1)
+    inputs: List[str]
+    expected_outputs: List[str]
+    trajectory_stability_spec: TrajectoryStabilitySpec
+
+
+class _LegacyTrajectoryStabilityPacket(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    steps: List[_LegacyTrajectoryStabilityStepPacket]
+
+
+def _verified_legacy_stability_migration_profile(
+    *,
+    plan: AnalysisPlan,
+    resume_state: Optional[Dict[str, Any]],
+    evidence: EvidenceStore,
+    run_dir: Path,
+) -> Optional[Dict[str, Any]]:
+    """Return a sanitized supported fit profile from current verified evidence."""
+
+    candidate_steps = [
+        step
+        for step in plan.steps
+        if "candidate_selection" in trajectory_step_roles(step)
+    ]
+    if len(candidate_steps) != 1:
+        return None
+    candidate_step_id = candidate_steps[0].step_id
+    current_records = current_step_records(
+        [
+            record
+            for record in ((resume_state or {}).get("per_step_records") or [])
+            if isinstance(record, dict) and record.get("step_id")
+        ]
+    )
+    candidate_records = [
+        record
+        for record in current_records
+        if str(record.get("step_id") or "") == candidate_step_id
+        and record.get("status") == "ok"
+    ]
+    if len(candidate_records) != 1:
+        return None
+    candidate_record = candidate_records[0]
+    candidate_schema_record = None
+    candidate_schema_path = None
+    for evidence_id in candidate_record.get("evidence_ids") or []:
+        record = evidence.get(str(evidence_id))
+        if record is None or not str(record.relative_path).endswith(
+            "candidate_cluster_solution_schema.json"
+        ):
+            continue
+        path = verified_run_evidence_path(run_dir, record)
+        if path is None:
+            continue
+        if candidate_schema_record is not None:
+            return None
+        candidate_schema_record = record
+        candidate_schema_path = path
+    if candidate_schema_record is None or candidate_schema_path is None:
+        return None
+    try:
+        candidate_schema = json.loads(candidate_schema_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if (
+        not isinstance(candidate_schema, dict)
+        or candidate_schema.get("schema_version")
+        != "easyicu.candidate_cluster_solution_schema/2"
+    ):
+        return None
+    if (
+        _normalise_plan_contract_token(candidate_schema.get("model_family"))
+        != "latent_class_diagonal_gaussian_mixture"
+        or _normalise_plan_contract_token(candidate_schema.get("fit_method"))
+        != "observed_data_em_diagonal_gaussian_mixture"
+        or _normalise_plan_contract_token(candidate_schema.get("covariance_type"))
+        != "diag"
+    ):
+        return None
+
+    current_candidate_evidence_ids = {
+        str(value) for value in candidate_record.get("evidence_ids") or []
+    }
+    candidate_assignments_evidence_id = str(
+        candidate_schema.get("candidate_assignments_evidence_id") or ""
+    )
+    if candidate_assignments_evidence_id not in current_candidate_evidence_ids:
+        return None
+    candidate_assignments_record = evidence.get(candidate_assignments_evidence_id)
+    candidate_assignments_path = (
+        verified_run_evidence_path(run_dir, candidate_assignments_record)
+        if candidate_assignments_record is not None
+        else None
+    )
+    if (
+        candidate_assignments_record is None
+        or not str(candidate_assignments_record.relative_path).endswith(
+            "candidate_cluster_assignments.csv"
+        )
+        or candidate_assignments_path is None
+    ):
+        return None
+
+    representation_schema_evidence_id = str(
+        candidate_schema.get("representation_schema_evidence_id") or ""
+    )
+    representation_schema_record = evidence.get(representation_schema_evidence_id)
+    if (
+        representation_schema_record is None
+        or not str(representation_schema_record.relative_path).endswith(
+            "trajectory_representation_schema.json"
+        )
+    ):
+        return None
+    representation_schema_path = verified_run_evidence_path(
+        run_dir,
+        representation_schema_record,
+    )
+    if representation_schema_path is None:
+        return None
+    try:
+        representation_schema = json.loads(
+            representation_schema_path.read_text(encoding="utf-8")
+        )
+    except Exception:
+        return None
+    if (
+        not isinstance(representation_schema, dict)
+        or representation_schema.get("schema_version")
+        != "easyicu.trajectory_representation_schema/1"
+    ):
+        return None
+    representation_evidence_id = str(
+        representation_schema.get("representation_evidence_id") or ""
+    )
+    representation_record = evidence.get(representation_evidence_id)
+    if (
+        representation_record is None
+        or not str(representation_record.relative_path).endswith(
+            ("trajectory_representation.parquet", "trajectory_representation.csv")
+        )
+    ):
+        return None
+    representation_path = verified_run_evidence_path(run_dir, representation_record)
+    if representation_path is None:
+        return None
+    if (
+        str(representation_schema.get("representation_sha256") or "").lower()
+        != str(representation_record.sha256 or "").lower()
+    ):
+        return None
+    try:
+        from .trajectory_stability_executor import (
+            validate_trajectory_stability_schema_pair,
+            validate_trajectory_stability_upstream,
+        )
+
+        (
+            id_column,
+            _assignment_column,
+            representation_columns,
+            frozen_population_n,
+            selected_n_clusters,
+        ) = validate_trajectory_stability_schema_pair(
+            representation_schema=representation_schema,
+            solution_schema=candidate_schema,
+        )
+        representation_table = (
+            pd.read_parquet(representation_path)
+            if representation_path.suffix.lower() == ".parquet"
+            else pd.read_csv(representation_path)
+        )
+        assignment_table = pd.read_csv(candidate_assignments_path)
+        validate_trajectory_stability_upstream(
+            representation=representation_table,
+            assignments=assignment_table,
+            representation_schema=representation_schema,
+            solution_schema=candidate_schema,
+        )
+    except Exception:
+        return None
+    return {
+        "candidate_schema_evidence_id": candidate_schema_record.evidence_id,
+        "candidate_schema_sha256": candidate_schema_record.sha256,
+        "representation_schema_evidence_id": (representation_schema_record.evidence_id),
+        "representation_schema_sha256": representation_schema_record.sha256,
+        "representation_evidence_id": representation_record.evidence_id,
+        "representation_sha256": representation_record.sha256,
+        "candidate_assignments_evidence_id": (
+            candidate_assignments_record.evidence_id
+        ),
+        "candidate_assignments_sha256": candidate_assignments_record.sha256,
+        "frozen_population_n": frozen_population_n,
+        "selected_n_clusters": selected_n_clusters,
+        "id_column": id_column,
+        "representation_coordinate_count": len(representation_columns),
+        "model_family": candidate_schema.get("model_family"),
+        "fit_method": candidate_schema.get("fit_method"),
+        "covariance_type": candidate_schema.get("covariance_type"),
+        "trailing_na_policy": representation_schema.get("trailing_na_policy"),
+    }
+
+
+def _legacy_resume_trajectory_stability_targets(
+    *,
+    plan: AnalysisPlan,
+    completed_step_ids: set[str],
+) -> tuple[str, ...]:
+    """Select one remaining dedicated stability owner; never infer a design."""
+
+    candidate_steps = [
+        step
+        for step in plan.steps
+        if "candidate_selection" in trajectory_step_roles(step)
+    ]
+    stability_steps = [
+        step for step in plan.steps if "stability_freeze" in trajectory_step_roles(step)
+    ]
+    if len(candidate_steps) != 1 or len(stability_steps) != 1:
+        return ()
+    candidate = candidate_steps[0]
+    stability = stability_steps[0]
+    order = {step.step_id: index for index, step in enumerate(plan.steps)}
+    if (
+        candidate.step_id == stability.step_id
+        or order[candidate.step_id] >= order[stability.step_id]
+        or candidate.step_id not in completed_step_ids
+        or stability.step_id in completed_step_ids
+        or stability.trajectory_stability_spec is not None
+    ):
+        return ()
+    return (stability.step_id,)
+
+
+def _parse_legacy_trajectory_stability_packet(
+    raw: str,
+    *,
+    target_step_ids: tuple[str, ...],
+) -> _LegacyTrajectoryStabilityPacket:
+    packet = _LegacyTrajectoryStabilityPacket.model_validate(json.loads(raw.strip()))
+    if not packet.steps:
+        return packet
+    if [step.step_id for step in packet.steps] != list(target_step_ids):
+        raise ValueError(
+            "stability packet steps must exactly match the ordered targets"
+        )
+    required_inputs = sorted(STABILITY_EXECUTOR_INPUTS)
+    required_outputs = sorted(STABILITY_EXECUTOR_OUTPUTS)
+    for step in packet.steps:
+        if (
+            _normalise_plan_contract_token(step.method)
+            != TRAJECTORY_STABILITY_METHOD_HEAD
+        ):
+            raise ValueError(
+                "standard stability packet method must be exactly "
+                f"{TRAJECTORY_STABILITY_METHOD_HEAD!r}"
+            )
+        if step.inputs != required_inputs:
+            raise ValueError(
+                "standard stability packet inputs must exactly match the closed "
+                "typed-input contract"
+            )
+        if step.expected_outputs != required_outputs:
+            raise ValueError(
+                "standard stability packet outputs must exactly match the closed "
+                "typed-output contract"
+            )
+    return packet
+
+
+def _project_legacy_trajectory_stability_packet(
+    *,
+    plan: AnalysisPlan,
+    packet: _LegacyTrajectoryStabilityPacket,
+) -> AnalysisPlan:
+    """Project only the Planner-owned stability packet onto the saved plan."""
+
+    updates = {step.step_id: step for step in packet.steps}
+    revised_steps: List[AnalysisStep] = []
+    for step in plan.steps:
+        update = updates.get(step.step_id)
+        if update is None:
+            revised_steps.append(step)
+            continue
+        revised_steps.append(
+            step.model_copy(
+                update={
+                    "method": update.method,
+                    "inputs": list(update.inputs),
+                    "expected_outputs": list(update.expected_outputs),
+                    "trajectory_stability_spec": update.trajectory_stability_spec,
+                }
+            )
+        )
+    return plan.model_copy(update={"steps": revised_steps})
+
+
+def _migrate_legacy_resume_trajectory_stability_spec(
+    *,
+    plan: AnalysisPlan,
+    run_dir: Path,
+    resume_state: Optional[Dict[str, Any]],
+    resume_from_step_id: Optional[str],
+    role_resolver: Callable[[str], Any],
+    evidence: EvidenceStore,
+    prompt_version: str,
+    llm_signature: str,
+) -> tuple[AnalysisPlan, Optional[Path], tuple[str, ...]]:
+    """Ask PlannerAgent for the missing stability science; never default it.
+
+    This migration is intentionally retrospective and is used only for a
+    development checkpoint whose remaining dedicated stability step predates
+    the typed packet. Final benchmark runs must carry the packet in their fresh
+    initial plan.
+    """
+
+    completed_records = _resume_completed_records_for_plan_migration(
+        plan=plan,
+        resume_state=resume_state,
+        resume_from_step_id=resume_from_step_id,
+    )
+    target_step_ids = _legacy_resume_trajectory_stability_targets(
+        plan=plan,
+        completed_step_ids={str(record.get("step_id")) for record in completed_records},
+    )
+    if not target_step_ids:
+        return plan, None, ()
+    fit_profile = _verified_legacy_stability_migration_profile(
+        plan=plan,
+        resume_state=resume_state,
+        evidence=evidence,
+        run_dir=run_dir,
+    )
+    if fit_profile is None:
+        # No default and no prose inference: unsupported or unverifiable legacy
+        # fits retain their original agent-coded path.
+        return plan, None, ()
+
+    target_steps = [
+        {
+            "step_id": step.step_id,
+            "intent": step.intent,
+            "method": step.method,
+            "inputs": list(step.inputs),
+            "expected_outputs": list(step.expected_outputs),
+            "icu_rule_refs": list(step.icu_rule_refs),
+        }
+        for step in plan.steps
+        if step.step_id in set(target_step_ids)
+    ]
+    required_inputs = sorted(STABILITY_EXECUTOR_INPUTS)
+    required_outputs = sorted(STABILITY_EXECUTOR_OUTPUTS)
+    spec_fields = list(TrajectoryStabilitySpec.model_fields)
+    format_reminder = (
+        'Return exactly one JSON object {"steps": [{"step_id": <target>, '
+        f'"method": "{TRAJECTORY_STABILITY_METHOD_HEAD}", '
+        '"inputs": <exact supplied list>, "expected_outputs": <exact supplied '
+        'list>, "trajectory_stability_spec": <complete object>}]}. If the '
+        'standard calculator is scientifically inappropriate, return exactly '
+        '{"steps": []}. The spec must contain exactly these fields: '
+        f"{spec_fields!r}."
+    )
+    messages = [
+        LLMMessage(
+            role="system",
+            content=(
+                "You are the PlannerAgent's typed trajectory-stability design "
+                "worker. You, not the execution framework, choose every value in "
+                "the stability design. Return JSON only. Use the canonical method "
+                f"{TRAJECTORY_STABILITY_METHOD_HEAD!r} when opting in. Do not rewrite any other "
+                "plan field, choose a new k, inspect outcomes, or invent a fallback "
+                "when the supported refit family is scientifically inappropriate; "
+                "return an empty steps list instead."
+            ),
+        ),
+        LLMMessage(
+            role="user",
+            content=(
+                "Design the remaining trajectory-cluster stability assessment. "
+                "This is a retrospective development-checkpoint migration, not "
+                "evidence that the design was present in the original plan. The "
+                "upstream candidate-solution and representation schemas remain "
+                "authoritative for population, coordinates, selected k, model "
+                "family, fit method, covariance, missing-data likelihood, and "
+                "reference labels. Do not repeat or change those choices. The "
+                "available standard executor supports only a no-imputation "
+                "observed-data diagonal Gaussian-mixture refit; if that is not the "
+                "planned family, do not substitute a nearby estimator. Choose the "
+                "subsample count/size, seed, convergence controls, report-only or "
+                "threshold-gate decision, and threshold when applicable. Every "
+                "planned refit must succeed; a failed refit is recorded once with "
+                "no replacement seed. A failed threshold must fail closed and "
+                "request a new planner revision, never select another k. The refit controls you "
+                "choose are a new stability-refit contract, not a claim that a "
+                "legacy candidate artifact recorded identical implementation "
+                "controls.\n\n"
+                f"REQUIRED INPUTS (return in this exact order):\n{json.dumps(required_inputs)}\n\n"
+                f"REQUIRED OUTPUTS (return in this exact order):\n{json.dumps(required_outputs)}\n\n"
+                f"REQUIRED JSON SHAPE:\n{format_reminder}\n\n"
+                "TARGET STEP (verbatim saved plan):\n"
+                f"{json.dumps(target_steps, indent=2, ensure_ascii=False)}\n\n"
+                "SANITIZED VERIFIED FIT PROFILE (no outcomes or raw variables):\n"
+                f"{json.dumps(fit_profile, indent=2, ensure_ascii=False)}"
+            ),
+        ),
+    ]
+    try:
+        from .structured_retry import call_llm_with_structured_retry
+
+        packet = call_llm_with_structured_retry(
+            role_resolver("planner"),
+            messages,
+            parser=lambda raw: _parse_legacy_trajectory_stability_packet(
+                raw,
+                target_step_ids=target_step_ids,
+            ),
+            role="legacy_trajectory_stability_spec_migration",
+            max_retries=2,
+            max_tokens=3072,
+            temperature=0.1,
+            format_reminder=format_reminder,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Planner declined or failed the optional retrospective trajectory "
+            "stability migration; preserving the original agent-coded path: %s",
+            exc,
+        )
+        return plan, None, ()
+
+    if not packet.steps:
+        return plan, None, ()
+
+    revised = _project_legacy_trajectory_stability_packet(
+        plan=plan,
+        packet=packet,
+    )
+    revision = _next_analysis_plan_revision(
+        run_dir=run_dir,
+        plan=plan,
+        evidence=evidence,
+    )
+    revised = revised.model_copy(update={"revision": revision})
+    revision_path = run_dir / f"analysis_plan_revision_{revision}.json"
+    if revision_path.exists():
+        raise LegacyResumePlanMigrationError(
+            f"refusing to overwrite existing plan revision {revision_path.name}"
+        )
+    revision_path.write_text(revised.model_dump_json(indent=2), encoding="utf-8")
+    evidence.register_file(
+        kind="log",
+        description=(
+            "Planner-owned retrospective trajectory stability design for a "
+            "remaining development-checkpoint step."
+        ),
+        source_path=revision_path,
+        evidence_id=f"analysis_plan_revision_{revision}",
+        producer="planner",
+        generation_mode="llm",
+        prompt_pack_version=prompt_version,
+        metadata={
+            "reason": "legacy_missing_trajectory_stability_spec",
+            "retrospective_development_migration": True,
+            "target_step_ids": list(target_step_ids),
+            "llm_signature": llm_signature,
+        },
+    )
+    return revised, revision_path, target_step_ids
+
+
 def _load_resume_state(run_dir: Path) -> Optional[Dict[str, Any]]:
     partial = run_dir / "manifest_partial.json"
     if not partial.exists():
@@ -969,6 +1452,7 @@ class ResearchAgentPipeline:
         enable_deterministic_code_fallback: bool = False,
         enable_deterministic_planner_fallback: bool = False,
         enable_deterministic_runner_repair: bool = True,
+        enable_retrospective_trajectory_stability_design: bool = False,
         enable_pubmed: bool = False,
         pubmed_email: Optional[str] = None,
         pubmed_api_key: Optional[str] = None,
@@ -1087,6 +1571,9 @@ class ResearchAgentPipeline:
         )
         self._enable_deterministic_runner_repair = bool(
             enable_deterministic_runner_repair
+        )
+        self._enable_retrospective_trajectory_stability_design = bool(
+            enable_retrospective_trajectory_stability_design
         )
         # T2.2 — opt-in PubMed live search. Off by default so CI and
         # the offline demo stay deterministic; the LiteratureAgent
@@ -2141,6 +2628,46 @@ class ResearchAgentPipeline:
                             "kind": "resume_trajectory_schema_migration",
                             "plan_path": str(
                                 trajectory_migration_path.relative_to(run_dir)
+                            ),
+                        },
+                    )
+                )
+            stability_spec_migration_path = None
+            stability_spec_step_ids: tuple[str, ...] = ()
+            if (
+                self._enable_retrospective_trajectory_stability_design
+                and resume_from_step_id is not None
+            ):
+                (
+                    plan,
+                    stability_spec_migration_path,
+                    stability_spec_step_ids,
+                ) = _migrate_legacy_resume_trajectory_stability_spec(
+                    plan=plan,
+                    run_dir=run_dir,
+                    resume_state=resume_state,
+                    resume_from_step_id=resume_from_step_id,
+                    role_resolver=role_resolver,
+                    evidence=evidence,
+                    prompt_version=prompt_version,
+                    llm_signature=llm_signature,
+                )
+            if stability_spec_migration_path is not None:
+                migrated_plan_path = stability_spec_migration_path
+                plan_generation_mode = "resumed_planner_migration"
+                findings.append(
+                    ValidationFinding(
+                        validator="planner_schema_migration",
+                        severity="warning",
+                        message=(
+                            "Planner supplied the missing typed trajectory "
+                            "stability design for a remaining development step."
+                        ),
+                        detail={
+                            "kind": "retrospective_trajectory_stability_design",
+                            "target_step_ids": list(stability_spec_step_ids),
+                            "plan_path": str(
+                                stability_spec_migration_path.relative_to(run_dir)
                             ),
                         },
                     )
@@ -3420,6 +3947,9 @@ class ResearchAgentPipeline:
             ),
             "enable_deterministic_runner_repair": bool(
                 self._enable_deterministic_runner_repair
+            ),
+            "enable_retrospective_trajectory_stability_design": bool(
+                self._enable_retrospective_trajectory_stability_design
             ),
             "latex_venue_template": self._latex_venue_template,
         }

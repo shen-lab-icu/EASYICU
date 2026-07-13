@@ -53,6 +53,34 @@ _ROLE_CANONICAL_OUTPUTS: Mapping[str, Tuple[str, ...]] = {
     ),
 }
 
+STABILITY_EXECUTOR_INPUTS = frozenset(
+    {
+        "artifact:trajectory_representation",
+        "artifact:candidate_cluster_assignments",
+        "manifest:trajectory_representation_schema",
+        "manifest:candidate_cluster_solution_schema",
+    }
+)
+
+# Canonical method head for the typed supporting calculator.  Scientific fit
+# choices remain in the upstream manifests and planner-owned spec; this token
+# prevents an unrelated method (for example cluster-robust regression) from
+# claiming the calculator merely by declaring stability-shaped filenames.
+TRAJECTORY_STABILITY_METHOD_HEAD = "trajectory_cluster_stability"
+
+STABILITY_EXECUTOR_OUTPUTS = frozenset(
+    {
+        "artifact:stability_freeze",
+        "artifact:cluster_assignments",
+        "manifest:cluster_stability_spec",
+        "manifest:trajectory_missingness_policy",
+        "table:cluster_assignments",
+        "table:cluster_stability",
+        "table:cluster_stability_assignments",
+        "table:cluster_assignment_provenance",
+    }
+)
+
 _CHARACTERIZATION_OUTCOME_PRODUCTS = frozenset(
     {
         "outcome_by_cluster",
@@ -619,8 +647,25 @@ def evaluate_trajectory_plan_dag(
 ) -> TrajectoryPlanDagEvaluation:
     """Validate the agent-declared trajectory plan without rewriting it."""
 
+    spec_steps = [
+        step
+        for step in (plan.steps or [])
+        if step.trajectory_stability_spec is not None
+    ]
     if not trajectory_plan_contract_applies(plan=plan, context=context):
-        return TrajectoryPlanDagEvaluation(False, {}, {}, (), ())
+        findings = (
+            (
+                _finding(
+                    "trajectory_stability_spec_without_trajectory_plan",
+                    "A trajectory stability spec is attached to a plan that has "
+                    "no validated fixed-window trajectory contract.",
+                    step_ids=[step.step_id for step in spec_steps],
+                ),
+            )
+            if spec_steps
+            else ()
+        )
+        return TrajectoryPlanDagEvaluation(bool(spec_steps), {}, {}, (), findings)
 
     findings: List[ValidationFinding] = []
     steps = list(plan.steps or [])
@@ -674,6 +719,54 @@ def evaluate_trajectory_plan_dag(
                 )
             )
 
+    if len(spec_steps) > 1:
+        findings.append(
+            _finding(
+                "trajectory_stability_spec_owner_ambiguous",
+                "Only one dedicated stability owner may carry the standard "
+                "trajectory stability spec.",
+                step_ids=[step.step_id for step in spec_steps],
+            )
+        )
+    for spec_step in spec_steps:
+        local_roles = trajectory_step_roles(spec_step)
+        local_method_head = _method_head(spec_step.method)
+        local_inputs = {str(value).strip().lower() for value in spec_step.inputs}
+        local_outputs = {
+            str(value).strip().lower() for value in spec_step.expected_outputs
+        }
+        candidate_owner = role_owners.get("candidate_selection")
+        if (
+            local_method_head != TRAJECTORY_STABILITY_METHOD_HEAD
+            or
+            local_roles != frozenset({"stability_freeze"})
+            or role_owners.get("stability_freeze") != spec_step.step_id
+            or candidate_owner is None
+            or candidate_owner == spec_step.step_id
+            or step_index.get(candidate_owner, len(steps))
+            >= step_index.get(spec_step.step_id, -1)
+            or local_inputs != STABILITY_EXECUTOR_INPUTS
+            or local_outputs != STABILITY_EXECUTOR_OUTPUTS
+        ):
+            findings.append(
+                _finding(
+                    "trajectory_stability_spec_contract_invalid",
+                    "A planner-owned trajectory stability spec requires one later, "
+                    "dedicated stability owner using method head "
+                    f"{TRAJECTORY_STABILITY_METHOD_HEAD!r}, the closed standard "
+                    "executor input/output contract, and a distinct preceding "
+                    "candidate owner.",
+                    step_id=spec_step.step_id,
+                    declared_method_head=local_method_head,
+                    required_method_head=TRAJECTORY_STABILITY_METHOD_HEAD,
+                    roles=sorted(local_roles),
+                    candidate_owner_step_id=candidate_owner,
+                    declared_inputs=sorted(local_inputs),
+                    required_inputs=sorted(STABILITY_EXECUTOR_INPUTS),
+                    declared_outputs=sorted(local_outputs),
+                    required_outputs=sorted(STABILITY_EXECUTOR_OUTPUTS),
+                )
+            )
     for step in steps:
         for kind, product in sorted(products_by_step[step.step_id]):
             if kind in _FIGURE_KINDS or _is_window_manifest_product((kind, product)):
@@ -1179,8 +1272,13 @@ def augment_trajectory_plan_products(
     stability = next(
         item for item in normalized.steps if item.step_id == stability_owner
     )
+    if stability.trajectory_stability_spec is not None:
+        for output in sorted(STABILITY_EXECUTOR_OUTPUTS):
+            if output not in (stability.expected_outputs or []):
+                additions[stability_owner].append(output)
     if (
         candidate_owner != stability_owner
+        and stability.trajectory_stability_spec is None
         and "manifest:cluster_selection" not in (stability.inputs or [])
     ):
         input_additions[stability_owner].append("manifest:cluster_selection")
@@ -1306,7 +1404,49 @@ def trajectory_planner_contract_guide(
         "representation owner must consume both. The manifest records ordered "
         "source columns with family and window boundaries; it is provenance, not "
         "permission for the framework to choose a horizon, method, k, threshold, "
-        "or missing-data policy."
+        "or missing-data policy.\n"
+        "A dedicated stability owner may opt into the standard observed-data "
+        "diagonal-GMM stability calculator by carrying a complete "
+        "trajectory_stability_spec. In that case its method head must be exactly "
+        f"{TRAJECTORY_STABILITY_METHOD_HEAD}; its inputs must be exactly "
+        "artifact:trajectory_representation, "
+        "artifact:candidate_cluster_assignments, "
+        "manifest:trajectory_representation_schema, and "
+        "manifest:candidate_cluster_solution_schema. Its outputs must be exactly "
+        "artifact:stability_freeze, artifact:cluster_assignments, "
+        "manifest:cluster_stability_spec, "
+        "manifest:trajectory_missingness_policy, table:cluster_assignments, "
+        "table:cluster_stability, table:cluster_stability_assignments, and "
+        "table:cluster_assignment_provenance. The spec is your "
+        "scientific decision packet: set resampling_method="
+        "subsample_without_replacement; n_resamples; exactly one of "
+        "sample_fraction (<1) or sample_size; sample_fraction_rounding=floor; "
+        "base_seed; seed_derivation=numpy_seedsequence_spawn_uint32_v1; "
+        "cross_resample_membership=distinct_membership_required; "
+        "stability_metric=adjusted_rand_index; stability_aggregation=mean; "
+        "metric_label_source=raw_refit_labels_label_invariant; "
+        "evaluation_scope=sampled_overlap; "
+        "label_alignment=hungarian_maximum_overlap; "
+        "label_alignment_reference=frozen_candidate_assignments; "
+        "label_alignment_tie_break="
+        "minimum_rank_distance_then_lexicographic_v1; "
+        "final_assignment_policy=copy_selected_candidate_labels; "
+        "minimum_successful_resamples equal to n_resamples; "
+        "failed_refit_policy=record_once_no_retry; "
+        "refit_engine=easyicu_observed_data_diag_gmm_v1; "
+        "refit_initialization=random_balanced_assignments; refit_max_iter; "
+        "refit_tolerance; refit_regularization; decision_mode; optional "
+        "minimum_mean_stability; and "
+        "threshold_failure_action=fail_closed_require_planner_revision. The refit controls are a "
+        "new Planner-owned stability-refit contract, not a claim that a legacy "
+        "candidate artifact recorded an identical implementation. Use "
+        "decision_mode=report_only with no threshold when no binary stability "
+        "claim is intended; use minimum_mean_threshold with a threshold when "
+        "stability must gate freezing. A failed threshold must request a new "
+        "planner revision and must never make the calculator choose a different k. Leave "
+        "trajectory_stability_spec null for other fit families or any monolithic "
+        "candidate+stability step; those remain agent-coded and fail closed if "
+        "unsupported."
     )
 
 
@@ -1404,10 +1544,10 @@ def trajectory_role_code_contract(
             "assignment_column, criterion, direction, and selected criterion value. "
             "This manifest records the "
             "agent's already-made selection; it must not introduce a new choice. "
-            "The agent owns the method, criterion, and k."
-            + role_boundary
+            "The agent owns the method, criterion, and k." + role_boundary
         )
     if declarations & {
+        "cluster_stability_spec",
         "trajectory_missingness_policy",
         "cluster_assignments",
         "cluster_stability_assignments",
@@ -1461,7 +1601,12 @@ def trajectory_role_code_contract(
             "Do not compare candidate k values or choose a new method, k, coordinate "
             "layer, population, or reference assignment. If any required upstream "
             "field is absent or inconsistent, fail closed in step_summary.json "
-            "instead of inferring or reconstructing it. Write trajectory_missingness_policy.json "
+            "instead of inferring or reconstructing it. A dedicated stability "
+            "owner may carry a complete planner-owned trajectory_stability_spec; "
+            "when present, materialize cluster_stability_spec.json by binding that "
+            "unchanged packet to the current upstream evidence digests. The executor "
+            "must not supply any missing resampling, seed, refit, comparison, "
+            "alignment, or decision field. Write trajectory_missingness_policy.json "
             "with id_column, observation_family, ordered observation_columns, "
             "the exact model representation_columns, min_observed_windows, "
             "profile_columns, profile_summary_statistic, "
@@ -1507,6 +1652,9 @@ def trajectory_role_code_contract(
 
 
 __all__ = [
+    "STABILITY_EXECUTOR_INPUTS",
+    "STABILITY_EXECUTOR_OUTPUTS",
+    "TRAJECTORY_STABILITY_METHOD_HEAD",
     "TrajectoryPlanDagEvaluation",
     "augment_trajectory_plan_products",
     "evaluate_trajectory_plan_dag",
