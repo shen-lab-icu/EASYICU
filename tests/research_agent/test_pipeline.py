@@ -964,7 +964,7 @@ print(json.dumps(summary))
     assert blocked[-1]["outcome"] == "blocked_by_automatic_repair_policy"
 
 
-def test_figure_step_coder_failure_uses_parent_output_rescue(ra, tmp_path: Path):
+def test_generic_association_figure_coder_failure_fails_closed(ra, tmp_path: Path):
     class FigureCoderFailureLLM:
         name = "figure-coder-failure-llm"
 
@@ -985,8 +985,8 @@ def test_figure_step_coder_failure_uses_parent_output_rescue(ra, tmp_path: Path)
                                 "step_id": "03_primary_association",
                                 "intent": "Estimate the adjusted odds ratio.",
                                 "inputs": ["sepsis3", "death", "age"],
-                                "expected_outputs": ["statistic:primary_association"],
-                                "method": "logistic",
+                                "expected_outputs": ["statistic:primary_or"],
+                                "method": "logistic_regression",
                                 "icu_rule_refs": [],
                             },
                             {
@@ -995,7 +995,7 @@ def test_figure_step_coder_failure_uses_parent_output_rescue(ra, tmp_path: Path)
                                     "Render the publication figure(s) declared by "
                                     "step '03_primary_association'."
                                 ),
-                                "inputs": ["03_primary_association"],
+                                "inputs": ["statistic:primary_or"],
                                 "expected_outputs": ["figure:publication_figure"],
                                 "method": "publication_figure_generation",
                                 "icu_rule_refs": [],
@@ -1076,24 +1076,16 @@ print(json.dumps(summary))
     record = _step_record_by_id(
         partial["per_step_records"], "03_primary_association_figure"
     )
-    assert record["status"] == "ok"
-    assert (
-        record["deterministic_code_fallback"]
-        == "publication_figure_coder_failed"
+    parent_record = _step_record_by_id(
+        partial["per_step_records"], "03_primary_association"
     )
-    # One call creates the parent analysis; at least one later call gives the
-    # agent the figure step before deterministic rendering rescues its outage.
+    assert parent_record["status"] == "ok"
+    assert record["status"] == "coder_failed"
+    assert "deterministic_code_fallback" not in record
+    # One call creates the parent analysis; at least one later call still gives
+    # the agent its declared figure step before failing closed on the outage.
     assert llm.code_calls >= 2
-    assert (out_dir / "publication_figure.png").exists()
-    assert (out_dir / "publication_figure.svg").exists()
-    assert (out_dir / "publication_figure.figure_contract.json").exists()
-    assert (out_dir / "publication_figure_source_data.csv").exists()
-    assert not [
-        f for f in record.get("contract_findings", []) if f["severity"] == "error"
-    ]
-    assert not [
-        f for f in record.get("figure_source_findings", []) if f["severity"] == "error"
-    ]
+    assert not out_dir.exists() or not list(out_dir.glob("publication_figure*"))
 
 
 def test_promote_prior_publication_bundle_copies_real_figure_exports(tmp_path: Path):
