@@ -363,6 +363,18 @@ def test_legacy_resume_adds_planner_spec_only_from_verified_supported_candidate(
     )
 
     assert len(calls) == 1
+    migration_prompt = "\n".join(message.content for message in calls[0][0])
+    assert (
+        '"cross_resample_membership": {"const": "distinct_membership_required"'
+        in migration_prompt
+    )
+    assert '"stability_aggregation": {"const": "mean"' in migration_prompt
+    assert (
+        '"decision_mode": {"enum": ["report_only", "minimum_mean_threshold"]'
+        in migration_prompt
+    )
+    assert "Every JSON-Schema const value must be copied exactly" in migration_prompt
+    assert "every enum value must be selected exactly" in migration_prompt
     assert target_ids == ("stability",)
     assert revision_path == tmp_path / "analysis_plan_revision_2.json"
     assert revision_path.exists()

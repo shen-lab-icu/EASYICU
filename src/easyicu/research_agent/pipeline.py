@@ -1279,6 +1279,7 @@ def _migrate_legacy_resume_trajectory_stability_spec(
     required_inputs = sorted(STABILITY_EXECUTOR_INPUTS)
     required_outputs = sorted(STABILITY_EXECUTOR_OUTPUTS)
     spec_fields = list(TrajectoryStabilitySpec.model_fields)
+    spec_json_schema = TrajectoryStabilitySpec.model_json_schema()
     format_reminder = (
         'Return exactly one JSON object {"steps": [{"step_id": <target>, '
         f'"method": "{TRAJECTORY_STABILITY_METHOD_HEAD}", '
@@ -1286,7 +1287,10 @@ def _migrate_legacy_resume_trajectory_stability_spec(
         'list>, "trajectory_stability_spec": <complete object>}]}. If the '
         'standard calculator is scientifically inappropriate, return exactly '
         '{"steps": []}. The spec must contain exactly these fields: '
-        f"{spec_fields!r}."
+        f"{spec_fields!r}. Every JSON-Schema const value must be copied exactly, "
+        "and every enum value must be selected exactly from its listed choices; "
+        "do not replace protocol tokens with synonyms. The complete spec schema is: "
+        f"{json.dumps(spec_json_schema, sort_keys=True)}"
     )
     messages = [
         LLMMessage(
