@@ -14,6 +14,15 @@ def test_coder_prompt_names_pandas_categorical_codes_gotcha() -> None:
     assert 'pd.Series(x).astype("category").cat.codes' in coder_prompt
 
 
+def test_coder_prompt_forbids_bitwise_not_on_scalar_dtype_predicates() -> None:
+    from easyicu.research_agent.prompts import load_prompt_pack
+
+    coder_prompt = load_prompt_pack()["coder"]
+
+    assert "Negate such scalar predicates with `not`, never with `~`" in coder_prompt
+    assert "reserve `~` for elementwise boolean Series/array masks" in coder_prompt
+
+
 def test_coder_prompt_treats_input_cohort_as_already_locked() -> None:
     from easyicu.research_agent.prompts import load_prompt_pack
 
@@ -228,6 +237,10 @@ def test_coder_prompt_prevents_resume_evidence_polluting_figure_rendering() -> N
     assert "render from" in coder_prompt
     assert "that table alone" in coder_prompt
     assert "exact current upstream step outputs directory first" in coder_prompt
+    assert "Every typed result input remains part" in coder_prompt
+    assert "do not ignore a bound `statistic:` input" in coder_prompt
+    assert "Never infer or" in coder_prompt
+    assert "recompute a missing statistic" in coder_prompt
     assert "most recent completed record" in coder_prompt
     assert "never rank all historical resume records together" in coder_prompt
     assert "<figure_stem>_source_data.csv" in coder_prompt
