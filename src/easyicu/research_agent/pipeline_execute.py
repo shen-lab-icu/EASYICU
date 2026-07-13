@@ -6854,6 +6854,7 @@ else:
                     run_dir=run_dir,
                     step_summary=visual_step_summary,
                     completed_step_records=completed_records_snapshot,
+                    resolved_input_bindings=resolved_input_bindings,
                 )
                 # For the controlled ordered-stratified method, replay the
                 # agent-authored tables from the locked cohort before evidence
@@ -8234,6 +8235,7 @@ else:
             run_dir=run_dir,
             step_summary=step_summary,
             completed_step_records=completed_records_snapshot,
+            resolved_input_bindings=resolved_input_bindings,
         )
         figure_gate_errors = [
             finding
@@ -8405,6 +8407,7 @@ else:
                     run_dir=run_dir,
                     step_summary=step_summary,
                     completed_step_records=completed_records_snapshot,
+                    resolved_input_bindings=resolved_input_bindings,
                 )
         with shared_lock:
             findings.extend(stat_findings)

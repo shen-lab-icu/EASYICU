@@ -430,7 +430,12 @@ def test_unregistered_identifier_column_resolves_join(tmp_path: Path):
     source = pd.DataFrame(
         {
             "category_code": ["unmeasured", "lt2", "2to4", "ge4"],
-            "group": ["Unmeasured", "<2", "2-<4", ">=4"],  # figure label, not a trace key
+            "group": [
+                "Unmeasured",
+                "<2",
+                "2-<4",
+                ">=4",
+            ],  # figure label, not a trace key
             "odds_ratio": [1.0, 1.42, 2.05, 3.31],
             "ci_low": [1.0, 1.30, 1.90, 3.02],
             "ci_high": [1.0, 1.55, 2.21, 3.63],
@@ -658,9 +663,7 @@ def test_source_row_index_alias_accepts_truthful_parent_projection(
 
     assert res.get("ok") is True, res
     assert res.get("key_column") == position_col, res
-    assert {"n", "event_n", "risk"} <= set(
-        res.get("verified_value_mappings", {})
-    )
+    assert {"n", "event_n", "risk"} <= set(res.get("verified_value_mappings", {}))
 
 
 def test_underscore_source_row_index_still_flags_tampered_value(tmp_path: Path):
@@ -909,9 +912,7 @@ def test_truthful_renamed_value_is_verified_by_row_aligned_vector(tmp_path: Path
     )
 
     assert res.get("ok") is True, res
-    assert res.get("verified_value_mappings") == {
-        "estimate": "mortality_rate"
-    }, res
+    assert res.get("verified_value_mappings") == {"estimate": "mortality_rate"}, res
 
 
 def test_declared_rate_target_cannot_be_laundered_by_sibling_rate(tmp_path: Path):
@@ -970,9 +971,7 @@ def test_declared_rate_target_accepts_truthful_named_parent_value(tmp_path: Path
     )
 
     assert res.get("ok") is True, res
-    assert res.get("verified_value_mappings") == {
-        "estimate": "mortality_rate"
-    }, res
+    assert res.get("verified_value_mappings") == {"estimate": "mortality_rate"}, res
 
 
 def test_renamed_estimate_cannot_match_unrelated_location_summary(
@@ -1324,12 +1323,12 @@ def test_duplicate_declared_basename_requires_exact_source_step(tmp_path: Path):
     unrelated_out.mkdir(parents=True)
     figure_out.mkdir(parents=True)
     shared_name = "outcome_by_group.csv"
-    pd.DataFrame(
-        {"group": ["low", "high"], "mortality_rate": [0.1, 0.2]}
-    ).to_csv(parent_out / shared_name, index=False)
-    pd.DataFrame(
-        {"group": ["low", "high"], "mortality_rate": [0.9, 0.8]}
-    ).to_csv(unrelated_out / shared_name, index=False)
+    pd.DataFrame({"group": ["low", "high"], "mortality_rate": [0.1, 0.2]}).to_csv(
+        parent_out / shared_name, index=False
+    )
+    pd.DataFrame({"group": ["low", "high"], "mortality_rate": [0.9, 0.8]}).to_csv(
+        unrelated_out / shared_name, index=False
+    )
     pd.DataFrame(
         {
             "group": ["low", "high"],
@@ -1442,16 +1441,12 @@ def _write_authoritative_figure_trace_run(
             }
         ],
     }
-    (tmp_path / "manifest.json").write_text(
-        json.dumps(manifest), encoding="utf-8"
-    )
+    (tmp_path / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     return parent_path, figure_out, records
 
 
 def test_figure_source_uses_current_hash_verified_parent(tmp_path: Path):
-    _parent_path, figure_out, records = _write_authoritative_figure_trace_run(
-        tmp_path
-    )
+    _parent_path, figure_out, records = _write_authoritative_figure_trace_run(tmp_path)
 
     findings = FigureSourceDataValidator().audit(
         step=AnalysisStep(
@@ -1468,10 +1463,135 @@ def test_figure_source_uses_current_hash_verified_parent(tmp_path: Path):
     assert [item for item in findings if item.severity == "error"] == []
 
 
-def test_figure_source_rejects_parent_superseded_by_failure(tmp_path: Path):
-    _parent_path, figure_out, records = _write_authoritative_figure_trace_run(
-        tmp_path
+def test_standalone_figure_uses_host_resolved_parent_not_step_id_suffix(
+    tmp_path: Path,
+):
+    parent_path, figure_out, records = _write_authoritative_figure_trace_run(tmp_path)
+    digest = hashlib.sha256(parent_path.read_bytes()).hexdigest()
+    bindings = {
+        "table:outcome_by_group": {
+            "declared_kind": "table",
+            "product": "outcome_by_group",
+            "produced_by_step": "01_parent",
+            "evidence_id": f"table_outcome_by_group_{digest[:8]}",
+            "sha256": digest,
+        }
+    }
+
+    findings = FigureSourceDataValidator().audit(
+        step=AnalysisStep(
+            step_id="05_publication_figure",
+            intent="Render the host-resolved result table.",
+            inputs=["table:outcome_by_group"],
+            method="publication_figure",
+        ),
+        out_dir=figure_out,
+        run_dir=tmp_path,
+        step_summary={"upstream_step_id": "01_parent"},
+        completed_step_records=records,
+        resolved_input_bindings=bindings,
     )
+
+    assert [item for item in findings if item.severity == "error"] == []
+
+
+def test_figure_source_rejects_summary_parent_that_conflicts_with_host_binding(
+    tmp_path: Path,
+):
+    parent_path, figure_out, records = _write_authoritative_figure_trace_run(tmp_path)
+    digest = hashlib.sha256(parent_path.read_bytes()).hexdigest()
+
+    findings = FigureSourceDataValidator().audit(
+        step=AnalysisStep(
+            step_id="05_publication_figure",
+            intent="Render the host-resolved result table.",
+            inputs=["table:outcome_by_group"],
+            method="publication_figure",
+        ),
+        out_dir=figure_out,
+        run_dir=tmp_path,
+        step_summary={"upstream_step_id": "02_stale_parent"},
+        completed_step_records=records,
+        resolved_input_bindings={
+            "table:outcome_by_group": {
+                "declared_kind": "table",
+                "product": "outcome_by_group",
+                "produced_by_step": "01_parent",
+                "evidence_id": "table_outcome_by_group",
+                "sha256": digest,
+            }
+        },
+    )
+
+    errors = [item for item in findings if item.severity == "error"]
+    assert errors
+    assert errors[0].detail["reason"] == "resolved_upstream_binding_mismatch"
+
+
+def test_figure_source_cannot_use_unbound_table_from_same_producer(tmp_path: Path):
+    parent_path, figure_out, records = _write_authoritative_figure_trace_run(tmp_path)
+    unbound_path = parent_path.parent / "unbound_other.csv"
+    unbound_bytes = b"group,mortality_rate\nlow,0.9\nhigh,0.8\n"
+    unbound_path.write_bytes(unbound_bytes)
+    unbound_digest = hashlib.sha256(unbound_bytes).hexdigest()
+    unbound_id = f"table_unbound_other_{unbound_digest[:8]}"
+    evidence_path = tmp_path / "evidence" / f"{unbound_id}__{unbound_path.name}"
+    evidence_path.write_bytes(unbound_bytes)
+    manifest_path = tmp_path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["evidence"].append(
+        {
+            "evidence_id": unbound_id,
+            "kind": "table",
+            "relative_path": str(evidence_path.relative_to(tmp_path)),
+            "sha256": unbound_digest,
+            "produced_by_step": "01_parent",
+        }
+    )
+    manifest["per_step_records"][0]["evidence_ids"].append(unbound_id)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    records[0]["evidence_ids"].append(unbound_id)
+    pd.DataFrame(
+        {
+            "group": ["low", "high"],
+            "mortality_rate": [0.9, 0.8],
+            "source_table": [unbound_path.name] * 2,
+            "source_step_id": ["01_parent"] * 2,
+        }
+    ).to_csv(figure_out / "publication_figure_source_data.csv", index=False)
+    bound_digest = hashlib.sha256(parent_path.read_bytes()).hexdigest()
+
+    findings = FigureSourceDataValidator().audit(
+        step=AnalysisStep(
+            step_id="05_publication_figure",
+            intent="Render only the bound table.",
+            inputs=["table:outcome_by_group"],
+            method="publication_figure",
+        ),
+        out_dir=figure_out,
+        run_dir=tmp_path,
+        step_summary={"upstream_step_id": "01_parent"},
+        completed_step_records=records,
+        resolved_input_bindings={
+            "table:outcome_by_group": {
+                "declared_kind": "table",
+                "product": "outcome_by_group",
+                "produced_by_step": "01_parent",
+                "evidence_id": f"table_outcome_by_group_{bound_digest[:8]}",
+                "sha256": bound_digest,
+            }
+        },
+    )
+
+    errors = [item for item in findings if item.severity == "error"]
+    assert errors
+    assert errors[0].detail["best_mismatch"]["reason"] == (
+        "declared_source_table_not_found"
+    )
+
+
+def test_figure_source_rejects_parent_superseded_by_failure(tmp_path: Path):
+    _parent_path, figure_out, records = _write_authoritative_figure_trace_run(tmp_path)
     records.append(
         {
             "step_id": "01_parent",
@@ -1501,9 +1621,7 @@ def test_figure_source_rejects_parent_superseded_by_failure(tmp_path: Path):
 def test_figure_source_rejects_tampered_parent_after_registration(
     tmp_path: Path,
 ):
-    parent_path, figure_out, records = _write_authoritative_figure_trace_run(
-        tmp_path
-    )
+    parent_path, figure_out, records = _write_authoritative_figure_trace_run(tmp_path)
     parent_path.write_text(
         "group,mortality_rate\nlow,0.9\nhigh,0.8\n", encoding="utf-8"
     )
@@ -1526,9 +1644,7 @@ def test_figure_source_rejects_tampered_parent_after_registration(
 
 
 def test_figure_source_rejects_symlinked_parent_output(tmp_path: Path):
-    parent_path, figure_out, records = _write_authoritative_figure_trace_run(
-        tmp_path
-    )
+    parent_path, figure_out, records = _write_authoritative_figure_trace_run(tmp_path)
     target = tmp_path / "symlink_target.csv"
     target.write_bytes(parent_path.read_bytes())
     parent_path.unlink()
@@ -1550,9 +1666,7 @@ def test_figure_source_rejects_symlinked_parent_output(tmp_path: Path):
 
 
 def test_figure_source_rejects_upstream_path_traversal(tmp_path: Path):
-    _parent_path, figure_out, records = _write_authoritative_figure_trace_run(
-        tmp_path
-    )
+    _parent_path, figure_out, records = _write_authoritative_figure_trace_run(tmp_path)
 
     findings = FigureSourceDataValidator().audit(
         step=AnalysisStep(
@@ -1572,9 +1686,7 @@ def test_figure_source_rejects_upstream_path_traversal(tmp_path: Path):
 
 
 def test_figure_source_rejects_declared_table_path_traversal(tmp_path: Path):
-    _parent_path, figure_out, records = _write_authoritative_figure_trace_run(
-        tmp_path
-    )
+    _parent_path, figure_out, records = _write_authoritative_figure_trace_run(tmp_path)
     source_path = figure_out / "publication_figure_source_data.csv"
     source = pd.read_csv(source_path)
     source["source_table"] = "../outcome_by_group.csv"
@@ -1600,9 +1712,7 @@ def test_figure_source_rejects_declared_table_path_traversal(tmp_path: Path):
 
 
 def test_figure_source_rejects_missing_upstream_binding(tmp_path: Path):
-    _parent_path, figure_out, records = _write_authoritative_figure_trace_run(
-        tmp_path
-    )
+    _parent_path, figure_out, records = _write_authoritative_figure_trace_run(tmp_path)
 
     findings = FigureSourceDataValidator().audit(
         step=AnalysisStep(
@@ -1626,9 +1736,7 @@ def test_figure_source_rejects_unverifiable_source_data_file(
     tmp_path: Path,
     mutation: str,
 ):
-    _parent_path, figure_out, records = _write_authoritative_figure_trace_run(
-        tmp_path
-    )
+    _parent_path, figure_out, records = _write_authoritative_figure_trace_run(tmp_path)
     source_path = figure_out / "publication_figure_source_data.csv"
     if mutation == "malformed":
         source_path.write_bytes(b'"unterminated')
@@ -1664,3 +1772,1974 @@ def test_figure_source_rejects_unverifiable_source_data_file(
         "symlink": "unsafe_source_data_path",
     }[mutation]
     assert expected in reasons, findings
+
+
+def _effect_figure_bundle_fixture(
+    tmp_path: Path,
+) -> tuple[Path, Path, list[dict], dict[str, dict[str, str]]]:
+    parent_out = tmp_path / "steps" / "01_parent" / "outputs"
+    figure_out = tmp_path / "steps" / "01_parent_figure" / "outputs"
+    evidence_dir = tmp_path / "evidence"
+    parent_out.mkdir(parents=True)
+    figure_out.mkdir(parents=True)
+    evidence_dir.mkdir()
+    parent_path = parent_out / "primary_or.csv"
+    parent_bytes = b"term,odds_ratio,ci_low,ci_high\nexposure,1.25,1.1,1.42\n"
+    parent_path.write_bytes(parent_bytes)
+    pd.DataFrame(
+        {
+            "term": ["exposure"],
+            "odds_ratio": [1.25],
+            "ci_low": [1.10],
+            "ci_high": [1.42],
+            "source_table": [parent_path.name],
+        }
+    ).to_csv(figure_out / "publication_figure_source_data.csv", index=False)
+    digest = hashlib.sha256(parent_path.read_bytes()).hexdigest()
+    evidence_id = f"table_primary_or_{digest[:8]}"
+    evidence_path = evidence_dir / f"{evidence_id}__{parent_path.name}"
+    evidence_path.write_bytes(parent_bytes)
+    records = [
+        {
+            "step_id": "01_parent",
+            "status": "ok",
+            "evidence_ids": [evidence_id],
+            "step_summary": {"output_files": {"table:primary_or": parent_path.name}},
+        }
+    ]
+    (tmp_path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "per_step_records": records,
+                "evidence": [
+                    {
+                        "evidence_id": evidence_id,
+                        "kind": "table",
+                        "relative_path": str(evidence_path.relative_to(tmp_path)),
+                        "sha256": digest,
+                        "produced_by_step": "01_parent",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    bindings = {
+        "table:primary_or": {
+            "declared_kind": "table",
+            "product": "primary_or",
+            "produced_by_step": "01_parent",
+            "evidence_id": evidence_id,
+            "sha256": digest,
+        }
+    }
+    return parent_path, figure_out, records, bindings
+
+
+def _effect_figure_step() -> AnalysisStep:
+    return AnalysisStep(
+        step_id="05_plot",
+        intent="Plot the host-bound effect result.",
+        inputs=["table:primary_or"],
+        expected_outputs=["figure:primary_or_forest"],
+        method="visualization",
+    )
+
+
+def _write_two_panel_contract(
+    path: Path,
+    *,
+    figure_id: str,
+    source_data: list[str],
+) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "figure_id": figure_id,
+                "source_data": source_data,
+                "panels": [
+                    {
+                        "panel_id": "A",
+                        "title": "Primary estimate",
+                        "role": "primary_estimand",
+                        "claim": "The primary estimate is copied from the bound result table.",
+                    },
+                    {
+                        "panel_id": "B",
+                        "title": "Source audit",
+                        "role": "audit",
+                        "claim": "The audit panel exposes values from the same bound result table.",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_effect_figure_requires_contract_declared_local_source_data(tmp_path: Path):
+    _parent, figure_out, records, bindings = _effect_figure_bundle_fixture(tmp_path)
+    (figure_out / "publication_figure_source_data.csv").unlink()
+    (figure_out / "primary_or_forest.png").write_bytes(b"png")
+    _write_two_panel_contract(
+        figure_out / "primary_or_forest.figure_contract.json",
+        figure_id="primary_or_forest",
+        source_data=[],
+    )
+
+    findings = FigureSourceDataValidator().audit(
+        step=_effect_figure_step(),
+        out_dir=figure_out,
+        run_dir=tmp_path,
+        step_summary={
+            "output_files": {"figure:primary_or_forest": "primary_or_forest.png"}
+        },
+        completed_step_records=records,
+        resolved_input_bindings=bindings,
+    )
+
+    errors = [finding for finding in findings if finding.severity == "error"]
+    assert errors
+    assert errors[0].detail["reason"] == "missing_source_data"
+
+
+def test_effect_figure_exact_bundle_with_truthful_source_data_passes(tmp_path: Path):
+    _parent, figure_out, records, bindings = _effect_figure_bundle_fixture(tmp_path)
+    (figure_out / "primary_or_forest.png").write_bytes(b"png")
+    _write_two_panel_contract(
+        figure_out / "primary_or_forest.figure_contract.json",
+        figure_id="primary_or_forest",
+        source_data=["publication_figure_source_data.csv"],
+    )
+
+    findings = FigureSourceDataValidator().audit(
+        step=_effect_figure_step(),
+        out_dir=figure_out,
+        run_dir=tmp_path,
+        step_summary={
+            "output_files": {"figure:primary_or_forest": "primary_or_forest.png"}
+        },
+        completed_step_records=records,
+        resolved_input_bindings=bindings,
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"] == []
+
+
+def test_honest_decoy_bundle_cannot_authenticate_registered_forged_figure(
+    tmp_path: Path,
+):
+    _parent, figure_out, records, bindings = _effect_figure_bundle_fixture(tmp_path)
+    (figure_out / "forged.png").write_bytes(b"forged")
+    (figure_out / "honest.png").write_bytes(b"honest")
+    _write_two_panel_contract(
+        figure_out / "honest.figure_contract.json",
+        figure_id="honest",
+        source_data=["publication_figure_source_data.csv"],
+    )
+
+    findings = FigureSourceDataValidator().audit(
+        step=_effect_figure_step(),
+        out_dir=figure_out,
+        run_dir=tmp_path,
+        step_summary={"output_files": {"figure:primary_or_forest": "forged.png"}},
+        completed_step_records=records,
+        resolved_input_bindings=bindings,
+    )
+
+    errors = [finding for finding in findings if finding.severity == "error"]
+    assert errors
+    assert errors[0].detail["reason"] == "missing_figure_contract"
+
+
+def test_statistic_backed_figure_also_requires_same_stem_contract(tmp_path: Path):
+    figure_out = tmp_path / "steps" / "05_plot" / "outputs"
+    figure_out.mkdir(parents=True)
+    (figure_out / "forged.png").write_bytes(b"forged")
+    (figure_out / "honest.figure_contract.json").write_text(
+        json.dumps({"figure_id": "honest", "panels": []}),
+        encoding="utf-8",
+    )
+
+    findings = FigureSourceDataValidator().audit(
+        step=AnalysisStep(
+            step_id="05_plot",
+            intent="Plot model performance.",
+            inputs=["statistic:auroc"],
+            expected_outputs=["figure:model_performance"],
+            method="visualization",
+        ),
+        out_dir=figure_out,
+        run_dir=tmp_path,
+        step_summary={"output_files": {"figure:model_performance": "forged.png"}},
+    )
+
+    errors = [finding for finding in findings if finding.severity == "error"]
+    assert errors
+    assert errors[0].detail["reason"] == "missing_figure_contract"
+
+
+def test_statistic_backed_result_cannot_self_label_as_supporting_to_skip_source(
+    tmp_path: Path,
+):
+    figure_out = tmp_path / "steps" / "05_plot" / "outputs"
+    figure_out.mkdir(parents=True)
+    (figure_out / "model_performance.png").write_bytes(b"forged")
+    (figure_out / "model_performance.figure_contract.json").write_text(
+        json.dumps(
+            {
+                "figure_id": "model_performance",
+                "source_data": [],
+                "panels": [
+                    {
+                        "panel_id": "A",
+                        "title": "Audit",
+                        "role": "audit",
+                        "claim": "Coder-authored supporting label cannot weaken host lineage.",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    findings = FigureSourceDataValidator().audit(
+        step=AnalysisStep(
+            step_id="05_plot",
+            intent="Plot model performance.",
+            inputs=["statistic:auroc"],
+            expected_outputs=["figure:model_performance"],
+            method="visualization",
+        ),
+        out_dir=figure_out,
+        run_dir=tmp_path,
+        step_summary={
+            "output_files": {"figure:model_performance": "model_performance.png"}
+        },
+    )
+
+    errors = [finding for finding in findings if finding.severity == "error"]
+    assert errors
+    assert errors[0].detail["reason"] == "missing_source_data"
+
+
+def _write_mixed_effect_figure_bundle(
+    tmp_path: Path,
+    *,
+    source_estimate: float,
+) -> tuple[Path, AnalysisStep, dict]:
+    out_dir = tmp_path / "steps" / "04_primary_association" / "outputs"
+    out_dir.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "term": ["exposure"],
+            "odds_ratio": [1.25],
+            "ci_low": [1.10],
+            "ci_high": [1.42],
+        }
+    ).to_csv(out_dir / "primary_association.csv", index=False)
+    pd.DataFrame(
+        {
+            "term": ["exposure"],
+            "odds_ratio": [source_estimate],
+            "ci_low": [1.10],
+            "ci_high": [1.42],
+            "source_table": ["primary_association.csv"],
+            "source_step_id": ["04_primary_association"],
+        }
+    ).to_csv(out_dir / "primary_or_forest_source_data.csv", index=False)
+    (out_dir / "primary_or_forest.png").write_bytes(b"png")
+    _write_two_panel_contract(
+        out_dir / "primary_or_forest.figure_contract.json",
+        figure_id="primary_or_forest",
+        source_data=["primary_or_forest_source_data.csv"],
+    )
+    step = AnalysisStep(
+        step_id="04_primary_association",
+        intent="Estimate the association and render its planned forest plot.",
+        expected_outputs=[
+            "table:primary_association",
+            "figure:primary_or_forest",
+        ],
+        method="logistic_regression",
+    )
+    summary = {
+        "output_files": {
+            "table:primary_association": "primary_association.csv",
+            "figure:primary_or_forest": "primary_or_forest.png",
+        }
+    }
+    return out_dir, step, summary
+
+
+def test_mixed_effect_step_can_trace_figure_to_its_own_declared_table(
+    tmp_path: Path,
+):
+    out_dir, step, summary = _write_mixed_effect_figure_bundle(
+        tmp_path,
+        source_estimate=1.25,
+    )
+
+    findings = FigureSourceDataValidator().audit(
+        step=step,
+        out_dir=out_dir,
+        run_dir=tmp_path,
+        step_summary=summary,
+        completed_step_records=[],
+        resolved_input_bindings={},
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"] == []
+
+
+def test_mixed_effect_step_still_rejects_forged_own_source_data(tmp_path: Path):
+    out_dir, step, summary = _write_mixed_effect_figure_bundle(
+        tmp_path,
+        source_estimate=9.99,
+    )
+
+    findings = FigureSourceDataValidator().audit(
+        step=step,
+        out_dir=out_dir,
+        run_dir=tmp_path,
+        step_summary=summary,
+        completed_step_records=[],
+        resolved_input_bindings={},
+    )
+
+    errors = [finding for finding in findings if finding.severity == "error"]
+    assert errors
+    assert any(
+        finding.detail.get("best_mismatch", {}).get("reason")
+        == "source_values_disagree"
+        for finding in errors
+    )
+
+
+def test_effect_figure_cannot_use_unrelated_same_step_cohort_table(
+    tmp_path: Path,
+):
+    out_dir = tmp_path / "steps" / "04_primary" / "outputs"
+    out_dir.mkdir(parents=True)
+    pd.DataFrame({"group": ["low", "high"], "n": [60, 40]}).to_csv(
+        out_dir / "cohort_summary.csv", index=False
+    )
+    pd.DataFrame(
+        {
+            "group": ["low", "high"],
+            "n": [60, 40],
+            "source_table": ["cohort_summary.csv"] * 2,
+            "source_step_id": ["04_primary"] * 2,
+        }
+    ).to_csv(out_dir / "primary_or_forest_source_data.csv", index=False)
+    (out_dir / "primary_or_forest.png").write_bytes(b"png")
+    _write_two_panel_contract(
+        out_dir / "primary_or_forest.figure_contract.json",
+        figure_id="primary_or_forest",
+        source_data=["primary_or_forest_source_data.csv"],
+    )
+    step = AnalysisStep(
+        step_id="04_primary",
+        intent="Estimate an adjusted association and render its forest plot.",
+        method="logistic_regression",
+        expected_outputs=["table:cohort_summary", "figure:primary_or_forest"],
+    )
+
+    findings = FigureSourceDataValidator().audit(
+        step=step,
+        out_dir=out_dir,
+        run_dir=tmp_path,
+        step_summary={
+            "output_files": {
+                "table:cohort_summary": "cohort_summary.csv",
+                "figure:primary_or_forest": "primary_or_forest.png",
+            }
+        },
+        completed_step_records=[],
+        resolved_input_bindings={},
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"]
+
+
+def test_source_data_file_cannot_register_itself_as_same_step_parent(
+    tmp_path: Path,
+):
+    out_dir = tmp_path / "steps" / "04_primary" / "outputs"
+    out_dir.mkdir(parents=True)
+    source_name = "primary_or_forest_source_data.csv"
+    pd.DataFrame({"term": ["exposure"], "odds_ratio": [9.99]}).to_csv(
+        out_dir / source_name, index=False
+    )
+    (out_dir / "primary_or_forest.png").write_bytes(b"png")
+    _write_two_panel_contract(
+        out_dir / "primary_or_forest.figure_contract.json",
+        figure_id="primary_or_forest",
+        source_data=[source_name],
+    )
+    step = AnalysisStep(
+        step_id="04_primary",
+        intent="Estimate an association and render its forest plot.",
+        method="logistic_regression",
+        expected_outputs=[
+            "table:association_estimates",
+            "figure:primary_or_forest",
+        ],
+    )
+
+    findings = FigureSourceDataValidator().audit(
+        step=step,
+        out_dir=out_dir,
+        run_dir=tmp_path,
+        step_summary={
+            "output_files": {
+                "table:association_estimates": source_name,
+                "figure:primary_or_forest": "primary_or_forest.png",
+            }
+        },
+        completed_step_records=[],
+        resolved_input_bindings={},
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"]
+
+
+def _statistic_figure_fixture(
+    tmp_path: Path,
+    *,
+    source_value: float,
+    statistic: str = "auroc",
+) -> tuple[Path, AnalysisStep, dict, list[dict], dict]:
+    parent_out = tmp_path / "steps" / "03_model" / "outputs"
+    figure_out = tmp_path / "steps" / "04_plot" / "outputs"
+    evidence_dir = tmp_path / "evidence"
+    parent_out.mkdir(parents=True)
+    figure_out.mkdir(parents=True)
+    evidence_dir.mkdir()
+    summary_path = evidence_dir / "model_summary__step_summary.json"
+    summary_path.write_text(json.dumps({statistic: 0.81}), encoding="utf-8")
+    digest = hashlib.sha256(summary_path.read_bytes()).hexdigest()
+    pd.DataFrame({"metric": [statistic], "value": [source_value]}).to_csv(
+        figure_out / "model_performance_source_data.csv", index=False
+    )
+    (figure_out / "model_performance.png").write_bytes(b"png")
+    _write_two_panel_contract(
+        figure_out / "model_performance.figure_contract.json",
+        figure_id="model_performance",
+        source_data=["model_performance_source_data.csv"],
+    )
+    records = [
+        {
+            "step_id": "03_model",
+            "status": "ok",
+            "evidence_ids": ["model_summary"],
+            "step_summary_evidence_id": "model_summary",
+            "step_summary": {statistic: 0.81},
+        }
+    ]
+    (tmp_path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "per_step_records": records,
+                "evidence": [
+                    {
+                        "evidence_id": "model_summary",
+                        "kind": "log",
+                        "relative_path": str(summary_path.relative_to(tmp_path)),
+                        "sha256": digest,
+                        "produced_by_step": "03_model",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    step = AnalysisStep(
+        step_id="04_plot",
+        intent="Render current model performance.",
+        method="visualization",
+        inputs=[f"statistic:{statistic}"],
+        expected_outputs=["figure:model_performance"],
+    )
+    summary = {"output_files": {"figure:model_performance": "model_performance.png"}}
+    bindings = {
+        f"statistic:{statistic}": {
+            "declared_kind": "statistic",
+            "product": statistic,
+            "produced_by_step": "03_model",
+            "evidence_id": "model_summary",
+            "sha256": digest,
+            "absolute_path": str(summary_path),
+        }
+    }
+    return figure_out, step, summary, records, bindings
+
+
+def test_truthful_statistic_backed_figure_has_value_lineage(tmp_path: Path):
+    figure_out, step, summary, records, bindings = _statistic_figure_fixture(
+        tmp_path,
+        source_value=0.81,
+    )
+
+    findings = FigureSourceDataValidator().audit(
+        step=step,
+        out_dir=figure_out,
+        run_dir=tmp_path,
+        step_summary=summary,
+        completed_step_records=records,
+        resolved_input_bindings=bindings,
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"] == []
+
+
+def test_statistic_backed_figure_rejects_wrong_source_value(tmp_path: Path):
+    figure_out, step, summary, records, bindings = _statistic_figure_fixture(
+        tmp_path,
+        source_value=0.99,
+    )
+
+    findings = FigureSourceDataValidator().audit(
+        step=step,
+        out_dir=figure_out,
+        run_dir=tmp_path,
+        step_summary=summary,
+        completed_step_records=records,
+        resolved_input_bindings=bindings,
+    )
+
+    errors = [finding for finding in findings if finding.severity == "error"]
+    assert errors
+    assert any(
+        finding.detail.get("reason")
+        in {"no_verifiable_figure_values", "incomplete_source_lineage_coverage"}
+        for finding in errors
+    )
+
+
+def test_truthful_c_statistic_backed_figure_has_value_lineage(tmp_path: Path):
+    figure_out, step, summary, records, bindings = _statistic_figure_fixture(
+        tmp_path,
+        source_value=0.81,
+        statistic="c_statistic",
+    )
+
+    findings = FigureSourceDataValidator().audit(
+        step=step,
+        out_dir=figure_out,
+        run_dir=tmp_path,
+        step_summary=summary,
+        completed_step_records=records,
+        resolved_input_bindings=bindings,
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"] == []
+
+
+@pytest.mark.parametrize(
+    ("extra_metric", "extra_value"),
+    [("displayed_auroc", 0.99), ("calibration_slope", 99.0)],
+)
+def test_statistic_source_rejects_unbound_numeric_payload(
+    tmp_path: Path,
+    extra_metric: str,
+    extra_value: float,
+):
+    figure_out, step, summary, records, bindings = _statistic_figure_fixture(
+        tmp_path,
+        source_value=0.81,
+    )
+    pd.DataFrame(
+        {
+            "metric": ["auroc", extra_metric],
+            "value": [0.81, extra_value],
+        }
+    ).to_csv(figure_out / "model_performance_source_data.csv", index=False)
+
+    findings = FigureSourceDataValidator().audit(
+        step=step,
+        out_dir=figure_out,
+        run_dir=tmp_path,
+        step_summary=summary,
+        completed_step_records=records,
+        resolved_input_bindings=bindings,
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"]
+
+
+@pytest.mark.parametrize(
+    ("inputs", "method"),
+    [
+        (["artifact:predictions"], "visualization"),
+        ([], "prediction_model"),
+    ],
+)
+def test_prediction_result_cannot_self_label_audit_to_skip_source_data(
+    tmp_path: Path,
+    inputs: list[str],
+    method: str,
+):
+    out_dir = tmp_path / "steps" / "04_plot" / "outputs"
+    out_dir.mkdir(parents=True)
+    (out_dir / "model_performance.png").write_bytes(b"png")
+    (out_dir / "model_performance.figure_contract.json").write_text(
+        json.dumps(
+            {
+                "figure_id": "model_performance",
+                "source_data": [],
+                "panels": [
+                    {
+                        "panel_id": "A",
+                        "title": "Audit",
+                        "role": "audit",
+                        "claim": "A coder label cannot downgrade a result figure.",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    findings = FigureSourceDataValidator().audit(
+        step=AnalysisStep(
+            step_id="04_plot",
+            intent="Compute and render model performance.",
+            method=method,
+            inputs=inputs,
+            expected_outputs=["figure:model_performance"],
+        ),
+        out_dir=out_dir,
+        run_dir=tmp_path,
+        step_summary={
+            "output_files": {"figure:model_performance": "model_performance.png"}
+        },
+    )
+
+    errors = [finding for finding in findings if finding.severity == "error"]
+    assert errors
+    assert errors[0].detail["reason"] == "missing_source_data"
+
+
+def test_model_file_alone_cannot_authenticate_plotted_metrics(tmp_path: Path):
+    parent_out = tmp_path / "steps" / "03_model" / "outputs"
+    figure_out = tmp_path / "steps" / "04_plot" / "outputs"
+    evidence_dir = tmp_path / "evidence"
+    parent_out.mkdir(parents=True)
+    figure_out.mkdir(parents=True)
+    evidence_dir.mkdir()
+    model_path = evidence_dir / "prediction_model__model.json"
+    model_path.write_text('{"model": "sealed"}', encoding="utf-8")
+    digest = hashlib.sha256(model_path.read_bytes()).hexdigest()
+    pd.DataFrame({"metric": ["auroc"], "value": [0.81]}).to_csv(
+        figure_out / "model_performance_source_data.csv", index=False
+    )
+    (figure_out / "model_performance.png").write_bytes(b"png")
+    _write_two_panel_contract(
+        figure_out / "model_performance.figure_contract.json",
+        figure_id="model_performance",
+        source_data=["model_performance_source_data.csv"],
+    )
+    records = [
+        {
+            "step_id": "03_model",
+            "status": "ok",
+            "evidence_ids": ["prediction_model"],
+        }
+    ]
+    (tmp_path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "per_step_records": records,
+                "evidence": [
+                    {
+                        "evidence_id": "prediction_model",
+                        "kind": "model",
+                        "relative_path": str(model_path.relative_to(tmp_path)),
+                        "sha256": digest,
+                        "produced_by_step": "03_model",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    findings = FigureSourceDataValidator().audit(
+        step=AnalysisStep(
+            step_id="04_plot",
+            intent="Render model performance.",
+            method="visualization",
+            inputs=["model:prediction_model"],
+            expected_outputs=["figure:model_performance"],
+        ),
+        out_dir=figure_out,
+        run_dir=tmp_path,
+        step_summary={
+            "output_files": {"figure:model_performance": "model_performance.png"}
+        },
+        completed_step_records=records,
+        resolved_input_bindings={
+            "model:prediction_model": {
+                "declared_kind": "model",
+                "product": "prediction_model",
+                "produced_by_step": "03_model",
+                "evidence_id": "prediction_model",
+                "sha256": digest,
+                "absolute_path": str(model_path),
+            }
+        },
+    )
+
+    errors = [finding for finding in findings if finding.severity == "error"]
+    assert errors
+    assert errors[0].detail["reason"] == "non_replayable_figure_input"
+
+
+def test_tabular_prediction_dataset_can_authenticate_result_figure(tmp_path: Path):
+    figure_out = tmp_path / "steps" / "04_plot" / "outputs"
+    evidence_dir = tmp_path / "evidence"
+    figure_out.mkdir(parents=True)
+    evidence_dir.mkdir()
+    predictions_path = evidence_dir / "predictions__predictions.csv"
+    frame = pd.DataFrame(
+        {"row_id": [1, 2], "predicted_risk": [0.2, 0.8], "outcome": [0, 1]}
+    )
+    frame.to_csv(predictions_path, index=False)
+    digest = hashlib.sha256(predictions_path.read_bytes()).hexdigest()
+    frame.to_csv(figure_out / "model_performance_source_data.csv", index=False)
+    (figure_out / "model_performance.png").write_bytes(b"png")
+    _write_two_panel_contract(
+        figure_out / "model_performance.figure_contract.json",
+        figure_id="model_performance",
+        source_data=["model_performance_source_data.csv"],
+    )
+    records = [
+        {
+            "step_id": "03_model",
+            "status": "ok",
+            "evidence_ids": ["predictions"],
+        }
+    ]
+    (tmp_path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "per_step_records": records,
+                "evidence": [
+                    {
+                        "evidence_id": "predictions",
+                        "kind": "table",
+                        "relative_path": str(predictions_path.relative_to(tmp_path)),
+                        "sha256": digest,
+                        "produced_by_step": "03_model",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    findings = FigureSourceDataValidator().audit(
+        step=AnalysisStep(
+            step_id="04_plot",
+            intent="Render model performance from current predictions.",
+            method="visualization",
+            inputs=["dataset:predictions"],
+            expected_outputs=["figure:model_performance"],
+        ),
+        out_dir=figure_out,
+        run_dir=tmp_path,
+        step_summary={
+            "output_files": {"figure:model_performance": "model_performance.png"}
+        },
+        completed_step_records=records,
+        resolved_input_bindings={
+            "dataset:predictions": {
+                "declared_kind": "dataset",
+                "product": "predictions",
+                "produced_by_step": "03_model",
+                "evidence_id": "predictions",
+                "sha256": digest,
+                "absolute_path": str(predictions_path),
+            }
+        },
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"] == []
+
+
+def _audit_bound_tabular_figures(
+    tmp_path: Path,
+    *,
+    declared_input: str,
+    upstream: pd.DataFrame,
+    figure_products: list[str],
+    source: pd.DataFrame | None = None,
+):
+    declared_kind, product = declared_input.split(":", 1)
+    parent_out = tmp_path / "steps" / "03_parent" / "outputs"
+    figure_out = tmp_path / "steps" / "04_plot" / "outputs"
+    evidence_dir = tmp_path / "evidence"
+    parent_out.mkdir(parents=True)
+    figure_out.mkdir(parents=True)
+    evidence_dir.mkdir()
+
+    parent_path = parent_out / f"{product}.csv"
+    upstream.to_csv(parent_path, index=False)
+    digest = hashlib.sha256(parent_path.read_bytes()).hexdigest()
+    evidence_id = f"{product}_{digest[:8]}"
+    evidence_path = evidence_dir / f"{evidence_id}__{parent_path.name}"
+    evidence_path.write_bytes(parent_path.read_bytes())
+
+    source_name = "shared_figure_source_data.csv"
+    (source if source is not None else upstream).to_csv(
+        figure_out / source_name,
+        index=False,
+    )
+    output_files = {}
+    for figure_product in figure_products:
+        figure_name = figure_product.split(":", 1)[1]
+        figure_path = figure_out / f"{figure_name}.png"
+        figure_path.write_bytes(b"png")
+        _write_two_panel_contract(
+            figure_out / f"{figure_name}.figure_contract.json",
+            figure_id=figure_name,
+            source_data=[source_name],
+        )
+        output_files[figure_product] = figure_path.name
+
+    records = [
+        {
+            "step_id": "03_parent",
+            "status": "ok",
+            "evidence_ids": [evidence_id],
+        }
+    ]
+    (tmp_path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "per_step_records": records,
+                "evidence": [
+                    {
+                        "evidence_id": evidence_id,
+                        "kind": "table",
+                        "relative_path": str(evidence_path.relative_to(tmp_path)),
+                        "sha256": digest,
+                        "produced_by_step": "03_parent",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    return FigureSourceDataValidator().audit(
+        step=AnalysisStep(
+            step_id="04_plot",
+            intent="Render only the host-bound typed result.",
+            method="visualization",
+            inputs=[declared_input],
+            expected_outputs=figure_products,
+        ),
+        out_dir=figure_out,
+        run_dir=tmp_path,
+        step_summary={"output_files": output_files},
+        completed_step_records=records,
+        resolved_input_bindings={
+            declared_input: {
+                "declared_kind": declared_kind,
+                "product": product,
+                "produced_by_step": "03_parent",
+                "evidence_id": evidence_id,
+                "sha256": digest,
+                "absolute_path": str(evidence_path),
+            }
+        },
+    )
+
+
+def test_cohort_score_columns_cannot_authenticate_model_performance(tmp_path: Path):
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input="dataset:cohort_summary",
+        upstream=pd.DataFrame({"row_id": [1, 2], "severity_score": [3.0, 8.0]}),
+        figure_products=["figure:model_performance"],
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"]
+
+
+def test_cohort_counts_cannot_authenticate_compound_prediction_figure(
+    tmp_path: Path,
+):
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input="table:cohort_summary",
+        upstream=pd.DataFrame(
+            {
+                "group": ["development", "validation"],
+                "n": [240, 160],
+            }
+        ),
+        figure_products=["figure:discrimination_calibration"],
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"]
+
+
+@pytest.mark.parametrize(
+    "figure_product",
+    ["figure:time_varying_discrimination", "figure:subgroup_forest"],
+)
+def test_cohort_counts_cannot_authenticate_registered_suite_result_figures(
+    tmp_path: Path,
+    figure_product: str,
+):
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input="table:cohort_summary",
+        upstream=pd.DataFrame({"group": ["a", "b"], "n": [120, 80]}),
+        figure_products=[figure_product],
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"]
+
+
+@pytest.mark.parametrize(
+    ("declared_input", "upstream", "figure_product"),
+    [
+        (
+            "table:horizon_performance",
+            pd.DataFrame(
+                {
+                    "row_id": [1, 2, 3],
+                    "prediction_horizon_hours": [6, 12, 24],
+                    "metric": ["auroc", "auroc", "auroc"],
+                    "value": [0.74, 0.79, 0.81],
+                }
+            ),
+            "figure:time_varying_discrimination",
+        ),
+        (
+            "table:subgroup_effects",
+            pd.DataFrame(
+                {
+                    "term": ["subgroup_a"],
+                    "odds_ratio": [1.25],
+                }
+            ),
+            "figure:subgroup_forest",
+        ),
+    ],
+)
+def test_registered_suite_result_figures_require_matching_typed_sources(
+    tmp_path: Path,
+    declared_input: str,
+    upstream: pd.DataFrame,
+    figure_product: str,
+):
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input=declared_input,
+        upstream=upstream,
+        figure_products=[figure_product],
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"] == []
+
+
+@pytest.mark.parametrize(
+    "declared_input",
+    ["table:model_performance", "table:horizon_performance"],
+    ids=["static_product", "horizon_product_without_horizon_values"],
+)
+def test_static_performance_cannot_authenticate_time_varying_discrimination(
+    tmp_path: Path,
+    declared_input: str,
+):
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input=declared_input,
+        upstream=pd.DataFrame({"metric": ["auroc"], "value": [0.81]}),
+        figure_products=["figure:time_varying_discrimination"],
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"]
+
+
+def test_time_varying_performance_requires_metric_at_each_counted_horizon(
+    tmp_path: Path,
+):
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input="table:horizon_performance",
+        upstream=pd.DataFrame(
+            {
+                "row_id": [1, 2],
+                "prediction_horizon_hours": [6, 12],
+                "metric": ["auroc", "sample_size"],
+                "value": [0.81, 200.0],
+            }
+        ),
+        figure_products=["figure:time_varying_discrimination"],
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"]
+
+
+def test_time_varying_discrimination_requires_same_metric_across_horizons(
+    tmp_path: Path,
+):
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input="table:horizon_performance",
+        upstream=pd.DataFrame(
+            {
+                "row_id": [1, 2],
+                "prediction_horizon_hours": [6, 12],
+                "metric": ["auroc", "brier"],
+                "value": [0.81, 0.12],
+            }
+        ),
+        figure_products=["figure:time_varying_discrimination"],
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"]
+
+
+def test_row_paired_raw_predictions_authenticate_time_varying_performance(
+    tmp_path: Path,
+):
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input="dataset:predictions",
+        upstream=pd.DataFrame(
+            {
+                "row_id": [1, 2, 3, 4],
+                "prediction_horizon_hours": [6, 6, 12, 12],
+                "prediction": [0.1, 0.8, 0.2, 0.9],
+                "outcome": [0, 1, 0, 1],
+            }
+        ),
+        figure_products=["figure:time_varying_discrimination"],
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"] == []
+
+
+@pytest.mark.parametrize(
+    "figure_product",
+    [
+        "figure:roc_curve",
+        "figure:calibration_curve",
+        "figure:model_performance",
+        "figure:discrimination_calibration",
+    ],
+    ids=["roc", "calibration", "performance", "compound"],
+)
+def test_prediction_values_without_observed_outcomes_cannot_authenticate_results(
+    tmp_path: Path,
+    figure_product: str,
+):
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input="dataset:predictions",
+        upstream=pd.DataFrame(
+            {
+                "row_id": [1, 2, 3],
+                "predicted_risk": [0.1, 0.4, 0.8],
+            }
+        ),
+        figure_products=[figure_product],
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"]
+
+
+def test_disjoint_prediction_and_outcome_rows_cannot_authenticate_results(
+    tmp_path: Path,
+):
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input="dataset:predictions",
+        upstream=pd.DataFrame(
+            {
+                "row_id": [1, 2, 3, 4],
+                "predicted_risk": [0.1, 0.8, None, None],
+                "outcome": [None, None, 0, 1],
+            }
+        ),
+        figure_products=["figure:discrimination_calibration"],
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"]
+
+
+@pytest.mark.parametrize(
+    "upstream",
+    [
+        pd.DataFrame(
+            {
+                "row_id": [1, 2, 3],
+                "predicted_risk": [-0.1, 0.4, 1.1],
+                "outcome": [0, 0, 1],
+            }
+        ),
+        pd.DataFrame(
+            {
+                "row_id": [1, 2, 3],
+                "predicted_risk": [0.1, 0.4, 0.8],
+                "outcome": [0, 2, 1],
+            }
+        ),
+    ],
+    ids=["risk_outside_probability_domain", "nonbinary_outcome"],
+)
+def test_raw_prediction_domains_must_support_replayable_binary_risk_figures(
+    tmp_path: Path,
+    upstream: pd.DataFrame,
+):
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input="dataset:predictions",
+        upstream=upstream,
+        figure_products=["figure:discrimination_calibration"],
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"]
+
+
+@pytest.mark.parametrize(
+    "upstream",
+    [
+        pd.DataFrame(
+            {
+                "row_id": [1, 2, 3],
+                "predicted_risk": [-9.0, 2.0, 8.0],
+                "prediction": [0.1, 0.4, 0.8],
+                "outcome": [0, 0, 1],
+            }
+        ),
+        pd.DataFrame(
+            {
+                "row_id": [1, 2, 3],
+                "predicted_risk": [0.1, 0.4, 0.8],
+                "outcome": [9, 8, 7],
+                "y_true": [0, 0, 1],
+            }
+        ),
+    ],
+    ids=["invalid_probability_with_valid_alias", "invalid_outcome_with_valid_alias"],
+)
+def test_valid_prediction_alias_cannot_launder_invalid_semantic_sibling(
+    tmp_path: Path,
+    upstream: pd.DataFrame,
+):
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input="dataset:predictions",
+        upstream=upstream,
+        figure_products=["figure:discrimination_calibration"],
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"]
+
+
+def test_roc_table_cannot_authenticate_calibration_curve(tmp_path: Path):
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input="table:roc_curve",
+        upstream=pd.DataFrame(
+            {
+                "row_id": [1, 2, 3],
+                "threshold": [0.2, 0.5, 0.8],
+                "fpr": [0.70, 0.25, 0.05],
+                "tpr": [0.95, 0.72, 0.30],
+            }
+        ),
+        figure_products=["figure:calibration_curve"],
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"]
+
+
+def test_calibration_table_cannot_authenticate_roc_curve(tmp_path: Path):
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input="table:calibration_curve",
+        upstream=pd.DataFrame(
+            {
+                "row_id": [1, 2, 3],
+                "predicted_risk": [0.1, 0.3, 0.7],
+                "observed_risk": [0.08, 0.28, 0.74],
+            }
+        ),
+        figure_products=["figure:roc_curve"],
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"]
+
+
+def test_disjoint_predicted_and_observed_risk_cannot_authenticate_calibration(
+    tmp_path: Path,
+):
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input="table:calibration_curve",
+        upstream=pd.DataFrame(
+            {
+                "row_id": [1, 2, 3, 4],
+                "predicted_risk": [0.1, 0.8, None, None],
+                "observed_risk": [None, None, 0.2, 0.7],
+            }
+        ),
+        figure_products=["figure:calibration_curve"],
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"]
+
+
+def test_disjoint_roc_coordinates_cannot_authenticate_roc_curve(tmp_path: Path):
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input="table:roc_curve",
+        upstream=pd.DataFrame(
+            {
+                "row_id": [1, 2, 3, 4, 5, 6],
+                "threshold": [0.1, 0.8, None, None, None, None],
+                "fpr": [None, None, 0.2, 0.7, None, None],
+                "tpr": [None, None, None, None, 0.3, 0.9],
+            }
+        ),
+        figure_products=["figure:roc_curve"],
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"]
+
+
+def test_disjoint_threshold_and_net_benefit_cannot_authenticate_decision_curve(
+    tmp_path: Path,
+):
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input="table:decision_curve",
+        upstream=pd.DataFrame(
+            {
+                "row_id": [1, 2, 3, 4],
+                "threshold": [0.1, 0.8, None, None],
+                "net_benefit": [None, None, 0.02, 0.04],
+            }
+        ),
+        figure_products=["figure:decision_curve"],
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"]
+
+
+@pytest.mark.parametrize(
+    ("declared_input", "upstream", "figure_product"),
+    [
+        (
+            "table:roc_curve",
+            pd.DataFrame(
+                {
+                    "threshold": [0.5],
+                    "fpr": [0.2],
+                    "tpr": [0.8],
+                }
+            ),
+            "figure:roc_curve",
+        ),
+        (
+            "table:calibration_curve",
+            pd.DataFrame(
+                {
+                    "predicted_risk": [0.5],
+                    "observed_risk": [0.45],
+                }
+            ),
+            "figure:calibration_curve",
+        ),
+        (
+            "table:decision_curve",
+            pd.DataFrame(
+                {
+                    "threshold": [0.5],
+                    "net_benefit": [0.05],
+                }
+            ),
+            "figure:decision_curve",
+        ),
+    ],
+    ids=["roc", "calibration", "decision_curve"],
+)
+def test_single_point_table_cannot_authenticate_curve_figure(
+    tmp_path: Path,
+    declared_input: str,
+    upstream: pd.DataFrame,
+    figure_product: str,
+):
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input=declared_input,
+        upstream=upstream,
+        figure_products=[figure_product],
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"]
+
+
+def test_valid_fpr_alias_cannot_launder_invalid_false_positive_rate(
+    tmp_path: Path,
+):
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input="table:roc_curve",
+        upstream=pd.DataFrame(
+            {
+                "row_id": [1, 2],
+                "threshold": [0.2, 0.8],
+                "fpr": [0.70, 0.10],
+                "false_positive_rate": [7.0, -2.0],
+                "tpr": [0.90, 0.30],
+            }
+        ),
+        figure_products=["figure:roc_curve"],
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"]
+
+
+def test_out_of_domain_auroc_cannot_authenticate_model_performance(tmp_path: Path):
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input="table:model_performance",
+        upstream=pd.DataFrame({"metric": ["auroc"], "value": [999.0]}),
+        figure_products=["figure:model_performance"],
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"]
+
+
+def test_valid_auroc_row_cannot_launder_out_of_domain_auroc_sibling(
+    tmp_path: Path,
+):
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input="table:model_performance",
+        upstream=pd.DataFrame(
+            {
+                "row_id": [1, 2],
+                "metric": ["auroc", "auroc"],
+                "value": [0.81, 999.0],
+            }
+        ),
+        figure_products=["figure:model_performance"],
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"]
+
+
+def test_wide_auroc_point_outside_confidence_interval_cannot_authenticate_figure(
+    tmp_path: Path,
+):
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input="table:model_performance",
+        upstream=pd.DataFrame(
+            {
+                "auroc": [0.81],
+                "auroc_ci_low": [0.82],
+                "auroc_ci_high": [0.90],
+            }
+        ),
+        figure_products=["figure:model_performance"],
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"]
+
+
+@pytest.mark.parametrize(
+    ("ci_low", "ci_high"),
+    [
+        (-0.10, 0.90),
+        (0.82, 0.90),
+        (0.70, 1.20),
+    ],
+    ids=["negative_lower", "point_below_interval", "upper_above_one"],
+)
+def test_long_form_auroc_requires_valid_confidence_interval(
+    tmp_path: Path,
+    ci_low: float,
+    ci_high: float,
+):
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input="table:model_performance",
+        upstream=pd.DataFrame(
+            {
+                "metric": ["auroc"],
+                "value": [0.81],
+                "ci_low": [ci_low],
+                "ci_high": [ci_high],
+            }
+        ),
+        figure_products=["figure:model_performance"],
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"]
+
+
+def test_auroc_metadata_column_does_not_invalidate_numeric_performance(
+    tmp_path: Path,
+):
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input="table:model_performance",
+        upstream=pd.DataFrame(
+            {
+                "auroc": [0.81],
+                "auroc_ci_method": ["delong"],
+            }
+        ),
+        figure_products=["figure:model_performance"],
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"] == []
+
+
+def test_risk_score_table_cannot_authenticate_model_performance(tmp_path: Path):
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input="table:risk_score",
+        upstream=pd.DataFrame(
+            {
+                "row_id": [1, 2, 3],
+                "risk_score": [2.0, 5.0, 9.0],
+            }
+        ),
+        figure_products=["figure:model_performance"],
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"]
+
+
+@pytest.mark.parametrize(
+    "figure_product",
+    [
+        "figure:roc_curve",
+        "figure:calibration_curve",
+        "figure:model_performance",
+        "figure:discrimination_calibration",
+    ],
+    ids=["roc", "calibration", "performance", "compound"],
+)
+def test_raw_predictions_with_observed_outcomes_authenticate_prediction_results(
+    tmp_path: Path,
+    figure_product: str,
+):
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input="dataset:predictions",
+        upstream=pd.DataFrame(
+            {
+                "row_id": [1, 2, 3, 4],
+                "prediction": [0.05, 0.25, 0.65, 0.90],
+                "outcome": [0, 0, 1, 1],
+            }
+        ),
+        figure_products=[figure_product],
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"] == []
+
+
+def test_untyped_generic_subgroup_estimate_cannot_authenticate_subgroup_forest(
+    tmp_path: Path,
+):
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input="table:subgroup_effects",
+        upstream=pd.DataFrame({"term": ["subgroup_a"], "estimate": [999.0]}),
+        figure_products=["figure:subgroup_forest"],
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"]
+
+
+def test_negative_ratio_cannot_authenticate_subgroup_forest(tmp_path: Path):
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input="table:subgroup_effects",
+        upstream=pd.DataFrame(
+            {
+                "row_id": [1],
+                "term": ["subgroup_a"],
+                "odds_ratio": [-1.25],
+            }
+        ),
+        figure_products=["figure:subgroup_forest"],
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"]
+
+
+def test_negative_ratio_interval_bound_cannot_authenticate_subgroup_forest(
+    tmp_path: Path,
+):
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input="table:subgroup_effects",
+        upstream=pd.DataFrame(
+            {
+                "row_id": [1],
+                "term": ["subgroup_a"],
+                "odds_ratio": [1.25],
+                "ci_low": [-0.2],
+                "ci_high": [1.6],
+            }
+        ),
+        figure_products=["figure:subgroup_forest"],
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"]
+
+
+def test_bare_lower_upper_negative_ratio_interval_cannot_authenticate_forest(
+    tmp_path: Path,
+):
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input="table:subgroup_effects",
+        upstream=pd.DataFrame(
+            {
+                "row_id": [1],
+                "term": ["subgroup_a"],
+                "odds_ratio": [1.25],
+                "lower": [-0.2],
+                "upper": [1.6],
+            }
+        ),
+        figure_products=["figure:subgroup_forest"],
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"]
+
+
+def test_ratio_point_outside_positive_interval_cannot_authenticate_subgroup_forest(
+    tmp_path: Path,
+):
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input="table:subgroup_effects",
+        upstream=pd.DataFrame(
+            {
+                "row_id": [1],
+                "term": ["subgroup_a"],
+                "odds_ratio": [1.25],
+                "ci_low": [1.5],
+                "ci_high": [2.0],
+            }
+        ),
+        figure_products=["figure:subgroup_forest"],
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"]
+
+
+def test_ratio_interval_validation_ignores_unrelated_signed_effect_interval(
+    tmp_path: Path,
+):
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input="table:subgroup_effects",
+        upstream=pd.DataFrame(
+            {
+                "row_id": [1],
+                "term": ["subgroup_a"],
+                "odds_ratio": [1.25],
+                "or_ci_low": [0.8],
+                "or_ci_high": [1.6],
+                "mean_difference_ci_low": [-2.0],
+                "mean_difference_ci_high": [1.0],
+            }
+        ),
+        figure_products=["figure:subgroup_forest"],
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"] == []
+
+
+def test_explicit_ratio_interval_takes_precedence_over_generic_log_scale_interval(
+    tmp_path: Path,
+):
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input="table:primary_association",
+        upstream=pd.DataFrame(
+            {
+                "term": ["exposure"],
+                "coef": [0.18],
+                "ci_lower": [-0.25],
+                "ci_upper": [0.61],
+                "odds_ratio": [1.20],
+                "or_lower": [0.78],
+                "or_upper": [1.84],
+            }
+        ),
+        figure_products=["figure:primary_or_forest"],
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"] == []
+
+
+@pytest.mark.parametrize(
+    ("declared_input", "upstream", "figure_product"),
+    [
+        (
+            "table:roc_curve",
+            pd.DataFrame(
+                {
+                    "row_id": [1, 2, 3],
+                    "threshold": [0.2, 0.5, 0.8],
+                    "fpr": [0.70, 0.25, 0.05],
+                    "tpr": [0.95, 0.72, 0.30],
+                }
+            ),
+            "figure:roc_curve",
+        ),
+        (
+            "table:calibration_curve",
+            pd.DataFrame(
+                {
+                    "row_id": [1, 2, 3],
+                    "predicted_risk": [0.1, 0.3, 0.7],
+                    "observed_risk": [0.08, 0.28, 0.74],
+                }
+            ),
+            "figure:calibration_curve",
+        ),
+        (
+            "table:model_performance",
+            pd.DataFrame(
+                {
+                    "metric": ["auroc", "brier"],
+                    "value": [0.81, 0.16],
+                }
+            ),
+            "figure:model_performance",
+        ),
+    ],
+    ids=["roc", "calibration", "performance"],
+)
+def test_typed_prediction_result_tables_authenticate_matching_figures(
+    tmp_path: Path,
+    declared_input: str,
+    upstream: pd.DataFrame,
+    figure_product: str,
+):
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input=declared_input,
+        upstream=upstream,
+        figure_products=[figure_product],
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"] == []
+
+
+@pytest.mark.parametrize(
+    "upstream",
+    [
+        pd.DataFrame({"term": ["exposure"], "n": [120]}),
+        pd.DataFrame({"term": ["exposure"], "n": [120], "odds_ratio": [float("nan")]}),
+    ],
+    ids=["no_effect_value", "non_finite_effect_value"],
+)
+def test_typed_effect_table_requires_finite_effect_value(
+    tmp_path: Path,
+    upstream: pd.DataFrame,
+):
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input="table:primary_or",
+        upstream=upstream,
+        figure_products=["figure:primary_or_forest"],
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"]
+
+
+def test_false_adjusted_flag_cannot_authorize_adjusted_effect_figure(tmp_path: Path):
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input="table:primary_or",
+        upstream=pd.DataFrame(
+            {
+                "term": ["exposure"],
+                "odds_ratio": [1.25],
+                "adjusted": [False],
+            }
+        ),
+        figure_products=["figure:adjusted_or_forest"],
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"]
+
+
+def test_uppercase_or_column_authenticates_typed_primary_or_figure(tmp_path: Path):
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input="table:primary_or",
+        upstream=pd.DataFrame({"term": ["exposure"], "OR": [1.25]}),
+        figure_products=["figure:primary_or_forest"],
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"] == []
+
+
+@pytest.mark.parametrize(
+    "other_figure",
+    ["figure:primary_hr_forest", "figure:model_performance"],
+)
+def test_one_or_source_cannot_authenticate_incompatible_sibling_figure(
+    tmp_path: Path,
+    other_figure: str,
+):
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input="table:primary_or",
+        upstream=pd.DataFrame({"term": ["exposure"], "odds_ratio": [1.25]}),
+        figure_products=["figure:primary_or_forest", other_figure],
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"]
+
+
+def _write_bound_effect_parent(
+    tmp_path: Path,
+    *,
+    step_id: str,
+    product: str,
+    odds_ratio: float,
+) -> tuple[dict, dict]:
+    out_dir = tmp_path / "steps" / step_id / "outputs"
+    evidence_dir = tmp_path / "evidence"
+    out_dir.mkdir(parents=True)
+    evidence_dir.mkdir(exist_ok=True)
+    path = out_dir / f"{product}.csv"
+    pd.DataFrame({"term": ["exposure"], "odds_ratio": [odds_ratio]}).to_csv(
+        path, index=False
+    )
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    evidence_id = f"{product}_{digest[:8]}"
+    evidence_path = evidence_dir / f"{evidence_id}__{path.name}"
+    evidence_path.write_bytes(path.read_bytes())
+    evidence = {
+        "evidence_id": evidence_id,
+        "kind": "table",
+        "relative_path": str(evidence_path.relative_to(tmp_path)),
+        "sha256": digest,
+        "produced_by_step": step_id,
+    }
+    binding = {
+        "declared_kind": "table",
+        "product": product,
+        "produced_by_step": step_id,
+        "evidence_id": evidence_id,
+        "sha256": digest,
+    }
+    return evidence, binding
+
+
+def test_multi_parent_effect_figure_requires_source_coverage_for_every_parent(
+    tmp_path: Path,
+):
+    primary_evidence, primary_binding = _write_bound_effect_parent(
+        tmp_path,
+        step_id="03_primary",
+        product="primary_or",
+        odds_ratio=1.25,
+    )
+    robust_evidence, robust_binding = _write_bound_effect_parent(
+        tmp_path,
+        step_id="04_robust",
+        product="robust_or_estimates",
+        odds_ratio=1.20,
+    )
+    figure_out = tmp_path / "steps" / "05_plot" / "outputs"
+    figure_out.mkdir(parents=True)
+    pd.DataFrame({"term": ["exposure"], "odds_ratio": [1.25]}).to_csv(
+        figure_out / "primary_or_forest_source_data.csv", index=False
+    )
+    (figure_out / "primary_or_forest.png").write_bytes(b"png")
+    _write_two_panel_contract(
+        figure_out / "primary_or_forest.figure_contract.json",
+        figure_id="primary_or_forest",
+        source_data=["primary_or_forest_source_data.csv"],
+    )
+    records = [
+        {
+            "step_id": "03_primary",
+            "status": "ok",
+            "evidence_ids": [primary_evidence["evidence_id"]],
+        },
+        {
+            "step_id": "04_robust",
+            "status": "ok",
+            "evidence_ids": [robust_evidence["evidence_id"]],
+        },
+    ]
+    (tmp_path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "per_step_records": records,
+                "evidence": [primary_evidence, robust_evidence],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    findings = FigureSourceDataValidator().audit(
+        step=AnalysisStep(
+            step_id="05_plot",
+            intent="Render primary and robustness estimates.",
+            method="visualization",
+            inputs=["table:primary_or", "table:robust_or_estimates"],
+            expected_outputs=["figure:primary_or_forest"],
+        ),
+        out_dir=figure_out,
+        run_dir=tmp_path,
+        step_summary={
+            "output_files": {"figure:primary_or_forest": "primary_or_forest.png"}
+        },
+        completed_step_records=records,
+        resolved_input_bindings={
+            "table:primary_or": primary_binding,
+            "table:robust_or_estimates": robust_binding,
+        },
+    )
+
+    errors = [finding for finding in findings if finding.severity == "error"]
+    assert errors
+    assert any(
+        finding.detail.get("reason") == "incomplete_source_lineage_coverage"
+        and "robust_or_estimates.csv" in finding.detail.get("missing_bound_tables", [])
+        for finding in errors
+    )
+
+
+@pytest.mark.parametrize("same_step", [False, True])
+def test_truthful_tsv_parent_is_supported(tmp_path: Path, same_step: bool):
+    if same_step:
+        out_dir = tmp_path / "steps" / "04_plot" / "outputs"
+        out_dir.mkdir(parents=True)
+        pd.DataFrame({"group": ["low", "high"], "mortality_rate": [0.1, 0.2]}).to_csv(
+            out_dir / "outcome_by_group.tsv", sep="\t", index=False
+        )
+        pd.DataFrame({"group": ["low", "high"], "mortality_rate": [0.1, 0.2]}).to_csv(
+            out_dir / "outcome_distribution_source_data.csv", index=False
+        )
+        (out_dir / "outcome_distribution.png").write_bytes(b"png")
+        _write_two_panel_contract(
+            out_dir / "outcome_distribution.figure_contract.json",
+            figure_id="outcome_distribution",
+            source_data=["outcome_distribution_source_data.csv"],
+        )
+        findings = FigureSourceDataValidator().audit(
+            step=AnalysisStep(
+                step_id="04_plot",
+                intent="Summarize and render current outcomes.",
+                method="descriptive_analysis",
+                expected_outputs=[
+                    "table:outcome_by_group",
+                    "figure:outcome_distribution",
+                ],
+            ),
+            out_dir=out_dir,
+            run_dir=tmp_path,
+            step_summary={
+                "output_files": {
+                    "table:outcome_by_group": "outcome_by_group.tsv",
+                    "figure:outcome_distribution": "outcome_distribution.png",
+                }
+            },
+            completed_step_records=[],
+            resolved_input_bindings={},
+        )
+    else:
+        parent_out = tmp_path / "steps" / "03_parent" / "outputs"
+        figure_out = tmp_path / "steps" / "04_plot" / "outputs"
+        evidence_dir = tmp_path / "evidence"
+        parent_out.mkdir(parents=True)
+        figure_out.mkdir(parents=True)
+        evidence_dir.mkdir()
+        parent_path = parent_out / "outcome_by_group.tsv"
+        pd.DataFrame({"group": ["low", "high"], "mortality_rate": [0.1, 0.2]}).to_csv(
+            parent_path, sep="\t", index=False
+        )
+        digest = hashlib.sha256(parent_path.read_bytes()).hexdigest()
+        evidence_id = f"outcome_by_group_{digest[:8]}"
+        evidence_path = evidence_dir / f"{evidence_id}__{parent_path.name}"
+        evidence_path.write_bytes(parent_path.read_bytes())
+        pd.DataFrame({"group": ["low", "high"], "mortality_rate": [0.1, 0.2]}).to_csv(
+            figure_out / "outcome_distribution_source_data.csv", index=False
+        )
+        (figure_out / "outcome_distribution.png").write_bytes(b"png")
+        _write_two_panel_contract(
+            figure_out / "outcome_distribution.figure_contract.json",
+            figure_id="outcome_distribution",
+            source_data=["outcome_distribution_source_data.csv"],
+        )
+        records = [
+            {
+                "step_id": "03_parent",
+                "status": "ok",
+                "evidence_ids": [evidence_id],
+            }
+        ]
+        (tmp_path / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "per_step_records": records,
+                    "evidence": [
+                        {
+                            "evidence_id": evidence_id,
+                            "kind": "table",
+                            "relative_path": str(evidence_path.relative_to(tmp_path)),
+                            "sha256": digest,
+                            "produced_by_step": "03_parent",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        findings = FigureSourceDataValidator().audit(
+            step=AnalysisStep(
+                step_id="04_plot",
+                intent="Render the current outcome table.",
+                method="visualization",
+                inputs=["table:outcome_by_group"],
+                expected_outputs=["figure:outcome_distribution"],
+            ),
+            out_dir=figure_out,
+            run_dir=tmp_path,
+            step_summary={
+                "output_files": {
+                    "figure:outcome_distribution": "outcome_distribution.png"
+                }
+            },
+            completed_step_records=records,
+            resolved_input_bindings={
+                "table:outcome_by_group": {
+                    "declared_kind": "table",
+                    "product": "outcome_by_group",
+                    "produced_by_step": "03_parent",
+                    "evidence_id": evidence_id,
+                    "sha256": digest,
+                }
+            },
+        )
+
+    assert [finding for finding in findings if finding.severity == "error"] == []
