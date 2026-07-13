@@ -7,6 +7,7 @@ single 0/1 column (present=1 else 0), durations get a single value (absent=0),
 static/outcome concepts get a single column. Built from the full module-grouped
 MIIV export with duckdb (low memory over ~98M long-format rows).
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -18,10 +19,21 @@ EXPORT = Path("/Volumes/外置硬盘/easyicu_fullexport_miiv_20260610")
 OUT = Path("research_output/universe_discovery/universe_discovery.parquet")
 
 # concept -> handling
-MEASUREMENT = ["na", "lact", "urine24", "uo_24h", "map", "crea", "sofa2",
-               "hr", "resp", "spo2", "temp"]
-EVENT = ["rrt", "circ_failure", "sep3_sofa2", "heparin"]   # binary 0/1
-DURATION_ZERO = ["norepi_dur"]                              # absent -> 0
+MEASUREMENT = [
+    "na",
+    "lact",
+    "urine24",
+    "uo_24h",
+    "map",
+    "crea",
+    "sofa2",
+    "hr",
+    "resp",
+    "spo2",
+    "temp",
+]
+EVENT = ["rrt", "circ_failure", "sep3_sofa2", "heparin"]  # binary 0/1
+DURATION_ZERO = ["norepi_dur"]  # absent -> 0
 STATIC = ["age", "sex"]
 OUTCOME = ["death", "los_icu"]
 
@@ -31,6 +43,31 @@ def file_for(concept: str) -> Path:
         if concept in pq.read_schema(f).names:
             return f
     raise SystemExit(f"concept not found in export: {concept}")
+
+
+def normalize_measurement_companions(
+    con: duckdb.DuckDBPyConnection,
+    *,
+    table: str,
+    concepts: list[str],
+) -> None:
+    """Standardize structural no-record rows after left joins.
+
+    Aggregate subqueries only contain stays with source rows. A left join
+    therefore represents structural no-record status as a pair of NULLs;
+    normalize those provenance companions to count zero and flag zero, and
+    derive the flag from the count so the pair cannot disagree.
+    """
+
+    quoted_table = '"' + table.replace('"', '""') + '"'
+    for concept in concepts:
+        count_column = '"' + f"{concept}_n".replace('"', '""') + '"'
+        measured_column = '"' + f"{concept}_measured".replace('"', '""') + '"'
+        con.execute(
+            f"UPDATE {quoted_table} SET "
+            f"{measured_column} = CAST(COALESCE({count_column}, 0) > 0 AS INTEGER), "
+            f"{count_column} = COALESCE({count_column}, 0)"
+        )
 
 
 def main() -> None:
@@ -59,33 +96,35 @@ def main() -> None:
             f'avg("{c}") AS "{c}_mean", count("{c}") AS "{c}_n", '
             f'{first} AS "{c}_first", '
             f'CAST(count("{c}")>0 AS INTEGER) AS "{c}_measured" '
-            f'FROM read_parquet(\'{f.as_posix()}\') WHERE stay_id IS NOT NULL '
-            f'GROUP BY stay_id'
+            f"FROM read_parquet('{f.as_posix()}') WHERE stay_id IS NOT NULL "
+            f"GROUP BY stay_id"
         )
 
     for c in EVENT:
         f = file_for(c)
         join(
             f'SELECT stay_id, CAST(count("{c}")>0 AS INTEGER) AS "{c}" '
-            f'FROM read_parquet(\'{f.as_posix()}\') WHERE stay_id IS NOT NULL '
-            f'GROUP BY stay_id'
+            f"FROM read_parquet('{f.as_posix()}') WHERE stay_id IS NOT NULL "
+            f"GROUP BY stay_id"
         )
 
     for c in DURATION_ZERO:
         f = file_for(c)
         join(
             f'SELECT stay_id, max("{c}") AS "{c}" '
-            f'FROM read_parquet(\'{f.as_posix()}\') WHERE stay_id IS NOT NULL '
-            f'GROUP BY stay_id'
+            f"FROM read_parquet('{f.as_posix()}') WHERE stay_id IS NOT NULL "
+            f"GROUP BY stay_id"
         )
 
     for c in STATIC + OUTCOME:
         f = file_for(c)
         join(
             f'SELECT stay_id, any_value("{c}") AS "{c}" '
-            f'FROM read_parquet(\'{f.as_posix()}\') WHERE stay_id IS NOT NULL '
-            f'GROUP BY stay_id'
+            f"FROM read_parquet('{f.as_posix()}') WHERE stay_id IS NOT NULL "
+            f"GROUP BY stay_id"
         )
+
+    normalize_measurement_companions(con, table="u", concepts=MEASUREMENT)
 
     # event concepts + death are 0 when absent (no event), not missing
     for c in EVENT + ["death"]:
@@ -98,11 +137,20 @@ def main() -> None:
     ncol = len(con.execute("SELECT * FROM u LIMIT 0").description)
     print(f"universe built: {OUT}  n_stays={n}  ncols={ncol}")
     # quick non-missing report for the instance variables
-    for c in ["na_measured", "lact_measured", "urine24_measured", "rrt",
-              "circ_failure", "sep3_sofa2", "heparin", "norepi_dur", "death"]:
+    for c in [
+        "na_measured",
+        "lact_measured",
+        "urine24_measured",
+        "rrt",
+        "circ_failure",
+        "sep3_sofa2",
+        "heparin",
+        "norepi_dur",
+        "death",
+    ]:
         try:
             v = con.execute(f'SELECT avg(CAST("{c}" AS DOUBLE)) FROM u').fetchone()[0]
-            print(f"   {c:16s} mean={round(float(v),4)}")
+            print(f"   {c:16s} mean={round(float(v), 4)}")
         except Exception as e:  # noqa: BLE001
             print(f"   {c}: {e}")
     con.close()

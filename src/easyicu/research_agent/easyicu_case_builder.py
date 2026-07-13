@@ -118,7 +118,9 @@ def read_exported_concept(
     path = Path(index[resolved]["file"])
     available = set(index[resolved]["columns"])
     columns = [
-        c for c in [ID_COL, TIME_COL, resolved, *(extra_columns or [])] if c in available
+        c
+        for c in [ID_COL, TIME_COL, resolved, *(extra_columns or [])]
+        if c in available
     ]
     df = read_parquet(path, columns=columns)
     if resolved != concept:
@@ -139,7 +141,9 @@ def _first_nonnull(series: pd.Series):
     return s.iloc[0] if len(s) else pd.NA
 
 
-def _aggregate_lactate(df: pd.DataFrame, start_hour: float, end_hour: float) -> pd.DataFrame:
+def _aggregate_lactate(
+    df: pd.DataFrame, start_hour: float, end_hour: float
+) -> pd.DataFrame:
     work = _window(df, start_hour, end_hour)
     if work.empty:
         return pd.DataFrame(columns=[ID_COL])
@@ -158,7 +162,9 @@ def _aggregate_lactate(df: pd.DataFrame, start_hour: float, end_hour: float) -> 
     return out
 
 
-def _aggregate_map(df: pd.DataFrame, start_hour: float, end_hour: float) -> pd.DataFrame:
+def _aggregate_map(
+    df: pd.DataFrame, start_hour: float, end_hour: float
+) -> pd.DataFrame:
     work = _window(df, start_hour, end_hour)
     if work.empty:
         return pd.DataFrame(columns=[ID_COL])
@@ -176,7 +182,9 @@ def _aggregate_map(df: pd.DataFrame, start_hour: float, end_hour: float) -> pd.D
     return out
 
 
-def _aggregate_vaso(df: pd.DataFrame, start_hour: float, end_hour: float) -> pd.DataFrame:
+def _aggregate_vaso(
+    df: pd.DataFrame, start_hour: float, end_hour: float
+) -> pd.DataFrame:
     work = _window(df, start_hour, end_hour)
     if work.empty:
         return pd.DataFrame(columns=[ID_COL])
@@ -190,17 +198,21 @@ def _aggregate_vaso(df: pd.DataFrame, start_hour: float, end_hour: float) -> pd.
         "vaso_hours_24h": ("vaso_ind", "sum"),
     }
     if "norepi_equiv" in work.columns:
-        specs.update({
-            "norepi_equiv_max_24h": ("norepi_equiv", "max"),
-            "norepi_equiv_median_24h": ("norepi_equiv", "median"),
-        })
+        specs.update(
+            {
+                "norepi_equiv_max_24h": ("norepi_equiv", "max"),
+                "norepi_equiv_median_24h": ("norepi_equiv", "median"),
+            }
+        )
     out = grouped.agg(**specs).reset_index()
     out["vaso_any_24h"] = out["vaso_any_24h"].fillna(0).astype(int)
     out["vaso_hours_24h"] = out["vaso_hours_24h"].fillna(0)
     return out
 
 
-def _aggregate_circ(df: pd.DataFrame, start_hour: float, end_hour: float) -> pd.DataFrame:
+def _aggregate_circ(
+    df: pd.DataFrame, start_hour: float, end_hour: float
+) -> pd.DataFrame:
     work = _window(df, start_hour, end_hour)
     if work.empty:
         return pd.DataFrame(columns=[ID_COL])
@@ -217,7 +229,9 @@ def _aggregate_circ(df: pd.DataFrame, start_hour: float, end_hour: float) -> pd.
     return out
 
 
-def _aggregate_sep3(df: pd.DataFrame, start_hour: float, end_hour: float) -> pd.DataFrame:
+def _aggregate_sep3(
+    df: pd.DataFrame, start_hour: float, end_hour: float
+) -> pd.DataFrame:
     work = _window(df, start_hour, end_hour)
     if work.empty or "sep3_sofa2" not in work.columns:
         return pd.DataFrame(columns=[ID_COL])
@@ -240,6 +254,38 @@ def _merge_left(base: pd.DataFrame, frames: Iterable[pd.DataFrame]) -> pd.DataFr
     return out
 
 
+def _normalize_measurement_count_pair(
+    frame: pd.DataFrame,
+    *,
+    measured_column: str,
+    count_column: str,
+) -> None:
+    """Normalize structural no-record rows and derive status from count."""
+
+    raw_count = (
+        frame[count_column]
+        if count_column in frame.columns
+        else pd.Series(0, index=frame.index, dtype="int64")
+    )
+    if (
+        pd.api.types.is_bool_dtype(raw_count.dtype)
+        or pd.api.types.is_datetime64_any_dtype(raw_count.dtype)
+        or pd.api.types.is_timedelta64_dtype(raw_count.dtype)
+    ):
+        raise ValueError(f"{count_column} must be a numeric observation count")
+    count = pd.to_numeric(raw_count, errors="coerce")
+    invalid = raw_count.notna() & (
+        count.isna() | count.lt(0) | ~count.lt(float("inf")) | ~count.mod(1).eq(0)
+    )
+    if bool(invalid.any()):
+        raise ValueError(
+            f"{count_column} contains non-numeric, negative, non-finite, or "
+            "fractional values"
+        )
+    frame[count_column] = count.fillna(0).astype("int64")
+    frame[measured_column] = frame[count_column].gt(0).astype("int64")
+
+
 def build_lactate_map_vaso_cohort_from_export(
     export_dir: Union[str, Path],
     *,
@@ -260,15 +306,23 @@ def build_lactate_map_vaso_cohort_from_export(
     if missing:
         raise KeyError(f"EasyICU export is missing required concepts: {missing}")
 
-    demo = read_exported_concept(root, "age", extra_columns=["sex", "adm", "bmi", "weight"])
-    outcome = read_exported_concept(root, "death", extra_columns=["los_icu", "los_hosp"])
+    demo = read_exported_concept(
+        root, "age", extra_columns=["sex", "adm", "bmi", "weight"]
+    )
+    outcome = read_exported_concept(
+        root, "death", extra_columns=["los_icu", "los_hosp"]
+    )
     lact = read_exported_concept(root, "lact")
     vitals = read_exported_concept(root, "map")
     vaso = read_exported_concept(root, "vaso_ind", extra_columns=["norepi_equiv"])
 
-    base_cols = [c for c in [ID_COL, "age", "sex", "adm", "bmi", "weight"] if c in demo.columns]
+    base_cols = [
+        c for c in [ID_COL, "age", "sex", "adm", "bmi", "weight"] if c in demo.columns
+    ]
     base = demo[base_cols].drop_duplicates(subset=[ID_COL]).copy()
-    out_cols = [c for c in [ID_COL, "death", "los_icu", "los_hosp"] if c in outcome.columns]
+    out_cols = [
+        c for c in [ID_COL, "death", "los_icu", "los_hosp"] if c in outcome.columns
+    ]
     out = outcome[out_cols].drop_duplicates(subset=[ID_COL]).copy()
     if "death" in out.columns:
         out["death"] = out["death"].fillna(False).astype(bool).astype(int)
@@ -300,10 +354,11 @@ def build_lactate_map_vaso_cohort_from_export(
             cohort[col] = cohort[col].fillna(default)
         else:
             cohort[col] = default
-    if "lactate_measured_24h" not in cohort.columns:
-        cohort["lactate_measured_24h"] = 0
-    else:
-        cohort["lactate_measured_24h"] = cohort["lactate_measured_24h"].fillna(0).astype(int)
+    _normalize_measurement_count_pair(
+        cohort,
+        measured_column="lactate_measured_24h",
+        count_column="lactate_n_24h",
+    )
 
     if not include_unmeasured_lactate:
         cohort = cohort[cohort["lactate_measured_24h"] == 1].copy()
@@ -328,7 +383,11 @@ def build_lactate_map_vaso_cohort_from_export(
     manifest = {
         "builder": "easyicu.research_agent.easyicu_case_builder.build_lactate_map_vaso_cohort_from_export",
         "export_dir": str(root),
-        "window_hours": {"start": start_hour, "end": end_hour, "anchor": "icu_admission"},
+        "window_hours": {
+            "start": start_hour,
+            "end": end_hour,
+            "anchor": "icu_admission",
+        },
         "unit_of_analysis": "one row per ICU stay",
         "n_stays": int(len(cohort)),
         "n_deaths": int(cohort["death"].sum()),
