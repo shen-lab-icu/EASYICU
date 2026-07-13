@@ -319,6 +319,7 @@ def _audit_svg_text_layout(
                 "multi-panel labels, annotations or axis text need more spacing."
             ),
             detail={
+                "reason": "svg_text_overlap_spacing",
                 "path": str(path),
                 "count": len(blocking_overlaps),
                 "examples": [

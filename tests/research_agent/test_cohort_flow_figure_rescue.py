@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -11,7 +12,11 @@ from easyicu.research_agent.audits.validators import (
     FigureContractQualityValidator,
     FigureSourceDataValidator,
 )
+from easyicu.research_agent.declared_product_contract import (
+    bind_declared_figure_products,
+)
 from easyicu.research_agent.pipeline import (
+    _render_authorized_sealed_publication_bundle,
     _render_cohort_flow_publication_bundle_from_prior_outputs as cohort_flow_rescue,
     _render_publication_bundle_from_prior_outputs_for_step as routed_rescue,
 )
@@ -112,24 +117,33 @@ def test_cohort_flow_rescue_writes_publication_bundle_and_traceable_sources(
     attrition_source = out / "publication_figure_attrition_source_data.csv"
     assert flow_source.exists()
     assert attrition_source.exists()
-    assert FigureSourceDataValidator._compare_source_to_upstream(
-        source_df=pd.read_csv(flow_source),
-        source_path=flow_source,
-        upstream_path=parent / "cohort_flow.csv",
-    )["ok"] is True
-    assert FigureSourceDataValidator._compare_source_to_upstream(
-        source_df=pd.read_csv(attrition_source),
-        source_path=attrition_source,
-        upstream_path=parent / "attrition.csv",
-    )["ok"] is True
+    assert (
+        FigureSourceDataValidator._compare_source_to_upstream(
+            source_df=pd.read_csv(flow_source),
+            source_path=flow_source,
+            upstream_path=parent / "cohort_flow.csv",
+        )["ok"]
+        is True
+    )
+    assert (
+        FigureSourceDataValidator._compare_source_to_upstream(
+            source_df=pd.read_csv(attrition_source),
+            source_path=attrition_source,
+            upstream_path=parent / "attrition.csv",
+        )["ok"]
+        is True
+    )
 
     contract_path = out / "publication_figure.figure_contract.json"
     contract = json.loads(contract_path.read_text(encoding="utf-8"))
     assert [panel["panel_id"] for panel in contract["panels"]] == ["A", "B"]
-    assert FigureContractQualityValidator().audit_contract_file(
-        contract_path,
-        manuscript_facing=True,
-    ) == []
+    assert (
+        FigureContractQualityValidator().audit_contract_file(
+            contract_path,
+            manuscript_facing=True,
+        )
+        == []
+    )
 
     summary = json.loads((out / "step_summary.json").read_text(encoding="utf-8"))
     assert summary["source_step_id"] == "01_primary_cohort_flow"
@@ -144,18 +158,72 @@ def test_cohort_flow_rescue_writes_publication_bundle_and_traceable_sources(
         "publication_figure.tiff",
     }
     assert summary["figure_path"] == "publication_figure.png"
+    assert summary["figure_contract"] == "publication_figure.figure_contract.json"
     assert summary["n_flow_stages"] == 4
     assert summary["n_exclusion_categories"] == 3
 
-    assert FigureSourceDataValidator().audit(
-        step=AnalysisStep(
-            step_id="01_primary_cohort_flow_figure",
-            intent="Render the cohort flow declared by step '01_primary_cohort_flow'.",
-        ),
+    assert (
+        FigureSourceDataValidator().audit(
+            step=AnalysisStep(
+                step_id="01_primary_cohort_flow_figure",
+                intent="Render the cohort flow declared by step '01_primary_cohort_flow'.",
+            ),
+            out_dir=out,
+            run_dir=tmp_path,
+            step_summary=summary,
+        )
+        == []
+    )
+    assert bind_declared_figure_products(
         out_dir=out,
-        run_dir=tmp_path,
-        step_summary=summary,
-    ) == []
+        declared_products=["figure:cohort_flow"],
+        authorized_product_slots={"figure:cohort_flow": "cohort_flow"},
+        renderer_repair_id=("cohort_flow_publication_bundle_from_parent_outputs_v1"),
+        renderer_implementation_sha256="c" * 64,
+        renderer_parent_digests={
+            "step_summary.json": "1" * 64,
+            "cohort_flow.csv": "2" * 64,
+            "attrition.csv": "3" * 64,
+        },
+    )
+
+
+def test_authorized_cohort_flow_renderer_rejects_parent_mutation(tmp_path: Path):
+    parent = _write_cohort_flow_parent(tmp_path)
+    sealed_paths = [
+        parent / "step_summary.json",
+        parent / "cohort_flow.csv",
+        parent / "attrition.csv",
+    ]
+    seal = {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sealed_paths
+    }
+    repair_id = "cohort_flow_publication_bundle_from_parent_outputs_v1"
+    figure_step_id = "01_primary_cohort_flow_figure"
+
+    assert (
+        _render_authorized_sealed_publication_bundle(
+            repair_id=repair_id,
+            run_dir=tmp_path,
+            current_step_id=figure_step_id,
+            out_dir=tmp_path / "steps" / figure_step_id / "sealed_outputs",
+            parent_artifact_digests=seal,
+        )
+        == repair_id
+    )
+
+    (parent / "attrition.csv").write_text("status,n\nexcluded,999\n", encoding="utf-8")
+    assert (
+        _render_authorized_sealed_publication_bundle(
+            repair_id=repair_id,
+            run_dir=tmp_path,
+            current_step_id=figure_step_id,
+            out_dir=tmp_path / "steps" / figure_step_id / "mutated_outputs",
+            parent_artifact_digests=seal,
+        )
+        is None
+    )
 
 
 def test_cohort_route_falls_back_to_flow_but_preserves_overlap_priority(
@@ -195,9 +263,12 @@ def test_cohort_route_falls_back_to_flow_but_preserves_overlap_priority(
         flow_renderer,
     )
 
-    assert routed_rescue(
-        run_dir=tmp_path,
-        current_step_id="01_primary_cohort_flow_figure",
-        out_dir=out,
-    ) == "overlap_renderer"
+    assert (
+        routed_rescue(
+            run_dir=tmp_path,
+            current_step_id="01_primary_cohort_flow_figure",
+            out_dir=out,
+        )
+        == "overlap_renderer"
+    )
     assert calls == ["overlap"]

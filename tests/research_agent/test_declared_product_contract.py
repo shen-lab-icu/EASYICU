@@ -1,12 +1,39 @@
 from __future__ import annotations
 
+import hashlib
+import json
+
 import pytest
 
 from easyicu.research_agent.declared_product_contract import (
+    authorize_declared_figure_product_slots,
+    bind_declared_figure_products,
     declared_product_contract_findings,
+    read_digest_bound_artifact_snapshot,
 )
 from easyicu.research_agent.plan_utils import _step_contract_findings
 from easyicu.research_agent.schema import AnalysisStep
+
+
+SEALED_DISTRIBUTION_REPAIR = (
+    "distribution_availability_publication_bundle_from_parent_outputs_v1"
+)
+SEALED_IMPLEMENTATION_DIGEST = "a" * 64
+SEALED_PARENT_DIGESTS = {
+    "step_summary.json": "1" * 64,
+    "planned_distribution.csv": "2" * 64,
+    "planned_measurement_audit.csv": "3" * 64,
+}
+
+
+def _authorized_slots(products: list[str]) -> dict[str, str]:
+    slots: dict[str, str] = {}
+    for product in products:
+        if product.endswith("_distribution"):
+            slots[product] = "distribution"
+        elif product.endswith("_availability"):
+            slots[product] = "availability"
+    return slots
 
 
 def _step(*, method: str = "descriptive_summary", outputs: list[str]) -> AnalysisStep:
@@ -162,9 +189,7 @@ def test_non_effect_method_cannot_declare_or_register_effect_products():
     declared = declared_product_contract_findings(
         step=_step(outputs=["table:association_estimates"]),
         step_summary={
-            "output_files": {
-                "table:association_estimates": "association_estimates.csv"
-            }
+            "output_files": {"table:association_estimates": "association_estimates.csv"}
         },
         effect_method_authorized=False,
     )
@@ -213,6 +238,275 @@ def test_plan_utils_integration_fails_closed():
         step_summary={"status": "ok", "output_files": []},
     )
     assert "declared_product_missing" in _kinds(findings)
+
+
+def test_planner_figure_roles_bind_to_one_contracted_multi_panel_bundle(tmp_path):
+    (tmp_path / "planned_bundle.png").write_bytes(b"verified-renderer-output")
+    (tmp_path / "planned_bundle.figure_contract.json").write_text(
+        json.dumps(
+            {
+                "panels": [
+                    {
+                        "panel_id": "A",
+                        "role": "descriptive_result",
+                        "metadata": {"planner_product_slots": ["distribution"]},
+                    },
+                    {
+                        "panel_id": "B",
+                        "role": "data_quality",
+                        "metadata": {"planner_product_slots": ["availability"]},
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "step_summary.json").write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "rendering_only": True,
+                "figure_path": "planned_bundle.png",
+                "figure_contract": "planned_bundle.figure_contract.json",
+                "output_files": {"figure:publication_figure": "planned_bundle.png"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    products = ["figure:planned_distribution", "figure:planned_availability"]
+
+    assert bind_declared_figure_products(
+        out_dir=tmp_path,
+        declared_products=products,
+        authorized_product_slots=_authorized_slots(products),
+        renderer_repair_id=SEALED_DISTRIBUTION_REPAIR,
+        renderer_implementation_sha256=SEALED_IMPLEMENTATION_DIGEST,
+        renderer_parent_digests=SEALED_PARENT_DIGESTS,
+    )
+    summary = json.loads((tmp_path / "step_summary.json").read_text("utf-8"))
+    assert summary["planner_bound_figure_products"] == products
+    assert summary["output_files"]["figure:planned_distribution"] == (
+        "planned_bundle.png"
+    )
+    assert summary["output_files"]["figure:planned_availability"] == (
+        "planned_bundle.png"
+    )
+    assert (
+        declared_product_contract_findings(
+            step=_step(outputs=products),
+            step_summary=summary,
+            effect_method_authorized=False,
+            out_dir=tmp_path,
+        )
+        == []
+    )
+
+
+def test_planner_roles_do_not_overclaim_single_panel_bundle(tmp_path):
+    (tmp_path / "planned_bundle.png").write_bytes(b"verified-renderer-output")
+    (tmp_path / "planned_bundle.figure_contract.json").write_text(
+        json.dumps(
+            {
+                "panels": [
+                    {
+                        "panel_id": "A",
+                        "metadata": {"planner_product_slots": ["distribution"]},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    original = {
+        "rendering_only": True,
+        "figure_path": "planned_bundle.png",
+        "figure_contract": "planned_bundle.figure_contract.json",
+    }
+    (tmp_path / "step_summary.json").write_text(json.dumps(original), encoding="utf-8")
+
+    products = [
+        "figure:first_distribution",
+        "figure:first_availability",
+    ]
+    with pytest.raises(ValueError, match="not anchored"):
+        bind_declared_figure_products(
+            out_dir=tmp_path,
+            declared_products=products,
+            authorized_product_slots=_authorized_slots(products),
+            renderer_repair_id=SEALED_DISTRIBUTION_REPAIR,
+            renderer_implementation_sha256=SEALED_IMPLEMENTATION_DIGEST,
+            renderer_parent_digests=SEALED_PARENT_DIGESTS,
+        )
+    assert json.loads((tmp_path / "step_summary.json").read_text("utf-8")) == original
+
+
+@pytest.mark.parametrize("figure_path", ["../outside.png", "/tmp/outside.png"])
+def test_planner_figure_binding_rejects_path_escape(tmp_path, figure_path):
+    (tmp_path / "planned_bundle.figure_contract.json").write_text(
+        json.dumps({"panels": [{"panel_id": "A"}]}),
+        encoding="utf-8",
+    )
+    original = {
+        "rendering_only": True,
+        "figure_path": figure_path,
+        "figure_contract": "planned_bundle.figure_contract.json",
+    }
+    (tmp_path / "step_summary.json").write_text(json.dumps(original), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="outside STEP_OUT_DIR"):
+        bind_declared_figure_products(
+            out_dir=tmp_path,
+            declared_products=["figure:planned_distribution"],
+            authorized_product_slots={"figure:planned_distribution": "distribution"},
+            renderer_repair_id=SEALED_DISTRIBUTION_REPAIR,
+            renderer_implementation_sha256=SEALED_IMPLEMENTATION_DIGEST,
+            renderer_parent_digests=SEALED_PARENT_DIGESTS,
+        )
+    assert json.loads((tmp_path / "step_summary.json").read_text("utf-8")) == original
+
+
+def test_planner_figure_binding_rejects_output_symlink(tmp_path):
+    outside = tmp_path.parent / f"{tmp_path.name}_outside.png"
+    outside.write_bytes(b"not-owned-by-step")
+    (tmp_path / "planned_bundle.png").symlink_to(outside)
+    (tmp_path / "planned_bundle.figure_contract.json").write_text(
+        json.dumps({"panels": [{"panel_id": "A"}]}),
+        encoding="utf-8",
+    )
+    original = {
+        "rendering_only": True,
+        "figure_path": "planned_bundle.png",
+        "figure_contract": "planned_bundle.figure_contract.json",
+    }
+    (tmp_path / "step_summary.json").write_text(json.dumps(original), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="outside STEP_OUT_DIR"):
+        bind_declared_figure_products(
+            out_dir=tmp_path,
+            declared_products=["figure:planned_distribution"],
+            authorized_product_slots={"figure:planned_distribution": "distribution"},
+            renderer_repair_id=SEALED_DISTRIBUTION_REPAIR,
+            renderer_implementation_sha256=SEALED_IMPLEMENTATION_DIGEST,
+            renderer_parent_digests=SEALED_PARENT_DIGESTS,
+        )
+    assert json.loads((tmp_path / "step_summary.json").read_text("utf-8")) == original
+
+
+def test_distribution_bundle_cannot_launder_unrelated_figure_roles(tmp_path):
+    (tmp_path / "planned_bundle.png").write_bytes(b"verified-renderer-output")
+    (tmp_path / "planned_bundle.figure_contract.json").write_text(
+        json.dumps(
+            {
+                "panels": [
+                    {
+                        "panel_id": "A",
+                        "metadata": {"planner_product_slots": ["distribution"]},
+                    },
+                    {
+                        "panel_id": "B",
+                        "metadata": {"planner_product_slots": ["availability"]},
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    original = {
+        "rendering_only": True,
+        "figure_path": "planned_bundle.png",
+        "figure_contract": "planned_bundle.figure_contract.json",
+    }
+    (tmp_path / "step_summary.json").write_text(json.dumps(original), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="host product-slot authorization"):
+        bind_declared_figure_products(
+            out_dir=tmp_path,
+            declared_products=[
+                "figure:kaplan_meier_curve",
+                "figure:adjusted_forest_plot",
+            ],
+            authorized_product_slots={},
+            renderer_repair_id=SEALED_DISTRIBUTION_REPAIR,
+            renderer_implementation_sha256=SEALED_IMPLEMENTATION_DIGEST,
+            renderer_parent_digests=SEALED_PARENT_DIGESTS,
+        )
+    assert json.loads((tmp_path / "step_summary.json").read_text("utf-8")) == original
+
+
+@pytest.mark.parametrize(
+    "laundered_product",
+    [
+        "figure:kaplan_meier_curve_distribution",
+        "figure:kaplan_meier_curve_by_stage_distribution",
+        "figure:roc_curve_distribution",
+        "figure:roc_curve_smoothed_distribution",
+        "figure:adjusted_forest_availability",
+        "figure:adjusted_forest_plot_by_subgroup_availability",
+    ],
+)
+def test_host_slot_authorization_rejects_nested_display_role_even_when_planner_anchored(
+    laundered_product,
+):
+    with pytest.raises(ValueError, match="nests an incompatible display archetype"):
+        authorize_declared_figure_product_slots(
+            declared_products=[laundered_product],
+            renderer_repair_id=SEALED_DISTRIBUTION_REPAIR,
+            planner_parent_anchors=[
+                laundered_product.replace("figure:", "table:"),
+            ],
+        )
+
+
+def test_host_slot_authorization_requires_planner_parent_subject():
+    with pytest.raises(ValueError, match="not anchored to a verified"):
+        authorize_declared_figure_product_slots(
+            declared_products=["figure:unplanned_distribution"],
+            renderer_repair_id=SEALED_DISTRIBUTION_REPAIR,
+            planner_parent_anchors=["table:planned_distribution"],
+        )
+
+
+def test_host_slot_authorization_accepts_parent_anchored_subject():
+    assert authorize_declared_figure_product_slots(
+        declared_products=[
+            "figure:planned_distribution",
+            "figure:planned_availability",
+        ],
+        renderer_repair_id=SEALED_DISTRIBUTION_REPAIR,
+        planner_parent_anchors=[
+            "table:planned_distribution",
+            "table:planned_measurement_audit",
+        ],
+    ) == {
+        "figure:planned_distribution": "distribution",
+        "figure:planned_availability": "availability",
+    }
+
+
+def test_digest_bound_snapshot_parses_the_verified_bytes_after_path_mutation(tmp_path):
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    summary = parent / "step_summary.json"
+    table = parent / "planned_distribution.csv"
+    summary.write_bytes(b'{"method":"descriptive"}')
+    table.write_bytes(b"category,n\nA,2\n")
+    seal = {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in (summary, table)
+    }
+
+    snapshot = read_digest_bound_artifact_snapshot(
+        parent_out=parent,
+        artifact_digests=seal,
+    )
+    table.write_bytes(b"category,n\nA,999\n")
+
+    assert snapshot["planned_distribution.csv"] == b"category,n\nA,2\n"
+    with pytest.raises(ValueError, match="authorized digest"):
+        read_digest_bound_artifact_snapshot(
+            parent_out=parent,
+            artifact_digests=seal,
+        )
 
 
 @pytest.mark.parametrize("reported_status", ["fail_closed", "failed_closed"])

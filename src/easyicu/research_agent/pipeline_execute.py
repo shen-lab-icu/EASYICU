@@ -27,6 +27,7 @@ from __future__ import annotations
 import ast
 import csv
 import hashlib
+import importlib
 import json
 import logging
 import os
@@ -100,7 +101,11 @@ from .deterministic_robustness import (
     replay_locked_memberships,
     robustness_sensitivity_preflight_code,
 )
-from .declared_product_contract import typed_product as _canonical_typed_product
+from .declared_product_contract import (
+    authorize_declared_figure_product_slots,
+    read_digest_bound_artifact_snapshot,
+    typed_product as _canonical_typed_product,
+)
 from .estimators import fit_robustness_rows_from_records
 from .evidence import sha256_of_bytes, sha256_of_file
 from .llm import MockLLMClient
@@ -108,8 +113,10 @@ from .ordered_stratified_contract import ordered_stratified_numeric_findings
 from .pipeline import (
     _build_probe_summary,
     _clear_output_dir,
-    _distribution_availability_parent_digest_seal,
     _distribution_availability_figure_step_matches_parent,
+    _resolve_upstream_manifest_step,
+    _sealed_renderer_figure_step_matches_parent,
+    _sealed_renderer_parent_digest_seal,
     deterministic_figure_family_supported_for_upstream,
     deterministic_figure_repair_id_for_upstream,
     _has_figure_exports,
@@ -177,6 +184,8 @@ from .repair_registry import (
     RepairLedger,
     RepairObservedState,
     automatic_repair_allowed,
+    is_sealed_renderer_repair,
+    repair_metadata_for,
 )
 from .runtime_artifacts import (
     current_step_records,
@@ -241,6 +250,8 @@ _TYPED_INPUT_KINDS = frozenset(
         "table",
     }
 )
+
+
 def _normalise_typed_product_name(value: Any) -> str:
     parsed = _canonical_typed_product(f"artifact:{value}")
     return parsed[1] if parsed is not None else ""
@@ -461,9 +472,7 @@ def _resolve_typed_input_evidence(
         record = candidates[0]
         return (
             EvidenceRef(
-                evidence_id=str(
-                    _evidence_record_field(record, "evidence_id") or ""
-                ),
+                evidence_id=str(_evidence_record_field(record, "evidence_id") or ""),
                 kind=_evidence_record_field(record, "kind"),
                 description=_evidence_record_field(record, "description"),
                 relative_path=_evidence_record_field(record, "relative_path"),
@@ -688,9 +697,10 @@ def _python_semantic_sha256(code: str) -> Optional[str]:
 def _python_repair_is_materially_changed(before: str, after: str) -> bool:
     """Reject exact and AST-equivalent repair responses."""
 
-    if hashlib.sha256(before.encode("utf-8")).digest() == hashlib.sha256(
-        after.encode("utf-8")
-    ).digest():
+    if (
+        hashlib.sha256(before.encode("utf-8")).digest()
+        == hashlib.sha256(after.encode("utf-8")).digest()
+    ):
         return False
     before_semantic = _python_semantic_sha256(before)
     after_semantic = _python_semantic_sha256(after)
@@ -742,7 +752,9 @@ def _quarantined_errors_superseded_by_current_policy(
             current.validator == prior.validator
             and current.message == prior.message
             and current.evidence_ids == prior.evidence_ids
-            and all(current_detail.get(key) == value for key, value in prior_detail.items())
+            and all(
+                current_detail.get(key) == value for key, value in prior_detail.items()
+            )
         )
         if (
             not same_finding
@@ -803,7 +815,11 @@ def _repair_publication_figure_in_staging(
                 exc,
             )
             return None
-        if repair_id is None or not _has_figure_exports(staging_dir):
+        if (
+            repair_id is None
+            or is_sealed_renderer_repair(repair_id)
+            or not _has_figure_exports(staging_dir)
+        ):
             return None
         # Rendering into an isolated temporary directory is non-authoritative.
         # Ask the central repair policy before installing any generated bundle
@@ -906,9 +922,7 @@ def _preserve_locked_robustness_specs_after_replan(
     revised_specs = list(revised_plan.robustness_specs or [])
     if robustness_specs_sha(revised_specs) == robustness_specs_sha(locked_specs):
         return revised_plan, None
-    preserved = revised_plan.model_copy(
-        update={"robustness_specs": list(locked_specs)}
-    )
+    preserved = revised_plan.model_copy(update={"robustness_specs": list(locked_specs)})
     return preserved, ValidationFinding(
         validator="replanner",
         severity="warning",
@@ -975,6 +989,7 @@ def _step_has_figure_only_output_contract(step: AnalysisStep) -> bool:
         for output in (step.expected_outputs or [])
         if str(output or "").strip()
     ]
+
     def _is_typed_figure_product(output: str) -> bool:
         token = str(output or "").strip().lower()
         kind, separator, _product = token.partition(":")
@@ -1001,10 +1016,9 @@ def _read_locked_robustness_spec_dicts(run_dir: Path) -> List[Dict[str, Any]]:
 
 
 def _is_cohort_definition_sensitivity_result_step(step: AnalysisStep) -> bool:
-    return (
-        _method_head(str(step.method or "")) == "cohort_definition_sensitivity"
-        and not _step_expects_figure(step)
-    )
+    return _method_head(
+        str(step.method or "")
+    ) == "cohort_definition_sensitivity" and not _step_expects_figure(step)
 
 
 def _coder_context_with_locked_robustness_specs(
@@ -1031,10 +1045,7 @@ def _coder_context_with_locked_robustness_specs(
         "missing_override",
         "outcome_override",
     )
-    locked_contract = [
-        {field: spec.get(field) for field in fields}
-        for spec in specs
-    ]
+    locked_contract = [{field: spec.get(field) for field in fields} for spec in specs]
     attachment = (
         "LOCKED ROBUSTNESS SPECIFICATIONS (binding plan-time state):\n"
         + json.dumps(locked_contract, ensure_ascii=False, separators=(",", ":"))
@@ -1043,8 +1054,7 @@ def _coder_context_with_locked_robustness_specs(
         "rows outside the locked analysis cohort must be materialised from "
         "os.environ['EASYICU_UNIVERSE_PARQUET']; COHORT_PARQUET is the locked "
         "analysis cohort."
-        "\n\n"
-        + ROBUSTNESS_EXECUTION_CONTRACT_GUIDANCE
+        "\n\n" + ROBUSTNESS_EXECUTION_CONTRACT_GUIDANCE
     )
     prior_notes = str(context.notes or "").strip()
     enriched_notes = f"{prior_notes}\n\n{attachment}" if prior_notes else attachment
@@ -1122,7 +1132,9 @@ def _declared_sensitivity_csv_paths(
                 denominator_paths.append(path)
     for values in (
         output_files if isinstance(output_files, list) else [],
-        step_summary.get("outputs") if isinstance(step_summary.get("outputs"), list) else [],
+        step_summary.get("outputs")
+        if isinstance(step_summary.get("outputs"), list)
+        else [],
     ):
         for value in values:
             path = _local_csv(value)
@@ -1155,9 +1167,10 @@ def _sensitivity_csv_rows(paths: Sequence[Path]) -> List[Dict[str, str]]:
                     # typed table role here; values are still checked against
                     # the digest-bound lock and deterministic membership
                     # replay below, so this cannot authorize an invented id.
-                    if not str(row.get("spec_id") or "").strip() and str(
-                        row.get("definition_id") or ""
-                    ).strip():
+                    if (
+                        not str(row.get("spec_id") or "").strip()
+                        and str(row.get("definition_id") or "").strip()
+                    ):
                         row["spec_id"] = row["definition_id"]
                     rows.append(row)
         except (OSError, csv.Error):
@@ -1225,9 +1238,7 @@ def _cohort_definition_sensitivity_contract_findings(
         out_dir=out_dir,
     )
     reported_rows.extend(
-        _sensitivity_csv_rows(
-            list(dict.fromkeys([*spec_paths, *denominator_paths]))
-        )
+        _sensitivity_csv_rows(list(dict.fromkeys([*spec_paths, *denominator_paths])))
     )
 
     rows_by_id: Dict[str, List[Dict[str, Any]]] = {}
@@ -1437,7 +1448,9 @@ def _cohort_definition_sensitivity_contract_findings(
                         **step_detail,
                         "universe_path": str(universe_path),
                         "cohort_path": str(cohort_path),
-                        "cohort_spec_ids": sorted(spec.spec_id for spec in cohort_specs),
+                        "cohort_spec_ids": sorted(
+                            spec.spec_id for spec in cohort_specs
+                        ),
                         "issues": membership_issues,
                     },
                 )
@@ -1526,9 +1539,7 @@ def _is_terminal_publication_figure_repair_step(step: Any) -> bool:
     }
     if method not in rendering_methods or not expected_outputs:
         return False
-    return all(
-        _output_declares_figure(str(output)) for output in expected_outputs
-    )
+    return all(_output_declares_figure(str(output)) for output in expected_outputs)
 
 
 def _publication_bundle_has_primary_result_roles(outputs_dir: Path) -> bool:
@@ -1648,9 +1659,7 @@ def _detached_figure_repair_binding(
         if target_step_id == str(step.step_id or ""):
             continue
         target_record = latest.get(target_step_id)
-        target_status = str(
-            (target_record or {}).get("status") or ""
-        ).strip().lower()
+        target_status = str((target_record or {}).get("status") or "").strip().lower()
         if target_record is None or target_status not in {
             "execution_failed",
             "contract_failed",
@@ -1663,9 +1672,10 @@ def _detached_figure_repair_binding(
         if source_step_id is None:
             continue
         source_record = latest.get(source_step_id)
-        if source_record is None or str(
-            source_record.get("status") or ""
-        ).strip().lower() != "ok":
+        if (
+            source_record is None
+            or str(source_record.get("status") or "").strip().lower() != "ok"
+        ):
             continue
         if declared_step_inputs and not (
             {target_step_id, source_step_id} & declared_step_inputs
@@ -1684,17 +1694,146 @@ def _detached_figure_repair_binding(
     return candidates[0]
 
 
+def _should_attempt_detached_figure_binding(
+    *, out_dir: Path, sealed_renderer_authorized_code_sha256: Optional[str]
+) -> bool:
+    """Detached rescue lineage must never rewrite an authorized sealed summary."""
+
+    return sealed_renderer_authorized_code_sha256 is None and _has_figure_exports(
+        out_dir
+    )
+
+
 if TYPE_CHECKING:
     from .pipeline import ResearchAgentPipeline
 
 
+def _sealed_renderer_source_digests(repair_id: str) -> Dict[str, str]:
+    """Hash every repository module loaded by an exact sealed renderer."""
+
+    if not is_sealed_renderer_repair(repair_id):
+        raise ValueError(f"{repair_id!r} is not an exact sealed renderer")
+    metadata = repair_metadata_for(repair_id)
+    if not metadata.implementation_modules:
+        raise ValueError(f"{repair_id!r} declares no implementation modules")
+    digests: Dict[str, str] = {}
+    for module_name in metadata.implementation_modules:
+        module = importlib.import_module(module_name)
+        module_file = getattr(module, "__file__", None)
+        if not module_file:
+            raise ValueError(f"Cannot locate implementation module {module_name!r}")
+        digests[module_name] = sha256_of_file(Path(module_file))
+    return dict(sorted(digests.items()))
+
+
+def _sealed_renderer_implementation_digest(source_digests: Mapping[str, str]) -> str:
+    """Return one stable authority digest for a renderer's source modules."""
+
+    payload = json.dumps(
+        dict(sorted(source_digests.items())),
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return sha256_of_bytes(payload)
+
+
+def _sealed_parent_planner_anchors(
+    *,
+    run_dir: Path,
+    figure_step_id: str,
+) -> tuple[str, ...]:
+    """Return only products and inputs from the host-recorded parent request.
+
+    A physical filename or coder summary field can prove bytes and schema, but
+    it cannot define the scientific subject that a Planner figure role claims.
+    """
+
+    request_step = _resolve_upstream_manifest_step(run_dir, figure_step_id)
+    if not isinstance(request_step, Mapping):
+        return ()
+    anchors: list[str] = []
+    for raw in request_step.get("expected_outputs") or []:
+        parsed = _canonical_typed_product(raw)
+        if parsed is not None:
+            anchors.append(f"{parsed[0]}:{parsed[1]}")
+    anchors.extend(
+        str(raw).strip()
+        for raw in (request_step.get("inputs") or [])
+        if str(raw).strip()
+    )
+    return tuple(dict.fromkeys(anchors))
+
+
+def _sealed_typed_figure_products(
+    expected_outputs: Sequence[str],
+) -> Optional[List[str]]:
+    """Return unique typed figure roles, never legacy bare export filenames."""
+
+    products = [
+        str(product).strip() for product in expected_outputs if str(product).strip()
+    ]
+    typed_roles = [_canonical_typed_product(product) for product in products]
+    if (
+        not typed_roles
+        or any(role is None or role[0] != "figure" for role in typed_roles)
+        or len(typed_roles) != len(set(typed_roles))
+    ):
+        return None
+    return products
+
+
+_SEALED_AUTHORITY_SUMMARY_MARKERS = (
+    "sealed_renderer_repair",
+    "sealed_renderer_implementation_sha256",
+    "sealed_renderer_parent_digests",
+    "planner_bound_figure_products",
+    "planner_product_slot_bindings",
+    "planner_product_binding",
+)
+
+
+def _unowned_sealed_authority_markers(
+    step_summary: Mapping[str, Any],
+    *,
+    authorized_code_sha256: Optional[str],
+) -> List[str]:
+    """Reject sealed provenance unless the host authorized it pre-execution."""
+
+    if authorized_code_sha256 is not None:
+        return []
+    return [
+        marker for marker in _SEALED_AUTHORITY_SUMMARY_MARKERS if marker in step_summary
+    ]
+
+
+_COSMETIC_VISUAL_REASON = "svg_text_overlap_spacing"
+_LEGACY_COSMETIC_VISUAL_MESSAGE = re.compile(
+    r"^svg figure '[^']+' has overlapping text elements; "
+    r"multi-panel labels, annotations or axis text need more spacing\.?$",
+    re.IGNORECASE,
+)
+_HARD_VISUAL_MESSAGE = re.compile(
+    r"\b(?:blank|clip(?:ped|ping)?|crop(?:ped|ping)?|missing|absent|"
+    r"unreadable|overflow|truncat(?:ed|ion)|numeric|mismatch|disagree)\b",
+    re.IGNORECASE,
+)
+
+
 def _is_cosmetic_visual_finding(finding: ValidationFinding) -> bool:
-    """Return true only for deterministic layout errors safe to demote."""
+    """Return true only for the closed SVG spacing reason safe to demote."""
 
     if finding.severity != "error" or finding.validator != "visual_qa":
         return False
-    message = (finding.message or "").lower()
-    return "overlapping text elements" in message and "spacing" in message
+    message = str(finding.message or "").strip()
+    if _HARD_VISUAL_MESSAGE.search(message):
+        return False
+    detail = finding.detail if isinstance(finding.detail, Mapping) else {}
+    if str(detail.get("reason") or "").strip() == _COSMETIC_VISUAL_REASON:
+        return True
+    # Preserve readiness for historical deterministic findings that predate
+    # the reason enum, but require the complete canonical message rather than
+    # two permissive substrings.
+    return _LEGACY_COSMETIC_VISUAL_MESSAGE.fullmatch(message) is not None
 
 
 def _demote_cosmetic_visual_findings(
@@ -2067,14 +2206,14 @@ _ORDINAL_EXPLICIT_METHODS = frozenset(
 # specific score name). Present in the question, intent, or declared outputs.
 _ORDINAL_OUTPUT_PRODUCTS = frozenset(
     {
-    "dose_response",
-    "per_stage",
-    "per_stage_odds",
-    "per_stage_odds_ratio",
-    "per_stage_odds_ratios",
-    "trend_or",
-    "ordinal_trend",
-    "ordinal_trend_model",
+        "dose_response",
+        "per_stage",
+        "per_stage_odds",
+        "per_stage_odds_ratio",
+        "per_stage_odds_ratios",
+        "trend_or",
+        "ordinal_trend",
+        "ordinal_trend_model",
     }
 )
 
@@ -2193,9 +2332,9 @@ def _closed_auxiliary_output_products(
 def _method_head(method: str) -> str:
     """Return the scientific owner of a ``<head>_with_<rider>`` method."""
 
-    normalized = re.sub(
-        r"[^a-z0-9]+", "_", str(method or "").strip().lower()
-    ).strip("_")
+    normalized = re.sub(r"[^a-z0-9]+", "_", str(method or "").strip().lower()).strip(
+        "_"
+    )
     return normalized.split("_with_", 1)[0]
 
 
@@ -2298,6 +2437,7 @@ _ROBUSTNESS_SENSITIVITY_METHODS = frozenset(
         "sensitivity_comparison",
     }
 )
+
 
 # An ordinal *trend test* can be a purely descriptive result.  The primary
 # dose-response runner fits an adjusted model, so it may only claim a broadly
@@ -2485,9 +2625,7 @@ def _ordinal_dose_response_step_matches(
     products = _normalised_structured_output_names(expected_blob)
     if not products.intersection(_ORDINAL_OUTPUT_PRODUCTS):
         return False
-    return head in _ORDINAL_EXPLICIT_METHODS or _method_has_ordinal_primary_token(
-        head
-    )
+    return head in _ORDINAL_EXPLICIT_METHODS or _method_has_ordinal_primary_token(head)
 
 
 # --- Trajectory-clustering compatibility audit ------------------------------
@@ -3185,9 +3323,7 @@ def run_execute_phase(
         if cap > 0 and len(revised.steps) > cap:
             protected_step_ids = [
                 str(record.get("step_id"))
-                for record in current_successful_step_records(
-                    completed_records or []
-                )
+                for record in current_successful_step_records(completed_records or [])
                 if record.get("step_id") and record.get("status") == "ok"
             ]
             capped_revised, cap_findings = _cap_plan_preserving_figure_steps(
@@ -3474,6 +3610,7 @@ def run_execute_phase(
         source: str,
         before_code: Optional[str] = None,
         after_code: Optional[str] = None,
+        sealed_renderer_wrapper: bool = False,
     ) -> bool:
         """Apply the central no-auto-method-substitution policy.
 
@@ -3483,18 +3620,28 @@ def run_execute_phase(
         """
 
         step_id = str(step.step_id)
-        if automatic_repair_allowed(repair_id, step=step):
+        if automatic_repair_allowed(
+            repair_id,
+            step=step,
+            sealed_renderer_wrapper=sealed_renderer_wrapper,
+        ):
             return True
+        sealed_context_denied = is_sealed_renderer_repair(repair_id)
+        policy_reason = (
+            "sealed_renderer_requires_preexecution_wrapper"
+            if sealed_context_denied
+            else "method_substitution_default_deny"
+        )
         _record_repair(
             repair_id=repair_id,
             step_id=step_id,
             trigger={
                 "source": source,
-                "automatic_repair_policy": "method_substitution_default_deny",
+                "automatic_repair_policy": policy_reason,
             },
             transformation=(
-                "Candidate repair was not applied because automatic method "
-                "substitution is forbidden."
+                "Candidate repair was not applied because its execution context "
+                "did not satisfy the central automatic-repair policy."
             ),
             before_code=before_code,
             after_code=after_code,
@@ -3505,14 +3652,14 @@ def run_execute_phase(
                 validator="automatic_repair_policy",
                 severity="info",
                 message=(
-                    f"Blocked automatic method-substitution repair {repair_id} "
-                    f"for step {step_id}; agent repair or fail-closed handling "
-                    "retains ownership."
+                    f"Blocked automatic repair {repair_id} for step {step_id}; "
+                    f"policy={policy_reason}."
                 ),
                 detail={
                     "repair_id": repair_id,
                     "step_id": step_id,
                     "source": source,
+                    "policy": policy_reason,
                     "outcome": "blocked_by_automatic_repair_policy",
                 },
             )
@@ -3525,6 +3672,7 @@ def run_execute_phase(
         step: AnalysisStep,
         source: str,
         before_code: str,
+        sealed_renderer_wrapper: bool = False,
     ) -> Optional[Tuple[str, str]]:
         """Authorize a generated code repair before assigning live code."""
 
@@ -3537,6 +3685,7 @@ def run_execute_phase(
             source=source,
             before_code=before_code,
             after_code=candidate_code,
+            sealed_renderer_wrapper=sealed_renderer_wrapper,
         ):
             return None
         return repair
@@ -3553,14 +3702,14 @@ def run_execute_phase(
     ) -> str:
         if standard_executor_used:
             return "deterministic_standard"
-        if fallback_used:
-            return "fallback"
         # Report the code that actually executed, not merely where its first
         # draft came from. A resumed script that required a fresh LLM repair is
         # repaired code; labelling it as pure reuse hides the model mutation and
         # can incorrectly trigger reuse-only audit shortcuts.
         if llm_repair_used:
             return "repaired"
+        if fallback_used:
+            return "fallback"
         if runner_repair_name:
             return "runner_repaired"
         if repair_attempts > 0 or concept_repair_used:
@@ -3691,6 +3840,12 @@ def run_execute_phase(
         quarantine_policy_superseded = False
         pending_quarantined_errors: List[ValidationFinding] = []
         preexecution_runner_repair_name: Optional[str] = None
+        runner_repair_name: Optional[str] = None
+        sealed_renderer_repair_id: Optional[str] = None
+        sealed_renderer_authorized_code_sha256: Optional[str] = None
+        sealed_renderer_implementation_sha256: Optional[str] = None
+        sealed_renderer_parent_digests: Dict[str, str] = {}
+        sealed_renderer_authorized_product_slots: Dict[str, str] = {}
         step_current = step_order.get(step.step_id, 0) + 1
         dependency_record = _failed_dependency_record(step)
         if dependency_record is not None:
@@ -3787,9 +3942,7 @@ def run_execute_phase(
         step_record["resolved_inputs_path"] = str(
             resolved_inputs_path.relative_to(run_dir)
         )
-        step_record["resolved_input_evidence_ids"] = list(
-            resolved_input_evidence_ids
-        )
+        step_record["resolved_input_evidence_ids"] = list(resolved_input_evidence_ids)
         local_runtime_state = supervisor.prepare_step_state(
             state=runtime_state,
             context=context,
@@ -3818,8 +3971,7 @@ def run_execute_phase(
             resumed_quarantined_draft_used = True
             quarantined_draft_active = True
             pending_quarantined_errors = [
-                ValidationFinding.model_validate(payload)
-                for payload in draft.findings
+                ValidationFinding.model_validate(payload) for payload in draft.findings
             ]
             step_record["resumed_quarantined_draft"] = True
             step_record["quarantined_draft_sha256"] = draft.sha256
@@ -3863,9 +4015,7 @@ def run_execute_phase(
             step_record["resumed_code_evidence_generation_mode"] = (
                 resumed_evidence_generation_mode
             )
-            step_record["resumed_from_generation_mode"] = (
-                resumed_from_generation_mode
-            )
+            step_record["resumed_from_generation_mode"] = resumed_from_generation_mode
             detail = {
                 "step_id": step.step_id,
                 "resume_from_step_id": requested_resume_from_step_id,
@@ -4016,6 +4166,10 @@ def run_execute_phase(
             reason: str,
         ) -> Optional[str]:
             nonlocal deterministic_fallback_used, preexecution_runner_repair_name
+            nonlocal sealed_renderer_repair_id
+            nonlocal sealed_renderer_implementation_sha256
+            nonlocal sealed_renderer_parent_digests
+            nonlocal sealed_renderer_authorized_product_slots
             exact_repair_id = deterministic_figure_repair_id_for_upstream(
                 run_dir, step.step_id
             )
@@ -4026,7 +4180,55 @@ def run_execute_phase(
                 or exact_repair_id is None
             ):
                 return None
+            sealed_renderer = is_sealed_renderer_repair(exact_repair_id)
+            declared_figure_products = list(step.expected_outputs or [])
+            sealed_source_digests: Dict[str, str] = {}
+            sealed_implementation_digest = ""
+            sealed_product_slots: Dict[str, str] = {}
+            if sealed_renderer:
+                typed_products = _sealed_typed_figure_products(declared_figure_products)
+                if typed_products is None:
+                    # Legacy bare exports are file requirements, not logical
+                    # Planner product roles.  They retain the ordinary coder
+                    # path rather than entering a sealed binder that cannot
+                    # prove their semantics.
+                    return None
+                declared_figure_products = typed_products
+                try:
+                    sealed_source_digests = _sealed_renderer_source_digests(
+                        exact_repair_id
+                    )
+                    sealed_implementation_digest = (
+                        _sealed_renderer_implementation_digest(sealed_source_digests)
+                    )
+                except (ImportError, OSError, ValueError):
+                    return None
+                if not _sealed_renderer_figure_step_matches_parent(
+                    run_dir,
+                    step,
+                    exact_repair_id,
+                ):
+                    return None
             sealed_parent_digests: Optional[Dict[str, str]] = None
+            if sealed_renderer:
+                sealed_parent_digests = _sealed_renderer_parent_digest_seal(
+                    run_dir,
+                    step.step_id,
+                    exact_repair_id,
+                )
+                if not sealed_parent_digests:
+                    return None
+                try:
+                    sealed_product_slots = authorize_declared_figure_product_slots(
+                        declared_products=declared_figure_products,
+                        renderer_repair_id=exact_repair_id,
+                        planner_parent_anchors=_sealed_parent_planner_anchors(
+                            run_dir=run_dir,
+                            figure_step_id=step.step_id,
+                        ),
+                    )
+                except ValueError:
+                    return None
             if exact_repair_id == (
                 "distribution_availability_publication_bundle_from_parent_outputs_v1"
             ):
@@ -4034,12 +4236,9 @@ def run_execute_phase(
                     run_dir, step
                 ):
                     return None
-                sealed_parent_digests = _distribution_availability_parent_digest_seal(
-                    run_dir, step.step_id
-                )
-                if not sealed_parent_digests:
-                    return None
             candidate_code = """
+import hashlib
+import importlib
 import json
 import os
 from pathlib import Path
@@ -4048,18 +4247,48 @@ out_dir = Path(os.environ["STEP_OUT_DIR"])
 run_dir = out_dir.parents[2]
 current_step_id = out_dir.parent.name
 
-from easyicu.research_agent.pipeline import (
-    _render_publication_bundle_from_prior_outputs_for_step,
-)
+expected_source_digests = __EXPECTED_SOURCE_DIGESTS__
+loaded_modules = {}
+actual_source_digests = {}
+for module_name, expected_digest in expected_source_digests.items():
+    module = importlib.import_module(module_name)
+    module_path = Path(module.__file__)
+    actual_digest = hashlib.sha256(module_path.read_bytes()).hexdigest()
+    loaded_modules[module_name] = module
+    actual_source_digests[module_name] = actual_digest
+if actual_source_digests != expected_source_digests:
+    raise RuntimeError(
+        "A sealed renderer implementation module changed after authorization."
+    )
 
-repair_id = _render_publication_bundle_from_prior_outputs_for_step(
-    run_dir=run_dir,
-    current_step_id=current_step_id,
-    out_dir=out_dir,
-    preverified_parent_digests=__PREVERIFIED_PARENT_DIGESTS__,
-)
-
+pipeline_module = loaded_modules.get("easyicu.research_agent.pipeline")
+if pipeline_module is None:
+    pipeline_module = importlib.import_module("easyicu.research_agent.pipeline")
 expected_repair_id = __EXPECTED_REPAIR_ID__
+if __IS_SEALED_RENDERER__:
+    render_publication_bundle = getattr(
+        pipeline_module,
+        "_render_authorized_sealed_publication_bundle",
+    )
+    repair_id = render_publication_bundle(
+        repair_id=expected_repair_id,
+        run_dir=run_dir,
+        current_step_id=current_step_id,
+        out_dir=out_dir,
+        parent_artifact_digests=__PREVERIFIED_PARENT_DIGESTS__,
+    )
+else:
+    render_publication_bundle = getattr(
+        pipeline_module,
+        "_render_publication_bundle_from_prior_outputs_for_step",
+    )
+    repair_id = render_publication_bundle(
+        run_dir=run_dir,
+        current_step_id=current_step_id,
+        out_dir=out_dir,
+        preverified_parent_digests=__PREVERIFIED_PARENT_DIGESTS__,
+    )
+
 if repair_id != expected_repair_id:
     summary = {
         "rendering_only": True,
@@ -4072,6 +4301,22 @@ if repair_id != expected_repair_id:
     with open(out_dir / "step_summary.json", "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
 else:
+    if __IS_SEALED_RENDERER__:
+        contract_module = loaded_modules[
+            "easyicu.research_agent.declared_product_contract"
+        ]
+        bind_declared_figure_products = getattr(
+            contract_module,
+            "bind_declared_figure_products",
+        )
+        bind_declared_figure_products(
+            out_dir=out_dir,
+            declared_products=__DECLARED_FIGURE_PRODUCTS__,
+            authorized_product_slots=__AUTHORIZED_PRODUCT_SLOTS__,
+            renderer_repair_id=expected_repair_id,
+            renderer_implementation_sha256=__IMPLEMENTATION_DIGEST__,
+            renderer_parent_digests=__PREVERIFIED_PARENT_DIGESTS__,
+        )
     print(json.dumps({"deterministic_publication_figure_rescue": repair_id}))
 """
             candidate_code = candidate_code.replace(
@@ -4085,17 +4330,64 @@ else:
                     else None
                 ),
             )
+            candidate_code = candidate_code.replace(
+                "__DECLARED_FIGURE_PRODUCTS__",
+                repr(declared_figure_products),
+            )
+            candidate_code = candidate_code.replace(
+                "__AUTHORIZED_PRODUCT_SLOTS__",
+                repr(dict(sorted(sealed_product_slots.items()))),
+            )
+            candidate_code = candidate_code.replace(
+                "__EXPECTED_SOURCE_DIGESTS__",
+                repr(sealed_source_digests),
+            )
+            candidate_code = candidate_code.replace(
+                "__IS_SEALED_RENDERER__",
+                repr(sealed_renderer),
+            )
+            candidate_code = candidate_code.replace(
+                "__IMPLEMENTATION_DIGEST__",
+                repr(sealed_implementation_digest),
+            )
             repair_id = exact_repair_id
             authorized = _authorize_automatic_repair(
                 (repair_id, candidate_code),
                 step=step,
                 source=reason,
                 before_code="",
+                sealed_renderer_wrapper=sealed_renderer,
             )
             if authorized is None:
                 return None
             deterministic_fallback_used = True
             preexecution_runner_repair_name = repair_id
+            if sealed_renderer:
+                sealed_renderer_repair_id = repair_id
+                sealed_renderer_implementation_sha256 = sealed_implementation_digest
+                sealed_renderer_parent_digests = dict(
+                    sorted((sealed_parent_digests or {}).items())
+                )
+                sealed_renderer_authorized_product_slots = dict(
+                    sorted(sealed_product_slots.items())
+                )
+                step_record["sealed_renderer_repair"] = repair_id
+                step_record["post_execution_mutation_policy"] = "audit_only"
+                step_record["sealed_renderer_source_digests"] = dict(
+                    sealed_source_digests
+                )
+                step_record["sealed_renderer_implementation_sha256"] = (
+                    sealed_implementation_digest
+                )
+                step_record["sealed_renderer_parent_digests"] = dict(
+                    sealed_renderer_parent_digests
+                )
+                step_record["sealed_renderer_authorized_product_slots"] = dict(
+                    sealed_renderer_authorized_product_slots
+                )
+                step_record["planner_product_slot_binding_source"] = (
+                    "planner_parent_typed_product_prefix_v2"
+                )
             step_record["deterministic_code_fallback"] = reason
             step_record["runner_repair"] = repair_id
             _record_repair(
@@ -4271,10 +4563,8 @@ else:
         # deterministic-standard path unless the operator explicitly enables
         # the diagnostic fast path. Reused code still runs through every
         # current execution audit and repair gate.
-        preflight_trajectory_stability_code = (
-            _deterministic_trajectory_stability_code(
-                "trajectory_stability_spec_preflight", preflight=True
-            )
+        preflight_trajectory_stability_code = _deterministic_trajectory_stability_code(
+            "trajectory_stability_spec_preflight", preflight=True
         )
         preflight_figure_code = (
             None
@@ -4307,8 +4597,8 @@ else:
             and quarantined_resume_draft is None
             and resume_summary_repair_code is None
             and (
-            requested_resume_from_step_id != step.step_id
-            or reuse_selected_step_code_opt_in
+                requested_resume_from_step_id != step.step_id
+                or reuse_selected_step_code_opt_in
             )
         ):
             preflight_resumed_code = resume_controller.prior_code_for_step(step.step_id)
@@ -4445,9 +4735,7 @@ else:
                     )
                     code = coder.run(context=coder_context, step=step)
                 except Exception as exc:
-                    resumed_code = resume_controller.prior_code_for_step(
-                        step.step_id
-                    )
+                    resumed_code = resume_controller.prior_code_for_step(step.step_id)
                     if resumed_code is not None:
                         code = _use_resumed_code(resumed_code, error=exc)
                     else:
@@ -4538,8 +4826,7 @@ else:
             )
             try:
                 if pipeline._enable_llm_concept_audit and (
-                    deterministic_fallback_used
-                    or deterministic_standard_executor_used
+                    deterministic_fallback_used or deterministic_standard_executor_used
                 ):
                     generation_mode = (
                         "deterministic_standard"
@@ -4668,6 +4955,13 @@ else:
                 step_record["concept_approved_code_sha256"] = (
                     concept_approved_code_digest
                 )
+                if sealed_renderer_repair_id is not None:
+                    sealed_renderer_authorized_code_sha256 = (
+                        concept_approved_code_digest
+                    )
+                    step_record["sealed_renderer_authorized_code_sha256"] = (
+                        sealed_renderer_authorized_code_sha256
+                    )
                 if (
                     resumed_quarantined_draft_used
                     and quarantined_repair_materially_changed
@@ -4678,6 +4972,51 @@ else:
                 with shared_lock:
                     findings.extend(usage_findings)
                 break
+
+            if sealed_renderer_repair_id is not None:
+                terminal_finding = ValidationFinding(
+                    validator="sealed_renderer_authority",
+                    severity="error",
+                    message=(
+                        "The authorized rendering-only adapter failed the "
+                        "pre-execution deterministic concept gate; execution was "
+                        "blocked without coder repair."
+                    ),
+                    detail={
+                        "step_id": step.step_id,
+                        "repair_id": sealed_renderer_repair_id,
+                        "reason": "preexecution_concept_gate_failed",
+                    },
+                )
+                terminal_findings = [terminal_finding, *usage_findings]
+                step_record.update(
+                    {
+                        "status": "blocked_by_concept_audit",
+                        "diagnostic_only": True,
+                        "sealed_renderer_terminal_reason": (
+                            "preexecution_concept_gate_failed"
+                        ),
+                        "contract_findings": [
+                            finding.model_dump() for finding in terminal_findings
+                        ],
+                        "llm_repair_used": False,
+                        "generation_mode": "fallback",
+                    }
+                )
+                with shared_lock:
+                    findings.extend(terminal_findings)
+                    per_step_records.append(step_record)
+                    _flush_partial_manifest()
+                emit_progress(
+                    "audit",
+                    f"Sealed renderer blocked for {step.step_id}.",
+                    status="error",
+                    run_id=run_id,
+                    step_id=step.step_id,
+                    current_step=step_current,
+                    total_steps=total_steps,
+                )
+                return step_record
 
             if deterministic_standard_executor_used:
                 terminal_finding = ValidationFinding(
@@ -4807,9 +5146,7 @@ else:
                                     if finding.severity == "error"
                                 ],
                             )
-                            step_record["quarantined_draft_sha256"] = (
-                                checkpoint.sha256
-                            )
+                            step_record["quarantined_draft_sha256"] = checkpoint.sha256
                             step_record["quarantined_draft_relative_path"] = (
                                 checkpoint.relative_path
                             )
@@ -4885,9 +5222,7 @@ else:
                             checkpoint.relative_path
                         )
                         step_record["quarantined_requires_repair"] = True
-                        step_record["quarantine_checkpoint_is_latest_candidate"] = (
-                            True
-                        )
+                        step_record["quarantine_checkpoint_is_latest_candidate"] = True
                     except Exception as checkpoint_exc:
                         checkpoint_error = checkpoint_exc
                 # Tier C — when auto-repair (deterministic + LLM) could not
@@ -5017,8 +5352,9 @@ else:
                     ),
                     attempt=concept_repair_attempts,
                 )
-                if quarantined_draft_active and not _python_repair_is_materially_changed(
-                    code, repaired_code
+                if (
+                    quarantined_draft_active
+                    and not _python_repair_is_materially_changed(code, repaired_code)
                 ):
                     no_op_finding = ValidationFinding(
                         validator="resume",
@@ -5042,9 +5378,9 @@ else:
                         for finding in pending_quarantined_errors
                     ):
                         pending_quarantined_errors.append(no_op_finding)
-                    step_record["quarantined_repair_noop_count"] = int(
-                        step_record.get("quarantined_repair_noop_count") or 0
-                    ) + 1
+                    step_record["quarantined_repair_noop_count"] = (
+                        int(step_record.get("quarantined_repair_noop_count") or 0) + 1
+                    )
                     step_record["quarantined_repair_succeeded"] = False
                     continue
                 code = repaired_code
@@ -5192,7 +5528,7 @@ else:
         # budgets. ``repair_attempts`` remains the total mutation count used for
         # provenance and generation-mode labels.
         runtime_repair_attempts = 0
-        runner_repair_name: Optional[str] = preexecution_runner_repair_name
+        runner_repair_name = preexecution_runner_repair_name
         is_trajectory_stability_standard = bool(
             step.trajectory_stability_spec is not None
             and step_record.get("deterministic_standard_analysis")
@@ -5205,6 +5541,41 @@ else:
         while True:
             code = reorder_forward_references(code)
             candidate_code_digest = sha256_of_bytes(code.encode("utf-8"))
+            if (
+                sealed_renderer_authorized_code_sha256 is not None
+                and candidate_code_digest != sealed_renderer_authorized_code_sha256
+            ):
+                authority_finding = ValidationFinding(
+                    validator="sealed_renderer_authority",
+                    severity="error",
+                    message=(
+                        "The active rendering-only adapter no longer matches its "
+                        "authorized code digest; execution was blocked without "
+                        "running or repairing the mutated code."
+                    ),
+                    detail={
+                        "step_id": step.step_id,
+                        "repair_id": sealed_renderer_repair_id,
+                        "authorized_code_sha256": (
+                            sealed_renderer_authorized_code_sha256
+                        ),
+                        "candidate_code_sha256": candidate_code_digest,
+                    },
+                )
+                step_record.update(
+                    {
+                        "status": "execution_failed",
+                        "diagnostic_only": True,
+                        "sealed_renderer_terminal_reason": "code_digest_changed",
+                        "llm_repair_used": False,
+                        "generation_mode": "fallback",
+                    }
+                )
+                with shared_lock:
+                    findings.append(authority_finding)
+                    per_step_records.append(step_record)
+                    _flush_partial_manifest()
+                return step_record
             if candidate_code_digest != concept_approved_code_digest:
                 # Every code mutation after execution (visual, contract,
                 # runtime, deterministic, or fallback) returns through this
@@ -5314,9 +5685,7 @@ else:
                 # widening the shared generated-code runner's timeout. This is
                 # concurrency-safe and leaves every ordinary coder attempt on
                 # the configured short budget.
-                execution_timeout_seconds = (
-                    pipeline._standard_executor_timeout_seconds
-                )
+                execution_timeout_seconds = pipeline._standard_executor_timeout_seconds
                 execution_runner = pipeline._build_runner(
                     run_dir=run_dir,
                     cohort_path=cohort_path,
@@ -5328,15 +5697,9 @@ else:
             # is quiescent before its bind-mounted output directory is reused;
             # it therefore owns cleanup inside ``run``. Other backends retain
             # the pipeline's established pre-execution clearing behaviour.
-            if not bool(
-                getattr(execution_runner, "manages_output_cleanup", False)
-            ):
-                _clear_output_dir(
-                    run_dir / "steps" / step.step_id / "outputs"
-                )
-            step_record["execution_timeout_seconds"] = (
-                execution_timeout_seconds
-            )
+            if not bool(getattr(execution_runner, "manages_output_cleanup", False)):
+                _clear_output_dir(run_dir / "steps" / step.step_id / "outputs")
+            step_record["execution_timeout_seconds"] = execution_timeout_seconds
             run_result = execution_runner.run(
                 step_id=step.step_id,
                 code=code,
@@ -5368,6 +5731,15 @@ else:
                 if is_trajectory_stability_standard:
                     step_record["standard_executor_terminal_reason"] = (
                         "executor_runtime_failure"
+                    )
+                elif sealed_renderer_authorized_code_sha256 is not None:
+                    step_record.update(
+                        {
+                            "sealed_renderer_runtime_repair_suppressed": True,
+                            "sealed_renderer_terminal_reason": unsafe_reason,
+                            "llm_repair_used": False,
+                            "generation_mode": "fallback",
+                        }
                     )
                 unsafe_finding = ValidationFinding(
                     validator="runner_output_safety",
@@ -5401,6 +5773,10 @@ else:
                 return step_record
             executed_code_digest = sha256_of_file(run_result.script_path)
             step_record["executed_code_sha256"] = executed_code_digest
+            if sealed_renderer_authorized_code_sha256 is not None:
+                step_record["sealed_renderer_executed_code_matches_authority"] = (
+                    executed_code_digest == sealed_renderer_authorized_code_sha256
+                )
             if (
                 concept_approved_code_digest is None
                 or executed_code_digest != concept_approved_code_digest
@@ -5425,6 +5801,16 @@ else:
                 step_record["script_integrity_findings"] = [
                     integrity_finding.model_dump()
                 ]
+                if sealed_renderer_authorized_code_sha256 is not None:
+                    step_record.update(
+                        {
+                            "sealed_renderer_terminal_reason": (
+                                "executed_code_digest_mismatch"
+                            ),
+                            "llm_repair_used": False,
+                            "generation_mode": "fallback",
+                        }
+                    )
                 with shared_lock:
                     findings.append(integrity_finding)
                     per_step_records.append(step_record)
@@ -5640,9 +6026,70 @@ else:
                         f for f in visual_findings if f.severity == "error"
                     ]
                     if visual_errors:
-                        if (
-                            visual_repair_attempts
-                            >= pipeline._max_code_repair_attempts
+                        if sealed_renderer_authorized_code_sha256 is not None:
+                            demoted_findings, blocking_visual_errors = (
+                                _demote_cosmetic_visual_findings(visual_findings)
+                            )
+                            step_record["visual_findings"] = [
+                                finding.model_dump() for finding in demoted_findings
+                            ]
+                            step_record["sealed_renderer_visual_repair_suppressed"] = (
+                                True
+                            )
+                            step_record["visual_qa_demoted"] = any(
+                                original.severity == "error"
+                                and demoted.severity == "warning"
+                                for original, demoted in zip(
+                                    visual_findings, demoted_findings
+                                )
+                            )
+                            with shared_lock:
+                                findings.extend(demoted_findings)
+                            if blocking_visual_errors:
+                                step_record.update(
+                                    {
+                                        "status": "execution_failed",
+                                        "diagnostic_only": True,
+                                        "sealed_renderer_terminal_reason": (
+                                            "visual_qa_failed"
+                                        ),
+                                        "llm_repair_used": False,
+                                        "generation_mode": "fallback",
+                                    }
+                                )
+                                with shared_lock:
+                                    per_step_records.append(step_record)
+                                    _flush_partial_manifest()
+                                emit_progress(
+                                    "visual_qa",
+                                    (
+                                        "Visual QA blocked sealed renderer "
+                                        f"{step.step_id}; coder repair was not "
+                                        "authorized."
+                                    ),
+                                    status="error",
+                                    run_id=run_id,
+                                    step_id=step.step_id,
+                                    current_step=step_current,
+                                    total_steps=total_steps,
+                                )
+                                return step_record
+                            emit_progress(
+                                "visual_qa",
+                                (
+                                    "Cosmetic visual QA findings were retained as "
+                                    "warnings for sealed renderer "
+                                    f"{step.step_id}; its verified code and outputs "
+                                    "were not rewritten."
+                                ),
+                                status="warning",
+                                run_id=run_id,
+                                step_id=step.step_id,
+                                current_step=step_current,
+                                total_steps=total_steps,
+                            )
+                        elif (
+                            visual_repair_attempts >= pipeline._max_code_repair_attempts
                         ):
                             fallback_code = _deterministic_fallback_code("visual_qa")
                             if fallback_code is not None:
@@ -5927,6 +6374,128 @@ else:
                     out_dir=run_result.out_dir,
                     step_summary=visual_step_summary,
                 )
+                unowned_sealed_markers = _unowned_sealed_authority_markers(
+                    visual_step_summary,
+                    authorized_code_sha256=(sealed_renderer_authorized_code_sha256),
+                )
+                if unowned_sealed_markers:
+                    early_contract_findings.append(
+                        ValidationFinding(
+                            validator="sealed_renderer_authority",
+                            severity="error",
+                            message=(
+                                "Generated code reported sealed-renderer authority "
+                                "that the host did not authorize before execution."
+                            ),
+                            detail={
+                                "step_id": step.step_id,
+                                "unowned_authority_markers": unowned_sealed_markers,
+                            },
+                        )
+                    )
+                if (
+                    sealed_renderer_authorized_code_sha256 is not None
+                    and visual_step_summary.get("rendering_only") is not True
+                ):
+                    early_contract_findings.append(
+                        ValidationFinding(
+                            validator="sealed_renderer_authority",
+                            severity="error",
+                            message=(
+                                "The authorized figure adapter did not report its "
+                                "required rendering-only execution scope."
+                            ),
+                            detail={
+                                "step_id": step.step_id,
+                                "repair_id": sealed_renderer_repair_id,
+                                "reported_rendering_only": visual_step_summary.get(
+                                    "rendering_only"
+                                ),
+                            },
+                        )
+                    )
+                reported_slot_bindings = visual_step_summary.get(
+                    "planner_product_slot_bindings"
+                )
+                reported_product_slots = (
+                    {
+                        str(product): str(binding.get("slot") or "")
+                        for product, binding in reported_slot_bindings.items()
+                        if isinstance(binding, Mapping)
+                    }
+                    if isinstance(reported_slot_bindings, Mapping)
+                    else {}
+                )
+                if sealed_renderer_authorized_code_sha256 is not None:
+                    parent_step_id = str(step.step_id or "").removesuffix("_figure")
+                    parent_out = run_dir / "steps" / parent_step_id / "outputs"
+                    try:
+                        read_digest_bound_artifact_snapshot(
+                            parent_out=parent_out,
+                            artifact_digests=sealed_renderer_parent_digests,
+                        )
+                        step_record["sealed_renderer_parent_receipt_verified"] = True
+                    except ValueError:
+                        step_record["sealed_renderer_parent_receipt_verified"] = False
+                        early_contract_findings.append(
+                            ValidationFinding(
+                                validator="sealed_renderer_authority",
+                                severity="error",
+                                message=(
+                                    "The sealed renderer's direct-parent inputs "
+                                    "changed before host receipt."
+                                ),
+                                detail={
+                                    "step_id": step.step_id,
+                                    "repair_id": sealed_renderer_repair_id,
+                                },
+                            )
+                        )
+                if sealed_renderer_authorized_code_sha256 is not None and (
+                    visual_step_summary.get("sealed_renderer_repair")
+                    != sealed_renderer_repair_id
+                    or visual_step_summary.get("sealed_renderer_implementation_sha256")
+                    != sealed_renderer_implementation_sha256
+                    or visual_step_summary.get("sealed_renderer_parent_digests")
+                    != sealed_renderer_parent_digests
+                    or reported_product_slots
+                    != sealed_renderer_authorized_product_slots
+                ):
+                    early_contract_findings.append(
+                        ValidationFinding(
+                            validator="sealed_renderer_authority",
+                            severity="error",
+                            message=(
+                                "The rendered summary did not preserve the exact "
+                                "sealed renderer identity and implementation digest."
+                            ),
+                            detail={
+                                "step_id": step.step_id,
+                                "expected_repair_id": sealed_renderer_repair_id,
+                                "reported_repair_id": visual_step_summary.get(
+                                    "sealed_renderer_repair"
+                                ),
+                                "expected_implementation_sha256": (
+                                    sealed_renderer_implementation_sha256
+                                ),
+                                "reported_implementation_sha256": (
+                                    visual_step_summary.get(
+                                        "sealed_renderer_implementation_sha256"
+                                    )
+                                ),
+                                "expected_parent_digests": (
+                                    sealed_renderer_parent_digests
+                                ),
+                                "reported_parent_digests": visual_step_summary.get(
+                                    "sealed_renderer_parent_digests"
+                                ),
+                                "expected_product_slots": (
+                                    sealed_renderer_authorized_product_slots
+                                ),
+                                "reported_product_slots": reported_product_slots,
+                            },
+                        )
+                    )
                 # A deterministic PRIMARY runner owns its step's contract: if it
                 # produced the core estimate, planner-requested extra outputs it
                 # does not emit are advisory, never a reason to repair-away the
@@ -5938,14 +6507,48 @@ else:
                     f for f in early_contract_findings if f.severity == "error"
                 ]
                 if early_contract_errors:
+                    if sealed_renderer_authorized_code_sha256 is not None:
+                        step_record.update(
+                            {
+                                "status": "contract_failed",
+                                "diagnostic_only": True,
+                                "sealed_renderer_contract_repair_suppressed": True,
+                                "sealed_renderer_terminal_reason": (
+                                    "output_contract_failed"
+                                ),
+                                "contract_findings": [
+                                    finding.model_dump()
+                                    for finding in early_contract_findings
+                                ],
+                                "step_summary": visual_step_summary,
+                                "llm_repair_used": False,
+                                "generation_mode": "fallback",
+                            }
+                        )
+                        with shared_lock:
+                            findings.extend(early_contract_findings)
+                            per_step_records.append(step_record)
+                            _flush_partial_manifest()
+                        emit_progress(
+                            "contract",
+                            (
+                                "Contract validation blocked sealed renderer "
+                                f"{step.step_id}; its code and outputs were retained "
+                                "without coder repair."
+                            ),
+                            status="error",
+                            run_id=run_id,
+                            step_id=step.step_id,
+                            current_step=step_current,
+                            total_steps=total_steps,
+                        )
+                        return step_record
                     if is_trajectory_stability_standard:
                         standard_executor_terminal_block = True
                         standard_executor_terminal_reason = (
                             "executor_output_contract_failed"
                         )
-                        standard_executor_terminal_summary = dict(
-                            visual_step_summary
-                        )
+                        standard_executor_terminal_summary = dict(visual_step_summary)
                         standard_executor_terminal_findings = list(
                             early_contract_findings
                         )
@@ -6059,10 +6662,7 @@ else:
                         )
                         _clear_output_dir(run_result.out_dir)
                         continue
-                    if (
-                        contract_repair_attempts
-                        >= pipeline._max_code_repair_attempts
-                    ):
+                    if contract_repair_attempts >= pipeline._max_code_repair_attempts:
                         with shared_lock:
                             findings.extend(early_contract_findings)
                             step_record["status"] = "contract_failed"
@@ -6089,9 +6689,7 @@ else:
                     contract_repair_attempts += 1
                     repair_attempts += 1
                     step_record["code_repair_attempts"] = repair_attempts
-                    step_record["contract_repair_attempts"] = (
-                        contract_repair_attempts
-                    )
+                    step_record["contract_repair_attempts"] = contract_repair_attempts
                     emit_progress(
                         "coder",
                         f"Repairing contract violation for {step.step_id}.",
@@ -6173,7 +6771,10 @@ else:
                             total_steps=total_steps,
                         )
                         return step_record
-                if pipeline._enable_deterministic_runner_repair:
+                if (
+                    pipeline._enable_deterministic_runner_repair
+                    and sealed_renderer_authorized_code_sha256 is None
+                ):
                     before_repair_code = code
                     summary_repair = _deterministic_summary_repair(
                         code=code,
@@ -6231,6 +6832,49 @@ else:
                 standard_executor_terminal_block = True
                 standard_executor_terminal_reason = "executor_runtime_failure"
                 break
+            if sealed_renderer_authorized_code_sha256 is not None:
+                runtime_finding = ValidationFinding(
+                    validator="sealed_renderer_authority",
+                    severity="error",
+                    message=(
+                        "The authorized rendering-only adapter failed at runtime; "
+                        "its diagnostics were retained and no deterministic or LLM "
+                        "code repair was allowed."
+                    ),
+                    detail={
+                        "step_id": step.step_id,
+                        "repair_id": sealed_renderer_repair_id,
+                        "returncode": run_result.returncode,
+                        "timed_out": run_result.timed_out,
+                    },
+                )
+                step_record.update(
+                    {
+                        "status": "execution_failed",
+                        "diagnostic_only": True,
+                        "sealed_renderer_runtime_repair_suppressed": True,
+                        "sealed_renderer_terminal_reason": "runtime_failure",
+                        "llm_repair_used": False,
+                        "generation_mode": "fallback",
+                    }
+                )
+                with shared_lock:
+                    findings.append(runtime_finding)
+                    per_step_records.append(step_record)
+                    _flush_partial_manifest()
+                emit_progress(
+                    "runner",
+                    (
+                        f"Sealed renderer failed for {step.step_id}; coder repair "
+                        "was not authorized."
+                    ),
+                    status="error",
+                    run_id=run_id,
+                    step_id=step.step_id,
+                    current_step=step_current,
+                    total_steps=total_steps,
+                )
+                return step_record
             if pipeline._enable_deterministic_runner_repair:
                 before_repair_code = code
                 plugin_repair = pipeline._case_plugin_registry.repair_code(
@@ -6253,8 +6897,7 @@ else:
                     step=step,
                     source=(
                         "case_plugin_repair"
-                        if plugin_repair is not None
-                        and runner_repair is plugin_repair
+                        if plugin_repair is not None and runner_repair is plugin_repair
                         else "deterministic_runner_repair"
                     ),
                     before_code=before_repair_code,
@@ -6419,7 +7062,11 @@ else:
             if _step_expects_figure(step)
             else None
         )
-        if publication_step and not _has_figure_exports(run_result.out_dir):
+        if (
+            publication_step
+            and not _has_figure_exports(run_result.out_dir)
+            and sealed_renderer_authorized_code_sha256 is None
+        ):
             sibling_repair_id = "sibling_figure_exports_promote_v1"
             promoted = None
             if _automatic_repair_authorized(
@@ -6427,9 +7074,7 @@ else:
                 step=step,
                 source="publication_figure_sibling_promotion",
             ):
-                promoted = _promote_sibling_figure_exports(
-                    out_dir=run_result.out_dir
-                )
+                promoted = _promote_sibling_figure_exports(out_dir=run_result.out_dir)
             if promoted is not None:
                 runner_repair_name = promoted
                 step_record["runner_repair"] = promoted
@@ -6441,11 +7086,10 @@ else:
                 )
             else:
                 rescued = None
-                if (
-                    _step_has_figure_only_output_contract(step)
-                    and deterministic_figure_family_supported_for_upstream(
-                        run_dir, step.step_id
-                    )
+                if _step_has_figure_only_output_contract(
+                    step
+                ) and deterministic_figure_family_supported_for_upstream(
+                    run_dir, step.step_id
                 ):
                     rescued = _repair_publication_figure_in_staging(
                         run_dir=run_dir,
@@ -6501,7 +7145,12 @@ else:
                             transformation="Promoted prior publication figure bundle into current outputs directory.",
                         )
 
-        if _has_figure_exports(run_result.out_dir):
+        if _should_attempt_detached_figure_binding(
+            out_dir=run_result.out_dir,
+            sealed_renderer_authorized_code_sha256=(
+                sealed_renderer_authorized_code_sha256
+            ),
+        ):
             with shared_lock:
                 repair_binding_records = list(per_step_records)
             detached_repair_binding = _detached_figure_repair_binding(
@@ -6520,9 +7169,7 @@ else:
                 repair_source_evidence_ids,
             ) = detached_repair_binding
             step_record["repair_target_step_id"] = repair_target_step_id
-            step_record["source_evidence_ids"] = list(
-                repair_source_evidence_ids
-            )
+            step_record["source_evidence_ids"] = list(repair_source_evidence_ids)
             repair_evidence_metadata = {
                 "repair_target_step_id": repair_target_step_id,
                 "source_step_id": repair_source_step_id,
@@ -6569,9 +7216,7 @@ else:
             )
 
         lineage_input_evidence_ids = list(
-            dict.fromkeys(
-                [*resolved_input_evidence_ids, *repair_source_evidence_ids]
-            )
+            dict.fromkeys([*resolved_input_evidence_ids, *repair_source_evidence_ids])
         )
 
         if standard_executor_terminal_block:
@@ -6841,9 +7486,7 @@ else:
                     "generation_mode": _script_generation_mode(
                         repair_attempts=repair_attempts,
                         fallback_used=deterministic_fallback_used,
-                        standard_executor_used=(
-                            deterministic_standard_executor_used
-                        ),
+                        standard_executor_used=(deterministic_standard_executor_used),
                         runner_repair_name=runner_repair_name,
                         resumed_code_reuse=resumed_code_reuse_used,
                         concept_repair_used=concept_repair_used,
@@ -7056,6 +7699,7 @@ else:
         ]
         repairable_publication_step = (
             publication_step
+            and sealed_renderer_authorized_code_sha256 is None
             and _step_has_figure_only_output_contract(step)
             and deterministic_figure_family_supported_for_upstream(
                 run_dir, step.step_id
@@ -7623,9 +8267,8 @@ else:
                             )
                         )
 
-    if (
-        not trajectory_plan_blocked
-        and trajectory_plan_contract_applies(plan=plan, context=context)
+    if not trajectory_plan_blocked and trajectory_plan_contract_applies(
+        plan=plan, context=context
     ):
         run_level_trajectory_findings = trajectory_bundle_findings(
             context=context,

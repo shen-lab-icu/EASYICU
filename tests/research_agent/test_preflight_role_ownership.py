@@ -4,7 +4,11 @@ import inspect
 import json
 from pathlib import Path
 
+import pytest
+
 from easyicu.research_agent import pipeline_execute
+from easyicu.research_agent.pipeline import _sealed_renderer_figure_step_matches_parent
+from easyicu.research_agent.schema import AnalysisStep
 
 from easyicu.research_agent.pipeline_execute import (
     _absolute_risk_context_runner_owns_step,
@@ -15,10 +19,79 @@ from easyicu.research_agent.pipeline_execute import (
     _primary_cohort_flow_runner_owns_step,
     _repair_publication_figure_in_staging,
     _robustness_sensitivity_runner_owns_step,
+    _sealed_typed_figure_products,
+    _should_attempt_detached_figure_binding,
     _simple_missingness_audit_runner_owns_step,
     _step_has_figure_only_output_contract,
     _terminal_publication_repair_replan_skip_detail,
+    _unowned_sealed_authority_markers,
 )
+
+
+@pytest.mark.parametrize(
+    ("repair_id", "planner_method", "parent_outputs"),
+    (
+        (
+            "ordered_category_distribution_publication_bundle_v1",
+            "ordinal_exposure_derivation_and_quality_control",
+            ["table:marker_distribution"],
+        ),
+        (
+            "distribution_availability_publication_bundle_from_parent_outputs_v1",
+            "exposure_distribution_and_missingness_audit",
+            ["table:marker_distribution", "table:marker_measurement_audit"],
+        ),
+        (
+            "cohort_flow_publication_bundle_from_parent_outputs_v1",
+            "cohort_definition",
+            ["table:cohort_flow", "table:attrition"],
+        ),
+        (
+            "sensitivity_publication_bundle_from_locked_summary_v1",
+            "cohort_definition_sensitivity",
+            ["table:robustness_summary"],
+        ),
+    ),
+)
+def test_every_sealed_renderer_requires_a_planner_owned_child_edge(
+    monkeypatch,
+    repair_id,
+    planner_method,
+    parent_outputs,
+):
+    import easyicu.research_agent.pipeline as pipeline_module
+
+    parent_inputs = ["artifact:locked_cohort", "marker_value"]
+    monkeypatch.setattr(
+        pipeline_module,
+        "_resolve_upstream_manifest_step",
+        lambda run_dir, step_id: {
+            "method": planner_method,
+            "inputs": parent_inputs,
+            "expected_outputs": parent_outputs,
+        },
+    )
+    modern = AnalysisStep(
+        step_id="02_parent_figure",
+        intent="Render only the Planner-owned parent products.",
+        inputs=parent_outputs,
+        expected_outputs=["figure:planned_display"],
+        method="publication_figure_generation",
+    )
+    unrelated = modern.model_copy(update={"inputs": ["table:unrelated_result"]})
+    legacy = modern.model_copy(
+        update={"inputs": parent_inputs, "method": planner_method}
+    )
+
+    assert _sealed_renderer_figure_step_matches_parent(
+        Path("/unused"), modern, repair_id
+    )
+    assert _sealed_renderer_figure_step_matches_parent(
+        Path("/unused"), legacy, repair_id
+    )
+    assert not _sealed_renderer_figure_step_matches_parent(
+        Path("/unused"), unrelated, repair_id
+    )
 
 
 def test_failed_staged_figure_repair_preserves_agent_exports(tmp_path: Path):
@@ -103,6 +176,81 @@ def test_staged_figure_repair_needs_authorization_before_install(tmp_path: Path)
     assert repaired is None
     assert sentinel.read_bytes() == b"agent"
     assert not (out_dir / "publication_figure.png").exists()
+
+
+def test_staging_cannot_install_a_sealed_renderer_even_if_authorizer_allows_it(
+    tmp_path: Path,
+):
+    out_dir = tmp_path / "steps" / "05_result_figure" / "outputs"
+    out_dir.mkdir(parents=True)
+    sentinel = out_dir / "agent_figure.png"
+    sentinel.write_bytes(b"agent")
+
+    def _renders(**kwargs):
+        staging = Path(kwargs["out_dir"])
+        (staging / "publication_figure.png").write_bytes(b"generated")
+        return "distribution_availability_publication_bundle_from_parent_outputs_v1"
+
+    repaired = _repair_publication_figure_in_staging(
+        run_dir=tmp_path,
+        current_step_id="05_result_figure",
+        out_dir=out_dir,
+        renderer=_renders,
+        authorizer=lambda _repair_id: True,
+    )
+
+    assert repaired is None
+    assert sentinel.read_bytes() == b"agent"
+    assert not (out_dir / "publication_figure.png").exists()
+
+
+def test_sealed_renderer_requires_typed_logical_products_not_bare_exports():
+    assert _sealed_typed_figure_products(
+        ["figure:marker_distribution", "figure:marker_availability"]
+    ) == ["figure:marker_distribution", "figure:marker_availability"]
+    assert _sealed_typed_figure_products(["marker.png", "marker.svg"]) is None
+    assert (
+        _sealed_typed_figure_products(["figure:marker_distribution", "marker.svg"])
+        is None
+    )
+
+
+def test_generated_code_cannot_self_declare_sealed_authority():
+    summary = {
+        "sealed_renderer_repair": (
+            "distribution_availability_publication_bundle_from_parent_outputs_v1"
+        ),
+        "sealed_renderer_implementation_sha256": "0" * 64,
+        "sealed_renderer_parent_digests": {"step_summary.json": "1" * 64},
+        "planner_product_slot_bindings": {},
+    }
+
+    assert set(
+        _unowned_sealed_authority_markers(
+            summary,
+            authorized_code_sha256=None,
+        )
+    ) == set(summary)
+    assert (
+        _unowned_sealed_authority_markers(
+            summary,
+            authorized_code_sha256="a" * 64,
+        )
+        == []
+    )
+
+
+def test_sealed_renderer_never_enters_detached_binding(tmp_path: Path):
+    (tmp_path / "figure.png").write_bytes(b"rendered")
+
+    assert _should_attempt_detached_figure_binding(
+        out_dir=tmp_path,
+        sealed_renderer_authorized_code_sha256=None,
+    )
+    assert not _should_attempt_detached_figure_binding(
+        out_dir=tmp_path,
+        sealed_renderer_authorized_code_sha256="a" * 64,
+    )
 
 
 def test_locked_primary_cohort_flow_is_owned_by_deterministic_runner():
@@ -557,9 +705,16 @@ def test_detached_repair_binding_comes_from_plan_and_current_outer_ledger():
     )
 
     production_source = inspect.getsource(pipeline_execute.run_execute_phase)
+    compact_source = "".join(production_source.split())
     assert 'step_record["repair_target_step_id"]' in production_source
-    assert "inputs=repair_source_evidence_ids or None" in production_source
-    assert '"source_evidence_ids": list(repair_source_evidence_ids)' in production_source
+    assert (
+        "lineage_input_evidence_ids=list(dict.fromkeys("
+        "[*resolved_input_evidence_ids,*repair_source_evidence_ids]))" in compact_source
+    )
+    assert "inputs=lineage_input_evidence_idsorNone" in compact_source
+    assert (
+        '"source_evidence_ids": list(repair_source_evidence_ids)' in production_source
+    )
 
 
 def test_detached_render_repair_cannot_bind_nonfigure_science_target() -> None:
