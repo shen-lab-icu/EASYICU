@@ -75,6 +75,20 @@ def test_classify_unknown_falls_back_to_dtype(ra):
     assert h_dt.kind == VariableKind.TIMESTAMP
 
 
+def test_measurement_count_companion_preserves_window_suffix() -> None:
+    from easyicu.research_agent.icu_rules import (
+        companion_count_column_for_measured,
+    )
+
+    assert companion_count_column_for_measured("signal_measured") == "signal_n"
+    assert companion_count_column_for_measured("signal_measured_6h") == "signal_n_6h"
+    assert (
+        companion_count_column_for_measured("Signal_Measured_first_24h")
+        == "Signal_n_first_24h"
+    )
+    assert companion_count_column_for_measured("signal_measurement_rate") is None
+
+
 def test_companion_audit_columns_override_base_concept_prefix_metadata(ra):
     """Counts/status flags are provenance, never disguised physiology.
 
@@ -144,9 +158,9 @@ def test_aggregation_rule_matrix(ra):
                     schema.AggregationRule.SUM,
                     schema.AggregationRule.MEDIAN_ONLY,
                 }
-                assert all(
-                    a not in bad for a in allowed
-                ), f"Identifier kind wrongly allows {bad & set(allowed)}"
+                assert all(a not in bad for a in allowed), (
+                    f"Identifier kind wrongly allows {bad & set(allowed)}"
+                )
 
 
 def test_default_time_windows_present(ra):
@@ -423,7 +437,9 @@ def test_outcome_leakage_caution_flags_other_endpoint_not_study_outcome(ra):
     assert ra.outcome_leakage_caution(["death_icu"], study_outcome="death_icu") is None
     # Plain covariates / a derived severity score never caution as endpoints.
     assert (
-        ra.outcome_leakage_caution(["age", "sofa", "lactate"], study_outcome="death_icu")
+        ra.outcome_leakage_caution(
+            ["age", "sofa", "lactate"], study_outcome="death_icu"
+        )
         is None
     )
 
@@ -444,12 +460,9 @@ def test_leakage_detectors_degrade_without_dictionary(ra):
     # In a data-isolated sandbox (no concept dictionary) the dictionary-backed
     # checks must not fabricate flags. The self-leakage match is purely token
     # based, so it still works; the category-driven ones stay silent.
-    assert (
-        ra.detect_outcome_as_predictor(
-            ["age", "death_icu"], study_outcome="death_icu", dictionary={}
-        )
-        == ["death_icu"]
-    )
+    assert ra.detect_outcome_as_predictor(
+        ["age", "death_icu"], study_outcome="death_icu", dictionary={}
+    ) == ["death_icu"]
     assert (
         ra.outcome_leakage_caution(
             ["age", "los_icu"], study_outcome="death_icu", dictionary={}

@@ -615,27 +615,36 @@ CLINICAL SCORE AND MISSINGNESS SEMANTICS:
   combine its numeric/domain check with the shared source-present and
   non-contradictory indicator mask; it must not bypass that gate merely
   because the summary value is finite or in range.
-- For a component derivation/source-status QUALITY-CONTROL step, a declared
-  `<concept>_measured` flag does not replace the independent observation-count
-  audit. Repeat this for EVERY declared `<concept>_measured` family in the
-  step, including the authoritative primary summary and each audit-only
-  component; checking only the components is incomplete. If `<concept>_n`
-  exists in the locked wide cohort, treat it as an
-  auxiliary provenance field even when the planner omitted it from the primary
-  input list: compare `<concept>_measured` with `(<concept>_n > 0)` per stay and
-  report `count_consistency_status="checked"`, `count_flag_comparison_n`,
-  `count_flag_discordant_n`, and the count-column names under
-  `step_summary["component_qc"]`. The union of `count_columns` and
-  `missing_count_columns` must cover every declared measured family. If no
-  companion count exists, report
-  `count_consistency_status="unavailable"` plus `missing_count_columns`; never
-  fabricate a check or substitute a value-domain comparison for it. Also emit
-  `count_consistency_by_measured_input`, keyed by the exact declared
-  `<concept>_measured` name. Each entry must report either
-  `{status:"checked", count_column:"<concept>_n", comparison_n,
-  discordant_n}` or `{status:"unavailable", count_column:"<concept>_n",
-  reason}`. A checked comparison must have at least one comparable stay. These
-  count columns are audit-only, not new exposures or adjustment covariates.
+- Every non-figure, result-bearing step that declares a `<concept>_measured`
+  input must audit that flag against its mechanically paired `<concept>_n`
+  provenance field. This
+  requirement is not limited to a component-QC step or to one analysis method.
+  Set `step_summary["measurement_provenance_audit"]["source"]` to exactly
+  `"COHORT_PARQUET"` and write one record under `checks` for every exact
+  declared measured input. Preserve any trailing time-window suffix when
+  pairing fields (for example, `<concept>_measured_24h` pairs with
+  `<concept>_n_24h`). Each record must contain `measured_column`,
+  `count_column`, `status`, `comparison_n`, `invalid_pair_n`, `discordant_n`,
+  and `role="audit_only"`. If the companion count exists in the locked cohort,
+  require a binary 0/1 measured flag and a finite, non-negative integer count;
+  validate the measured flag itself even when the companion count is absent.
+  A boolean, datetime, or timedelta count is not an integer observation count,
+  and datetime/timedelta values are not valid measured flags.
+  Report invalid pairs separately, compare valid pairs with `(count > 0)`, and
+  use `status="checked"`. Any invalid pair or flag/count discordance is a
+  fail-closed provenance error, even when reported truthfully. The host will
+  replay both exact columns from the locked `COHORT_PARQUET` and reject omitted
+  measured families, convenient subset checks, or self-reported counts that
+  disagree. If the locked cohort
+  contains the measured flag but not its companion count, use
+  `status="unavailable"` with the expected count column and a reason, and set
+  `comparison_n`, `invalid_pair_n`, and `discordant_n` to null. Never claim
+  unavailable merely because the count was omitted from the planner's primary
+  input list. This audit verifies provenance only: it must not turn the count
+  into an exposure, outcome, adjustment covariate, or new cohort rule.
+  Figure-only steps and steps without a declared measured input do not need
+  this block. A method-specific `component_qc` block may report other
+  method-specific checks, but need not duplicate this host-replayed audit.
 - A shared source-status helper must make the summary semantics explicit
   (for example `require_integer=True` only for an ordinal stage or count).
   Never apply an ordinal/integer-like check to a continuous laboratory value
