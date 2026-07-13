@@ -16,6 +16,32 @@ def _is_python_executable(command: str) -> bool:
     return Path(command).name.startswith("python")
 
 
+def test_output_cleanup_never_follows_untrusted_symlinks(tmp_path: Path):
+    from easyicu.research_agent.pipeline import _clear_output_dir
+
+    victim_dir = tmp_path / "victim"
+    victim_dir.mkdir()
+    victim_file = victim_dir / "must_survive.txt"
+    victim_file.write_text("preserve", encoding="utf-8")
+    step_dir = tmp_path / "run" / "steps" / "hostile"
+    step_dir.mkdir(parents=True)
+    out_dir = step_dir / "outputs"
+    out_dir.symlink_to(victim_dir, target_is_directory=True)
+
+    _clear_output_dir(out_dir)
+
+    assert out_dir.is_dir()
+    assert not out_dir.is_symlink()
+    assert victim_file.read_text(encoding="utf-8") == "preserve"
+
+    child_link = out_dir / "hostile_child"
+    child_link.symlink_to(victim_dir, target_is_directory=True)
+    _clear_output_dir(out_dir)
+
+    assert not child_link.exists()
+    assert victim_file.read_text(encoding="utf-8") == "preserve"
+
+
 def test_runner_records_real_duration(ra, tmp_path: Path):
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)

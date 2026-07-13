@@ -196,6 +196,24 @@ from .visual_qa import VLMVisualQAAdapter, VisualQAAuditor
 logger = logging.getLogger(__name__)
 
 
+_STANDARD_EXECUTOR_INTERNAL_PENDING_ARTIFACTS = frozenset(
+    {".cluster_stability_assignments.pending.csv"}
+)
+
+
+def _remove_standard_executor_pending_artifacts(out_dir: Path) -> None:
+    """Remove private partial files before failed-run evidence discovery."""
+
+    for name in _STANDARD_EXECUTOR_INTERNAL_PENDING_ARTIFACTS:
+        (out_dir / name).unlink(missing_ok=True)
+
+
+def _is_standard_executor_internal_artifact(path: Path) -> bool:
+    """Return whether *path* is a private, never-evidence work product."""
+
+    return path.name in _STANDARD_EXECUTOR_INTERNAL_PENDING_ARTIFACTS
+
+
 class _EvidenceLineageResolutionError(RuntimeError):
     """A typed plan input could not be bound to current verified evidence."""
 
@@ -5237,12 +5255,99 @@ else:
                 total_steps=total_steps,
                 repair_attempts=repair_attempts,
             )
-            _clear_output_dir(run_dir / "steps" / step.step_id / "outputs")
-            run_result = runner.run(
+            execution_runner = runner
+            execution_timeout_seconds = pipeline._timeout_seconds
+            if deterministic_standard_executor_used:
+                # A registered standard executes the exact typed workload the
+                # planner froze. Give it a distinct bounded runner rather than
+                # widening the shared generated-code runner's timeout. This is
+                # concurrency-safe and leaves every ordinary coder attempt on
+                # the configured short budget.
+                execution_timeout_seconds = (
+                    pipeline._standard_executor_timeout_seconds
+                )
+                execution_runner = pipeline._build_runner(
+                    run_dir=run_dir,
+                    cohort_path=cohort_path,
+                    target_outcome=context.target_outcome,
+                    universe_path=universe_path,
+                    timeout_seconds=execution_timeout_seconds,
+                )
+            # DockerRunner must first prove any previous timed-out container
+            # is quiescent before its bind-mounted output directory is reused;
+            # it therefore owns cleanup inside ``run``. Other backends retain
+            # the pipeline's established pre-execution clearing behaviour.
+            if not bool(
+                getattr(execution_runner, "manages_output_cleanup", False)
+            ):
+                _clear_output_dir(
+                    run_dir / "steps" / step.step_id / "outputs"
+                )
+            step_record["execution_timeout_seconds"] = (
+                execution_timeout_seconds
+            )
+            run_result = execution_runner.run(
                 step_id=step.step_id,
                 code=code,
                 resolved_inputs_path=resolved_inputs_path,
             )
+            step_record["outputs_safe_to_collect"] = bool(
+                run_result.outputs_safe_to_collect
+            )
+            if not run_result.outputs_safe_to_collect:
+                # The backend could not prove that a process/container with a
+                # writable output mount was stopped.  Those outputs remain
+                # mutable and are therefore ineligible for inspection,
+                # hashing, repair, cleanup, or evidence registration. Docker
+                # keeps host-owned script/log control copies, but this step is
+                # still terminal until a later explicit retry resolves the
+                # teardown sentinel first.
+                unsafe_reason = "runner_output_teardown_unconfirmed"
+                step_record.update(
+                    {
+                        "status": (
+                            "deterministic_standard_blocked"
+                            if is_trajectory_stability_standard
+                            else "execution_failed"
+                        ),
+                        "diagnostic_only": True,
+                        "runner_output_safety_reason": unsafe_reason,
+                    }
+                )
+                if is_trajectory_stability_standard:
+                    step_record["standard_executor_terminal_reason"] = (
+                        "executor_runtime_failure"
+                    )
+                unsafe_finding = ValidationFinding(
+                    validator="runner_output_safety",
+                    severity="error",
+                    message=(
+                        f"Step {step.step_id} was stopped because the execution "
+                        "backend could not confirm teardown of its writable "
+                        "mount; no files from that mount were inspected or "
+                        "registered."
+                    ),
+                    detail={
+                        "step_id": step.step_id,
+                        "reason": unsafe_reason,
+                        "timed_out": bool(run_result.timed_out),
+                        "returncode": int(run_result.returncode),
+                    },
+                )
+                with shared_lock:
+                    findings.append(unsafe_finding)
+                    per_step_records.append(step_record)
+                    _flush_partial_manifest()
+                emit_progress(
+                    "runner",
+                    f"Execution mount teardown was not confirmed for {step.step_id}.",
+                    status="error",
+                    run_id=run_id,
+                    step_id=step.step_id,
+                    current_step=step_current,
+                    total_steps=total_steps,
+                )
+                return step_record
             executed_code_digest = sha256_of_file(run_result.script_path)
             step_record["executed_code_sha256"] = executed_code_digest
             if (
@@ -5371,7 +5476,7 @@ else:
                     "llm_signature": llm_signature,
                 },
             )
-            log_path = run_result.cwd / "run.log"
+            log_path = run_result.runner_log_path or (run_result.cwd / "run.log")
             if log_path.exists():
                 evidence.register_file(
                     kind="log",
@@ -6066,6 +6171,12 @@ else:
             else:
                 run_log = (run_result.stdout or "") + "\n" + (run_result.stderr or "")
             if is_trajectory_stability_standard:
+                # A timeout can interrupt the standard executor between its
+                # private streaming write and atomic rename.  That file is an
+                # implementation detail, not a diagnostic product, and must
+                # be gone before the generic output-directory scan below can
+                # register it as evidence.
+                _remove_standard_executor_pending_artifacts(run_result.out_dir)
                 standard_executor_terminal_block = True
                 standard_executor_terminal_reason = "executor_runtime_failure"
                 break
@@ -6412,9 +6523,25 @@ else:
             )
         )
 
-        run_result.artefacts = sorted(
-            p for p in run_result.out_dir.iterdir() if p.is_file()
-        )
+        if standard_executor_terminal_block:
+            # Defence in depth for every terminal path: only published
+            # diagnostics may reach evidence enumeration.
+            _remove_standard_executor_pending_artifacts(run_result.out_dir)
+        if run_result.outputs_safe_to_collect:
+            run_result.artefacts = sorted(
+                p
+                for p in run_result.out_dir.iterdir()
+                if p.is_file()
+                and not (
+                    deterministic_standard_executor_used
+                    and _is_standard_executor_internal_artifact(p)
+                )
+            )
+        else:
+            # A sandbox backend could not prove that a timed-out writer was
+            # stopped. Never enumerate or hash its mutable mount. The script
+            # and host-written run log remain available outside this list.
+            run_result.artefacts = []
 
         if publication_step and not _has_figure_exports(run_result.out_dir):
             with shared_lock:
@@ -6444,6 +6571,18 @@ else:
         evidence_ids_for_step: List[str] = [script_record.evidence_id]
         step_summary_record_id: Optional[str] = None
         for art in run_result.artefacts:
+            if not run_result.outputs_safe_to_collect:
+                # Defence in depth if a custom runner supplied an artefact
+                # list despite declaring its output mount unsafe.
+                continue
+            # Do not rely only on deletion/enumeration timing: an isolated
+            # writer interrupted during teardown could recreate its private
+            # streaming file.  Internal work products are never evidence,
+            # even if a runner reports one explicitly.
+            if deterministic_standard_executor_used and (
+                _is_standard_executor_internal_artifact(art)
+            ):
+                continue
             step_aliases = _semantic_aliases_for(step, art)
             generation_mode = _script_generation_mode(
                 repair_attempts=repair_attempts,

@@ -1537,6 +1537,8 @@ def _benchmark_pipeline_options(
     max_total_steps: Optional[int],
     disable_replanning: bool,
     max_code_repair_attempts: Optional[int],
+    timeout_seconds: float = 300.0,
+    standard_executor_timeout_seconds: float = 3_600.0,
     enable_repro_envelope: bool = True,
     enable_cost_tracking: bool = True,
     llm_seed: Optional[int] = None,
@@ -1555,6 +1557,13 @@ def _benchmark_pipeline_options(
         # the run manifest / bench_results.json document the execution
         # isolation the manuscript Methods section cites.
         options["runner_kind"] = runner_kind
+    # These are independent execution budgets.  The ordinary timeout bounds
+    # model-generated scripts; registered standards use their own longer
+    # planner-owned workload budget.
+    options["timeout_seconds"] = float(timeout_seconds)
+    options["standard_executor_timeout_seconds"] = float(
+        standard_executor_timeout_seconds
+    )
     if max_total_steps is not None:
         options["max_total_steps"] = int(max_total_steps)
     if disable_replanning:
@@ -1860,6 +1869,25 @@ def main() -> int:
         help="Per-request timeout for real LLM providers.",
     )
     parser.add_argument(
+        "--timeout",
+        type=float,
+        default=300.0,
+        help=(
+            "Per-attempt timeout in seconds for ordinary model-generated "
+            "analysis code. This does not change the LLM request timeout or "
+            "the registered standard-executor timeout."
+        ),
+    )
+    parser.add_argument(
+        "--standard-executor-timeout",
+        type=float,
+        default=3_600.0,
+        help=(
+            "Independent timeout in seconds for a registered deterministic "
+            "standard executor running the Planner-owned workload."
+        ),
+    )
+    parser.add_argument(
         "--arms",
         nargs="+",
         choices=list(_ARM_ORDER),
@@ -2116,6 +2144,10 @@ def main() -> int:
         max_total_steps=args.max_total_steps,
         disable_replanning=bool(args.disable_replanning),
         max_code_repair_attempts=args.max_code_repair_attempts,
+        timeout_seconds=float(args.timeout),
+        standard_executor_timeout_seconds=float(
+            args.standard_executor_timeout
+        ),
         enable_repro_envelope=not bool(getattr(args, "no_repro_envelope", False)),
         enable_cost_tracking=not bool(getattr(args, "no_cost_tracking", False)),
         llm_seed=getattr(args, "llm_seed", None),

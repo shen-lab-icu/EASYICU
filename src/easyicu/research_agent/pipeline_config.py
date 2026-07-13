@@ -52,6 +52,12 @@ class PipelineConfig:
     # --- core LLM / runtime ---------------------------------------------
     llm: Optional[Any] = None
     timeout_seconds: float = 300.0
+    # Registered deterministic standards can execute a planner-owned workload
+    # (for example, a fixed resampling design) that is intentionally much
+    # longer than one generated-code attempt. Keep that bounded workload on a
+    # separate wall-clock budget so raising it never gives ordinary coder
+    # scripts additional runtime.
+    standard_executor_timeout_seconds: float = 3_600.0
     python_executable: Optional[str] = None
 
     # --- feature toggles -------------------------------------------------

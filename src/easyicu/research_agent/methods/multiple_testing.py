@@ -16,10 +16,12 @@ from __future__ import annotations
 import csv
 import json
 import math
+import mmap
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, TextIO, Tuple
 
 from ..runtime_artifacts import verified_run_evidence_path
 
@@ -140,6 +142,12 @@ _IDENTITY_CONTEXT_COLUMNS = (
 # also scan the value text. The regex is liberal but capped at 12
 # characters to avoid surprising matches.
 _INLINE_P_RE = re.compile(r"\bp\s*[=<>]\s*([0-9.eE\-]{1,12})")
+_ASCII_WORD_BYTES = frozenset(
+    b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz"
+)
+_ASCII_WHITESPACE_BYTES = frozenset(b" \t\n\r\v\f")
+_INLINE_P_OPERATOR_BYTES = frozenset(b"=<>")
+_INLINE_P_NUMBER_BYTES = frozenset(b"0123456789.eE-")
 
 
 # ---------------------------------------------------------------------------
@@ -611,6 +619,66 @@ def _first_label_in_row(row: Dict[str, Any], pvalue_column: str) -> Optional[str
     return None
 
 
+def _mapped_file_may_contain_inline_p(fh: TextIO) -> bool:
+    """Cheaply detect whether a CSV may contain an inline ``p=...`` cell.
+
+    The exact p-value columns are handled from the header before this helper is
+    called.  For the legacy arbitrary-column inline syntax, a read-only mapping
+    lets the platform's native byte search reject large numeric files without
+    constructing a Python dictionary for every row.  ASCII candidates mirror
+    the required prefix of :data:`_INLINE_P_RE`.  Bytes whose Unicode boundary
+    or whitespace role is ambiguous conservatively return ``True`` so the
+    existing text/CSV parser remains the authority; false positives cost time
+    but cannot change extracted results.
+    """
+    try:
+        payload = mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ)
+    except ValueError:
+        # ``mmap`` rejects empty files, but ValueError is not guaranteed to
+        # mean empty on every platform/filesystem.  Only return a definitive
+        # negative when fstat proves zero bytes; otherwise preserve semantics
+        # by falling back to the row parser.
+        try:
+            return os.fstat(fh.fileno()).st_size != 0
+        except (AttributeError, OSError, ValueError):
+            return True
+    except (AttributeError, OSError):
+        # Some virtual filesystems do not support mapping.  Falling back to the
+        # existing row parser preserves extraction semantics on those systems.
+        return True
+
+    with payload:
+        size = len(payload)
+        position = payload.find(b"p")
+        while position >= 0:
+            if position:
+                previous = payload[position - 1]
+                if previous >= 128:
+                    return True
+                if previous in _ASCII_WORD_BYTES:
+                    position = payload.find(b"p", position + 1)
+                    continue
+
+            cursor = position + 1
+            while cursor < size and payload[cursor] in _ASCII_WHITESPACE_BYTES:
+                cursor += 1
+            if cursor < size and payload[cursor] >= 128:
+                return True
+            if cursor >= size or payload[cursor] not in _INLINE_P_OPERATOR_BYTES:
+                position = payload.find(b"p", position + 1)
+                continue
+
+            cursor += 1
+            while cursor < size and payload[cursor] in _ASCII_WHITESPACE_BYTES:
+                cursor += 1
+            if cursor < size and payload[cursor] >= 128:
+                return True
+            if cursor < size and payload[cursor] in _INLINE_P_NUMBER_BYTES:
+                return True
+            position = payload.find(b"p", position + 1)
+    return False
+
+
 def _extract_pvalues_from_csv(
     *, csv_path: Path, evidence_id: str, artefact_path: str
 ) -> Tuple[List[PValueRecord], List[str]]:
@@ -624,6 +692,19 @@ def _extract_pvalues_from_csv(
                 return records, notes
             pvalue_columns = [c for c in reader.fieldnames if _is_pvalue_column(c)]
             coefficient_table = _is_structured_coefficient(reader.fieldnames)
+            if not pvalue_columns:
+                # Structured coefficient tables deliberately disable inline
+                # narrative extraction.  With no raw-p column there is
+                # therefore nothing this source can contribute.
+                if coefficient_table:
+                    return records, notes
+                # Preserve arbitrary-column inline ``p=...`` support without
+                # paying DictReader + per-row normalisation cost for large
+                # numeric artefacts that contain no such token.
+                if not _mapped_file_may_contain_inline_p(fh):
+                    return records, notes
+                fh.seek(0)
+                reader = csv.DictReader(fh)
             omitted_untyped_coefficients = 0
             for row_idx, row in enumerate(reader):
                 metadata = _normalised_row(row)

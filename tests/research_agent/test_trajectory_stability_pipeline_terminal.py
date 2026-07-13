@@ -146,9 +146,16 @@ class _TerminalPlanLLM:
 
 
 class _TerminalRunner:
-    def __init__(self, *, workdir: Path, stability_mode: str) -> None:
+    def __init__(
+        self,
+        *,
+        workdir: Path,
+        stability_mode: str,
+        timeout_seconds: float,
+    ) -> None:
         self.workdir = Path(workdir)
         self.stability_mode = stability_mode
+        self.timeout_seconds = float(timeout_seconds)
         self.calls: list[str] = []
 
     @staticmethod
@@ -265,6 +272,55 @@ class _TerminalRunner:
         script_path = cwd / "analysis.py"
         script_path.write_text(code, encoding="utf-8")
         (cwd / "run.log").write_text("synthetic runner\n", encoding="utf-8")
+        if (
+            step_id == "01_representation"
+            and self.stability_mode == "unsafe_ordinary_timeout"
+        ):
+            (out_dir / "untrusted_partial.csv").write_text(
+                "value\n1\n", encoding="utf-8"
+            )
+            return RunResult(
+                step_id=step_id,
+                script_path=script_path,
+                cwd=cwd,
+                out_dir=out_dir,
+                stdout="",
+                stderr="synthetic unconfirmed teardown",
+                returncode=-1,
+                duration_seconds=self.timeout_seconds,
+                artefacts=[],
+                timed_out=True,
+                effective_isolation="synthetic_test",
+                outputs_safe_to_collect=False,
+            )
+        if step_id == "03_stability" and self.stability_mode in {
+            "runtime_timeout",
+            "unsafe_runtime_timeout",
+        }:
+            # Simulate interruption after the standard executor has streamed
+            # assignments but before its atomic publish/cleanup boundary.
+            pd.DataFrame(
+                {"opaque_id": ["a"], "resample_id": [0], "cluster": [1]}
+            ).to_csv(
+                out_dir / ".cluster_stability_assignments.pending.csv",
+                index=False,
+            )
+            return RunResult(
+                step_id=step_id,
+                script_path=script_path,
+                cwd=cwd,
+                out_dir=out_dir,
+                stdout="",
+                stderr="synthetic timeout",
+                returncode=-1,
+                duration_seconds=self.timeout_seconds,
+                artefacts=[],
+                timed_out=True,
+                effective_isolation="synthetic_test",
+                outputs_safe_to_collect=(
+                    self.stability_mode != "unsafe_runtime_timeout"
+                ),
+            )
         if step_id == "03_stability":
             self._write_terminal_outputs(out_dir)
         else:
@@ -364,10 +420,11 @@ def _run_terminal_case(
     llm = _TerminalPlanLLM()
     runner_holder: dict[str, _TerminalRunner] = {}
 
-    def runner_factory(*, workdir, **_kwargs):
+    def runner_factory(*, workdir, timeout_seconds, **_kwargs):
         runner = _TerminalRunner(
             workdir=Path(workdir),
             stability_mode=stability_mode,
+            timeout_seconds=timeout_seconds,
         )
         runner_holder["runner"] = runner
         return runner
@@ -375,6 +432,8 @@ def _run_terminal_case(
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=llm,
+        timeout_seconds=17.0,
+        standard_executor_timeout_seconds=1_234.0,
         runner_factory=runner_factory,
         enable_literature=False,
         enable_visual_qa=False,
@@ -411,6 +470,8 @@ def _run_terminal_case(
         ("failed_closed", "executor_reported_failed_closed", 1),
         ("empty", "missing_executor_outputs", 1),
         ("ok_contract_error", "executor_output_contract_failed", 1),
+        ("runtime_timeout", "executor_runtime_failure", 1),
+        ("unsafe_runtime_timeout", "executor_runtime_failure", 1),
         ("preexecution_concept_error", "preexecution_concept_gate_failed", 0),
     ],
 )
@@ -443,9 +504,32 @@ def test_trajectory_stability_terminal_failures_never_enter_repair_or_fallback(
     assert stability_record["standard_executor_terminal_reason"] == expected_reason
     assert llm.repair_calls == 0
     assert runner.calls.count("03_stability") == expected_runner_calls
+    if expected_runner_calls:
+        assert runner.timeout_seconds == 1_234.0
+        assert stability_record["execution_timeout_seconds"] == 1_234.0
+    if stability_mode == "unsafe_runtime_timeout":
+        assert stability_record["outputs_safe_to_collect"] is False
     assert "04_characterization" not in runner.calls
 
+    pending_path = (
+        run_dir
+        / "steps"
+        / "03_stability"
+        / "outputs"
+        / ".cluster_stability_assignments.pending.csv"
+    )
+    if stability_mode == "unsafe_runtime_timeout":
+        assert pending_path.exists()
+    else:
+        assert not pending_path.exists()
+
     evidence = EvidenceStore(run_dir)
+    assert not any(
+        record.relative_path.endswith(
+            ".cluster_stability_assignments.pending.csv"
+        )
+        for record in evidence.records()
+    )
     assert [
         claim for claim in evidence.numeric_claims() if claim.step_id == "03_stability"
     ] == []
@@ -466,3 +550,134 @@ def test_trajectory_stability_terminal_failures_never_enter_repair_or_fallback(
         assert all(
             record.metadata.get("diagnostic_only") is True for record in output_records
         )
+
+
+def test_standard_executor_pending_file_is_never_registered_during_cleanup_race(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.research_agent import pipeline_execute
+
+    # Model a writer that recreates its private stream after unlink.  Evidence
+    # safety must come from an explicit deny-list at enumeration/registration,
+    # not from winning a filesystem timing race.
+    monkeypatch.setattr(
+        pipeline_execute,
+        "_remove_standard_executor_pending_artifacts",
+        lambda _out_dir: None,
+    )
+    result, _llm, _runner = _run_terminal_case(
+        ra=ra,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        stability_mode="runtime_timeout",
+    )
+    run_dir = Path(result.workdir)
+    pending_path = (
+        run_dir
+        / "steps"
+        / "03_stability"
+        / "outputs"
+        / ".cluster_stability_assignments.pending.csv"
+    )
+
+    assert pending_path.exists()
+    evidence = EvidenceStore(run_dir)
+    assert not any(
+        record.relative_path.endswith(pending_path.name)
+        for record in evidence.records()
+    )
+
+
+def test_unsafe_runner_mount_short_circuits_before_any_output_probe(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.research_agent import pipeline_execute
+
+    real_figure_probe = pipeline_execute._has_figure_exports
+
+    def forbidden_output_probe(out_dir: Path) -> bool:
+        if out_dir.parent.name == "03_stability":
+            raise AssertionError("unsafe runner output mount must not be inspected")
+        return real_figure_probe(out_dir)
+
+    monkeypatch.setattr(
+        pipeline_execute,
+        "_has_figure_exports",
+        forbidden_output_probe,
+    )
+    result, llm, runner = _run_terminal_case(
+        ra=ra,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        stability_mode="unsafe_runtime_timeout",
+    )
+    run_dir = Path(result.workdir)
+    partial = json.loads(
+        (run_dir / "manifest_partial.json").read_text(encoding="utf-8")
+    )
+    stability_record = next(
+        record
+        for record in reversed(partial["per_step_records"])
+        if record.get("step_id") == "03_stability"
+    )
+
+    assert stability_record["status"] == "deterministic_standard_blocked"
+    assert stability_record["outputs_safe_to_collect"] is False
+    assert stability_record["runner_output_safety_reason"] == (
+        "runner_output_teardown_unconfirmed"
+    )
+    assert llm.repair_calls == 0
+    assert runner.calls.count("03_stability") == 1
+    assert [
+        claim
+        for claim in EvidenceStore(run_dir).numeric_claims()
+        if claim.step_id == "03_stability"
+    ] == []
+
+
+def test_ordinary_unsafe_runner_mount_never_enters_repair_or_evidence(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.research_agent import pipeline_execute
+
+    def forbidden_output_probe(_out_dir: Path) -> bool:
+        raise AssertionError("unsafe runner output mount must not be inspected")
+
+    monkeypatch.setattr(
+        pipeline_execute,
+        "_has_figure_exports",
+        forbidden_output_probe,
+    )
+    result, llm, runner = _run_terminal_case(
+        ra=ra,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        stability_mode="unsafe_ordinary_timeout",
+    )
+    run_dir = Path(result.workdir)
+    partial = json.loads(
+        (run_dir / "manifest_partial.json").read_text(encoding="utf-8")
+    )
+    failed_record = next(
+        record
+        for record in reversed(partial["per_step_records"])
+        if record.get("step_id") == "01_representation"
+    )
+
+    assert failed_record["status"] == "execution_failed"
+    assert failed_record["outputs_safe_to_collect"] is False
+    assert failed_record["runner_output_safety_reason"] == (
+        "runner_output_teardown_unconfirmed"
+    )
+    assert llm.repair_calls == 0
+    assert runner.calls == ["01_representation"]
+    assert not any(
+        record.relative_path.endswith("untrusted_partial.csv")
+        for record in EvidenceStore(run_dir).records()
+    )
