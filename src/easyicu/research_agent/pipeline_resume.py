@@ -374,6 +374,19 @@ class ResumeController:
                 finding = ValidationFinding.model_validate(payload)
             except Exception:
                 continue
+            detail = finding.detail if isinstance(finding.detail, dict) else {}
+            # Plan-DAG findings describe a particular saved plan revision, not
+            # an immutable run event. Resume loads the newest digest-verified
+            # compatible plan and the execute phase re-evaluates its trajectory
+            # DAG immediately. Carrying pending/errors from an older revision
+            # can otherwise block a now-valid plan before the selected step.
+            if finding.validator == "plan_contract_pending":
+                continue
+            if (
+                finding.validator == "plan_contract"
+                and str(detail.get("kind") or "").startswith("trajectory_")
+            ):
+                continue
             if self._finding_mentions_step(finding, rerun_step_ids):
                 continue
             if finding.validator == "cohort_auditor":
