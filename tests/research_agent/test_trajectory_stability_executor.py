@@ -265,6 +265,50 @@ def test_executor_is_case_neutral_and_replayable(
             replayed_ari, rel=1e-12, abs=1e-12
         )
 
+    assert len(row_assignments) == int(stability["sample_n"].sum())
+    replay_counts = (
+        row_assignments.assign(
+            assignment_agreement=(
+                row_assignments["reference_cluster"].astype(str)
+                == row_assignments["resampled_cluster"].astype(str)
+            ).astype(int)
+        )
+        .groupby(id_column, sort=False)
+        .agg(
+            stability_inclusion_n=("resample_id", "nunique"),
+            assignment_agreement_n=("assignment_agreement", "sum"),
+        )
+    )
+    provenance = pd.read_csv(out_dir / "cluster_assignment_provenance.csv")
+    provenance_by_id = provenance.set_index(id_column)
+    for identifier in representation[id_column]:
+        expected_inclusion = (
+            int(replay_counts.loc[identifier, "stability_inclusion_n"])
+            if identifier in replay_counts.index
+            else 0
+        )
+        expected_agreement = (
+            int(replay_counts.loc[identifier, "assignment_agreement_n"])
+            if identifier in replay_counts.index
+            else 0
+        )
+        observed = provenance_by_id.loc[identifier]
+        assert int(observed["stability_inclusion_n"]) == expected_inclusion
+        assert int(observed["assignment_agreement_n"]) == expected_agreement
+        assert float(observed["stability_inclusion_fraction"]) == pytest.approx(
+            expected_inclusion / len(stability)
+        )
+        expected_fraction = (
+            expected_agreement / expected_inclusion if expected_inclusion else math.nan
+        )
+        if math.isnan(expected_fraction):
+            assert pd.isna(observed["assignment_agreement_fraction"])
+        else:
+            assert float(observed["assignment_agreement_fraction"]) == pytest.approx(
+                expected_fraction
+            )
+    assert not (out_dir / ".cluster_stability_assignments.pending.csv").exists()
+
 
 @pytest.mark.parametrize(
     "violation",
@@ -386,9 +430,10 @@ def test_executor_fails_closed_when_sampled_reference_has_one_cluster(
     ]
     assignment_binding["sha256"] = _sha256(assignment_path)
 
+    out_dir = tmp_path / "step_outputs"
     summary = run_trajectory_stability(
         spec=_spec().model_copy(update={"base_seed": 9}),
-        out_dir=tmp_path / "step_outputs",
+        out_dir=out_dir,
         run_dir=tmp_path,
         resolved_inputs=resolved,
     )
@@ -400,6 +445,8 @@ def test_executor_fails_closed_when_sampled_reference_has_one_cluster(
         )
     )["failures"]
     assert any("fewer than two clusters" in row["error"] for row in failures)
+    assert not (out_dir / ".cluster_stability_assignments.pending.csv").exists()
+    assert pd.read_csv(out_dir / "cluster_stability_assignments.csv").empty
 
 
 def test_threshold_failure_fails_closed_without_changing_selected_solution(

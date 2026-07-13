@@ -466,16 +466,18 @@ def test_typed_trajectory_stability_success_is_evidence_bound_and_continues(
 
     _disable_unrelated_audits(monkeypatch)
     llm = _PlanAndCoderLLM()
-    runner_holder: dict[str, _HybridTrajectoryRunner] = {}
+    runner_records: list[tuple[float, _HybridTrajectoryRunner]] = []
 
-    def runner_factory(*, workdir, **_kwargs):
+    def runner_factory(*, workdir, timeout_seconds, **_kwargs):
         runner = _HybridTrajectoryRunner(workdir=Path(workdir))
-        runner_holder["runner"] = runner
+        runner_records.append((float(timeout_seconds), runner))
         return runner
 
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=llm,
+        timeout_seconds=17.0,
+        standard_executor_timeout_seconds=1_234.0,
         runner_factory=runner_factory,
         enable_literature=False,
         enable_visual_qa=False,
@@ -513,7 +515,21 @@ def test_typed_trajectory_stability_success_is_evidence_bound_and_continues(
     }
     stability_record = latest["03_stability"]
     downstream_record = latest["04_characterization"]
-    runner = runner_holder["runner"]
+    ordinary_runners = [
+        runner for timeout, runner in runner_records if timeout == 17.0
+    ]
+    standard_runners = [
+        runner for timeout, runner in runner_records if timeout == 1_234.0
+    ]
+    ordinary_calls = [
+        step_id for runner in ordinary_runners for step_id in runner.calls
+    ]
+    standard_calls = [
+        step_id for runner in standard_runners for step_id in runner.calls
+    ]
+    candidate_runner = next(
+        runner for runner in ordinary_runners if runner.candidate_labels
+    )
 
     assert stability_record["status"] == "ok"
     assert stability_record["deterministic_standard_analysis"] == (
@@ -526,11 +542,25 @@ def test_typed_trajectory_stability_success_is_evidence_bound_and_continues(
         if finding.get("severity") == "error"
     ]
     assert downstream_record["status"] == "ok"
-    assert runner.calls.count("03_stability") == 1
-    assert runner.calls.index("04_characterization") > runner.calls.index(
-        "03_stability"
+    assert stability_record["execution_timeout_seconds"] == 1_234.0
+    assert downstream_record["execution_timeout_seconds"] == 17.0
+    assert standard_calls == ["03_stability"]
+    assert "03_stability" not in ordinary_calls
+    assert "04_characterization" in ordinary_calls
+    assert any(
+        runner.downstream_resolved_assignments for runner in ordinary_runners
     )
-    assert runner.downstream_resolved_assignments is True
+    standard_script = (
+        run_dir / "steps" / "03_stability" / "analysis.py"
+    ).read_text(encoding="utf-8")
+    for native_thread_env in (
+        "VECLIB_MAXIMUM_THREADS",
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+    ):
+        assert f"os.environ['{native_thread_env}'] = '1'" in standard_script
 
     stability_coder_marker = "03_stability"
     assert all(stability_coder_marker not in prompt for prompt in llm.write_prompts)
@@ -567,7 +597,7 @@ def test_typed_trajectory_stability_success_is_evidence_bound_and_continues(
         run_dir / "steps" / "03_stability" / "outputs" / "cluster_assignments.csv"
     )
     assert final_assignments.set_index("opaque_id")["cluster"].to_dict() == (
-        runner.candidate_labels
+        candidate_runner.candidate_labels
     )
 
     summary_evidence_id = stability_record["step_summary_evidence_id"]

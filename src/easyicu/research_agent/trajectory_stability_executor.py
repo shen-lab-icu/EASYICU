@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -47,6 +48,13 @@ _SUPPORTED_FIT_METHOD = "observed_data_em_diagonal_gaussian_mixture"
 _SUPPORTED_COVARIANCE = "diag"
 _SUPPORTED_REPRESENTATION_SCHEMA = "easyicu.trajectory_representation_schema/1"
 _SUPPORTED_SOLUTION_SCHEMA = "easyicu.candidate_cluster_solution_schema/2"
+_NATIVE_MATH_THREAD_ENV = (
+    "VECLIB_MAXIMUM_THREADS",
+    "OMP_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+)
 
 
 def _step_contract_is_closed(step: AnalysisStep) -> bool:
@@ -106,6 +114,11 @@ def trajectory_stability_executor_code(
     payload = step.trajectory_stability_spec.model_dump(mode="json")
     return (
         "import json, os\n"
+        "os.environ['VECLIB_MAXIMUM_THREADS'] = '1'\n"
+        "os.environ['OMP_NUM_THREADS'] = '1'\n"
+        "os.environ['OPENBLAS_NUM_THREADS'] = '1'\n"
+        "os.environ['MKL_NUM_THREADS'] = '1'\n"
+        "os.environ['NUMEXPR_NUM_THREADS'] = '1'\n"
         "from pathlib import Path\n"
         "from easyicu.research_agent.trajectory_stability_executor import "
         "run_trajectory_stability\n"
@@ -297,9 +310,17 @@ def _fit_observed_data_diag_gmm(
     if not observed.any(axis=0).all():
         raise ValueError("a refit coordinate has no observed values")
 
-    observed_float = observed.astype(float)
-    x_work = np.where(observed, x, 0.0)
-    x_squared = x_work * x_work
+    # Stack the three sufficient-statistic blocks once so each EM phase uses
+    # one dense matrix multiplication instead of three small ones.  This is
+    # algebraically identical to the separate observed/x/x-squared products,
+    # but materially reduces dispatch overhead for large trajectory matrices.
+    sufficient_statistics = np.empty((n_rows, 3 * n_features), dtype=float)
+    observed_float = sufficient_statistics[:, :n_features]
+    observed_float[:] = observed
+    x_work = sufficient_statistics[:, n_features : 2 * n_features]
+    x_work[:] = np.where(observed, x, 0.0)
+    x_squared = sufficient_statistics[:, 2 * n_features :]
+    np.square(x_work, out=x_squared)
     counts = observed_float.sum(axis=0)
     global_mean = x_work.sum(axis=0) / counts
     centered = x_work - global_mean
@@ -315,9 +336,10 @@ def _fit_observed_data_diag_gmm(
     previous = -np.inf
     converged = False
     for iteration in range(max_iter):
-        effective_observed = responsibilities.T @ observed_float
-        weighted_values = responsibilities.T @ x_work
-        weighted_squares = responsibilities.T @ x_squared
+        weighted_statistics = responsibilities.T @ sufficient_statistics
+        effective_observed = weighted_statistics[:, :n_features]
+        weighted_values = weighted_statistics[:, n_features : 2 * n_features]
+        weighted_squares = weighted_statistics[:, 2 * n_features :]
         means = np.broadcast_to(global_mean, (n_components, n_features)).copy()
         np.divide(
             weighted_values,
@@ -346,11 +368,15 @@ def _fit_observed_data_diag_gmm(
             + np.log(variances)
             + means * means * inverse_variances
         )
-        contribution = (
-            observed_float @ observed_constant.T
-            + x_squared @ inverse_variances.T
-            - 2.0 * x_work @ (means * inverse_variances).T
+        likelihood_coefficients = np.concatenate(
+            (
+                observed_constant.T,
+                (-2.0 * means * inverse_variances).T,
+                inverse_variances.T,
+            ),
+            axis=0,
         )
+        contribution = sufficient_statistics @ likelihood_coefficients
         log_prob = np.log(weights)[None, :] - 0.5 * contribution
         normalizer = logsumexp(log_prob, axis=1)
         likelihood = float(normalizer.sum())
@@ -693,6 +719,8 @@ def run_trajectory_stability(
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     _empty_outputs(out_dir)
+    pending_assignments_path = out_dir / ".cluster_stability_assignments.pending.csv"
+    pending_assignments_path.unlink(missing_ok=True)
     summary: dict[str, Any] = {
         "analysis_family": "trajectory_clustering",
         "status": "failed_closed",
@@ -841,6 +869,13 @@ def run_trajectory_stability(
             "fit_method": solution_schema.get("fit_method"),
             "covariance_type": solution_schema.get("covariance_type"),
             "representation_columns": representation_columns,
+            "execution_parallelism": {
+                "method": "ordered_sequential_refits_v1",
+                "max_workers": 1,
+                "native_math_thread_environment": {
+                    key: os.environ.get(key) for key in _NATIVE_MATH_THREAD_ENV
+                },
+            },
             "input_provenance": {
                 key: _binding_provenance(inputs, key)
                 for key in sorted(STABILITY_EXECUTOR_INPUTS)
@@ -852,10 +887,12 @@ def run_trajectory_stability(
         reference_array = reference.to_numpy(dtype=object)
         reference_universe = pd.unique(reference_array).tolist()
         successful_rows: list[dict[str, Any]] = []
-        assignment_rows: list[dict[str, Any]] = []
         failure_rows: list[dict[str, Any]] = []
         attempt_rows: list[dict[str, Any]] = []
+        inclusion_counts = np.zeros(n_rows, dtype=np.int64)
+        agreement_counts = np.zeros(n_rows, dtype=np.int64)
         seen_hashes: set[str] = set()
+        assignments_header_written = False
         for index, seed in enumerate(seeds, start=1):
             resample_id = f"stability_resample_{index:03d}"
             rng = np.random.default_rng(seed)
@@ -867,7 +904,9 @@ def run_trajectory_stability(
             )
             try:
                 if sample_id_hash in seen_hashes:
-                    raise ValueError("subsample membership duplicated an earlier refit")
+                    raise ValueError(
+                        "subsample membership duplicated an earlier refit"
+                    )
                 reference_sample = reference_array[positions]
                 if np.unique(reference_sample).size < 2:
                     raise ValueError(
@@ -915,19 +954,25 @@ def run_trajectory_stability(
                         ].get("sha256"),
                     }
                 )
-                assignment_rows.extend(
+                assignment_frame = pd.DataFrame(
                     {
                         "resample_id": resample_id,
-                        id_column: identifier,
-                        "reference_cluster": reference_label,
-                        "resampled_cluster": refit_label,
+                        id_column: sampled_ids.to_numpy(),
+                        "reference_cluster": reference_sample,
+                        "resampled_cluster": aligned,
                     }
-                    for identifier, reference_label, refit_label in zip(
-                        sampled_ids.tolist(),
-                        reference_sample.tolist(),
-                        aligned.tolist(),
-                        strict=True,
-                    )
+                )
+                assignment_frame.to_csv(
+                    pending_assignments_path,
+                    mode="a",
+                    header=not assignments_header_written,
+                    index=False,
+                )
+                assignments_header_written = True
+                inclusion_counts[positions] += 1
+                agreement_counts[positions] += np.asarray(
+                    aligned == reference_sample,
+                    dtype=np.int64,
                 )
             except Exception as exc:
                 failure_row = {
@@ -965,6 +1010,7 @@ def run_trajectory_stability(
             raise ValueError("stability attempt ledger does not match n_resamples")
 
         if len(successful_rows) < spec.minimum_successful_resamples:
+            pending_assignments_path.unlink(missing_ok=True)
             _write_json(
                 out_dir / "cluster_stability_refit_failures.json",
                 {"failures": failure_rows},
@@ -974,42 +1020,20 @@ def run_trajectory_stability(
                 f"{len(successful_rows)} < {spec.minimum_successful_resamples}"
             )
         stability = pd.DataFrame(successful_rows)
-        stability_assignments = pd.DataFrame(assignment_rows)
         stability.to_csv(out_dir / "cluster_stability.csv", index=False)
-        stability_assignments.to_csv(
-            out_dir / "cluster_stability_assignments.csv", index=False
+        if not assignments_header_written or not pending_assignments_path.is_file():
+            raise ValueError("successful refits did not produce assignment rows")
+        pending_assignments_path.replace(
+            out_dir / "cluster_stability_assignments.csv"
         )
 
         final_assignments = pd.DataFrame(
             {id_column: ids.tolist(), "cluster": reference_array.tolist()}
         )
         final_assignments.to_csv(out_dir / "cluster_assignments.csv", index=False)
-        grouped = stability_assignments.groupby(id_column, sort=False)
-        per_id = grouped.agg(
-            stability_inclusion_n=("resample_id", "nunique"),
-            assignment_agreement_n=(
-                "resampled_cluster",
-                lambda values: int(
-                    sum(
-                        str(left) == str(right)
-                        for left, right in zip(
-                            stability_assignments.loc[
-                                values.index, "reference_cluster"
-                            ],
-                            values,
-                            strict=True,
-                        )
-                    )
-                ),
-            ),
-        ).reset_index()
-        provenance = final_assignments.merge(per_id, on=id_column, how="left")
-        provenance["stability_inclusion_n"] = (
-            provenance["stability_inclusion_n"].fillna(0).astype(int)
-        )
-        provenance["assignment_agreement_n"] = (
-            provenance["assignment_agreement_n"].fillna(0).astype(int)
-        )
+        provenance = final_assignments.copy()
+        provenance["stability_inclusion_n"] = inclusion_counts
+        provenance["assignment_agreement_n"] = agreement_counts
         provenance["stability_inclusion_fraction"] = provenance[
             "stability_inclusion_n"
         ] / len(successful_rows)
@@ -1140,5 +1164,6 @@ def run_trajectory_stability(
             )
     except Exception as exc:
         summary["errors"].append(f"{type(exc).__name__}: {exc}")
+    pending_assignments_path.unlink(missing_ok=True)
     _write_json(out_dir / "step_summary.json", summary)
     return summary

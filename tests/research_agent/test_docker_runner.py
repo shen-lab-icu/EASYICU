@@ -6,8 +6,8 @@ mock ``subprocess.run`` and ``shutil.which`` to verify:
 1. ``shutil.which("docker")`` is consulted at construction; missing
    binary raises a clean ``FileNotFoundError``.
 2. The composed argv contains the right safety knobs:
-   ``--rm``, ``--init``, ``--network=none``, RO cohort mount, RW
-   step mount, env injection, image trailer, and ``python -u``.
+   ``--rm``, ``--init``, ``--network=none``, RO cohort/run mounts, RW
+   outputs-only mount, env injection, image trailer, and ``python -u``.
 3. ``cohort_parquet`` is mounted read-only at ``/cohort.parquet``
    and ``COHORT_PARQUET`` points there.
 4. Custom image, network, mounts, cpu/memory limits, user, and
@@ -22,9 +22,10 @@ from __future__ import annotations
 
 import json
 import shlex
+import shutil
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import pandas as pd
 import pytest
@@ -48,6 +49,15 @@ def _install_fake_subprocess(
     *,
     proc: Optional[_FakeProc] = None,
     raise_timeout: bool = False,
+    stop_returncode: int = 0,
+    kill_returncode: int = 0,
+    rm_returncode: int = 0,
+    wait_returncode: int = 0,
+    container_inspect_returncode: int = 0,
+    container_inspect_stderr: str = "",
+    cidfile_value: Optional[str] = "c" * 64,
+    run_exception: Optional[BaseException] = None,
+    run_side_effect: Optional[Callable[[], None]] = None,
     captured: Optional[List[List[str]]] = None,
 ) -> None:
     """Replace runner.subprocess.run with a deterministic stub."""
@@ -65,6 +75,11 @@ def _install_fake_subprocess(
                     }
                 )
             )
+        if len(cmd) >= 3 and cmd[1:3] == ["container", "inspect"]:
+            return _FakeProc(
+                returncode=container_inspect_returncode,
+                stderr=container_inspect_stderr,
+            )
         if "pip" in cmd and "freeze" in cmd:
             return _FakeProc(
                 stdout=(
@@ -81,7 +96,24 @@ def _install_fake_subprocess(
             )
         if len(cmd) >= 2 and cmd[1] == "pull":
             return proc
-        if raise_timeout:
+        if len(cmd) >= 2 and cmd[1] == "stop":
+            return _FakeProc(returncode=stop_returncode)
+        if len(cmd) >= 2 and cmd[1] == "kill":
+            return _FakeProc(returncode=kill_returncode)
+        if len(cmd) >= 2 and cmd[1] == "rm":
+            return _FakeProc(returncode=rm_returncode)
+        if len(cmd) >= 2 and cmd[1] == "wait":
+            return _FakeProc(returncode=wait_returncode)
+        cidfile_args = [token for token in cmd if token.startswith("--cidfile=")]
+        if run_side_effect is not None and cidfile_args:
+            run_side_effect()
+        if run_exception is not None and cidfile_args:
+            raise run_exception
+        if raise_timeout and cidfile_args:
+            if cidfile_value is not None:
+                Path(cidfile_args[0].split("=", 1)[1]).write_text(
+                    cidfile_value, encoding="utf-8"
+                )
             raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs.get("timeout", 0))
         # Mimic the side-effect a real container would have so the
         # caller's ``out_dir.iterdir()`` finds something.
@@ -191,16 +223,20 @@ def test_build_command_has_safety_knobs(
         "type=bind" in s and "readonly" in s and "target=/cohort.parquet" in s
         for s in cmd
     ), f"cohort mount missing in {joined}"
-    # Run root is RO, with only the current step overlaid RW.
+    # Run root is RO, with only the current outputs directory overlaid RW.
     assert any(
         "type=bind" in s and "target=/easyicu-run" in s and "readonly" in s for s in cmd
     ), f"run-root mount missing in {joined}"
     assert any(
         "type=bind" in s
-        and "target=/easyicu-run/steps/step_x" in s
+        and "target=/easyicu-run/steps/step_x/outputs" in s
         and "readonly" not in s
         for s in cmd
-    ), f"step mount missing in {joined}"
+    ), f"output mount missing in {joined}"
+    assert not any(
+        "type=bind" in s and s.endswith("target=/easyicu-run/steps/step_x")
+        for s in cmd
+    ), f"step directory must not be writable in {joined}"
     # Env injection.
     assert "-e" in cmd
     env_pairs = [cmd[i + 1] for i, tok in enumerate(cmd) if tok == "-e"]
@@ -319,8 +355,11 @@ def test_run_invokes_subprocess_and_writes_log(
     assert cmd[0] == runner.docker_executable and cmd[1] == "run"
     assert immutable_id in cmd
     assert "img:0" not in cmd
+    cidfile_arg = next(token for token in cmd if token.startswith("--cidfile="))
+    assert not Path(cidfile_arg.split("=", 1)[1]).exists()
 
     assert result.succeeded
+    assert result.outputs_safe_to_collect is True
     assert result.returncode == 0
     assert "container-said-hi" in result.stdout
     log_text = (result.cwd / "run.log").read_text(encoding="utf-8")
@@ -377,7 +416,8 @@ def test_run_handles_timeout(
 ):
     cohort = _make_cohort(tmp_path)
     _force_docker_present(monkeypatch)
-    _install_fake_subprocess(monkeypatch, raise_timeout=True)
+    captured: List[List[str]] = []
+    _install_fake_subprocess(monkeypatch, raise_timeout=True, captured=captured)
 
     runner = ra.DockerRunner(
         workdir=tmp_path / "run",
@@ -392,6 +432,370 @@ def test_run_handles_timeout(
     log_text = (result.cwd / "run.log").read_text(encoding="utf-8")
     assert "timed_out: True" in log_text
     assert "DockerRunner] timed out" in result.stderr
+    assert [cmd[1] for cmd in captured[-2:]] == ["stop", "wait"]
+    assert captured[-2][2] == "--timeout=5"
+    cidfile_arg = next(
+        token for token in captured[-3] if token.startswith("--cidfile=")
+    )
+    assert not Path(cidfile_arg.split("=", 1)[1]).exists()
+    assert not list((tmp_path / "run").glob("*.sentinel"))
+
+
+def test_timeout_kills_when_graceful_stop_fails(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+    captured: List[List[str]] = []
+    _install_fake_subprocess(
+        monkeypatch,
+        raise_timeout=True,
+        stop_returncode=1,
+        captured=captured,
+    )
+
+    runner = ra.DockerRunner(
+        workdir=tmp_path / "run",
+        cohort_parquet=cohort,
+        timeout_seconds=0.001,
+    )
+    result = runner.run(step_id="slow", code="print('hi')\n")
+
+    assert result.timed_out is True
+    assert [cmd[1] for cmd in captured[-3:]] == ["stop", "kill", "wait"]
+
+
+def test_timeout_force_removes_when_stop_and_kill_fail(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+    captured: List[List[str]] = []
+    _install_fake_subprocess(
+        monkeypatch,
+        raise_timeout=True,
+        stop_returncode=1,
+        kill_returncode=1,
+        rm_returncode=0,
+        captured=captured,
+    )
+
+    runner = ra.DockerRunner(workdir=tmp_path / "run", cohort_parquet=cohort)
+    result = runner.run(step_id="slow", code="print('hi')\n")
+
+    assert result.timed_out is True
+    assert result.artefacts
+    assert [cmd[1] for cmd in captured[-4:]] == ["stop", "kill", "rm", "wait"]
+    assert captured[-2][2] == "--force"
+    assert not list((tmp_path / "run").glob("*.sentinel"))
+
+
+def test_nonzero_docker_return_collects_only_after_confirmed_teardown(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+    captured: List[List[str]] = []
+    _install_fake_subprocess(
+        monkeypatch,
+        proc=_FakeProc(stderr="container failed", returncode=2),
+        captured=captured,
+    )
+
+    runner = ra.DockerRunner(workdir=tmp_path / "run", cohort_parquet=cohort)
+    result = runner.run(step_id="failed", code="raise SystemExit(2)\n")
+
+    assert result.returncode == 2
+    assert result.timed_out is False
+    assert result.outputs_safe_to_collect is True
+    assert result.artefacts
+    assert [cmd[1] for cmd in captured[-2:]] == ["stop", "wait"]
+    assert not list((tmp_path / "run").glob("*.sentinel"))
+
+
+def test_nonzero_docker_return_hides_outputs_when_teardown_is_unconfirmed(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+    captured: List[List[str]] = []
+    _install_fake_subprocess(
+        monkeypatch,
+        proc=_FakeProc(stderr="docker transport failed", returncode=125),
+        stop_returncode=1,
+        kill_returncode=1,
+        rm_returncode=1,
+        wait_returncode=1,
+        captured=captured,
+    )
+    run_dir = tmp_path / "run"
+    runner = ra.DockerRunner(workdir=run_dir, cohort_parquet=cohort)
+
+    result = runner.run(step_id="failed", code="print('unknown')\n")
+
+    assert result.returncode == 125
+    assert result.timed_out is False
+    assert result.outputs_safe_to_collect is False
+    assert result.artefacts == []
+    assert [cmd[1] for cmd in captured[-5:]] == [
+        "stop",
+        "kill",
+        "rm",
+        "wait",
+        "container",
+    ]
+    assert len(list(run_dir.glob(".docker-failed-*.sentinel"))) == 1
+
+
+@pytest.mark.parametrize("cidfile_value", [None, "invalid-container-id"])
+def test_timeout_uses_unique_name_when_cidfile_is_unavailable(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cidfile_value: Optional[str],
+):
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+    captured: List[List[str]] = []
+    _install_fake_subprocess(
+        monkeypatch,
+        raise_timeout=True,
+        cidfile_value=cidfile_value,
+        captured=captured,
+    )
+
+    runner = ra.DockerRunner(workdir=tmp_path / "run", cohort_parquet=cohort)
+    result = runner.run(step_id="slow", code="print('hi')\n")
+
+    run_cmd = captured[-3]
+    container_name = next(
+        token.removeprefix("--name=")
+        for token in run_cmd
+        if token.startswith("--name=")
+    )
+    assert result.timed_out is True
+    assert captured[-2][-1] == container_name
+    assert not list((tmp_path / "run").glob("*.sentinel"))
+
+
+def test_unconfirmed_timeout_hides_artifacts_and_retries_stale_cleanup(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+    captured: List[List[str]] = []
+    _install_fake_subprocess(
+        monkeypatch,
+        raise_timeout=True,
+        stop_returncode=1,
+        kill_returncode=1,
+        rm_returncode=1,
+        wait_returncode=1,
+        captured=captured,
+    )
+    run_dir = tmp_path / "run"
+    runner = ra.DockerRunner(workdir=run_dir, cohort_parquet=cohort)
+
+    failed = runner.run(step_id="slow", code="print('hi')\n")
+
+    assert failed.timed_out is True
+    assert failed.artefacts == []
+    assert failed.outputs_safe_to_collect is False
+    assert not (failed.out_dir / "runner_requirements.lock.txt").exists()
+    assert not (failed.out_dir / "runner_provenance.json").exists()
+    assert failed.script_path.parent == run_dir
+    assert failed.runner_log_path is not None
+    assert failed.runner_log_path.parent == run_dir
+    assert not failed.script_path.is_symlink()
+    assert not failed.runner_log_path.is_symlink()
+    assert not (failed.cwd / "run.log").exists()
+    assert [cmd[1] for cmd in captured[-5:]] == [
+        "stop",
+        "kill",
+        "rm",
+        "wait",
+        "container",
+    ]
+    sentinels = list(run_dir.glob(".docker-slow-*.sentinel"))
+    assert len(sentinels) == 1
+    assert sentinels[0].read_text(encoding="utf-8").startswith("name:easyicu-ra-")
+    stale_output = failed.out_dir / "orphan-writer-output.csv"
+    stale_output.write_text("unsafe\n", encoding="utf-8")
+
+    retry_commands: List[List[str]] = []
+    _install_fake_subprocess(monkeypatch, captured=retry_commands)
+    succeeded = runner.run(step_id="slow", code="print('retry')\n")
+
+    assert succeeded.succeeded
+    assert [cmd[1] for cmd in retry_commands[:2]] == ["stop", "wait"]
+    assert not stale_output.exists()
+    assert not list(run_dir.glob(".docker-slow-*.sentinel"))
+    assert not list(run_dir.glob(".docker-slow-*.cid"))
+
+
+def test_stale_sentinel_for_absent_container_does_not_block_retry(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    sentinel = run_dir / ".docker-slow-crashed.sentinel"
+    sentinel.write_text("name:easyicu-ra-crashed\n", encoding="utf-8")
+    captured: List[List[str]] = []
+    _install_fake_subprocess(
+        monkeypatch,
+        stop_returncode=1,
+        kill_returncode=1,
+        rm_returncode=1,
+        wait_returncode=1,
+        container_inspect_returncode=1,
+        container_inspect_stderr="Error: No such object: easyicu-ra-crashed",
+        captured=captured,
+    )
+
+    runner = ra.DockerRunner(workdir=run_dir, cohort_parquet=cohort)
+    result = runner.run(step_id="slow", code="print('retry')\n")
+
+    assert result.succeeded
+    assert [cmd[1] for cmd in captured[:5]] == [
+        "stop",
+        "kill",
+        "rm",
+        "wait",
+        "container",
+    ]
+    assert not sentinel.exists()
+
+
+def test_stale_cleanup_treats_step_id_glob_metacharacters_literally(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    own = run_dir / ".docker-probe*-own.sentinel"
+    own.write_text("name:easyicu-ra-own\n", encoding="utf-8")
+    unrelated = run_dir / ".docker-probe-other.sentinel"
+    unrelated.write_text("name:easyicu-ra-unrelated\n", encoding="utf-8")
+    _install_fake_subprocess(monkeypatch)
+
+    runner = ra.DockerRunner(workdir=run_dir, cohort_parquet=cohort)
+    result = runner.run(step_id="probe*", code="print('retry')\n")
+
+    assert result.succeeded
+    assert not own.exists()
+    assert unrelated.exists()
+
+
+@pytest.mark.parametrize("run_exception", [OSError("docker failed"), KeyboardInterrupt()])
+def test_host_interruption_preserves_cleanup_sentinel(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    run_exception: BaseException,
+):
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+    _install_fake_subprocess(monkeypatch, run_exception=run_exception)
+    run_dir = tmp_path / "run"
+    runner = ra.DockerRunner(workdir=run_dir, cohort_parquet=cohort)
+
+    with pytest.raises(type(run_exception)):
+        runner.run(step_id="interrupted", code="print('hi')\n")
+
+    sentinels = list(run_dir.glob(".docker-interrupted-*.sentinel"))
+    assert len(sentinels) == 1
+    assert sentinels[0].read_text(encoding="utf-8").startswith("name:easyicu-ra-")
+
+
+def test_run_replaces_hostile_step_file_and_output_symlinks(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+    run_dir = tmp_path / "run"
+    external_script = tmp_path / "external-script.py"
+    external_script.write_text("do not overwrite\n", encoding="utf-8")
+    external_log = tmp_path / "external.log"
+    external_log.write_text("do not overwrite\n", encoding="utf-8")
+    external_outputs = tmp_path / "external-outputs"
+    external_outputs.mkdir()
+    external_marker = external_outputs / "keep.txt"
+    external_marker.write_text("keep\n", encoding="utf-8")
+
+    def replace_step_paths_with_symlinks() -> None:
+        step_dir = run_dir / "steps" / "hostile"
+        script_path = step_dir / "analysis.py"
+        script_path.unlink()
+        script_path.symlink_to(external_script)
+        (step_dir / "run.log").symlink_to(external_log)
+        shutil.rmtree(step_dir / "outputs")
+        (step_dir / "outputs").symlink_to(
+            external_outputs,
+            target_is_directory=True,
+        )
+
+    _install_fake_subprocess(
+        monkeypatch,
+        run_side_effect=replace_step_paths_with_symlinks,
+    )
+    runner = ra.DockerRunner(workdir=run_dir, cohort_parquet=cohort)
+
+    result = runner.run(step_id="hostile", code="print('safe')\n")
+
+    assert result.succeeded
+    assert result.outputs_safe_to_collect is True
+    assert result.script_path.read_text(encoding="utf-8") == "print('safe')\n"
+    assert not result.script_path.is_symlink()
+    assert result.runner_log_path == result.cwd / "run.log"
+    assert not result.runner_log_path.is_symlink()
+    assert result.out_dir.is_dir()
+    assert not result.out_dir.is_symlink()
+    assert external_script.read_text(encoding="utf-8") == "do not overwrite\n"
+    assert external_log.read_text(encoding="utf-8") == "do not overwrite\n"
+    assert external_marker.read_text(encoding="utf-8") == "keep\n"
+    assert all(not path.is_symlink() for path in result.artefacts)
+
+
+def test_run_rejects_symlinked_step_directory(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+    run_dir = tmp_path / "run"
+    steps_dir = run_dir / "steps"
+    steps_dir.mkdir(parents=True)
+    external_step = tmp_path / "external-step"
+    external_step.mkdir()
+    marker = external_step / "keep.txt"
+    marker.write_text("keep\n", encoding="utf-8")
+    (steps_dir / "hostile").symlink_to(external_step, target_is_directory=True)
+    runner = ra.DockerRunner(workdir=run_dir, cohort_parquet=cohort)
+
+    with pytest.raises(RuntimeError, match="requires a real directory"):
+        runner.run(step_id="hostile", code="print('no')\n")
+
+    assert marker.read_text(encoding="utf-8") == "keep\n"
 
 
 def test_pull_image_invoked_when_requested(
@@ -446,6 +850,7 @@ def test_pipeline_runner_kind_docker_constructs_docker_runner(
         run_dir=tmp_path / "ra" / "run", cohort_path=cohort_path
     )
     assert isinstance(runner, ra.DockerRunner)
+    assert runner.manages_output_cleanup is True
     assert runner.image == "img:smoke"
     assert runner.network == "none"
 

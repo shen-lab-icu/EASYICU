@@ -138,6 +138,131 @@ def test_pvalue_column_matching_is_exact_not_substring(ra):
     assert _is_pvalue_column("adjusted_p") is False
 
 
+def test_large_csv_without_pvalue_signal_does_not_iterate_rows(
+    ra, tmp_path, monkeypatch
+):
+    from easyicu.research_agent.methods import multiple_testing
+
+    csv_path = tmp_path / "component_completeness.csv"
+    _write_csv(
+        csv_path,
+        rows=(
+            [f"stay_{row_index}", row_index % 12, 6, 0]
+            for row_index in range(20_000)
+        ),
+        header=[
+            "stay_id",
+            "window_index",
+            "component_available_n",
+            "component_missing_n",
+        ],
+    )
+
+    real_dict_reader = csv.DictReader
+    iteration_count = 0
+
+    class _RowIterationGuard:
+        def __init__(self, fh):
+            self._reader = real_dict_reader(fh)
+
+        @property
+        def fieldnames(self):
+            return self._reader.fieldnames
+
+        def __iter__(self):
+            nonlocal iteration_count
+            iteration_count += 1
+            raise AssertionError("no-p-value CSV rows must not be iterated")
+
+    monkeypatch.setattr(multiple_testing.csv, "DictReader", _RowIterationGuard)
+
+    records, notes = multiple_testing._extract_pvalues_from_csv(
+        csv_path=csv_path,
+        evidence_id="component_completeness",
+        artefact_path="component_completeness.csv",
+    )
+
+    assert records == []
+    assert notes == []
+    assert iteration_count == 0
+
+
+def test_csv_header_preflight_preserves_arbitrary_column_inline_pvalues(
+    ra, tmp_path
+):
+    from easyicu.research_agent.methods.multiple_testing import (
+        _extract_pvalues_from_csv,
+    )
+
+    csv_path = tmp_path / "narrative.csv"
+    _write_csv(
+        csv_path,
+        rows=[["primary comparison", "Wald result: p=0.031"]],
+        header=["label", "details"],
+    )
+
+    records, notes = _extract_pvalues_from_csv(
+        csv_path=csv_path,
+        evidence_id="narrative",
+        artefact_path="narrative.csv",
+    )
+
+    assert notes == [
+        "narrative.csv: treated 1 legacy untyped p-value(s) as one source-local family."
+    ]
+    assert len(records) == 1
+    assert records[0].source == "inline"
+    assert records[0].p_value == pytest.approx(0.031)
+
+
+def test_inline_pvalue_preflight_preserves_unicode_whitespace(ra, tmp_path):
+    from easyicu.research_agent.methods.multiple_testing import (
+        _extract_pvalues_from_csv,
+    )
+
+    csv_path = tmp_path / "unicode_inline.csv"
+    _write_csv(
+        csv_path,
+        rows=[["primary comparison", "Wald result: p\u2003<\u20030.001"]],
+        header=["label", "details"],
+    )
+
+    records, _ = _extract_pvalues_from_csv(
+        csv_path=csv_path,
+        evidence_id="unicode_narrative",
+        artefact_path="unicode_inline.csv",
+    )
+
+    assert len(records) == 1
+    assert records[0].p_value == pytest.approx(0.001)
+
+
+def test_nonempty_csv_mmap_value_error_falls_back_to_parser(
+    ra, tmp_path, monkeypatch
+):
+    from easyicu.research_agent.methods import multiple_testing
+
+    csv_path = tmp_path / "mmap_fallback.csv"
+    _write_csv(
+        csv_path,
+        rows=[["primary comparison", "Wald result: p=0.047"]],
+        header=["label", "details"],
+    )
+
+    def unsupported_mapping(*_args, **_kwargs):
+        raise ValueError("synthetic non-empty mmap failure")
+
+    monkeypatch.setattr(multiple_testing.mmap, "mmap", unsupported_mapping)
+    records, _notes = multiple_testing._extract_pvalues_from_csv(
+        csv_path=csv_path,
+        evidence_id="mmap_fallback",
+        artefact_path="mmap_fallback.csv",
+    )
+
+    assert len(records) == 1
+    assert records[0].p_value == pytest.approx(0.047)
+
+
 def test_primary_p_value_exact_field_remains_backward_compatible(ra, tmp_path):
     run_dir = tmp_path / "run"
     evidence_dir = run_dir / "evidence"

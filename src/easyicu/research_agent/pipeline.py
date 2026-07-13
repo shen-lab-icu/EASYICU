@@ -1436,6 +1436,7 @@ class ResearchAgentPipeline:
         workdir: Union[str, Path],
         llm: Optional[LLMClient] = None,
         timeout_seconds: float = 300.0,
+        standard_executor_timeout_seconds: float = 3_600.0,
         python_executable: Optional[str] = None,
         enable_literature: bool = True,
         enable_visual_qa: bool = True,
@@ -1526,6 +1527,9 @@ class ResearchAgentPipeline:
         self.workdir.mkdir(parents=True, exist_ok=True)
         self._llm = llm
         self._timeout_seconds = timeout_seconds
+        self._standard_executor_timeout_seconds = (
+            standard_executor_timeout_seconds
+        )
         self._python_executable = python_executable
         self._enable_literature = enable_literature
         self._enable_visual_qa = enable_visual_qa
@@ -1764,6 +1768,7 @@ class ResearchAgentPipeline:
         cohort_path: Path,
         target_outcome: Optional[str] = None,
         universe_path: Optional[Path] = None,
+        timeout_seconds: Optional[float] = None,
     ):
         """Return the configured runner backend for a single ``run()``.
 
@@ -1799,6 +1804,11 @@ class ResearchAgentPipeline:
                     "COHORT_TRAJECTORY_PARQUET",
                 ):
                     extra_env.setdefault(traj_alias, str(trajectory_path))
+        effective_timeout_seconds = (
+            self._timeout_seconds
+            if timeout_seconds is None
+            else float(timeout_seconds)
+        )
         if self._runner_factory is not None:
             # A user-supplied factory (OpenHands, firecracker, ...) also needs
             # the run's outcome column so deterministic repairs resolve it from
@@ -1806,7 +1816,7 @@ class ResearchAgentPipeline:
             return self._runner_factory(
                 workdir=run_dir,
                 cohort_parquet=cohort_path,
-                timeout_seconds=self._timeout_seconds,
+                timeout_seconds=effective_timeout_seconds,
                 extra_env=extra_env,
                 **runner_kwargs,
             )
@@ -1820,7 +1830,7 @@ class ResearchAgentPipeline:
             return DockerRunner(
                 workdir=run_dir,
                 cohort_parquet=cohort_path,
-                timeout_seconds=self._timeout_seconds,
+                timeout_seconds=effective_timeout_seconds,
                 image=self._runner_image,
                 network=self._runner_network,
                 extra_env=extra_env,
@@ -1829,7 +1839,7 @@ class ResearchAgentPipeline:
         return CodeRunner(
             workdir=run_dir,
             cohort_parquet=cohort_path,
-            timeout_seconds=self._timeout_seconds,
+            timeout_seconds=effective_timeout_seconds,
             python_executable=self._python_executable,
             extra_env=extra_env,
             **runner_kwargs,
@@ -9379,17 +9389,20 @@ def _step_summary_has_any_key(path: Path, keys: Sequence[str]) -> bool:
 
 
 def _clear_output_dir(out_dir: Path) -> None:
-    """Remove stale artefacts before rerunning a repaired step script."""
-    if not out_dir.exists():
-        return
+    """Recreate a step output directory without following untrusted symlinks."""
+
+    # Generated code may replace the output leaf itself with a symlink.  Using
+    # ``exists``/``iterdir`` first would follow that link and could delete an
+    # arbitrary host directory during repair.  Remove any non-directory leaf
+    # lexically, then create the expected directory in its place.
+    if out_dir.is_symlink() or (out_dir.exists() and not out_dir.is_dir()):
+        out_dir.unlink()
+    out_dir.mkdir(parents=True, exist_ok=True)
     for child in out_dir.iterdir():
-        try:
-            if child.is_dir():
-                shutil.rmtree(child, ignore_errors=True)
-            else:
-                child.unlink(missing_ok=True)
-        except Exception:
-            pass
+        if child.is_symlink() or not child.is_dir():
+            child.unlink(missing_ok=True)
+        else:
+            shutil.rmtree(child)
 
 
 __all__ = ["ResearchAgentPipeline"]

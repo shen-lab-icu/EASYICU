@@ -90,6 +90,20 @@ def test_benchmark_options_record_runner_kind() -> None:
     assert "runner_kind" not in CANONICAL_PROFILE.as_pipeline_options()
 
 
+def test_benchmark_options_keep_execution_timeouts_independent() -> None:
+    options = _benchmark_pipeline_options(
+        max_total_steps=None,
+        disable_replanning=False,
+        max_code_repair_attempts=None,
+        timeout_seconds=29.0,
+        standard_executor_timeout_seconds=2_345.0,
+        enable_repro_envelope=False,
+    )
+
+    assert options["timeout_seconds"] == 29.0
+    assert options["standard_executor_timeout_seconds"] == 2_345.0
+
+
 def test_mock_provider_aware_arm_requires_explicit_smoke_opt_in() -> None:
     _enforce_mock_aware_provider(["naive"], provider="mock")
     _enforce_mock_aware_provider(["aware"], provider="openrouter")

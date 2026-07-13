@@ -31,15 +31,18 @@ the artefacts.
 
 from __future__ import annotations
 
+import glob
 import hashlib
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import textwrap
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -169,10 +172,17 @@ class RunResult:
     isolation_degraded: bool = False
     isolation_degradation_reason: Optional[str] = None
     runtime_provenance: Dict[str, object] = field(default_factory=dict)
+    # False means callers must not scan or hash anything under ``out_dir``.
+    outputs_safe_to_collect: bool = True
+    runner_log_path: Optional[Path] = None
 
     @property
     def succeeded(self) -> bool:
-        return self.returncode == 0 and not self.timed_out
+        return (
+            self.returncode == 0
+            and not self.timed_out
+            and self.outputs_safe_to_collect
+        )
 
 
 class CodeRunner:
@@ -480,6 +490,7 @@ class CodeRunner:
                 effective_isolation="blocked_fail_closed",
                 isolation_degraded=False,
                 isolation_degradation_reason=None,
+                runner_log_path=log_path,
             )
         if requested_isolation == "host_subprocess":
             isolation_degraded = True
@@ -766,6 +777,7 @@ class CodeRunner:
             effective_isolation=self._isolation_backend_for_cmd(cmd),
             isolation_degraded=isolation_degraded,
             isolation_degradation_reason=isolation_degradation_reason,
+            runner_log_path=log_path,
         )
 
 
@@ -783,9 +795,9 @@ class DockerRunner:
       pass ``network="bridge"`` explicitly.
     * cohort parquet is mounted **read-only** at a fixed container
       path (``/cohort.parquet``) and ``COHORT_PARQUET`` points at it.
-    * the run root is mounted read-only at ``/easyicu-run`` and only the
-      current step is overlaid read-write, preserving the host run layout
-      without exposing unrelated run artefacts to mutation.
+    * the run root, including the script and step directory, is mounted
+      read-only at ``/easyicu-run``; only the current step's ``outputs``
+      directory is overlaid read-write.
     * ``--rm`` so containers don't pile up; ``--init`` so signal
       handling is sane.
     * the host's ``docker`` binary must be on PATH and the image
@@ -808,6 +820,7 @@ class DockerRunner:
     """
 
     DEFAULT_IMAGE = "easyicu-research-agent:latest"
+    manages_output_cleanup = True
     CONTAINER_RUN_ROOT = "/easyicu-run"
     CONTAINER_COHORT_PATH = "/cohort.parquet"
     CONTAINER_INPUT_ROOT = "/easyicu-inputs"
@@ -914,12 +927,70 @@ class DockerRunner:
 
     def prepare_step_dir(self, step_id: str) -> Tuple[Path, Path, Path]:
         """Lay out the per-step directory and return the key paths."""
-        step_dir = self.workdir / "steps" / step_id
-        step_dir.mkdir(parents=True, exist_ok=True)
+        step_id = _safe_path_component(step_id, label="step_id")
+        steps_dir = self.workdir / "steps"
+        self._ensure_real_directory(steps_dir, replace_unsafe=False)
+        step_dir = steps_dir / step_id
+        if step_dir.parent != steps_dir:
+            raise ValueError("step directory must remain under the run steps root")
+        self._ensure_real_directory(step_dir, replace_unsafe=False)
         script_path = step_dir / "analysis.py"
         out_dir = step_dir / "outputs"
-        out_dir.mkdir(parents=True, exist_ok=True)
+        self._ensure_real_directory(out_dir, replace_unsafe=True)
         return step_dir, script_path, out_dir
+
+    @staticmethod
+    def _remove_lexical_path(path: Path) -> None:
+        """Remove exactly ``path`` without following a final symlink."""
+
+        try:
+            mode = os.lstat(path).st_mode
+        except FileNotFoundError:
+            return
+        if stat.S_ISDIR(mode) and not stat.S_ISLNK(mode):
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+
+    @classmethod
+    def _ensure_real_directory(
+        cls,
+        path: Path,
+        *,
+        replace_unsafe: bool,
+    ) -> None:
+        """Ensure ``path`` itself is a directory, never a symlink target."""
+
+        try:
+            mode = os.lstat(path).st_mode
+        except FileNotFoundError:
+            path.mkdir(parents=False)
+            return
+        if stat.S_ISDIR(mode) and not stat.S_ISLNK(mode):
+            return
+        if not replace_unsafe:
+            raise RuntimeError(f"DockerRunner requires a real directory: {path}")
+        cls._remove_lexical_path(path)
+        path.mkdir(parents=False)
+
+    @classmethod
+    def _write_regular_file(cls, path: Path, content: str) -> None:
+        """Replace a possibly hostile path with one single-link regular file."""
+
+        cls._remove_lexical_path(path)
+        path.write_text(content, encoding="utf-8")
+        metadata = os.lstat(path)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            cls._remove_lexical_path(path)
+            raise RuntimeError(f"DockerRunner could not secure host file: {path}")
+
+    @staticmethod
+    def _clear_step_outputs(out_dir: Path) -> None:
+        """Clear a quiescent step output directory without following symlinks."""
+
+        DockerRunner._ensure_real_directory(out_dir, replace_unsafe=True)
+        for child in out_dir.iterdir():
+            DockerRunner._remove_lexical_path(child)
 
     def build_command(
         self,
@@ -960,8 +1031,8 @@ class DockerRunner:
 
         # Mount the complete run tree read-only so deterministic runners can
         # resolve ``STEP_OUT_DIR.parents[2]`` to the run root. Overlay only the
-        # current step directory read-write; all other run artefacts and the
-        # cohort remain immutable to generated code.
+        # current outputs directory read-write; the script, cwd, all other run
+        # artefacts, and the cohort remain immutable to generated code.
         cmd.extend(
             [
                 "--mount",
@@ -971,8 +1042,8 @@ class DockerRunner:
                 ),
                 "--mount",
                 (
-                    f"type=bind,source={str(script_path.parent.resolve())},"
-                    f"target={container_step_dir}"
+                    f"type=bind,source={str(out_dir.resolve())},"
+                    f"target={container_step_dir}/outputs"
                 ),
                 "--mount",
                 (
@@ -1180,6 +1251,114 @@ class DockerRunner:
             )
         return tuple(snapshot)
 
+    @staticmethod
+    def _container_reference(
+        cidfile: Path,
+        *,
+        fallback_name: Optional[str] = None,
+    ) -> Optional[str]:
+        """Return a validated container id/name without trusting mounted code."""
+
+        try:
+            value = cidfile.read_text(encoding="utf-8").strip()
+        except OSError:
+            value = ""
+        if value.startswith("name:"):
+            value = value.removeprefix("name:")
+        try:
+            if len(value) == 64:
+                int(value, 16)
+                return value
+        except ValueError:
+            pass
+        if value.startswith("easyicu-ra-") and all(
+            char.isalnum() or char in "-_" for char in value
+        ):
+            return value
+        return fallback_name
+
+    def _teardown_container(self, container_ref: str) -> Tuple[bool, str]:
+        """Stop, force-remove if needed, and wait for one container."""
+
+        def _control(
+            args: Sequence[str], *, timeout: float
+        ) -> Optional[subprocess.CompletedProcess[str]]:
+            try:
+                return subprocess.run(  # noqa: S603 - argv list, no shell
+                    [self.docker_executable, *args],
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    encoding="utf-8",
+                    errors="replace",
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                return None
+
+        teardown_confirmed = False
+        cleanup_notes: List[str] = []
+        teardown_commands = (
+            ("stop", ("stop", "--timeout=5", container_ref), 15.0),
+            ("kill", ("kill", container_ref), 10.0),
+            ("rm", ("rm", "--force", container_ref), 10.0),
+        )
+        for label, args, timeout in teardown_commands:
+            proc = _control(args, timeout=timeout)
+            teardown_confirmed = proc is not None and proc.returncode == 0
+            if teardown_confirmed:
+                break
+            cleanup_notes.append(f"{label} failed")
+
+        wait_proc = _control(("wait", container_ref), timeout=10.0)
+        if not teardown_confirmed and (
+            wait_proc is None or wait_proc.returncode != 0
+        ):
+            cleanup_notes.append("wait failed")
+
+        if not teardown_confirmed:
+            inspect_proc = _control(
+                ("container", "inspect", container_ref),
+                timeout=10.0,
+            )
+            if inspect_proc is not None:
+                inspect_error = inspect_proc.stderr.lower()
+                teardown_confirmed = inspect_proc.returncode != 0 and (
+                    "no such object" in inspect_error
+                    or "no such container" in inspect_error
+                )
+            if not teardown_confirmed:
+                cleanup_notes.append("container presence could not be excluded")
+
+        if not teardown_confirmed:
+            return False, (
+                "[DockerRunner] timed-out container cleanup: "
+                f"{', '.join(cleanup_notes)}\n"
+            )
+        return True, (
+            "[DockerRunner] container teardown confirmed before output collection\n"
+        )
+
+    def _retry_stale_container_cleanup(self, step_id: str) -> None:
+        """Resolve prior unconfirmed teardown before reusing a step directory."""
+
+        pattern = f".docker-{glob.escape(step_id)}-*.sentinel"
+        for sentinel in self.workdir.glob(pattern):
+            container_ref = self._container_reference(sentinel)
+            if container_ref is None:
+                raise RuntimeError(
+                    "DockerRunner found an invalid stale container sentinel; "
+                    "refusing to reuse the step output directory"
+                )
+            teardown_confirmed, _note = self._teardown_container(container_ref)
+            if not teardown_confirmed:
+                raise RuntimeError(
+                    "DockerRunner could not confirm stale container teardown; "
+                    "refusing to reuse the step output directory"
+                )
+            sentinel.unlink(missing_ok=True)
+            for suffix in (".cid", ".analysis.py", ".run.log"):
+                sentinel.with_suffix(suffix).unlink(missing_ok=True)
+
     # ------------------------------------------------------------------
     # Main entry point
     # ------------------------------------------------------------------
@@ -1192,6 +1371,7 @@ class DockerRunner:
         resolved_inputs_path: Optional[Path] = None,
     ) -> RunResult:
         step_id = _safe_path_component(step_id, label="step_id")
+        self._retry_stale_container_cleanup(step_id)
         resolved_inputs_path = _validated_resolved_inputs_path(
             resolved_inputs_path,
             workdir=self.workdir,
@@ -1200,8 +1380,10 @@ class DockerRunner:
         # docstring for the qwen3-coder-30b regression that motivates it.
         code = reorder_forward_references(code)
         step_dir, script_path, out_dir = self.prepare_step_dir(step_id)
+        self._clear_step_outputs(out_dir)
         log_path = step_dir / "run.log"
-        script_path.write_text(code, encoding="utf-8")
+        self._write_regular_file(script_path, code)
+        self._remove_lexical_path(log_path)
 
         if self.pull_image:
             try:
@@ -1226,8 +1408,21 @@ class DockerRunner:
             runtime_image=str(runtime_provenance["image_id"]),
             resolved_inputs_path=resolved_inputs_path,
         )
+        # Keep the host-written cidfile outside the step's read-write mount so
+        # generated code cannot replace the container id used for teardown.
+        attempt_id = uuid.uuid4().hex
+        cidfile = self.workdir / f".docker-{step_id}-{attempt_id}.cid"
+        sentinel = self.workdir / f".docker-{step_id}-{attempt_id}.sentinel"
+        control_script_path = sentinel.with_suffix(".analysis.py")
+        control_log_path = sentinel.with_suffix(".run.log")
+        container_name = f"easyicu-ra-{attempt_id}"
+        self._write_regular_file(sentinel, f"name:{container_name}\n")
+        self._write_regular_file(control_script_path, code)
+        cmd.insert(2, f"--cidfile={cidfile}")
+        cmd.insert(3, f"--name={container_name}")
 
         timed_out = False
+        teardown_confirmed = False
         started = time.monotonic()
         try:
             proc = subprocess.run(  # noqa: S603 - argv list, no shell
@@ -1239,22 +1434,40 @@ class DockerRunner:
                 encoding="utf-8",
                 errors="replace",
             )
-            stdout, stderr, returncode = proc.stdout, proc.stderr, proc.returncode
-            duration = time.monotonic() - started
+            stdout, stderr, returncode = (
+                proc.stdout,
+                proc.stderr,
+                proc.returncode,
+            )
+            if returncode == 0:
+                teardown_confirmed = True
+            else:
+                container_ref = self._container_reference(
+                    cidfile,
+                    fallback_name=container_name,
+                )
+                assert container_ref is not None
+                teardown_confirmed, cleanup_note = self._teardown_container(
+                    container_ref
+                )
+                stderr = _as_text(stderr) + "\n" + cleanup_note
         except subprocess.TimeoutExpired as exc:
             stdout = _as_text(exc.stdout)
             stderr = _as_text(exc.stderr) + (
                 f"\n[DockerRunner] timed out after {self.timeout_seconds}s\n"
             )
+            container_ref = self._container_reference(
+                cidfile,
+                fallback_name=container_name,
+            )
+            assert container_ref is not None
+            teardown_confirmed, cleanup_note = self._teardown_container(container_ref)
+            stderr += cleanup_note
             returncode = -1
-            duration = time.monotonic() - started
             timed_out = True
-            # Best-effort: if the host's docker is alive, the container
-            # is still draining. There's no addressable container id
-            # because we used --rm; the timeout will reap it on its own.
+        duration = time.monotonic() - started
 
-        log_path.write_text(
-            textwrap.dedent(f"""
+        log_content = textwrap.dedent(f"""
                 === step {step_id} (DockerRunner) ===
                 image: {self.image}
                 image_id: {runtime_provenance.get("image_id")}
@@ -1269,22 +1482,44 @@ class DockerRunner:
                 {stdout}
                 ---- stderr ----
                 {stderr}
-                """).strip(),
-            encoding="utf-8",
-        )
+                """).strip()
 
-        requirements_path = out_dir / "runner_requirements.lock.txt"
-        requirements_path.write_text(runtime_requirements, encoding="utf-8")
-        provenance_path = out_dir / "runner_provenance.json"
-        provenance_path.write_text(
-            json.dumps(runtime_provenance, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-
-        artefacts = sorted(p for p in out_dir.iterdir() if p.is_file())
+        if teardown_confirmed:
+            self._ensure_real_directory(step_dir, replace_unsafe=False)
+            self._ensure_real_directory(out_dir, replace_unsafe=True)
+            for output_path in list(out_dir.iterdir()):
+                metadata = os.lstat(output_path)
+                if stat.S_ISLNK(metadata.st_mode) or (
+                    stat.S_ISREG(metadata.st_mode) and metadata.st_nlink != 1
+                ):
+                    self._remove_lexical_path(output_path)
+            self._write_regular_file(script_path, code)
+            safe_script_path = script_path
+            safe_log_path = log_path
+            self._write_regular_file(safe_log_path, log_content)
+            requirements_path = out_dir / "runner_requirements.lock.txt"
+            self._write_regular_file(requirements_path, runtime_requirements)
+            provenance_path = out_dir / "runner_provenance.json"
+            self._write_regular_file(
+                provenance_path,
+                json.dumps(runtime_provenance, indent=2, ensure_ascii=False) + "\n",
+            )
+            artefacts = []
+            for output_path in out_dir.iterdir():
+                metadata = os.lstat(output_path)
+                if stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1:
+                    artefacts.append(output_path)
+            artefacts.sort()
+            for control_path in (cidfile, sentinel, control_script_path):
+                control_path.unlink(missing_ok=True)
+        else:
+            safe_script_path = control_script_path
+            safe_log_path = control_log_path
+            self._write_regular_file(safe_log_path, log_content)
+            artefacts = []
         return RunResult(
             step_id=step_id,
-            script_path=script_path,
+            script_path=safe_script_path,
             cwd=step_dir,
             out_dir=out_dir,
             stdout=stdout,
@@ -1298,6 +1533,8 @@ class DockerRunner:
             isolation_degraded=False,
             isolation_degradation_reason=None,
             runtime_provenance=runtime_provenance,
+            outputs_safe_to_collect=teardown_confirmed,
+            runner_log_path=safe_log_path,
         )
 
 

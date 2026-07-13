@@ -36,6 +36,7 @@ class RuntimeSpec(BaseModel):
 
     workdir: str = "./research_output"
     timeout_seconds: float = 300.0
+    standard_executor_timeout_seconds: float = 3_600.0
     manuscript_language: str = "en"
     stop_after_analysis: bool = False
     enable_literature: bool = True
@@ -71,6 +72,9 @@ class ExperimentSpec(BaseModel):
         return {
             "workdir": runtime.workdir,
             "timeout_seconds": runtime.timeout_seconds,
+            "standard_executor_timeout_seconds": (
+                runtime.standard_executor_timeout_seconds
+            ),
             "manuscript_language": runtime.manuscript_language,
             "enable_literature": runtime.enable_literature,
             "enable_visual_qa": runtime.enable_visual_qa,
