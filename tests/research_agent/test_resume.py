@@ -33,6 +33,7 @@ from easyicu.research_agent.pipeline import (
     _load_resume_state,
 )
 from easyicu.research_agent.evidence import EvidenceStore
+from easyicu.research_agent.plan_utils import _render_only_figure_step_intent
 from easyicu.research_agent.runtime_artifacts import verified_run_evidence_path
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
@@ -1442,6 +1443,161 @@ def test_resume_reuses_locked_plan_instead_of_replanning(
         (f.get("detail") or {}).get("generation_mode") == "resumed"
         for f in manifest["findings"]
     ), "no 'resumed' planner finding recorded"
+
+
+def test_resume_adopts_legacy_figure_edge_migration_without_replanning(
+    ra, synthetic_cohort, tmp_path: Path, monkeypatch
+):
+    """A reused legacy split plan is migrated and checkpointed as the active plan."""
+    from easyicu.research_agent import pipeline as pipeline_module
+
+    run_id = "run_legacy_figure_edge"
+    run_dir = tmp_path / run_id
+    run_dir.mkdir()
+    parent = AnalysisStep(
+        step_id="01_summary",
+        intent="Summarize the analytic cohort.",
+        inputs=["age", "death"],
+        expected_outputs=["artifact:cohort_snapshot", "table:cohort_summary"],
+        method="descriptive_statistics",
+        icu_rule_refs=["admission_anchor"],
+    )
+    figure_outputs = ["figure:cohort_summary"]
+    legacy_plan = AnalysisPlan(
+        research_question="Summarize the analytic cohort.",
+        revision=3,
+        steps=[
+            parent,
+            AnalysisStep(
+                step_id="01_summary_figure",
+                intent=_render_only_figure_step_intent(
+                    source_step_id=parent.step_id,
+                    figure_outputs=figure_outputs,
+                ),
+                inputs=list(parent.inputs),
+                expected_outputs=figure_outputs,
+                method=parent.method,
+                icu_rule_refs=[*parent.icu_rule_refs, "visualization_rule"],
+            ),
+        ],
+    )
+    plan_path = run_dir / "analysis_plan.json"
+    plan_path.write_text(legacy_plan.model_dump_json(indent=2), encoding="utf-8")
+    evidence = EvidenceStore(run_dir)
+    evidence.register_file(
+        kind="log",
+        description="Legacy framework-split analysis plan.",
+        source_path=plan_path,
+        evidence_id="analysis_plan",
+        producer="planner",
+        generation_mode="llm",
+    )
+    (run_dir / "manifest_partial.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "easyicu.research_manifest_partial/1",
+                "run_id": run_id,
+                "plan_path": plan_path.name,
+                "per_step_records": [],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    migration_calls = 0
+    original_migration = pipeline_module._migrate_legacy_resume_figure_render_edges
+
+    def observed_migration(**kwargs):
+        nonlocal migration_calls
+        migration_calls += 1
+        return original_migration(**kwargs)
+
+    monkeypatch.setattr(
+        pipeline_module,
+        "_migrate_legacy_resume_figure_render_edges",
+        observed_migration,
+    )
+
+    class PlannerCountingLLM(ra.MockLLMClient):
+        def __init__(self):
+            super().__init__()
+            self.planner_calls = 0
+
+        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
+            user = next(
+                (message.content for message in reversed(messages) if message.role == "user"),
+                "",
+            )
+            upper = user.upper()
+            if upper.startswith(
+                (
+                    "PRODUCE AN ICU-AWARE RESEARCH PLAN",
+                    "REVISE THE ICU-AWARE RESEARCH PLAN",
+                )
+            ):
+                self.planner_calls += 1
+            return super().complete(
+                messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+
+    llm = PlannerCountingLLM()
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=llm,
+        enable_literature=False,
+        enable_visual_qa=False,
+        enable_publication_figure_skill=False,
+        enable_latex=False,
+        enable_memory=False,
+        enable_probe_step=False,
+        enable_replanning=False,
+        enable_reviewer_round=False,
+        enable_fairness_subgroups=False,
+        enable_causal_audit=False,
+        enable_reporting_checklist=False,
+        runner_kind="subprocess",
+    )
+    result = pipeline.run(
+        question=legacy_plan.research_question,
+        cohort=synthetic_cohort,
+        cohort_name="legacy_figure_edge",
+        database="synthetic",
+        target_outcome="death",
+        resume_run_id=run_id,
+        resume_from_step_id=parent.step_id,
+        stop_after_step_id=parent.step_id,
+        stop_after_analysis=True,
+    )
+
+    assert result.run_id == run_id
+    assert migration_calls == 1
+    assert llm.planner_calls == 0
+    revision_path = run_dir / "analysis_plan_revision_4.json"
+    assert revision_path.is_file()
+    migrated = AnalysisPlan.model_validate_json(
+        revision_path.read_text(encoding="utf-8")
+    )
+    assert migrated.revision == 4
+    assert migrated.steps[1].inputs == ["table:cohort_summary"]
+    assert migrated.steps[1].method == "visualization"
+
+    revision_record = EvidenceStore(run_dir).get("analysis_plan_revision_4")
+    assert revision_record is not None
+    assert revision_record.metadata["reason"] == "resume_legacy_figure_render_edges"
+    assert revision_record.metadata["target_step_ids"] == ["01_summary_figure"]
+    partial = json.loads(
+        (run_dir / "manifest_partial.json").read_text(encoding="utf-8")
+    )
+    assert partial["plan_path"] == revision_path.name
+    assert any(
+        finding.get("validator") == "planner_schema_migration"
+        and (finding.get("detail") or {}).get("kind")
+        == "legacy_figure_render_edge"
+        for finding in partial["findings"]
+    )
 
 
 def test_resume_to_nonexistent_run_id_starts_fresh_directory(ra, synthetic_cohort,

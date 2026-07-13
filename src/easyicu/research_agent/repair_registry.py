@@ -254,6 +254,7 @@ def _meta(
 
 
 _SYNTACTIC_REPAIRS = {
+    "figure_contract_source_data_schema_v1",
     "missing_os_import_v1",
     "strip_python_prefix_v1",
     "restore_shadowed_json_module_v1",

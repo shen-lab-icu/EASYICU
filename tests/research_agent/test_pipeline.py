@@ -4388,6 +4388,52 @@ def test_split_effect_figure_when_exact_bound_table_proves_figure_scale(ra):
     assert findings
 
 
+def test_split_generic_primary_adjusted_effect_from_planner_model_roster(ra):
+    from easyicu.research_agent.pipeline import (
+        _split_table_and_figure_outputs_in_plan,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    plan = AnalysisPlan(
+        research_question="Estimate the Planner-owned primary adjusted effect.",
+        steps=[
+            AnalysisStep(
+                step_id="05_primary_adjusted_association",
+                intent="Fit and render the Planner-owned adjusted model roster.",
+                expected_outputs=[
+                    "table:adjusted_association_estimates",
+                    "artifact:primary_model_specification",
+                    "figure:primary_adjusted_effect",
+                ],
+                method="adjusted_association_models",
+                model_requirements=[
+                    {
+                        "requirement_id": "primary_death_model",
+                        "outcome": "death",
+                        "outcome_type": "binary",
+                        "method_family": "logistic_regression",
+                        "exposure_source": "exposure",
+                        "analysis_role": "primary",
+                        "analysis_set": "complete_case",
+                        "required_for_step_success": True,
+                    }
+                ],
+            )
+        ],
+    )
+
+    revised, findings = _split_table_and_figure_outputs_in_plan(plan=plan)
+
+    assert [step.step_id for step in revised.steps] == [
+        "05_primary_adjusted_association",
+        "05_primary_adjusted_association_figure",
+    ]
+    assert revised.steps[1].inputs == [
+        "table:adjusted_association_estimates",
+    ]
+    assert findings
+
+
 @pytest.mark.parametrize(
     "method",
     [

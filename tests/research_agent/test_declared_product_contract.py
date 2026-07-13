@@ -341,6 +341,76 @@ def test_effect_named_figure_requires_successful_typed_effect_parent(render_meth
     assert "unauthorized_effect_product" not in _kinds(findings)
 
 
+def test_generic_primary_adjusted_effect_uses_verified_planner_model_roster():
+    parent = AnalysisStep(
+        step_id="05_primary_adjusted_association",
+        intent="Fit the Planner-owned primary adjusted model.",
+        method="adjusted_association_models",
+        expected_outputs=[
+            "table:adjusted_association_estimates",
+            "artifact:primary_model_specification",
+        ],
+        model_requirements=[
+            {
+                "requirement_id": "primary_death_model",
+                "outcome": "death",
+                "outcome_type": "binary",
+                "method_family": "logistic_regression",
+                "exposure_source": "exposure",
+                "analysis_role": "primary",
+                "analysis_set": "complete_case",
+                "required_for_step_success": True,
+            }
+        ],
+    )
+    child = AnalysisStep(
+        step_id="05_primary_adjusted_association_figure",
+        intent="Render the Planner-owned primary adjusted result.",
+        method="visualization",
+        inputs=["table:adjusted_association_estimates"],
+        expected_outputs=["figure:primary_adjusted_effect"],
+    )
+    record = {
+        "step_id": parent.step_id,
+        "status": "ok",
+        "analysis_request": {"step": parent.model_dump(mode="json")},
+        "step_summary": {
+            "output_files": {
+                "table:adjusted_association_estimates": (
+                    "adjusted_association_estimates.csv"
+                )
+            }
+        },
+    }
+
+    assert (
+        _effect_figure_source_authorized(
+            step=child,
+            completed_step_records=[record],
+            resolved_input_bindings=_resolved_render_bindings(
+                child,
+                producer_step_id=parent.step_id,
+            ),
+        )
+        is True
+    )
+    findings = _step_contract_findings(
+        step=child,
+        step_summary={
+            "status": "ok",
+            "output_files": {
+                "figure:primary_adjusted_effect": "primary_adjusted_effect.png"
+            },
+        },
+        completed_step_records=[record],
+        resolved_input_bindings=_resolved_render_bindings(
+            child,
+            producer_step_id=parent.step_id,
+        ),
+    )
+    assert "unauthorized_effect_product" not in _kinds(findings)
+
+
 @pytest.mark.parametrize(
     "case",
     [
