@@ -208,6 +208,7 @@ def test_candidate_code_contract_consumes_one_upstream_coordinate_layer():
     assert "Copy id_column into the cluster-selection manifest" in contract
     assert "cluster_selection.selected_model_id" in contract
     assert "clustering_method/model_family" in contract
+    assert "candidate_cluster_solution_schema.json" in contract
     assert "do not run bootstrap" in contract
     assert "do not write cluster profiles" in contract
 
@@ -234,6 +235,7 @@ def test_stability_code_contract_reuses_frozen_candidate_solution_only():
     contract = trajectory_role_code_contract(context=_context(), step=step)
 
     assert "EASYICU_RESOLVED_INPUTS_JSON" in contract
+    assert "typed schema manifests as authoritative" in contract
     assert "do not read COHORT_PARQUET" in contract
     assert "exact representation_columns in the same order" in contract
     assert "copy the selected candidate labels" in contract

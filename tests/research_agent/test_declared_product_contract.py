@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from easyicu.research_agent.declared_product_contract import (
     declared_product_contract_findings,
 )
@@ -211,3 +213,41 @@ def test_plan_utils_integration_fails_closed():
         step_summary={"status": "ok", "output_files": []},
     )
     assert "declared_product_missing" in _kinds(findings)
+
+
+@pytest.mark.parametrize("reported_status", ["fail_closed", "failed_closed"])
+def test_reported_fail_closed_status_fails_outer_step_contract(reported_status):
+    from easyicu.research_agent.pipeline_execute import (
+        _step_status_from_contract_findings,
+    )
+
+    step = _step(outputs=["table:summary"])
+    summary = {
+        "status": reported_status,
+        "output_files": {"table:summary": "summary.csv"},
+    }
+
+    declared_findings = declared_product_contract_findings(
+        step=step,
+        step_summary=summary,
+        effect_method_authorized=False,
+    )
+    contract_findings = _step_contract_findings(
+        step=step,
+        step_summary=summary,
+    )
+
+    assert declared_findings == []
+    assert any(
+        finding.severity == "error"
+        and finding.detail.get("reported_status") == reported_status
+        for finding in contract_findings
+    )
+    assert (
+        _step_status_from_contract_findings(
+            contract_findings=contract_findings,
+            figure_source_findings=[],
+            stat_findings=[],
+        )
+        == "contract_failed"
+    )

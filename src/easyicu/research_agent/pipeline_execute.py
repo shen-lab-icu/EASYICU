@@ -165,6 +165,7 @@ from .trajectory_plan_contract import (
     trajectory_plan_contract_applies,
     trajectory_plan_dag_findings,
 )
+from .trajectory_resume_schema import materialize_legacy_trajectory_replay_schemas
 from .repair_registry import (
     InvariantStatus,
     RepairLedger,
@@ -2752,6 +2753,16 @@ def run_execute_phase(
         resumed_step_ids = set(resume_application.resumed_step_ids)
         findings.extend(resume_application.findings)
         probe_summary = resume_application.probe_summary
+        findings.extend(
+            materialize_legacy_trajectory_replay_schemas(
+                plan=plan,
+                context=context,
+                run_dir=run_dir,
+                evidence=evidence,
+                per_step_records=per_step_records,
+                prompt_pack_version=prompt_version,
+            )
+        )
         if resumed_step_ids:
             print(
                 f"[research_agent] resume: skipping {len(resumed_step_ids)} "

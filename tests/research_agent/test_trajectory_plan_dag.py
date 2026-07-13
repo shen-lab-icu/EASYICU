@@ -629,12 +629,27 @@ def test_plan_augmentation_distributes_only_schema_products_to_role_owners():
     }
     for step in revised.steps:
         expected_inputs = list(original_inputs[step.step_id])
+        if step.step_id == "04_candidates":
+            expected_inputs.append("manifest:trajectory_representation_schema")
         if step.step_id == "05_stability":
-            expected_inputs.append("manifest:cluster_selection")
+            expected_inputs.extend(
+                [
+                    "manifest:cluster_selection",
+                    "manifest:trajectory_representation_schema",
+                    "manifest:candidate_cluster_solution_schema",
+                ]
+            )
         assert step.inputs == expected_inputs
     outputs = {step.step_id: step.expected_outputs for step in revised.steps}
     assert "table:trajectory_membership" in outputs["03_representation"]
+    assert (
+        "manifest:trajectory_representation_schema"
+        in outputs["03_representation"]
+    )
     assert "manifest:cluster_selection" in outputs["04_candidates"]
+    assert (
+        "manifest:candidate_cluster_solution_schema" in outputs["04_candidates"]
+    )
     assert "manifest:trajectory_missingness_policy" in outputs["05_stability"]
     assert "table:cluster_assignments" in outputs["05_stability"]
     assert "table:cluster_stability_assignments" in outputs["05_stability"]
