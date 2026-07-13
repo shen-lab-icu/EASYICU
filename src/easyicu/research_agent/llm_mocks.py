@@ -259,7 +259,7 @@ def _mock_plan_json(ctx: ResearchContext) -> str:
             output
             for output in non_figure_outputs
             if str(output).lower().startswith(
-                ("table:", "artifact:", "dataset:", "model:")
+                ("table:", "statistic:", "artifact:", "dataset:", "model:")
             )
         ]
         separated_steps.append(
@@ -271,10 +271,7 @@ def _mock_plan_json(ctx: ResearchContext) -> str:
                 ),
                 inputs=typed_table_inputs,
                 expected_outputs=figure_outputs,
-                # The shared declared-product gate authorises an effect-named
-                # rendering product through the parent effect method.  The
-                # generated script itself remains render-only.
-                method=step.method,
+                method="visualization",
                 icu_rule_refs=list(step.icu_rule_refs or []) + ["visualization_rule"],
             )
         )

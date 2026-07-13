@@ -54,6 +54,7 @@ from .study_design_playbook import StudyDesignFamily
 __all__ = [
     "METHOD_TIERS",
     "METHOD_IMPLEMENTATIONS",
+    "FIGURE_SOURCE_OBLIGATIONS",
     "AnalysisMethod",
     "MethodSuite",
     "METHOD_SUITE_REGISTRY",
@@ -62,6 +63,7 @@ __all__ = [
     "planned_methods",
     "deterministic_methods",
     "supporting_methods",
+    "figure_product_source_obligations",
     "render_method_suite_markdown",
 ]
 
@@ -82,6 +84,15 @@ METHOD_IMPLEMENTATIONS: Tuple[str, ...] = (
     "planned",  # not implemented; must fail closed if required as a primary estimand
 )
 
+FIGURE_SOURCE_OBLIGATIONS: Tuple[str, ...] = (
+    "effect:subgroup",
+    "prediction:calibration",
+    "prediction:decision",
+    "prediction:performance",
+    "prediction:roc",
+    "prediction:time_varying_discrimination",
+)
+
 
 @dataclass(frozen=True)
 class AnalysisMethod:
@@ -96,6 +107,7 @@ class AnalysisMethod:
     runner: Optional[str] = None  # deterministic entrypoint / figure renderer / None
     reporting_items: Tuple[str, ...] = ()  # checklist items it helps satisfy
     notes: str = ""
+    figure_source_contracts: Tuple[Tuple[str, Tuple[str, ...]], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -126,6 +138,26 @@ _PREDICTION = MethodSuite(
             runner="prediction",  # deterministic FIGURE renderer; the FIT is LLM-coded
             reporting_items=("TRIPOD+AI 15", "TRIPOD+AI 17"),
             notes="Model FIT is LLM-coded (value-provenance verified); the calibration+ROC FIGURE is deterministic.",
+            figure_source_contracts=(
+                (
+                    "figure:discrimination_calibration",
+                    (
+                        "prediction:performance",
+                        "prediction:calibration",
+                        "prediction:roc",
+                    ),
+                ),
+                ("figure:model_performance", ("prediction:performance",)),
+                ("figure:prediction_performance", ("prediction:performance",)),
+                ("figure:discrimination", ("prediction:performance",)),
+                ("figure:roc_curve", ("prediction:roc",)),
+                (
+                    "figure:receiver_operating_characteristic",
+                    ("prediction:roc",),
+                ),
+                ("figure:calibration_curve", ("prediction:calibration",)),
+                ("figure:calibration_plot", ("prediction:calibration",)),
+            ),
         ),
         AnalysisMethod(
             key="calibration_metrics",
@@ -159,6 +191,9 @@ _PREDICTION = MethodSuite(
             runner=None,
             reporting_items=("TRIPOD+AI 19",),
             notes="Already a TRIPOD+AI checklist item; deterministic DCA runner + panel PLANNED (WS5).",
+            figure_source_contracts=(
+                ("figure:decision_curve", ("prediction:decision",)),
+            ),
         ),
         AnalysisMethod(
             key="threshold_metrics",
@@ -237,6 +272,12 @@ _PREDICTION = MethodSuite(
             implementation="planned",
             produces="landmark performance over time",
             runner=None,
+            figure_source_contracts=(
+                (
+                    "figure:time_varying_discrimination",
+                    ("prediction:time_varying_discrimination",),
+                ),
+            ),
         ),
     ),
 )
@@ -441,6 +482,9 @@ _ASSOCIATION = MethodSuite(
             produces="interaction test + subgroup forest",
             runner=None,
             reporting_items=("STROBE 12b",),
+            figure_source_contracts=(
+                ("figure:subgroup_forest", ("effect:subgroup",)),
+            ),
         ),
         AnalysisMethod(
             key="missingness_audit",
@@ -744,6 +788,27 @@ def deterministic_methods() -> Tuple[Tuple[str, AnalysisMethod], ...]:
 def supporting_methods(family: StudyDesignFamily) -> Tuple[AnalysisMethod, ...]:
     """Standard-supporting methods for a family (the reviewer-expected depth set)."""
     return methods_by_tier(family, "standard_supporting")
+
+
+def figure_product_source_obligations(product: object) -> Tuple[str, ...]:
+    """Return reviewer-suite source obligations for one exact typed figure.
+
+    This is the shared semantic registry consumed by figure lineage validation;
+    validators must not maintain a second list of benchmark or suite product
+    names. Multiple suites may register the same display, in which case every
+    declared obligation is retained.
+    """
+
+    canonical = str(product or "").strip().lower()
+    obligations = {
+        obligation
+        for suite in METHOD_SUITE_REGISTRY
+        for method in suite.methods
+        for figure_product, source_obligations in method.figure_source_contracts
+        if figure_product == canonical
+        for obligation in source_obligations
+    }
+    return tuple(sorted(obligations))
 
 
 # ---------------------------------------------------------------------------

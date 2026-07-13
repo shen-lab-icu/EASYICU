@@ -63,6 +63,38 @@ def test_tiers_and_implementations_use_closed_vocabulary():
         )
 
 
+def test_figure_source_contracts_use_closed_obligations_and_round_trip():
+    for suite, method in _ALL_METHODS:
+        for product, obligations in method.figure_source_contracts:
+            assert product.startswith("figure:"), (suite.family, method.key, product)
+            assert obligations
+            assert set(obligations) <= set(ams.FIGURE_SOURCE_OBLIGATIONS)
+            resolved = set(ams.figure_product_source_obligations(product))
+            assert set(obligations) <= resolved
+
+
+@pytest.mark.parametrize(
+    ("product", "obligations"),
+    [
+        (
+            "figure:discrimination_calibration",
+            {
+                "prediction:performance",
+                "prediction:calibration",
+                "prediction:roc",
+            },
+        ),
+        (
+            "figure:time_varying_discrimination",
+            {"prediction:time_varying_discrimination"},
+        ),
+        ("figure:subgroup_forest", {"effect:subgroup"}),
+    ],
+)
+def test_shared_suite_figures_publish_source_obligations(product, obligations):
+    assert set(ams.figure_product_source_obligations(product)) == obligations
+
+
 def test_method_keys_unique_within_suite():
     for suite in ams.METHOD_SUITE_REGISTRY:
         keys = [m.key for m in suite.methods]

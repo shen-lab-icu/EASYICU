@@ -6748,6 +6748,7 @@ else:
                     step=step,
                     step_summary=visual_step_summary,
                     completed_step_records=completed_records_snapshot,
+                    resolved_input_bindings=resolved_input_bindings,
                     out_dir=run_result.out_dir,
                 )
                 early_contract_findings += (
@@ -8108,6 +8109,7 @@ else:
             step=step,
             step_summary=step_summary,
             completed_step_records=completed_records_snapshot,
+            resolved_input_bindings=resolved_input_bindings,
             out_dir=run_result.out_dir,
         )
         contract_findings.extend(
@@ -8295,6 +8297,7 @@ else:
                     step=step,
                     step_summary=step_summary,
                     completed_step_records=completed_records_snapshot,
+                    resolved_input_bindings=resolved_input_bindings,
                     out_dir=run_result.out_dir,
                 )
                 contract_findings.extend(

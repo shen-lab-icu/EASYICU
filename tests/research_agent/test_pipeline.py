@@ -74,6 +74,19 @@ def test_pipeline_end_to_end_synthetic_cohort(ra, synthetic_cohort, tmp_path: Pa
         "manuscript_critique",
     } <= evidence_ids
     assert (run_dir / "hypothesis_blueprint.json").exists()
+    plan = json.loads(Path(result.plan_path).read_text(encoding="utf-8"))
+    plan_by_id = {step["step_id"]: step for step in plan["steps"]}
+    parent = plan_by_id["04_primary_association"]
+    figure_child = plan_by_id["04_primary_association_figure"]
+    assert figure_child["method"] == "visualization"
+    assert figure_child["inputs"] == [
+        output
+        for output in parent["expected_outputs"]
+        if output.startswith(
+            ("table:", "statistic:", "artifact:", "dataset:", "model:")
+        )
+    ]
+    assert figure_child["inputs"]
 
     # 3) The bound manuscript should have ZERO ``[evidence missing: …]``
     #    lines (T1.2 acceptance criterion).
@@ -432,7 +445,10 @@ import pandas as pd
 df = pd.read_parquet(os.environ["COHORT_PARQUET"])
 out = os.environ["STEP_OUT_DIR"]
 pd.DataFrame({"n": [int(len(df))]}).to_csv(os.path.join(out, "table_one.csv"), index=False)
-summary = {"n": int(len(df))}
+summary = {
+    "n": int(len(df)),
+    "output_files": {"table:table_one": "table_one.csv"},
+}
 with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     json.dump(summary, f)
 print(json.dumps(summary))
@@ -529,7 +545,8 @@ summary = {{
             {{"category": "Invalid summary", "count": 0}},
             {{"category": "Contradictory status", "count": 0}},
         ],
-    }}
+    }},
+    "output_files": {{"table:table_one": "table_one.csv"}},
 }}
 with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     json.dump(summary, f)
@@ -767,7 +784,8 @@ def test_runtime_crash_after_contract_repair_gets_its_own_repair_budget(
                     "pd.DataFrame({'predictor': ['exposure'], 'odds_ratio': [1.47]})"
                     ".to_csv(os.path.join(out, 'primary_association.csv'), index=False)\n"
                     "summary = {'primary_or': 1.47, 'odds_ratio': 1.47, "
-                    "'primary_predictor': 'exposure'}\n"
+                    "'primary_predictor': 'exposure', "
+                    "'output_files': {'statistic:primary_association': 1.47}}\n"
                     "with open(os.path.join(out, 'step_summary.json'), 'w') as f:\n"
                     "    json.dump(summary, f)\n"
                     "print(json.dumps(summary))\n"
@@ -1272,6 +1290,7 @@ summary = {
     "predictor": "sofa2",
     "sofa2_median": float(df["sofa2"].median()),
     "primary_or": 1.0,
+    "output_files": {"table:primary_association": "primary_association.csv"},
 }
 with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     json.dump(summary, f)
@@ -1299,6 +1318,7 @@ summary = {
     "sofa2_level_distribution": {int(k): int(v) for k, v in levels.items()},
     "sofa2_supplementary_mean": float(df["sofa2"].mean()),
     "primary_or": 1.0,
+    "output_files": {"table:primary_association": "primary_association.csv"},
 }
 with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     json.dump(summary, f)
@@ -4076,6 +4096,7 @@ def test_step_contract_findings_accepts_figure_path_for_figure_output(ra):
 
     step = ra.AnalysisStep(
         step_id="03_association_model",
+        method="adjusted_logistic_regression",
         intent="Estimate lactate association with a publication-ready figure.",
         expected_outputs=[
             "table:adjusted_association",
@@ -4184,6 +4205,8 @@ def test_split_table_and_figure_outputs_in_plan_splits_mixed_step(ra):
     figure_step = revised.steps[1]
     assert table_step.expected_outputs == ["table:table_one"]
     assert figure_step.expected_outputs == ["figure:table_one_visual"]
+    assert figure_step.inputs == ["table:table_one"]
+    assert figure_step.method == "visualization"
     assert findings and findings[0].severity == "warning"
     assert "01_table_one_figure" in findings[0].message
 
@@ -4213,6 +4236,250 @@ def test_split_table_and_figure_outputs_in_plan_no_op_when_pure_steps(ra):
     revised, findings = _split_table_and_figure_outputs_in_plan(plan=plan)
     assert revised is plan
     assert findings == []
+
+
+def test_split_table_and_figure_outputs_keeps_figure_with_log_sidecar(ra):
+    from easyicu.research_agent.pipeline import (
+        _split_table_and_figure_outputs_in_plan,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    plan = AnalysisPlan(
+        research_question="Render one publication figure and its process log.",
+        steps=[
+            AnalysisStep(
+                step_id="05_publication_figure",
+                intent="Render the already planned publication figure.",
+                inputs=["table:primary_result"],
+                expected_outputs=[
+                    "figure:primary_result",
+                    "log:rendering_process",
+                ],
+                method="publication_figure",
+            )
+        ],
+    )
+
+    revised, findings = _split_table_and_figure_outputs_in_plan(plan=plan)
+
+    assert revised is plan
+    assert findings == []
+
+
+@pytest.mark.parametrize(
+    "source_output",
+    [
+        "statistic:primary_effect",
+        "model:adjusted_model",
+        "artifact:primary_effect",
+        "dataset:primary_effect",
+    ],
+)
+def test_split_table_and_figure_outputs_requires_replayable_parent_table(
+    ra,
+    source_output,
+):
+    from easyicu.research_agent.pipeline import (
+        _split_table_and_figure_outputs_in_plan,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    plan = AnalysisPlan(
+        research_question="Estimate a result and render its planned figure.",
+        steps=[
+            AnalysisStep(
+                step_id="04_primary_result",
+                intent="Estimate the result and render its planned figure.",
+                expected_outputs=[source_output, "figure:primary_result"],
+                method="logistic_regression",
+            )
+        ],
+    )
+
+    revised, findings = _split_table_and_figure_outputs_in_plan(plan=plan)
+
+    assert revised is plan
+    assert findings == []
+
+
+def test_split_effect_figure_requires_effect_bearing_parent_table(ra):
+    from easyicu.research_agent.pipeline import (
+        _split_table_and_figure_outputs_in_plan,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    plan = AnalysisPlan(
+        research_question="Estimate a primary effect and render its forest plot.",
+        steps=[
+            AnalysisStep(
+                step_id="04_primary_effect",
+                intent="Estimate the primary effect and render its forest plot.",
+                expected_outputs=[
+                    "table:cohort_summary",
+                    "statistic:primary_effect",
+                    "figure:primary_effect_forest",
+                ],
+                method="logistic_regression",
+            )
+        ],
+    )
+
+    revised, findings = _split_table_and_figure_outputs_in_plan(plan=plan)
+
+    assert revised is plan
+    assert findings == []
+
+
+def test_split_effect_figure_requires_bound_table_to_prove_figure_scale(ra):
+    from easyicu.research_agent.pipeline import (
+        _split_table_and_figure_outputs_in_plan,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    plan = AnalysisPlan(
+        research_question="Estimate an association and render its odds ratio.",
+        steps=[
+            AnalysisStep(
+                step_id="04_primary_association",
+                intent="Estimate and render the primary association.",
+                expected_outputs=[
+                    "table:association_estimates",
+                    "figure:primary_or_forest",
+                ],
+                method="logistic_regression",
+            )
+        ],
+    )
+
+    revised, findings = _split_table_and_figure_outputs_in_plan(plan=plan)
+
+    assert revised is plan
+    assert findings == []
+
+
+def test_split_effect_figure_when_exact_bound_table_proves_figure_scale(ra):
+    from easyicu.research_agent.pipeline import (
+        _split_table_and_figure_outputs_in_plan,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    plan = AnalysisPlan(
+        research_question="Estimate an odds ratio and render its forest plot.",
+        steps=[
+            AnalysisStep(
+                step_id="04_primary_association",
+                intent="Estimate and render the primary odds ratio.",
+                expected_outputs=[
+                    "table:primary_or",
+                    "figure:primary_or_forest",
+                ],
+                method="logistic_regression",
+            )
+        ],
+    )
+
+    revised, findings = _split_table_and_figure_outputs_in_plan(plan=plan)
+
+    assert [step.step_id for step in revised.steps] == [
+        "04_primary_association",
+        "04_primary_association_figure",
+    ]
+    assert revised.steps[1].inputs == ["table:primary_or"]
+    assert findings
+
+
+@pytest.mark.parametrize(
+    "method",
+    [
+        "association_robustness with prespecified complete-case analysis",
+        "bias_audit_association with negative controls",
+        "clustering with kmeans",
+    ],
+)
+def test_splitter_respects_non_primary_method_head_with_rider(ra, method):
+    from easyicu.research_agent.pipeline import (
+        _split_table_and_figure_outputs_in_plan,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    plan = AnalysisPlan(
+        research_question="Run the planned method and its display.",
+        steps=[
+            AnalysisStep(
+                step_id="03_method",
+                intent="Run the method and render its planned display.",
+                expected_outputs=["table:results", "figure:results_overview"],
+                method=method,
+            )
+        ],
+    )
+
+    revised, findings = _split_table_and_figure_outputs_in_plan(plan=plan)
+
+    assert revised is plan
+    assert findings == []
+
+
+def test_split_table_and_figure_requires_unique_typed_parent_product(ra):
+    from easyicu.research_agent.pipeline import (
+        _split_table_and_figure_outputs_in_plan,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    plan = AnalysisPlan(
+        research_question="Render the primary association.",
+        steps=[
+            AnalysisStep(
+                step_id="01_primary",
+                intent="Estimate and render the primary association.",
+                expected_outputs=[
+                    "table:association_estimates",
+                    "figure:association_forest",
+                ],
+            ),
+            AnalysisStep(
+                step_id="02_sensitivity",
+                intent="Estimate a sensitivity association.",
+                expected_outputs=["table:association_estimates"],
+            ),
+        ],
+    )
+
+    revised, findings = _split_table_and_figure_outputs_in_plan(plan=plan)
+
+    assert revised is plan
+    assert findings == []
+
+
+def test_split_table_and_figure_does_not_create_duplicate_child_id(ra):
+    from easyicu.research_agent.pipeline import (
+        _split_table_and_figure_outputs_in_plan,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    plan = AnalysisPlan(
+        research_question="Render the primary table.",
+        steps=[
+            AnalysisStep(
+                step_id="01_primary",
+                intent="Create and render the primary table.",
+                expected_outputs=["table:summary", "figure:summary"],
+            ),
+            AnalysisStep(
+                step_id="01_primary_figure",
+                intent="Existing agent-planned renderer.",
+                inputs=["table:summary"],
+                expected_outputs=["figure:summary"],
+                method="visualization",
+            ),
+        ],
+    )
+
+    revised, findings = _split_table_and_figure_outputs_in_plan(plan=plan)
+
+    assert revised is plan
+    assert findings == []
+    assert [step.step_id for step in revised.steps].count("01_primary_figure") == 1
 
 
 def test_split_table_and_figure_outputs_in_plan_no_op_for_advanced_self_contained_step(
@@ -9328,11 +9595,14 @@ def test_step_contract_findings_accepts_textual_or_summary(ra):
         step_id="04_primary_association_model",
         method="adjusted_logistic_regression",
         intent="Fit logistic regression for lactate association.",
-        expected_outputs=["summary:primary_association"],
+        expected_outputs=["statistic:primary_association_estimate"],
     )
     findings = _step_contract_findings(
         step=step,
         step_summary={
+            "output_files": {
+                "statistic:primary_association_estimate": 1.219,
+            },
             "summary": {
                 "notes": [
                     "Association estimate with lactate: OR=1.219 (95% CI 1.116-1.332)."

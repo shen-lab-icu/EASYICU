@@ -9,9 +9,13 @@ from easyicu.research_agent.declared_product_contract import (
     authorize_declared_figure_product_slots,
     bind_declared_figure_products,
     declared_product_contract_findings,
+    effect_bearing_product,
+    effect_measure_family,
     read_digest_bound_artifact_snapshot,
+    typed_product,
 )
 from easyicu.research_agent.plan_utils import (
+    _effect_figure_source_authorized,
     _step_contract_findings,
     effect_output_authorized,
 )
@@ -237,6 +241,970 @@ def test_effect_method_owner_may_realise_its_declared_effect():
     assert findings == []
 
 
+def test_text_only_summary_kind_does_not_grant_effect_output_authority():
+    step = _step(
+        method="adjusted_logistic_regression",
+        outputs=["summary:primary_association"],
+    )
+    findings = _step_contract_findings(
+        step=step,
+        step_summary={
+            "summary": {
+                "notes": [
+                    "Association estimate: OR=1.219 (95% CI 1.116-1.332)."
+                ]
+            }
+        },
+    )
+
+    assert effect_output_authorized(step) is False
+    assert "unauthorized_effect_product" in _kinds(findings)
+
+
+def _effect_parent_and_figure_child():
+    parent = AnalysisStep(
+        step_id="04_primary_association",
+        intent="Estimate the prespecified primary association.",
+        inputs=["exposure", "outcome"],
+        expected_outputs=["table:primary_association"],
+        method="logistic_regression",
+    )
+    child = AnalysisStep(
+        step_id="04_primary_association_figure",
+        intent="Render the successful direct parent's typed result.",
+        inputs=["table:primary_association"],
+        expected_outputs=["figure:primary_association_curve"],
+        method="visualization",
+    )
+    record = {
+        "step_id": parent.step_id,
+        "status": "ok",
+        "analysis_request": {"step": parent.model_dump(mode="json")},
+        "step_summary": {
+            "status": "ok",
+            "output_files": {"table:primary_association": "primary_association.csv"},
+        },
+    }
+    return parent, child, record
+
+
+def _resolved_render_bindings(
+    child: AnalysisStep,
+    *,
+    producer_step_id: str = "04_primary_association",
+) -> dict[str, dict[str, str]]:
+    bindings: dict[str, dict[str, str]] = {}
+    for index, raw in enumerate(child.inputs or []):
+        parsed = typed_product(raw)
+        if parsed is None:
+            continue
+        bindings[str(raw)] = {
+            "declared_kind": parsed[0],
+            "product": parsed[1],
+            "produced_by_step": producer_step_id,
+            "evidence_id": f"evidence_{index}",
+            "sha256": f"{index + 1:x}" * 64,
+        }
+    return bindings
+
+
+@pytest.mark.parametrize(
+    "render_method", ["visualization", "publication_figure_generation"]
+)
+def test_effect_named_figure_requires_successful_typed_effect_parent(render_method):
+    parent, child, record = _effect_parent_and_figure_child()
+    child = child.model_copy(update={"method": render_method})
+    bindings = _resolved_render_bindings(child)
+
+    assert effect_output_authorized(parent) is True
+    assert effect_output_authorized(child) is False
+    assert (
+        _effect_figure_source_authorized(
+            step=child,
+            completed_step_records=[record],
+            resolved_input_bindings=bindings,
+        )
+        is True
+    )
+    findings = _step_contract_findings(
+        step=child,
+        step_summary={
+            "status": "ok",
+            "output_files": {
+                "figure:primary_association_curve": "primary_association_curve.png"
+            },
+        },
+        completed_step_records=[record],
+        resolved_input_bindings=bindings,
+    )
+
+    assert "unauthorized_effect_product" not in _kinds(findings)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "latest_parent_failed",
+        "child_input_mismatch",
+        "parent_not_effect_authorized",
+        "child_inherits_effect_method",
+    ],
+)
+def test_effect_named_figure_source_authority_fails_closed(case):
+    parent, child, record = _effect_parent_and_figure_child()
+    records = [record]
+    if case == "latest_parent_failed":
+        records.append({**record, "status": "contract_failed"})
+    elif case == "child_input_mismatch":
+        child = child.model_copy(update={"inputs": ["table:cohort_summary"]})
+    elif case == "parent_not_effect_authorized":
+        parent = parent.model_copy(
+            update={
+                "method": "descriptive_summary",
+                "expected_outputs": ["table:cohort_summary"],
+            }
+        )
+        record = {
+            **record,
+            "analysis_request": {"step": parent.model_dump(mode="json")},
+        }
+        records = [record]
+    else:
+        child = child.model_copy(update={"method": parent.method})
+    bindings = _resolved_render_bindings(child)
+
+    assert (
+        _effect_figure_source_authorized(
+            step=child,
+            completed_step_records=records,
+            resolved_input_bindings=bindings,
+        )
+        is False
+    )
+
+
+@pytest.mark.parametrize(
+    ("parent_output", "child_input"),
+    [
+        ("primary_association", "table:primary_association"),
+        ("table:primary_association", "primary_association"),
+    ],
+)
+def test_effect_figure_source_authority_rejects_bare_product_lineage(
+    parent_output,
+    child_input,
+):
+    parent, child, record = _effect_parent_and_figure_child()
+    parent = parent.model_copy(update={"expected_outputs": [parent_output]})
+    child = child.model_copy(update={"inputs": [child_input]})
+    record["analysis_request"]["step"] = parent.model_dump(mode="json")
+    bindings = _resolved_render_bindings(child)
+
+    assert effect_output_authorized(parent) is True
+    assert (
+        _effect_figure_source_authorized(
+            step=child,
+            completed_step_records=[record],
+            resolved_input_bindings=bindings,
+        )
+        is False
+    )
+
+
+def test_effect_figure_source_authority_rejects_same_name_with_different_kind():
+    parent, child, record = _effect_parent_and_figure_child()
+    child = child.model_copy(update={"inputs": ["statistic:primary_association"]})
+    bindings = _resolved_render_bindings(child)
+
+    assert (
+        _effect_figure_source_authorized(
+            step=child,
+            completed_step_records=[record],
+            resolved_input_bindings=bindings,
+        )
+        is False
+    )
+
+
+def test_effect_figure_source_authority_uses_canonical_typed_identity():
+    parent, child, record = _effect_parent_and_figure_child()
+    parent = parent.model_copy(
+        update={"expected_outputs": ["Table:Primary Association.csv"]}
+    )
+    record["analysis_request"]["step"] = parent.model_dump(mode="json")
+    bindings = _resolved_render_bindings(child)
+
+    assert effect_output_authorized(parent) is True
+    assert (
+        _effect_figure_source_authorized(
+            step=child,
+            completed_step_records=[record],
+            resolved_input_bindings=bindings,
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["missing_bindings", "wrong_producer", "missing_evidence", "missing_digest"],
+)
+def test_effect_figure_source_authority_requires_verified_direct_parent_binding(case):
+    _parent, child, record = _effect_parent_and_figure_child()
+    bindings = _resolved_render_bindings(child)
+    if case == "missing_bindings":
+        bindings = {}
+    elif case == "wrong_producer":
+        bindings = _resolved_render_bindings(child, producer_step_id="03_stale_model")
+    elif case == "missing_evidence":
+        bindings[child.inputs[0]]["evidence_id"] = ""
+    else:
+        bindings[child.inputs[0]]["sha256"] = ""
+
+    assert (
+        _effect_figure_source_authorized(
+            step=child,
+            completed_step_records=[record],
+            resolved_input_bindings=bindings,
+        )
+        is False
+    )
+
+
+def test_effect_figure_source_authority_rejects_mixed_typed_and_raw_inputs():
+    _parent, child, record = _effect_parent_and_figure_child()
+    child = child.model_copy(
+        update={"inputs": ["table:primary_association", "outcome"]}
+    )
+
+    assert (
+        _effect_figure_source_authorized(
+            step=child,
+            completed_step_records=[record],
+            resolved_input_bindings=_resolved_render_bindings(child),
+        )
+        is False
+    )
+
+
+def test_standalone_effect_figure_uses_verified_binding_instead_of_id_convention():
+    _parent, child, record = _effect_parent_and_figure_child()
+    child = child.model_copy(update={"step_id": "05_publication_figure"})
+
+    assert (
+        _effect_figure_source_authorized(
+            step=child,
+            completed_step_records=[record],
+            resolved_input_bindings=_resolved_render_bindings(child),
+        )
+        is True
+    )
+
+
+def test_effect_figure_allows_only_typed_log_sidecars():
+    _parent, child, record = _effect_parent_and_figure_child()
+    child = child.model_copy(
+        update={
+            "expected_outputs": [
+                "figure:primary_association_curve",
+                "log:primary_association_render_trace",
+            ]
+        }
+    )
+    bindings = _resolved_render_bindings(child)
+
+    assert (
+        _effect_figure_source_authorized(
+            step=child,
+            completed_step_records=[record],
+            resolved_input_bindings=bindings,
+        )
+        is True
+    )
+    findings = _step_contract_findings(
+        step=child,
+        step_summary={
+            "status": "ok",
+            "output_files": {
+                "figure:primary_association_curve": "primary_association_curve.png",
+                "log:primary_association_render_trace": (
+                    "primary_association_render_trace.json"
+                ),
+            },
+        },
+        completed_step_records=[record],
+        resolved_input_bindings=bindings,
+    )
+
+    assert "unauthorized_effect_product" not in _kinds(findings)
+
+
+def test_effect_figure_source_authority_rejects_result_bearing_sidecar():
+    _parent, child, record = _effect_parent_and_figure_child()
+    child = child.model_copy(
+        update={
+            "expected_outputs": [
+                "figure:primary_association_curve",
+                "table:primary_association_copy",
+            ]
+        }
+    )
+
+    assert (
+        _effect_figure_source_authorized(
+            step=child,
+            completed_step_records=[record],
+            resolved_input_bindings=_resolved_render_bindings(child),
+        )
+        is False
+    )
+
+
+def test_effect_figure_requires_effect_bearing_table_not_unrelated_table():
+    parent, child, record = _effect_parent_and_figure_child()
+    parent = parent.model_copy(
+        update={
+            "expected_outputs": [
+                "table:cohort_summary",
+                "statistic:primary_effect",
+            ]
+        }
+    )
+    child = child.model_copy(
+        update={
+            "inputs": ["table:cohort_summary", "statistic:primary_effect"],
+            "expected_outputs": ["figure:primary_effect_forest"],
+        }
+    )
+    record["analysis_request"]["step"] = parent.model_dump(mode="json")
+
+    assert effect_output_authorized(parent) is True
+    assert (
+        _effect_figure_source_authorized(
+            step=child,
+            completed_step_records=[record],
+            resolved_input_bindings=_resolved_render_bindings(child),
+        )
+        is False
+    )
+
+
+def test_effect_figure_cannot_relabel_parent_effect_measure():
+    parent, child, record = _effect_parent_and_figure_child()
+    parent = parent.model_copy(update={"expected_outputs": ["table:primary_or"]})
+    child = child.model_copy(
+        update={
+            "inputs": ["table:primary_or"],
+            "expected_outputs": ["figure:risk_ratio_forest"],
+        }
+    )
+    record["analysis_request"]["step"] = parent.model_dump(mode="json")
+
+    assert (
+        _effect_figure_source_authorized(
+            step=child,
+            completed_step_records=[record],
+            resolved_input_bindings=_resolved_render_bindings(child),
+        )
+        is False
+    )
+    matching_child = child.model_copy(
+        update={"expected_outputs": ["figure:odds_ratio_forest"]}
+    )
+    assert (
+        _effect_figure_source_authorized(
+            step=matching_child,
+            completed_step_records=[record],
+            resolved_input_bindings=_resolved_render_bindings(matching_child),
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize(
+    ("parent_product", "child_product"),
+    [
+        ("table:primary_or", "figure:adjusted_or_forest"),
+        ("table:risk_ratio", "figure:adjusted_rr_forest"),
+        ("table:adjusted_or", "figure:crude_odds_ratio_forest"),
+    ],
+)
+def test_effect_figure_cannot_invent_adjustment_qualifier(
+    parent_product,
+    child_product,
+):
+    parent, child, record = _effect_parent_and_figure_child()
+    parent = parent.model_copy(update={"expected_outputs": [parent_product]})
+    child = child.model_copy(
+        update={"inputs": [parent_product], "expected_outputs": [child_product]}
+    )
+    record["analysis_request"]["step"] = parent.model_dump(mode="json")
+
+    assert (
+        _effect_figure_source_authorized(
+            step=child,
+            completed_step_records=[record],
+            resolved_input_bindings=_resolved_render_bindings(child),
+        )
+        is False
+    )
+
+
+def test_effect_figure_preserves_matching_adjustment_qualifier():
+    parent, child, record = _effect_parent_and_figure_child()
+    parent = parent.model_copy(update={"expected_outputs": ["table:adjusted_or"]})
+    child = child.model_copy(
+        update={
+            "inputs": ["table:adjusted_or"],
+            "expected_outputs": ["figure:adjusted_odds_ratio_forest"],
+        }
+    )
+    record["analysis_request"]["step"] = parent.model_dump(mode="json")
+
+    assert (
+        _effect_figure_source_authorized(
+            step=child,
+            completed_step_records=[record],
+            resolved_input_bindings=_resolved_render_bindings(child),
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize(
+    "child_product",
+    [
+        "figure:interaction_pvalue_heatmap",
+        "figure:subgroup_effects_forest",
+        "figure:treatment_effect_forest",
+        "figure:causal_effect_forest",
+    ],
+)
+def test_effect_figure_cannot_invent_specialized_effect_role(child_product):
+    parent, child, record = _effect_parent_and_figure_child()
+    parent = parent.model_copy(update={"expected_outputs": ["table:primary_or"]})
+    child = child.model_copy(
+        update={"inputs": ["table:primary_or"], "expected_outputs": [child_product]}
+    )
+    record["analysis_request"]["step"] = parent.model_dump(mode="json")
+
+    assert (
+        _effect_figure_source_authorized(
+            step=child,
+            completed_step_records=[record],
+            resolved_input_bindings=_resolved_render_bindings(child),
+        )
+        is False
+    )
+
+
+@pytest.mark.parametrize(
+    ("parent_product", "child_product"),
+    [
+        ("table:subgroup_effects", "figure:subgroup_effects_forest"),
+        ("table:interaction_pvalue", "figure:interaction_pvalue_heatmap"),
+        ("table:treatment_effect", "figure:treatment_effect_forest"),
+        ("table:causal_effect", "figure:causal_effect_forest"),
+    ],
+)
+def test_effect_figure_preserves_matching_specialized_effect_role(
+    parent_product,
+    child_product,
+):
+    parent, child, record = _effect_parent_and_figure_child()
+    parent = parent.model_copy(update={"expected_outputs": [parent_product]})
+    child = child.model_copy(
+        update={
+            "inputs": [parent_product],
+            "expected_outputs": [child_product],
+        }
+    )
+    record["analysis_request"]["step"] = parent.model_dump(mode="json")
+
+    assert (
+        _effect_figure_source_authorized(
+            step=child,
+            completed_step_records=[record],
+            resolved_input_bindings=_resolved_render_bindings(child),
+        )
+        is True
+    )
+
+
+def test_effect_figure_authority_uses_only_the_bound_parent_product():
+    parent, child, record = _effect_parent_and_figure_child()
+    parent = parent.model_copy(
+        update={"expected_outputs": ["table:primary_or", "table:risk_ratio"]}
+    )
+    child = child.model_copy(
+        update={
+            "inputs": ["table:primary_or"],
+            "expected_outputs": ["figure:risk_ratio_forest"],
+        }
+    )
+    record["analysis_request"]["step"] = parent.model_dump(mode="json")
+
+    assert (
+        _effect_figure_source_authorized(
+            step=child,
+            completed_step_records=[record],
+            resolved_input_bindings=_resolved_render_bindings(child),
+        )
+        is False
+    )
+
+
+def test_effect_figure_cannot_borrow_adjustment_from_unbound_sibling():
+    parent, child, record = _effect_parent_and_figure_child()
+    parent = parent.model_copy(
+        update={
+            "expected_outputs": [
+                "table:crude_odds_ratio",
+                "table:adjusted_or",
+            ]
+        }
+    )
+    child = child.model_copy(
+        update={
+            "inputs": ["table:crude_odds_ratio"],
+            "expected_outputs": ["figure:adjusted_or_forest"],
+        }
+    )
+    record["analysis_request"]["step"] = parent.model_dump(mode="json")
+
+    assert (
+        _effect_figure_source_authorized(
+            step=child,
+            completed_step_records=[record],
+            resolved_input_bindings=_resolved_render_bindings(child),
+        )
+        is False
+    )
+
+
+def test_generic_effect_figure_can_use_generic_input_among_specialized_siblings():
+    parent, child, record = _effect_parent_and_figure_child()
+    parent = parent.model_copy(
+        update={"expected_outputs": ["table:primary_or", "table:subgroup_effects"]}
+    )
+    child = child.model_copy(
+        update={
+            "inputs": ["table:primary_or"],
+            "expected_outputs": ["figure:odds_ratio_forest"],
+        }
+    )
+    record["analysis_request"]["step"] = parent.model_dump(mode="json")
+
+    assert (
+        _effect_figure_source_authorized(
+            step=child,
+            completed_step_records=[record],
+            resolved_input_bindings=_resolved_render_bindings(child),
+        )
+        is True
+    )
+
+
+def test_specialized_figure_can_select_matching_input_from_multi_role_parent():
+    parent, child, record = _effect_parent_and_figure_child()
+    parent = parent.model_copy(
+        update={
+            "expected_outputs": [
+                "table:subgroup_effects",
+                "table:interaction_pvalue",
+            ]
+        }
+    )
+    child = child.model_copy(
+        update={
+            "inputs": ["table:subgroup_effects"],
+            "expected_outputs": ["figure:subgroup_effects_forest"],
+        }
+    )
+    record["analysis_request"]["step"] = parent.model_dump(mode="json")
+
+    assert (
+        _effect_figure_source_authorized(
+            step=child,
+            completed_step_records=[record],
+            resolved_input_bindings=_resolved_render_bindings(child),
+        )
+        is True
+    )
+
+
+def test_effect_figure_can_combine_verified_tables_from_multiple_parents():
+    parent_a = AnalysisStep(
+        step_id="04_primary_model",
+        intent="Estimate the primary odds ratio.",
+        expected_outputs=["table:primary_or"],
+        method="logistic_regression",
+    )
+    parent_b = AnalysisStep(
+        step_id="05_adjusted_model",
+        intent="Estimate the adjusted odds ratio.",
+        expected_outputs=["table:adjusted_or"],
+        method="logistic_regression",
+    )
+    child = AnalysisStep(
+        step_id="06_effect_figure",
+        intent="Render both verified effect tables.",
+        inputs=["table:primary_or", "table:adjusted_or"],
+        expected_outputs=["figure:primary_or_forest"],
+        method="visualization",
+    )
+    records = [
+        {
+            "step_id": parent.step_id,
+            "status": "ok",
+            "analysis_request": {"step": parent.model_dump(mode="json")},
+        }
+        for parent in (parent_a, parent_b)
+    ]
+    bindings = _resolved_render_bindings(child, producer_step_id=parent_a.step_id)
+    bindings["table:adjusted_or"]["produced_by_step"] = parent_b.step_id
+
+    assert (
+        _effect_figure_source_authorized(
+            step=child,
+            completed_step_records=records,
+            resolved_input_bindings=bindings,
+        )
+        is True
+    )
+
+
+def test_effect_figure_multi_parent_authority_requires_every_parent_current():
+    parent_a = AnalysisStep(
+        step_id="04_primary_model",
+        intent="Estimate the primary odds ratio.",
+        expected_outputs=["table:primary_or"],
+        method="logistic_regression",
+    )
+    parent_b = AnalysisStep(
+        step_id="05_adjusted_model",
+        intent="Estimate the adjusted odds ratio.",
+        expected_outputs=["table:adjusted_or"],
+        method="logistic_regression",
+    )
+    child = AnalysisStep(
+        step_id="06_effect_figure",
+        intent="Render both effect tables.",
+        inputs=["table:primary_or", "table:adjusted_or"],
+        expected_outputs=["figure:primary_or_forest"],
+        method="visualization",
+    )
+    records = [
+        {
+            "step_id": parent_a.step_id,
+            "status": "ok",
+            "analysis_request": {"step": parent_a.model_dump(mode="json")},
+        },
+        {
+            "step_id": parent_b.step_id,
+            "status": "contract_failed",
+            "analysis_request": {"step": parent_b.model_dump(mode="json")},
+        },
+    ]
+    bindings = _resolved_render_bindings(child, producer_step_id=parent_a.step_id)
+    bindings["table:adjusted_or"]["produced_by_step"] = parent_b.step_id
+
+    assert (
+        _effect_figure_source_authorized(
+            step=child,
+            completed_step_records=records,
+            resolved_input_bindings=bindings,
+        )
+        is False
+    )
+
+
+@pytest.mark.parametrize(
+    ("parent_product", "child_product"),
+    [
+        ("table:subgroup_effects", "figure:overall_effect_forest"),
+        ("table:interaction_pvalue", "figure:primary_effect_forest"),
+        ("table:causal_effect", "figure:primary_association_curve"),
+    ],
+)
+def test_specialized_parent_effect_cannot_be_relabelled_as_generic(
+    parent_product,
+    child_product,
+):
+    parent, child, record = _effect_parent_and_figure_child()
+    parent = parent.model_copy(update={"expected_outputs": [parent_product]})
+    child = child.model_copy(
+        update={"inputs": [parent_product], "expected_outputs": [child_product]}
+    )
+    record["analysis_request"]["step"] = parent.model_dump(mode="json")
+
+    assert (
+        _effect_figure_source_authorized(
+            step=child,
+            completed_step_records=[record],
+            resolved_input_bindings=_resolved_render_bindings(child),
+        )
+        is False
+    )
+
+
+@pytest.mark.parametrize(
+    ("parent_product", "figure_product"),
+    [
+        ("table:primary_rr", "figure:forest_primary_rr"),
+        ("table:relative_risk", "figure:forest_relative_risk"),
+        ("table:adjusted_hr", "figure:forest_adjusted_hr"),
+        ("table:primary_rd", "figure:forest_primary_rd"),
+        ("table:adjusted_odds_ratios", "figure:odds_ratio_forest"),
+    ],
+)
+def test_effect_alias_parent_authorizes_matching_table_backed_figure(
+    parent_product,
+    figure_product,
+):
+    parent, child, record = _effect_parent_and_figure_child()
+    parent = parent.model_copy(update={"expected_outputs": [parent_product]})
+    child = child.model_copy(
+        update={"inputs": [parent_product], "expected_outputs": [figure_product]}
+    )
+    record["analysis_request"]["step"] = parent.model_dump(mode="json")
+
+    assert effect_output_authorized(parent) is True
+    assert (
+        _effect_figure_source_authorized(
+            step=child,
+            completed_step_records=[record],
+            resolved_input_bindings=_resolved_render_bindings(child),
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize(
+    ("declared_output", "registered_path"),
+    [
+        ("table:cohort_summary", "risk_ratio.csv"),
+        ("figure:overview", "risk_ratio_forest.png"),
+    ],
+)
+def test_typed_registry_role_cannot_launder_effect_bearing_path(
+    declared_output,
+    registered_path,
+):
+    step = _step(outputs=[declared_output])
+
+    findings = declared_product_contract_findings(
+        step=step,
+        step_summary={"output_files": {declared_output: registered_path}},
+        effect_method_authorized=False,
+    )
+
+    assert "unauthorized_effect_product" in _kinds(findings)
+
+
+def test_undeclared_effect_named_log_is_not_an_auxiliary_sidecar():
+    step = _step(outputs=["table:cohort_summary"])
+
+    findings = declared_product_contract_findings(
+        step=step,
+        step_summary={
+            "output_files": {
+                "table:cohort_summary": "cohort_summary.csv",
+                "log:risk_ratio": "risk_ratio.json",
+            }
+        },
+        effect_method_authorized=False,
+    )
+
+    assert "unauthorized_effect_product" in _kinds(findings)
+
+
+@pytest.mark.parametrize("effect_log", ["risk_ratio", "primary_or"])
+def test_declared_bare_effect_log_is_not_an_auxiliary_sidecar(effect_log):
+    output = f"log:{effect_log}"
+    step = _step(outputs=[output])
+
+    findings = declared_product_contract_findings(
+        step=step,
+        step_summary={"output_files": {output: f"{effect_log}.json"}},
+        effect_method_authorized=False,
+    )
+
+    assert "unauthorized_effect_product" in _kinds(findings)
+
+
+@pytest.mark.parametrize(
+    ("container", "effect_key"),
+    [
+        ("output_files", "primary_or"),
+        ("outputs", "adjusted_rr"),
+        ("figure_files", "risk_ratio"),
+    ],
+)
+def test_output_container_cannot_hide_untyped_effect_scalar(container, effect_key):
+    step = _step(outputs=["table:cohort_summary"])
+    summary = {"output_files": {"table:cohort_summary": "cohort_summary.csv"}}
+    summary.setdefault(container, {})[effect_key] = 1.7
+
+    findings = declared_product_contract_findings(
+        step=step,
+        step_summary=summary,
+        effect_method_authorized=False,
+    )
+
+    assert "unauthorized_effect_product" in _kinds(findings)
+
+
+@pytest.mark.parametrize(
+    "effect_alias",
+    [
+        "or",
+        "rr",
+        "hr",
+        "rd",
+        "relative_risk",
+        "primary_rr",
+        "adjusted_rr",
+        "adjusted_hr",
+        "primary_rd",
+        "adjusted_rd",
+    ],
+)
+def test_explicit_effect_family_aliases_cannot_evade_effect_scope(effect_alias):
+    step = _step(outputs=[f"figure:{effect_alias}_forest"])
+
+    findings = declared_product_contract_findings(
+        step=step,
+        step_summary={
+            "output_files": {
+                f"figure:{effect_alias}_forest": f"{effect_alias}_forest.png"
+            }
+        },
+        effect_method_authorized=False,
+    )
+
+    assert "unauthorized_effect_product" in _kinds(findings)
+
+
+@pytest.mark.parametrize(
+    "figure_product",
+    ["figure:forest_risk_ratio", "figure:forest_odds_ratio"],
+)
+def test_effect_role_is_detected_after_display_prefix(figure_product):
+    step = _step(outputs=[figure_product])
+
+    findings = declared_product_contract_findings(
+        step=step,
+        step_summary={
+            "output_files": {figure_product: f"{figure_product.split(':', 1)[1]}.png"}
+        },
+        effect_method_authorized=False,
+    )
+
+    assert "unauthorized_effect_product" in _kinds(findings)
+
+
+@pytest.mark.parametrize(
+    "product_name",
+    [
+        "adjusted_association",
+        "adjusted_associations",
+        "adjusted_association_model",
+        "adjusted_association_models",
+        "adjusted_association_primary",
+        "adjusted_logistic_regression_primary",
+        "adjusted_or_ci",
+        "primary_adjusted_association",
+        "primary_effect_estimate",
+        "primary_estimate",
+        "effect_estimate",
+        "effect_forest",
+    ],
+)
+def test_shared_effect_vocabulary_blocks_non_effect_owner(product_name):
+    output = f"table:{product_name}"
+    step = _step(outputs=[output])
+
+    findings = declared_product_contract_findings(
+        step=step,
+        step_summary={"output_files": {output: f"{product_name}.csv"}},
+        effect_method_authorized=False,
+    )
+
+    assert "unauthorized_effect_product" in _kinds(findings)
+
+
+@pytest.mark.parametrize(
+    "product_name",
+    [
+        "adjusted_effect_estimate",
+        "subgroup_effect",
+        "treatment_effect",
+        "effect_estimate",
+        "effect_forest",
+    ],
+)
+def test_shared_effect_vocabulary_authorizes_effect_method_owner(product_name):
+    step = _step(
+        method="logistic_regression",
+        outputs=[f"table:{product_name}"],
+    )
+
+    assert effect_output_authorized(step) is True
+
+
+def test_authorized_figure_role_cannot_launder_rogue_effect_figure_path():
+    _parent, child, record = _effect_parent_and_figure_child()
+
+    findings = _step_contract_findings(
+        step=child,
+        step_summary={
+            "status": "ok",
+            "output_files": {
+                "figure:primary_association_curve": "risk_ratio_forest.png"
+            },
+        },
+        completed_step_records=[record],
+        resolved_input_bindings=_resolved_render_bindings(child),
+    )
+
+    assert "unauthorized_effect_product" in _kinds(findings)
+
+
+@pytest.mark.parametrize(
+    "extra_summary",
+    [
+        {"adjusted_or": 1.4},
+        {"output_files": {"table:risk_ratio": "risk_ratio.csv"}},
+        {"output_files": {"figure:risk_ratio_forest": "risk_ratio_forest.png"}},
+    ],
+)
+def test_effect_figure_parent_authority_never_authorizes_numeric_or_table_effects(
+    extra_summary,
+):
+    _parent, child, record = _effect_parent_and_figure_child()
+    bindings = _resolved_render_bindings(child)
+    summary = {
+        "status": "ok",
+        "output_files": {
+            "figure:primary_association_curve": "primary_association_curve.png"
+        },
+    }
+    if "output_files" in extra_summary:
+        summary["output_files"].update(extra_summary["output_files"])
+    else:
+        summary.update(extra_summary)
+
+    findings = _step_contract_findings(
+        step=child,
+        step_summary=summary,
+        completed_step_records=[record],
+        resolved_input_bindings=bindings,
+    )
+
+    assert "unauthorized_effect_product" in _kinds(findings)
+
+
 def test_inferred_effect_family_does_not_authorize_non_effect_method_output():
     step = _step(outputs=["table:cohort_summary"])
     findings = _step_contract_findings(
@@ -284,6 +1252,82 @@ def test_non_effect_hypothesis_test_p_value_is_not_misclassified_as_effect():
 
     assert effect_output_authorized(step) is False
     assert "unauthorized_effect_product" not in _kinds(findings)
+
+
+@pytest.mark.parametrize(
+    "product_name",
+    [
+        "included_or_excluded_counts",
+        "missing_or_invalid_rows",
+        "exposure_or_outcome_availability",
+        "hr_trajectory",
+        "rr_distribution",
+    ],
+)
+def test_effect_abbreviations_do_not_capture_non_effect_products(product_name):
+    output = f"table:{product_name}"
+    step = _step(outputs=[output])
+
+    findings = declared_product_contract_findings(
+        step=step,
+        step_summary={"output_files": {output: f"{product_name}.csv"}},
+        effect_method_authorized=False,
+    )
+
+    assert effect_output_authorized(step) is False
+    assert "unauthorized_effect_product" not in _kinds(findings)
+
+
+@pytest.mark.parametrize("abbreviation", ["or", "rr", "hr", "rd"])
+def test_bare_typed_abbreviations_are_measure_hints_not_effect_authority(
+    abbreviation,
+):
+    output = f"table:{abbreviation}"
+    findings = declared_product_contract_findings(
+        step=_step(outputs=[output]),
+        step_summary={"output_files": {output: f"{abbreviation}.csv"}},
+        effect_method_authorized=False,
+    )
+
+    # In ICU data, HR/RR are also heart/respiratory rate and OR may be ordinary
+    # language. Exact abbreviations may help interpret a value column only after
+    # an unambiguous typed effect product has established authority.
+    assert effect_measure_family(output) is not None
+    assert effect_bearing_product(output) is False
+    assert "unauthorized_effect_product" not in _kinds(findings)
+
+
+@pytest.mark.parametrize(
+    ("parent_product", "primary_figure"),
+    [
+        ("table:secondary_odds_ratio", "figure:primary_odds_ratio_forest"),
+        ("table:sensitivity_risk_ratio", "figure:primary_risk_ratio_forest"),
+        (
+            "table:corroborative_hazard_ratio",
+            "figure:primary_hazard_ratio_forest",
+        ),
+    ],
+)
+def test_non_primary_effect_source_cannot_authorize_primary_figure(
+    parent_product,
+    primary_figure,
+):
+    parent, child, record = _effect_parent_and_figure_child()
+    parent = parent.model_copy(update={"expected_outputs": [parent_product]})
+    child = child.model_copy(
+        update={"inputs": [parent_product], "expected_outputs": [primary_figure]}
+    )
+    record["analysis_request"]["step"] = parent.model_dump(mode="json")
+
+    assert effect_output_authorized(parent) is True
+    assert (
+        _effect_figure_source_authorized(
+            step=child,
+            completed_step_records=[record],
+            resolved_input_bindings=_resolved_render_bindings(child),
+        )
+        is False
+    )
 
 
 def test_plan_utils_integration_fails_closed():
