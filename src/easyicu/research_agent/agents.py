@@ -1364,6 +1364,41 @@ def _declared_output_scope_contract(step: AnalysisStep) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _typed_input_scope_contract(step: AnalysisStep) -> str:
+    """Bind planned upstream products to their run-authoritative files."""
+
+    supported_kinds = {
+        "artifact",
+        "dataset",
+        "figure",
+        "log",
+        "manifest",
+        "model",
+        "statistic",
+        "table",
+    }
+    typed_inputs = []
+    for item in step.inputs or []:
+        kind, separator, product = str(item or "").strip().partition(":")
+        if separator and kind.strip().lower() in supported_kinds and product.strip():
+            typed_inputs.append(str(item))
+    if not typed_inputs:
+        return ""
+    return (
+        "TYPED INPUT BINDING (binding):\n"
+        "- This step has typed upstream inputs. At instrumented execution, read "
+        "the JSON manifest at os.environ['EASYICU_RESOLVED_INPUTS_JSON'].\n"
+        "- Look up each typed input by its exact kind:name key in manifest['inputs']. "
+        "Read its exact file as Path(os.environ['EASYICU_RUN_DIR']) / "
+        "binding['relative_path']; the manifest also supplies evidence_id and sha256.\n"
+        "- Do not glob EASYICU_EVIDENCE_DIR, choose a file by mtime or basename, "
+        "follow a legacy alias, or reconstruct a declared upstream product from "
+        "COHORT_PARQUET. COHORT_PARQUET remains the source only for untyped raw "
+        "variables or steps with no typed upstream input.\n"
+        f"- Exact typed inputs for this step: {typed_inputs}\n"
+    )
+
+
 class CoderAgent:
     """Generates a self-contained Python analysis script for one step.
 
@@ -1406,6 +1441,7 @@ class CoderAgent:
                     f"{json.dumps([item.model_dump(mode='json') for item in step.model_requirements], ensure_ascii=False)}\n"
                     f"Method: {step.method or '(unspecified — choose conservatively)'}\n\n"
                     + _declared_output_scope_contract(step)
+                    + _typed_input_scope_contract(step)
                     + coder_method_capability_block()
                     + trajectory_phenotyping_code_contract(
                         context=context,
@@ -1490,6 +1526,7 @@ class CoderAgent:
                     f"{json.dumps([item.model_dump(mode='json') for item in step.model_requirements], ensure_ascii=False)}\n"
                     f"Method: {step.method or '(unspecified)'}\n\n"
                     + _declared_output_scope_contract(step)
+                    + _typed_input_scope_contract(step)
                     + trajectory_phenotyping_code_contract(
                         context=context,
                         step=step,

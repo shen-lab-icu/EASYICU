@@ -69,6 +69,37 @@ def test_code_runner_exposes_run_level_artifact_env(ra, tmp_path: Path):
     )
 
 
+def test_code_runner_exposes_exact_resolved_inputs_manifest(ra, tmp_path: Path):
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1]}).to_parquet(cohort_path, index=False)
+    run_dir = tmp_path / "run"
+    manifest = run_dir / "resolved_inputs" / "consume.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text('{"schema_version":"1.0","inputs":{}}\n', encoding="utf-8")
+    runner = ra.CodeRunner(
+        workdir=run_dir,
+        cohort_parquet=cohort_path,
+        timeout_seconds=10,
+        allow_unsafe_host_fallback=True,
+    )
+
+    result = runner.run(
+        step_id="consume",
+        resolved_inputs_path=manifest,
+        code=(
+            "import os\n"
+            "from pathlib import Path\n"
+            "Path(os.environ['STEP_OUT_DIR'], 'path.txt').write_text("
+            "os.environ['EASYICU_RESOLVED_INPUTS_JSON'])\n"
+        ),
+    )
+
+    assert result.succeeded
+    assert (result.out_dir / "path.txt").read_text(encoding="utf-8") == str(
+        manifest.resolve()
+    )
+
+
 def test_runner_build_command_defaults_to_network_isolation(ra, tmp_path: Path):
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)

@@ -58,6 +58,25 @@ def test_coder_prompt_allows_only_declared_figure_products(ra):
     assert "declares no figure product" not in prompt
 
 
+def test_coder_prompt_binds_typed_inputs_to_resolved_manifest(ra):
+    llm = _RecordingLLM()
+    step = ra.AnalysisStep(
+        step_id="consume",
+        intent="Consume the declared upstream table.",
+        inputs=["table:scaling_summary"],
+        expected_outputs=["table:result"],
+        method="descriptive_summary",
+    )
+
+    CoderAgent(llm).run(context=_context(ra), step=step)
+
+    prompt = llm.messages[-1].content
+    assert "TYPED INPUT BINDING (binding)" in prompt
+    assert "EASYICU_RESOLVED_INPUTS_JSON" in prompt
+    assert "Do not glob EASYICU_EVIDENCE_DIR" in prompt
+    assert "reconstruct a declared upstream product" in prompt
+
+
 def test_runtime_only_builds_visualization_request_for_figure_step(ra):
     context = _context(ra)
     supervisor = ra.RuntimeSupervisor()

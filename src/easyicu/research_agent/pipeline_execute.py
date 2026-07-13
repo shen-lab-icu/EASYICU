@@ -100,6 +100,7 @@ from .deterministic_robustness import (
     replay_locked_memberships,
     robustness_sensitivity_preflight_code,
 )
+from .declared_product_contract import typed_product as _canonical_typed_product
 from .estimators import fit_robustness_rows_from_records
 from .evidence import sha256_of_bytes, sha256_of_file
 from .llm import MockLLMClient
@@ -203,15 +204,39 @@ class _EvidenceLineageResolutionError(RuntimeError):
         )
 
 
-def _typed_artifact_name(value: Any) -> Optional[str]:
-    """Return the normalized logical name for an ``artifact:`` contract."""
+_TYPED_INPUT_KINDS = frozenset(
+    {
+        "artifact",
+        "dataset",
+        "figure",
+        "log",
+        "manifest",
+        "model",
+        "statistic",
+        "table",
+    }
+)
+def _normalise_typed_product_name(value: Any) -> str:
+    parsed = _canonical_typed_product(f"artifact:{value}")
+    return parsed[1] if parsed is not None else ""
 
-    kind, separator, product = str(value or "").strip().partition(":")
-    if not separator or kind.strip().lower() != "artifact":
+
+def _typed_input_product(value: Any) -> Optional[Tuple[str, str]]:
+    """Return a canonical ``(kind, product)`` for a typed plan dependency."""
+
+    parsed = _canonical_typed_product(value)
+    if parsed is None or parsed[0] not in _TYPED_INPUT_KINDS:
         return None
-    name = product.strip().lower().rsplit("/", 1)[-1]
-    name = re.sub(r"\.(?:csv|json|parquet|feather|tsv)$", "", name)
-    return name or None
+    return parsed
+
+
+def _typed_artifact_name(value: Any) -> Optional[str]:
+    """Backward-compatible artifact-only view of a typed plan dependency."""
+
+    typed_product = _typed_input_product(value)
+    if typed_product is None or typed_product[0] != "artifact":
+        return None
+    return typed_product[1]
 
 
 def _evidence_record_field(record: Any, name: str) -> Any:
@@ -230,10 +255,10 @@ def _registered_source_name(record: Any, verified_path: Path) -> Optional[str]:
     return verified_path.name[len(prefix) :] or None
 
 
-def _declared_typed_artifact_paths(
+def _declared_typed_product_paths(
     step_summary: Any,
     *,
-    artifact_name: str,
+    typed_product: Tuple[str, str],
 ) -> Tuple[bool, List[str]]:
     """Return exact typed file mappings declared by the producer summary."""
 
@@ -246,7 +271,7 @@ def _declared_typed_artifact_paths(
         if not isinstance(container, Mapping):
             continue
         for typed_key, value in container.items():
-            if _typed_artifact_name(typed_key) != artifact_name:
+            if _typed_input_product(typed_key) != typed_product:
                 continue
             declared = True
             if isinstance(value, str) and value.strip():
@@ -260,7 +285,58 @@ def _declared_typed_artifact_paths(
     return declared, list(dict.fromkeys(paths))
 
 
-def _resolve_typed_artifact_evidence(
+def _declared_typed_artifact_paths(
+    step_summary: Any,
+    *,
+    artifact_name: str,
+) -> Tuple[bool, List[str]]:
+    """Backward-compatible wrapper for artifact-specific callers."""
+
+    return _declared_typed_product_paths(
+        step_summary,
+        typed_product=("artifact", artifact_name),
+    )
+
+
+def _lineage_failure_product_fields(
+    typed_product: Tuple[str, str],
+) -> Dict[str, str]:
+    kind, product_name = typed_product
+    fields = {"kind": kind, "product": product_name}
+    if kind == "artifact":
+        fields["artifact"] = product_name
+    return fields
+
+
+def _step_summary_contains_statistic(step_summary: Any, statistic_name: str) -> bool:
+    """Confirm a declared scalar is materialized in the current summary."""
+
+    def _walk(value: Any) -> bool:
+        if isinstance(value, Mapping):
+            declared_name = value.get("name") or value.get("statistic")
+            if (
+                declared_name is not None
+                and _normalise_typed_product_name(declared_name) == statistic_name
+                and any(key in value for key in ("value", "estimate", "result"))
+            ):
+                return True
+            for key, nested in value.items():
+                if (
+                    _normalise_typed_product_name(key) == statistic_name
+                    and nested is not None
+                    and not isinstance(nested, (Mapping, list, tuple))
+                ):
+                    return True
+                if _walk(nested):
+                    return True
+        elif isinstance(value, (list, tuple)):
+            return any(_walk(item) for item in value)
+        return False
+
+    return _walk(step_summary)
+
+
+def _resolve_typed_input_evidence(
     *,
     input_name: str,
     plan: AnalysisPlan,
@@ -268,7 +344,7 @@ def _resolve_typed_artifact_evidence(
     per_step_records: Sequence[Mapping[str, Any]],
     run_dir: Path,
 ) -> Tuple[Optional[EvidenceRef], Optional[Dict[str, Any]]]:
-    """Resolve one typed artifact through the current execution authority.
+    """Resolve one typed input through the current execution authority.
 
     The plan declaration identifies the producer; the latest outer step record
     authorizes its evidence ids.  Basename aliases are deliberately excluded:
@@ -277,28 +353,29 @@ def _resolve_typed_artifact_evidence(
     producer and pass the registered path/SHA check.
     """
 
-    artifact_name = _typed_artifact_name(input_name)
-    if artifact_name is None:
-        return None, {"input": str(input_name), "reason": "invalid_artifact_input"}
+    typed_product = _typed_input_product(input_name)
+    if typed_product is None:
+        return None, {"input": str(input_name), "reason": "invalid_typed_input"}
+    product_fields = _lineage_failure_product_fields(typed_product)
 
     producer_ids = {
         str(step.step_id)
         for step in plan.steps
         if any(
-            _typed_artifact_name(output) == artifact_name
+            _typed_input_product(output) == typed_product
             for output in (step.expected_outputs or [])
         )
     }
     if not producer_ids:
         return None, {
             "input": str(input_name),
-            "artifact": artifact_name,
+            **product_fields,
             "reason": "producer_not_declared",
         }
     if len(producer_ids) != 1:
         return None, {
             "input": str(input_name),
-            "artifact": artifact_name,
+            **product_fields,
             "reason": "ambiguous_producer",
             "producer_step_ids": sorted(producer_ids),
         }
@@ -313,7 +390,7 @@ def _resolve_typed_artifact_evidence(
     if producer_status != "ok":
         return None, {
             "input": str(input_name),
-            "artifact": artifact_name,
+            **product_fields,
             "reason": "producer_not_successful",
             "producer_step_id": producer_id,
             "producer_status": producer_status or "missing",
@@ -324,21 +401,65 @@ def _resolve_typed_artifact_evidence(
         for evidence_id in (producer_record or {}).get("evidence_ids", [])
         if str(evidence_id).strip()
     }
-    typed_mapping_declared, declared_paths = _declared_typed_artifact_paths(
+    if typed_product[0] == "statistic":
+        step_summary = (producer_record or {}).get("step_summary")
+        if not _step_summary_contains_statistic(step_summary, typed_product[1]):
+            return None, {
+                "input": str(input_name),
+                **product_fields,
+                "reason": "statistic_not_materialized",
+                "producer_step_id": producer_id,
+            }
+        step_summary_evidence_id = str(
+            (producer_record or {}).get("step_summary_evidence_id") or ""
+        )
+        candidates: List[Any] = []
+        for record in evidence_records:
+            evidence_id = str(_evidence_record_field(record, "evidence_id") or "")
+            if (
+                evidence_id != step_summary_evidence_id
+                or evidence_id not in active_ids
+                or str(_evidence_record_field(record, "produced_by_step") or "")
+                != producer_id
+                or verified_run_evidence_path(run_dir, record) is None
+            ):
+                continue
+            candidates.append(record)
+        if len(candidates) != 1:
+            return None, {
+                "input": str(input_name),
+                **product_fields,
+                "reason": "no_verified_current_statistic",
+                "producer_step_id": producer_id,
+                "step_summary_evidence_id": step_summary_evidence_id or None,
+            }
+        record = candidates[0]
+        return (
+            EvidenceRef(
+                evidence_id=str(
+                    _evidence_record_field(record, "evidence_id") or ""
+                ),
+                kind=_evidence_record_field(record, "kind"),
+                description=_evidence_record_field(record, "description"),
+                relative_path=_evidence_record_field(record, "relative_path"),
+            ),
+            None,
+        )
+    typed_mapping_declared, declared_paths = _declared_typed_product_paths(
         (producer_record or {}).get("step_summary"),
-        artifact_name=artifact_name,
+        typed_product=typed_product,
     )
     if typed_mapping_declared and not declared_paths:
         return None, {
             "input": str(input_name),
-            "artifact": artifact_name,
+            **product_fields,
             "reason": "typed_mapping_not_verified",
             "producer_step_id": producer_id,
         }
     if len(declared_paths) > 1:
         return None, {
             "input": str(input_name),
-            "artifact": artifact_name,
+            **product_fields,
             "reason": "ambiguous_typed_mapping",
             "producer_step_id": producer_id,
             "declared_paths": declared_paths,
@@ -364,7 +485,9 @@ def _resolve_typed_artifact_evidence(
         if declared_filename is not None:
             matches_product = source_name == declared_filename
         else:
-            matches_product = Path(source_name).stem.strip().lower() == artifact_name
+            matches_product = (
+                _normalise_typed_product_name(source_name) == typed_product[1]
+            )
         if not matches_product:
             continue
         matching_current_ids.append(evidence_id)
@@ -373,7 +496,7 @@ def _resolve_typed_artifact_evidence(
     if not candidates:
         return None, {
             "input": str(input_name),
-            "artifact": artifact_name,
+            **product_fields,
             "reason": (
                 "typed_mapping_not_verified"
                 if declared_filename is not None
@@ -389,7 +512,7 @@ def _resolve_typed_artifact_evidence(
     if len(candidates) != 1:
         return None, {
             "input": str(input_name),
-            "artifact": artifact_name,
+            **product_fields,
             "reason": "ambiguous_current_artifact",
             "producer_step_id": producer_id,
             "evidence_ids": sorted(matching_current_ids),
@@ -405,6 +528,107 @@ def _resolve_typed_artifact_evidence(
         ),
         None,
     )
+
+
+def _resolve_typed_artifact_evidence(
+    *,
+    input_name: str,
+    plan: AnalysisPlan,
+    evidence_records: Sequence[Any],
+    per_step_records: Sequence[Mapping[str, Any]],
+    run_dir: Path,
+) -> Tuple[Optional[EvidenceRef], Optional[Dict[str, Any]]]:
+    """Compatibility wrapper preserving the public artifact resolver."""
+
+    if _typed_artifact_name(input_name) is None:
+        return None, {"input": str(input_name), "reason": "invalid_artifact_input"}
+    return _resolve_typed_input_evidence(
+        input_name=input_name,
+        plan=plan,
+        evidence_records=evidence_records,
+        per_step_records=per_step_records,
+        run_dir=run_dir,
+    )
+
+
+def _resolved_typed_input_binding(
+    *,
+    input_name: str,
+    evidence_ref: EvidenceRef,
+    evidence_records: Sequence[Any],
+    run_dir: Path,
+) -> Optional[Dict[str, Any]]:
+    """Build the exact, digest-verified runtime binding for one typed input."""
+
+    typed_product = _typed_input_product(input_name)
+    if typed_product is None:
+        return None
+    record = next(
+        (
+            candidate
+            for candidate in evidence_records
+            if str(_evidence_record_field(candidate, "evidence_id") or "")
+            == evidence_ref.evidence_id
+        ),
+        None,
+    )
+    if record is None:
+        return None
+    verified_path = verified_run_evidence_path(run_dir, record)
+    if verified_path is None:
+        return None
+    run_root = Path(run_dir).resolve()
+    try:
+        run_relative_path = verified_path.relative_to(run_root).as_posix()
+    except ValueError:
+        return None
+    declared_kind, product_name = typed_product
+    return {
+        "evidence_id": evidence_ref.evidence_id,
+        "declared_kind": declared_kind,
+        "product": product_name,
+        "evidence_kind": str(_evidence_record_field(record, "kind") or ""),
+        "relative_path": run_relative_path,
+        "absolute_path": str(verified_path),
+        "sha256": str(_evidence_record_field(record, "sha256") or ""),
+        "produced_by_step": str(
+            _evidence_record_field(record, "produced_by_step") or ""
+        ),
+    }
+
+
+def _write_resolved_inputs_manifest(
+    *,
+    run_dir: Path,
+    step_id: str,
+    bindings: Mapping[str, Mapping[str, Any]],
+) -> Path:
+    """Persist bindings outside the writable step overlay for runtime use."""
+
+    safe_step_id = str(step_id or "")
+    if (
+        not safe_step_id
+        or safe_step_id in {".", ".."}
+        or Path(safe_step_id).name != safe_step_id
+        or "/" in safe_step_id
+        or "\\" in safe_step_id
+    ):
+        raise ValueError("step_id must be a single safe path component")
+    manifest_dir = Path(run_dir).resolve() / "resolved_inputs"
+    manifest_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = manifest_dir / f"{safe_step_id}.json"
+    payload = {
+        "schema_version": "1.0",
+        "step_id": safe_step_id,
+        "inputs": {str(key): dict(value) for key, value in bindings.items()},
+    }
+    temporary_path = manifest_path.with_suffix(".json.tmp")
+    temporary_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    temporary_path.replace(manifest_path)
+    return manifest_path
 
 
 class _InertPythonNodeStripper(ast.NodeTransformer):
@@ -3319,20 +3543,22 @@ def run_execute_phase(
 
     def _evidence_refs_for_names(
         names: Sequence[str],
-    ) -> Tuple[List[EvidenceRef], List[str]]:
+    ) -> Tuple[List[EvidenceRef], List[str], Dict[str, Dict[str, Any]]]:
         refs: List[EvidenceRef] = []
         typed_evidence_ids: List[str] = []
+        typed_bindings: Dict[str, Dict[str, Any]] = {}
         seen: set[str] = set()
         failures: List[Dict[str, Any]] = []
         for name in names:
             value = str(name)
-            if _typed_artifact_name(value) is not None:
+            if _typed_input_product(value) is not None:
                 with shared_lock:
                     records_snapshot = list(per_step_records)
-                ref, failure = _resolve_typed_artifact_evidence(
+                evidence_snapshot = evidence.records()
+                ref, failure = _resolve_typed_input_evidence(
                     input_name=value,
                     plan=plan,
-                    evidence_records=evidence.records(),
+                    evidence_records=evidence_snapshot,
                     per_step_records=records_snapshot,
                     run_dir=run_dir,
                 )
@@ -3343,6 +3569,22 @@ def run_execute_phase(
                     refs.append(ref)
                     seen.add(ref.evidence_id)
                     typed_evidence_ids.append(ref.evidence_id)
+                if ref is not None:
+                    binding = _resolved_typed_input_binding(
+                        input_name=value,
+                        evidence_ref=ref,
+                        evidence_records=evidence_snapshot,
+                        run_dir=run_dir,
+                    )
+                    if binding is None:
+                        failures.append(
+                            {
+                                "input": value,
+                                "reason": "verified_binding_unavailable",
+                            }
+                        )
+                    else:
+                        typed_bindings[value] = binding
                 continue
 
             rec = evidence.get(value)
@@ -3358,7 +3600,7 @@ def run_execute_phase(
                 seen.add(rec.evidence_id)
         if failures:
             raise _EvidenceLineageResolutionError(failures)
-        return refs, typed_evidence_ids
+        return refs, typed_evidence_ids, typed_bindings
 
     def _validator_messages(
         *finding_groups: Sequence[ValidationFinding],
@@ -3452,9 +3694,11 @@ def run_execute_phase(
             total_steps=total_steps,
         )
         try:
-            existing_refs, resolved_input_evidence_ids = _evidence_refs_for_names(
-                step.inputs
-            )
+            (
+                existing_refs,
+                resolved_input_evidence_ids,
+                resolved_input_bindings,
+            ) = _evidence_refs_for_names(step.inputs)
         except _EvidenceLineageResolutionError as exc:
             step_record.update(
                 {
@@ -3488,6 +3732,17 @@ def run_execute_phase(
                 total_steps=total_steps,
             )
             return step_record
+        resolved_inputs_path = _write_resolved_inputs_manifest(
+            run_dir=run_dir,
+            step_id=step.step_id,
+            bindings=resolved_input_bindings,
+        )
+        step_record["resolved_inputs_path"] = str(
+            resolved_inputs_path.relative_to(run_dir)
+        )
+        step_record["resolved_input_evidence_ids"] = list(
+            resolved_input_evidence_ids
+        )
         local_runtime_state = supervisor.prepare_step_state(
             state=runtime_state,
             context=context,
@@ -4835,7 +5090,11 @@ else:
                 repair_attempts=repair_attempts,
             )
             _clear_output_dir(run_dir / "steps" / step.step_id / "outputs")
-            run_result = runner.run(step_id=step.step_id, code=code)
+            run_result = runner.run(
+                step_id=step.step_id,
+                code=code,
+                resolved_inputs_path=resolved_inputs_path,
+            )
             executed_code_digest = sha256_of_file(run_result.script_path)
             step_record["executed_code_sha256"] = executed_code_digest
             if (
@@ -6531,7 +6790,7 @@ else:
             if side_findings:
                 step_record["side_findings"] = side_findings
         step_record["step_summary"] = step_summary
-        evidence_refs_for_step, _ = _evidence_refs_for_names(evidence_ids_for_step)
+        evidence_refs_for_step, _, _ = _evidence_refs_for_names(evidence_ids_for_step)
         validator_messages = _validator_messages(
             usage_findings,
             stat_findings,
@@ -6728,8 +6987,8 @@ else:
             executed_step_ids=set(resumed_step_ids),
         )
     )
-    has_typed_artifact_dependencies = any(
-        _typed_artifact_name(input_name) is not None
+    has_typed_input_dependencies = any(
+        _typed_input_product(input_name) is not None
         for step in steps_to_run
         for input_name in (step.inputs or [])
     )
@@ -6752,13 +7011,13 @@ else:
                 ),
             )
         )
-    elif has_typed_artifact_dependencies and pipeline._max_concurrent_steps > 1:
+    elif has_typed_input_dependencies and pipeline._max_concurrent_steps > 1:
         findings.append(
             ValidationFinding(
                 validator="typed_artifact_evidence_lineage",
                 severity="info",
                 message=(
-                    "Typed artifact dependencies are present, so step execution "
+                    "Typed product dependencies are present, so step execution "
                     "was forced to plan order before resolving producer evidence."
                 ),
             )
@@ -6768,7 +7027,7 @@ else:
         pipeline._max_concurrent_steps <= 1
         or len(steps_to_run) <= 1
         or pipeline._enable_replanning
-        or has_typed_artifact_dependencies
+        or has_typed_input_dependencies
         or requested_stop_after_step_id is not None
     ):
 

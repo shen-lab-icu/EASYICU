@@ -106,7 +106,9 @@ def _canonical_kind(value: object) -> str:
     return kind
 
 
-def _typed_product(value: object) -> tuple[str, str] | None:
+def typed_product(value: object) -> tuple[str, str] | None:
+    """Return the shared canonical identity for a ``kind:product`` token."""
+
     kind, separator, product = str(value or "").strip().partition(":")
     if not separator:
         return None
@@ -120,6 +122,11 @@ def _typed_product(value: object) -> tuple[str, str] | None:
     if not canonical_kind or not product_name:
         return None
     return canonical_kind, product_name
+
+
+# Internal compatibility alias; lineage and product-scope validation must share
+# the public parser above rather than growing independent token grammars.
+_typed_product = typed_product
 
 
 def _file_stem(value: object) -> str:

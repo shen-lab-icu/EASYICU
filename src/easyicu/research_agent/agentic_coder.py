@@ -65,7 +65,11 @@ class AgenticCoderAgent:
 
     # -- prompt -------------------------------------------------------------
     def _build_prompt(self, context: ResearchContext, step: AnalysisStep) -> str:
-        from .agents import _declared_output_scope_contract, _format_context
+        from .agents import (
+            _declared_output_scope_contract,
+            _format_context,
+            _typed_input_scope_contract,
+        )
         from .trajectory_contract import trajectory_phenotyping_code_contract
         from .trajectory_plan_contract import trajectory_role_code_contract
 
@@ -87,6 +91,7 @@ class AgenticCoderAgent:
             "- The script must be runnable standalone with `python "
             f"{_SCRIPT_NAME}`; keep all imports inside it.\n\n"
             + _declared_output_scope_contract(step)
+            + _typed_input_scope_contract(step)
             + "\n"
             "RESEARCH CONTEXT:\n"
             + _format_context(context)
