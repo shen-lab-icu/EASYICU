@@ -1769,6 +1769,9 @@ def _repair_specialization(
         "provenance field as a value gate",
         "observation counts audit-only",
         "observation counts audit only",
+        "bypass their measured source status consistency checks",
+        "do not mask or invalidate modeled",
+        "first value covariates can bypass",
     )
     if any(signal in normalized for signal in audit_only_signals):
         guidance.append(
