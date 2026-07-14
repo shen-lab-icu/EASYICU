@@ -126,8 +126,9 @@ def test_coder_repair_requires_standard_helper_after_sparse_event_diagnosis(ra):
     assert "DIAGNOSED SPARSE-EVENT REPAIR (binding)" in prompt
     assert "methods.source_status.reconcile_binary_event_presence" in prompt
     assert "Do not replace those columns" in prompt
-    assert "fail closed if any returned value is missing" in prompt
-    assert "never publish a completed exposure artefact" in prompt
+    assert "do not add a second missingness/binary filter" in prompt
+    assert "permitted missingness in the raw representative column" in prompt
+    assert "Never publish a completed exposure artefact" in prompt
     assert "bind the selected base `source_concept`" in prompt
     assert "explicit event/indicator metadata" in prompt
     assert "record that binding" in prompt
@@ -245,6 +246,33 @@ def test_coder_repair_separates_provenance_audit_from_value_selection(ra):
     assert "sole basis for its descriptive non-missing denominator" in prompt
     assert "Do not require either companion" in prompt
     assert "fail the entire completed step" in prompt
+
+
+def test_coder_repair_fail_closes_nonterminating_provenance_audit(ra):
+    llm = _RecordingLLM()
+    step = ra.AnalysisStep(
+        step_id="adjusted_model",
+        intent="Fit the planner-owned adjusted model.",
+        inputs=["artifact:quality_checked_analysis_data"],
+        expected_outputs=["table:adjusted_model"],
+        method="regression",
+    )
+
+    CoderAgent(llm).repair(
+        context=_context(ra),
+        step=step,
+        code="audit = provenance_audit(raw_frame)\nmodel.fit(analysis_frame)\n",
+        run_log=(
+            "A measurement-provenance audit records invalid or discordant pairs "
+            "but does not fail the completed step before outputs can be published."
+        ),
+    )
+
+    prompt = llm.messages[-1].content
+    assert "DIAGNOSED PROVENANCE/VALUE-SELECTION REPAIR" in prompt
+    assert "same authoritative typed working frame used by the model" in prompt
+    assert "instead of a hard-coded column list" in prompt
+    assert "raise before model fitting or output registration" in prompt
 
 
 def test_coder_repair_removes_untraceable_figure_audit_columns(ra):

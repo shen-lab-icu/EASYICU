@@ -1765,11 +1765,13 @@ def _repair_specialization(
             "arguments. Do not replace those "
             "columns, rebuild custom masks, silently numeric-coerce original "
             "representative values, or change the exposure, cohort, outcome, or "
-            "model. Treat the helper's `values` contract as complete binary 0/1: "
-            "explicitly fail closed if any returned value is missing or outside "
-            "{0, 1}, and never publish a completed exposure artefact from an "
-            "exception, unavailable branch, or incomplete result. Do not write a "
-            "validation mask that accepts NaN as a valid binary exposure. The "
+            "model. Treat `helper_result.values` as the authoritative complete "
+            "binary 0/1 output: do not add a second missingness/binary filter over "
+            "those returned values, and do not confuse permitted missingness in "
+            "the raw representative column on reconciled negative rows with "
+            "missingness in `helper_result.values`. Never publish a completed "
+            "exposure artefact from an exception, unavailable branch, or incomplete "
+            "helper result. The "
             "helper is the documented project-local import authorized for this "
             "diagnosed contract. Before applying the exception, bind the selected "
             "base `source_concept` to explicit event/indicator metadata from the "
@@ -1793,6 +1795,10 @@ def _repair_specialization(
         "bypass their measured source status consistency checks",
         "do not mask or invalidate modeled",
         "first value covariates can bypass",
+        "provenance audit is not fail closed",
+        "provenance audit not fail closed",
+        "completed step allowed",
+        "does not fail the completed step",
     )
     if any(signal in normalized for signal in audit_only_signals):
         guidance.append(
@@ -1805,6 +1811,11 @@ def _repair_specialization(
             "them into the value-validity mask. If the provenance pair is invalid or "
             "discordant, fail the entire completed step after recording the audit; "
             "never repair it by filtering rows or changing descriptive denominators.\n"
+            "  Run the provenance audit on the same authoritative typed working "
+            "frame used by the model. Derive required companion pairs from declared "
+            "inputs and ResearchContext descriptors instead of a hard-coded column "
+            "list, and raise before model fitting or output registration when a "
+            "required pair is unavailable, invalid, or discordant.\n"
         )
 
     figure_trace_signals = (
