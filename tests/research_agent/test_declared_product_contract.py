@@ -141,6 +141,57 @@ def test_declared_file_must_exist_under_step_output_dir(tmp_path):
     assert valid == []
 
 
+def test_output_artifacts_list_registers_existing_typed_file_stems(tmp_path):
+    (tmp_path / "primary_exposure_definition.parquet").write_bytes(b"parquet")
+    (tmp_path / "exposure_distribution.csv").write_text(
+        "group,n\nexposed,1\n", encoding="utf-8"
+    )
+    (tmp_path / "exposure_source_status.csv").write_text(
+        "source_status,count\nevent_present,1\n", encoding="utf-8"
+    )
+    step = _step(
+        outputs=[
+            "artifact:primary_exposure_definition",
+            "table:exposure_distribution",
+            "table:exposure_source_status",
+        ]
+    )
+    summary = {
+        "output_files": {
+            "primary_exposure_definition.parquet": True,
+            "exposure_distribution.csv": True,
+            "exposure_source_status.csv": True,
+        },
+        "output_artifacts": [
+            {
+                "kind": "artifact",
+                "name": "primary_exposure_definition",
+                "filename": "primary_exposure_definition.parquet",
+            },
+            {
+                "kind": "table",
+                "name": "exposure_distribution",
+                "filename": "exposure_distribution.csv",
+            },
+            {
+                "kind": "table",
+                "name": "exposure_source_status",
+                "filename": "exposure_source_status.csv",
+            },
+        ],
+    }
+
+    assert (
+        declared_product_contract_findings(
+            step=step,
+            step_summary=summary,
+            effect_method_authorized=False,
+            out_dir=tmp_path,
+        )
+        == []
+    )
+
+
 def test_real_execution_cannot_evade_registry_by_omitting_output_files(tmp_path):
     findings = declared_product_contract_findings(
         step=_step(outputs=["table:summary"]),
