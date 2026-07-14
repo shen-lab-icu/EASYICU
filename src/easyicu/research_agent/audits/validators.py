@@ -5104,6 +5104,58 @@ class StatisticalValidator:
         findings: List[ValidationFinding] = []
         outcome = context.target_outcome
 
+        primary_exposure = step_summary.get("primary_exposure")
+        if isinstance(primary_exposure, Mapping):
+            status = str(
+                primary_exposure.get("reconciliation_status")
+                or primary_exposure.get("status")
+                or ""
+            ).strip().lower()
+            cohort_n = self._finite_nonnegative_count(step_summary.get("cohort_n"))
+            missing_n = self._finite_nonnegative_count(
+                primary_exposure.get("missing_n")
+            )
+            counts = primary_exposure.get("counts")
+            usable_group_n = 0.0
+            if isinstance(counts, Mapping):
+                for label, value in counts.items():
+                    normalized_label = str(label).strip().lower()
+                    if any(
+                        token in normalized_label
+                        for token in ("unavailable", "missing", "unknown")
+                    ):
+                        continue
+                    numeric = self._finite_nonnegative_count(value)
+                    if numeric is not None:
+                        usable_group_n += numeric
+            all_missing = (
+                cohort_n is not None
+                and cohort_n > 0
+                and missing_n is not None
+                and missing_n >= cohort_n
+                and usable_group_n <= 0
+            )
+            if status in {"unavailable", "failed", "error", "not_available"} or all_missing:
+                findings.append(
+                    ValidationFinding(
+                        validator=self.name,
+                        severity="error",
+                        message=(
+                            "The completed step declares a primary exposure but "
+                            "no cohort row has a usable reconciled exposure value. "
+                            "Repair the metadata/value binding or fail the step; "
+                            "do not publish an all-unavailable primary-exposure result."
+                        ),
+                        detail={
+                            "step_id": step.step_id,
+                            "reconciliation_status": status or None,
+                            "cohort_n": cohort_n,
+                            "missing_n": missing_n,
+                            "usable_group_n": usable_group_n,
+                        },
+                    )
+                )
+
         # Controlled ordered-group summaries remain agent-authored, but every
         # denominator, interval, descriptive statistic, and trend test is
         # independently replayed from the locked cohort before publication.
@@ -5264,6 +5316,16 @@ class StatisticalValidator:
             ))
 
         return findings
+
+    @staticmethod
+    def _finite_nonnegative_count(value: Any) -> Optional[float]:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(numeric) or numeric < 0:
+            return None
+        return numeric
 
     @staticmethod
     def _degenerate_partition(

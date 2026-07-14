@@ -1711,6 +1711,75 @@ def test_statistical_validator_no_artefacts_is_error(ra, tmp_path: Path):
                for f in findings), findings
 
 
+def test_statistical_validator_blocks_all_unavailable_primary_exposure(
+    ra, tmp_path: Path
+):
+    ctx = _ctx_with_sofa(ra)
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1, 2], "death": [0, 1]}).to_parquet(
+        cohort_path, index=False
+    )
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    (out_dir / "step_summary.json").write_text("{}", encoding="utf-8")
+    step = ra.schema.AnalysisStep(step_id="baseline", intent="Describe the cohort")
+
+    findings = ra.StatisticalValidator().audit(
+        context=ctx,
+        cohort_path=cohort_path,
+        step=step,
+        out_dir=out_dir,
+        step_summary={
+            "cohort_n": 2,
+            "primary_exposure": {
+                "reconciliation_status": "unavailable",
+                "missing_n": 2,
+                "counts": {"Unexposed": 0, "Exposed": 0, "Unavailable": 2},
+            },
+        },
+    )
+
+    assert any(
+        finding.severity == "error"
+        and "no cohort row has a usable reconciled exposure" in finding.message
+        for finding in findings
+    ), findings
+
+
+def test_statistical_validator_accepts_reconciled_primary_exposure(
+    ra, tmp_path: Path
+):
+    ctx = _ctx_with_sofa(ra)
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1, 2], "death": [0, 1]}).to_parquet(
+        cohort_path, index=False
+    )
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    (out_dir / "step_summary.json").write_text("{}", encoding="utf-8")
+    step = ra.schema.AnalysisStep(step_id="baseline", intent="Describe the cohort")
+
+    findings = ra.StatisticalValidator().audit(
+        context=ctx,
+        cohort_path=cohort_path,
+        step=step,
+        out_dir=out_dir,
+        step_summary={
+            "cohort_n": 2,
+            "primary_exposure": {
+                "reconciliation_status": "checked",
+                "missing_n": 0,
+                "counts": {"Unexposed": 1, "Exposed": 1, "Unavailable": 0},
+            },
+        },
+    )
+
+    assert not any(
+        "no cohort row has a usable reconciled exposure" in finding.message
+        for finding in findings
+    ), findings
+
+
 def test_statistical_validator_flags_primary_or_mismatch(ra, tmp_path: Path):
     """T1.6 — when the reported OR disagrees with primary_association.csv,
     the validator must surface an error finding."""

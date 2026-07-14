@@ -175,6 +175,12 @@ def _format_variable(v: ConceptDescriptor) -> str:
     pit = f" pitfalls={v.pitfalls!r}" if v.pitfalls else ""
     rng = f" range={v.valid_range}" if v.valid_range else ""
     unit = f" unit={v.unit}" if v.unit else ""
+    source = f" source_concept={v.source_concept}" if v.source_concept else ""
+    description = ""
+    if v.description:
+        compact_description = " ".join(str(v.description).split())
+        description = f" description={compact_description!r}"
+    ordinal = " is_ordinal=true" if v.is_ordinal else ""
     obs = _format_observed_domain(v.observed_domain)
     trajectory = ""
     if v.fixed_window_trajectory is not None:
@@ -188,6 +194,7 @@ def _format_variable(v: ConceptDescriptor) -> str:
         )
     return (
         f"- {v.name} | role={v.role.value} dtype={v.dtype}{unit}{rng}{obs}"
+        f"{source}{description}{ordinal}"
         f" agg_default={_ctas_aggregation_hint(v.aggregation_default)}"
         f"{trajectory}{miss}{pit}"
     )

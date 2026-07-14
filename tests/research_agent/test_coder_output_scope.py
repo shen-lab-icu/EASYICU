@@ -61,6 +61,47 @@ def test_coder_prompt_allows_only_declared_figure_products(ra):
     assert "declares no figure product" not in prompt
 
 
+def test_coder_context_exposes_registered_source_concept_metadata(ra):
+    llm = _RecordingLLM()
+    context = ra.ResearchContext(
+        research_question="Describe a binary intervention.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo", database="synthetic", n_stays=10, n_patients=10
+        ),
+        variables=[
+            ra.ConceptDescriptor(
+                name="treatment_first",
+                description="Registered treatment event indicator",
+                role="intervention",
+                dtype="float64",
+                source_concept="treatment_event",
+                observed_domain={
+                    "n_unique": 1,
+                    "is_constant": True,
+                    "is_binary": True,
+                    "min": 1.0,
+                    "max": 1.0,
+                },
+            )
+        ],
+    )
+    step = ra.AnalysisStep(
+        step_id="event_definition",
+        intent="Construct the selected binary event exposure.",
+        inputs=["treatment_first"],
+        expected_outputs=["table:event_definition"],
+        method="prespecified_binary_event_definition",
+    )
+
+    CoderAgent(llm).run(context=context, step=step)
+
+    prompt = llm.messages[-1].content
+    assert "source_concept=treatment_event" in prompt
+    assert "description='Registered treatment event indicator'" in prompt
+    assert "role=intervention" in prompt
+    assert "observed=CONSTANT(single value; no variation to model)" in prompt
+
+
 def test_coder_repair_requires_standard_helper_after_sparse_event_diagnosis(ra):
     llm = _RecordingLLM()
     step = ra.AnalysisStep(
