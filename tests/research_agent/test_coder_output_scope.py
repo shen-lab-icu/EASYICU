@@ -247,6 +247,34 @@ def test_coder_repair_separates_provenance_audit_from_value_selection(ra):
     assert "fail the entire completed step" in prompt
 
 
+def test_coder_repair_removes_untraceable_figure_audit_columns(ra):
+    llm = _RecordingLLM()
+    step = ra.AnalysisStep(
+        step_id="descriptive_figure",
+        intent="Render the declared figure from upstream values.",
+        inputs=["table:descriptive"],
+        expected_outputs=["figure:descriptive"],
+        method="visualization",
+    )
+    code = "source_data['count_integer'] = source_data['count'].mod(1).eq(0)\n"
+
+    CoderAgent(llm).repair(
+        context=_context(ra),
+        step=step,
+        code=code,
+        run_log=(
+            "These source-data value columns were not verified against any "
+            "row-aligned upstream value vector: ['count_integer']; one verified "
+            "column cannot authenticate another renamed or transformed value."
+        ),
+    )
+
+    prompt = llm.messages[-1].content
+    assert "DIAGNOSED FIGURE SOURCE-DATA TRACE REPAIR" in prompt
+    assert "remove unplotted derived numeric/boolean audit fields" in prompt
+    assert "Keep such checks internal" in prompt
+
+
 def test_coder_repair_preserves_ordinal_covariate_without_linearizing_it(ra):
     llm = _RecordingLLM()
     step = ra.AnalysisStep(

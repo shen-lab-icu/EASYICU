@@ -174,6 +174,12 @@ Code contract:
   its denominator, and the source row/key needed for reconciliation. For a
   publication figure, save matching PNG, SVG, PDF, and TIFF exports; keep SVG
   text editable and use the same data for every format.
+  Keep this source-data export minimal: do not include unplotted derived
+  numeric/boolean audit fields, duplicate rounded values, integer-validity
+  flags, or helper-only masks unless each has its own independently
+  row-aligned upstream value vector. Keep those checks internal or in
+  step_summary.json. One traced plotted value does not authenticate another
+  derived source-data column, and renaming or stringifying it is not a repair.
   For a positional source-row trace, use the exact canonical columns
   `source_row_index` (the zero-based original row position in the declared
   upstream table) and `source_table` (that upstream table's basename). Do not
