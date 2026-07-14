@@ -273,6 +273,7 @@ _STRUCTURAL_REPAIRS = {
     "json_dump_numpy_key_sanitizer_v1",
     "local_wilson_proportion_confint_v1",
     "matplotlib_errorbar_xerr_shape_v1",
+    "normalize_first_time_companion_v1",
     "primary_predictor_safe_summary_lookup_v1",
     "provenance_bidirectional_pair_scan_v1",
     "provenance_fail_closed_guard_v1",
