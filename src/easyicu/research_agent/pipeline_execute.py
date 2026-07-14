@@ -92,6 +92,8 @@ from .code_repair import (
     deterministic_concept_audit_repair,
 )
 from .code_hygiene import reorder_forward_references
+from .code_preflight import audit_mechanical_code_contracts
+from .concept_audit_cache import LLMConceptAuditCache
 from .cohort_repair import extract_cohort_definition_from_prose
 from .cohort_schema import (
     assert_cohort_definition_locked,
@@ -3685,6 +3687,7 @@ def run_execute_phase(
     step_summary_integrity_validator = StepSummaryIntegrityValidator()
     primary_model_contract_validator = PrimaryModelContractValidator()
     statistical_guard = StatisticalGuard()
+    llm_concept_audit_cache = LLMConceptAuditCache(run_dir)
     runtime_state = supervisor.bootstrap_state(run_id=run_id, context=context)
     repair_ledger = RepairLedger(run_dir / "repairs_applied.json")
     repair_ledger_lock = threading.Lock()
@@ -5841,6 +5844,13 @@ else:
                         },
                     )
                 )
+            code_findings.extend(audit_mechanical_code_contracts(script_text, step))
+            deterministic_errors = [
+                finding
+                for finding in code_findings
+                if finding.severity == "error"
+                and finding.validator != "llm_concept_auditor"
+            ]
             try:
                 if pipeline._enable_llm_concept_audit and (
                     deterministic_fallback_used or deterministic_standard_executor_used
@@ -5865,19 +5875,50 @@ else:
                             },
                         )
                     )
+                elif pipeline._enable_llm_concept_audit and deterministic_errors:
+                    code_findings.append(
+                        ValidationFinding(
+                            validator="llm_concept_auditor",
+                            severity="info",
+                            message=(
+                                "Deferred optional LLM concept audit because the "
+                                "deterministic mechanical/concept preflight already "
+                                f"blocked step {step.step_id}. The repaired digest "
+                                "will be audited after deterministic checks pass."
+                            ),
+                            detail={
+                                "step_id": step.step_id,
+                                "deterministic_error_validators": sorted(
+                                    {finding.validator for finding in deterministic_errors}
+                                ),
+                            },
+                        )
+                    )
                 elif pipeline._enable_llm_concept_audit:
                     llm_audit_client = (
                         pipeline._llm_concept_auditor_client
                         or role_resolver("analyzer")
                     )
                     if llm_audit_client is not None:
-                        code_findings.extend(
-                            LLMConceptAuditor(llm_audit_client).audit(
+                        audit_key = llm_concept_audit_cache.key(
+                            context=context,
+                            step=step,
+                            script_text=script_text,
+                        )
+                        cached_findings = llm_concept_audit_cache.get(audit_key)
+                        if cached_findings is not None:
+                            code_findings.extend(cached_findings)
+                            step_record["llm_concept_audit_cache_hits"] = int(
+                                step_record.get("llm_concept_audit_cache_hits") or 0
+                            ) + 1
+                        else:
+                            llm_findings = LLMConceptAuditor(llm_audit_client).audit(
                                 context=context,
                                 script_text=script_text,
                                 step=step,
                             )
-                        )
+                            llm_concept_audit_cache.put(audit_key, llm_findings)
+                            code_findings.extend(llm_findings)
             except BaseException:
                 # An operator interrupt must propagate, but a draft already
                 # rejected by deterministic findings remains resumable.
@@ -6356,7 +6397,16 @@ else:
                 repair_attempts=concept_repair_attempts,
             )
             audit_log = "\n".join(
-                f"{f.severity.upper()}: {f.message}" for f in usage_findings
+                (
+                    f"{f.severity.upper()}: {f.message}"
+                    + (
+                        "\nDETAIL: "
+                        + json.dumps(f.detail, ensure_ascii=False, sort_keys=True)
+                        if f.detail
+                        else ""
+                    )
+                )
+                for f in usage_findings
             )
             _remember_concept_constraints(usage_findings)
             try:
