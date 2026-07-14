@@ -118,6 +118,34 @@ def test_coder_repair_preserves_standard_helper_across_later_traceback(ra):
     assert "Do not replace those columns" in prompt
 
 
+def test_coder_repair_preserves_ordinal_covariate_without_linearizing_it(ra):
+    llm = _RecordingLLM()
+    step = ra.AnalysisStep(
+        step_id="assignment_model",
+        intent="Fit the prespecified treatment assignment model.",
+        inputs=["artifact:analysis_data"],
+        expected_outputs=["table:assignment_scores"],
+        method="propensity_score_logistic_regression",
+    )
+
+    CoderAgent(llm).repair(
+        context=_context(ra),
+        step=step,
+        code="import pandas as pd\n",
+        run_log=(
+            "The script passes an ordinal score as a numeric covariate, "
+            "imposing a continuous linear effect on an ordinal variable."
+        ),
+    )
+
+    prompt = llm.messages[-1].content
+    assert "DIAGNOSED ORDINAL-COVARIATE REPAIR (binding)" in prompt
+    assert "preserve the Agent-selected covariate" in prompt
+    assert "observed ordered levels explicitly" in prompt
+    assert "Record the chosen encoding and reference" in prompt
+    assert "Do not drop the covariate" in prompt
+
+
 def _ordinary_run_repair_and_agentic_prompts(*, ra, step):  # noqa: ANN001
     context = _context(ra)
     llm = _RecordingLLM()

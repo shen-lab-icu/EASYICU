@@ -1687,26 +1687,48 @@ def _repair_specialization(*, run_log: str, code: str) -> str:
         "easyicu.research_agent.methods.source_status" in code
         and "reconcile_binary_event_presence" in code
     )
-    if not standard_helper_in_script and not any(
+    guidance: List[str] = []
+    if standard_helper_in_script or any(
         signal in normalized for signal in sparse_event_signals
     ):
-        return ""
-    return (
-        "- DIAGNOSED SPARSE-EVENT REPAIR (binding): import and call "
-        "`easyicu.research_agent.methods.source_status."
-        "reconcile_binary_event_presence` with the count, measured-flag, and "
-        "representative columns already selected by the Agent. Use its "
-        "`values`, `audit`, and `status_table` directly. Do not replace those "
-        "columns, rebuild custom masks, silently numeric-coerce original "
-        "representative values, or change the exposure, cohort, outcome, or "
-        "model. Treat the helper's `values` contract as complete binary 0/1: "
-        "explicitly fail closed if any returned value is missing or outside "
-        "{0, 1}, and never publish a completed exposure artefact from an "
-        "exception, unavailable branch, or incomplete result. Do not write a "
-        "validation mask that accepts NaN as a valid binary exposure. The "
-        "helper is the documented project-local import authorized for this "
-        "diagnosed contract.\n"
+        guidance.append(
+            "- DIAGNOSED SPARSE-EVENT REPAIR (binding): import and call "
+            "`easyicu.research_agent.methods.source_status."
+            "reconcile_binary_event_presence` with the count, measured-flag, and "
+            "representative columns already selected by the Agent. Use its "
+            "`values`, `audit`, and `status_table` directly. Do not replace those "
+            "columns, rebuild custom masks, silently numeric-coerce original "
+            "representative values, or change the exposure, cohort, outcome, or "
+            "model. Treat the helper's `values` contract as complete binary 0/1: "
+            "explicitly fail closed if any returned value is missing or outside "
+            "{0, 1}, and never publish a completed exposure artefact from an "
+            "exception, unavailable branch, or incomplete result. Do not write a "
+            "validation mask that accepts NaN as a valid binary exposure. The "
+            "helper is the documented project-local import authorized for this "
+            "diagnosed contract.\n"
+        )
+
+    ordinal_covariate_signals = (
+        "ordinal score",
+        "ordinal covariate",
+        "ordered score",
+        "ordered covariate",
+        "continuous linear effect on an ordinal",
+        "numeric covariate imposing a continuous linear effect",
     )
+    if any(signal in normalized for signal in ordinal_covariate_signals):
+        guidance.append(
+            "- DIAGNOSED ORDINAL-COVARIATE REPAIR (binding): preserve the "
+            "Agent-selected covariate but do not silently impose one continuous "
+            "linear effect on an ordinal variable. Encode its observed ordered "
+            "levels explicitly (for example, categorical indicators with a "
+            "declared reference) or use another prespecified ordinal-compatible "
+            "representation supported by the model. Record the chosen encoding "
+            "and reference in the step summary. Do not drop the covariate, change "
+            "the exposure/outcome/cohort, or choose cut points from the outcome.\n"
+        )
+
+    return "".join(guidance)
 
 
 # ---------------------------------------------------------------------------
