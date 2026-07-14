@@ -699,11 +699,11 @@ def _migrate_legacy_resume_figure_render_edges(
     Older framework-generated render children copied the parent's raw inputs and
     scientific method. Current source-data authority requires a host-resolved
     typed edge. This migration is intentionally narrower than ordinary plan
-    shaping: it recognizes only the full legacy splitter fingerprint and binds
-    the child to every globally unique table/statistic declared by its direct
-    parent. Raw artifacts, datasets, and models remain excluded so rendering
-    cannot reopen the scientific analysis. Any ambiguity remains fail-closed for
-    the Planner.
+    shaping: it recognizes only the full legacy splitter fingerprint or an
+    already-visualization child with one globally unique exact typed table role.
+    Raw artifacts, sibling tables, datasets, and models remain excluded so
+    rendering cannot reopen the scientific analysis. Any ambiguity remains
+    fail-closed for the Planner.
     """
 
     from .declared_product_contract import (
@@ -736,6 +736,7 @@ def _migrate_legacy_resume_figure_render_edges(
             )
 
     producer_ids: Dict[tuple[str, str], set[str]] = {}
+    producer_tokens: Dict[tuple[str, str], List[tuple[str, str]]] = {}
     for producer_step in plan.steps:
         for output in producer_step.expected_outputs or []:
             parsed = typed_product(output)
@@ -743,6 +744,64 @@ def _migrate_legacy_resume_figure_render_edges(
                 producer_ids.setdefault(parsed, set()).add(
                     str(producer_step.step_id)
                 )
+                producer_tokens.setdefault(parsed, []).append(
+                    (str(producer_step.step_id), str(output))
+                )
+
+    def _exact_role_dependencies(
+        figure_outputs: Sequence[str],
+        *,
+        required_producer_id: Optional[str] = None,
+        required_producer_step: Optional[AnalysisStep] = None,
+    ) -> tuple[List[str], set[str]]:
+        dependencies: List[str] = []
+        dependency_producers: set[str] = set()
+        for figure_output in figure_outputs:
+            parsed_figure = typed_product(figure_output)
+            if parsed_figure is None or parsed_figure[0] != "figure":
+                return [], set()
+            candidates = [
+                candidate
+                for kind in ("table", "statistic")
+                for candidate in producer_tokens.get((kind, parsed_figure[1]), [])
+            ]
+            if required_producer_id is not None:
+                candidates = [
+                    candidate
+                    for candidate in candidates
+                    if candidate[0] == required_producer_id
+                ]
+            if not candidates and effect_bearing_product(figure_output):
+                semantic_candidates: List[tuple[str, str]] = []
+                for identity, raw_candidates in producer_tokens.items():
+                    if required_producer_id is not None:
+                        raw_candidates = [
+                            candidate
+                            for candidate in raw_candidates
+                            if candidate[0] == required_producer_id
+                        ]
+                    if not raw_candidates:
+                        continue
+                    supported = _effect_figure_semantics_supported_by_inputs(
+                        figure_outputs=[figure_output],
+                        effect_input_products={identity},
+                    ) or (
+                        required_producer_step is not None
+                        and _effect_figure_semantics_supported_by_model_roster(
+                            step=required_producer_step,
+                            figure_outputs=[figure_output],
+                            effect_input_products={identity},
+                        )
+                    )
+                    if supported:
+                        semantic_candidates.extend(raw_candidates)
+                candidates = semantic_candidates
+            if len(candidates) != 1:
+                return [], set()
+            producer_id, source_token = candidates[0]
+            dependencies.append(source_token)
+            dependency_producers.add(producer_id)
+        return list(dict.fromkeys(dependencies)), dependency_producers
 
     revised_steps = list(plan.steps)
     migrated_step_ids: List[str] = []
@@ -802,12 +861,11 @@ def _migrate_legacy_resume_figure_render_edges(
         ):
             continue
 
-        source_tokens = [
-            str(raw)
-            for raw in parent_outputs
-            if (parsed := typed_product(raw)) is not None
-            and parsed[0] in {"statistic", "table"}
-        ]
+        source_tokens, dependency_producers = _exact_role_dependencies(
+            figure_outputs,
+            required_producer_id=parent_id,
+            required_producer_step=parent,
+        )
         source_identities = {
             parsed
             for raw in source_tokens
@@ -816,6 +874,7 @@ def _migrate_legacy_resume_figure_render_edges(
         source_names = [identity[1] for identity in source_identities]
         if (
             not source_tokens
+            or dependency_producers != {parent_id}
             or len(source_identities) != len(source_tokens)
             or len(source_names) != len(set(source_names))
             or any(
@@ -848,6 +907,74 @@ def _migrate_legacy_resume_figure_render_edges(
             }
         )
         migrated_step_ids.append(child_id)
+
+    # A later framework splitter already emitted a visualization child, but an
+    # older plan may still bind it to a sibling table even though the declared
+    # figure has one globally unique exact typed table role elsewhere. Preserve
+    # step ids/order and replace only that closed edge; never infer multi-table
+    # dependencies or grant every table owned by the producer.
+    for index, original_child in enumerate(plan.steps):
+        child = revised_steps[index]
+        child_id = str(child.step_id)
+        if (
+            child_id in completed_step_ids
+            or (cut_index is not None and index < cut_index)
+            or not child_id.endswith("_figure")
+            or _normalise_plan_contract_token(str(child.method or "")).split(
+                "_with_", 1
+            )[0]
+            != "visualization"
+            or not child.inputs
+            or any(
+                (parsed := typed_product(raw)) is None
+                or parsed[0] not in {"statistic", "table"}
+                for raw in child.inputs
+            )
+        ):
+            continue
+        figure_outputs = [
+            str(raw)
+            for raw in child.expected_outputs or []
+            if (parsed := typed_product(raw)) is not None and parsed[0] == "figure"
+        ]
+        parsed_child_outputs = [
+            typed_product(raw) for raw in child.expected_outputs or []
+        ]
+        if (
+            not figure_outputs
+            or any(parsed is None for parsed in parsed_child_outputs)
+            or any(
+                parsed[0] not in {"figure", "log"}
+                for parsed in parsed_child_outputs
+                if parsed is not None
+            )
+        ):
+            continue
+        source_tokens, dependency_producers = _exact_role_dependencies(figure_outputs)
+        if len(dependency_producers) != 1 or not source_tokens:
+            continue
+        source_step_id = next(iter(dependency_producers))
+        source_index = step_order.get(source_step_id)
+        if (
+            source_index is None
+            or source_index >= index
+            or (
+                source_step_id not in completed_step_ids
+                and not (cut_index is not None and source_index >= cut_index)
+            )
+        ):
+            continue
+        intended = _render_only_figure_step_intent(
+            source_step_id=source_step_id,
+            figure_outputs=figure_outputs,
+        )
+        if list(child.inputs) == source_tokens and child.intent == intended:
+            continue
+        revised_steps[index] = child.model_copy(
+            update={"inputs": source_tokens, "intent": intended}
+        )
+        if child_id not in migrated_step_ids:
+            migrated_step_ids.append(child_id)
 
     if not migrated_step_ids:
         return plan, None, ()

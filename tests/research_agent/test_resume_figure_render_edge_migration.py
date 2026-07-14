@@ -102,7 +102,7 @@ def test_resume_migrates_unique_parent_table_and_excludes_artifact(tmp_path) -> 
     assert record.metadata["target_step_ids"] == ["01_define_cohort_figure"]
 
 
-def test_resume_migrates_all_unique_parent_tables_but_not_raw_artifacts(
+def test_resume_does_not_grant_unrelated_parent_tables_without_exact_role(
     tmp_path,
 ) -> None:
     plan = _legacy_plan(
@@ -125,12 +125,54 @@ def test_resume_migrates_all_unique_parent_tables_but_not_raw_artifacts(
         completed=("01_define_cohort",),
     )
 
-    assert revision_path is not None
-    assert step_ids == ("01_define_cohort_figure",)
-    assert migrated.steps[1].inputs == [
-        "table:distribution",
-        "table:measurement_audit",
-    ]
+    assert revision_path is None
+    assert step_ids == ()
+    assert migrated == plan
+
+
+def test_resume_rebinds_visualization_child_to_unique_exact_product_role(
+    tmp_path,
+) -> None:
+    source = AnalysisStep(
+        step_id="01_define_cohort",
+        intent="Create cohort flow and diagnostics.",
+        method="cohort_definition_and_attrition",
+        expected_outputs=["table:cohort_flow", "table:cohort_diagnostics"],
+    )
+    sibling = AnalysisStep(
+        step_id="02_table_one",
+        intent="Create Table 1.",
+        method="descriptive_baseline_characteristics",
+        expected_outputs=["table:table_one"],
+    )
+    child = AnalysisStep(
+        step_id="02_table_one_figure",
+        intent=_render_only_figure_step_intent(
+            source_step_id=sibling.step_id,
+            figure_outputs=["figure:cohort_flow"],
+        ),
+        method="visualization",
+        inputs=["table:table_one"],
+        expected_outputs=["figure:cohort_flow"],
+    )
+    plan = AnalysisPlan(
+        research_question="Describe the cohort.",
+        revision=2,
+        steps=[source, sibling, child],
+    )
+
+    migrated, revision_path, step_ids, _ = _migrate(
+        tmp_path,
+        plan,
+        completed=("01_define_cohort", "02_table_one"),
+        resume_from="02_table_one_figure",
+    )
+
+    assert revision_path == tmp_path / "analysis_plan_revision_3.json"
+    assert step_ids == ("02_table_one_figure",)
+    assert migrated.steps[2].inputs == ["table:cohort_flow"]
+    assert "table:cohort_diagnostics" not in migrated.steps[2].inputs
+    assert "01_define_cohort" in migrated.steps[2].intent
 
 
 def test_resume_figure_edge_migration_is_idempotent(tmp_path) -> None:
