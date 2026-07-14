@@ -1818,6 +1818,26 @@ def _repair_specialization(
             "required pair is unavailable, invalid, or discordant.\n"
         )
 
+    primary_exposure_binding_signals = (
+        "authoritative primary exposure unused",
+        "authoritative primary exposure definition is loaded but never consumed",
+        "ignores the loaded primary exposure definition",
+        "hard codes the primary exposure",
+        "hard coded primary exposure",
+    )
+    if any(signal in normalized for signal in primary_exposure_binding_signals):
+        guidance.append(
+            "- DIAGNOSED AUTHORITATIVE-EXPOSURE BINDING REPAIR: consume the "
+            "already loaded `artifact:primary_exposure_definition` to resolve the "
+            "exact executable exposure column. Reuse the script's existing typed "
+            "definition resolver when present; do not leave that resolver unused. "
+            "Fail closed if the declared column or its required registered "
+            "companions are unavailable. Do not substitute a hard-coded column, "
+            "candidate list, dtype scan, frame-order fallback, count field, or "
+            "measured-status field. Preserve the planner-owned exposure and all "
+            "other scientific choices.\n"
+        )
+
     figure_trace_signals = (
         "not verified against any row aligned upstream value vector",
         "unverified source value columns",

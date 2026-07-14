@@ -275,6 +275,36 @@ def test_coder_repair_fail_closes_nonterminating_provenance_audit(ra):
     assert "raise before model fitting or output registration" in prompt
 
 
+def test_coder_repair_consumes_authoritative_exposure_definition(ra):
+    llm = _RecordingLLM()
+    step = ra.AnalysisStep(
+        step_id="diagnostics",
+        intent="Run diagnostics for the planner-owned exposure.",
+        inputs=["artifact:primary_exposure_definition"],
+        expected_outputs=["table:diagnostics"],
+        method="diagnostic_analysis",
+    )
+
+    CoderAgent(llm).repair(
+        context=_context(ra),
+        step=step,
+        code=(
+            "exposure_definition = typed.get("
+            "'artifact:primary_exposure_definition')\n"
+            "exposure_col = 'candidate_event_max'\n"
+        ),
+        run_log=(
+            "DETAIL: {\"reason\": \"authoritative_primary_exposure_unused\"}"
+        ),
+    )
+
+    prompt = llm.messages[-1].content
+    assert "DIAGNOSED AUTHORITATIVE-EXPOSURE BINDING REPAIR" in prompt
+    assert "Reuse the script's existing typed definition resolver" in prompt
+    assert "do not leave that resolver unused" in prompt
+    assert "Do not substitute a hard-coded column" in prompt
+
+
 def test_coder_repair_removes_untraceable_figure_audit_columns(ra):
     llm = _RecordingLLM()
     step = ra.AnalysisStep(
