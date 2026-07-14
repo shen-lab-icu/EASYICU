@@ -386,6 +386,34 @@ def test_coder_repair_binds_finalized_tabular_exposure_product(ra):
     assert "Do not repeat raw-event reconciliation" in prompt
 
 
+def test_coder_repair_removes_constructed_exposure_fallback(ra):
+    llm = _RecordingLLM()
+    context = _context(ra).model_copy(update={"primary_exposure": "selected_first"})
+    step = ra.AnalysisStep(
+        step_id="diagnostics",
+        intent="Run diagnostics for the planner-owned exposure.",
+        inputs=["artifact:primary_exposure_definition"],
+        expected_outputs=["table:diagnostics"],
+        method="diagnostic_analysis",
+    )
+
+    CoderAgent(llm).repair(
+        context=context,
+        step=step,
+        code="try:\n    resolved = bind(definition)\nexcept:\n    resolved = {}\n",
+        run_log=(
+            "DETAIL: {\"reason\": "
+            "\"authoritative_primary_exposure_fallback\"}"
+        ),
+    )
+
+    prompt = llm.messages[-1].content
+    assert "DIAGNOSED AUTHORITATIVE-EXPOSURE BINDING REPAIR" in prompt
+    assert "Do not catch a binding failure and construct replacement" in prompt
+    assert "DIAGNOSED TABULAR AUTHORITATIVE-EXPOSURE REPAIR" in prompt
+    assert "fail closed if the exact planner-selected column is absent" in prompt
+
+
 def test_coder_repair_removes_untraceable_figure_audit_columns(ra):
     llm = _RecordingLLM()
     step = ra.AnalysisStep(
