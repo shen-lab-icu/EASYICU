@@ -139,6 +139,12 @@ def test_coder_prompt_keeps_sparse_event_negatives_in_exposure_denominator() -> 
     assert "<concept>_measured == 1" in coder_prompt
     assert "event-negative" in coder_prompt
     assert "untriggered" in coder_prompt
+    assert 'indicator_semantics="binary_event_presence"' in coder_prompt
+    assert "retain reconciled count-zero/flag-zero rows as the" in coder_prompt
+    assert "Never restrict the analytic denominator to `measured == 1`" in (
+        coder_prompt
+    )
+    assert "if the triad is incomplete or discordant, fail closed" in coder_prompt
 
 
 def test_coder_prompt_applies_source_status_to_every_measurement_summary() -> None:

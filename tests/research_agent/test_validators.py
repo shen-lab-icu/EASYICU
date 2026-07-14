@@ -2452,6 +2452,10 @@ def test_llm_concept_auditor_checks_summary_source_status_bypasses(ra):
     assert "alternate per-stay summaries (first/max/min/mean)" in prompt
     assert "measured/count/source-status" in prompt
     assert "consistency checks" in prompt
+    assert "one narrow sparse-event exception" in prompt
+    assert "count-zero/flag-zero rows are the reconciled negative class" in prompt
+    assert "keeps only `measured == 1` or `count > 0`" in prompt
+    assert "applies this exception to a continuous measurement" in prompt
 
 
 def test_llm_concept_auditor_sees_late_independent_count_qc(ra):

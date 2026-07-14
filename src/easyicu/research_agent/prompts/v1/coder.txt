@@ -654,8 +654,21 @@ CLINICAL SCORE AND MISSINGNESS SEMANTICS:
   `status="unavailable"` with the expected count column and a reason, and set
   `comparison_n`, `invalid_pair_n`, and `discordant_n` to null. Never claim
   unavailable merely because the count was omitted from the planner's primary
-  input list. This audit verifies provenance only: it must not turn the count
-  into an exposure, outcome, adjustment covariate, or new cohort rule.
+  input list. This audit normally verifies provenance only: it must not turn
+  the count into a physiological value, outcome, adjustment covariate, or new
+  cohort rule. The narrow exception is an agent-planned sparse binary
+  event-presence exposure when the registered base concept is an
+  event/indicator rather than a continuous measurement. In that case
+  `<concept>_n > 0` may encode event presence only if the count is complete,
+  finite, non-negative, integer-like, the paired `<concept>_measured` flag is
+  complete binary and agrees exactly with `(count > 0)`, and any non-missing
+  representative event value is binary positive and occurs on exactly those
+  same rows. Record `indicator_semantics="binary_event_presence"` and all
+  reconciliation counts. The flag is then an event-presence companion, not an
+  availability gate: retain reconciled count-zero/flag-zero rows as the
+  negative class. Never restrict the analytic denominator to `measured == 1`
+  or `count > 0`; if the triad is incomplete or discordant, fail closed instead
+  of using the count as the exposure.
   Figure-only steps and steps without a declared measured input do not need
   this block. A method-specific `component_qc` block may report other
   method-specific checks, but need not duplicate this host-replayed audit.
