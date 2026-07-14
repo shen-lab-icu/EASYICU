@@ -781,6 +781,69 @@ class LLMConceptAuditor:
         script_text: str,
         step: Optional[AnalysisStep],
     ) -> str:
+        # A wide ICU context can exceed the prompt budget.  Never take the
+        # first columns blindly: preserve plan-declared inputs and their
+        # structural companion family first, then variables actually referenced
+        # by the script, and only then fill the remaining budget in context
+        # order.  This is ordering-neutral and prevents a relevant late column
+        # from losing its registered clinical role during concept review.
+        companion_suffixes = (
+            "_measured",
+            "_first_time",
+            "_last_time",
+            "_first",
+            "_max",
+            "_min",
+            "_mean",
+            "_n",
+        )
+
+        def _family(name: str) -> str:
+            lowered = str(name or "").strip().lower()
+            for suffix in companion_suffixes:
+                if lowered.endswith(suffix):
+                    return lowered[: -len(suffix)]
+            return lowered
+
+        declared_inputs = {
+            str(value or "").strip().lower()
+            for value in ((step.inputs or []) if step is not None else [])
+            if ":" not in str(value or "") and str(value or "").strip()
+        }
+        declared_families = {_family(value) for value in declared_inputs}
+        direct_names = {
+            value
+            for value in (
+                context.target_outcome,
+                context.primary_exposure,
+            )
+            if value
+        }
+        priority_variables = [
+            variable
+            for variable in context.variables
+            if variable.name.lower() in declared_inputs
+            or _family(variable.name) in declared_families
+            or variable.name in direct_names
+        ]
+        priority_names = {variable.name for variable in priority_variables}
+        referenced_variables = [
+            variable
+            for variable in context.variables
+            if variable.name not in priority_names and variable.name in script_text
+        ]
+        selected_names = priority_names | {
+            variable.name for variable in referenced_variables
+        }
+        remaining_variables = [
+            variable
+            for variable in context.variables
+            if variable.name not in selected_names
+        ]
+        selected_variables = (
+            priority_variables + referenced_variables + remaining_variables
+        )[:80]
+
         variables = [
             {
                 "name": v.name,
@@ -797,7 +860,7 @@ class LLMConceptAuditor:
                     if v.missingness is not None else None
                 ),
             }
-            for v in context.variables[:80]
+            for v in selected_variables
         ]
         return (
             "Review this generated analysis script for ICU concept-use risks "
