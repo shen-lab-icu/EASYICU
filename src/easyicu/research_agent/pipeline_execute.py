@@ -1296,18 +1296,19 @@ def _repair_publication_figure_in_staging(
 def _actionable_validator_messages(
     *finding_groups: Sequence[ValidationFinding],
 ) -> List[str]:
-    """Return only warning/error messages that require Critic action.
+    """Return only blocking validator messages that require Critic action.
 
-    Informational audit records remain in the manifest and global findings,
-    but must not turn an otherwise clean deterministic step into
-    ``needs_revision`` merely because the Critic receives a non-empty string.
+    Warning and informational audit records remain in the manifest and global
+    findings, but the untyped Critic input cannot preserve their severity. If
+    forwarded as bare strings they become ``needs_revision`` and incorrectly
+    fail an otherwise valid step. Only fail-closed errors are actionable here.
     """
 
     return [
         finding.message
         for group in finding_groups
         for finding in group
-        if finding.severity in {"warning", "error"} and finding.message
+        if finding.severity == "error" and finding.message
     ]
 
 

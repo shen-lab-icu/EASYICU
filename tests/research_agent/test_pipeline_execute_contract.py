@@ -221,7 +221,7 @@ def test_run_execute_phase_is_exported():
     assert callable(run_execute_phase)
 
 
-def test_critic_messages_exclude_info_but_keep_warnings_and_errors():
+def test_critic_messages_keep_only_blocking_errors():
     from easyicu.research_agent.contracts import ValidationFinding
     from easyicu.research_agent.pipeline_execute import (
         _actionable_validator_messages,
@@ -247,7 +247,7 @@ def test_critic_messages_exclude_info_but_keep_warnings_and_errors():
         ]
     )
 
-    assert messages == ["Review this warning.", "Repair this error."]
+    assert messages == ["Repair this error."]
 
 
 @pytest.mark.parametrize(
