@@ -408,7 +408,45 @@ class StepSummaryIntegrityValidator:
         return None
 
     @classmethod
-    def _planned_measurement_pairs(cls, step: AnalysisStep) -> Dict[str, str]:
+    def _measurement_flag_for_exposure_source(cls, source: Any) -> Optional[str]:
+        """Map one Planner-owned wide-cohort exposure to its status flag.
+
+        This recognises only the closed aggregate family materialised by
+        EasyICU (for example ``marker_max`` -> ``marker_measured``).  The
+        caller still requires that the candidate flag exists in the locked
+        cohort, so this helper cannot invent a measurement family or choose an
+        exposure from the available columns.
+        """
+
+        raw_source = str(source or "").strip()
+        if not raw_source or ":" in raw_source:
+            return None
+        window_match = re.search(r"_(?:first_)?\d+(?:h|d)$", raw_source, re.I)
+        window_suffix = window_match.group(0) if window_match is not None else ""
+        structural_source = (
+            raw_source[: window_match.start()]
+            if window_match is not None
+            else raw_source
+        )
+        aggregate_match = re.search(
+            r"_(?:first|last|max|min|mean|median)$", structural_source, re.I
+        )
+        stem = (
+            structural_source[: aggregate_match.start()]
+            if aggregate_match is not None
+            else structural_source
+        )
+        if not stem:
+            return None
+        return f"{stem}_measured{window_suffix}"
+
+    @classmethod
+    def _planned_measurement_pairs(
+        cls,
+        step: AnalysisStep,
+        *,
+        cohort_columns: Optional[Sequence[str]] = None,
+    ) -> Dict[str, str]:
         pairs: Dict[str, str] = {}
         for value in step.inputs or []:
             measured_column = str(value).strip()
@@ -417,6 +455,33 @@ class StepSummaryIntegrityValidator:
             count_column = companion_count_column_for_measured(measured_column)
             if count_column is not None:
                 pairs[measured_column] = count_column
+
+        # A result-producing model step may consume typed artifacts plus a
+        # Planner-owned aggregate exposure without listing its structural
+        # ``*_measured`` flag as a model input.  Audit that exposure's source
+        # provenance when, and only when, the corresponding flag actually
+        # exists in the immutable locked cohort.  This closes the typed-input
+        # bypass without sweeping unrelated measurement families into scope.
+        if cohort_columns is not None:
+            by_casefold: Dict[str, List[str]] = {}
+            for column in cohort_columns:
+                by_casefold.setdefault(str(column).casefold(), []).append(str(column))
+            for requirement in step.model_requirements or []:
+                candidate = cls._measurement_flag_for_exposure_source(
+                    requirement.exposure_source
+                )
+                if candidate is None:
+                    continue
+                matches = by_casefold.get(candidate.casefold(), [])
+                if candidate in matches:
+                    measured_column = candidate
+                elif len(matches) == 1:
+                    measured_column = matches[0]
+                else:
+                    continue
+                count_column = companion_count_column_for_measured(measured_column)
+                if count_column is not None:
+                    pairs[measured_column] = count_column
         return dict(sorted(pairs.items()))
 
     @classmethod
@@ -539,10 +604,16 @@ class StepSummaryIntegrityValidator:
         """Replay immutable measurement facts independently of agent output."""
 
         measurement_pairs = cls._planned_measurement_pairs(step)
-        measured_columns = list(measurement_pairs)
-        if not measured_columns or not cls._is_result_step(step):
+        if not cls._is_result_step(step):
+            return measurement_pairs, {}, []
+        has_planner_exposure = any(
+            str(requirement.exposure_source or "").strip()
+            for requirement in (step.model_requirements or [])
+        )
+        if not measurement_pairs and (cohort_path is None or not has_planner_exposure):
             return measurement_pairs, {}, []
         if cohort_path is None:
+            measured_columns = list(measurement_pairs)
             return (
                 measurement_pairs,
                 {},
@@ -579,6 +650,14 @@ class StepSummaryIntegrityValidator:
                     )
                 ],
             )
+
+        measurement_pairs = cls._planned_measurement_pairs(
+            step,
+            cohort_columns=sorted(cohort_columns),
+        )
+        measured_columns = list(measurement_pairs)
+        if not measured_columns:
+            return measurement_pairs, {}, []
 
         replays: Dict[str, Dict[str, Any]] = {}
         findings: List[ValidationFinding] = []

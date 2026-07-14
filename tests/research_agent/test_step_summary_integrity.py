@@ -346,6 +346,68 @@ def test_measurement_provenance_missing_audit_fails_closed(tmp_path: Path) -> No
     ]
 
 
+def test_model_exposure_measurement_provenance_cannot_bypass_typed_inputs(
+    tmp_path: Path,
+) -> None:
+    cohort_path = tmp_path / "locked_cohort.parquet"
+    pd.DataFrame(
+        {
+            "record_id": [1, 2, 3],
+            "marker_max": [2.0, 4.0, float("nan")],
+            "marker_measured": [1, 1, 0],
+            "marker_n": [1, 2, 0],
+            "unrelated_measured": [1, 0, 1],
+            "unrelated_n": [1, 0, 1],
+        }
+    ).to_parquet(cohort_path, index=False)
+    step = AnalysisStep(
+        step_id="05_adjusted_association",
+        intent="Fit the Planner-specified adjusted association model.",
+        inputs=["artifact:analysis_rows", "marker_max", "outcome"],
+        expected_outputs=["table:adjusted_association_estimates"],
+        method="adjusted_association_models",
+        model_requirements=[
+            {
+                "requirement_id": "primary_marker_model",
+                "outcome": "outcome",
+                "outcome_type": "binary",
+                "method_family": "logistic_regression",
+                "exposure_source": "marker_max",
+                "analysis_role": "primary",
+                "analysis_set": "complete_case",
+                "required_for_step_success": True,
+            }
+        ],
+    )
+
+    findings = StepSummaryIntegrityValidator().audit(
+        step=step,
+        step_summary={},
+        resolved_input_bindings={},
+        cohort_path=cohort_path,
+    )
+
+    assert [finding.detail["issue"] for finding in findings] == [
+        "measurement_provenance_source_invalid"
+    ]
+    assert findings[0].detail["planned_measured_columns"] == ["marker_measured"]
+
+    truthful = _measurement_summary(count_column="marker_n")
+    truthful["measurement_provenance_audit"]["checks"][0][
+        "measured_column"
+    ] = "marker_measured"
+    truthful["measurement_provenance_audit"]["checks"][0]["comparison_n"] = 3
+    assert (
+        StepSummaryIntegrityValidator().audit(
+            step=step,
+            step_summary=truthful,
+            resolved_input_bindings={},
+            cohort_path=cohort_path,
+        )
+        == []
+    )
+
+
 def test_measurement_provenance_false_zero_discordance_is_rejected(
     tmp_path: Path,
 ) -> None:
