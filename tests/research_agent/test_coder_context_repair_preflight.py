@@ -452,6 +452,34 @@ def main():
     )
 
 
+def test_mechanical_preflight_does_not_treat_requested_product_list_as_binding(ra):
+    step = ra.AnalysisStep(
+        step_id="diagnostics",
+        intent="Run planner-owned exposure diagnostics.",
+        inputs=["artifact:primary_exposure_definition"],
+        expected_outputs=["table:diagnostics"],
+        method="diagnostic_analysis",
+    )
+    code = """
+def load_typed_inputs():
+    requested = ['artifact:primary_exposure_definition']
+    return load_requested_products(requested)
+
+def main():
+    typed = load_typed_inputs()
+    exposure_definition = typed.get('artifact:primary_exposure_definition')
+    exposure_col = resolve_declared_exposure(frame, exposure_definition)
+    return frame[exposure_col].mean()
+"""
+    findings = audit_mechanical_code_contracts(code, step)
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "authoritative_primary_exposure_unused"
+        for finding in findings
+    )
+
+
 def test_llm_concept_audit_cache_reuses_identical_digest(tmp_path, ra):
     context = _context(ra)
     step = _figure_step(ra)

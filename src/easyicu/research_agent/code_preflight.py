@@ -476,6 +476,13 @@ def _authoritative_exposure_binding_findings(
                 continue
             if authoritative_product not in _literal_string_tokens(node.value):
                 continue
+            is_binding_lookup = (
+                isinstance(node.value, ast.Subscript)
+                or isinstance(node.value, ast.Call)
+                and _call_name(node.value.func).split(".")[-1] in {"get", "pop"}
+            )
+            if not is_binding_lookup:
+                continue
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             definition_names.update(
                 target.id for target in targets if isinstance(target, ast.Name)
