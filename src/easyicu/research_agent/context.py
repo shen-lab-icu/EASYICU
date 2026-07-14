@@ -63,6 +63,46 @@ def _safe_get_concept_info(name: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+_WIDE_COMPANION_SUFFIXES: tuple[str, ...] = (
+    "_first_time",
+    "_last_time",
+    "_measured",
+    "_median",
+    "_first",
+    "_last",
+    "_mean",
+    "_max",
+    "_min",
+    "_sum",
+    "_n",
+)
+
+
+def _concept_info_for_wide_column(
+    name: str,
+) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Resolve exact or mechanically derived wide columns to a base concept.
+
+    Resolution is metadata-only and conservative: the exact column is tried
+    first; one known EasyICU wide-export companion suffix is stripped only when
+    exact lookup fails.  No fuzzy token or clinical-name matching occurs.
+    """
+
+    exact = _safe_get_concept_info(name)
+    if exact is not None:
+        return exact, name
+    lowered = str(name or "").strip().lower()
+    for suffix in _WIDE_COMPANION_SUFFIXES:
+        if not lowered.endswith(suffix) or len(lowered) <= len(suffix):
+            continue
+        base = lowered[: -len(suffix)]
+        info = _safe_get_concept_info(base)
+        if info is not None:
+            return info, base
+        break
+    return None, None
+
+
 def _missingness_severity(fraction: float) -> str:
     """Operational severity label for missingness.
 
@@ -470,26 +510,26 @@ def _describe_column(
     temporal_resolution: Optional[str] = None
     clinical_caveats: List[str] = []
     missingness_semantics: Optional[str] = None
-    if description is None:
-        info = _safe_get_concept_info(col)
-        if info is not None:
+    info, resolved_concept = _concept_info_for_wide_column(col)
+    if info is not None:
+        if description is None:
             description = info.get("description") or None
-            meta = concept_validation.validate_descriptor_payload(
-                source_info=info,
-                column_name=col,
-            )
-            source_concept = meta.get("source_concept") or col
-            srcs = info.get("sources") or info.get("source_databases") or []
-            if isinstance(srcs, dict):
-                source_databases = sorted(map(str, srcs.keys()))
-            else:
-                source_databases = [str(s) for s in srcs]
-            source_tables = meta.get("source_tables") or []
-            item_ids = meta.get("item_ids") or []
-            unit_normalization = meta.get("unit_normalization")
-            temporal_resolution = meta.get("temporal_resolution")
-            clinical_caveats = meta.get("clinical_caveats") or []
-            missingness_semantics = meta.get("missingness_semantics")
+        meta = concept_validation.validate_descriptor_payload(
+            source_info=info,
+            column_name=col,
+        )
+        source_concept = str(info.get("name") or resolved_concept or col)
+        srcs = info.get("sources") or info.get("source_databases") or []
+        if isinstance(srcs, dict):
+            source_databases = sorted(map(str, srcs.keys()))
+        else:
+            source_databases = [str(s) for s in srcs]
+        source_tables = meta.get("source_tables") or []
+        item_ids = meta.get("item_ids") or []
+        unit_normalization = meta.get("unit_normalization")
+        temporal_resolution = meta.get("temporal_resolution")
+        clinical_caveats = meta.get("clinical_caveats") or []
+        missingness_semantics = meta.get("missingness_semantics")
 
     allowed = _allowed_aggregations(role, hint.kind)
     miss = _profile_missingness(series)
