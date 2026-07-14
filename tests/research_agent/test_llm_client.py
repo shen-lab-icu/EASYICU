@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 
 def test_openai_client_strips_reasoning_blocks_from_content(ra):
     from easyicu.research_agent.llm import LLMMessage, OpenAIClient
 
     class _Completions:
         def create(self, **kwargs):
+            assert "stream" not in kwargs
             msg = SimpleNamespace(
                 content="<think>private chain of thought</think>\n{\"ok\": true}"
             )
@@ -23,6 +26,108 @@ def test_openai_client_strips_reasoning_blocks_from_content(ra):
     out = client.complete([LLMMessage(role="user", content="return json")])
 
     assert out == '{"ok": true}'
+
+
+def test_openai_client_streaming_is_transport_only(monkeypatch, ra):
+    from easyicu.research_agent.llm import LLMMessage, OpenAIClient
+
+    usage = SimpleNamespace(
+        prompt_tokens=12,
+        completion_tokens=4,
+        total_tokens=16,
+    )
+    chunks = [
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(content="{\"ok\": ", reasoning=None),
+                    finish_reason=None,
+                )
+            ],
+            usage=None,
+        ),
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(content="true}", reasoning=None),
+                    finish_reason="stop",
+                )
+            ],
+            usage=None,
+        ),
+        SimpleNamespace(choices=[], usage=usage),
+    ]
+
+    class _Stream:
+        def __init__(self):
+            self.closed = False
+
+        def __iter__(self):
+            return iter(chunks)
+
+        def close(self):
+            self.closed = True
+
+    stream = _Stream()
+
+    class _Completions:
+        def create(self, **kwargs):
+            assert kwargs["stream"] is True
+            assert "stream_options" not in kwargs
+            return stream
+
+    client = OpenAIClient.__new__(OpenAIClient)
+    client._client = SimpleNamespace(chat=SimpleNamespace(completions=_Completions()))
+    client._model = "gpt-5.6-luna"
+    client._timeout = 120.0
+    client._extra_body = {}
+    client._local_noauth_mode = False
+    monkeypatch.setenv("EASYICU_LLM_STREAM", "1")
+
+    out = client.complete([LLMMessage(role="user", content="return json")])
+
+    assert out == '{"ok": true}'
+    assert client.last_finish_reason == "stop"
+    assert client.last_usage == {
+        "prompt_tokens": 12,
+        "completion_tokens": 4,
+        "total_tokens": 16,
+    }
+    assert stream.closed is True
+
+
+def test_openai_client_stream_closes_on_iteration_error(monkeypatch, ra):
+    from easyicu.research_agent.llm import LLMMessage, OpenAIClient
+
+    class _Stream:
+        def __init__(self):
+            self.closed = False
+
+        def __iter__(self):
+            yield SimpleNamespace(choices=[], usage=None)
+            raise ValueError("broken stream")
+
+        def close(self):
+            self.closed = True
+
+    stream = _Stream()
+
+    class _Completions:
+        def create(self, **kwargs):
+            return stream
+
+    client = OpenAIClient.__new__(OpenAIClient)
+    client._client = SimpleNamespace(chat=SimpleNamespace(completions=_Completions()))
+    client._model = "gpt-5.6-luna"
+    client._timeout = 120.0
+    client._extra_body = {}
+    client._local_noauth_mode = False
+    monkeypatch.setenv("EASYICU_LLM_STREAM", "1")
+
+    with pytest.raises(ValueError, match="broken stream"):
+        client.complete([LLMMessage(role="user", content="return json")])
+
+    assert stream.closed is True
 
 
 def test_openai_client_recovers_unclosed_reasoning_prefix_for_debuggability(ra):
