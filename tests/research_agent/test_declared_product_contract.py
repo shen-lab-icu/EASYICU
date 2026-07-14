@@ -1226,6 +1226,34 @@ def test_shared_effect_vocabulary_authorizes_effect_method_owner(product_name):
     assert effect_output_authorized(step) is True
 
 
+def test_prespecified_robustness_grid_authorizes_locked_effect_refits():
+    step = _step(
+        method="prespecified_robustness_analysis",
+        outputs=["table:robustness_grid", "table:sensitivity_specification_matrix"],
+    )
+
+    assert effect_output_authorized(step) is True
+
+
+@pytest.mark.parametrize(
+    ("method", "outputs"),
+    [
+        ("descriptive_summary", ["table:robustness_grid"]),
+        (
+            "prespecified_robustness_analysis",
+            ["table:sensitivity_specification_matrix"],
+        ),
+    ],
+)
+def test_robustness_words_without_method_and_result_product_do_not_authorize_effects(
+    method,
+    outputs,
+):
+    step = _step(method=method, outputs=outputs)
+
+    assert effect_output_authorized(step) is False
+
+
 def test_authorized_figure_role_cannot_launder_rogue_effect_figure_path():
     _parent, child, record = _effect_parent_and_figure_child()
 

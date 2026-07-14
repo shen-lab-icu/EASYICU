@@ -657,6 +657,26 @@ _EFFECT_RESULT_OUTPUT_KINDS = frozenset(
     {"artifact", "dataset", "manifest", "model", "statistic", "table"}
 )
 
+# A robustness owner may refit an already planned estimand across locked
+# specifications.  Its closed product is a typed grid/summary of those refits,
+# rather than one primary-effect product.  Keep this separate from the ordinary
+# effect vocabulary so a free-standing ``table:robustness_grid`` cannot grant
+# effect authority to an unrelated method.
+_ROBUSTNESS_EFFECT_CONTRACT_METHODS = frozenset(
+    {
+        "prespecified_robustness_analysis",
+        "association_robustness",
+        "prespecified_robustness",
+        "robustness_sensitivity",
+    }
+)
+_ROBUSTNESS_EFFECT_CONTRACT_PRODUCTS = frozenset(
+    {
+        "robustness_grid",
+        "robustness_summary",
+    }
+)
+
 
 def _typed_effect_result_identities(
     outputs: Sequence[str],
@@ -791,11 +811,20 @@ def effect_output_authorized(step: AnalysisStep) -> bool:
 def _effect_contract_applies(step: AnalysisStep) -> bool:
     """Whether this exact method owner declares a result-bearing effect product."""
 
-    return _normalised_method_head(
-        str(step.method or "")
-    ) in _EFFECT_CONTRACT_METHODS and _has_closed_effect_contract_product(
-        step.expected_outputs or []
+    method_head = _normalised_method_head(str(step.method or ""))
+    outputs = step.expected_outputs or []
+    ordinary_effect_contract = (
+        method_head in _EFFECT_CONTRACT_METHODS
+        and _has_closed_effect_contract_product(outputs)
     )
+    robustness_refit_contract = (
+        method_head in _ROBUSTNESS_EFFECT_CONTRACT_METHODS
+        and _has_closed_contract_product(
+            outputs,
+            products=_ROBUSTNESS_EFFECT_CONTRACT_PRODUCTS,
+        )
+    )
+    return ordinary_effect_contract or robustness_refit_contract
 
 
 def _prediction_contract_applies(step: AnalysisStep) -> bool:

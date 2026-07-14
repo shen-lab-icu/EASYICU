@@ -178,6 +178,22 @@ def test_typed_model_requirement_roster_also_authorizes_effect_output(ra):
     )[0]
 
 
+def test_prespecified_robustness_refit_prompt_has_effect_authority(ra):
+    step = ra.AnalysisStep(
+        step_id="locked_robustness_refits",
+        intent="Refit the primary estimand across planner-locked specifications.",
+        expected_outputs=[
+            "table:robustness_grid",
+            "table:sensitivity_specification_matrix",
+        ],
+        method="prespecified_robustness_analysis",
+    )
+
+    assert effect_output_authorized(step) is True
+    for prompt in _ordinary_run_repair_and_agentic_prompts(ra=ra, step=step):
+        assert "effect_output_authorized: true" in prompt
+
+
 def test_coder_prompt_binds_typed_inputs_to_resolved_manifest(ra):
     step = ra.AnalysisStep(
         step_id="consume",
