@@ -328,6 +328,17 @@ def test_coder_prompt_uses_canonical_positional_source_trace_columns() -> None:
     assert "`key_column` agree with the CSV column name" in coder_prompt
 
 
+def test_coder_prompt_keeps_figure_source_data_minimal_and_traceable() -> None:
+    from easyicu.research_agent.prompts import load_prompt_pack
+
+    coder_prompt = load_prompt_pack()["coder"]
+
+    assert "Keep this source-data export minimal" in coder_prompt
+    assert "unplotted derived" in coder_prompt
+    assert "integer-validity" in coder_prompt
+    assert "One traced plotted value does not authenticate another" in coder_prompt
+
+
 def test_coder_prompt_fail_closes_unverifiable_plotted_values() -> None:
     from easyicu.research_agent.prompts import load_prompt_pack
 

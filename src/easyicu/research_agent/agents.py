@@ -1783,6 +1783,26 @@ def _repair_specialization(
             "never repair it by filtering rows or changing descriptive denominators.\n"
         )
 
+    figure_trace_signals = (
+        "not verified against any row aligned upstream value vector",
+        "unverified source value columns",
+        "one verified column cannot authenticate another",
+        "no verifiable values",
+    )
+    if any(signal in normalized for signal in figure_trace_signals):
+        guidance.append(
+            "- DIAGNOSED FIGURE SOURCE-DATA TRACE REPAIR (binding): make the "
+            "exported `<figure_stem>_source_data.csv` minimal. Keep every value "
+            "actually plotted plus its exact upstream trace key, but remove "
+            "unplotted derived numeric/boolean audit fields (for example integer-"
+            "validity flags, duplicate rounded values, or helper-only masks) that "
+            "have no independently row-aligned upstream value vector. Keep such "
+            "checks internal to the script or summarize them in step_summary.json; "
+            "do not rename, stringify, or fabricate an upstream source merely to "
+            "evade trace validation. Preserve plotted values, denominators, source "
+            "row indices, source table names, and the FigureContract unchanged.\n"
+        )
+
     ordinal_covariate_signals = (
         "ordinal score",
         "ordinal covariate",
