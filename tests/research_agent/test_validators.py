@@ -350,6 +350,104 @@ def test_step_summary_fraction_scale_accepts_fraction_and_percent_units() -> Non
     assert findings == []
 
 
+def test_step_summary_fraction_scale_does_not_bound_counts_in_metric_record() -> None:
+    findings = StepSummaryFractionValidator().audit(
+        step=AnalysisStep(step_id="04_incidence", intent="Report absolute risk."),
+        step_summary={
+            "overall_outcome_prevalence": {
+                "outcome_column": "death",
+                "n": 94_458,
+                "n_eligible": 94_458,
+                "event_n": 9_466,
+                "non_event_n": 84_992,
+                "risk": 0.1002,
+                "ci_low": 0.0983,
+                "ci_high": 0.1022,
+                "ci_alpha": 0.05,
+            }
+        },
+    )
+
+    assert findings == []
+
+
+def test_step_summary_fraction_scale_does_not_inherit_into_percent_leaf() -> None:
+    findings = StepSummaryFractionValidator().audit(
+        step=AnalysisStep(step_id="04_incidence", intent="Report absolute risk."),
+        step_summary={
+            "overall_outcome_prevalence": {
+                "n_events": 9_466,
+                "mortality_percentage": 10.02,
+                "risk": 0.1002,
+            }
+        },
+    )
+
+    assert findings == []
+
+
+def test_step_summary_fraction_scale_still_bounds_explicit_metric_in_record() -> None:
+    findings = StepSummaryFractionValidator().audit(
+        step=AnalysisStep(step_id="04_incidence", intent="Report absolute risk."),
+        step_summary={
+            "overall_outcome_prevalence": {
+                "n": 94_458,
+                "event_n": 9_466,
+                "non_event_n": 84_992,
+                "risk": 10.02,
+            }
+        },
+    )
+
+    assert len(findings) == 1
+    assert findings[0].detail["summary_path"] == "overall_outcome_prevalence.risk"
+
+
+def test_step_summary_fraction_scale_ignores_nested_audit_counts() -> None:
+    findings = StepSummaryFractionValidator().audit(
+        step=AnalysisStep(step_id="04_audit", intent="Audit numeric coercion."),
+        step_summary={
+            "statistics": {
+                "numeric_coercion_audit": {
+                    "binary_risk": {
+                        "attempted_n": 94_458,
+                        "post_coercion_valid_n": 94_458,
+                    }
+                }
+            }
+        },
+    )
+
+    assert findings == []
+
+
+def test_step_summary_fraction_scale_stops_at_named_nested_container() -> None:
+    validator = StepSummaryFractionValidator()
+    step = AnalysisStep(step_id="04_audit", intent="Report absolute risk.")
+    summary = {
+        "absolute_risk": {
+            "bili_distribution": {"q25": 0.8, "q75": 1.4},
+            "outcome_risk": 0.1,
+        }
+    }
+
+    assert validator.audit(step=step, step_summary=summary) == []
+    summary["absolute_risk"]["outcome_risk"] = 10.0
+    findings = validator.audit(step=step, step_summary=summary)
+    assert len(findings) == 1
+    assert findings[0].detail["summary_path"] == "absolute_risk.outcome_risk"
+
+
+def test_step_summary_fraction_scale_does_not_drop_mixed_category_values() -> None:
+    findings = StepSummaryFractionValidator().audit(
+        step=AnalysisStep(step_id="04_audit", intent="Audit completeness."),
+        step_summary={"observed_fraction": {"group_a": 40.0, "risk": 0.2}},
+    )
+
+    assert len(findings) == 1
+    assert findings[0].detail["summary_path"] == "observed_fraction.group_a"
+
+
 def test_step_summary_fraction_scale_ignores_method_and_count_fields() -> None:
     findings = StepSummaryFractionValidator().audit(
         step=AnalysisStep(step_id="04_model", intent="Fit a flexible model."),
