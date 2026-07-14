@@ -1352,6 +1352,13 @@ def test_coder_context_receives_locked_spec_definitions_and_universe_contract(
     assert "Cohort membership N and fitted analytic n are distinct" in (
         enriched.notes or ""
     )
+    assert "single pre-aggregated outcome scalar per analysis unit" in (
+        enriched.notes or ""
+    )
+    assert "must be marked not_independent" in (enriched.notes or "")
+    assert "never refit the unchanged scalar and relabel it" in (
+        enriched.notes or ""
+    )
     assert "AUTHORITATIVE PRIMARY MODEL CONTRACT" in (enriched.notes or "")
     assert '"model_family":"logistic_regression"' in (enriched.notes or "")
 
