@@ -43,7 +43,9 @@ _FAILED_STATUSES = frozenset(
         "skipped_dependency_failed",
     }
 )
-_OUTPUT_CONTAINER_KEYS = frozenset({"output_files", "outputs", "figure_files"})
+_OUTPUT_CONTAINER_KEYS = frozenset(
+    {"output_files", "output_artifacts", "outputs", "figure_files"}
+)
 _DIRECT_FIGURE_KEYS = frozenset({"figure_file", "figure_path"})
 _FIGURE_SUFFIXES = frozenset({".png", ".svg", ".pdf", ".tif", ".tiff"})
 _KNOWN_FILE_SUFFIXES = frozenset(
@@ -812,7 +814,11 @@ def _has_product_registry(value: Any) -> bool:
 
     if isinstance(value, Mapping):
         for raw_key, child in value.items():
-            if _normalise(raw_key) in {"output_files", "outputs"}:
+            if _normalise(raw_key) in {
+                "output_files",
+                "output_artifacts",
+                "outputs",
+            }:
                 return True
             if isinstance(child, (Mapping, list, tuple)) and _has_product_registry(
                 child
