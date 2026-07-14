@@ -914,6 +914,176 @@ def _undefined_direct_call_findings(tree: ast.Module) -> list[ValidationFinding]
     ]
 
 
+def _local_call_signature_findings(tree: ast.Module) -> list[ValidationFinding]:
+    """Reject direct local-helper calls that Python can prove are invalid."""
+
+    functions = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    invalid_calls: list[dict[str, object]] = []
+    for call in ast.walk(tree):
+        if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Name):
+            continue
+        function = functions.get(call.func.id)
+        if function is None:
+            continue
+
+        arguments = function.args
+        positional = [*arguments.posonlyargs, *arguments.args]
+        positional_names = [argument.arg for argument in positional]
+        positional_only_names = {
+            argument.arg for argument in arguments.posonlyargs
+        }
+        keyword_only_names = {
+            argument.arg for argument in arguments.kwonlyargs
+        }
+        accepted_keywords = (
+            set(positional_names) - positional_only_names
+        ) | keyword_only_names
+        explicit_keywords = [
+            keyword.arg for keyword in call.keywords if keyword.arg is not None
+        ]
+        has_star_args = any(
+            isinstance(argument, ast.Starred) for argument in call.args
+        )
+        has_star_keywords = any(keyword.arg is None for keyword in call.keywords)
+
+        reasons: list[str] = []
+        explicit_positional_count = sum(
+            not isinstance(argument, ast.Starred) for argument in call.args
+        )
+        if (
+            not has_star_args
+            and arguments.vararg is None
+            and explicit_positional_count > len(positional)
+        ):
+            reasons.append("too_many_positional_arguments")
+
+        if not has_star_keywords and arguments.kwarg is None:
+            unexpected = sorted(
+                name for name in explicit_keywords if name not in accepted_keywords
+            )
+            if unexpected:
+                reasons.append(
+                    "unexpected_keyword_arguments=" + ",".join(unexpected)
+                )
+
+        duplicate = sorted(
+            name
+            for index, name in enumerate(positional_names)
+            if index < explicit_positional_count and name in explicit_keywords
+        )
+        if duplicate:
+            reasons.append("multiple_values_for=" + ",".join(duplicate))
+
+        if not has_star_args and not has_star_keywords:
+            required_positional_count = len(positional) - len(arguments.defaults)
+            supplied_names = set(explicit_keywords)
+            missing_positional = [
+                name
+                for index, name in enumerate(positional_names[:required_positional_count])
+                if index >= explicit_positional_count and name not in supplied_names
+            ]
+            missing_keyword_only = [
+                argument.arg
+                for argument, default in zip(
+                    arguments.kwonlyargs,
+                    arguments.kw_defaults,
+                )
+                if default is None and argument.arg not in supplied_names
+            ]
+            missing = [*missing_positional, *missing_keyword_only]
+            if missing:
+                reasons.append("missing_required_arguments=" + ",".join(missing))
+
+        if reasons:
+            invalid_calls.append(
+                {
+                    "name": call.func.id,
+                    "line": int(call.lineno),
+                    "reasons": reasons,
+                }
+            )
+
+    if not invalid_calls:
+        return []
+    return [
+        ValidationFinding(
+            validator="mechanical_code_preflight",
+            severity="error",
+            message=(
+                "A direct call to a locally defined helper cannot satisfy that "
+                "helper's Python signature and would fail before analysis."
+            ),
+            detail={
+                "reason": "invalid_local_helper_call",
+                "calls": sorted(
+                    invalid_calls,
+                    key=lambda item: (int(item["line"]), str(item["name"])),
+                ),
+            },
+        )
+    ]
+
+
+def _ordinal_rounding_findings(tree: ast.Module) -> list[ValidationFinding]:
+    """Reject lossy round-to-integer coercion inside explicit ordinal branches."""
+
+    unsafe_lines: list[int] = []
+    for branch in ast.walk(tree):
+        if not isinstance(branch, ast.If):
+            continue
+        test_tokens = {
+            candidate.id.lower()
+            for candidate in ast.walk(branch.test)
+            if isinstance(candidate, ast.Name)
+        }
+        if not any("ordinal" in token for token in test_tokens):
+            continue
+        for node in ast.walk(ast.Module(body=branch.body, type_ignores=[])):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "astype"
+                and isinstance(node.func.value, ast.Call)
+                and _call_name(node.func.value.func).split(".")[-1] == "round"
+            ):
+                continue
+            dtype = node.args[0] if node.args else next(
+                (
+                    keyword.value
+                    for keyword in node.keywords
+                    if keyword.arg == "dtype"
+                ),
+                None,
+            )
+            dtype_name = _call_name(dtype).lower() if dtype is not None else ""
+            if isinstance(dtype, ast.Constant) and isinstance(dtype.value, str):
+                dtype_name = dtype.value.lower()
+            if dtype_name == "int" or dtype_name.startswith(("int", "uint")):
+                unsafe_lines.append(int(node.lineno))
+
+    if not unsafe_lines:
+        return []
+    return [
+        ValidationFinding(
+            validator="mechanical_code_preflight",
+            severity="error",
+            message=(
+                "An ordinal-analysis branch rounds observed numeric values before "
+                "integer conversion; validate exact registered levels instead of "
+                "silently changing fractional or out-of-domain values."
+            ),
+            detail={
+                "reason": "lossy_ordinal_rounding",
+                "lines": sorted(set(unsafe_lines)),
+            },
+        )
+    ]
+
+
 def _first_time_companion_findings(tree: ast.Module) -> list[ValidationFinding]:
     """Reject ``value_first`` + ``_first_time`` double-suffix composition."""
 
@@ -1088,6 +1258,8 @@ def audit_mechanical_code_contracts(
     findings.extend(_finalized_exposure_reconciliation_findings(tree, step))
     findings.extend(_typed_dataframe_erasure_findings(tree, step))
     findings.extend(_undefined_direct_call_findings(tree))
+    findings.extend(_local_call_signature_findings(tree))
+    findings.extend(_ordinal_rounding_findings(tree))
     findings.extend(_first_time_companion_findings(tree))
     return findings
 
