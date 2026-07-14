@@ -6294,6 +6294,95 @@ class FigureSourceDataValidator:
         return True
 
     @classmethod
+    def _contract_scoped_effect_product(
+        cls,
+        *,
+        product: str,
+        source_frame: pd.DataFrame,
+        upstream_step_id: str,
+        completed_step_records: Optional[Sequence[Dict[str, Any]]],
+    ) -> str:
+        """Add an estimand tier only when rows match validated model contracts.
+
+        A generic coefficient table name cannot by itself prove that selected
+        rows are primary, secondary, or sensitivity estimates.  Once the
+        figure source has value-matched that table, its exact ``model_id`` and
+        exposure rows may inherit the tier from the successful parent step's
+        machine-readable model contracts.  Free text and variable names are
+        never routing authority.
+        """
+
+        parsed = typed_product(product)
+        if (
+            parsed is None
+            or not effect_bearing_product(product)
+            or "model_id" not in source_frame.columns
+            or not completed_step_records
+        ):
+            return product
+        model_ids = {
+            str(value).strip()
+            for value in source_frame["model_id"].dropna().tolist()
+            if str(value).strip()
+        }
+        if not model_ids:
+            return product
+        parent_records = [
+            record
+            for record in current_successful_step_records(completed_step_records)
+            if str(record.get("step_id") or "").strip() == upstream_step_id
+        ]
+        if len(parent_records) != 1:
+            return product
+        summary = parent_records[0].get("step_summary")
+        contracts = (
+            summary.get("model_contracts")
+            if isinstance(summary, Mapping)
+            else None
+        )
+        contract_by_model: Dict[str, Mapping[str, Any]] = {}
+        for contract in contracts or []:
+            if not isinstance(contract, Mapping):
+                continue
+            model_id = str(contract.get("model_id") or "").strip()
+            if not model_id or model_id in contract_by_model:
+                return product
+            contract_by_model[model_id] = contract
+        if not model_ids <= set(contract_by_model):
+            return product
+        selected_contracts = [contract_by_model[model_id] for model_id in model_ids]
+        tiers = {
+            cls._normalise(contract.get("analysis_role"))
+            for contract in selected_contracts
+        }
+        allowed_tiers = {"primary", "secondary", "sensitivity", "corroborative"}
+        if len(tiers) != 1 or not tiers <= allowed_tiers or any(
+            cls._normalise(contract.get("fit_status")) != "fitted"
+            for contract in selected_contracts
+        ):
+            return product
+        if not {"term_role", "source_variable"} <= set(source_frame.columns):
+            return product
+        exposure_rows = source_frame.loc[
+            source_frame["term_role"].map(cls._normalise).eq("exposure")
+        ]
+        if exposure_rows.empty or len(exposure_rows) != len(source_frame):
+            return product
+        for _, row in exposure_rows.iterrows():
+            contract = contract_by_model.get(
+                str(row.get("model_id") or "").strip()
+            )
+            if contract is None or str(
+                row.get("source_variable") or ""
+            ).strip() != str(contract.get("exposure_source") or "").strip():
+                return product
+        tier = next(iter(tiers))
+        kind, name = parsed
+        if effect_estimand_tier(product) is not None:
+            return product
+        return f"{kind}:{tier}_{name}"
+
+    @classmethod
     def _confidence_interval_bound(
         cls,
         column: Any,
@@ -7640,7 +7729,11 @@ class FigureSourceDataValidator:
             figure: set() for figure in required_figure_obligations
         }
 
-        def credit_table_source(source_path: Path, table_paths: Set[Path]) -> None:
+        def credit_table_source(
+            source_path: Path,
+            source_frame: pd.DataFrame,
+            table_paths: Set[Path],
+        ) -> None:
             for table_path in table_paths:
                 resolved = table_path.resolve()
                 product = table_products.get(resolved, f"table:{table_path.stem}")
@@ -7651,6 +7744,12 @@ class FigureSourceDataValidator:
                     except Exception:
                         continue
                     table_frames[resolved] = frame
+                semantic_product = self._contract_scoped_effect_product(
+                    product=product,
+                    source_frame=source_frame,
+                    upstream_step_id=self._table_step_id(table_path, run_dir=run_dir),
+                    completed_step_records=completed_step_records,
+                )
                 for figure in source_figure_products.get(
                     source_path.resolve(), set()
                 ):
@@ -7670,7 +7769,7 @@ class FigureSourceDataValidator:
                         )
                     elif self._source_supports_figures(
                         step=step,
-                        product=product,
+                        product=semantic_product,
                         frame=frame,
                         figure_products=[figure],
                         require_all=True,
@@ -7851,7 +7950,11 @@ class FigureSourceDataValidator:
             def finalize_source_match() -> bool:
                 if source_matched_table_paths:
                     matched_table_paths.update(source_matched_table_paths)
-                    credit_table_source(source_path, source_matched_table_paths)
+                    credit_table_source(
+                        source_path,
+                        source_df,
+                        source_matched_table_paths,
+                    )
                     if source_statistic_matches:
                         matched_statistics.update(source_statistic_matches)
                         credit_statistic_source(

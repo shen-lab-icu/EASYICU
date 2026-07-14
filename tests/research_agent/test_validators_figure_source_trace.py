@@ -26,6 +26,55 @@ from easyicu.research_agent.audits.validators import FigureSourceDataValidator
 from easyicu.research_agent.schema import AnalysisStep
 
 
+def test_effect_source_inherits_primary_tier_only_from_matching_model_contract():
+    source = pd.DataFrame(
+        {
+            "model_id": ["planned_model"],
+            "term_role": ["exposure"],
+            "source_variable": ["marker_max"],
+            "odds_ratio": [1.25],
+        }
+    )
+    completed = [
+        {
+            "step_id": "05_model",
+            "status": "ok",
+            "step_summary": {
+                "model_contracts": [
+                    {
+                        "model_id": "planned_model",
+                        "analysis_role": "primary",
+                        "exposure_source": "marker_max",
+                        "fit_status": "fitted",
+                    }
+                ]
+            },
+        }
+    ]
+    assert FigureSourceDataValidator._contract_scoped_effect_product(
+        product="table:adjusted_association_estimates",
+        source_frame=source,
+        upstream_step_id="05_model",
+        completed_step_records=completed,
+    ) == "table:primary_adjusted_association_estimates"
+
+    forged = source.assign(source_variable="different_marker")
+    assert FigureSourceDataValidator._contract_scoped_effect_product(
+        product="table:adjusted_association_estimates",
+        source_frame=forged,
+        upstream_step_id="05_model",
+        completed_step_records=completed,
+    ) == "table:adjusted_association_estimates"
+
+    adjustment_row = source.assign(term_role="adjustment")
+    assert FigureSourceDataValidator._contract_scoped_effect_product(
+        product="table:adjusted_association_estimates",
+        source_frame=adjustment_row,
+        upstream_step_id="05_model",
+        completed_step_records=completed,
+    ) == "table:adjusted_association_estimates"
+
+
 def _write_upstream(tmp_path: Path) -> Path:
     up = tmp_path / "causal_effect.csv"
     pd.DataFrame(

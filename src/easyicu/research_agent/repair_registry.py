@@ -289,6 +289,7 @@ _STRUCTURAL_REPAIRS = {
     "ordered_category_distribution_publication_bundle_v1",
     "distribution_availability_publication_bundle_from_parent_outputs_v1",
     "absolute_risk_incidence_prevalence_publication_bundle_v1",
+    "association_publication_bundle_from_planned_model_contract_v1",
     "cohort_flow_publication_bundle_from_parent_outputs_v1",
     "sensitivity_publication_bundle_from_locked_summary_v1",
     # Step-summary salvage that faithfully relocates the agent's own output
@@ -313,6 +314,7 @@ _SEALED_RENDERER_REPAIRS = {
     "ordered_category_distribution_publication_bundle_v1",
     "distribution_availability_publication_bundle_from_parent_outputs_v1",
     "absolute_risk_incidence_prevalence_publication_bundle_v1",
+    "association_publication_bundle_from_planned_model_contract_v1",
     "cohort_flow_publication_bundle_from_parent_outputs_v1",
     "sensitivity_publication_bundle_from_locked_summary_v1",
 }
@@ -327,6 +329,10 @@ _SEALED_RENDERER_PRODUCT_SLOTS: Dict[str, Tuple[str, ...]] = {
         "availability",
     ),
     "absolute_risk_incidence_prevalence_publication_bundle_v1": ("absolute_risk",),
+    "association_publication_bundle_from_planned_model_contract_v1": (
+        "primary_estimand",
+        "precision_audit",
+    ),
     "cohort_flow_publication_bundle_from_parent_outputs_v1": (
         "cohort_flow",
         "attrition_audit",
@@ -351,6 +357,9 @@ _SEALED_RENDERER_PLANNER_METHODS: Dict[str, Tuple[str, ...]] = {
     "absolute_risk_incidence_prevalence_publication_bundle_v1": (
         "binary_outcome_incidence_and_absolute_risk",
     ),
+    "association_publication_bundle_from_planned_model_contract_v1": (
+        "adjusted_association_models",
+    ),
     "cohort_flow_publication_bundle_from_parent_outputs_v1": ("cohort_definition",),
     "sensitivity_publication_bundle_from_locked_summary_v1": (
         "cohort_definition_sensitivity",
@@ -372,6 +381,9 @@ _SEALED_RENDERER_PARENT_OUTPUT_ROLE_GROUPS: Dict[
     "absolute_risk_incidence_prevalence_publication_bundle_v1": (
         (("outcome", "incidence"),),
         (("exposure", "prevalence"),),
+    ),
+    "association_publication_bundle_from_planned_model_contract_v1": (
+        (("adjusted", "association", "estimates"),),
     ),
     "cohort_flow_publication_bundle_from_parent_outputs_v1": (
         (("cohort", "flow"),),
@@ -400,6 +412,9 @@ _SEALED_RENDERER_IMPLEMENTATION_MODULES: Dict[str, Tuple[str, ...]] = {
     "absolute_risk_incidence_prevalence_publication_bundle_v1": (
         *_COMMON_SEALED_RENDERER_MODULES,
         "easyicu.research_agent.figures.absolute_risk",
+    ),
+    "association_publication_bundle_from_planned_model_contract_v1": (
+        *_COMMON_SEALED_RENDERER_MODULES,
     ),
     "cohort_flow_publication_bundle_from_parent_outputs_v1": (
         *_COMMON_SEALED_RENDERER_MODULES,

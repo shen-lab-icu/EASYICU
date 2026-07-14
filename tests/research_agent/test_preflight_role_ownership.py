@@ -47,6 +47,11 @@ from easyicu.research_agent.pipeline_execute import (
             ["table:cohort_flow", "table:attrition"],
         ),
         (
+            "association_publication_bundle_from_planned_model_contract_v1",
+            "adjusted_association_models",
+            ["table:adjusted_association_estimates"],
+        ),
+        (
             "sensitivity_publication_bundle_from_locked_summary_v1",
             "cohort_definition_sensitivity",
             ["table:robustness_summary"],

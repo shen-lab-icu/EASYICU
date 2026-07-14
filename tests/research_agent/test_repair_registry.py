@@ -205,6 +205,7 @@ def test_only_closed_source_figure_renderers_are_structural_and_automatic() -> N
         "ordered_category_distribution_publication_bundle_v1",
         "distribution_availability_publication_bundle_from_parent_outputs_v1",
         "absolute_risk_incidence_prevalence_publication_bundle_v1",
+        "association_publication_bundle_from_planned_model_contract_v1",
         "cohort_flow_publication_bundle_from_parent_outputs_v1",
         "sensitivity_publication_bundle_from_locked_summary_v1",
     ):

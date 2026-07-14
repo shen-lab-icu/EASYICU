@@ -29,6 +29,8 @@ from easyicu.research_agent.pipeline import (
     _render_association_publication_bundle_from_prior_outputs as rescue,
     _render_sensitivity_publication_bundle_from_prior_outputs as sensitivity_rescue,
     _resolve_upstream_analysis_family,
+    _sealed_renderer_parent_digest_seal,
+    deterministic_figure_repair_id_for_upstream,
     deterministic_figure_family_supported,
     deterministic_figure_family_supported_for_upstream,
 )
@@ -39,6 +41,125 @@ def _make_parent_step(run_dir: Path, csv_name: str, columns: dict) -> None:
     out = run_dir / "steps" / "03_association_model" / "outputs"
     out.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(columns).to_csv(out / csv_name, index=False)
+
+
+def test_planned_model_contract_seals_exact_association_renderer(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repair_id = "association_publication_bundle_from_planned_model_contract_v1"
+    parent_step = "05_adjusted_association"
+    figure_step = f"{parent_step}_figure"
+    parent = tmp_path / "steps" / parent_step / "outputs"
+    parent.mkdir(parents=True)
+    estimates = pd.DataFrame(
+        {
+            "model_id": ["primary_model", "primary_model", "alternate_model"],
+            "term": ["marker_max", "age", "marker_first"],
+            "term_role": ["exposure", "adjustment", "exposure"],
+            "source_variable": ["marker_max", "age", "marker_first"],
+            "odds_ratio": [1.25, 1.02, 9.0],
+            "ci_low": [1.10, 1.01, 8.0],
+            "ci_high": [1.42, 1.03, 10.0],
+        }
+    )
+    estimates.to_csv(parent / "adjusted_association_estimates.csv", index=False)
+    summary = {
+        "model_contracts": [
+            {
+                "model_id": "primary_model",
+                "requirement_id": "primary_requirement",
+                "analysis_role": "primary",
+                "exposure_role": "primary",
+                "exposure_source": "marker_max",
+                "fit_status": "fitted",
+            },
+            {
+                "model_id": "alternate_model",
+                "requirement_id": "alternate_requirement",
+                "analysis_role": "secondary",
+                "exposure_role": "secondary",
+                "exposure_source": "marker_first",
+                "fit_status": "fitted",
+            },
+        ]
+    }
+    (parent / "step_summary.json").write_text(json.dumps(summary), encoding="utf-8")
+    seal = {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in (
+            parent / "step_summary.json",
+            parent / "adjusted_association_estimates.csv",
+        )
+    }
+    request_step = {
+        "method": "adjusted_association_models",
+        "inputs": ["artifact:analysis_rows"],
+        "expected_outputs": ["table:adjusted_association_estimates"],
+        "model_requirements": [
+            {
+                "requirement_id": "primary_requirement",
+                "analysis_role": "primary",
+                "required_for_step_success": True,
+            }
+        ],
+    }
+    import easyicu.research_agent.pipeline as pipeline_module
+
+    monkeypatch.setattr(
+        pipeline_module,
+        "_verified_direct_parent_artifact_digests",
+        lambda run_dir, step_id: dict(seal),
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "_verified_direct_parent_table_names",
+        lambda run_dir, step_id: {"adjusted_association_estimates.csv"},
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "_resolve_upstream_manifest_step",
+        lambda run_dir, step_id: dict(request_step),
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "_resolve_upstream_manifest_analysis_request",
+        lambda run_dir, step_id: {"step": dict(request_step)},
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "_resolve_upstream_analysis_method",
+        lambda run_dir, step_id: "adjusted_association_models",
+    )
+
+    assert _sealed_renderer_parent_digest_seal(tmp_path, figure_step, repair_id) == seal
+    assert deterministic_figure_repair_id_for_upstream(tmp_path, figure_step) == (
+        repair_id
+    )
+    out = tmp_path / "steps" / figure_step / "outputs"
+    assert (
+        _render_authorized_sealed_publication_bundle(
+            repair_id=repair_id,
+            run_dir=tmp_path,
+            current_step_id=figure_step,
+            out_dir=out,
+            parent_artifact_digests=seal,
+        )
+        == repair_id
+    )
+    source = pd.read_csv(out / "publication_figure_source_data.csv")
+    assert source["model_id"].tolist() == ["primary_model"]
+    assert source["source_variable"].tolist() == ["marker_max"]
+    assert source["source_row_index"].tolist() == [0]
+    assert source["odds_ratio"].tolist() == pytest.approx([1.25])
+    for suffix in ("png", "svg", "pdf", "tiff"):
+        assert (out / f"publication_figure.{suffix}").stat().st_size > 0
+    contract = json.loads(
+        (out / "publication_figure.figure_contract.json").read_text(encoding="utf-8")
+    )
+    assert [panel["role"] for panel in contract["panels"]] == [
+        "primary_estimand",
+        "robustness",
+    ]
 
 
 def test_context_axis_label_wraps_metric_group_pairs():
