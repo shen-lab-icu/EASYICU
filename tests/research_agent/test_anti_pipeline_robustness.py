@@ -1344,6 +1344,14 @@ def test_coder_context_receives_locked_spec_definitions_and_universe_contract(
     assert "inflow_n" in (enriched.notes or "")
     assert "outflow_n" in (enriched.notes or "")
     assert "overlap_n" in (enriched.notes or "")
+    assert "including when the fitted model itself is not executable" in (
+        enriched.notes or ""
+    )
+    assert "aggregation='count'" in (enriched.notes or "")
+    assert "must never be replaced by nonmissingness" in (enriched.notes or "")
+    assert "Cohort membership N and fitted analytic n are distinct" in (
+        enriched.notes or ""
+    )
     assert "AUTHORITATIVE PRIMARY MODEL CONTRACT" in (enriched.notes or "")
     assert '"model_family":"logistic_regression"' in (enriched.notes or "")
 
