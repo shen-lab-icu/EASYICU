@@ -480,6 +480,41 @@ def main():
     )
 
 
+def test_mechanical_preflight_blocks_undefined_direct_helper_call(ra):
+    code = """
+def main(frame):
+    return resolve_declared_product(frame)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    finding = next(
+        item
+        for item in findings
+        if item.detail and item.detail.get("reason") == "undefined_helper_call"
+    )
+    assert finding.detail["calls"] == [
+        {"name": "resolve_declared_product", "line": 3}
+    ]
+
+
+def test_mechanical_preflight_accepts_defined_and_imported_helper_calls(ra):
+    code = """
+from pathlib import Path
+
+def resolve_declared_product(frame):
+    return frame
+
+def main(frame):
+    return Path('output.csv'), resolve_declared_product(frame), len(frame)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail and finding.detail.get("reason") == "undefined_helper_call"
+        for finding in findings
+    )
+
+
 def test_llm_concept_audit_cache_reuses_identical_digest(tmp_path, ra):
     context = _context(ra)
     step = _figure_step(ra)

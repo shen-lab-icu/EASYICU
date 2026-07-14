@@ -305,6 +305,32 @@ def test_coder_repair_consumes_authoritative_exposure_definition(ra):
     assert "Do not substitute a hard-coded column" in prompt
 
 
+def test_coder_repair_replaces_undefined_helper_without_stub(ra):
+    llm = _RecordingLLM()
+    step = ra.AnalysisStep(
+        step_id="diagnostics",
+        intent="Render planner-owned diagnostics.",
+        inputs=["table:diagnostics"],
+        expected_outputs=["figure:diagnostics"],
+        method="visualization",
+    )
+
+    CoderAgent(llm).repair(
+        context=_context(ra),
+        step=step,
+        code="result = missing_renderer(source)\n",
+        run_log=(
+            "DETAIL: {\"reason\": \"undefined_helper_call\", "
+            "\"calls\": [{\"name\": \"missing_renderer\", \"line\": 1}]}"
+        ),
+    )
+
+    prompt = llm.messages[-1].content
+    assert "DIAGNOSED UNDEFINED-HELPER REPAIR" in prompt
+    assert "Prefer calling an already defined equivalent helper" in prompt
+    assert "Never insert a stub, no-op" in prompt
+
+
 def test_coder_repair_removes_untraceable_figure_audit_columns(ra):
     llm = _RecordingLLM()
     step = ra.AnalysisStep(
