@@ -139,6 +139,15 @@ _PRODUCT_SLOT_SUFFIXES: Mapping[str, tuple[tuple[str, ...], ...]] = {
         ("attrition",),
         ("attrition", "audit"),
     ),
+    "primary_estimand": (
+        ("adjusted", "effect"),
+        ("adjusted", "association"),
+        ("primary", "estimand"),
+    ),
+    "precision_audit": (
+        ("precision", "audit"),
+        ("interval", "width", "audit"),
+    ),
     "robustness_plot": (
         ("robustness", "plot"),
         ("sensitivity", "plot"),
@@ -186,6 +195,12 @@ _OPERATIONAL_SUBJECT_SUFFIXES = frozenset(
         "value",
     }
 )
+
+# This subtree is a host-verified receipt, not a registry of scientific
+# outputs.  The execution layer separately rejects these markers when they
+# were not installed by an authorized sealed renderer, so excluding the digest
+# map here cannot let generated code claim renderer authority.
+_HOST_RECEIPT_SUBTREES = frozenset({"sealed_renderer_parent_digests"})
 
 
 def _normalise(value: object) -> str:
@@ -680,6 +695,8 @@ def _summary_scalar_products(value: Any) -> set[tuple[str, str]]:
         if isinstance(node, Mapping):
             for raw_key, child in node.items():
                 key = _normalise(raw_key)
+                if key in _HOST_RECEIPT_SUBTREES:
+                    continue
                 if isinstance(child, Mapping) or isinstance(child, (list, tuple)):
                     visit(child)
                     continue
@@ -1003,6 +1020,8 @@ def _effect_summary_paths(summary: Mapping[str, Any]) -> list[str]:
             for raw_key, child in node.items():
                 key = _normalise(raw_key)
                 path = f"{prefix}.{key}" if prefix else key
+                if key in _HOST_RECEIPT_SUBTREES:
+                    continue
                 if isinstance(child, Mapping) or isinstance(child, (list, tuple)):
                     visit(child, path)
                 elif (

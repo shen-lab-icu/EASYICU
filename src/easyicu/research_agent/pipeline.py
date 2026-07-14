@@ -7627,6 +7627,8 @@ def _render_association_publication_bundle_from_prior_outputs(
     run_dir: Path,
     current_step_id: str,
     out_dir: Path,
+    preverified_parent_artifacts: Optional[Mapping[str, bytes]] = None,
+    authorized_repair_id: Optional[str] = None,
 ) -> Optional[str]:
     """Deterministically build a multi-panel figure from a prior association step.
 
@@ -7721,44 +7723,76 @@ def _render_association_publication_bundle_from_prior_outputs(
             return or_c, lo_c, hi_c
         return None
 
-    parent: Optional[tuple[Path, pd.DataFrame, tuple[str, str, str]]] = None
-    candidate_step_dirs, _direct_parent_only = _figure_parent_candidate_step_dirs(
-        steps_dir=steps_dir, current_step_id=current_step_id
+    sealed_repair_id = (
+        "association_publication_bundle_from_planned_model_contract_v1"
     )
-    for step_dir in candidate_step_dirs:
-        outputs_dir = step_dir / "outputs"
-        if not outputs_dir.exists():
-            continue
-        candidates: List[
-            tuple[tuple[int, int], Path, pd.DataFrame, tuple[str, str, str]]
-        ] = []
-        for csv_path in sorted(outputs_dir.glob("*.csv")):
-            try:
-                candidate_frame = pd.read_csv(csv_path)
-            except Exception:
-                continue
-            resolved = _resolve_or_ci_columns(candidate_frame)
-            if resolved is None:
-                continue
-            columns = {str(column).lower() for column in candidate_frame.columns}
-            structured_coefficients = {
-                "model_id",
-                "term",
-                "term_role",
-                "source_variable",
-            }.issubset(columns)
-            score = (
-                int(structured_coefficients),
-                int(structured_coefficients and "coefficient" in csv_path.stem.lower()),
+    parent: Optional[tuple[Path, pd.DataFrame, tuple[str, str, str]]] = None
+    if preverified_parent_artifacts is not None:
+        if authorized_repair_id != sealed_repair_id:
+            return None
+        try:
+            candidate_frame = pd.read_csv(
+                io.BytesIO(
+                    preverified_parent_artifacts[
+                        "adjusted_association_estimates.csv"
+                    ]
+                )
             )
-            candidates.append((score, csv_path, candidate_frame, resolved))
-        if candidates:
-            _, csv_path, candidate_frame, resolved = max(
-                candidates,
-                key=lambda item: item[0],
-            )
-            parent = (csv_path, candidate_frame, resolved)
-            break
+        except (KeyError, OSError, ValueError):
+            return None
+        resolved = _resolve_or_ci_columns(candidate_frame)
+        if resolved is None:
+            return None
+        parent_step_id = str(current_step_id or "").removesuffix("_figure")
+        table_path = (
+            Path(run_dir)
+            / "steps"
+            / parent_step_id
+            / "outputs"
+            / "adjusted_association_estimates.csv"
+        )
+        parent = (table_path, candidate_frame, resolved)
+    else:
+        candidate_step_dirs, _direct_parent_only = _figure_parent_candidate_step_dirs(
+            steps_dir=steps_dir, current_step_id=current_step_id
+        )
+        for step_dir in candidate_step_dirs:
+            outputs_dir = step_dir / "outputs"
+            if not outputs_dir.exists():
+                continue
+            candidates: List[
+                tuple[tuple[int, int], Path, pd.DataFrame, tuple[str, str, str]]
+            ] = []
+            for csv_path in sorted(outputs_dir.glob("*.csv")):
+                try:
+                    candidate_frame = pd.read_csv(csv_path)
+                except Exception:
+                    continue
+                resolved = _resolve_or_ci_columns(candidate_frame)
+                if resolved is None:
+                    continue
+                columns = {str(column).lower() for column in candidate_frame.columns}
+                structured_coefficients = {
+                    "model_id",
+                    "term",
+                    "term_role",
+                    "source_variable",
+                }.issubset(columns)
+                score = (
+                    int(structured_coefficients),
+                    int(
+                        structured_coefficients
+                        and "coefficient" in csv_path.stem.lower()
+                    ),
+                )
+                candidates.append((score, csv_path, candidate_frame, resolved))
+            if candidates:
+                _, csv_path, candidate_frame, resolved = max(
+                    candidates,
+                    key=lambda item: item[0],
+                )
+                parent = (csv_path, candidate_frame, resolved)
+                break
     if parent is None:
         return None
 
@@ -7767,7 +7801,16 @@ def _render_association_publication_bundle_from_prior_outputs(
 
     parent_summary: Dict[str, Any] = {}
     summary_path = table_path.parent / "step_summary.json"
-    if summary_path.is_file():
+    if preverified_parent_artifacts is not None:
+        try:
+            loaded = json.loads(
+                preverified_parent_artifacts["step_summary.json"].decode("utf-8")
+            )
+            if isinstance(loaded, dict):
+                parent_summary = loaded
+        except (KeyError, UnicodeDecodeError, json.JSONDecodeError):
+            return None
+    elif summary_path.is_file():
         try:
             loaded = json.loads(summary_path.read_text(encoding="utf-8"))
             if isinstance(loaded, dict):
@@ -7778,27 +7821,39 @@ def _render_association_publication_bundle_from_prior_outputs(
     model_contracts = parent_summary.get("model_contracts") or []
     if not isinstance(model_contracts, list):
         model_contracts = []
-    primary_contract = next(
-        (
-            contract
-            for contract in model_contracts
-            if isinstance(contract, dict)
-            and primary_model_id
-            and str(contract.get("model_id") or "") == primary_model_id
-        ),
-        None,
-    )
-    if primary_contract is None:
+    primary_contract: Optional[Mapping[str, Any]] = None
+    if authorized_repair_id == sealed_repair_id:
+        primary_contract = _planned_primary_association_contract(
+            run_dir,
+            current_step_id,
+            parent_summary,
+        )
+        if primary_contract is None:
+            return None
+        primary_model_id = str(primary_contract.get("model_id") or "").strip()
+    else:
         primary_contract = next(
             (
                 contract
                 for contract in model_contracts
                 if isinstance(contract, dict)
-                and str(contract.get("analysis_role") or "").lower() == "primary"
-                and str(contract.get("exposure_role") or "primary").lower() == "primary"
+                and primary_model_id
+                and str(contract.get("model_id") or "") == primary_model_id
             ),
             None,
         )
+        if primary_contract is None:
+            primary_contract = next(
+                (
+                    contract
+                    for contract in model_contracts
+                    if isinstance(contract, dict)
+                    and str(contract.get("analysis_role") or "").lower() == "primary"
+                    and str(contract.get("exposure_role") or "primary").lower()
+                    == "primary"
+                ),
+                None,
+            )
     if not primary_model_id and isinstance(primary_contract, dict):
         primary_model_id = str(primary_contract.get("model_id") or "").strip()
     primary_exposure = (
@@ -7806,16 +7861,21 @@ def _render_association_publication_bundle_from_prior_outputs(
         if isinstance(primary_contract, dict)
         else ""
     )
-    matching_model_ids = {
-        str(contract.get("model_id") or "").strip()
-        for contract in model_contracts
-        if isinstance(contract, dict)
-        and primary_exposure
-        and str(contract.get("exposure_source") or "").strip() == primary_exposure
-        and str(contract.get("exposure_role") or "primary").lower() == "primary"
-        and str(contract.get("analysis_role") or "").lower()
-        in {"primary", "sensitivity"}
-    }
+    matching_model_ids = (
+        {primary_model_id}
+        if authorized_repair_id == sealed_repair_id
+        else {
+            str(contract.get("model_id") or "").strip()
+            for contract in model_contracts
+            if isinstance(contract, dict)
+            and primary_exposure
+            and str(contract.get("exposure_source") or "").strip()
+            == primary_exposure
+            and str(contract.get("exposure_role") or "primary").lower() == "primary"
+            and str(contract.get("analysis_role") or "").lower()
+            in {"primary", "sensitivity"}
+        }
+    )
     matching_model_ids.discard("")
 
     plot_df = frame.copy()
@@ -7935,8 +7995,10 @@ def _render_association_publication_bundle_from_prior_outputs(
     hi = plot_df[hi_col].astype(float).to_numpy()
     ci_width = hi - lo
     y = list(range(len(labels)))
+    source_row_indices = plot_df.index.to_list()
     source_data = plot_df.copy().reset_index(drop=True)
     source_data = source_data.assign(
+        source_row_index=source_row_indices,
         display_label=full_display_labels,
         plot_label=display_labels,
         point_estimate=or_vals,
@@ -7947,11 +8009,22 @@ def _render_association_publication_bundle_from_prior_outputs(
         source_table=table_path.name,
     )
     source_data.to_csv(out_dir / "publication_figure_source_data.csv", index=False)
-    descriptive_context = _association_descriptive_context(
-        run_dir=run_dir,
-        current_step_id=current_step_id,
-        out_dir=out_dir,
-        primary_exposure=primary_exposure or None,
+    descriptive_context = (
+        {
+            "plot_rows": [],
+            "source_files": [],
+            "has_prevalence": False,
+            "has_outcome_risk": False,
+            "title": "",
+            "claim": "",
+        }
+        if preverified_parent_artifacts is not None
+        else _association_descriptive_context(
+            run_dir=run_dir,
+            current_step_id=current_step_id,
+            out_dir=out_dir,
+            primary_exposure=primary_exposure or None,
+        )
     )
     descriptive_rows = list(descriptive_context.get("plot_rows") or [])
     association_panel_title = (
@@ -8174,6 +8247,7 @@ def _render_association_publication_bundle_from_prior_outputs(
                 "chart_type": association_chart_type,
                 "claim": association_panel_claim,
                 "evidence_ids": ["publication_figure_source_data.csv"],
+                "metadata": {"planner_product_slots": ["primary_estimand"]},
             },
         ]
         core_claim = (
@@ -8189,6 +8263,7 @@ def _render_association_publication_bundle_from_prior_outputs(
                 "chart_type": association_chart_type,
                 "claim": association_panel_claim,
                 "evidence_ids": ["publication_figure_source_data.csv"],
+                "metadata": {"planner_product_slots": ["primary_estimand"]},
             },
             {
                 "panel_id": "B",
@@ -8200,6 +8275,7 @@ def _render_association_publication_bundle_from_prior_outputs(
                     "precision rather than hiding uncertainty in the forest plot."
                 ),
                 "evidence_ids": ["publication_figure_source_data.csv"],
+                "metadata": {"planner_product_slots": ["precision_audit"]},
             },
         ]
         core_claim = (
@@ -8231,6 +8307,23 @@ def _render_association_publication_bundle_from_prior_outputs(
                 existing_summary = loaded
         except Exception:
             existing_summary = {}
+    observed_repair_id = (
+        sealed_repair_id
+        if authorized_repair_id == sealed_repair_id
+        else "association_publication_bundle_from_parent_outputs_v3"
+        if descriptive_rows
+        else "association_publication_bundle_from_parent_outputs_v2"
+    )
+    existing_summary.update(
+        {
+            "step_id": current_step_id,
+            "method": "deterministic_association_publication_figure_repair",
+            "rendering_only": True,
+            "deterministic_publication_figure_rescue": observed_repair_id,
+            "source_step_id": current_step_id.removesuffix("_figure"),
+            "figure_contract": "publication_figure.figure_contract.json",
+        }
+    )
     existing_summary.setdefault("publication_figure_repair", {})
     existing_summary["publication_figure_repair"].update(
         {
@@ -8252,9 +8345,7 @@ def _render_association_publication_bundle_from_prior_outputs(
         json.dumps(existing_summary, indent=2, ensure_ascii=False, default=str),
         encoding="utf-8",
     )
-    if descriptive_rows:
-        return "association_publication_bundle_from_parent_outputs_v3"
-    return "association_publication_bundle_from_parent_outputs_v2"
+    return observed_repair_id
 
 
 def _render_sensitivity_publication_bundle_from_prior_outputs(
@@ -9393,6 +9484,46 @@ def _absolute_risk_parent_digest_seal(
     return sealed
 
 
+def _planned_primary_association_contract(
+    run_dir: Path,
+    figure_step_id: str,
+    summary: Mapping[str, Any],
+) -> Optional[dict[str, Any]]:
+    """Resolve one Planner-required primary model to its validated contract."""
+
+    request_step = _resolve_upstream_manifest_step(run_dir, figure_step_id)
+    if not isinstance(request_step, Mapping):
+        return None
+    requirements = request_step.get("model_requirements")
+    primary_requirements = [
+        item
+        for item in requirements or []
+        if isinstance(item, Mapping)
+        and str(item.get("analysis_role") or "").strip().lower() == "primary"
+        and item.get("required_for_step_success") is not False
+    ]
+    if len(primary_requirements) != 1:
+        return None
+    requirement_id = str(primary_requirements[0].get("requirement_id") or "")
+    contracts = summary.get("model_contracts")
+    matching_contracts = [
+        item
+        for item in contracts or []
+        if isinstance(item, Mapping)
+        and str(item.get("requirement_id") or "") == requirement_id
+        and str(item.get("analysis_role") or "").strip().lower() == "primary"
+        and str(item.get("fit_status") or "").strip().lower() == "fitted"
+    ]
+    if len(matching_contracts) != 1:
+        return None
+    contract = dict(matching_contracts[0])
+    if not str(contract.get("model_id") or "").strip():
+        return None
+    if not str(contract.get("exposure_source") or "").strip():
+        return None
+    return contract
+
+
 def _sealed_renderer_parent_digest_seal(
     run_dir: Path,
     figure_step_id: str,
@@ -9423,11 +9554,60 @@ def _sealed_renderer_parent_digest_seal(
         }
     elif repair_id == "sensitivity_publication_bundle_from_locked_summary_v1":
         required_names = {"step_summary.json", "robustness_summary.csv"}
+    elif repair_id == (
+        "association_publication_bundle_from_planned_model_contract_v1"
+    ):
+        required_names = {
+            "step_summary.json",
+            "adjusted_association_estimates.csv",
+        }
     else:
         return None
     if not required_names <= set(digests):
         return None
-    return {name: digests[name] for name in sorted(required_names)}
+    sealed = {name: digests[name] for name in sorted(required_names)}
+    if repair_id != "association_publication_bundle_from_planned_model_contract_v1":
+        return sealed
+
+    # Association rendering is automatic only after the Planner and the
+    # validated parent summary identify one exact primary model contract.  The
+    # renderer then selects by model_id + exposure_source; it never searches
+    # table prose, variable-name fragments, or benchmark vocabulary.
+    parent_step_id = str(figure_step_id or "").removesuffix("_figure")
+    parent_out = Path(run_dir) / "steps" / parent_step_id / "outputs"
+    try:
+        from .declared_product_contract import read_digest_bound_artifact_snapshot
+
+        snapshot = read_digest_bound_artifact_snapshot(
+            parent_out=parent_out,
+            artifact_digests=sealed,
+        )
+        summary = json.loads(snapshot["step_summary.json"].decode("utf-8"))
+        estimates = pd.read_csv(io.BytesIO(snapshot["adjusted_association_estimates.csv"]))
+    except (OSError, KeyError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(summary, Mapping):
+        return None
+    contract = _planned_primary_association_contract(
+        run_dir,
+        figure_step_id,
+        summary,
+    )
+    if contract is None:
+        return None
+    model_id = str(contract.get("model_id") or "").strip()
+    exposure = str(contract.get("exposure_source") or "").strip()
+    required_columns = {"model_id", "term_role", "source_variable"}
+    if not model_id or not exposure or not required_columns <= set(estimates.columns):
+        return None
+    selected = estimates.loc[
+        estimates["model_id"].astype(str).eq(model_id)
+        & estimates["term_role"].astype(str).str.lower().eq("exposure")
+        & estimates["source_variable"].astype(str).eq(exposure)
+    ]
+    if selected.empty:
+        return None
+    return sealed
 
 
 def _render_authorized_sealed_publication_bundle(
@@ -9505,6 +9685,16 @@ def _render_authorized_sealed_publication_bundle(
         )
     elif repair_id == "sensitivity_publication_bundle_from_locked_summary_v1":
         observed = _render_sensitivity_publication_bundle_from_prior_outputs(
+            run_dir=run_dir,
+            current_step_id=current_step_id,
+            out_dir=out_dir,
+            preverified_parent_artifacts=snapshot,
+            authorized_repair_id=repair_id,
+        )
+    elif repair_id == (
+        "association_publication_bundle_from_planned_model_contract_v1"
+    ):
+        observed = _render_association_publication_bundle_from_prior_outputs(
             run_dir=run_dir,
             current_step_id=current_step_id,
             out_dir=out_dir,
@@ -9678,6 +9868,20 @@ def deterministic_figure_repair_id_for_upstream(
             repair_id
             if required_tables <= verified_tables
             and _absolute_risk_parent_digest_seal(run_dir, step_id) is not None
+            else None
+        )
+    if repair_id == (
+        "association_publication_bundle_from_planned_model_contract_v1"
+    ):
+        return (
+            repair_id
+            if "adjusted_association_estimates.csv" in verified_tables
+            and _sealed_renderer_parent_digest_seal(
+                run_dir,
+                step_id,
+                repair_id,
+            )
+            is not None
             else None
         )
     if repair_id == "sensitivity_publication_bundle_from_locked_summary_v1":

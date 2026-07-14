@@ -1669,6 +1669,38 @@ def test_host_slot_authorization_preserves_role_by_exposure_subject():
     ) == {"figure:absolute_risk_by_lactate": "absolute_risk"}
 
 
+def test_host_slot_authorization_accepts_planned_primary_adjusted_effect():
+    assert authorize_declared_figure_product_slots(
+        declared_products=["figure:primary_adjusted_effect"],
+        renderer_repair_id=(
+            "association_publication_bundle_from_planned_model_contract_v1"
+        ),
+        planner_parent_anchors=[
+            "table:adjusted_association_estimates",
+            "artifact:primary_model_specification",
+        ],
+    ) == {"figure:primary_adjusted_effect": "primary_estimand"}
+
+
+def test_sealed_parent_digest_receipt_is_not_a_scientific_output():
+    step = _step(outputs=["figure:primary_adjusted_effect"], method="visualization")
+    findings = declared_product_contract_findings(
+        step=step,
+        step_summary={
+            "output_files": {
+                "figure:primary_adjusted_effect": "primary_adjusted_effect.svg"
+            },
+            "sealed_renderer_parent_digests": {
+                "adjusted_association_estimates.csv": "a" * 64,
+                "step_summary.json": "b" * 64,
+            },
+        },
+        effect_method_authorized=False,
+        effect_figure_source_authorized=True,
+    )
+    assert "unauthorized_effect_product" not in _kinds(findings)
+
+
 @pytest.mark.parametrize(
     "unowned_subject",
     [
