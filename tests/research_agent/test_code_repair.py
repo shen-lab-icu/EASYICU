@@ -663,9 +663,8 @@ def test_outcome_incidence_repair_rejects_non_binary_outcome(
 
 
 # ---------------------------------------------------------------------------
-# deterministic_concept_audit_repair — compatibility no-op. Concept findings
-# route to agent repair/fail-closed handling because changing missing-data
-# strategy is a scientific choice, even when the original strategy is invalid.
+# deterministic_concept_audit_repair — scientific choices still route to agent
+# repair, while an explicitly diagnosed missing fail-close guard is mechanical.
 # ---------------------------------------------------------------------------
 
 
@@ -708,6 +707,74 @@ def test_concept_repair_is_idempotent():
     assert names1 == []
     assert once == code
     twice, names2 = deterministic_concept_audit_repair(once, ["fillna(0) on lactate"])
+    assert names2 == []
+    assert twice == once
+
+
+def test_concept_repair_inserts_provenance_fail_closed_guard():
+    code = '''
+def measurement_provenance_audit(frame):
+    return {
+        "invalid_pair_n": 0,
+        "discordant_n": 0,
+        "audit_only": True,
+        "fail_closed": True,
+        "completed_step_allowed": False,
+    }
+
+def main(frame):
+    provenance = measurement_provenance_audit(frame)
+    write_scientific_outputs(frame)
+'''.lstrip()
+    out, names = deterministic_concept_audit_repair(
+        code,
+        [
+            "A measurement-provenance audit records invalid or discordant "
+            "pairs but does not fail the completed step before scientific "
+            "outputs can be published."
+        ],
+    )
+
+    assert names == ["provenance_fail_closed_guard_v1"]
+    assert "_easyicu_provenance_fail_closed_guard_v1" in out
+    tree = ast.parse(out)
+    main = next(
+        node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "main"
+    )
+    assert isinstance(main.body[1], ast.If)
+    assert isinstance(main.body[1].body[0], ast.Raise)
+
+
+def test_concept_repair_does_not_infer_provenance_policy_from_counts():
+    code = '''
+def measurement_provenance_audit(frame):
+    return {"invalid_pair_n": 1, "discordant_n": 0, "audit_only": True}
+
+provenance = measurement_provenance_audit(frame)
+'''.lstrip()
+    out, names = deterministic_concept_audit_repair(
+        code, ["provenance_audit_not_fail_closed"]
+    )
+    assert names == []
+    assert out == code
+
+
+def test_concept_repair_provenance_guard_is_idempotent():
+    code = '''
+def provenance_audit(frame):
+    return {
+        "invalid_pair_n": 0,
+        "discordant_n": 0,
+        "audit_only": True,
+        "provenance_valid": False,
+    }
+
+result = provenance_audit(frame)
+'''.lstrip()
+    messages = ["provenance_audit_not_fail_closed"]
+    once, names1 = deterministic_concept_audit_repair(code, messages)
+    twice, names2 = deterministic_concept_audit_repair(once, messages)
+    assert names1 == ["provenance_fail_closed_guard_v1"]
     assert names2 == []
     assert twice == once
 
