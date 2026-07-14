@@ -21,13 +21,10 @@ from easyicu.research_agent.plan_utils import (
 )
 from easyicu.research_agent.schema import AnalysisStep
 
-
 SEALED_DISTRIBUTION_REPAIR = (
     "distribution_availability_publication_bundle_from_parent_outputs_v1"
 )
-SEALED_ABSOLUTE_RISK_REPAIR = (
-    "absolute_risk_incidence_prevalence_publication_bundle_v1"
-)
+SEALED_ABSOLUTE_RISK_REPAIR = "absolute_risk_incidence_prevalence_publication_bundle_v1"
 SEALED_IMPLEMENTATION_DIGEST = "a" * 64
 SEALED_PARENT_DIGESTS = {
     "step_summary.json": "1" * 64,
@@ -155,6 +152,58 @@ def test_declared_assignment_model_accepts_a_fitted_model():
     )
 
     assert "assignment_model_unfitted" not in _kinds(findings)
+
+
+def test_declared_assignment_model_surfaces_eligibility_class_collapse():
+    step = _step(
+        method="propensity_score_model",
+        outputs=["artifact:assignment_model"],
+    )
+    findings = declared_product_contract_findings(
+        step=step,
+        step_summary={
+            "status": "ok",
+            "exposure": {
+                "event_n": 120,
+                "non_event_n": 880,
+                "resolution": {"status": "resolved"},
+            },
+            "assignment_models": [
+                {
+                    "model_id": "planner_model",
+                    "fit_status": "not_fitted",
+                    "n": 90,
+                    "exposure_event_n": 90,
+                    "exposure_non_event_n": 0,
+                    "error": "exposure has no variation in the analysis set",
+                }
+            ],
+            "output_files": [
+                {
+                    "kind": "artifact",
+                    "name": "assignment_model",
+                    "path": "assignment_model.csv",
+                }
+            ],
+        },
+        effect_method_authorized=False,
+    )
+
+    finding = next(
+        item for item in findings if item.detail["kind"] == "assignment_model_unfitted"
+    )
+    assert finding.detail["exposure_class_collapse_after_eligibility"] is True
+    assert finding.detail["model_diagnostics"] == [
+        {
+            "model_id": "planner_model",
+            "fit_status": "not_fitted",
+            "n": 90,
+            "exposure_event_n": 90,
+            "exposure_non_event_n": 0,
+            "error": "exposure has no variation in the analysis set",
+        }
+    ]
+    assert "symmetrically" in finding.detail["repair_constraint"]
 
 
 @pytest.mark.parametrize("noncanonical_status", ["ok", "converged"])
@@ -439,9 +488,7 @@ def test_text_only_summary_kind_does_not_grant_effect_output_authority():
         step=step,
         step_summary={
             "summary": {
-                "notes": [
-                    "Association estimate: OR=1.219 (95% CI 1.116-1.332)."
-                ]
+                "notes": ["Association estimate: OR=1.219 (95% CI 1.116-1.332)."]
             }
         },
     )
