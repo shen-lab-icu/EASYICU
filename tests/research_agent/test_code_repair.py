@@ -63,29 +63,27 @@ class TestExtractMissingIndexColumns:
         assert _extract_missing_index_columns(log) == []
 
     def test_extracts_single_column_from_keyerror(self):
-        log = 'KeyError: "[\'sofa_total\'] not in index"'
+        log = "KeyError: \"['sofa_total'] not in index\""
         assert _extract_missing_index_columns(log) == ["sofa_total"]
 
     def test_extracts_multiple_columns_preserving_order(self):
-        log = 'KeyError: "[\'a\', \'b\', \'c\'] not in index"'
+        log = "KeyError: \"['a', 'b', 'c'] not in index\""
         assert _extract_missing_index_columns(log) == ["a", "b", "c"]
 
     def test_deduplicates_columns(self):
-        log = 'KeyError: "[\'a\', \'b\', \'a\'] not in index"'
+        log = "KeyError: \"['a', 'b', 'a'] not in index\""
         assert _extract_missing_index_columns(log) == ["a", "b"]
 
     def test_tolerates_double_quoted_entries(self):
         # The matcher is documented to accept both single and double quotes.
-        log = 'KeyError: "[\"col1\", \"col2\"] not in index"'
+        log = 'KeyError: "["col1", "col2"] not in index"'
         assert _extract_missing_index_columns(log) == ["col1", "col2"]
 
 
 def test_keyerror_regex_is_compiled_pattern():
     """Pin the symbol pipeline imports as a regex, not a raw string."""
     assert isinstance(_KEYERROR_NOT_IN_INDEX_RE, re.Pattern)
-    match = _KEYERROR_NOT_IN_INDEX_RE.search(
-        'KeyError: "[\'x\'] not in index"'
-    )
+    match = _KEYERROR_NOT_IN_INDEX_RE.search("KeyError: \"['x'] not in index\"")
     assert match is not None
     assert "items" in match.groupdict()
 
@@ -100,9 +98,9 @@ def test_name_error_helper_regex_captures_identifier():
 
 def test_name_error_helper_regex_rejects_non_identifiers():
     # The regex requires a Python identifier; a stray expression should miss.
-    assert _NAME_ERROR_HELPER_RE.search(
-        "NameError: name '123abc' is not defined"
-    ) is None
+    assert (
+        _NAME_ERROR_HELPER_RE.search("NameError: name '123abc' is not defined") is None
+    )
 
 
 @pytest.mark.parametrize(
@@ -121,9 +119,7 @@ def test_runner_repair_moves_boolean_mask_reduction_after_combination(
     )
     repaired = _deterministic_runner_repair(
         code=code,
-        run_log=(
-            "TypeError: only length-1 arrays can be converted to Python scalars"
-        ),
+        run_log=("TypeError: only length-1 arrays can be converted to Python scalars"),
     )
 
     assert repaired is not None
@@ -479,9 +475,7 @@ class TestStripColumnsFromListLiterals:
     def test_leaves_unrelated_lists_alone(self):
         code = "scores = [1, 2, 3]\nletters = ['a', 'b']"
         # Neither list contains any of the missing columns.
-        assert (
-            _strip_columns_from_list_literals(code, ["sofa_total"]) == code
-        )
+        assert _strip_columns_from_list_literals(code, ["sofa_total"]) == code
 
     def test_result_is_still_valid_python(self):
         """The rewriter must never produce un-parseable code."""
@@ -536,10 +530,7 @@ def test_runner_repair_does_not_trigger_case_fallbacks_by_default():
         ),
     ]
     for code, run_log in probes:
-        assert (
-            _deterministic_runner_repair(code=code, run_log=run_log)
-            is None
-        )
+        assert _deterministic_runner_repair(code=code, run_log=run_log) is None
 
 
 def test_prediction_discrimination_template_is_case_neutral():
@@ -670,9 +661,9 @@ def test_outcome_incidence_repair_rejects_non_binary_outcome(
 
 def test_concept_repair_does_not_choose_complete_case_for_zero_imputation():
     code = (
-        'mi_df = analysis_df.copy()\n'
+        "mi_df = analysis_df.copy()\n"
         'mi_df["lact"] = mi_df["lact"].fillna(0)\n'
-        'mi_df[primary_predictor] = mi_df[primary_predictor].fillna(0)\n'
+        "mi_df[primary_predictor] = mi_df[primary_predictor].fillna(0)\n"
     )
     out, names = deterministic_concept_audit_repair(
         code, ["Imputed missing lactate values with 0"]
@@ -712,7 +703,7 @@ def test_concept_repair_is_idempotent():
 
 
 def test_concept_repair_inserts_provenance_fail_closed_guard():
-    code = '''
+    code = """
 def measurement_provenance_audit(frame):
     return {
         "invalid_pair_n": 0,
@@ -725,7 +716,7 @@ def measurement_provenance_audit(frame):
 def main(frame):
     provenance = measurement_provenance_audit(frame)
     write_scientific_outputs(frame)
-'''.lstrip()
+""".lstrip()
     out, names = deterministic_concept_audit_repair(
         code,
         [
@@ -739,19 +730,21 @@ def main(frame):
     assert "_easyicu_provenance_fail_closed_guard_v1" in out
     tree = ast.parse(out)
     main = next(
-        node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "main"
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "main"
     )
     assert isinstance(main.body[1], ast.If)
     assert isinstance(main.body[1].body[0], ast.Raise)
 
 
 def test_concept_repair_does_not_infer_provenance_policy_from_counts():
-    code = '''
+    code = """
 def measurement_provenance_audit(frame):
     return {"invalid_pair_n": 1, "discordant_n": 0, "audit_only": True}
 
 provenance = measurement_provenance_audit(frame)
-'''.lstrip()
+""".lstrip()
     out, names = deterministic_concept_audit_repair(
         code, ["provenance_audit_not_fail_closed"]
     )
@@ -760,7 +753,7 @@ provenance = measurement_provenance_audit(frame)
 
 
 def test_concept_repair_provenance_guard_is_idempotent():
-    code = '''
+    code = """
 def provenance_audit(frame):
     return {
         "invalid_pair_n": 0,
@@ -770,11 +763,71 @@ def provenance_audit(frame):
     }
 
 result = provenance_audit(frame)
-'''.lstrip()
+""".lstrip()
     messages = ["provenance_audit_not_fail_closed"]
     once, names1 = deterministic_concept_audit_repair(code, messages)
     twice, names2 = deterministic_concept_audit_repair(once, messages)
     assert names1 == ["provenance_fail_closed_guard_v1"]
+    assert names2 == []
+    assert twice == once
+
+
+def test_concept_repair_expands_provenance_pair_scan_bidirectionally():
+    code = """
+def measurement_provenance_audit(frame, measured_columns):
+    checks = []
+    for measured_column in measured_columns:
+        if not measured_column.endswith("_measured"):
+            continue
+        count_column = measured_column.replace("_measured", "_n")
+        invalid_pair_n = (
+            0
+            if measured_column in frame.columns and count_column in frame.columns
+            else 1
+        )
+        checks.append({
+            "role": "audit_only",
+            "invalid_pair_n": invalid_pair_n,
+            "discordant_n": 0,
+            "measured_column": measured_column,
+        })
+    failed = any(row["invalid_pair_n"] for row in checks)
+    return {
+        "checks": checks,
+        "fail_closed": failed,
+        "completed_step_allowed": not failed,
+    }
+""".lstrip()
+    out, names = deterministic_concept_audit_repair(
+        code,
+        [
+            "The measurement-provenance audit scans measured columns only "
+            "and cannot fail closed for count-only concepts."
+        ],
+    )
+
+    assert names == ["provenance_bidirectional_pair_scan_v1"]
+    assert "_easyicu_provenance_bidirectional_pair_scan_v1" in out
+    namespace = {}
+    exec(out, namespace)
+    frame = type("Frame", (), {"columns": ["lact_n"]})()
+    result = namespace["measurement_provenance_audit"](frame, [])
+    assert result["completed_step_allowed"] is False
+    assert result["checks"][0]["measured_column"] == "lact_measured"
+
+
+def test_concept_repair_bidirectional_pair_scan_is_idempotent():
+    code = """
+def provenance_audit(frame, measured_columns):
+    for measured_column in measured_columns:
+        if measured_column.endswith("_measured"):
+            checks = [{"role": "audit_only", "invalid_pair_n": 0, "discordant_n": 0}]
+    return {"fail_closed": False, "completed_step_allowed": True}
+""".lstrip()
+    messages = ["provenance_pair_scan_not_bidirectional"]
+    once, names1 = deterministic_concept_audit_repair(code, messages)
+    twice, names2 = deterministic_concept_audit_repair(once, messages)
+    assert names1 == ["provenance_bidirectional_pair_scan_v1"]
     assert names2 == []
     assert twice == once
 

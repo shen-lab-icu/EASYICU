@@ -203,7 +203,7 @@ def _patch_rank_safe_statsmodels_design(code: str) -> Optional[str]:
         return (
             f"{indent}{x_expr}, _easyicu_dropped_rank_cols_v1 = "
             f"_easyicu_rank_safe_design_v1({x_expr}, keep={keep_expr})\n"
-        f"{indent}{lhs} = sm.GLM({y_expr}, {x_expr}, family=sm.families.Binomial(){kwargs})"
+            f"{indent}{lhs} = sm.GLM({y_expr}, {x_expr}, family=sm.families.Binomial(){kwargs})"
         )
 
     repaired = model_call.sub(_rewrite, code, count=1)
@@ -230,7 +230,7 @@ def _patch_age_covariate_coding_without_indicator(code: str) -> Optional[str]:
     marker = '        elif var == "sex":\n'
     if marker not in code or "meas_var = measured_vars[var]" not in code:
         return None
-    age_branch = '''        elif var == "age":
+    age_branch = """        elif var == "age":
             coding_rows.append({
                 "variable": var,
                 "role": "adjustor",
@@ -247,7 +247,7 @@ def _patch_age_covariate_coding_without_indicator(code: str) -> Optional[str]:
                 "included_in_model": True,
                 "notes": "Demographic baseline covariate; no measured indicator is defined or used.",
             })
-'''
+"""
     repaired = code.replace(marker, age_branch + marker, 1)
     return repaired if repaired != code else None
 
@@ -317,12 +317,30 @@ def deterministic_concept_audit_repair(
         or "provenance_audit_not_fail_closed" in str(message).lower()
         for message in audit_messages
     )
+    repaired = code
+    repair_names: List[str] = []
     if provenance_finding:
-        repaired = _patch_provenance_fail_closed_guard(code)
-        if repaired != code:
+        guarded = _patch_provenance_fail_closed_guard(repaired)
+        if guarded != repaired:
             repair_name = "provenance_fail_closed_guard_v1"
-            return repaired, [repair_name]
-    return code, []
+            repaired = guarded
+            repair_names.append(repair_name)
+
+    bidirectional_scan_finding = any(
+        (
+            "measurement-provenance audit scans measured columns only"
+            in str(message).lower()
+        )
+        or "provenance_pair_scan_not_bidirectional" in str(message).lower()
+        for message in audit_messages
+    )
+    if bidirectional_scan_finding:
+        bidirectional = _patch_provenance_bidirectional_pair_scan(repaired)
+        if bidirectional != repaired:
+            repair_name = "provenance_bidirectional_pair_scan_v1"
+            repaired = bidirectional
+            repair_names.append(repair_name)
+    return repaired, repair_names
 
 
 _PROVENANCE_FAILURE_KEYS = frozenset({"invalid_pair_n", "discordant_n"})
@@ -332,6 +350,7 @@ _PROVENANCE_DECISION_KEYS = (
     "provenance_valid",
 )
 _PROVENANCE_GUARD_SENTINEL = "_easyicu_provenance_fail_closed_guard_v1"
+_PROVENANCE_PAIR_SCAN_SENTINEL = "_easyicu_provenance_bidirectional_pair_scan_v1"
 
 
 def _string_literals(node: ast.AST) -> set[str]:
@@ -374,9 +393,7 @@ def _patch_provenance_fail_closed_guard(code: str) -> str:
         tokens = _string_literals(node)
         if not (_PROVENANCE_FAILURE_KEYS <= tokens and "audit_only" in tokens):
             continue
-        decision_keys = tuple(
-            key for key in _PROVENANCE_DECISION_KEYS if key in tokens
-        )
+        decision_keys = tuple(key for key in _PROVENANCE_DECISION_KEYS if key in tokens)
         if decision_keys:
             marker_functions[node.name] = decision_keys
     if not marker_functions:
@@ -394,9 +411,7 @@ def _patch_provenance_fail_closed_guard(code: str) -> str:
         if not decision_keys:
             continue
         targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-        target_names = [
-            target.id for target in targets if isinstance(target, ast.Name)
-        ]
+        target_names = [target.id for target in targets if isinstance(target, ast.Name)]
         if len(target_names) != 1:
             continue
 
@@ -429,6 +444,114 @@ def _patch_provenance_fail_closed_guard(code: str) -> str:
         return code
     for line_number, guard in sorted(insertions, reverse=True):
         lines.insert(line_number, guard)
+    return "".join(lines)
+
+
+def _patch_provenance_bidirectional_pair_scan(code: str) -> str:
+    """Expand an authored provenance audit to see both companion suffixes.
+
+    The static preflight only requests this repair after proving that a
+    provenance-audit function enumerates ``*_measured`` but never ``*_n``.
+    The transformation preserves the function's existing pair validation and
+    failure policy; it only adds count-originated stems to the already-authored
+    measured-column candidate list. A count-only concept therefore becomes an
+    explicit missing-companion failure instead of escaping the audit.
+    """
+
+    if _PROVENANCE_PAIR_SCAN_SENTINEL in code:
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    lines = code.splitlines(keepends=True)
+    insertions: list[tuple[int, str]] = []
+    for function in ast.walk(tree):
+        if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        tokens = _string_literals(function)
+        if not (_PROVENANCE_FAILURE_KEYS <= tokens and "audit_only" in tokens):
+            continue
+        scanned_suffixes = {
+            token
+            for candidate in ast.walk(function)
+            if isinstance(candidate, ast.Call)
+            and _simple_call_name(candidate.func).split(".")[-1] == "endswith"
+            for token in _string_literals(candidate)
+            if token in {"_measured", "_n"}
+        }
+        if "_measured" not in scanned_suffixes or "_n" in scanned_suffixes:
+            continue
+
+        frame_name = next(
+            (argument.arg for argument in function.args.args),
+            "",
+        )
+        candidate_name = ""
+        for candidate in ast.walk(function):
+            if not isinstance(candidate, ast.For):
+                continue
+            if not isinstance(candidate.target, ast.Name):
+                continue
+            if not isinstance(candidate.iter, ast.Name):
+                continue
+            target_name = candidate.target.id
+            if any(
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "endswith"
+                and isinstance(call.func.value, ast.Name)
+                and call.func.value.id == target_name
+                and "_measured" in _string_literals(call)
+                for call in ast.walk(candidate)
+            ):
+                candidate_name = candidate.iter.id
+                break
+        if not frame_name or not candidate_name:
+            continue
+
+        first_statement = function.body[0] if function.body else None
+        insertion_line = function.lineno
+        if first_statement is not None:
+            insertion_line = first_statement.lineno - 1
+            if (
+                isinstance(first_statement, ast.Expr)
+                and isinstance(first_statement.value, ast.Constant)
+                and isinstance(first_statement.value.value, str)
+            ):
+                insertion_line = getattr(
+                    first_statement,
+                    "end_lineno",
+                    first_statement.lineno,
+                )
+        def_line = lines[function.lineno - 1]
+        def_indent = def_line[: len(def_line) - len(def_line.lstrip())]
+        indent = def_indent + "    "
+        patch = (
+            f"{indent}# {_PROVENANCE_PAIR_SCAN_SENTINEL}\n"
+            f"{indent}{candidate_name} = sorted(\n"
+            f"{indent}    {{str(_easyicu_column) for _easyicu_column in "
+            f"{candidate_name}}}\n"
+            f"{indent}    | {{\n"
+            f"{indent}        (\n"
+            f"{indent}            str(_easyicu_column)\n"
+            f'{indent}            if str(_easyicu_column).endswith("_measured")\n'
+            f'{indent}            else str(_easyicu_column)[: -len("_n")] '
+            f'+ "_measured"\n'
+            f"{indent}        )\n"
+            f"{indent}        for _easyicu_column in {frame_name}.columns\n"
+            f'{indent}        if str(_easyicu_column).endswith(("_measured", '
+            f'"_n"))\n'
+            f"{indent}    }}\n"
+            f"{indent})\n"
+        )
+        insertions.append((insertion_line, patch))
+
+    if not insertions:
+        return code
+    for line_number, patch in sorted(insertions, reverse=True):
+        lines.insert(line_number, patch)
     return "".join(lines)
 
 
@@ -576,9 +699,7 @@ def _deterministic_summary_repair(
         and error_text
         and predictor not in error_text
         and not (
-            generic_soft_failure
-            or dtype_soft_failure
-            or index_alignment_soft_failure
+            generic_soft_failure or dtype_soft_failure or index_alignment_soft_failure
         )
     ):
         return None
