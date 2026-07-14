@@ -3663,10 +3663,16 @@ def run_execute_phase(
     per_step_records: List[Dict[str, Any]] = []
     probe_summary: Dict[str, Any] = {}
     resumed_step_ids: set = set()
+    # Steps can finish before the ordinary plan execution loop.  Keep those
+    # ids distinct from resume state: a probe-aware replan is allowed to retain
+    # the probe in its returned plan, but that must not schedule a second coder
+    # execution for work the host already completed deterministically.
+    preexecuted_step_ids: set = set()
     if plan_result.resume_state is not None:
         resume_application = resume_controller.apply()
         per_step_records.extend(resume_application.per_step_records)
         resumed_step_ids = set(resume_application.resumed_step_ids)
+        preexecuted_step_ids.update(resumed_step_ids)
         findings.extend(resume_application.findings)
         probe_summary = resume_application.probe_summary
         findings.extend(
@@ -4248,6 +4254,7 @@ def run_execute_phase(
             "evidence_ids": probe_evidence_ids,
         }
         per_step_records.append(probe_record)
+        preexecuted_step_ids.add(probe_step_id)
         _flush_partial_manifest()
         trajectory_preflight = trajectory_plan_dag_findings(
             plan=plan,
@@ -9087,7 +9094,7 @@ else:
         if trajectory_plan_blocked
         else resume_controller.remaining_steps(
             plan=plan,
-            executed_step_ids=set(resumed_step_ids),
+            executed_step_ids=set(preexecuted_step_ids),
         )
     )
     has_typed_input_dependencies = any(
@@ -9099,6 +9106,14 @@ else:
         emit_progress(
             "resume",
             f"Skipped completed step from prior run: {skipped_step_id}.",
+            status="complete",
+            run_id=run_id,
+            step_id=skipped_step_id,
+        )
+    for skipped_step_id in sorted(preexecuted_step_ids - resumed_step_ids):
+        emit_progress(
+            "step",
+            f"Skipped step already completed by pre-execution: {skipped_step_id}.",
             status="complete",
             run_id=run_id,
             step_id=skipped_step_id,
@@ -9201,7 +9216,7 @@ else:
                 force=True,
             )
 
-        executed_step_ids = set(resumed_step_ids)
+        executed_step_ids = set(preexecuted_step_ids)
         remaining_steps = resume_controller.remaining_steps(
             plan=plan,
             executed_step_ids=executed_step_ids,

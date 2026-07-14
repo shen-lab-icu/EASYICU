@@ -2091,6 +2091,9 @@ def test_pipeline_probe_can_trigger_replanning(ra, tmp_path: Path):
     class ReplanningLLM:
         name = "replanning-llm"
 
+        def __init__(self):
+            self.coder_prompts = []
+
         def complete(self, messages, *, max_tokens=2048, temperature=0.2):
             user = next((m.content for m in reversed(messages) if m.role == "user"), "")
             upper = user.upper()
@@ -2099,6 +2102,14 @@ def test_pipeline_probe_can_trigger_replanning(ra, tmp_path: Path):
                     {
                         "research_question": "Audit then model mortality.",
                         "steps": [
+                            {
+                                "step_id": "00_probe",
+                                "intent": "Probe distributions before execution.",
+                                "inputs": [],
+                                "expected_outputs": [],
+                                "method": None,
+                                "icu_rule_refs": [],
+                            },
                             {
                                 "step_id": "03_missingness_audit",
                                 "intent": "Audit missingness before modelling.",
@@ -2139,6 +2150,7 @@ def test_pipeline_probe_can_trigger_replanning(ra, tmp_path: Path):
                     }
                 )
             if "WRITE THE PYTHON CODE" in upper:
+                self.coder_prompts.append(user)
                 if "03_missingness_audit" in upper:
                     return """
 import json, os, pandas as pd
@@ -2171,9 +2183,10 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
             "death": [1 if i % 7 == 0 else 0 for i in range(40)],
         }
     )
+    llm = ReplanningLLM()
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
-        llm=ReplanningLLM(),
+        llm=llm,
         enable_literature=False,
         enable_probe_step=True,
         enable_replanning=True,
@@ -2191,6 +2204,13 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     )
     step_ids = [rec["step_id"] for rec in partial["per_step_records"]]
     assert "00_probe" in step_ids
+    probe_records = [
+        rec for rec in partial["per_step_records"] if rec["step_id"] == "00_probe"
+    ]
+    assert len(probe_records) == 1
+    assert probe_records[0]["status"] == "ok"
+    assert probe_records[0]["generation_mode"] == "deterministic_probe"
+    assert not any("00_probe" in prompt for prompt in llm.coder_prompts)
     assert "03_missingness_audit" in step_ids
     assert (run_dir / "analysis_plan_revision_2.json").exists()
 
