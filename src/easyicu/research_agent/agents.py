@@ -29,7 +29,6 @@ generic dispatch Protocol because nothing in the codebase consumes one.
 
 from __future__ import annotations
 
-import ast
 import json
 import os
 import re
@@ -56,7 +55,13 @@ from .icu_rules import (
     default_time_windows,
 )
 from .llm import LLMClient, LLMMessage
-from .code_patch import CodePatchError, PATCH_FORMAT, apply_code_patch, repair_code_excerpt
+from .code_patch import (
+    CodePatchError,
+    PATCH_FORMAT,
+    apply_code_patch,
+    looks_like_executable_python,
+    repair_code_excerpt,
+)
 from .coder_context import coder_guide_for_step, scoped_coder_context
 from .plan_utils import effect_output_authorized
 from .prompts import PROMPT_PACK_VERSION, load_prompt_pack
@@ -2290,45 +2295,7 @@ def _strip_code_fence(text: str) -> str:
 
 
 def _looks_like_python_script(text: str) -> bool:
-    stripped = (text or "").strip()
-    if not stripped or stripped in {"{}", "[]", "null", "None"}:
-        return False
-    try:
-        payload = json.loads(stripped)
-    except (json.JSONDecodeError, TypeError):
-        payload = None
-    if isinstance(payload, dict) and payload.get("format") == PATCH_FORMAT:
-        return False
-    try:
-        tree = ast.parse(stripped)
-    except SyntaxError:
-        return False
-    if not tree.body:
-        return False
-    # A JSON patch with only strings/numbers is also a valid Python dict
-    # expression. It must never be accepted as an executable analysis script.
-    if all(
-        isinstance(node, ast.Expr)
-        and isinstance(node.value, (ast.Constant, ast.Dict, ast.List, ast.Set, ast.Tuple))
-        for node in tree.body
-    ):
-        return False
-    script_markers = (
-        "\nimport ",
-        "import ",
-        "\nfrom ",
-        "from ",
-        "\ndef ",
-        "def ",
-        "os.environ",
-        "pd.",
-        "json.",
-        ".to_csv",
-        "write_text",
-        "STEP_OUT_DIR",
-        "COHORT_PARQUET",
-    )
-    return any(marker in stripped for marker in script_markers)
+    return looks_like_executable_python(text)
 
 
 def _first_json_block(text: str) -> Optional[str]:

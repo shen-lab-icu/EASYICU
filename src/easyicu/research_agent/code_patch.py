@@ -66,6 +66,50 @@ def apply_code_patch(code: str, raw_patch: str) -> str:
     return patched
 
 
+def looks_like_executable_python(text: str) -> bool:
+    """Reject prose/literal payloads even when they contain code-like strings."""
+
+    stripped = str(text or "").strip()
+    if not stripped or stripped in {"{}", "[]", "null", "None"}:
+        return False
+    try:
+        payload = json.loads(stripped)
+    except (json.JSONDecodeError, TypeError):
+        payload = None
+    if isinstance(payload, dict) and payload.get("format") == PATCH_FORMAT:
+        return False
+    try:
+        tree = ast.parse(stripped)
+    except SyntaxError:
+        return False
+    if not tree.body:
+        return False
+    if all(
+        isinstance(node, ast.Expr)
+        and isinstance(node.value, (ast.Constant, ast.Dict, ast.List, ast.Set, ast.Tuple))
+        for node in tree.body
+    ):
+        return False
+    return any(
+        marker in stripped
+        for marker in (
+            "\nimport ",
+            "import ",
+            "\nfrom ",
+            "from ",
+            "\ndef ",
+            "def ",
+            "os.environ",
+            "pd.",
+            "json.",
+            ".to_csv",
+            "write_text",
+            "STEP_OUT_DIR",
+            "COHORT_PARQUET",
+        )
+    )
+
+
 def repair_code_excerpt(code: str, run_log: str, *, char_limit: int = 10_000) -> str:
     """Select imports and the most diagnosis-relevant top-level AST blocks."""
 
@@ -119,4 +163,10 @@ def repair_code_excerpt(code: str, run_log: str, *, char_limit: int = 10_000) ->
     return excerpt[:char_limit]
 
 
-__all__ = ["CodePatchError", "PATCH_FORMAT", "apply_code_patch", "repair_code_excerpt"]
+__all__ = [
+    "CodePatchError",
+    "PATCH_FORMAT",
+    "apply_code_patch",
+    "looks_like_executable_python",
+    "repair_code_excerpt",
+]

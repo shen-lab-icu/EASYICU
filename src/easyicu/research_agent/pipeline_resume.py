@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from .code_patch import looks_like_executable_python
 from .contracts import ValidationFinding
 from .runtime_artifacts import current_step_records, verified_run_evidence_path
 from .schema import AnalysisPlan, AnalysisStep
@@ -632,21 +633,7 @@ def _resolve_resume_evidence_path(run_dir: Path, relative_path: str) -> Optional
 
 
 def _looks_like_generated_python(code: str) -> bool:
-    stripped = code.strip()
-    if not stripped or stripped in {"{}", "[]", "null", "None"}:
-        return False
-    return any(
-        marker in stripped
-        for marker in (
-            "import ",
-            "from ",
-            "def ",
-            "os.environ",
-            "pd.",
-            "STEP_OUT_DIR",
-            "COHORT_PARQUET",
-        )
-    )
+    return looks_like_executable_python(code)
 
 
 def upsert_step_record(
