@@ -40,6 +40,7 @@ _FAILED_STATUSES = frozenset(
         "fail_closed",
         "failed_closed",
         "repair_failed",
+        "skipped",
         "skipped_dependency_failed",
     }
 )
@@ -1065,6 +1066,70 @@ def _undeclared_figure_bundle(
     }
 
 
+def _assignment_model_completion_findings(
+    *,
+    step: AnalysisStep,
+    step_summary: Mapping[str, Any],
+    declared: set[tuple[str, str]],
+) -> list[ValidationFinding]:
+    """Require a declared assignment-model artifact to contain a fitted model.
+
+    This validates realization of the Planner-owned method; it does not select
+    the exposure, covariates, model family, cohort, or estimand.
+    """
+
+    method_head = _normalise(str(step.method or "").split(" with ", 1)[0])
+    if (
+        method_head != "confounder_selection_and_propensity_model"
+        or ("artifact", "assignment_model") not in declared
+    ):
+        return []
+
+    raw_models = step_summary.get("assignment_models")
+    models = raw_models if isinstance(raw_models, list) else []
+    fitted_models = [
+        model
+        for model in models
+        if isinstance(model, Mapping)
+        and _normalise(model.get("fit_status") or model.get("status"))
+        in {"fitted", "ok", "converged"}
+    ]
+    if fitted_models:
+        return []
+
+    exposure = step_summary.get("exposure")
+    exposure_resolution = (
+        exposure.get("resolution")
+        if isinstance(exposure, Mapping)
+        and isinstance(exposure.get("resolution"), Mapping)
+        else {}
+    )
+    return [
+        ValidationFinding(
+            validator="declared_product_contract",
+            severity="error",
+            message=(
+                f"Step {step.step_id} declared an assignment-model artifact but "
+                "registered no successfully fitted assignment model. An empty "
+                "or all-missing propensity table is not a completed product."
+            ),
+            detail={
+                "kind": "assignment_model_unfitted",
+                "step_id": step.step_id,
+                "model_statuses": [
+                    _normalise(model.get("fit_status") or model.get("status"))
+                    for model in models
+                    if isinstance(model, Mapping)
+                ],
+                "exposure_resolution_status": _normalise(
+                    exposure_resolution.get("status")
+                ),
+                "exposure_resolution_reason": exposure_resolution.get("reason"),
+            },
+        )
+    ]
+
+
 def declared_product_contract_findings(
     *,
     step: AnalysisStep,
@@ -1096,6 +1161,13 @@ def declared_product_contract_findings(
         trajectory_role_result_findings(
             step=step,
             step_summary=step_summary,
+        )
+    )
+    findings.extend(
+        _assignment_model_completion_findings(
+            step=step,
+            step_summary=step_summary,
+            declared=declared,
         )
     )
 
