@@ -194,6 +194,24 @@ def test_prespecified_robustness_refit_prompt_has_effect_authority(ra):
         assert "effect_output_authorized: true" in prompt
 
 
+def test_coder_repair_prompt_forbids_helper_result_name_shadowing(ra):
+    step = ra.AnalysisStep(
+        step_id="repair_runtime_failure",
+        intent="Repair a generated analysis without changing its method.",
+        expected_outputs=["table:result"],
+        method="descriptive_summary",
+    )
+
+    _run_prompt, repair_prompt, _agentic_prompt = (
+        _ordinary_run_repair_and_agentic_prompts(ra=ra, step=step)
+    )
+
+    assert "same name as a helper function called in that scope" in repair_prompt
+    assert "never write `audit = audit(...)`" in repair_prompt
+    assert "UnboundLocalError" in repair_prompt
+    assert "Use a distinct result name" in repair_prompt
+
+
 def test_coder_prompt_binds_typed_inputs_to_resolved_manifest(ra):
     step = ra.AnalysisStep(
         step_id="consume",
