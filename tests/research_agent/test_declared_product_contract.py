@@ -157,6 +157,59 @@ def test_declared_assignment_model_accepts_a_fitted_model():
     assert "assignment_model_unfitted" not in _kinds(findings)
 
 
+@pytest.mark.parametrize("noncanonical_status", ["ok", "converged"])
+def test_declared_assignment_model_rejects_noncanonical_success_status(
+    noncanonical_status,
+):
+    step = _step(
+        method="propensity_score_model",
+        outputs=["artifact:assignment_model"],
+    )
+    findings = declared_product_contract_findings(
+        step=step,
+        step_summary={
+            "status": "ok",
+            "assignment_models": [
+                {"model_id": "planner_model", "fit_status": noncanonical_status}
+            ],
+            "output_files": [
+                {
+                    "kind": "artifact",
+                    "name": "assignment_model",
+                    "path": "assignment_model.csv",
+                }
+            ],
+        },
+        effect_method_authorized=False,
+    )
+
+    assert "assignment_model_unfitted" in _kinds(findings)
+
+
+def test_declared_assignment_model_contract_is_method_name_neutral():
+    step = _step(
+        method="propensity_score_model",
+        outputs=["artifact:assignment_model"],
+    )
+    findings = declared_product_contract_findings(
+        step=step,
+        step_summary={
+            "status": "ok",
+            "assignment_models": [],
+            "output_files": [
+                {
+                    "kind": "artifact",
+                    "name": "assignment_model",
+                    "path": "assignment_model.csv",
+                }
+            ],
+        },
+        effect_method_authorized=False,
+    )
+
+    assert "assignment_model_unfitted" in _kinds(findings)
+
+
 def test_step_contract_rejects_planned_step_that_reports_skipped():
     findings = _step_contract_findings(
         step=_step(outputs=["table:diagnostics"]),

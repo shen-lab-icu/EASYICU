@@ -1078,11 +1078,7 @@ def _assignment_model_completion_findings(
     the exposure, covariates, model family, cohort, or estimand.
     """
 
-    method_head = _normalise(str(step.method or "").split(" with ", 1)[0])
-    if (
-        method_head != "confounder_selection_and_propensity_model"
-        or ("artifact", "assignment_model") not in declared
-    ):
+    if ("artifact", "assignment_model") not in declared:
         return []
 
     raw_models = step_summary.get("assignment_models")
@@ -1091,8 +1087,7 @@ def _assignment_model_completion_findings(
         model
         for model in models
         if isinstance(model, Mapping)
-        and _normalise(model.get("fit_status") or model.get("status"))
-        in {"fitted", "ok", "converged"}
+        and _normalise(model.get("fit_status") or model.get("status")) == "fitted"
     ]
     if fitted_models:
         return []
@@ -1110,8 +1105,9 @@ def _assignment_model_completion_findings(
             severity="error",
             message=(
                 f"Step {step.step_id} declared an assignment-model artifact but "
-                "registered no successfully fitted assignment model. An empty "
-                "or all-missing propensity table is not a completed product."
+                "registered no assignment model whose summary roster has "
+                "`fit_status` exactly `fitted`. Empty, placeholder, or "
+                "noncanonical model rosters are not completed products."
             ),
             detail={
                 "kind": "assignment_model_unfitted",
