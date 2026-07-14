@@ -241,6 +241,7 @@ def _structural_filter_findings(tree: ast.Module, step: AnalysisStep) -> list[Va
         prior_guards: set[str] = set()
         mask_names: set[str] = set()
         mask_sources: dict[str, set[str]] = {}
+        frame_aliases: dict[str, set[str]] = {}
         for statement in body:
             if isinstance(statement, (ast.Assign, ast.AnnAssign)):
                 value = statement.value
@@ -249,6 +250,25 @@ def _structural_filter_findings(tree: ast.Module, step: AnalysisStep) -> list[Va
                     if isinstance(statement, ast.Assign)
                     else [statement.target]
                 )
+                alias_source: Optional[str] = None
+                if isinstance(value, ast.Name):
+                    alias_source = value.id
+                elif (
+                    isinstance(value, ast.Call)
+                    and isinstance(value.func, ast.Attribute)
+                    and value.func.attr == "copy"
+                    and isinstance(value.func.value, ast.Name)
+                ):
+                    alias_source = value.func.value.id
+                for target in targets:
+                    if not isinstance(target, ast.Name):
+                        continue
+                    frame_aliases.pop(target.id, None)
+                    if alias_source:
+                        frame_aliases[target.id] = {
+                            alias_source,
+                            *frame_aliases.get(alias_source, set()),
+                        }
                 if value is not None and _is_boolean_mask_expression(value):
                     for target in targets:
                         if not isinstance(target, ast.Name):
@@ -266,13 +286,16 @@ def _structural_filter_findings(tree: ast.Module, step: AnalysisStep) -> list[Va
                 mask_name = _mask_name_from_slice(node.slice)
                 value_name = _call_name(node.value)
                 source_names = mask_sources.get(mask_name or "", set())
-                filtered_names = _referenced_names(node.value)
+                direct_name = node.value.id if isinstance(node.value, ast.Name) else ""
+                direct_sources = {
+                    direct_name,
+                    *frame_aliases.get(direct_name, set()),
+                }
                 is_row_filter = bool(
                     mask_name
-                    and source_names & filtered_names
                     and (
                         value_name.endswith(".loc")
-                        or isinstance(node.value, ast.Name)
+                        or (direct_name and source_names & direct_sources)
                     )
                 )
                 if not is_row_filter:

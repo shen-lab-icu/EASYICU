@@ -501,21 +501,22 @@ def test_resume_from_step_reuses_prior_code(
             user = next((m.content for m in reversed(messages) if m.role == "user"), "")
             upper = user.upper()
             if "ICU-AWARE RESEARCH PLAN" in upper:
-                return json.dumps({
-                    "research_question": "Is SOFA associated with ICU mortality?",
-                    "steps": [{
-                        "step_id": "04_primary_association",
-                        "intent": "Estimate SOFA and ICU mortality association.",
-                        "inputs": ["sofa2", "death"],
-                        "expected_outputs": [
-                            "table:primary_association",
-                            "statistic:primary_or",
+                return json.dumps(
+                    {
+                        "research_question": "Is SOFA associated with ICU mortality?",
+                        "steps": [
+                            {
+                                "step_id": "04_primary_association",
+                                "intent": "Estimate SOFA and ICU mortality association.",
+                                "inputs": ["sofa2", "death"],
+                                "expected_outputs": ["table:cohort_summary"],
+                                "method": "descriptive",
+                                "icu_rule_refs": ["aggregation_rule_for"],
+                            }
                         ],
-                        "method": "descriptive",
-                        "icu_rule_refs": ["aggregation_rule_for"],
-                    }],
-                    "rationale": "single-step resume code reuse test",
-                })
+                        "rationale": "single-step resume code reuse test",
+                    }
+                )
             if "WRITE THE PYTHON CODE" in upper:
                 return """
 import json
@@ -529,24 +530,18 @@ summary = {
     "n": int(len(df)),
     "sofa2_median": float(df["sofa2"].median()),
     "mortality_rate": float(df["death"].mean()),
-    "primary_or": 1.42,
-    "primary_or_ci_low": 1.10,
-    "primary_or_ci_high": 1.83,
-    "model_converged": True,
-    "statistic:primary_or": {
-        "value": 1.42,
-        "ci_low": 1.10,
-        "ci_high": 1.83,
-    },
 }
-pd.DataFrame([summary]).to_csv(os.path.join(out, "primary_association.csv"), index=False)
+pd.DataFrame([summary]).to_csv(os.path.join(out, "cohort_summary.csv"), index=False)
+summary["output_files"] = [
+    {"kind": "table", "name": "cohort_summary", "path": "cohort_summary.csv"}
+]
 with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     json.dump(summary, f)
 """
             if "INTERPRET THE RESULTS" in upper:
-                return "The primary table is available {evidence:primary_association}."
+                return "The cohort table is available {evidence:cohort_summary}."
             if "MANUSCRIPT SCAFFOLD" in upper:
-                return "# Title\n\n## Results\n\nThe table is available {evidence:primary_association}."
+                return "# Title\n\n## Results\n\nThe table is available {evidence:cohort_summary}."
             return "{}"
 
     class FailingCoderLLM(SingleStepLLM):
@@ -753,7 +748,13 @@ import pandas as pd
 
 df = pd.read_parquet(os.environ["COHORT_PARQUET"])
 out = os.environ["STEP_OUT_DIR"]
-summary = {"n": int(len(df)), "draft_marker": True}
+summary = {
+    "n": int(len(df)),
+    "draft_marker": True,
+    "output_files": [
+        {"kind": "table", "name": "cohort_summary", "path": "cohort_summary.csv"}
+    ],
+}
 pd.DataFrame([summary]).to_csv(os.path.join(out, "cohort_summary.csv"), index=False)
 with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     json.dump(summary, f)
@@ -979,11 +980,16 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     original_run = CodeRunner.run
     quarantine_absent_at_runner = []
 
-    def run_after_quarantine_retired(self, *, step_id, code):
+    def run_after_quarantine_retired(self, *, step_id, code, resolved_inputs_path=None):
         quarantine_absent_at_runner.append(
             not (run_dir / "steps" / step_id / ".quarantine").exists()
         )
-        return original_run(self, step_id=step_id, code=code)
+        return original_run(
+            self,
+            step_id=step_id,
+            code=code,
+            resolved_inputs_path=resolved_inputs_path,
+        )
 
     monkeypatch.setattr(CodeRunner, "run", run_after_quarantine_retired)
     final_llm = QuarantineLLM(repair_succeeds=True)
@@ -1094,7 +1100,13 @@ OUTCOME_OVERRIDE = {
 df = pd.read_parquet(os.environ["COHORT_PARQUET"])
 y = df["death"]
 out = os.environ["STEP_OUT_DIR"]
-summary = {"status": "ok", "n": int(len(y))}
+summary = {
+    "status": "ok",
+    "n": int(len(y)),
+    "output_files": [
+        {"kind": "table", "name": "cohort_summary", "path": "cohort_summary.csv"}
+    ],
+}
 pd.DataFrame([summary]).to_csv(
     os.path.join(out, "cohort_summary.csv"), index=False
 )
@@ -1174,11 +1186,18 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     quarantine_absent_at_runner = []
     original_run = CodeRunner.run
 
-    def run_after_policy_supersession(self, *, step_id, code):
+    def run_after_policy_supersession(
+        self, *, step_id, code, resolved_inputs_path=None
+    ):
         quarantine_absent_at_runner.append(
             not (run_dir / "steps" / step_id / ".quarantine").exists()
         )
-        return original_run(self, step_id=step_id, code=code)
+        return original_run(
+            self,
+            step_id=step_id,
+            code=code,
+            resolved_inputs_path=resolved_inputs_path,
+        )
 
     monkeypatch.setattr(CodeRunner, "run", run_after_policy_supersession)
     resumed_llm = PolicyTransitionLLM()

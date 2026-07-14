@@ -224,7 +224,41 @@ def render(frame):
 """
     findings = audit_mechanical_code_contracts(code, _figure_step(ra))
     assert any(
-        finding.detail and finding.detail.get("reason") == "structural_accounting_filter"
+        finding.detail
+        and finding.detail.get("reason") == "structural_accounting_filter"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_blocks_alias_row_filter_for_accounting(ra):
+    code = """
+def render(frame):
+    accounting = frame
+    valid_rows = frame['n'].notna()
+    plotted = accounting[valid_rows].copy()
+    return plotted
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "structural_accounting_filter"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_blocks_sibling_derived_loc_filter(ra):
+    code = """
+def render(frame, audit):
+    valid_rows = audit['n'].notna()
+    plotted = frame.loc[valid_rows].copy()
+    return plotted
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "structural_accounting_filter"
         for finding in findings
     )
 
