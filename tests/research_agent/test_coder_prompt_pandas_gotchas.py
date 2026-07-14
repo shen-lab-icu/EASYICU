@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import inspect
+
 
 def test_coder_prompt_names_pandas_categorical_codes_gotcha() -> None:
     from easyicu.research_agent.prompts import load_prompt_pack
@@ -12,6 +14,25 @@ def test_coder_prompt_names_pandas_categorical_codes_gotcha() -> None:
     assert "pd.Categorical(x).cat.codes" in coder_prompt
     assert "pd.Categorical(x).codes" in coder_prompt
     assert 'pd.Series(x).astype("category").cat.codes' in coder_prompt
+
+
+def test_coder_prompt_closes_categorical_distribution_denominators() -> None:
+    from easyicu.research_agent.agents import CoderAgent
+    from easyicu.research_agent.prompts import load_prompt_pack
+
+    coder_prompt = load_prompt_pack()["coder"]
+    normalized = " ".join(coder_prompt.lower().split())
+
+    assert "closed partition" in normalized
+    assert "counts must sum exactly to `n_nonmissing`" in normalized
+    assert "silently omitted from the category rows" in normalized
+
+    repair_normalized = " ".join(
+        inspect.getsource(CoderAgent.repair).lower().split()
+    )
+    assert "map each non-missing value to" in repair_normalized
+    assert "category counts sum to" in repair_normalized
+    assert "silently omitting it from all categories" in repair_normalized
 
 
 def test_coder_prompt_forbids_bitwise_not_on_scalar_dtype_predicates() -> None:
