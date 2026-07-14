@@ -203,3 +203,33 @@ def test_openai_client_supports_local_noauth_proxy_mode(ra):
         "completion_tokens": 4,
         "total_tokens": 16,
     }
+
+
+def test_openai_client_zero_manual_retry_budget_makes_one_attempt(monkeypatch, ra):
+    from easyicu.research_agent.llm import LLMMessage, OpenAIClient
+
+    class _Completions:
+        def __init__(self):
+            self.calls = 0
+
+        def create(self, **kwargs):
+            self.calls += 1
+            return SimpleNamespace(choices=[], usage=None)
+
+    completions = _Completions()
+    client = OpenAIClient.__new__(OpenAIClient)
+    client._client = SimpleNamespace(
+        chat=SimpleNamespace(completions=completions)
+    )
+    client._model = "gpt-5.6-luna"
+    client._timeout = 1.0
+    client._extra_body = {}
+    client._local_noauth_mode = False
+    client._max_retries = 0
+    monkeypatch.delenv("EASYICU_LLM_STREAM", raising=False)
+    monkeypatch.setattr("time.sleep", lambda _seconds: None)
+
+    with pytest.raises(RuntimeError, match="LLM_TRANSIENT_NO_CHOICES"):
+        client.complete([LLMMessage(role="user", content="return json")])
+
+    assert completions.calls == 1

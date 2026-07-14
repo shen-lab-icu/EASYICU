@@ -533,7 +533,14 @@ class OpenAIClient:
         # observed ~30s Retry-After headers repeating) can't tip the run into
         # uncaught RateLimitError. Also honor the provider's Retry-After when
         # present in the exception body.
-        for attempt in range(max(8, getattr(self, "_max_retries", 8))):
+        # ``_max_retries`` is the manual attempt budget used by this outer
+        # provider-recovery loop.  Honour explicit small budgets (notably the
+        # experiment setting ``EASYICU_LLM_MAX_RETRIES=0``) instead of silently
+        # restoring the historical eight-attempt floor.  Even a zero budget
+        # must issue the initial request once; it simply disables another
+        # manual attempt after a transient failure.
+        manual_attempts = max(1, int(getattr(self, "_max_retries", 8)))
+        for attempt in range(manual_attempts):
             try:
                 resp = _do_call()
                 break
