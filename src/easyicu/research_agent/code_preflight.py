@@ -214,14 +214,46 @@ def _uses_zero_decimal_count_rendering(tree: ast.Module) -> bool:
 
 
 def _has_integer_like_accounting_guard(tree: ast.Module) -> bool:
-    integer_signals = ("round", "rint", "floor", "mod", "is_integer")
+    def _has_integer_operation(test: ast.AST) -> bool:
+        for candidate in ast.walk(test):
+            if isinstance(candidate, ast.Call):
+                function_name = _call_name(candidate.func).split(".")[-1].lower()
+                if function_name in {"round", "rint", "floor", "mod", "is_integer"}:
+                    return True
+            if isinstance(candidate, ast.BinOp) and isinstance(candidate.op, ast.Mod):
+                return True
+        return False
+
+    def _accounting_identifier(value: object) -> bool:
+        token = str(value or "").strip().lower()
+        if token == "n":
+            return True
+        parts = {part for part in re.split(r"[^a-z0-9]+", token) if part}
+        return bool(parts & {"count", "counts", "numerator", "denominator"})
+
+    def _guard_references_accounting_value(test: ast.AST) -> bool:
+        call_functions = {
+            id(node.func)
+            for node in ast.walk(test)
+            if isinstance(node, ast.Call)
+        }
+        for candidate in ast.walk(test):
+            if id(candidate) in call_functions:
+                continue
+            if isinstance(candidate, ast.Name) and _accounting_identifier(candidate.id):
+                return True
+            if isinstance(candidate, ast.Subscript):
+                key = _subscript_key(candidate.slice)
+                if key is not None and _accounting_identifier(key):
+                    return True
+        return False
+
     for node in ast.walk(tree):
         if not isinstance(node, ast.If):
             continue
-        test_text = ast.unparse(node.test).lower()
-        if not any(signal in test_text for signal in integer_signals):
+        if not _has_integer_operation(node.test):
             continue
-        if not any(token in test_text for token in ("count", "counts", "numerator", "n")):
+        if not _guard_references_accounting_value(node.test):
             continue
         body_text = "\n".join(ast.unparse(statement).lower() for statement in node.body)
         if "raise " in body_text or ".append(" in body_text or "return " in body_text:
