@@ -137,7 +137,12 @@ ROBUSTNESS_EXECUTION_CONTRACT_GUIDANCE = (
     "accepted). If the supplied data cannot execute a locked specification, "
     "emit one honest row with status='not_executable' or 'not_independent', "
     "reportable=false, converged=false, fit_status='not_fitted', null n/effect/CI, "
-    "and a non_executable_reason; do not fabricate a duplicate estimate. "
+    "and a non_executable_reason; do not fabricate a duplicate estimate. In "
+    "particular, a single pre-aggregated outcome scalar per analysis unit cannot "
+    "be re-aggregated to a different time window or first/any rule without "
+    "longitudinal outcome values and timestamps. Such an outcome override must "
+    "be marked not_independent; never refit the unchanged scalar and relabel it "
+    "as the requested override. "
     "Specification or membership declarations are not execution evidence."
 )
 
