@@ -256,6 +256,49 @@ def _structural_integer_findings(
     ]
 
 
+def _subscript_key(node: ast.AST) -> Optional[str]:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
+def _binding_metadata_findings(tree: ast.Module) -> list[ValidationFinding]:
+    required_keys: set[str] = set()
+    literal_keys: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Dict):
+            literal_keys.update(
+                key
+                for key in (_subscript_key(item) for item in node.keys)
+                if key is not None
+            )
+        if not isinstance(node, ast.Subscript):
+            continue
+        outer_key = _subscript_key(node.slice)
+        if outer_key is None or not isinstance(node.value, ast.Subscript):
+            continue
+        inner_key = _subscript_key(node.value.slice)
+        if inner_key == "binding":
+            required_keys.add(outer_key)
+    missing = sorted(required_keys - literal_keys)
+    if not missing:
+        return []
+    return [
+        ValidationFinding(
+            validator="mechanical_code_preflight",
+            severity="error",
+            message=(
+                "Typed-input metadata is read later from a local binding record "
+                "but is never persisted into any constructed binding record."
+            ),
+            detail={
+                "reason": "unpersisted_binding_metadata",
+                "missing_keys": missing,
+            },
+        )
+    ]
+
+
 def audit_mechanical_code_contracts(
     script_text: str,
     step: AnalysisStep,
@@ -292,6 +335,7 @@ def audit_mechanical_code_contracts(
         )
     findings.extend(_structural_filter_findings(tree, step))
     findings.extend(_structural_integer_findings(tree, step))
+    findings.extend(_binding_metadata_findings(tree))
     return findings
 
 
