@@ -16,6 +16,7 @@ Three properties to pin:
 from __future__ import annotations
 
 import json
+import re
 import threading
 from pathlib import Path
 
@@ -57,7 +58,9 @@ def test_evidence_store_concurrent_registers_preserve_every_record(ra, tmp_path)
         t.join()
 
     expected = n_threads * n_per_thread
-    assert len(store.records()) == expected, "lost a record under concurrent registration"
+    assert (
+        len(store.records()) == expected
+    ), "lost a record under concurrent registration"
 
     # Every alias should resolve and point at a unique evidence_id.
     for i in range(n_threads):
@@ -84,7 +87,9 @@ def _critical_findings(manifest_path: Path) -> set:
     return out
 
 
-def test_concurrent_pipeline_matches_sequential_findings(ra, synthetic_cohort, tmp_path):
+def test_concurrent_pipeline_matches_sequential_findings(
+    ra, synthetic_cohort, tmp_path
+):
     """Two pipelines, identical inputs, different ``max_concurrent_steps`` —
     the resulting set of *critical* findings must be identical."""
     seq_dir = tmp_path / "seq"
@@ -94,21 +99,27 @@ def test_concurrent_pipeline_matches_sequential_findings(ra, synthetic_cohort, t
         workdir=str(seq_dir),
         llm=ra.MockLLMClient(),
         max_concurrent_steps=1,
-        enable_literature=False, enable_visual_qa=False,
-        enable_memory=False, enable_latex=False,
+        enable_literature=False,
+        enable_visual_qa=False,
+        enable_memory=False,
+        enable_latex=False,
     )
     par_pipeline = ra.ResearchAgentPipeline(
         workdir=str(par_dir),
         llm=ra.MockLLMClient(),
         max_concurrent_steps=4,
-        enable_literature=False, enable_visual_qa=False,
-        enable_memory=False, enable_latex=False,
+        enable_literature=False,
+        enable_visual_qa=False,
+        enable_memory=False,
+        enable_latex=False,
     )
 
-    seq_result = seq_pipeline.run(skill="association_analysis",
-                                  cohort=synthetic_cohort, database="synthetic")
-    par_result = par_pipeline.run(skill="association_analysis",
-                                  cohort=synthetic_cohort, database="synthetic")
+    seq_result = seq_pipeline.run(
+        skill="association_analysis", cohort=synthetic_cohort, database="synthetic"
+    )
+    par_result = par_pipeline.run(
+        skill="association_analysis", cohort=synthetic_cohort, database="synthetic"
+    )
 
     seq_findings = _critical_findings(Path(seq_result.manifest_path))
     par_findings = _critical_findings(Path(par_result.manifest_path))
@@ -118,18 +129,23 @@ def test_concurrent_pipeline_matches_sequential_findings(ra, synthetic_cohort, t
     )
 
 
-def test_concurrent_pipeline_records_sorted_by_plan_order(ra, synthetic_cohort, tmp_path):
+def test_concurrent_pipeline_records_sorted_by_plan_order(
+    ra, synthetic_cohort, tmp_path
+):
     """Even with workers finishing in any order, ``per_step_records`` in
     the manifest must follow plan order."""
     pipeline = ra.ResearchAgentPipeline(
         workdir=str(tmp_path),
         llm=ra.MockLLMClient(),
         max_concurrent_steps=4,
-        enable_literature=False, enable_visual_qa=False,
-        enable_memory=False, enable_latex=False,
+        enable_literature=False,
+        enable_visual_qa=False,
+        enable_memory=False,
+        enable_latex=False,
     )
-    result = pipeline.run(skill="association_analysis",
-                          cohort=synthetic_cohort, database="synthetic")
+    result = pipeline.run(
+        skill="association_analysis", cohort=synthetic_cohort, database="synthetic"
+    )
 
     # The skill plan begins with table_one and ends with the QC/audit step.
     partial = json.loads(
@@ -138,15 +154,18 @@ def test_concurrent_pipeline_records_sorted_by_plan_order(ra, synthetic_cohort, 
     plan = json.loads(Path(result.plan_path).read_text(encoding="utf-8"))
     plan_step_ids = [s["step_id"] for s in plan["steps"]]
 
-    # The final report sorts records by plan order; the report file
-    # must list step ids in the same sequence.
+    # The final report sorts records by plan order. Inspect only the exact
+    # Step-outcome rows: a raw ``find(step_id)`` also matches figure-contract
+    # paths and parent ids embedded in child ids above this section.
     report_text = Path(result.report_path).read_text(encoding="utf-8")
-    positions = []
-    for sid in plan_step_ids:
-        pos = report_text.find(sid)
-        if pos >= 0:
-            positions.append(pos)
-    assert positions == sorted(positions), (
+    outcomes = report_text.split("## Step outcomes", 1)[1].split("## Findings", 1)[0]
+    outcome_ids = []
+    for line in outcomes.splitlines():
+        match = re.match(r"^- \*\*([^*]+)\*\* — status:", line)
+        if match and match.group(1) != "00_probe":
+            outcome_ids.append(match.group(1))
+    expected_outcome_ids = [sid for sid in plan_step_ids if sid in outcome_ids]
+    assert outcome_ids == expected_outcome_ids, (
         "results_report.md does not list step ids in plan order even though "
         "the pipeline sorted per_step_records before rendering."
     )
@@ -158,7 +177,9 @@ def test_concurrent_pipeline_records_sorted_by_plan_order(ra, synthetic_cohort, 
     assert seen - set(plan_step_ids) <= {"00_probe"}
 
 
-def test_concurrent_default_one_worker_keeps_sequential_path(ra, synthetic_cohort, tmp_path):
+def test_concurrent_default_one_worker_keeps_sequential_path(
+    ra, synthetic_cohort, tmp_path
+):
     """Default ``max_concurrent_steps=1`` must still execute serially —
     we don't want to silently introduce a thread pool for users who
     didn't ask for it."""
@@ -166,12 +187,15 @@ def test_concurrent_default_one_worker_keeps_sequential_path(ra, synthetic_cohor
         workdir=str(tmp_path),
         llm=ra.MockLLMClient(),
         # default: max_concurrent_steps not specified
-        enable_literature=False, enable_visual_qa=False,
-        enable_memory=False, enable_latex=False,
+        enable_literature=False,
+        enable_visual_qa=False,
+        enable_memory=False,
+        enable_latex=False,
     )
     assert pipeline._max_concurrent_steps == 1
-    result = pipeline.run(skill="association_analysis",
-                          cohort=synthetic_cohort, database="synthetic")
+    result = pipeline.run(
+        skill="association_analysis", cohort=synthetic_cohort, database="synthetic"
+    )
     # If the default broke, the run wouldn't even produce a manifest.
     assert Path(result.manifest_path).exists()
 

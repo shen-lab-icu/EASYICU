@@ -350,7 +350,9 @@ def validate_cohort_definition(definition: CohortDefinition) -> None:
         validate_concept_predicate(pred)
 
 
-def expand_named_cohort(name: str, registry: Optional[PatternRegistry] = None) -> CohortDefinition:
+def expand_named_cohort(
+    name: str, registry: Optional[PatternRegistry] = None
+) -> CohortDefinition:
     definition = (registry or _DEFAULT_PATTERN_REGISTRY).expand(name)
     validate_cohort_definition(definition)
     return definition
@@ -410,8 +412,21 @@ def _load_locked_cohort_definition(run_dir: Path) -> CohortDefinition:
             evidence_id="cohort_locked",
             label="cohort definition lock",
         )
-    except LockAuthorityError as exc:
-        raise CohortSchemaError(str(exc)) from exc
+    except LockAuthorityError as original_exc:
+        # A probe-only initial plan may have locked an empty placeholder before
+        # the Planner supplied its first real cohort definition in a substantive
+        # replan.  That one-way promotion is anchored under an id derived from
+        # the promoted scientific digest; arbitrary lock rewrites still fail.
+        revision_id = f"cohort_locked_revision_{observed_sha[:8]}"
+        try:
+            assert_lock_matches_evidence_anchor(
+                run_dir=run_dir,
+                lock_path=path,
+                evidence_id=revision_id,
+                label="promoted cohort definition lock",
+            )
+        except LockAuthorityError as revision_exc:
+            raise CohortSchemaError(str(original_exc)) from revision_exc
     return definition
 
 
@@ -422,6 +437,7 @@ def write_locked_cohort_definition(
     evidence: Any,
     prompt_pack_version: Optional[str],
     llm_signature: str,
+    allow_empty_promotion: bool = False,
 ) -> Path:
     definition = coerce_cohort_definition(getattr(plan, "cohort", None))
     if definition is None:
@@ -438,9 +454,10 @@ def write_locked_cohort_definition(
             )
         except LockAuthorityError as exc:
             raise CohortSchemaError(str(exc)) from exc
-        if repair is not None and evidence.get(
-            "cohort_lock_resume_rehydration"
-        ) is None:
+        if (
+            repair is not None
+            and evidence.get("cohort_lock_resume_rehydration") is None
+        ):
             evidence.register_json(
                 kind="log",
                 description=(
@@ -457,13 +474,59 @@ def write_locked_cohort_definition(
                 metadata={"llm_signature": llm_signature},
             )
         locked_definition = _load_locked_cohort_definition(run_dir)
-        if cohort_definition_sha(definition) != cohort_definition_sha(
-            locked_definition
-        ):
-            raise CohortSchemaError(
-                "cohort definition changed after plan lock; refusing to overwrite "
-                "the pre-specified execution contract"
+        definition_sha = cohort_definition_sha(definition)
+        locked_sha = cohort_definition_sha(locked_definition)
+        if definition_sha != locked_sha:
+            locked_is_empty = not (
+                locked_definition.inclusion or locked_definition.exclusion
             )
+            definition_is_real = bool(definition.inclusion or definition.exclusion)
+            if not (allow_empty_promotion and locked_is_empty and definition_is_real):
+                raise CohortSchemaError(
+                    "cohort definition changed after plan lock; refusing to overwrite "
+                    "the pre-specified execution contract"
+                )
+
+            # Preserve both authorities: the original empty plan-time lock stays
+            # immutable in evidence, while the first real Agent-authored cohort
+            # is registered as a digest-named revision before it becomes the live
+            # execution lock.  No non-empty lock can ever be promoted again.
+            payload = {
+                "schema_version": "easyicu.cohort_definition/1",
+                "locked_at": datetime.now(timezone.utc).isoformat(),
+                "cohort_sha256": definition_sha,
+                "cohort": definition.to_dict(),
+            }
+            revision_id = f"cohort_locked_revision_{definition_sha[:8]}"
+            revision_path = run_dir / f"{revision_id}.json"
+            revision_path.write_text(
+                json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+            evidence.register_file(
+                kind="log",
+                description=(
+                    "First substantive cohort definition promoted from the "
+                    "probe-only empty plan lock."
+                ),
+                source_path=revision_path,
+                evidence_id=revision_id,
+                producer="replanner",
+                generation_mode="llm",
+                prompt_pack_version=prompt_pack_version,
+                metadata={
+                    "llm_signature": llm_signature,
+                    "promotes_empty_lock": True,
+                    "supersedes_evidence_id": "cohort_locked",
+                },
+            )
+            from .evidence import _atomic_write_bytes
+
+            _atomic_write_bytes(
+                path,
+                revision_path.read_bytes(),
+                expected_root=Path(run_dir).resolve(),
+            )
+            return path
         if evidence.get("cohort_locked") is None:
             evidence.register_file(
                 kind="log",
@@ -647,7 +710,9 @@ def build_cohort(definition: CohortDefinition, data: Any = None) -> Any:
     try:
         import pandas as pd  # type: ignore
     except Exception as exc:  # pragma: no cover - pandas is a project dependency
-        raise NotImplementedError("pandas is required for CTAS dataframe filtering") from exc
+        raise NotImplementedError(
+            "pandas is required for CTAS dataframe filtering"
+        ) from exc
 
     if not isinstance(data, pd.DataFrame):
         raise TypeError("build_cohort data must be a pandas DataFrame")
@@ -755,7 +820,9 @@ def _predicate_mask(data: Any, pred: ConceptPredicate) -> Any:
     return _refine_occurrence_mask_by_event_time(data, pred, mask)
 
 
-def _refine_occurrence_mask_by_event_time(data: Any, pred: ConceptPredicate, mask: Any) -> Any:
+def _refine_occurrence_mask_by_event_time(
+    data: Any, pred: ConceptPredicate, mask: Any
+) -> Any:
     """Intersect an event-occurrence predicate with its event-time window.
 
     ``build_cohort`` filters an already-materialised wide table and, by design,
@@ -787,7 +854,9 @@ def _refine_occurrence_mask_by_event_time(data: Any, pred: ConceptPredicate, mas
     if event_time_col not in data.columns:
         return mask
     event_time = data[event_time_col]
-    in_window = (event_time >= float(tw.start_offset_hours)) & (event_time <= float(end))
+    in_window = (event_time >= float(tw.start_offset_hours)) & (
+        event_time <= float(end)
+    )
     # NaN event time (no event) -> not in window; keep the row's occurrence flag
     # from deciding membership only when the event genuinely falls in the window.
     try:

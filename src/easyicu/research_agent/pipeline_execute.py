@@ -222,9 +222,7 @@ logger = logging.getLogger(__name__)
 _STANDARD_EXECUTOR_INTERNAL_PENDING_ARTIFACTS = frozenset(
     {".cluster_stability_assignments.pending.csv"}
 )
-_FIGURE_CONTRACT_SOURCE_DATA_SCHEMA_REPAIR_ID = (
-    "figure_contract_source_data_schema_v1"
-)
+_FIGURE_CONTRACT_SOURCE_DATA_SCHEMA_REPAIR_ID = "figure_contract_source_data_schema_v1"
 
 
 def _remove_standard_executor_pending_artifacts(out_dir: Path) -> None:
@@ -1767,9 +1765,11 @@ def _declared_sensitivity_csv_paths(
                 denominator_paths.append(path)
     for values in (
         output_files if isinstance(output_files, list) else [],
-        step_summary.get("outputs")
-        if isinstance(step_summary.get("outputs"), list)
-        else [],
+        (
+            step_summary.get("outputs")
+            if isinstance(step_summary.get("outputs"), list)
+            else []
+        ),
     ):
         for value in values:
             path = _local_csv(value)
@@ -3901,6 +3901,7 @@ def run_execute_phase(
                 evidence=evidence,
                 prompt_pack_version=prompt_version,
                 llm_signature=llm_signature,
+                allow_empty_promotion=True,
             )
             result = materialize_locked_analysis_cohort(
                 run_dir=run_dir,
@@ -3929,8 +3930,16 @@ def run_execute_phase(
             target_outcome=context.target_outcome,
             universe_path=universe_path,
         )
+        cohort_product_steps = [
+            step
+            for step in candidate_plan.steps
+            if set(step.expected_outputs or []) == {"table:analysis_cohort"}
+        ]
+        cohort_product_step = (
+            cohort_product_steps[0] if len(cohort_product_steps) == 1 else None
+        )
         try:
-            evidence.register_file(
+            cohort_record = evidence.register_file(
                 kind="table",
                 description=(
                     "Analysis cohort materialised from the agent's prose 纳排, "
@@ -3938,13 +3947,40 @@ def run_execute_phase(
                 ),
                 source_path=cohort_path,
                 evidence_id="analysis_cohort_execute_repair",
+                produced_by_step=(
+                    cohort_product_step.step_id if cohort_product_step else None
+                ),
                 producer="cohort_repair",
                 generation_mode="llm",
                 prompt_pack_version=prompt_version,
                 metadata={"llm_signature": llm_signature, "reason": reason},
             )
         except ValueError:
-            pass
+            cohort_record = evidence.get("analysis_cohort_execute_repair")
+        if cohort_product_step is not None and cohort_record is not None:
+            # The deterministic materialiser has completely realised this
+            # single-product step using the cohort the Agent selected.  Record
+            # that product under the planned producer and do not ask the Coder
+            # to recreate or reinterpret the cohort scientifically.
+            per_step_records.append(
+                {
+                    "step_id": cohort_product_step.step_id,
+                    "intent": cohort_product_step.intent,
+                    "status": "ok",
+                    "generation_mode": "deterministic_cohort_materializer",
+                    "step_summary": {
+                        "output_files": {
+                            "table:analysis_cohort": str(
+                                cohort_path.relative_to(run_dir)
+                            )
+                        },
+                        "n_universe": int(result["n_universe"]),
+                        "n_analysis_cohort": int(result["n_cohort"]),
+                    },
+                    "evidence_ids": [cohort_record.evidence_id],
+                }
+            )
+            preexecuted_step_ids.add(cohort_product_step.step_id)
         findings.append(
             ValidationFinding(
                 validator="cohort_materializer",
@@ -5902,7 +5938,10 @@ else:
                             detail={
                                 "step_id": step.step_id,
                                 "deterministic_error_validators": sorted(
-                                    {finding.validator for finding in deterministic_errors}
+                                    {
+                                        finding.validator
+                                        for finding in deterministic_errors
+                                    }
                                 ),
                             },
                         )
@@ -5928,9 +5967,12 @@ else:
                         cached_findings = llm_concept_audit_cache.get(audit_key)
                         if cached_findings is not None:
                             code_findings.extend(cached_findings)
-                            step_record["llm_concept_audit_cache_hits"] = int(
-                                step_record.get("llm_concept_audit_cache_hits") or 0
-                            ) + 1
+                            step_record["llm_concept_audit_cache_hits"] = (
+                                int(
+                                    step_record.get("llm_concept_audit_cache_hits") or 0
+                                )
+                                + 1
+                            )
                         else:
                             llm_findings = llm_concept_auditor.audit(
                                 context=context,
@@ -8251,9 +8293,7 @@ else:
         figure_role = (
             "publication_figure"
             if publication_step
-            else "analysis_figure"
-            if _step_expects_figure(step)
-            else None
+            else "analysis_figure" if _step_expects_figure(step) else None
         )
         if (
             publication_step
@@ -9288,10 +9328,10 @@ else:
                     f"{step.step_id}."
                     if step_record["status"] == "critic_failed"
                     else (
-                    f"Step {step_current}/{total_steps} could not retire its "
-                    f"quarantine: {step.step_id}."
-                    if step_record["status"] == "blocked_quarantine_cleanup"
-                    else f"Step {step_current}/{total_steps} complete: {step.step_id}."
+                        f"Step {step_current}/{total_steps} could not retire its "
+                        f"quarantine: {step.step_id}."
+                        if step_record["status"] == "blocked_quarantine_cleanup"
+                        else f"Step {step_current}/{total_steps} complete: {step.step_id}."
                     )
                 )
             ),
@@ -9503,9 +9543,7 @@ else:
     if (
         not trajectory_plan_blocked
         and not typed_plan_dag_blocked
-        and trajectory_plan_contract_applies(
-        plan=plan, context=context
-        )
+        and trajectory_plan_contract_applies(plan=plan, context=context)
     ):
         run_level_trajectory_findings = trajectory_bundle_findings(
             context=context,

@@ -78,6 +78,7 @@ def test_pipeline_end_to_end_synthetic_cohort(ra, synthetic_cohort, tmp_path: Pa
     plan_by_id = {step["step_id"]: step for step in plan["steps"]}
     parent = plan_by_id["04_primary_association"]
     figure_child = plan_by_id["04_primary_association_figure"]
+    assert parent["method"] in {"association_analysis", "logistic_regression"}
     assert figure_child["method"] == "visualization"
     assert figure_child["inputs"] == [
         output
@@ -4753,7 +4754,9 @@ def test_plan_cap_drops_figure_when_its_typed_source_closure_exceeds_cap(ra):
     capped, findings = _cap_plan_preserving_figure_steps(plan=with_figure, cap=4)
 
     assert len(capped.steps) == 4
-    assert not any("publication_figure_fallback" in step.step_id for step in capped.steps)
+    assert not any(
+        "publication_figure_fallback" in step.step_id for step in capped.steps
+    )
     assert {output for step in capped.steps for output in step.expected_outputs} == {
         "table:t1",
         "table:t2",
@@ -9724,7 +9727,7 @@ def test_step_contract_findings_accepts_textual_or_summary(ra):
                 "notes": [
                     "Association estimate with lactate: OR=1.219 (95% CI 1.116-1.332)."
                 ]
-            }
+            },
         },
     )
     assert [f for f in findings if f.severity == "error"] == []

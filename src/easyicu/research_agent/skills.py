@@ -65,7 +65,9 @@ class ClinicalSkill:
         # ``database`` is required (no default) so no specific source key leaks
         # into a reusable skill's question text; the caller supplies it from the
         # active ResearchContext.database.
-        return self.research_question_template.format(database=database, **self.__dict__)
+        return self.research_question_template.format(
+            database=database, **self.__dict__
+        )
 
     def validate_against(self, df: pd.DataFrame) -> List[str]:
         """Return a list of human-readable issues; empty list means OK."""
@@ -170,7 +172,9 @@ def _preference_rationale_note(context: ResearchContext) -> Optional[str]:
     if prefs.evaluation_focus:
         fragments.append(f"Prioritize evaluation focus: {prefs.evaluation_focus}.")
     if prefs.subgroup_sensitivity:
-        fragments.append(f"Include subgroup/sensitivity requests: {prefs.subgroup_sensitivity}.")
+        fragments.append(
+            f"Include subgroup/sensitivity requests: {prefs.subgroup_sensitivity}."
+        )
     if prefs.timing_and_design:
         fragments.append(f"Honor timing/design constraints: {prefs.timing_and_design}.")
     if prefs.data_constraints:
@@ -178,7 +182,9 @@ def _preference_rationale_note(context: ResearchContext) -> Optional[str]:
     if prefs.must_have_outputs:
         fragments.append(f"Must-have outputs: {prefs.must_have_outputs}.")
     if prefs.covariates:
-        fragments.append("User-specified covariates: " + ", ".join(prefs.covariates) + ".")
+        fragments.append(
+            "User-specified covariates: " + ", ".join(prefs.covariates) + "."
+        )
     if prefs.extra_notes:
         fragments.append(f"Additional user notes: {prefs.extra_notes}.")
     return " ".join(fragments) or None
@@ -217,7 +223,9 @@ def _looks_like_quality_only_question(
     text = _question_text(context)
     if not _contains_hint(text, _QUALITY_HINTS):
         return False
-    if _contains_hint(text, _ASSOCIATION_HINTS) or _contains_hint(text, _OUTCOME_RATE_HINTS):
+    if _contains_hint(text, _ASSOCIATION_HINTS) or _contains_hint(
+        text, _OUTCOME_RATE_HINTS
+    ):
         return False
     if primary_predictor and target_outcome:
         explicit_no_effect = (
@@ -248,7 +256,8 @@ def _has_covariate_context(
     }
     descriptors = _candidate_descriptors(context, candidate_variables)
     others = [
-        v for v in descriptors
+        v
+        for v in descriptors
         if v.name not in {primary_predictor, target_outcome}
         and v.role in descriptive_roles
     ]
@@ -326,10 +335,16 @@ def should_include_missingness_audit(
             or miss.missingness_severity in {"medium", "high"}
         ):
             return True
-        if descriptor.missingness_semantics and "missing" in descriptor.missingness_semantics.lower():
+        if (
+            descriptor.missingness_semantics
+            and "missing" in descriptor.missingness_semantics.lower()
+        ):
             return True
         joined_pitfalls = " ".join(descriptor.pitfalls).lower()
-        if any(token in joined_pitfalls for token in ("missing", "unmeasured", "measured", "mnar")):
+        if any(
+            token in joined_pitfalls
+            for token in ("missing", "unmeasured", "measured", "mnar")
+        ):
             return True
     return False
 
@@ -359,10 +374,15 @@ def build_dynamic_core_plan_steps(
     rationale_note: Optional[str] = None,
     analysis_type_key: Optional[str] = None,
 ) -> List[AnalysisStep]:
-    variables = list(candidate_variables or [v.name for v in context.variables if v.role != VariableRole.ID])
+    variables = list(
+        candidate_variables
+        or [v.name for v in context.variables if v.role != VariableRole.ID]
+    )
     steps: List[AnalysisStep] = []
     preference_note = _preference_rationale_note(context)
-    combined_rationale = " ".join(part for part in (rationale_note, preference_note) if part)
+    combined_rationale = " ".join(
+        part for part in (rationale_note, preference_note) if part
+    )
     analysis_type = (
         get_analysis_type(analysis_type_key)
         if analysis_type_key
@@ -408,7 +428,10 @@ def build_dynamic_core_plan_steps(
                     step_id="02_outcome_incidence",
                     intent=f"Incidence of {target_outcome} in the {scope_label}.",
                     inputs=[target_outcome],
-                    expected_outputs=["table:outcome_incidence", "statistic:outcome_rate"],
+                    expected_outputs=[
+                        "table:outcome_incidence",
+                        "statistic:outcome_rate",
+                    ],
                     method="incidence",
                 )
             )
@@ -425,7 +448,10 @@ def build_dynamic_core_plan_steps(
                         f"Missingness audit for the descriptive dataset used in the {scope_label}."
                     ),
                     inputs=variables,
-                    expected_outputs=["table:missingness", "figure:missingness_heatmap"],
+                    expected_outputs=[
+                        "table:missingness",
+                        "figure:missingness_heatmap",
+                    ],
                     method="missingness",
                     icu_rule_refs=["missingness_kind"],
                 )
@@ -461,7 +487,10 @@ def build_dynamic_core_plan_steps(
                     step_id="02_outcome_incidence",
                     intent=f"Outcome incidence for {target_outcome} before the advanced {analysis_type.name.lower()} workflow.",
                     inputs=[target_outcome],
-                    expected_outputs=["table:outcome_incidence", "statistic:outcome_rate"],
+                    expected_outputs=[
+                        "table:outcome_incidence",
+                        "statistic:outcome_rate",
+                    ],
                     method="incidence",
                 )
             )
@@ -478,7 +507,10 @@ def build_dynamic_core_plan_steps(
                         f"Missingness audit before the advanced {analysis_type.name.lower()} workflow."
                     ),
                     inputs=variables,
-                    expected_outputs=["table:missingness", "figure:missingness_heatmap"],
+                    expected_outputs=[
+                        "table:missingness",
+                        "figure:missingness_heatmap",
+                    ],
                     method="missingness",
                     icu_rule_refs=["missingness_kind"],
                 )
@@ -596,7 +628,10 @@ def build_dynamic_core_plan_steps(
                     step_id="02_outcome_incidence",
                     intent=f"Outcome incidence for {target_outcome} before the advanced {analysis_type.name.lower()} workflow.",
                     inputs=[target_outcome],
-                    expected_outputs=["table:outcome_incidence", "statistic:outcome_rate"],
+                    expected_outputs=[
+                        "table:outcome_incidence",
+                        "statistic:outcome_rate",
+                    ],
                     method="incidence",
                 )
             )
@@ -613,7 +648,10 @@ def build_dynamic_core_plan_steps(
                         f"Missingness audit before the advanced {analysis_type.name.lower()} workflow."
                     ),
                     inputs=variables,
-                    expected_outputs=["table:missingness", "figure:missingness_heatmap"],
+                    expected_outputs=[
+                        "table:missingness",
+                        "figure:missingness_heatmap",
+                    ],
                     method="missingness",
                     icu_rule_refs=["missingness_kind"],
                 )
@@ -707,7 +745,11 @@ def build_dynamic_core_plan_steps(
                     "figure:primary_association_curve",
                     "statistic:primary_or",
                 ],
-                method="logistic_regression_or_kaplan_meier",
+                # This deterministic fallback declares only the scientific
+                # method family. The Planner/Coder still owns the concrete
+                # estimator; an ``A_or_B`` placeholder is not a closed method
+                # contract and must not be used to authorize effect outputs.
+                method="association_analysis",
                 icu_rule_refs=["aggregation_rule_for"],
             )
         )
