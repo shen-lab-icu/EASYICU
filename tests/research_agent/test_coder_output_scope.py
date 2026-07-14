@@ -85,6 +85,8 @@ def test_coder_repair_requires_standard_helper_after_sparse_event_diagnosis(ra):
     assert "DIAGNOSED SPARSE-EVENT REPAIR (binding)" in prompt
     assert "methods.source_status.reconcile_binary_event_presence" in prompt
     assert "Do not replace those columns" in prompt
+    assert "fail closed if any returned value is missing" in prompt
+    assert "never publish a completed exposure artefact" in prompt
 
 
 def test_coder_repair_preserves_standard_helper_across_later_traceback(ra):

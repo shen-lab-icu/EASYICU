@@ -1695,8 +1695,13 @@ def _repair_specialization(*, run_log: str, code: str) -> str:
         "`values`, `audit`, and `status_table` directly. Do not replace those "
         "columns, rebuild custom masks, silently numeric-coerce original "
         "representative values, or change the exposure, cohort, outcome, or "
-        "model. The helper is the documented project-local import authorized "
-        "for this diagnosed contract.\n"
+        "model. Treat the helper's `values` contract as complete binary 0/1: "
+        "explicitly fail closed if any returned value is missing or outside "
+        "{0, 1}, and never publish a completed exposure artefact from an "
+        "exception, unavailable branch, or incomplete result. Do not write a "
+        "validation mask that accepts NaN as a valid binary exposure. The "
+        "helper is the documented project-local import authorized for this "
+        "diagnosed contract.\n"
     )
 
 
