@@ -1854,6 +1854,8 @@ def _repair_specialization(
         "primary exposure definition must be a mapping or tabular input",
         "sparse event reconciliation can be authorized from a hardcoded fallback",
         "authoritative primary exposure fallback",
+        "row aligned exposure table branch bypasses binary event validation",
+        "row aligned exposure table branch bypasses binary event validation and provenance reconciliation",
     )
     if any(signal in normalized for signal in tabular_exposure_product_signals):
         selected_exposure = json.dumps(
@@ -1870,7 +1872,13 @@ def _repair_specialization(
             "or demand mapping-only metadata fields from a finalized row-aligned "
             "artifact that already passed its producer gate. Keep SHA-bound typed-"
             "input loading and row alignment intact, and fail closed if the exact "
-            "planner-selected column is absent. The current planner-selected exposure "
+            "planner-selected column is absent. Before any integer/boolean cast, "
+            "fail closed unless every finalized exposure value is non-missing, "
+            "finite, and exactly in {0, 1}; never let a fractional value be truncated. "
+            "Verify row alignment using the artifact's stable row key or exact index, "
+            "and retain the separate bidirectional count/measured provenance audit. "
+            "These checks validate the locked exposure without redefining it. The "
+            "current planner-selected exposure "
             f"fact is: {selected_exposure}.\n"
         )
 
