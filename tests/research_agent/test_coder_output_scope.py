@@ -275,6 +275,32 @@ def test_coder_repair_removes_untraceable_figure_audit_columns(ra):
     assert "Keep such checks internal" in prompt
 
 
+def test_coder_repair_fail_closes_partial_structural_accounting_figure(ra):
+    llm = _RecordingLLM()
+    step = ra.AnalysisStep(
+        step_id="cohort_accounting_figure",
+        intent="Render the declared cohort-accounting figure.",
+        inputs=["table:cohort_accounting"],
+        expected_outputs=["figure:cohort_accounting"],
+        method="visualization",
+    )
+
+    CoderAgent(llm).repair(
+        context=_context(ra),
+        step=step,
+        code="valid_rows = frame.loc[valid_mask].copy()\n",
+        run_log=(
+            "Renders a partial cohort flow after excluding invalid source rows."
+        ),
+    )
+
+    prompt = llm.messages[-1].content
+    assert "DIAGNOSED STRUCTURAL-ACCOUNTING FIGURE REPAIR" in prompt
+    assert "Validate every required label, count, denominator" in prompt
+    assert "keep figure_files empty" in prompt
+    assert "do not change the cohort" in prompt
+
+
 def test_coder_repair_preserves_ordinal_covariate_without_linearizing_it(ra):
     llm = _RecordingLLM()
     step = ra.AnalysisStep(
