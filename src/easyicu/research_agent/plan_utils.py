@@ -76,6 +76,83 @@ from .trajectory_contract import (
 from .trajectory_plan_contract import trajectory_plan_contract_applies
 
 
+_WIDE_MEASUREMENT_VALUE_SUFFIXES = (
+    "_median",
+    "_first",
+    "_last",
+    "_mean",
+    "_max",
+    "_min",
+    "_sum",
+)
+
+
+def _augment_measurement_companion_inputs(
+    *,
+    plan: AnalysisPlan,
+    context: ResearchContext,
+) -> tuple[AnalysisPlan, List[ValidationFinding]]:
+    """Close structural provenance inputs for selected wide summaries.
+
+    The planner remains the owner of which clinical values a step analyzes.
+    Once it selects a registered per-stay summary, however, its exact count and
+    measured companions are provenance inputs rather than new scientific
+    choices. Add only companions that actually exist in ResearchContext and
+    never infer a concept by fuzzy matching.
+    """
+
+    available = {str(variable.name) for variable in context.variables}
+    revised_steps: List[AnalysisStep] = []
+    additions_by_step: Dict[str, List[str]] = {}
+    for step in plan.steps or []:
+        inputs = [str(value) for value in (step.inputs or [])]
+        seen = set(inputs)
+        additions: List[str] = []
+        for input_name in list(inputs):
+            if ":" in input_name:
+                continue
+            suffix = next(
+                (
+                    candidate
+                    for candidate in _WIDE_MEASUREMENT_VALUE_SUFFIXES
+                    if input_name.endswith(candidate)
+                ),
+                None,
+            )
+            if suffix is None:
+                continue
+            base = input_name[: -len(suffix)]
+            if not base:
+                continue
+            for companion in (f"{base}_measured", f"{base}_n"):
+                if companion in available and companion not in seen:
+                    inputs.append(companion)
+                    additions.append(companion)
+                    seen.add(companion)
+        if additions:
+            additions_by_step[str(step.step_id)] = additions
+            revised_steps.append(step.model_copy(update={"inputs": inputs}))
+        else:
+            revised_steps.append(step)
+
+    if not additions_by_step:
+        return plan, []
+    revised = plan.model_copy(update={"steps": revised_steps})
+    finding = ValidationFinding(
+        validator="planner_input_closure",
+        severity="info",
+        message=(
+            "Added registered count/measured provenance companions for "
+            "planner-selected per-stay measurement summaries."
+        ),
+        detail={
+            "reason": "measurement_companion_input_closure",
+            "added_inputs_by_step": additions_by_step,
+        },
+    )
+    return revised, [finding]
+
+
 def _problematic_metric_keys(
     payload: Any,
     fragments: Sequence[str],
