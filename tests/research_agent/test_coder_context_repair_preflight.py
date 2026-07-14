@@ -337,6 +337,70 @@ def render(bindings):
     )
 
 
+def test_mechanical_preflight_blocks_nonterminating_provenance_audit(ra):
+    code = """
+def provenance_audit(frame):
+    checks = [{
+        'role': 'audit_only',
+        'invalid_pair_n': 1,
+        'discordant_n': 0,
+    }]
+    failed = any(
+        check.get('invalid_pair_n', 0) > 0
+        or check.get('discordant_n', 0) > 0
+        for check in checks
+    )
+    return {
+        'fail_closed': failed,
+        'completed_step_allowed': not failed,
+        'checks': checks,
+    }
+
+audit = provenance_audit(frame)
+model.fit(frame)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_accepts_terminating_provenance_guard(ra):
+    code = """
+def provenance_audit(frame):
+    checks = [{
+        'role': 'audit_only',
+        'invalid_pair_n': 0,
+        'discordant_n': 0,
+    }]
+    failed = any(
+        check.get('invalid_pair_n', 0) > 0
+        or check.get('discordant_n', 0) > 0
+        for check in checks
+    )
+    return {
+        'fail_closed': failed,
+        'completed_step_allowed': not failed,
+        'checks': checks,
+    }
+
+audit = provenance_audit(frame)
+if audit['fail_closed']:
+    raise ValueError('invalid measurement provenance')
+model.fit(frame)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
 def test_llm_concept_audit_cache_reuses_identical_digest(tmp_path, ra):
     context = _context(ra)
     step = _figure_step(ra)

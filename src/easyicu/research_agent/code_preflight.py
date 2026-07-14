@@ -331,6 +331,103 @@ def _binding_metadata_findings(tree: ast.Module) -> list[ValidationFinding]:
     ]
 
 
+_PROVENANCE_FAILURE_KEYS = frozenset({"invalid_pair_n", "discordant_n"})
+_PROVENANCE_DECISION_KEYS = frozenset(
+    {"fail_closed", "completed_step_allowed", "provenance_valid"}
+)
+
+
+def _literal_string_tokens(node: ast.AST) -> set[str]:
+    return {
+        str(candidate.value).strip().lower()
+        for candidate in ast.walk(node)
+        if isinstance(candidate, ast.Constant) and isinstance(candidate.value, str)
+    }
+
+
+def _referenced_names(node: ast.AST) -> set[str]:
+    return {
+        candidate.id
+        for candidate in ast.walk(node)
+        if isinstance(candidate, ast.Name)
+    }
+
+
+def _directly_raises(statements: list[ast.stmt]) -> bool:
+    return any(isinstance(statement, ast.Raise) for statement in statements)
+
+
+def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding]:
+    """Require a terminating guard for an implemented provenance failure audit."""
+
+    marker_functions = {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and _PROVENANCE_FAILURE_KEYS <= _literal_string_tokens(node)
+        and "audit_only" in _literal_string_tokens(node)
+    }
+    if not marker_functions:
+        return []
+
+    derived_names: set[str] = set()
+    result_names: set[str] = set()
+    assignments: list[tuple[set[str], ast.AST]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)) or node.value is None:
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        target_names = {
+            target.id for target in targets if isinstance(target, ast.Name)
+        }
+        if not target_names:
+            continue
+        assignments.append((target_names, node.value))
+        if isinstance(node.value, ast.Call) and _call_name(node.value.func) in marker_functions:
+            result_names.update(target_names)
+
+    changed = True
+    while changed:
+        changed = False
+        for target_names, value in assignments:
+            value_tokens = _literal_string_tokens(value)
+            value_names = _referenced_names(value)
+            if not (
+                value_tokens & (_PROVENANCE_FAILURE_KEYS | _PROVENANCE_DECISION_KEYS)
+                or value_names & derived_names
+            ):
+                continue
+            new_names = target_names - derived_names
+            if new_names:
+                derived_names.update(new_names)
+                changed = True
+
+    guard_names = derived_names | result_names
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If) or not _directly_raises(node.body):
+            continue
+        test_tokens = _literal_string_tokens(node.test)
+        test_names = _referenced_names(node.test)
+        if test_names & guard_names and (
+            test_names & derived_names
+            or test_tokens & _PROVENANCE_DECISION_KEYS
+        ):
+            return []
+
+    return [
+        ValidationFinding(
+            validator="mechanical_code_preflight",
+            severity="error",
+            message=(
+                "A measurement-provenance audit records invalid or discordant "
+                "pairs but does not fail the completed step before scientific "
+                "outputs can be published."
+            ),
+            detail={"reason": "provenance_audit_not_fail_closed"},
+        )
+    ]
+
+
 def audit_mechanical_code_contracts(
     script_text: str,
     step: AnalysisStep,
@@ -368,6 +465,7 @@ def audit_mechanical_code_contracts(
     findings.extend(_structural_filter_findings(tree, step))
     findings.extend(_structural_integer_findings(tree, step))
     findings.extend(_binding_metadata_findings(tree))
+    findings.extend(_provenance_fail_closed_findings(tree))
     return findings
 
 
