@@ -1369,8 +1369,16 @@ def _step_status_from_contract_findings(
     contract_findings: Sequence[ValidationFinding],
     figure_source_findings: Sequence[ValidationFinding],
     stat_findings: Sequence[ValidationFinding],
+    critique_status: Optional[str] = None,
 ) -> str:
-    """Map deterministic contract errors to the outer step status."""
+    """Map deterministic review failures to the outer step status.
+
+    A Critic ``needs_revision`` decision is not a successful scientific step.
+    Contract validation normally catches objective defects early enough for an
+    in-run coder repair, but the Critic is the final independent review layer;
+    its negative decision must therefore remain fail-closed rather than being
+    stored as a warning on an otherwise ``ok`` record.
+    """
 
     has_contract_error = any(
         finding.severity == "error"
@@ -1384,7 +1392,14 @@ def _step_status_from_contract_findings(
             ]
         )
     )
-    return "contract_failed" if has_contract_error else "ok"
+    if has_contract_error:
+        return "contract_failed"
+    if str(critique_status or "").strip().lower() in {
+        "needs_revision",
+        "blocked",
+    }:
+        return "critic_failed"
+    return "ok"
 
 
 _LOCKED_MEASUREMENT_DATA_QUALITY_ISSUES = frozenset(
@@ -1471,10 +1486,57 @@ def _read_locked_robustness_spec_dicts(run_dir: Path) -> List[Dict[str, Any]]:
     return [dict(spec) for spec in raw_specs if isinstance(spec, dict)]
 
 
+_AGENT_OWNED_ROBUSTNESS_RESULT_METHODS = frozenset(
+    {
+        "cohort_definition_sensitivity",
+        "prespecified_robustness_analysis",
+    }
+)
+_AGENT_OWNED_ROBUSTNESS_RESULT_PRODUCTS = frozenset(
+    {
+        "cohort_definition_overlap_attrition",
+        "cohort_overlap_and_attrition",
+        "complete_case_n",
+        "missingness_strategy_notes",
+        "primary_or",
+        "robustness_grid",
+        "robustness_matrix",
+        "robustness_summary",
+        "sensitivity_comparison",
+        "sensitivity_specification_matrix",
+    }
+)
+
+
 def _is_cohort_definition_sensitivity_result_step(step: AnalysisStep) -> bool:
-    return _method_head(
-        str(step.method or "")
-    ) == "cohort_definition_sensitivity" and not _step_expects_figure(step)
+    """Return true for an agent-owned, plan-locked robustness result step.
+
+    This predicate attaches specifications and validation; it does *not*
+    dispatch a deterministic runner.  Ownership requires an exact controlled
+    method head and a closed structured-product set so prose, step ids, or one
+    stray robustness keyword cannot opt an unrelated analysis into the gate.
+    """
+
+    if _step_expects_figure(step):
+        return False
+    if _method_head(str(step.method or "")) not in (
+        _AGENT_OWNED_ROBUSTNESS_RESULT_METHODS
+    ):
+        return False
+    products = _closed_auxiliary_output_products(
+        step.expected_outputs or [],
+        supported_products=_AGENT_OWNED_ROBUSTNESS_RESULT_PRODUCTS,
+    )
+    return products is not None and bool(
+        products
+        & {
+            "robustness_grid",
+            "robustness_matrix",
+            "robustness_summary",
+            "sensitivity_comparison",
+            "sensitivity_specification_matrix",
+        }
+    )
 
 
 def _coder_context_with_locked_robustness_specs(
@@ -1537,9 +1599,11 @@ def _declared_sensitivity_csv_paths(
     """Return declared spec-table paths and denominator-table paths."""
 
     spec_roles = {
+        "table:robustness_grid",
         "table:sensitivity_specification_matrix",
         "table:robustness_summary",
         "table:robustness_matrix",
+        "robustness_grid",
         "sensitivity_specification_matrix",
         "robustness_summary",
         "robustness_matrix",
@@ -1551,6 +1615,7 @@ def _declared_sensitivity_csv_paths(
         "cohort_overlap_and_attrition",
     }
     spec_names = {
+        "robustness_grid.csv",
         "sensitivity_specification_matrix.csv",
         "robustness_summary.csv",
         "robustness_matrix.csv",
@@ -8696,6 +8761,7 @@ else:
             findings=validator_messages,
         )
         critique = local_runtime_state.critique
+        critique_findings: List[ValidationFinding] = []
         if critique is not None:
             critique_path = run_result.out_dir / "critique_report.json"
             critique_path.write_text(
@@ -8716,26 +8782,28 @@ else:
             evidence_ids_for_step.append(critique_record.evidence_id)
             step_record["critique_report"] = critique.model_dump(mode="json")
             if critique.status in {"needs_revision", "blocked"}:
-                with shared_lock:
-                    findings.append(
-                        ValidationFinding(
-                            validator="critic_agent",
-                            severity=(
-                                "warning"
-                                if critique.status == "needs_revision"
-                                else "error"
-                            ),
-                            message=(
-                                f"CriticAgent marked {step.step_id} as {critique.status}: "
-                                + "; ".join(
-                                    critique.concerns
-                                    or critique.suggested_repairs
-                                    or ["review required"]
-                                )
-                            ),
-                            evidence_ids=[critique_record.evidence_id],
+                critique_finding = ValidationFinding(
+                    validator="critic_agent",
+                    severity=(
+                        "warning" if critique.status == "needs_revision" else "error"
+                    ),
+                    message=(
+                        f"CriticAgent marked {step.step_id} as {critique.status}: "
+                        + "; ".join(
+                            critique.concerns
+                            or critique.suggested_repairs
+                            or ["review required"]
                         )
-                    )
+                    ),
+                    evidence_ids=[critique_record.evidence_id],
+                    detail={
+                        "step_id": step.step_id,
+                        "critic_status": critique.status,
+                    },
+                )
+                critique_findings.append(critique_finding)
+                with shared_lock:
+                    findings.append(critique_finding)
 
         step_record["evidence_ids"] = list(dict.fromkeys(evidence_ids_for_step))
         checkpoint_record = dict(step_record)
@@ -8800,7 +8868,8 @@ else:
             + clinical_findings
             + guard_findings
             + contract_findings
-            + figure_source_findings,
+            + figure_source_findings
+            + critique_findings,
             metadata={
                 "step_id": step.step_id,
                 "generation_mode": step_record["generation_mode"],
@@ -8812,6 +8881,7 @@ else:
             contract_findings=contract_findings,
             figure_source_findings=figure_source_findings,
             stat_findings=stat_findings,
+            critique_status=(critique.status if critique is not None else None),
         )
         has_contract_error = step_record["status"] == "contract_failed"
         final_cleanup_finding: Optional[ValidationFinding] = None
@@ -8855,10 +8925,15 @@ else:
                 f"{step.step_id}."
                 if has_contract_error
                 else (
+                    f"Step {step_current}/{total_steps} failed Critic review: "
+                    f"{step.step_id}."
+                    if step_record["status"] == "critic_failed"
+                    else (
                     f"Step {step_current}/{total_steps} could not retire its "
                     f"quarantine: {step.step_id}."
                     if step_record["status"] == "blocked_quarantine_cleanup"
                     else f"Step {step_current}/{total_steps} complete: {step.step_id}."
+                    )
                 )
             ),
             status=("complete" if step_record["status"] == "ok" else "error"),

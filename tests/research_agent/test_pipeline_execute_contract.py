@@ -316,6 +316,23 @@ def test_required_model_contract_error_fail_closes_outer_step_and_run():
     ]
 
 
+@pytest.mark.parametrize("critique_status", ["needs_revision", "blocked"])
+def test_negative_critic_review_fail_closes_outer_step(critique_status):
+    from easyicu.research_agent.pipeline_execute import (
+        _step_status_from_contract_findings,
+    )
+
+    assert (
+        _step_status_from_contract_findings(
+            contract_findings=[],
+            figure_source_findings=[],
+            stat_findings=[],
+            critique_status=critique_status,
+        )
+        == "critic_failed"
+    )
+
+
 def test_locked_measurement_data_quality_classifier_is_structural():
     from easyicu.research_agent.contracts import ValidationFinding
     from easyicu.research_agent.pipeline_execute import (
