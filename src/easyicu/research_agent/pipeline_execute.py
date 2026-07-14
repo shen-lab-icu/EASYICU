@@ -131,6 +131,7 @@ from .pipeline import (
 )
 from .publication_figures import make_figure_contract
 from .plan_utils import (
+    _augment_measurement_companion_inputs,
     _cap_plan_preserving_figure_steps,
     _clustering_contract_applies,
     _cohort_definition_contract_findings,
@@ -3569,6 +3570,29 @@ def run_execute_phase(
     findings = plan_result.findings
     plan = plan_result.plan
     plan_path = plan_result.plan_path
+    plan, companion_input_findings = _augment_measurement_companion_inputs(
+        plan=plan,
+        context=context,
+    )
+    if companion_input_findings:
+        findings.extend(companion_input_findings)
+        plan_path = run_dir / "analysis_plan_input_closure.json"
+        plan_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
+        if evidence.get("analysis_plan_input_closure") is None:
+            evidence.register_file(
+                kind="log",
+                description=(
+                    "Analysis plan with structural measurement-provenance "
+                    "input closure."
+                ),
+                source_path=plan_path,
+                evidence_id="analysis_plan_input_closure",
+                producer="runtime_supervisor",
+                generation_mode="system",
+                prompt_pack_version=plan_result.prompt_version,
+                metadata={"reason": "measurement_companion_input_closure"},
+            )
+        plan_result.plan_path = plan_path
     resume_controller = ResumeController(
         plan=plan,
         run_dir=run_dir,
@@ -4119,6 +4143,11 @@ def run_execute_phase(
             context=context,
         )
         findings.extend(trajectory_product_findings)
+        revised, companion_input_findings = _augment_measurement_companion_inputs(
+            plan=revised,
+            context=context,
+        )
+        findings.extend(companion_input_findings)
         revised, post_transform_snapshot_findings = (
             _preserve_completed_step_snapshots_after_replan(
                 current_plan=current_plan,
