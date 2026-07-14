@@ -204,6 +204,42 @@ def render(frame):
     )
 
 
+def test_mechanical_preflight_blocks_silent_accounting_count_rounding(ra):
+    code = """
+def render(frame):
+    counts = frame['n']
+    if counts.isna().any():
+        raise ValueError('missing count')
+    labels = [f"{value:,.0f}" for value in counts]
+    return labels
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "structural_accounting_integer_validation"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_accepts_integer_like_accounting_validation(ra):
+    code = """
+import numpy as np
+
+def render(frame):
+    counts = frame['n']
+    if not np.allclose(counts, np.round(counts)):
+        raise ValueError('fractional count')
+    labels = [f"{value:,.0f}" for value in counts]
+    return labels
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "structural_accounting_integer_validation"
+        for finding in findings
+    )
+
+
 def test_llm_concept_audit_cache_reuses_identical_digest(tmp_path, ra):
     context = _context(ra)
     step = _figure_step(ra)

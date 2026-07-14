@@ -200,6 +200,62 @@ def _structural_filter_findings(tree: ast.Module, step: AnalysisStep) -> list[Va
     return findings
 
 
+def _uses_zero_decimal_count_rendering(tree: ast.Module) -> bool:
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FormattedValue) or node.format_spec is None:
+            continue
+        try:
+            format_spec = ast.unparse(node.format_spec).lower()
+        except Exception:
+            continue
+        if ".0f" in format_spec:
+            return True
+    return False
+
+
+def _has_integer_like_accounting_guard(tree: ast.Module) -> bool:
+    integer_signals = ("round", "rint", "floor", "mod", "is_integer")
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If):
+            continue
+        test_text = ast.unparse(node.test).lower()
+        if not any(signal in test_text for signal in integer_signals):
+            continue
+        if not any(token in test_text for token in ("count", "counts", "numerator", "n")):
+            continue
+        body_text = "\n".join(ast.unparse(statement).lower() for statement in node.body)
+        if "raise " in body_text or ".append(" in body_text or "return " in body_text:
+            return True
+    return False
+
+
+def _structural_integer_findings(
+    tree: ast.Module, step: AnalysisStep
+) -> list[ValidationFinding]:
+    if normalised_method_head(step.method) not in _RENDER_METHODS:
+        return []
+    accounting_products = _typed_input_products(step) & _STRUCTURAL_ACCOUNTING_PRODUCTS
+    if not accounting_products or not _uses_zero_decimal_count_rendering(tree):
+        return []
+    if _has_integer_like_accounting_guard(tree):
+        return []
+    return [
+        ValidationFinding(
+            validator="mechanical_code_preflight",
+            severity="error",
+            message=(
+                "A rendering-only structural-accounting step formats counts as "
+                "whole numbers without first failing closed on fractional "
+                "count values."
+            ),
+            detail={
+                "reason": "structural_accounting_integer_validation",
+                "typed_products": sorted(accounting_products),
+            },
+        )
+    ]
+
+
 def audit_mechanical_code_contracts(
     script_text: str,
     step: AnalysisStep,
@@ -235,6 +291,7 @@ def audit_mechanical_code_contracts(
             )
         )
     findings.extend(_structural_filter_findings(tree, step))
+    findings.extend(_structural_integer_findings(tree, step))
     return findings
 
 
