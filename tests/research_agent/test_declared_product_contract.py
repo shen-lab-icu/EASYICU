@@ -93,6 +93,88 @@ def test_declared_file_and_statistic_products_must_be_realised_exactly():
     assert finding.detail["missing_products"] == ["table:summary"]
 
 
+def test_declared_assignment_model_requires_a_successfully_fitted_model():
+    step = _step(
+        method="confounder_selection_and_propensity_model",
+        outputs=["artifact:assignment_model"],
+    )
+    findings = declared_product_contract_findings(
+        step=step,
+        step_summary={
+            "status": "ok",
+            "assignment_models": [],
+            "exposure": {
+                "resolution": {
+                    "status": "not_available",
+                    "reason": "typed binding unavailable",
+                }
+            },
+            "output_files": [
+                {
+                    "kind": "artifact",
+                    "name": "assignment_model",
+                    "path": "assignment_model.csv",
+                }
+            ],
+        },
+        effect_method_authorized=False,
+    )
+
+    assert "assignment_model_unfitted" in _kinds(findings)
+    finding = next(
+        item for item in findings if item.detail["kind"] == "assignment_model_unfitted"
+    )
+    assert finding.detail["exposure_resolution_status"] == "not_available"
+
+
+def test_declared_assignment_model_accepts_a_fitted_model():
+    step = _step(
+        method="confounder_selection_and_propensity_model",
+        outputs=["artifact:assignment_model"],
+    )
+    findings = declared_product_contract_findings(
+        step=step,
+        step_summary={
+            "status": "ok",
+            "assignment_models": [
+                {
+                    "model_id": "planner_model",
+                    "fit_status": "fitted",
+                    "n": 100,
+                }
+            ],
+            "output_files": [
+                {
+                    "kind": "artifact",
+                    "name": "assignment_model",
+                    "path": "assignment_model.csv",
+                }
+            ],
+        },
+        effect_method_authorized=False,
+    )
+
+    assert "assignment_model_unfitted" not in _kinds(findings)
+
+
+def test_step_contract_rejects_planned_step_that_reports_skipped():
+    findings = _step_contract_findings(
+        step=_step(outputs=["table:diagnostics"]),
+        step_summary={
+            "status": "skipped",
+            "error": "required upstream model unavailable",
+            "output_files": {"table:diagnostics": "diagnostics.csv"},
+        },
+    )
+
+    assert any(
+        finding.validator == "step_contract"
+        and finding.detail
+        and finding.detail.get("reported_status") == "skipped"
+        for finding in findings
+    )
+
+
 def test_file_list_stem_can_realise_typed_product_but_companion_cannot():
     step = _step(outputs=["artifact:analysis_cohort"])
     assert (

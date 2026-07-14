@@ -1859,6 +1859,8 @@ def _repair_specialization(
         "finalized exposure table branch bypasses registered exposure metadata validation",
         "finalized exposure reconciliation fallback",
         "finalized_exposure_reconciliation_fallback",
+        "assignment model artifact but registered no successfully fitted assignment model",
+        "assignment_model_unfitted",
     )
     if any(signal in normalized for signal in tabular_exposure_product_signals):
         selected_exposure = json.dumps(
@@ -1889,6 +1891,24 @@ def _repair_specialization(
             "exposure without redefining it. The "
             "current planner-selected exposure "
             f"fact is: {selected_exposure}.\n"
+        )
+
+    assignment_product_signals = (
+        "assignment model artifact but registered no successfully fitted assignment model",
+        "empty or all missing propensity table is not a completed product",
+        "assignment_model_unfitted",
+    )
+    if any(signal in normalized for signal in assignment_product_signals):
+        guidance.append(
+            "- DIAGNOSED ASSIGNMENT-PRODUCT COMPLETION REPAIR: the declared "
+            "assignment-model artifact must contain at least one actually fitted "
+            "Planner-owned assignment model and finite row-level propensity values. "
+            "Do not publish an empty/all-missing table, an empty model roster, or a "
+            "`not_fitted` placeholder as a successful product. Resolve and consume "
+            "the exact typed primary-exposure product, preserve the Planner's "
+            "covariates, cohort, and method, and fail closed with an explicit status "
+            "if fitting is genuinely impossible. Do not invent a substitute exposure, "
+            "covariate set, model family, or estimand.\n"
         )
 
     if "undefined helper call" in normalized:

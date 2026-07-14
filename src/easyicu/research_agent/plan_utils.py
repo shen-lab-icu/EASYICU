@@ -3968,6 +3968,7 @@ def _step_contract_findings(
         "fail_closed",
         "failed_closed",
         "repair_failed",
+        "skipped",
     }:
         findings.append(
             ValidationFinding(
