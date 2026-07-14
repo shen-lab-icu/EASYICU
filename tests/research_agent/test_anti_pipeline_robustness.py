@@ -127,6 +127,7 @@ def _write_valid_executed_results(out_dir, *, identifier_column="definition_id")
             "outcome_concept_id": "death",
             "model_family": "logistic_regression",
             "effect_scale": "odds_ratio",
+            "exposure_source": "marker",
             "comparison": "stage 3 versus stage 0",
             "coefficient_term": "stage_3",
             "analysis_set": analysis_set,
@@ -172,6 +173,7 @@ def _write_valid_executed_results(out_dir, *, identifier_column="definition_id")
                 "model_family": "logistic_regression",
                 "term": "stage_3",
                 "term_role": "exposure",
+                "source_variable": "marker",
                 "effect_scale": "odds_ratio",
                 "estimate": estimate,
                 "ci_low": estimate - 0.1,
@@ -1003,6 +1005,94 @@ def test_executed_sensitivity_rejects_forged_summary_estimate(tmp_path) -> None:
     )
 
 
+def test_reportable_robustness_must_retain_primary_estimator_contract(
+    tmp_path,
+) -> None:
+    from easyicu.research_agent.pipeline_execute import (
+        _executed_robustness_result_issues,
+    )
+
+    out_dir = tmp_path / "outputs"
+    out_dir.mkdir()
+    rows = _write_valid_executed_results(out_dir)
+    rows[0]["model_family"] = "descriptive_binomial_risk"
+    model_path = out_dir / "model_fit_summary.csv"
+    models = pd.read_csv(model_path)
+    models.loc[0, "model_family"] = "descriptive_binomial_risk"
+    models.to_csv(model_path, index=False)
+    lock = _locked_specs_payload()
+
+    issues = _executed_robustness_result_issues(
+        locked_by_id={spec["spec_id"]: spec for spec in lock["specs"]},
+        step_summary={"robustness_rows": rows},
+        out_dir=out_dir,
+        context=None,
+        primary_model_contract={
+            "model_family": "logistic_regression",
+            "effect_scale": "odds_ratio_per_unit",
+            "exposure_source": "marker",
+            "outcome": "death",
+        },
+    )
+
+    assert any(
+        issue.get("spec_id") == "alt_relaxed_cohort"
+        and issue.get("issue") == "primary_estimator_family_mismatch"
+        for issue in issues
+    )
+
+
+def test_nonindependent_locked_variant_is_an_honest_null_disclosure(
+    tmp_path,
+) -> None:
+    from easyicu.research_agent.pipeline_execute import (
+        _executed_robustness_result_issues,
+    )
+
+    out_dir = tmp_path / "outputs"
+    out_dir.mkdir()
+    rows = _write_valid_executed_results(out_dir)
+    blocked_spec_id = "alt_observed_outcome"
+    blocked = next(row for row in rows if row["spec_id"] == blocked_spec_id)
+    blocked.update(
+        {
+            "status": "not_independent",
+            "fit_status": "not_fitted",
+            "converged": False,
+            "reportable": False,
+            "n": None,
+            "point_estimate": None,
+            "ci_low": None,
+            "ci_high": None,
+            "non_executable_reason": (
+                "The supplied stay-level scalar target cannot yield an "
+                "independent first-versus-any aggregation."
+            ),
+        }
+    )
+    for filename in ("model_fit_summary.csv", "adjusted_estimates.csv"):
+        path = out_dir / filename
+        frame = pd.read_csv(path)
+        frame = frame[frame["model_id"] != blocked["model_id"]]
+        frame.to_csv(path, index=False)
+    lock = _locked_specs_payload()
+
+    issues = _executed_robustness_result_issues(
+        locked_by_id={spec["spec_id"]: spec for spec in lock["specs"]},
+        step_summary={"robustness_rows": rows},
+        out_dir=out_dir,
+        context=None,
+        primary_model_contract={
+            "model_family": "logistic_regression",
+            "effect_scale": "odds_ratio",
+            "exposure_source": "marker",
+            "outcome": "death",
+        },
+    )
+
+    assert issues == []
+
+
 def test_executed_sensitivity_rejects_missing_indicator_on_complete_case_model(
     tmp_path,
 ) -> None:
@@ -1189,6 +1279,35 @@ def test_coder_context_receives_locked_spec_definitions_and_universe_contract(
     (run_dir / "robustness_specs_locked.json").write_text(
         json.dumps(_locked_specs_payload()), encoding="utf-8"
     )
+    (run_dir / "manifest_partial.json").write_text(
+        json.dumps(
+            {
+                "per_step_records": [
+                    {
+                        "step_id": "04_primary_model",
+                        "status": "ok",
+                        "step_summary": {
+                            "final_design_terms": ["const", "marker", "age"],
+                            "model_contracts": [
+                                {
+                                    "model_id": "primary_model",
+                                    "outcome": "death",
+                                    "model_family": "logistic_regression",
+                                    "effect_scale": "odds_ratio_per_unit",
+                                    "exposure_source": "marker",
+                                    "exposure_role": "primary",
+                                    "analysis_role": "primary",
+                                    "fit_status": "fitted",
+                                    "converged": True,
+                                }
+                            ],
+                        },
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
     context = ResearchContext(
         research_question="Test the locked variants.",
         cohort=CohortDescriptor(
@@ -1198,6 +1317,8 @@ def test_coder_context_receives_locked_spec_definitions_and_universe_contract(
             n_stays=5,
         ),
         variables=[],
+        primary_exposure="marker",
+        target_outcome="death",
     )
 
     enriched = _coder_context_with_locked_robustness_specs(
@@ -1223,6 +1344,8 @@ def test_coder_context_receives_locked_spec_definitions_and_universe_contract(
     assert "inflow_n" in (enriched.notes or "")
     assert "outflow_n" in (enriched.notes or "")
     assert "overlap_n" in (enriched.notes or "")
+    assert "AUTHORITATIVE PRIMARY MODEL CONTRACT" in (enriched.notes or "")
+    assert '"model_family":"logistic_regression"' in (enriched.notes or "")
 
 
 def test_prespecified_robustness_alias_receives_locked_execution_contract(
@@ -1303,3 +1426,11 @@ def test_locked_sensitivity_contract_is_wired_into_all_three_contract_passes() -
 
     source = inspect.getsource(run_execute_phase)
     assert source.count("_cohort_definition_sensitivity_contract_findings(") == 3
+
+
+def test_later_repairs_receive_prior_concept_findings_as_regression_constraints():
+    from easyicu.research_agent.pipeline_execute import run_execute_phase
+
+    source = inspect.getsource(run_execute_phase)
+    assert "PREVIOUSLY REPAIRED CONCEPT FINDINGS" in source
+    assert source.count("_monotonic_concept_constraint_log()") >= 3

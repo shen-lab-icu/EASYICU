@@ -121,11 +121,25 @@ ROBUSTNESS_EXECUTION_CONTRACT_GUIDANCE = (
     + ". The robustness row, model row, and exposure coefficient row must "
     "agree exactly on identifiers, outcome, model family, effect scale, term, "
     "analytic n, point estimate, interval, fit status, and penalty/convergence "
-    "metadata. A missing-indicator specification must include a coefficient "
+    "metadata. Every reportable variant must retain the authoritative primary "
+    "model family, effect-measure family, outcome, and primary exposure source; "
+    "a descriptive risk or prevalence summary is not a robustness re-fit of an "
+    "association model. A missing-indicator specification must retain a primary-"
+    "exposure coefficient and additionally include a coefficient "
     "row whose term_role is missingness, availability, source_status, or "
     "measurement_status (legacy term names containing 'missing' remain "
-    "accepted). Specification or membership declarations are not execution "
-    "evidence."
+    "accepted). If the supplied data cannot execute a locked specification, "
+    "emit one honest row with status='not_executable' or 'not_independent', "
+    "reportable=false, converged=false, fit_status='not_fitted', null n/effect/CI, "
+    "and a non_executable_reason; do not fabricate a duplicate estimate. "
+    "Specification or membership declarations are not execution evidence."
+)
+
+_EXECUTED_RESULT_STATUSES = frozenset(
+    {"analyzed", "executed", "estimated", "fitted", "ok"}
+)
+_NONEXECUTABLE_RESULT_STATUSES = frozenset(
+    {"blocked", "non_executable", "not_executable", "not_independent"}
 )
 
 
@@ -145,6 +159,20 @@ def _normalise_result_token(value: Any) -> str:
     return re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip(
         "_"
     )
+
+
+def _effect_measure_family(value: Any) -> str:
+    token = _normalise_result_token(value)
+    for family, aliases in {
+        "odds_ratio": ("odds_ratio", "or"),
+        "hazard_ratio": ("hazard_ratio", "hr"),
+        "risk_ratio": ("risk_ratio", "relative_risk", "rr"),
+        "risk_difference": ("risk_difference", "rd"),
+        "mean_difference": ("mean_difference", "beta", "coefficient"),
+    }.items():
+        if token in aliases or any(token.startswith(f"{alias}_") for alias in aliases):
+            return family
+    return token
 
 
 def _finite_result_number(value: Any) -> Optional[float]:
@@ -224,6 +252,7 @@ def _executed_robustness_result_issues(
     step_summary: Mapping[str, Any],
     out_dir: Path,
     context: Optional[ResearchContext],
+    primary_model_contract: Optional[Mapping[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Bind each locked variant to one fitted, typed, cross-checked result.
 
@@ -292,6 +321,8 @@ def _executed_robustness_result_issues(
             continue
         row = candidates[0]
         axis = _normalise_result_token(spec.get("axis"))
+        result_status = _normalise_result_token(row.get("status"))
+        is_non_executable = result_status in _NONEXECUTABLE_RESULT_STATUSES
         if _normalise_result_token(row.get("axis")) != axis:
             issues.append(
                 {
@@ -302,9 +333,20 @@ def _executed_robustness_result_issues(
                 }
             )
 
+        required_text_fields = (
+            (
+                "status",
+                "outcome_concept_id",
+                "analysis_set",
+                "baseline_missing_policy",
+                "fit_status",
+            )
+            if is_non_executable
+            else ROBUSTNESS_RESULT_REQUIRED_TEXT_FIELDS
+        )
         missing_fields = [
             field
-            for field in ROBUSTNESS_RESULT_REQUIRED_TEXT_FIELDS
+            for field in required_text_fields
             if not str(row.get(field) or "").strip()
         ]
         for field in ROBUSTNESS_RESULT_REQUIRED_BOOLEAN_FIELDS:
@@ -315,10 +357,11 @@ def _executed_robustness_result_issues(
                 missing_fields.append(field)
         n_value = _nonnegative_integral_value(row.get("n"))
         point = _finite_result_number(row.get("point_estimate"))
-        if n_value is None or n_value <= 0:
-            missing_fields.append("positive_n")
-        if point is None:
-            missing_fields.append("finite_point_estimate")
+        if not is_non_executable:
+            if n_value is None or n_value <= 0:
+                missing_fields.append("positive_n")
+            if point is None:
+                missing_fields.append("finite_point_estimate")
         if missing_fields:
             issues.append(
                 {
@@ -327,13 +370,9 @@ def _executed_robustness_result_issues(
                     "fields": sorted(set(missing_fields)),
                 }
             )
-        if _normalise_result_token(row.get("status")) not in {
-            "analyzed",
-            "executed",
-            "estimated",
-            "fitted",
-            "ok",
-        }:
+        if result_status not in (
+            _EXECUTED_RESULT_STATUSES | _NONEXECUTABLE_RESULT_STATUSES
+        ):
             issues.append(
                 {
                     "spec_id": spec_id,
@@ -422,6 +461,50 @@ def _executed_robustness_result_issues(
         low = _finite_result_number(row.get("ci_low"))
         high = _finite_result_number(row.get("ci_high"))
         interval_method = _normalise_result_token(row.get("interval_method"))
+        if is_non_executable:
+            reason = str(
+                row.get("non_executable_reason")
+                or row.get("notes")
+                or row.get("note")
+                or ""
+            ).strip()
+            if reportable is not False or converged is not False:
+                issues.append(
+                    {
+                        "spec_id": spec_id,
+                        "issue": "non_executable_result_must_fail_closed",
+                    }
+                )
+            if _normalise_result_token(row.get("fit_status")) not in {
+                "blocked",
+                "not_executable",
+                "not_fitted",
+                "not_independent",
+            }:
+                issues.append(
+                    {
+                        "spec_id": spec_id,
+                        "issue": "non_executable_fit_status_invalid",
+                    }
+                )
+            if any(value is not None for value in (point, low, high, n_value)):
+                issues.append(
+                    {
+                        "spec_id": spec_id,
+                        "issue": "non_executable_result_has_numeric_claim",
+                    }
+                )
+            if not reason:
+                issues.append(
+                    {
+                        "spec_id": spec_id,
+                        "issue": "non_executable_reason_missing",
+                    }
+                )
+            # An unavailable/non-independent specification is a transparent
+            # fail-closed disclosure, not a fitted model. It therefore must not
+            # be laundered through model/coefficient rows below.
+            continue
         if _normalise_result_token(row.get("fit_status")) != "fitted":
             issues.append(
                 {"spec_id": spec_id, "issue": "executed_model_not_fitted"}
@@ -448,6 +531,64 @@ def _executed_robustness_result_issues(
                     "issue": "point_only_result_must_be_penalized_nonreportable",
                 }
             )
+
+        if primary_model_contract is not None:
+            expected_model_family = _normalise_result_token(
+                primary_model_contract.get("model_family")
+            )
+            expected_effect_family = _effect_measure_family(
+                primary_model_contract.get("effect_scale")
+            )
+            expected_exposure = str(
+                primary_model_contract.get("exposure_source") or ""
+            ).strip()
+            expected_outcome = str(
+                primary_model_contract.get("outcome") or primary_outcome or ""
+            ).strip()
+            if _normalise_result_token(row.get("model_family")) != (
+                expected_model_family
+            ):
+                issues.append(
+                    {
+                        "spec_id": spec_id,
+                        "issue": "primary_estimator_family_mismatch",
+                        "expected": expected_model_family,
+                        "observed": row.get("model_family"),
+                    }
+                )
+            if _effect_measure_family(row.get("effect_scale")) != (
+                expected_effect_family
+            ):
+                issues.append(
+                    {
+                        "spec_id": spec_id,
+                        "issue": "primary_effect_measure_mismatch",
+                        "expected": expected_effect_family,
+                        "observed": row.get("effect_scale"),
+                    }
+                )
+            if expected_exposure and str(row.get("exposure_source") or "").strip() != (
+                expected_exposure
+            ):
+                issues.append(
+                    {
+                        "spec_id": spec_id,
+                        "issue": "primary_exposure_source_mismatch",
+                        "expected": expected_exposure,
+                        "observed": row.get("exposure_source"),
+                    }
+                )
+            if expected_outcome and _normalise_result_token(
+                row.get("outcome_concept_id")
+            ) != _normalise_result_token(expected_outcome):
+                issues.append(
+                    {
+                        "spec_id": spec_id,
+                        "issue": "primary_outcome_mismatch",
+                        "expected": expected_outcome,
+                        "observed": row.get("outcome_concept_id"),
+                    }
+                )
         if (low is None) != (high is None):
             issues.append(
                 {"spec_id": spec_id, "issue": "partial_confidence_interval"}
@@ -580,6 +721,22 @@ def _executed_robustness_result_issues(
                             "spec_id": spec_id,
                             "issue": "coefficient_result_value_mismatch",
                             "field": field,
+                        }
+                    )
+            if primary_model_contract is not None:
+                expected_exposure = str(
+                    primary_model_contract.get("exposure_source") or ""
+                ).strip()
+                observed_source = str(
+                    coefficient_row.get("source_variable") or ""
+                ).strip()
+                if expected_exposure and observed_source != expected_exposure:
+                    issues.append(
+                        {
+                            "spec_id": spec_id,
+                            "issue": "coefficient_exposure_source_mismatch",
+                            "expected": expected_exposure,
+                            "observed": observed_source,
                         }
                     )
         if axis == "missing" and _normalise_result_token(

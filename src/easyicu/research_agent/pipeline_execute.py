@@ -1539,6 +1539,66 @@ def _is_cohort_definition_sensitivity_result_step(step: AnalysisStep) -> bool:
     )
 
 
+def _authoritative_primary_robustness_contract(
+    *,
+    completed_step_records: Sequence[Mapping[str, Any]],
+    context: Optional[ResearchContext],
+) -> Optional[Dict[str, Any]]:
+    """Return one fitted primary model contract for robustness re-estimation.
+
+    The robustness step is auxiliary: it may execute Planner-locked variants,
+    but it may not select a different estimator, outcome, or exposure.  Bind it
+    to the latest successful agent-produced primary contract that exactly
+    matches the research context. Ambiguity remains fail-closed.
+    """
+
+    expected_exposure = str(
+        (context.primary_exposure if context is not None else None) or ""
+    ).strip()
+    expected_outcome = str(
+        (context.target_outcome if context is not None else None) or ""
+    ).strip()
+    for record in reversed(
+        list(current_successful_step_records(completed_step_records))
+    ):
+        summary = record.get("step_summary")
+        if not isinstance(summary, Mapping):
+            continue
+        candidates: List[Dict[str, Any]] = []
+        for raw_contract in summary.get("model_contracts") or []:
+            if not isinstance(raw_contract, Mapping):
+                continue
+            contract = dict(raw_contract)
+            if str(contract.get("analysis_role") or "").strip().lower() != "primary":
+                continue
+            if str(contract.get("exposure_role") or "primary").strip().lower() != (
+                "primary"
+            ):
+                continue
+            if str(contract.get("fit_status") or "").strip().lower() != "fitted":
+                continue
+            if contract.get("converged") is not True:
+                continue
+            if expected_exposure and str(contract.get("exposure_source") or "") != (
+                expected_exposure
+            ):
+                continue
+            if expected_outcome and str(contract.get("outcome") or "") != (
+                expected_outcome
+            ):
+                continue
+            candidates.append(contract)
+        if len(candidates) != 1:
+            continue
+        contract = candidates[0]
+        contract["source_step_id"] = str(record.get("step_id") or "")
+        final_terms = summary.get("final_design_terms")
+        if isinstance(final_terms, list):
+            contract["final_design_terms"] = list(final_terms)
+        return contract
+    return None
+
+
 def _coder_context_with_locked_robustness_specs(
     *,
     context: ResearchContext,
@@ -1564,6 +1624,28 @@ def _coder_context_with_locked_robustness_specs(
         "outcome_override",
     )
     locked_contract = [{field: spec.get(field) for field in fields} for spec in specs]
+    primary_contract: Optional[Dict[str, Any]] = None
+    for manifest_name in ("manifest_partial.json", "manifest.json"):
+        manifest_path = Path(run_dir) / manifest_name
+        if not manifest_path.is_file():
+            continue
+        try:
+            manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        raw_records = (
+            manifest_payload.get("per_step_records")
+            if isinstance(manifest_payload, Mapping)
+            else None
+        )
+        if not isinstance(raw_records, list):
+            continue
+        primary_contract = _authoritative_primary_robustness_contract(
+            completed_step_records=raw_records,
+            context=context,
+        )
+        if primary_contract is not None:
+            break
     attachment = (
         "LOCKED ROBUSTNESS SPECIFICATIONS (binding plan-time state):\n"
         + json.dumps(locked_contract, ensure_ascii=False, separators=(",", ":"))
@@ -1574,6 +1656,17 @@ def _coder_context_with_locked_robustness_specs(
         "analysis cohort."
         "\n\n" + ROBUSTNESS_EXECUTION_CONTRACT_GUIDANCE
     )
+    if primary_contract is not None:
+        attachment += (
+            "\n\nAUTHORITATIVE PRIMARY MODEL CONTRACT (binding; variants must "
+            "re-estimate this model rather than substitute descriptive risks):\n"
+            + json.dumps(
+                primary_contract,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
     prior_notes = str(context.notes or "").strip()
     enriched_notes = f"{prior_notes}\n\n{attachment}" if prior_notes else attachment
     return context.model_copy(update={"notes": enriched_notes})
@@ -1708,6 +1801,7 @@ def _cohort_definition_sensitivity_contract_findings(
     universe_path: Path,
     cohort_path: Optional[Path] = None,
     context: Optional[ResearchContext] = None,
+    completed_step_records: Sequence[Mapping[str, Any]] = (),
 ) -> List[ValidationFinding]:
     """Verify that an agent executed, rather than replaced, its locked specs."""
 
@@ -1743,6 +1837,10 @@ def _cohort_definition_sensitivity_contract_findings(
         step_summary=step_summary,
         out_dir=out_dir,
         context=context,
+        primary_model_contract=_authoritative_primary_robustness_contract(
+            completed_step_records=completed_step_records,
+            context=context,
+        ),
     )
     reported_rows: List[Dict[str, Any]] = []
     raw_rows = step_summary.get("robustness_rows")
@@ -4505,6 +4603,7 @@ def run_execute_phase(
         quarantine_superseded_by_fallback = False
         quarantine_policy_superseded = False
         pending_quarantined_errors: List[ValidationFinding] = []
+        monotonic_concept_constraints: List[ValidationFinding] = []
         preexecution_runner_repair_name: Optional[str] = None
         runner_repair_name: Optional[str] = None
         sealed_renderer_repair_id: Optional[str] = None
@@ -4679,6 +4778,39 @@ def run_execute_phase(
 
         deterministic_fallback_used = False
         deterministic_standard_executor_used = False
+
+        def _remember_concept_constraints(
+            candidates: Sequence[ValidationFinding],
+        ) -> None:
+            """Keep repaired scientific defects binding across later repairs."""
+
+            existing = {
+                (finding.validator, finding.message)
+                for finding in monotonic_concept_constraints
+            }
+            monotonic_concept_constraints.extend(
+                finding
+                for finding in candidates
+                if finding.severity == "error"
+                and (finding.validator, finding.message) not in existing
+            )
+
+        def _monotonic_concept_constraint_log() -> str:
+            if not monotonic_concept_constraints:
+                return ""
+            payload = [
+                {
+                    "validator": finding.validator,
+                    "message": finding.message,
+                    "detail": dict(finding.detail or {}),
+                }
+                for finding in monotonic_concept_constraints
+            ]
+            return (
+                "\n\nPREVIOUSLY REPAIRED CONCEPT FINDINGS (binding regression "
+                "constraints; do not reintroduce them):\n"
+                + json.dumps(payload, indent=2, ensure_ascii=False, default=str)
+            )
 
         def _use_quarantined_draft(draft: QuarantinedConceptDraft) -> str:
             nonlocal resumed_quarantined_draft_used
@@ -6076,6 +6208,7 @@ else:
             audit_log = "\n".join(
                 f"{f.severity.upper()}: {f.message}" for f in usage_findings
             )
+            _remember_concept_constraints(usage_findings)
             try:
                 repaired_code = coder.repair(
                     context=coder_context,
@@ -6911,6 +7044,7 @@ else:
                                         "and editable SVG with the same stem, include "
                                         "publication figure exports when requested, and rerun.\n\n"
                                         + qa_log
+                                        + _monotonic_concept_constraint_log()
                                     ),
                                     attempt=visual_repair_attempts,
                                 )
@@ -7011,6 +7145,7 @@ else:
                         universe_path=universe_path,
                         cohort_path=cohort_path,
                         context=context,
+                        completed_step_records=completed_records_snapshot,
                     )
                 )
                 early_contract_findings += cross_step_cohort_lock_validator.audit(
@@ -7564,6 +7699,7 @@ else:
                                 + repair_guidance
                                 + "\n\nSTRUCTURED CONTRACT FINDINGS (authoritative):\n"
                                 + contract_log
+                                + _monotonic_concept_constraint_log()
                             ),
                             attempt=contract_repair_attempts,
                         )
@@ -7717,7 +7853,7 @@ else:
                     context=context,
                     step=step,
                     code=code,
-                    run_log=run_log,
+                    run_log=(run_log + _monotonic_concept_constraint_log()),
                 )
                 if plugin_repair is not None and plugin_repair[0] != runner_repair_name:
                     runner_repair = plugin_repair
@@ -8422,6 +8558,7 @@ else:
                 universe_path=universe_path,
                 cohort_path=cohort_path,
                 context=context,
+                completed_step_records=completed_records_snapshot,
             )
         )
         contract_findings.extend(
@@ -8611,6 +8748,7 @@ else:
                         universe_path=universe_path,
                         cohort_path=cohort_path,
                         context=context,
+                        completed_step_records=completed_records_snapshot,
                     )
                 )
                 contract_findings.extend(
