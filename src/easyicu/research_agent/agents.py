@@ -1838,6 +1838,30 @@ def _repair_specialization(
             "other scientific choices.\n"
         )
 
+    tabular_exposure_product_signals = (
+        "primary exposure definition has no registered executable exposure column",
+        "primary exposure definition is missing the registered exposure column",
+        "primary exposure definition must be a mapping or tabular input",
+    )
+    if any(signal in normalized for signal in tabular_exposure_product_signals):
+        selected_exposure = json.dumps(
+            context.primary_exposure, ensure_ascii=False, sort_keys=True
+        )
+        guidance.append(
+            "- DIAGNOSED TABULAR AUTHORITATIVE-EXPOSURE REPAIR: a typed primary-"
+            "exposure artifact may itself be the row-aligned finalized exposure "
+            "table rather than a metadata mapping. For a DataFrame artifact, bind "
+            "only the exact planner-selected `ResearchContext.primary_exposure` "
+            "column when it is present, and use that finalized column directly. "
+            "Do not scan candidates or reinterpret another numeric, count, measured-"
+            "status, or representative column. Do not repeat raw-event reconciliation "
+            "or demand mapping-only metadata fields from a finalized row-aligned "
+            "artifact that already passed its producer gate. Keep SHA-bound typed-"
+            "input loading and row alignment intact, and fail closed if the exact "
+            "planner-selected column is absent. The current planner-selected exposure "
+            f"fact is: {selected_exposure}.\n"
+        )
+
     if "undefined helper call" in normalized:
         guidance.append(
             "- DIAGNOSED UNDEFINED-HELPER REPAIR: every directly called helper "
