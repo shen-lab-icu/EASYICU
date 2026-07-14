@@ -55,6 +55,8 @@ from .icu_rules import (
     default_time_windows,
 )
 from .llm import LLMClient, LLMMessage
+from .code_patch import CodePatchError, PATCH_FORMAT, apply_code_patch, repair_code_excerpt
+from .coder_context import coder_guide_for_step, scoped_coder_context
 from .plan_utils import effect_output_authorized
 from .prompts import PROMPT_PACK_VERSION, load_prompt_pack
 from .schema import (
@@ -1475,8 +1477,10 @@ class CoderAgent:
         )
 
         _family = infer_analysis_type(context)
+        scoped_context = scoped_coder_context(context, step)
+        scoped_guide = coder_guide_for_step(_CODER_GUIDE, step)
         messages = [
-            LLMMessage(role="system", content=_SYSTEM_GUIDE + _CODER_GUIDE),
+            LLMMessage(role="system", content=_SYSTEM_GUIDE + "\n\n" + scoped_guide),
             LLMMessage(
                 role="user",
                 content=(
@@ -1511,7 +1515,7 @@ class CoderAgent:
                     "recorded in the ResearchContext, especially requested "
                     "outputs, evaluation metrics, timing rules, and design "
                     "constraints.\n\n"
-                    "RESEARCH CONTEXT:\n" + _format_context(context)
+                    "STEP-SCOPED RESEARCH CONTEXT:\n" + _format_context(scoped_context)
                 ),
             ),
         ]
@@ -1552,13 +1556,11 @@ class CoderAgent:
         run_log: str,
         attempt: int = 1,
     ) -> str:
-        """Ask the coder model for a minimal executable repair.
+        """Apply a minimal exact patch, falling back to one full rewrite.
 
-        Real hosted/free-tier models often produce scripts that are
-        logically fine but brittle around pandas/matplotlib edge cases.
-        The pipeline keeps the first failure as evidence, then gives
-        the coder the traceback once and asks for a complete replacement
-        script.
+        The normal path sends only diagnosis-relevant code blocks and accepts
+        exact unique replacements.  A complete-script request is made only
+        when the patch response cannot be parsed or safely applied.
         """
         family = infer_analysis_type(context)
         repair_specialization = _repair_specialization(
@@ -1566,109 +1568,115 @@ class CoderAgent:
             run_log=run_log,
             code=code,
         )
-        messages = [
-            LLMMessage(role="system", content=_SYSTEM_GUIDE + _CODER_GUIDE),
+        scoped_context = scoped_coder_context(context, step, code=code)
+        scoped_guide = coder_guide_for_step(_CODER_GUIDE, step)
+        shared_contract = (
+            f"Analysis-family context: {family.key} ({family.name}). Use this only "
+            "for method-compatibility checks. Preserve the planner-owned method, "
+            "inputs, outputs, model roster, exposure, outcome, cohort, and estimand; "
+            "the family label cannot add or replace a scientific product and the "
+            "repair may not change one.\n"
+            f"Repair attempt: {attempt}\n"
+            f"Step intent: {step.intent}\n"
+            f"Step inputs: {step.inputs}\n"
+            f"Expected outputs: {step.expected_outputs}\n"
+            "Model requirements: "
+            f"{json.dumps([item.model_dump(mode='json') for item in step.model_requirements], ensure_ascii=False)}\n"
+            f"Method: {step.method or '(unspecified)'}\n\n"
+            + _declared_output_scope_contract(step)
+            + _typed_input_scope_contract(step)
+            + trajectory_phenotyping_code_contract(context=context, step=step)
+            + trajectory_role_code_contract(context=context, step=step)
+            + "\nMECHANICAL REPAIR GUARDRAILS:\n"
+            "- Do not assign a local result variable the same name as a helper "
+            "function called in that scope (for example, never write "
+            "`audit = audit(...)`); Python can otherwise raise "
+            "UnboundLocalError. Use a distinct result name.\n"
+            "- Resolve declared columns by explicit registered names and fail "
+            "closed when none is present; never choose an arbitrary dtype- or "
+            "frame-order fallback.\n"
+            "- A rendering step must fail closed on any invalid structural "
+            "accounting row; never filter invalid rows and continue plotting.\n"
+        )
+        excerpt = repair_code_excerpt(code, run_log)
+        patch_messages = [
+            LLMMessage(
+                role="system",
+                content=_SYSTEM_GUIDE + "\n\n" + scoped_guide,
+            ),
             LLMMessage(
                 role="user",
                 content=(
                     f"REPAIR THE PYTHON CODE FOR STEP {step.step_id}.\n"
-                    f"Analysis-family context: {family.key} ({family.name}). "
-                    "Use this only for method-compatibility checks. Preserve the "
-                    "planner-owned Method and Expected outputs; the family label "
-                    "cannot add or replace a scientific product.\n"
-                    f"Repair attempt: {attempt}\n"
-                    f"Step intent: {step.intent}\n"
-                    f"Step inputs: {step.inputs}\n"
-                    f"Expected outputs: {step.expected_outputs}\n"
-                    "Model requirements: "
-                    f"{json.dumps([item.model_dump(mode='json') for item in step.model_requirements], ensure_ascii=False)}\n"
-                    f"Method: {step.method or '(unspecified)'}\n\n"
-                    + _declared_output_scope_contract(step)
-                    + _typed_input_scope_contract(step)
-                    + trajectory_phenotyping_code_contract(
-                        context=context,
-                        step=step,
-                    )
-                    + trajectory_role_code_contract(context=context, step=step)
-                    + "\n\n"
-                    "The previous script failed at execution time. Return "
-                    "only a complete replacement Python script that follows "
-                    "the original code contract and writes the same expected "
-                    "artefacts when possible. Make the smallest robust fix; "
-                    "do not add prose, markdown, or an explanation. Keep "
-                    "honoring explicit user preferences recorded in the "
-                    "ResearchContext.\n\n"
-                    "REPAIR CHECKLIST:\n"
+                    "MINIMAL PATCH MODE (default).\n"
+                    + shared_contract
+                    + "\nFix every diagnosed mechanical/contract error using the "
+                    "smallest exact replacement. Return JSON only with this schema:\n"
+                    f'{{"format":"{PATCH_FORMAT}","edits":['
+                    '{"old":"exact unique source block","new":"replacement",'
+                    '"expected_count":1}]}.\n'
+                    "Do not return a complete script. Each old block must appear "
+                    "exactly once in the original script. Do not change unrelated "
+                    "code or any planner-owned scientific choice.\n\n"
+                    "DIAGNOSED REPAIR CONTRACT:\n"
                     + repair_specialization
-                    + "- IMPORTS: "
+                    + "\nMETHOD CAPABILITY CONTRACT:\n"
                     + coder_method_capability_block()
-                    + "\n"
-                    "  **There is NO `easyicu.research_agent.rcs` / "
-                    "`.metrics` / `.utils` etc.** — the analysis script runs in a "
-                    "sandbox with a closed import contract. A method-specific "
-                    "code contract above may explicitly name documented "
-                    "`easyicu.research_agent.methods.*` modules; only those exact "
-                    "modules and symbols are allowed for that method. All other "
-                    "`easyicu.*` imports and undocumented project-local modules "
-                    "remain forbidden. If you need restricted cubic splines and "
-                    "no documented helper was named, use `patsy` or `numpy`; if "
-                    "you need calibration, import from `sklearn.calibration`.\n"
-                    "- If this is an association or prediction step, keep every named "
-                    "primary predictor/exposure in the fitted design matrix.\n"
-                    "- If you read `result.params[name]`, `result.conf_int().loc[name]`, "
-                    "or `result.pvalues[name]`, ensure `name` is present in `X.columns` "
-                    "before fitting.\n"
-                    "- If categorical variables are dummy-encoded, rebuild `x_cols` after "
-                    "encoding and include the primary predictor plus dummy columns.\n"
-                    "- Do not numeric-coerce string categorical variables such as `sex` "
-                    "before dummy encoding; this converts all categories to NaN. After "
-                    "dummy encoding, drop missing rows using the rebuilt `[outcome] + x_cols` "
-                    "list, not the old covariate list containing removed categorical columns.\n"
-                    "- If this is a prediction step, use a scikit-learn Pipeline or an "
-                    "equivalent leak-free split/CV workflow and write AUROC plus Brier or "
-                    "calibration metrics to step_summary.json. Keep categorical columns "
-                    "as objects until a ColumnTransformer categorical branch handles them; "
-                    "do not coerce mixed numeric + categorical feature frames all at once. "
-                    "If you use `calibration_curve`, import it from `sklearn.calibration`, "
-                    "not `sklearn.metrics`. "
-                    "Never use `('onehot', 'passthrough')` for a categorical branch feeding "
-                    "a numeric estimator; import OneHotEncoder and use "
-                    "`OneHotEncoder(handle_unknown='ignore', sparse_output=False)`.\n"
-                    "- If this is a clustering step, impute/scale numeric features before "
-                    "clustering and write cluster_count/n_clusters plus silhouette_score "
-                    "when at least two clusters are present.\n"
-                    "- If this is a table-one or descriptive step, rebuild the table as "
-                    "flat row dictionaries with explicit continuous/categorical helper "
-                    "functions. Do not infer table shape with `next(iter(...))`, and do "
-                    "not assume binary category keys are int 1 or string '1'. For every "
-                    "categorical or ordered distribution, map each non-missing value to "
-                    "exactly one emitted row and assert that category counts sum to "
-                    "`n_nonmissing`; never leave a value in the denominator while "
-                    "silently omitting it from all categories.\n"
-                    "- Define `out_dir = os.environ['STEP_OUT_DIR']` before any model "
-                    "fitting `try/except`; exception paths must still be able to write "
-                    "step_summary.json and any diagnostic tables.\n"
-                    "- Do not assign a local result variable the same name as a helper "
-                    "function called in that scope (for example, never write "
-                    "`audit = audit(...)`); Python treats that name as local and the "
-                    "call can fail with UnboundLocalError. Use a distinct result name.\n"
-                    "- Optional plotting or publication figure helpers must not make a "
-                    "completed metric step fail. Write step_summary.json after computing "
-                    "metrics, wrap figure-helper calls, and fall back to plain PNG/SVG if "
-                    "a helper signature is wrong.\n"
-                    "- If fitting cannot be completed, write a step_summary.json with null "
-                    "numeric fields and a precise error, then exit normally. Do not `raise` "
-                    "again after writing the failure summary.\n\n"
-                    "PREVIOUS SCRIPT:\n```python\n" + code[-12000:] + "\n```\n\n"
-                    "RUN LOG / TRACEBACK:\n```\n" + run_log[-8000:] + "\n```\n\n"
-                    "RESEARCH CONTEXT:\n" + _format_context(context)
+                    + "\n\nDIAGNOSIS / TRACEBACK:\n``\n"
+                    + run_log[-8000:]
+                    + "\n``\n\nRELEVANT EXACT CODE BLOCKS:\n```python\n"
+                    + excerpt
+                    + "\n```\n\nSTEP-SCOPED RESEARCH CONTEXT:\n"
+                    + _format_context(scoped_context)
                 ),
             ),
         ]
-        raw = self.llm.complete(
-            messages, max_tokens=_CODER_MAX_TOKENS, temperature=0.05
+        raw_patch = self.llm.complete(
+            patch_messages, max_tokens=min(2048, _CODER_MAX_TOKENS), temperature=0.0
         )
-        repaired = _strip_code_fence(raw.strip())
+        try:
+            repaired = apply_code_patch(code, raw_patch)
+        except CodePatchError as patch_error:
+            # Compatibility and latency guard: if a client ignored the JSON
+            # instruction but already returned a valid complete script, the
+            # patch attempt has failed and that response is itself the allowed
+            # full-rewrite fallback.  Otherwise make one explicit fallback call.
+            direct_script = _strip_code_fence(str(raw_patch or "").strip())
+            if _looks_like_python_script(direct_script):
+                repaired = direct_script
+            else:
+                fallback_messages = [
+                    LLMMessage(
+                        role="system",
+                        content=_SYSTEM_GUIDE + "\n\n" + scoped_guide,
+                    ),
+                    LLMMessage(
+                        role="user",
+                        content=(
+                            f"REPAIR THE PYTHON CODE FOR STEP {step.step_id}.\n"
+                            "FULL-REWRITE FALLBACK after minimal patch failure.\n"
+                            + shared_contract
+                            + "\nThe minimal patch could not be safely applied "
+                            f"({patch_error}). Return only one complete runnable Python "
+                            "script. Preserve all planner-owned scientific choices and "
+                            "change only what the diagnosis requires.\n\n"
+                            "DIAGNOSED REPAIR CONTRACT:\n"
+                            + repair_specialization
+                            + "\nDIAGNOSIS / TRACEBACK:\n``\n"
+                            + run_log[-8000:]
+                            + "\n``\n\nCOMPLETE PREVIOUS SCRIPT:\n```python\n"
+                            + code
+                            + "\n```\n\nSTEP-SCOPED RESEARCH CONTEXT:\n"
+                            + _format_context(scoped_context)
+                        ),
+                    ),
+                ]
+                raw = self.llm.complete(
+                    fallback_messages,
+                    max_tokens=_CODER_MAX_TOKENS,
+                    temperature=0.05,
+                )
+                repaired = _strip_code_fence(raw.strip())
         if not _looks_like_python_script(repaired):
             raise ValueError(
                 "Coder repair returned non-script output; refusing to replace "
