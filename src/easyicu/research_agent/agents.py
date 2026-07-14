@@ -1554,7 +1554,7 @@ class CoderAgent:
         script.
         """
         family = infer_analysis_type(context)
-        repair_specialization = _repair_specialization(run_log)
+        repair_specialization = _repair_specialization(run_log=run_log, code=code)
         messages = [
             LLMMessage(role="system", content=_SYSTEM_GUIDE + _CODER_GUIDE),
             LLMMessage(
@@ -1662,7 +1662,7 @@ class CoderAgent:
         return repaired
 
 
-def _repair_specialization(run_log: str) -> str:
+def _repair_specialization(*, run_log: str, code: str) -> str:
     """Add a binding repair contract for a diagnosed method-suite failure.
 
     The trigger is category-level validator evidence, never a benchmark item,
@@ -1679,7 +1679,13 @@ def _repair_specialization(run_log: str) -> str:
         "representative value",
         "reconcile binary event presence",
     )
-    if not any(signal in normalized for signal in sparse_event_signals):
+    standard_helper_in_script = (
+        "easyicu.research_agent.methods.source_status" in code
+        and "reconcile_binary_event_presence" in code
+    )
+    if not standard_helper_in_script and not any(
+        signal in normalized for signal in sparse_event_signals
+    ):
         return ""
     return (
         "- DIAGNOSED SPARSE-EVENT REPAIR (binding): import and call "

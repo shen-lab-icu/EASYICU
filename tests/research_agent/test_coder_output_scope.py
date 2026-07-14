@@ -87,6 +87,35 @@ def test_coder_repair_requires_standard_helper_after_sparse_event_diagnosis(ra):
     assert "Do not replace those columns" in prompt
 
 
+def test_coder_repair_preserves_standard_helper_across_later_traceback(ra):
+    llm = _RecordingLLM()
+    step = ra.AnalysisStep(
+        step_id="event_definition",
+        intent="Construct the Agent-selected binary event exposure.",
+        inputs=["event_n", "event_measured", "event_max"],
+        expected_outputs=["table:event_definition"],
+        method="prespecified_binary_event_definition",
+    )
+    code = (
+        "from easyicu.research_agent.methods.source_status import "
+        "reconcile_binary_event_presence\n"
+        "result = reconcile_binary_event_presence(frame, "
+        "count_column='event_n', measured_column='event_measured', "
+        "representative_column='event_max')\n"
+    )
+
+    CoderAgent(llm).repair(
+        context=_context(ra),
+        step=step,
+        code=code,
+        run_log="TypeError: cannot convert the series to int",
+    )
+
+    prompt = llm.messages[-1].content
+    assert "DIAGNOSED SPARSE-EVENT REPAIR (binding)" in prompt
+    assert "Do not replace those columns" in prompt
+
+
 def _ordinary_run_repair_and_agentic_prompts(*, ra, step):  # noqa: ANN001
     context = _context(ra)
     llm = _RecordingLLM()
