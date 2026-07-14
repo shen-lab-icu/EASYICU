@@ -904,6 +904,94 @@ def main(frame):
     )
 
 
+def test_mechanical_preflight_blocks_invalid_local_helper_calls(ra):
+    code = """
+def resolve_finalized_exposure(definition, frame):
+    return definition, frame
+
+def validate_domains(frame, covariates):
+    return frame, covariates
+
+resolved = resolve_finalized_exposure(
+    definition,
+    frame,
+    selected_exposure_column=selected_exposure,
+)
+audit = validate_domains(frame, covariates, metadata)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    finding = next(
+        item
+        for item in findings
+        if item.detail and item.detail.get("reason") == "invalid_local_helper_call"
+    )
+    assert [call["name"] for call in finding.detail["calls"]] == [
+        "resolve_finalized_exposure",
+        "validate_domains",
+    ]
+
+
+def test_mechanical_preflight_accepts_flexible_local_helper_signatures(ra):
+    code = """
+def resolve(definition, frame=None, *args, selected=None, **kwargs):
+    return definition
+
+resolved = resolve(
+    definition,
+    frame,
+    extra,
+    selected=selected_exposure,
+    provenance=metadata,
+)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "invalid_local_helper_call"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_blocks_lossy_ordinal_rounding(ra):
+    code = """
+def summarize(values, metadata):
+    is_ordinal = bool(metadata.get('is_ordinal', False))
+    if is_ordinal:
+        levels = values.round().astype(int)
+        return levels
+    return values
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    finding = next(
+        item
+        for item in findings
+        if item.detail and item.detail.get("reason") == "lossy_ordinal_rounding"
+    )
+    assert finding.detail["lines"] == [5]
+
+
+def test_mechanical_preflight_accepts_exact_ordinal_level_validation(ra):
+    code = """
+def summarize(values, metadata):
+    is_ordinal = bool(metadata.get('is_ordinal', False))
+    if is_ordinal:
+        invalid = values.notna() & ~values.isin(metadata['levels'])
+        if invalid.any():
+            raise ValueError('invalid ordinal level')
+        return values.astype('Int64')
+    return values
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail and finding.detail.get("reason") == "lossy_ordinal_rounding"
+        for finding in findings
+    )
+
+
 def test_llm_concept_audit_cache_reuses_identical_digest(tmp_path, ra):
     context = _context(ra)
     step = _figure_step(ra)
