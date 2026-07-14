@@ -118,6 +118,89 @@ def test_no_source_index_yields_no_classification_path():
     assert result.tier == "T3_not_in_db"
 
 
+def _recall_index() -> SourceItemIndex:
+    return SourceItemIndex(
+        [
+            {
+                "itemid": 221906,
+                "label": "Norepinephrine",
+                "category": "Medications",
+                "abbrev": "",
+                "table": "icu/inputevents",
+            },
+            {
+                "itemid": 50813,
+                "label": "Lactate",
+                "category": "Blood Gas",
+                "abbrev": "",
+                "table": "hosp/labevents",
+            },
+            {
+                "itemid": 50862,
+                "label": "Albumin",
+                "category": "Chemistry",
+                "abbrev": "",
+                "table": "hosp/labevents",
+            },
+        ]
+    )
+
+
+def test_synonym_group_expansion_reaches_measured_itemid():
+    # "noradrenaline" shares no token with the "Norepinephrine" label; the
+    # curated SYNONYM_GROUPS reuse must bridge it so the idea is not false-T3.
+    idx = _recall_index()
+    hits = idx.match("noradrenaline")
+    assert hits and hits[0].itemid == 221906
+    assert "norepinephrine" in hits[0].matched_tokens
+
+
+def test_morphological_fold_reaches_base_analyte():
+    # a clinical construct differs from the measured analyte only by affix.
+    idx = _recall_index()
+    assert idx.match("hyperlactatemia")[0].itemid == 50813
+    assert idx.match("hypoalbuminemia")[0].itemid == 50862
+
+
+def test_morphological_fold_does_not_fire_across_unrelated_roots():
+    # a leading "hyper" must not fuzzily merge unrelated roots: "hypertension"
+    # (tension) shares no stem with lactate/albumin/norepinephrine.
+    idx = _recall_index()
+    assert idx.match("hypertension") == []
+
+
+def test_recall_aids_preserve_precision_on_absent_construct():
+    # affix-free, non-synonym constructs stay strictly token-matched.
+    idx = _recall_index()
+    assert idx.match("procalcitonin") == []
+    assert idx.match("hemoperfusion") == []
+
+
+def test_exact_match_still_outranks_morphological_match():
+    # for the same query, an exact-token hit (score 1.0) must sort ahead of a
+    # fuzzy morphological hit (score 0.5), regardless of itemid order.
+    idx = SourceItemIndex(
+        [
+            {
+                "itemid": 9,  # only reachable via morphological fold (lactat~lactate)
+                "label": "Lactate",
+                "category": "Blood Gas",
+                "abbrev": "",
+                "table": "t",
+            },
+            {
+                "itemid": 1,  # exact-token match on "hyperlactatemia"
+                "label": "Hyperlactatemia flag",
+                "category": "x",
+                "abbrev": "",
+                "table": "t",
+            },
+        ]
+    )
+    hits = idx.match("hyperlactatemia")
+    assert [h.itemid for h in hits] == [1, 9]
+
+
 def test_module_is_a_leaf_does_not_import_idea_mining():
     src = inspect.getsource(
         importlib.import_module("easyicu.research_agent.idea_mining_feasibility_tier")

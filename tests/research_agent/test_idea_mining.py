@@ -194,6 +194,84 @@ def test_prior_art_queries_use_literature_phrase_not_canonical_concept_key() -> 
     assert assessment.clinical_plausibility_requires_human is True
 
 
+class _ConstantRecallClient:
+    """A second-index client that returns a fixed broad-recall count."""
+
+    def __init__(self, hit_count: int):
+        self.hit_count = hit_count
+        self.queries: list[str] = []
+
+    def search_prior_art(self, query: str, *, max_results: int = 20) -> object:
+        self.queries.append(query)
+        return {"hit_count": self.hit_count, "top_hits": []}
+
+
+def _gap_idea() -> LiteratureIdeaCandidate:
+    return LiteratureIdeaCandidate(
+        source_snapshot_id="source-snapshot/sha256:abc123",
+        citation_key="neutral_review_2026",
+        source_adapter_level="user_supplied_excerpt",
+        population="adult ICU patients with septic shock",
+        exposure_or_predictor="lactate clearance trajectory slope",
+        outcome="refractory circulatory support",
+        rationale="The source flags this as an unresolved question.",
+        source_quote="future work should study lactate clearance trajectory slope",
+        analysis_family="association",
+        time_window_hint="first six hours after admission",
+    )
+
+
+def test_secondary_index_corroboration_demotes_single_index_gap() -> None:
+    # PubMed shows a sparse count -> apparently_gap; a populated secondary index
+    # proves the gap is a coverage artifact, so the verdict is demoted.
+    idea = _gap_idea()
+    baseline = assess_prior_art_for_idea(
+        idea,
+        search_client=FakePriorArtSearchClient(),
+        searched_at="2026-06-04T00:00:00+00:00",
+    )
+    assert baseline.novelty_label == "apparently_gap"
+
+    corroborator = _ConstantRecallClient(hit_count=42)
+    assessment = assess_prior_art_for_idea(
+        idea,
+        search_client=FakePriorArtSearchClient(),
+        corroborating_search_client=corroborator,
+        searched_at="2026-06-04T00:00:00+00:00",
+    )
+    assert corroborator.queries, "corroborating index must actually be queried"
+    assert assessment.novelty_label == "crowded_but_differentiable"
+    assert "single-index coverage artifact" in assessment.novelty_statement
+
+
+def test_secondary_index_corroboration_holds_a_real_gap() -> None:
+    # a second index that is ALSO sparse leaves the apparent gap intact.
+    idea = _gap_idea()
+    assessment = assess_prior_art_for_idea(
+        idea,
+        search_client=FakePriorArtSearchClient(),
+        corroborating_search_client=_ConstantRecallClient(hit_count=1),
+        searched_at="2026-06-04T00:00:00+00:00",
+    )
+    assert assessment.novelty_label == "apparently_gap"
+
+
+def test_corroboration_client_is_never_consulted_for_non_gap_labels() -> None:
+    # only the strongest novelty label (apparently_gap) triggers corroboration;
+    # a crowded field must not spend a second-index query.
+    idea = _gap_idea()
+    crowded_primary = FakePriorArtSearchClient({"": {"hit_count": 80, "top_hits": []}})
+    corroborator = _ConstantRecallClient(hit_count=42)
+    assessment = assess_prior_art_for_idea(
+        idea,
+        search_client=crowded_primary,
+        corroborating_search_client=corroborator,
+        searched_at="2026-06-04T00:00:00+00:00",
+    )
+    assert assessment.novelty_label == "crowded_but_differentiable"
+    assert corroborator.queries == []
+
+
 def test_prior_art_broad_query_uses_phrase_facets_to_avoid_false_gaps() -> None:
     idea = LiteratureIdeaCandidate(
         source_snapshot_id="source-snapshot/sha256:abc123",

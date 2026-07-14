@@ -16,8 +16,23 @@ The discovery report used to collapse every non-executable candidate into one
   "needs a different database / prospective data".
 
 This module is a leaf: it must not import ``idea_mining`` (a module-boundary
-test enforces that). It depends only on the source-item catalog snapshot built
-by ``tools/build_source_item_catalog.py`` and a small generic stopword set.
+test enforces that). It depends on the source-item catalog snapshot built by
+``tools/build_source_item_catalog.py``, a small generic stopword set, and the
+curated ``SYNONYM_GROUPS`` in the sibling leaf ``concept_catalog`` (reused so a
+noradrenaline idea does not falsely miss a ``norepinephrine`` itemid).
+
+Recall vs precision: source-item hits are CANDIDATES that always pass through a
+human ``T2`` confirmation gate, so the safe bias here is *higher recall*. Two
+recall aids expand the raw token overlap without touching the shared synonym
+groups' novelty use:
+
+* **synonym expansion** — when an idea term contains a full member phrase of a
+  curated synonym group, the other members' tokens join the match set;
+* **morphological folding** — a bounded ICU affix stemmer (``hyper``/``hypo``/
+  ``dys`` prefixes, ``-emia``/``-aemia``/``-uria``/``-osis`` suffixes) lets
+  ``hyperlactatemia`` reach a ``lactate`` itemid via a shared stem prefix. It
+  only fires for tokens that actually carry such an affix, so non-morphological
+  terms (``procalcitonin``, ``hemoperfusion``) are unaffected.
 """
 
 from __future__ import annotations
@@ -26,7 +41,9 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, List, Optional, Sequence
+from typing import Any, List, Optional, Sequence, Set
+
+from .concept_catalog import SYNONYM_GROUPS
 
 # Tokens too generic to be a clinically specific match: matching on these alone
 # would over-call T2 ("we can build this") from research-design words.
@@ -216,6 +233,72 @@ def _content_tokens(text: str) -> List[str]:
     ]
 
 
+# Bounded ICU morphology: a clinical construct and the measured quantity often
+# differ only by an affix ("hyperlactatemia" vs "lactate", "hypokalemia" vs
+# "potassium"->"kalemia"). Folding is deliberately narrow — it fires only when a
+# token actually carries one of these affixes — so ordinary terms are untouched.
+_MORPH_PREFIXES = ("hyper", "hypo", "dys", "hypo")
+_MORPH_SUFFIXES = ("aemia", "emia", "uria", "osis", "aemic", "emic")
+_MORPH_MIN_STEM = 5
+
+
+def _affix_stem(token: str) -> tuple[str, bool]:
+    """Strip one leading + one trailing clinical affix. Returns (stem, changed)."""
+    stem = token
+    changed = False
+    for prefix in _MORPH_PREFIXES:
+        if stem.startswith(prefix) and len(stem) - len(prefix) >= 4:
+            stem = stem[len(prefix) :]
+            changed = True
+            break
+    for suffix in _MORPH_SUFFIXES:
+        if stem.endswith(suffix) and len(stem) - len(suffix) >= 4:
+            stem = stem[: -len(suffix)]
+            changed = True
+            break
+    return stem, changed
+
+
+def _morph_matches(term_token: str, label_token: str) -> bool:
+    """True when the two tokens share a morphological stem prefix.
+
+    Only fires when at least one side carried a clinical affix, and the shorter
+    stem (>= _MORPH_MIN_STEM chars) is a prefix of the longer — so
+    "hyperlactatemia" -> "lactat" matches "lactate", but no affix-free pair is
+    fuzzily merged.
+    """
+    a, a_changed = _affix_stem(term_token)
+    b, b_changed = _affix_stem(label_token)
+    if not (a_changed or b_changed):
+        return False
+    short, long = (a, b) if len(a) <= len(b) else (b, a)
+    return len(short) >= _MORPH_MIN_STEM and long.startswith(short)
+
+
+def _synonym_expansion_tokens(raw_tokens: Set[str]) -> Set[str]:
+    """Tokens contributed by any curated synonym group the term already matches.
+
+    A group is triggered only when one of its member phrases is a full token
+    subset of the term (single-word members by presence, multi-word members by
+    all-tokens-present), then every member's content tokens join the match set.
+    """
+    extra: Set[str] = set()
+    for group in SYNONYM_GROUPS:
+        triggered = any(
+            phrase_tokens and phrase_tokens <= raw_tokens
+            for phrase_tokens in (set(_tokens(member)) for member in group)
+        )
+        if not triggered:
+            continue
+        for member in group:
+            extra.update(
+                tok
+                for tok in _tokens(member)
+                if len(tok) >= 3 and tok not in _GENERIC_MATCH_STOPWORDS
+            )
+    return extra
+
+
 class SourceItemIndex:
     """Keyword/abbreviation index over a frozen source-item catalog snapshot."""
 
@@ -258,20 +341,35 @@ class SourceItemIndex:
         requiring human confirmation, never an assertion that the itemid IS the
         concept.
         """
+        raw = set(_tokens(term))
         wanted = set(_content_tokens(term))
+        wanted |= _synonym_expansion_tokens(raw)
         if not wanted:
             return []
-        hits: List[tuple[int, SourceItemHit]] = []
+        # tokens that carry a clinical affix are eligible for morphological fold.
+        morph_terms = [tok for tok in wanted if _affix_stem(tok)[1]]
+        hits: List[tuple[float, SourceItemHit]] = []
         for item in self._items:
             label_tokens = item["_label_tokens"]
             shared = wanted & label_tokens
             abbrev = item["abbrev"]
             abbrev_hit = bool(abbrev) and abbrev in wanted
-            if not shared and not abbrev_hit:
+            morph_shared: Set[str] = set()
+            if morph_terms:
+                for term_tok in morph_terms:
+                    for label_tok in label_tokens:
+                        if label_tok not in shared and _morph_matches(
+                            term_tok, label_tok
+                        ):
+                            morph_shared.add(label_tok)
+            if not shared and not abbrev_hit and not morph_shared:
                 continue
-            matched = tuple(sorted(shared | ({abbrev} if abbrev_hit else set())))
-            # score: more shared specific tokens first; abbrev match counts high.
-            score = len(shared) + (2 if abbrev_hit else 0)
+            matched = tuple(
+                sorted(shared | morph_shared | ({abbrev} if abbrev_hit else set()))
+            )
+            # score: exact specific tokens dominate; abbrev high; morphological
+            # (fuzzy) matches count half so exact hits always rank first.
+            score = len(shared) + (2 if abbrev_hit else 0) + 0.5 * len(morph_shared)
             hits.append(
                 (
                     score,
