@@ -98,19 +98,111 @@ def _mask_name_from_slice(node: ast.AST) -> Optional[str]:
     return None
 
 
+def _is_mask_method_call(node: ast.AST, mask_name: str, method: str) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and not node.args
+        and not node.keywords
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == method
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == mask_name
+    )
+
+
+def _is_len_call(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "len"
+        and len(node.args) == 1
+        and not node.keywords
+    )
+
+
+def _mask_incomplete_test(test: ast.AST, mask_name: str) -> bool:
+    if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+        return _is_mask_method_call(test.operand, mask_name, "all")
+    if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Invert):
+        return _is_mask_method_call(test.operand, mask_name, "all")
+
+    if (
+        isinstance(test, ast.Call)
+        and not test.args
+        and not test.keywords
+        and isinstance(test.func, ast.Attribute)
+        and test.func.attr == "any"
+        and isinstance(test.func.value, ast.UnaryOp)
+        and isinstance(test.func.value.op, ast.Invert)
+        and isinstance(test.func.value.operand, ast.Name)
+        and test.func.value.operand.id == mask_name
+    ):
+        return True
+    if (
+        isinstance(test, ast.Call)
+        and not test.args
+        and not test.keywords
+        and isinstance(test.func, ast.Attribute)
+        and test.func.attr == "any"
+        and isinstance(test.func.value, ast.Call)
+        and isinstance(test.func.value.func, ast.Attribute)
+        and test.func.value.func.attr == "eq"
+        and isinstance(test.func.value.func.value, ast.Name)
+        and test.func.value.func.value.id == mask_name
+        and len(test.func.value.args) == 1
+        and isinstance(test.func.value.args[0], ast.Constant)
+        and test.func.value.args[0].value is False
+    ):
+        return True
+
+    if not isinstance(test, ast.Compare) or len(test.ops) != 1:
+        return False
+    left = test.left
+    right = test.comparators[0]
+    operator = test.ops[0]
+    if isinstance(operator, (ast.Eq, ast.Is)):
+        return (
+            _is_mask_method_call(left, mask_name, "all")
+            and isinstance(right, ast.Constant)
+            and right.value is False
+        ) or (
+            _is_mask_method_call(right, mask_name, "all")
+            and isinstance(left, ast.Constant)
+            and left.value is False
+        )
+    if isinstance(operator, (ast.NotEq, ast.IsNot)):
+        return (
+            _is_mask_method_call(left, mask_name, "sum") and _is_len_call(right)
+        ) or (
+            _is_mask_method_call(right, mask_name, "sum") and _is_len_call(left)
+        )
+    return False
+
+
+def _mask_complete_test(test: ast.AST, mask_name: str) -> bool:
+    if _is_mask_method_call(test, mask_name, "all"):
+        return True
+    if not isinstance(test, ast.Compare) or len(test.ops) != 1:
+        return False
+    left = test.left
+    right = test.comparators[0]
+    if not isinstance(test.ops[0], (ast.Eq, ast.Is)):
+        return False
+    return (
+        _is_mask_method_call(left, mask_name, "sum") and _is_len_call(right)
+    ) or (
+        _is_mask_method_call(right, mask_name, "sum") and _is_len_call(left)
+    )
+
+
 def _is_raise_only_guard(statement: ast.stmt, mask_name: str) -> bool:
+    if isinstance(statement, ast.Assert):
+        return _mask_complete_test(statement.test, mask_name)
     if not isinstance(statement, ast.If) or not statement.body:
         return False
     if not all(isinstance(item, (ast.Raise, ast.Return)) for item in statement.body):
         return False
-    rendered = ast.unparse(statement.test)
-    compact = re.sub(r"\s+", "", rendered)
-    accepted = {
-        f"not{mask_name}.all()",
-        f"~{mask_name}.all()",
-        f"{mask_name}.eq(False).any()",
-    }
-    return compact in accepted
+    return _mask_incomplete_test(statement.test, mask_name)
 
 
 def _is_boolean_mask_expression(node: ast.AST) -> bool:
@@ -148,6 +240,7 @@ def _structural_filter_findings(tree: ast.Module, step: AnalysisStep) -> list[Va
         body = getattr(owner, "body", [])
         prior_guards: set[str] = set()
         mask_names: set[str] = set()
+        mask_sources: dict[str, set[str]] = {}
         for statement in body:
             if isinstance(statement, (ast.Assign, ast.AnnAssign)):
                 value = statement.value
@@ -157,9 +250,11 @@ def _structural_filter_findings(tree: ast.Module, step: AnalysisStep) -> list[Va
                     else [statement.target]
                 )
                 if value is not None and _is_boolean_mask_expression(value):
-                    mask_names.update(
-                        target.id for target in targets if isinstance(target, ast.Name)
-                    )
+                    for target in targets:
+                        if not isinstance(target, ast.Name):
+                            continue
+                        mask_names.add(target.id)
+                        mask_sources[target.id] = _referenced_names(value)
             for possible_mask in {
                 node.id for node in ast.walk(statement) if isinstance(node, ast.Name)
             }:
@@ -170,8 +265,15 @@ def _structural_filter_findings(tree: ast.Module, step: AnalysisStep) -> list[Va
                     continue
                 mask_name = _mask_name_from_slice(node.slice)
                 value_name = _call_name(node.value)
-                is_row_filter = value_name.endswith(".loc") or isinstance(
-                    node.value, (ast.Name, ast.Attribute)
+                source_names = mask_sources.get(mask_name or "", set())
+                filtered_names = _referenced_names(node.value)
+                is_row_filter = bool(
+                    mask_name
+                    and source_names & filtered_names
+                    and (
+                        value_name.endswith(".loc")
+                        or isinstance(node.value, ast.Name)
+                    )
                 )
                 if not is_row_filter:
                     continue

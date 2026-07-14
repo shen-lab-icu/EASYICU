@@ -333,6 +333,7 @@ from .runtime_artifacts import (
     AuditLogger,
     build_execution_replay,
     build_workflow_graph,
+    current_successful_step_records,
     current_step_records,
     load_run_artifact_authority,
     render_workflow_graph_mermaid,
@@ -424,9 +425,10 @@ def _load_compatible_resume_plan(
     """Load the newest saved plan compatible with completed resume steps."""
     completed_step_ids = {
         str(record.get("step_id"))
-        for record in ((resume_state or {}).get("per_step_records") or [])
+        for record in current_successful_step_records(
+            (resume_state or {}).get("per_step_records") or []
+        )
         if record.get("step_id")
-        and record.get("status") == "ok"
         and record.get("step_id") != "00_probe"
     }
     for candidate in _resume_plan_candidate_paths(

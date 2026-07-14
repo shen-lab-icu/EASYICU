@@ -5913,10 +5913,17 @@ else:
                         or role_resolver("analyzer")
                     )
                     if llm_audit_client is not None:
+                        llm_concept_auditor = LLMConceptAuditor(llm_audit_client)
+                        audit_prompt = llm_concept_auditor._prompt(
+                            context=context,
+                            script_text=script_text,
+                            step=step,
+                        )
                         audit_key = llm_concept_audit_cache.key(
                             context=context,
                             step=step,
                             script_text=script_text,
+                            audit_prompt=audit_prompt,
                         )
                         cached_findings = llm_concept_audit_cache.get(audit_key)
                         if cached_findings is not None:
@@ -5925,7 +5932,7 @@ else:
                                 step_record.get("llm_concept_audit_cache_hits") or 0
                             ) + 1
                         else:
-                            llm_findings = LLMConceptAuditor(llm_audit_client).audit(
+                            llm_findings = llm_concept_auditor.audit(
                                 context=context,
                                 script_text=script_text,
                                 step=step,

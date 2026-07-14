@@ -251,6 +251,47 @@ def test_resume_prefers_latest_compatible_plan_revision(tmp_path: Path):
     ]
 
 
+def test_resume_plan_compatibility_uses_latest_step_status(tmp_path: Path):
+    run_dir = tmp_path / "run_latest_step_authority"
+    run_dir.mkdir()
+    plan = AnalysisPlan(
+        research_question="Resume after a superseded success.",
+        steps=[
+            AnalysisStep(
+                step_id="01_current_success",
+                intent="Keep the current successful step.",
+                expected_outputs=["table:current"],
+            )
+        ],
+    )
+    plan_path = run_dir / "analysis_plan.json"
+    plan_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
+    evidence = EvidenceStore(run_dir)
+    record = evidence.register_file(
+        kind="log",
+        description="Resume plan.",
+        source_path=plan_path,
+        evidence_id="analysis_plan",
+        producer="planner",
+        generation_mode="llm",
+    )
+    resume_state = {
+        "per_step_records": [
+            {"step_id": "01_current_success", "status": "ok"},
+            {"step_id": "02_superseded", "status": "ok"},
+            {"step_id": "02_superseded", "status": "contract_failed"},
+        ]
+    }
+
+    selected, selected_path = _load_compatible_resume_plan(
+        run_dir=run_dir,
+        resume_state=resume_state,
+    )
+
+    assert selected == plan
+    assert selected_path == verified_run_evidence_path(run_dir, record)
+
+
 def test_partial_manifest_is_written_after_run(ra, synthetic_cohort, tmp_path: Path):
     result = _run_full(ra, synthetic_cohort, tmp_path)
     run_dir = Path(result.workdir)
