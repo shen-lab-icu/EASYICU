@@ -387,6 +387,22 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
         if isinstance(node.value, ast.Call) and _call_name(node.value.func) in marker_functions:
             result_names.update(target_names)
 
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If):
+            continue
+        if not (_literal_string_tokens(node.test) & _PROVENANCE_FAILURE_KEYS):
+            continue
+        for statement in [*node.body, *node.orelse]:
+            for candidate in ast.walk(statement):
+                if not isinstance(candidate, ast.Call):
+                    continue
+                if not isinstance(candidate.func, ast.Attribute):
+                    continue
+                if candidate.func.attr not in {"add", "append", "extend"}:
+                    continue
+                if isinstance(candidate.func.value, ast.Name):
+                    derived_names.add(candidate.func.value.id)
+
     changed = True
     while changed:
         changed = False

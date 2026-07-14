@@ -331,6 +331,35 @@ def test_coder_repair_replaces_undefined_helper_without_stub(ra):
     assert "Never insert a stub, no-op" in prompt
 
 
+def test_coder_repair_binds_finalized_tabular_exposure_product(ra):
+    llm = _RecordingLLM()
+    context = _context(ra).model_copy(update={"primary_exposure": "selected_first"})
+    step = ra.AnalysisStep(
+        step_id="diagnostics",
+        intent="Run diagnostics for the planner-owned exposure.",
+        inputs=["artifact:primary_exposure_definition"],
+        expected_outputs=["table:diagnostics"],
+        method="diagnostic_analysis",
+    )
+
+    CoderAgent(llm).repair(
+        context=context,
+        step=step,
+        code="definition = typed['artifact:primary_exposure_definition']\n",
+        run_log=(
+            "RuntimeError: primary_exposure_definition has no registered "
+            "executable exposure column available in the analysis data"
+        ),
+    )
+
+    prompt = llm.messages[-1].content
+    assert "DIAGNOSED TABULAR AUTHORITATIVE-EXPOSURE REPAIR" in prompt
+    assert "row-aligned finalized exposure table" in prompt
+    assert "exact planner-selected `ResearchContext.primary_exposure`" in prompt
+    assert 'fact is: "selected_first"' in prompt
+    assert "Do not repeat raw-event reconciliation" in prompt
+
+
 def test_coder_repair_removes_untraceable_figure_audit_columns(ra):
     llm = _RecordingLLM()
     step = ra.AnalysisStep(

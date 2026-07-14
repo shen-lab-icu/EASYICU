@@ -401,6 +401,34 @@ model.fit(frame)
     )
 
 
+def test_mechanical_preflight_accepts_terminating_provenance_failure_collection(ra):
+    code = """
+def provenance_audit(frame):
+    checks = [{
+        'role': 'audit_only',
+        'invalid_pair_n': 0,
+        'discordant_n': 0,
+    }]
+    return {'checks': checks}
+
+audit = provenance_audit(frame)
+provenance_failures = []
+for check in audit['checks']:
+    if check['invalid_pair_n'] or check['discordant_n']:
+        provenance_failures.append(check)
+if provenance_failures:
+    raise ValueError('invalid measurement provenance')
+model.fit(frame)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
 def test_mechanical_preflight_blocks_unused_authoritative_exposure(ra):
     step = ra.AnalysisStep(
         step_id="diagnostics",
