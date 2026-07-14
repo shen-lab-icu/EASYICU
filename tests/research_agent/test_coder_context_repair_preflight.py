@@ -401,6 +401,57 @@ model.fit(frame)
     )
 
 
+def test_mechanical_preflight_blocks_unused_authoritative_exposure(ra):
+    step = ra.AnalysisStep(
+        step_id="diagnostics",
+        intent="Run planner-owned exposure diagnostics.",
+        inputs=[
+            "artifact:quality_checked_analysis_data",
+            "artifact:primary_exposure_definition",
+        ],
+        expected_outputs=["table:diagnostics"],
+        method="diagnostic_analysis",
+    )
+    code = """
+def main():
+    typed = load_typed_inputs()
+    exposure_definition = typed.get('artifact:primary_exposure_definition')
+    exposure_col = 'candidate_event_max'
+    return frame[exposure_col].mean()
+"""
+    findings = audit_mechanical_code_contracts(code, step)
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "authoritative_primary_exposure_unused"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_accepts_consumed_authoritative_exposure(ra):
+    step = ra.AnalysisStep(
+        step_id="diagnostics",
+        intent="Run planner-owned exposure diagnostics.",
+        inputs=["artifact:primary_exposure_definition"],
+        expected_outputs=["table:diagnostics"],
+        method="diagnostic_analysis",
+    )
+    code = """
+def main():
+    typed = load_typed_inputs()
+    exposure_definition = typed.get('artifact:primary_exposure_definition')
+    exposure_col = resolve_declared_exposure(frame, exposure_definition)
+    return frame[exposure_col].mean()
+"""
+    findings = audit_mechanical_code_contracts(code, step)
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "authoritative_primary_exposure_unused"
+        for finding in findings
+    )
+
+
 def test_llm_concept_audit_cache_reuses_identical_digest(tmp_path, ra):
     context = _context(ra)
     step = _figure_step(ra)

@@ -428,6 +428,86 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
     ]
 
 
+def _scope_nodes(statements: list[ast.stmt]) -> list[ast.AST]:
+    """Walk one lexical scope without borrowing uses from nested functions."""
+
+    collected: list[ast.AST] = []
+
+    class _ScopeVisitor(ast.NodeVisitor):
+        def generic_visit(self, node: ast.AST) -> None:
+            collected.append(node)
+            super().generic_visit(node)
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            collected.append(node)
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            collected.append(node)
+
+        def visit_Lambda(self, node: ast.Lambda) -> None:
+            collected.append(node)
+
+    visitor = _ScopeVisitor()
+    for statement in statements:
+        visitor.visit(statement)
+    return collected
+
+
+def _authoritative_exposure_binding_findings(
+    tree: ast.Module, step: AnalysisStep
+) -> list[ValidationFinding]:
+    authoritative_product = "artifact:primary_exposure_definition"
+    if authoritative_product not in {
+        str(value or "").strip().lower() for value in step.inputs or []
+    }:
+        return []
+
+    scopes = [tree.body]
+    scopes.extend(
+        node.body
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    )
+    for statements in scopes:
+        nodes = _scope_nodes(statements)
+        definition_names: set[str] = set()
+        for node in nodes:
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)) or node.value is None:
+                continue
+            if authoritative_product not in _literal_string_tokens(node.value):
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            definition_names.update(
+                target.id for target in targets if isinstance(target, ast.Name)
+            )
+        if not definition_names:
+            continue
+
+        for node in nodes:
+            if isinstance(node, ast.Call):
+                call_inputs = [*node.args, *[keyword.value for keyword in node.keywords]]
+                if any(
+                    _referenced_names(value) & definition_names for value in call_inputs
+                ):
+                    return []
+            if isinstance(node, ast.Subscript):
+                if _referenced_names(node.value) & definition_names:
+                    return []
+
+        return [
+            ValidationFinding(
+                validator="mechanical_code_preflight",
+                severity="error",
+                message=(
+                    "The authoritative primary-exposure definition is loaded but "
+                    "never consumed to bind the executable exposure column."
+                ),
+                detail={"reason": "authoritative_primary_exposure_unused"},
+            )
+        ]
+    return []
+
+
 def audit_mechanical_code_contracts(
     script_text: str,
     step: AnalysisStep,
@@ -466,6 +546,7 @@ def audit_mechanical_code_contracts(
     findings.extend(_structural_integer_findings(tree, step))
     findings.extend(_binding_metadata_findings(tree))
     findings.extend(_provenance_fail_closed_findings(tree))
+    findings.extend(_authoritative_exposure_binding_findings(tree, step))
     return findings
 
 
