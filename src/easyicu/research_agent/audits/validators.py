@@ -1487,8 +1487,42 @@ class StepSummaryFractionValidator:
             "sample_size",
             "total_n",
         }
-        scalar_value_children = {"estimate", "fraction", "value"}
+        structural_suffixes = (
+            "_count",
+            "_denominator",
+            "_n",
+            "_numerator",
+            "_sample_size",
+        )
+        structural_prefixes = ("n_", "num_", "number_")
         generic_ci_children = {"ci_low", "ci_high", "ci_lower", "ci_upper"}
+
+        def is_structural_child(name: str) -> bool:
+            return (
+                name in structural_children
+                or name.startswith(structural_prefixes)
+                or name.endswith(structural_suffixes)
+            )
+
+        def blocks_inherited_context(key: Any, name: str) -> bool:
+            ci_base = re.sub(r"_(?:ci_)?(?:low|high|lower|upper)$", "", name)
+            return (
+                is_structural_child(name)
+                or any(
+                    token in name for token in ("pct", "percent", "percentage")
+                )
+                or name.startswith("fractional_")
+                or is_effect_scale_field(key)
+                or ci_base == "at_risk"
+                or ci_base.endswith("_at_risk")
+                or ci_base
+                in {
+                    "attributable_fraction",
+                    "attributable_risk",
+                    "excess_risk",
+                    "population_attributable_fraction",
+                }
+            )
 
         def visit(
             value: Any,
@@ -1496,10 +1530,6 @@ class StepSummaryFractionValidator:
             bounded_context: Optional[str] = None,
         ) -> None:
             if isinstance(value, dict):
-                normalised_children = {normalise_key(key) for key in value}
-                has_explicit_value_child = bool(
-                    normalised_children & scalar_value_children
-                )
                 sibling_kinds = {
                     kind
                     for key in value
@@ -1514,14 +1544,15 @@ class StepSummaryFractionValidator:
                 for key, child in value.items():
                     normalised = normalise_key(key)
                     key_context = bounded_field_kind(key)
-                    inherited_context = bounded_context
-                    if inherited_context and has_explicit_value_child:
-                        inherited_context = (
-                            inherited_context
-                            if normalised in scalar_value_children
-                            else None
-                        )
-                    if inherited_context and normalised in structural_children:
+                    # A bounded owner may directly contain a category->value map
+                    # or a structured metric record.  Do not let that context
+                    # leak through a named nested container such as
+                    # ``absolute_risk.bili_distribution``; the nested key must
+                    # establish its own bounded semantics.
+                    inherited_context = (
+                        None if isinstance(child, (dict, list)) else bounded_context
+                    )
+                    if inherited_context and blocks_inherited_context(key, normalised):
                         inherited_context = None
                     if normalised in generic_ci_children and (
                         sibling_context or bounded_context
