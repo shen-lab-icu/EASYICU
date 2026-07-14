@@ -43,9 +43,7 @@ def test_replanner_grown_cohort_step_with_empty_definition_is_flagged(
         the deterministic mock so the run still completes."""
 
         def complete(self, messages, **kwargs):
-            user = next(
-                (m.content for m in reversed(messages) if m.role == "user"), ""
-            )
+            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
             if _replan_prompt(user):
                 match = re.search(
                     r"CURRENT PLAN:\n(\{.*?\})\n\nPROBE SUMMARY:",
@@ -79,9 +77,7 @@ def test_replanner_grown_cohort_step_with_empty_definition_is_flagged(
                 return revised.model_dump_json(indent=2)
             return super().complete(messages, **kwargs)
 
-    pipeline = ra.ResearchAgentPipeline(
-        workdir=tmp_path, llm=ReplanAddsCohortStepLLM()
-    )
+    pipeline = ra.ResearchAgentPipeline(workdir=tmp_path, llm=ReplanAddsCohortStepLLM())
     result = pipeline.run(
         question="Is admission SOFA-2 associated with ICU mortality?",
         cohort=synthetic_cohort,
@@ -109,7 +105,10 @@ def test_replanner_grown_cohort_step_with_empty_definition_is_flagged(
         (f.get("detail") or {}).get("stage") == "execute" for f in contract_errors
     ), "cohort_contract error is not tagged as an execute-phase re-check"
 
-    # Fail-open, not fail-closed: the contract is auditable but the run still
-    # finishes and produces a manuscript.
-    statuses = [r.get("status") for r in manifest.get("per_step_records", [])]
-    assert statuses and all(s == "ok" for s in statuses), statuses
+    # The newer typed-product gate is deliberately fail-closed: an empty cohort
+    # definition cannot legitimately realise table:analysis_cohort. Downstream
+    # diagnostic steps may still run, but the missing product must remain red.
+    records = manifest.get("per_step_records", [])
+    cohort_records = [r for r in records if r.get("step_id") == "01_cohort_definition"]
+    assert cohort_records and cohort_records[-1].get("status") == "contract_failed"
+    assert any(r.get("status") == "ok" for r in records if r not in cohort_records)
