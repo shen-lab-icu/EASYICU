@@ -525,6 +525,14 @@ def test_robustness_runner_rejects_primary_and_figure_owners():
         "08_bare_mixed_contract",
         ["table:robustness_matrix", "negative_control_outcomes.csv"],
     )
+    # This is an agent-owned scientific execution contract, not an auxiliary
+    # renderer/calculator contract.  The standard runner must not invent the
+    # missing-data model simply because the planner used a robustness label.
+    assert not _robustness_sensitivity_runner_owns_step(
+        "prespecified_robustness_analysis",
+        "08_prespecified_grid",
+        ["table:robustness_grid", "table:sensitivity_specification_matrix"],
+    )
 
 
 def test_primary_estimands_and_cohort_selection_are_not_preflight_dispatched():

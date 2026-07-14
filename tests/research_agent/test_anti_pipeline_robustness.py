@@ -83,6 +83,23 @@ def _sensitivity_step(*, figure: bool = False):
     )
 
 
+def _prespecified_robustness_step(*, foreign_output: bool = False):
+    from easyicu.research_agent.schema import AnalysisStep
+
+    outputs = [
+        "table:robustness_grid",
+        "table:sensitivity_specification_matrix",
+    ]
+    if foreign_output:
+        outputs.append("table:negative_control_outcomes")
+    return AnalysisStep(
+        step_id="08_prespecified_robustness",
+        intent="Execute the planner-locked robustness specifications.",
+        method="prespecified_robustness_analysis",
+        expected_outputs=outputs,
+    )
+
+
 def _write_membership_inputs(run_dir):
     universe_path = run_dir / "universe.parquet"
     cohort_path = run_dir / "cohort_analysis.parquet"
@@ -1206,6 +1223,79 @@ def test_coder_context_receives_locked_spec_definitions_and_universe_contract(
     assert "inflow_n" in (enriched.notes or "")
     assert "outflow_n" in (enriched.notes or "")
     assert "overlap_n" in (enriched.notes or "")
+
+
+def test_prespecified_robustness_alias_receives_locked_execution_contract(
+    tmp_path,
+) -> None:
+    from easyicu.research_agent.pipeline_execute import (
+        _coder_context_with_locked_robustness_specs,
+    )
+    from easyicu.research_agent.schema import CohortDescriptor, ResearchContext
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "robustness_specs_locked.json").write_text(
+        json.dumps(_locked_specs_payload()), encoding="utf-8"
+    )
+    context = ResearchContext(
+        research_question="Test the locked variants.",
+        cohort=CohortDescriptor(
+            cohort_name="test",
+            database="mock",
+            n_patients=5,
+            n_stays=5,
+        ),
+        variables=[],
+    )
+
+    enriched = _coder_context_with_locked_robustness_specs(
+        context=context,
+        step=_prespecified_robustness_step(),
+        run_dir=run_dir,
+    )
+
+    assert enriched is not context
+    assert "LOCKED ROBUSTNESS SPECIFICATIONS" in (enriched.notes or "")
+    assert "missing-indicator specification" in (enriched.notes or "")
+
+
+def test_prespecified_robustness_alias_is_gated_but_mixed_contract_is_not(
+    tmp_path,
+) -> None:
+    from easyicu.research_agent.pipeline_execute import (
+        _cohort_definition_sensitivity_contract_findings,
+    )
+
+    run_dir = tmp_path / "run"
+    out_dir = run_dir / "steps" / "08_prespecified_robustness" / "outputs"
+    out_dir.mkdir(parents=True)
+    (run_dir / "robustness_specs_locked.json").write_text(
+        json.dumps(_locked_specs_payload()), encoding="utf-8"
+    )
+    universe_path, cohort_path = _write_membership_inputs(run_dir)
+
+    findings = _cohort_definition_sensitivity_contract_findings(
+        step=_prespecified_robustness_step(),
+        step_summary={},
+        out_dir=out_dir,
+        run_dir=run_dir,
+        universe_path=universe_path,
+        cohort_path=cohort_path,
+    )
+    mixed_findings = _cohort_definition_sensitivity_contract_findings(
+        step=_prespecified_robustness_step(foreign_output=True),
+        step_summary={},
+        out_dir=out_dir,
+        run_dir=run_dir,
+        universe_path=universe_path,
+        cohort_path=cohort_path,
+    )
+
+    assert any(
+        finding.validator == "robustness_executed_result" for finding in findings
+    )
+    assert mixed_findings == []
 
 
 def test_locked_sensitivity_contract_is_wired_into_all_three_contract_passes() -> None:
