@@ -1293,6 +1293,19 @@ def _repair_publication_figure_in_staging(
         return repair_id
 
 
+def _blocking_validator_findings(
+    *finding_groups: Sequence[ValidationFinding],
+) -> List[ValidationFinding]:
+    """Keep only fail-closed findings that may drive code or Critic repair."""
+
+    return [
+        finding
+        for group in finding_groups
+        for finding in group
+        if finding.severity == "error"
+    ]
+
+
 def _actionable_validator_messages(
     *finding_groups: Sequence[ValidationFinding],
 ) -> List[str]:
@@ -1306,9 +1319,8 @@ def _actionable_validator_messages(
 
     return [
         finding.message
-        for group in finding_groups
-        for finding in group
-        if finding.severity == "error" and finding.message
+        for finding in _blocking_validator_findings(*finding_groups)
+        if finding.message
     ]
 
 
@@ -6397,6 +6409,7 @@ else:
                 total_steps=total_steps,
                 repair_attempts=concept_repair_attempts,
             )
+            blocking_usage_findings = _blocking_validator_findings(usage_findings)
             audit_log = "\n".join(
                 (
                     f"{f.severity.upper()}: {f.message}"
@@ -6407,9 +6420,9 @@ else:
                         else ""
                     )
                 )
-                for f in usage_findings
+                for f in blocking_usage_findings
             )
-            _remember_concept_constraints(usage_findings)
+            _remember_concept_constraints(blocking_usage_findings)
             try:
                 repaired_code = coder.repair(
                     context=coder_context,
