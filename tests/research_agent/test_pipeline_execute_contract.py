@@ -250,6 +250,34 @@ def test_critic_messages_keep_only_blocking_errors():
     assert messages == ["Repair this error."]
 
 
+def test_code_repair_findings_keep_only_blocking_errors():
+    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.pipeline_execute import (
+        _blocking_validator_findings,
+    )
+
+    findings = _blocking_validator_findings(
+        [
+            ValidationFinding(
+                validator="audit",
+                severity="warning",
+                message="Keep as advisory evidence only.",
+            ),
+            ValidationFinding(
+                validator="audit",
+                severity="error",
+                message="Repair this blocking error.",
+                detail={"reason": "blocking_contract"},
+            ),
+        ]
+    )
+
+    assert [finding.message for finding in findings] == [
+        "Repair this blocking error."
+    ]
+    assert findings[0].detail == {"reason": "blocking_contract"}
+
+
 @pytest.mark.parametrize(
     ("record", "expected"),
     [
