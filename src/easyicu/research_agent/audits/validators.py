@@ -773,8 +773,13 @@ class LLMConceptAuditor:
             context=context,
             script_text=script_text,
         )
-        return _downgrade_audit_only_companion_gating_findings(
+        findings = _downgrade_audit_only_companion_gating_findings(
             findings=findings,
+            script_text=script_text,
+        )
+        return _downgrade_finalized_exposure_reconciliation_findings(
+            findings=findings,
+            context=context,
             script_text=script_text,
         )
 
@@ -887,6 +892,15 @@ class LLMConceptAuditor:
             "value column's own missingness and numeric/domain rules determine its "
             "descriptive or modelling availability; the companions audit source "
             "provenance and must not change its row-level denominator. "
+            "When `artifact:primary_exposure_definition` is a row-aligned "
+            "finalized table, its exact Planner-selected binary column is the "
+            "authoritative exposure. Validate its alignment, completeness, "
+            "finiteness, and exact {0,1} domain, then use it directly. Raw "
+            "count/measured/representative companions may be checked in a "
+            "separate fail-closed provenance audit, but they must neither "
+            "redefine nor overwrite the finalized exposure. Do not demand a "
+            "second sparse-event reconciliation in this finalized-table branch; "
+            "that reconciliation belongs to a raw-definition producer branch. "
             "There is one narrow sparse-event exception: an agent-planned binary "
             "event-presence exposure may use `<concept>_n > 0` when registered "
             "metadata identifies the base concept as an event/indicator rather "
@@ -1235,6 +1249,86 @@ def _downgrade_audit_only_companion_gating_findings(
                     "comparison and fails the whole completed step on invalid or "
                     "discordant provenance. Companion fields must not gate "
                     "row-level physiological values.",
+                )
+                downgraded.append(
+                    finding.model_copy(
+                        update={"severity": "warning", "detail": detail}
+                    )
+                )
+                continue
+        downgraded.append(finding)
+    return downgraded
+
+
+def _downgrade_finalized_exposure_reconciliation_findings(
+    *,
+    findings: Sequence[ValidationFinding],
+    context: ResearchContext,
+    script_text: str,
+) -> List[ValidationFinding]:
+    """Do not make consumers rederive a finalized binary exposure.
+
+    A typed row-aligned exposure table has already passed its producer gate. Its
+    exact Planner-selected column remains authoritative at downstream steps;
+    raw sparse-event companions may audit provenance but cannot redefine it.
+    Genuine findings that the script discards or overwrites the finalized values
+    remain blocking.
+    """
+
+    primary_exposure = str(context.primary_exposure or "").strip()
+    script = str(script_text or "")
+    normalized_script = re.sub(r"\s+", "", script.lower())
+    direct_binding = bool(
+        primary_exposure
+        and "artifact:primary_exposure_definition" in script
+        and "dataframe" in script.lower()
+        and re.search(
+            rf"\[\s*['\"]{re.escape(primary_exposure)}['\"]\s*\]",
+            script,
+        )
+        and ".isin([0,1])" in normalized_script
+        and ("isfinite(" in normalized_script or ".notna()" in normalized_script)
+    )
+    if not direct_binding:
+        return list(findings)
+
+    missing_reconciliation_signals = (
+        "bypasses the required binary-event triad reconciliation",
+        "bypasses binary-event triad reconciliation",
+        "bypasses the binary-event triad reconciliation",
+        "does not call reconcile_binary_event_presence",
+        "does not invoke reconcile_binary_event_presence",
+        "without the required companion-consistency audit",
+    )
+    finalized_override_signals = (
+        "ignores its values",
+        "ignores the finalized",
+        "overwrites",
+        "discards",
+        "replaces the finalized",
+        "instead of the finalized",
+        "raw companions determine",
+    )
+    downgraded: List[ValidationFinding] = []
+    for finding in findings:
+        if finding.validator == LLMConceptAuditor.name and finding.severity == "error":
+            text = " ".join(
+                [
+                    finding.message or "",
+                    json.dumps(finding.detail or {}, ensure_ascii=False, default=str),
+                ]
+            ).lower()
+            complains_only_about_reconciliation = any(
+                signal in text for signal in missing_reconciliation_signals
+            ) and not any(signal in text for signal in finalized_override_signals)
+            if complains_only_about_reconciliation:
+                detail = dict(finding.detail or {})
+                detail.setdefault(
+                    "downgraded_reason",
+                    "The script directly binds and validates the exact binary "
+                    "column from the finalized row-aligned exposure artifact. "
+                    "Downstream raw-event reconciliation may audit provenance "
+                    "but must not redefine that authoritative exposure.",
                 )
                 downgraded.append(
                     finding.model_copy(
