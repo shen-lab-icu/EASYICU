@@ -28,7 +28,6 @@ from .trajectory_plan_contract import (
     trajectory_role_scope_summary_findings,
 )
 
-
 _FIGURE_KINDS = frozenset({"figure", "plot", "chart", "fig", "heatmap"})
 _FAILED_STATUSES = frozenset(
     {
@@ -332,7 +331,12 @@ def _planner_product_slot_and_subject(
                 and tokens[len(role_tokens)] == "by"
             ):
                 matches.add(
-                    (slot, role_tokens, tokens[len(role_tokens) + 1 :], "role_by_subject")
+                    (
+                        slot,
+                        role_tokens,
+                        tokens[len(role_tokens) + 1 :],
+                        "role_by_subject",
+                    )
                 )
     if len(matches) != 1:
         raise ValueError(
@@ -411,9 +415,11 @@ def authorize_declared_figure_product_slots(
         parent_name = (
             parsed_parent[1]
             if parsed_parent is not None
-            else _file_stem(value)
-            if Path(str(value or "")).name != "step_summary.json"
-            else ""
+            else (
+                _file_stem(value)
+                if Path(str(value or "")).name != "step_summary.json"
+                else ""
+            )
         )
         tokens = tuple(part for part in parent_name.split("_") if part)
         if tokens:
@@ -433,11 +439,13 @@ def authorize_declared_figure_product_slots(
         )
         parent_subject_anchored = any(
             (
-                len(parent_tokens) >= len(subject)
-                and parent_tokens[: len(subject)] == subject
+                (
+                    len(parent_tokens) >= len(subject)
+                    and parent_tokens[: len(subject)] == subject
+                )
+                if syntax == "subject_role"
+                else _contains_token_sequence(parent_tokens, subject)
             )
-            if syntax == "subject_role"
-            else _contains_token_sequence(parent_tokens, subject)
             for parent_tokens in parent_token_sequences
         )
         if subject and not parent_subject_anchored:
@@ -852,7 +860,9 @@ def _effect_bearing_name(name: str) -> bool:
         )
     ):
         return False
-    return any(_contains_product_role(normalised, base) for base in _EFFECT_PRODUCT_BASES)
+    return any(
+        _contains_product_role(normalised, base) for base in _EFFECT_PRODUCT_BASES
+    )
 
 
 def _contains_product_role(name: str, role: str) -> bool:
@@ -993,8 +1003,7 @@ def effect_adjustment_family(value: object) -> str | None:
     if _contains_product_role(name, "adjusted"):
         return "adjusted"
     if any(
-        _contains_product_role(name, qualifier)
-        for qualifier in ("unadjusted", "crude")
+        _contains_product_role(name, qualifier) for qualifier in ("unadjusted", "crude")
     ):
         return "unadjusted"
     return None
@@ -1099,6 +1108,35 @@ def _assignment_model_completion_findings(
         and isinstance(exposure.get("resolution"), Mapping)
         else {}
     )
+    model_diagnostics = [
+        {
+            "model_id": model.get("model_id"),
+            "fit_status": _normalise(model.get("fit_status") or model.get("status")),
+            "n": model.get("n"),
+            "exposure_event_n": model.get("exposure_event_n"),
+            "exposure_non_event_n": model.get("exposure_non_event_n"),
+            "error": model.get("error"),
+        }
+        for model in models
+        if isinstance(model, Mapping)
+    ]
+    overall_event_n = exposure.get("event_n") if isinstance(exposure, Mapping) else None
+    overall_non_event_n = (
+        exposure.get("non_event_n") if isinstance(exposure, Mapping) else None
+    )
+    exposure_class_collapse = bool(
+        isinstance(overall_event_n, int)
+        and isinstance(overall_non_event_n, int)
+        and overall_event_n > 0
+        and overall_non_event_n > 0
+        and any(
+            (
+                diagnostic.get("exposure_event_n") == 0
+                or diagnostic.get("exposure_non_event_n") == 0
+            )
+            for diagnostic in model_diagnostics
+        )
+    )
     return [
         ValidationFinding(
             validator="declared_product_contract",
@@ -1121,6 +1159,19 @@ def _assignment_model_completion_findings(
                     exposure_resolution.get("status")
                 ),
                 "exposure_resolution_reason": exposure_resolution.get("reason"),
+                "overall_exposure_event_n": overall_event_n,
+                "overall_exposure_non_event_n": overall_non_event_n,
+                "model_diagnostics": model_diagnostics,
+                "exposure_class_collapse_after_eligibility": exposure_class_collapse,
+                "repair_constraint": (
+                    "The resolved exposure has both classes before model-set "
+                    "eligibility but at least one model set has lost a class. "
+                    "Audit analysis-set and timing eligibility symmetrically "
+                    "for exposed and unexposed rows; do not redefine the "
+                    "Planner-owned exposure, cohort, model, or estimand."
+                    if exposure_class_collapse
+                    else None
+                ),
             },
         )
     ]
@@ -1232,9 +1283,7 @@ def declared_product_contract_findings(
             for kind, name in registered
             if _effect_bearing_name(name)
             and not (
-                kind == "log"
-                and (kind, name) in declared
-                and _auxiliary_log_name(name)
+                kind == "log" and (kind, name) in declared and _auxiliary_log_name(name)
             )
             and not (
                 effect_figure_source_authorized
