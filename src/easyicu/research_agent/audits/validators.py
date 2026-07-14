@@ -768,9 +768,13 @@ class LLMConceptAuditor:
             validator=self.name,
             step_id=step.step_id if step else None,
         )
-        return _downgrade_metadata_supported_outcome_findings(
+        findings = _downgrade_metadata_supported_outcome_findings(
             findings=findings,
             context=context,
+            script_text=script_text,
+        )
+        return _downgrade_audit_only_companion_gating_findings(
+            findings=findings,
             script_text=script_text,
         )
 
@@ -866,9 +870,10 @@ class LLMConceptAuditor:
             "Review this generated analysis script for ICU concept-use risks "
             "that deterministic regex checks may miss. Focus only on: ordinal "
             "scores treated as continuous, silent missingness assumptions, "
-            "alternate per-stay summaries (first/max/min/mean) whose validity "
-            "masks bypass the same concept's measured/count/source-status "
-            "consistency checks, "
+            "alternate per-stay summaries (first/max/min/mean) that bypass "
+            "numeric/domain validation or a fail-closed whole-step provenance "
+            "audit of the same concept's measured/count/source-status "
+            "companion consistency checks, "
             "PaO2/FiO2 or GCS/SOFA/KDIGO misuse, ICU vs hospital mortality "
             "confusion, and causal/clinical treatment claims in analysis code. "
             "Measurement-count columns are normally independent QC fields: do "
@@ -876,6 +881,12 @@ class LLMConceptAuditor:
             "exposure, or source-status mask when the script separately compares "
             "(count > 0) with the measured flag, reports discordance or "
             "unavailable count columns, and keeps that comparison audit-only. "
+            "When that audit fails closed for the whole completed step, do not "
+            "demand that individual physiological first/max/min/mean values be "
+            "masked, filtered, or invalidated by measured/count companions. The "
+            "value column's own missingness and numeric/domain rules determine its "
+            "descriptive or modelling availability; the companions audit source "
+            "provenance and must not change its row-level denominator. "
             "There is one narrow sparse-event exception: an agent-planned binary "
             "event-presence exposure may use `<concept>_n > 0` when registered "
             "metadata identifies the base concept as an event/indicator rather "
@@ -1090,6 +1101,82 @@ def _downgrade_metadata_supported_outcome_findings(
                             "mortality definition."
                         )
                     ),
+                )
+                downgraded.append(
+                    finding.model_copy(
+                        update={"severity": "warning", "detail": detail}
+                    )
+                )
+                continue
+        downgraded.append(finding)
+    return downgraded
+
+
+def _downgrade_audit_only_companion_gating_findings(
+    *,
+    findings: Sequence[ValidationFinding],
+    script_text: str,
+) -> List[ValidationFinding]:
+    """Keep the optional semantic auditor from reintroducing value gating.
+
+    A script that records the canonical measured/count comparison and fails the
+    whole completed step on invalid or discordant provenance must not then mask
+    physiological values row by row with those companion fields.  Some auditor
+    models incorrectly demand exactly that.  Preserve genuine errors when the
+    whole-step audit contract is absent.
+    """
+
+    script_lower = str(script_text or "").lower()
+    audit_contract_present = all(
+        token in script_lower
+        for token in (
+            "measurement_provenance_audit",
+            "invalid_pair_n",
+            "discordant_n",
+            "audit_only",
+        )
+    ) and any(
+        token in script_lower
+        for token in (
+            "provenance_failed",
+            "provenance_error",
+            "provenance_valid",
+        )
+    )
+    if not audit_contract_present:
+        return list(findings)
+
+    false_positive_signals = (
+        "do not mask or invalidate modeled",
+        "not mask or invalidate modeled",
+        "not used to mask",
+        "without using the measured flag to mask",
+        "based largely on value non-missingness",
+        "bypass their measured/source-status consistency checks",
+    )
+    downgraded: List[ValidationFinding] = []
+    for finding in findings:
+        if finding.validator == LLMConceptAuditor.name and finding.severity == "error":
+            text = " ".join(
+                [
+                    finding.message or "",
+                    json.dumps(finding.detail or {}, ensure_ascii=False, default=str),
+                ]
+            ).lower()
+            companion_context = "measured" in text and any(
+                token in text
+                for token in ("first-value", "first value", "covariate", "summary")
+            )
+            if companion_context and any(
+                token in text for token in false_positive_signals
+            ):
+                detail = dict(finding.detail or {})
+                detail.setdefault(
+                    "downgraded_reason",
+                    "The script records the canonical audit-only measured/count "
+                    "comparison and fails the whole completed step on invalid or "
+                    "discordant provenance. Companion fields must not gate "
+                    "row-level physiological values.",
                 )
                 downgraded.append(
                     finding.model_copy(

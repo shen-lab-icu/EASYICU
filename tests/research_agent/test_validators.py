@@ -2530,6 +2530,111 @@ def test_llm_concept_auditor_checks_summary_source_status_bypasses(ra):
     assert "reject any non-binary value" in prompt
     assert "methods.source_status.reconcile_binary_event_presence" in prompt
     assert "unless the script later mutates" in prompt
+    assert "fails closed for the whole completed step" in prompt
+    assert "must not change its row-level denominator" in prompt
+
+
+def test_llm_concept_auditor_downgrades_companion_value_gating_false_positive(ra):
+    class _CompanionGatingFalsePositiveLLM:
+        def complete(self, messages, *, max_tokens=1024, temperature=0.0):
+            return json.dumps(
+                {
+                    "findings": [
+                        {
+                            "severity": "error",
+                            "message": (
+                                "First-value covariates can bypass their "
+                                "measured/source-status consistency checks."
+                            ),
+                            "detail": {
+                                "context": (
+                                    "The script audits measured/count pairs on the "
+                                    "original dataframe, but the flags do not mask or "
+                                    "invalidate modeled first-value covariates."
+                                )
+                            },
+                        }
+                    ]
+                }
+            )
+
+    script = """
+measurement_provenance_audit = {
+    'checks': [{'invalid_pair_n': 0, 'discordant_n': 0, 'role': 'audit_only'}]
+}
+provenance_failed = any(
+    row['invalid_pair_n'] or row['discordant_n']
+    for row in measurement_provenance_audit['checks']
+)
+model.fit(frame[['marker_first']], assignment)
+"""
+    findings = ra.LLMConceptAuditor(
+        _CompanionGatingFalsePositiveLLM()
+    ).audit(
+        context=ra.build_research_context(
+            research_question="Model assignment from early physiology.",
+            cohort=pd.DataFrame(
+                {
+                    "stay_id": [1, 2],
+                    "marker_first": [1.0, 2.0],
+                    "marker_measured": [1, 1],
+                    "marker_n": [1, 1],
+                }
+            ),
+            cohort_name="c",
+            database="synthetic",
+        ),
+        script_text=script,
+        step=None,
+    )
+
+    assert findings[0].severity == "warning"
+    assert findings[0].detail["downgraded_reason"]
+
+
+def test_llm_concept_auditor_preserves_companion_error_without_global_audit(ra):
+    class _MissingAuditLLM:
+        def complete(self, messages, *, max_tokens=1024, temperature=0.0):
+            return json.dumps(
+                {
+                    "findings": [
+                        {
+                            "severity": "error",
+                            "message": (
+                                "First-value covariates can bypass their "
+                                "measured/source-status consistency checks."
+                            ),
+                            "detail": {
+                                "context": (
+                                    "The measured flags are not used to mask the "
+                                    "first-value summary and no global audit exists."
+                                )
+                            },
+                        }
+                    ]
+                }
+            )
+
+    context = ra.build_research_context(
+        research_question="Model assignment from early physiology.",
+        cohort=pd.DataFrame(
+            {
+                "stay_id": [1, 2],
+                "marker_first": [1.0, 2.0],
+                "marker_measured": [1, 1],
+                "marker_n": [1, 1],
+            }
+        ),
+        cohort_name="c",
+        database="synthetic",
+    )
+    findings = ra.LLMConceptAuditor(_MissingAuditLLM()).audit(
+        context=context,
+        script_text="model.fit(frame[['marker_first']], assignment)",
+        step=None,
+    )
+
+    assert findings[0].severity == "error"
 
 
 def test_llm_concept_auditor_prioritizes_late_declared_input_companions(ra):
