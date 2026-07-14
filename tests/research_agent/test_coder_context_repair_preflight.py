@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from easyicu.research_agent.agents import CoderAgent, _looks_like_python_script
 from easyicu.research_agent.code_preflight import audit_mechanical_code_contracts
 from easyicu.research_agent.coder_context import (
@@ -236,6 +238,47 @@ def render(frame):
     return plotted
 """
     findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    assert not any(
+        finding.detail and finding.detail.get("reason") == "structural_accounting_filter"
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize(
+    "guard",
+    [
+        "if (~valid_rows).any():\n        raise ValueError('invalid')",
+        "if valid_rows.sum() != len(frame):\n        return None",
+        "if valid_rows.all() == False:\n        raise ValueError('invalid')",  # noqa: E712
+        "assert valid_rows.all(), 'invalid'",
+        "assert valid_rows.sum() == len(frame), 'invalid'",
+    ],
+)
+def test_mechanical_preflight_accepts_equivalent_fail_closed_guards(ra, guard):
+    code = f"""
+def render(frame):
+    valid_rows = frame['n'].notna()
+    {guard}
+    plotted = frame.loc[valid_rows].copy()
+    return plotted
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail and finding.detail.get("reason") == "structural_accounting_filter"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_ignores_unrelated_mapping_subscript(ra):
+    code = """
+def render(frame, labels):
+    valid_rows = frame['n'].notna()
+    selected_label = labels[valid_rows]
+    return selected_label
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
     assert not any(
         finding.detail and finding.detail.get("reason") == "structural_accounting_filter"
         for finding in findings
@@ -708,7 +751,12 @@ def test_llm_concept_audit_cache_reuses_identical_digest(tmp_path, ra):
     context = _context(ra)
     step = _figure_step(ra)
     cache = LLMConceptAuditCache(tmp_path)
-    key = cache.key(context=context, step=step, script_text="import os\n")
+    key = cache.key(
+        context=context,
+        step=step,
+        script_text="import os\n",
+        audit_prompt="auditor prompt v1",
+    )
     finding = ValidationFinding(
         validator="llm_concept_auditor",
         severity="error",
@@ -722,6 +770,20 @@ def test_llm_concept_audit_cache_reuses_identical_digest(tmp_path, ra):
 
     assert cached is not None
     assert [item.model_dump() for item in cached] == [finding.model_dump()]
-    changed_key = cache.key(context=context, step=step, script_text="import json\n")
+    changed_key = cache.key(
+        context=context,
+        step=step,
+        script_text="import json\n",
+        audit_prompt="auditor prompt v1",
+    )
     assert changed_key != key
     assert cache.get(changed_key) is None
+
+    changed_prompt_key = cache.key(
+        context=context,
+        step=step,
+        script_text="import os\n",
+        audit_prompt="auditor prompt v2",
+    )
+    assert changed_prompt_key != key
+    assert cache.get(changed_prompt_key) is None

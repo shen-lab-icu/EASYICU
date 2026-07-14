@@ -13,7 +13,7 @@ from .prompts import PROMPT_PACK_VERSION
 from .schema import AnalysisStep, ResearchContext, ValidationFinding
 
 
-_CACHE_SCHEMA = "easyicu.llm_concept_audit_cache/1"
+_CACHE_SCHEMA = "easyicu.llm_concept_audit_cache/2"
 _AUDIT_POLICY_VERSION = "2026-07-14-step-scoped-v1"
 _LOCK = threading.Lock()
 
@@ -26,12 +26,19 @@ class LLMConceptAuditCache:
 
     @staticmethod
     def key(
-        *, context: ResearchContext, step: AnalysisStep, script_text: str
+        *,
+        context: ResearchContext,
+        step: AnalysisStep,
+        script_text: str,
+        audit_prompt: str,
     ) -> str:
         payload = {
             "schema": _CACHE_SCHEMA,
             "policy": _AUDIT_POLICY_VERSION,
             "prompt_pack": PROMPT_PACK_VERSION,
+            "audit_prompt_sha256": hashlib.sha256(
+                audit_prompt.encode("utf-8")
+            ).hexdigest(),
             "script_sha256": hashlib.sha256(script_text.encode("utf-8")).hexdigest(),
             "step": step.model_dump(mode="json"),
             "context": context.model_dump(mode="json"),
