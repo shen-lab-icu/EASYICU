@@ -215,6 +215,34 @@ def test_coder_repair_preserves_standard_helper_across_later_traceback(ra):
     prompt = llm.messages[-1].content
     assert "DIAGNOSED SPARSE-EVENT REPAIR (binding)" in prompt
     assert "Do not replace those columns" in prompt
+    assert "`BinaryEventPresenceResult` dataclass, NOT a dictionary" in prompt
+    assert "`helper_result.values`" in prompt
+    assert "never require `isinstance(helper_result, dict)`" in prompt
+
+
+def test_coder_repair_separates_provenance_audit_from_value_selection(ra):
+    llm = _RecordingLLM()
+    step = ra.AnalysisStep(
+        step_id="table_one",
+        intent="Describe the locked cohort.",
+        inputs=["gcs_first", "gcs_measured", "gcs_n"],
+        expected_outputs=["table:table_one"],
+        method="descriptive_statistics",
+    )
+    code = "valid = frame['gcs_first'].notna() & frame['gcs_measured'].eq(1)\n"
+
+    CoderAgent(llm).repair(
+        context=_context(ra),
+        step=step,
+        code=code,
+        run_log="GCS reporting is incorrectly gated on measured and count columns being present.",
+    )
+
+    prompt = llm.messages[-1].content
+    assert "DIAGNOSED PROVENANCE/VALUE-SELECTION REPAIR" in prompt
+    assert "sole basis for its descriptive non-missing denominator" in prompt
+    assert "Do not require either companion" in prompt
+    assert "fail the entire completed step" in prompt
 
 
 def test_coder_repair_preserves_ordinal_covariate_without_linearizing_it(ra):
