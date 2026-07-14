@@ -105,6 +105,67 @@ def test_name_error_helper_regex_rejects_non_identifiers():
     ) is None
 
 
+@pytest.mark.parametrize(
+    ("operator", "expected"),
+    [("&", 1), ("|", 3)],
+)
+def test_runner_repair_moves_boolean_mask_reduction_after_combination(
+    operator,
+    expected,
+):
+    code = (
+        "import numpy as np\n"
+        "observed = np.array([True, False, True])\n"
+        "eligible = np.array([True, True, False])\n"
+        f"count = int(observed.sum() {operator} eligible)\n"
+    )
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log=(
+            "TypeError: only length-1 arrays can be converted to Python scalars"
+        ),
+    )
+
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "boolean_mask_reduction_precedence_v1"
+    assert f"int(((observed) {operator} (eligible)).sum())" in patched
+    namespace = {}
+    exec(patched, namespace)
+    assert namespace["count"] == expected
+    assert (
+        _deterministic_runner_repair(
+            code=code,
+            run_log=(
+                "TypeError: only length-1 arrays can be converted to Python scalars"
+            ),
+            previous_repair=name,
+        )
+        is None
+    )
+
+
+def test_boolean_mask_reduction_repair_requires_traceback_and_exact_ast_shape():
+    code = "count = int(observed.sum() & eligible)\n"
+    traceback = "TypeError: only length-1 arrays can be converted to Python scalars"
+
+    assert _deterministic_runner_repair(code=code, run_log="") is None
+    assert (
+        _deterministic_runner_repair(
+            code="count = int(observed & eligible)\n",
+            run_log=traceback,
+        )
+        is None
+    )
+    assert (
+        _deterministic_runner_repair(
+            code="count = int(observed.sum() & 1)\n",
+            run_log=traceback,
+        )
+        is None
+    )
+
+
 def test_prediction_split_repair_requires_explicit_outcome_col():
     repaired = _deterministic_runner_repair(
         code=(

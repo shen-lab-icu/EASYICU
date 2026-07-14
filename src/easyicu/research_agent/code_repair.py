@@ -794,6 +794,103 @@ _NAME_ERROR_HELPER_RE = re.compile(
 )
 
 
+def _patch_boolean_mask_reduction_precedence(code: str) -> Optional[str]:
+    """Move ``sum`` after a mistakenly scalarised boolean-mask operation.
+
+    Generated code occasionally emits ``int(mask.sum() & other_mask)``.  The
+    reduction turns the left mask into a scalar before the bitwise operation,
+    so an array-valued right operand makes ``int(...)`` fail.  This helper is
+    intentionally syntax-narrow: it only rewrites an ``int`` call whose sole
+    argument is ``mask.sum() & array_like`` (or ``|``), leaving every other
+    reduction and bitwise expression untouched.
+    """
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return None
+
+    array_like_nodes = (
+        ast.Name,
+        ast.Attribute,
+        ast.Subscript,
+        ast.Call,
+        ast.Compare,
+        ast.BoolOp,
+        ast.BinOp,
+        ast.UnaryOp,
+    )
+    replacements: List[tuple[int, int, str]] = []
+    lines = code.splitlines(keepends=True)
+    line_starts: List[int] = []
+    offset = 0
+    for line in lines:
+        line_starts.append(offset)
+        offset += len(line)
+
+    def _absolute_offset(lineno: int, utf8_col: int) -> int:
+        line = lines[lineno - 1]
+        char_col = len(line.encode("utf-8")[:utf8_col].decode("utf-8"))
+        return line_starts[lineno - 1] + char_col
+
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "int"
+            and len(node.args) == 1
+            and not node.keywords
+            and isinstance(node.args[0], ast.BinOp)
+            and isinstance(node.args[0].op, (ast.BitAnd, ast.BitOr))
+        ):
+            continue
+        operation = node.args[0]
+        reduction = operation.left
+        if not (
+            isinstance(reduction, ast.Call)
+            and isinstance(reduction.func, ast.Attribute)
+            and reduction.func.attr == "sum"
+            and not reduction.args
+            and not reduction.keywords
+            and isinstance(operation.right, array_like_nodes)
+        ):
+            continue
+        if not all(
+            isinstance(value, int)
+            for value in (
+                node.lineno,
+                node.col_offset,
+                node.end_lineno,
+                node.end_col_offset,
+            )
+        ):
+            continue
+        mask_source = ast.get_source_segment(code, reduction.func.value)
+        right_source = ast.get_source_segment(code, operation.right)
+        if not mask_source or not right_source:
+            continue
+        operator = "&" if isinstance(operation.op, ast.BitAnd) else "|"
+        replacement = f"int((({mask_source}) {operator} ({right_source})).sum())"
+        replacements.append(
+            (
+                _absolute_offset(node.lineno, node.col_offset),
+                _absolute_offset(node.end_lineno, node.end_col_offset),
+                replacement,
+            )
+        )
+
+    if not replacements:
+        return None
+    repaired = code
+    for start, end, replacement in sorted(replacements, reverse=True):
+        repaired = repaired[:start] + replacement + repaired[end:]
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return None
+    return repaired if repaired != code else None
+
+
 def _deterministic_runner_repair(
     *,
     code: str,
@@ -810,6 +907,17 @@ def _deterministic_runner_repair(
     """
     lowered = (run_log or "").lower()
     binary_model_repair_allowed = _family_allows_binary_model_repair(analysis_family)
+
+    mask_reduction_precedence_failure = (
+        "typeerror:" in lowered
+        and "only length-1 arrays can be converted to python scalars" in lowered
+    )
+    if mask_reduction_precedence_failure:
+        repair_name = "boolean_mask_reduction_precedence_v1"
+        if previous_repair != repair_name:
+            repaired = _patch_boolean_mask_reduction_precedence(code)
+            if repaired is not None:
+                return repair_name, repaired
 
     # 🔧 2026-05-17: defend against LLM hallucinating non-existent easyicu
     # sub-modules (e.g. deepseek-v4-flash emitted
