@@ -4231,6 +4231,47 @@ def test_split_table_and_figure_outputs_in_plan_splits_mixed_step(ra):
     assert "01_table_one_figure" in findings[0].message
 
 
+def test_split_rehomes_figure_to_sole_exact_typed_source_producer(ra):
+    from easyicu.research_agent.pipeline import (
+        _split_table_and_figure_outputs_in_plan,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    plan = AnalysisPlan(
+        research_question="Report cohort flow and baseline characteristics.",
+        steps=[
+            AnalysisStep(
+                step_id="02_cohort",
+                intent="Create the cohort accounting table.",
+                expected_outputs=["table:cohort_flow"],
+                method="cohort_definition_and_attrition",
+            ),
+            AnalysisStep(
+                step_id="05_table_one",
+                intent="Create Table 1 and the planned cohort-flow figure.",
+                expected_outputs=["table:table_one", "figure:cohort_flow"],
+                method="descriptive_baseline_characteristics",
+            ),
+        ],
+    )
+
+    revised, findings = _split_table_and_figure_outputs_in_plan(plan=plan)
+
+    assert [step.step_id for step in revised.steps] == [
+        "02_cohort",
+        "02_cohort_figure",
+        "05_table_one",
+    ]
+    assert revised.steps[0].expected_outputs == ["table:cohort_flow"]
+    assert revised.steps[1].inputs == ["table:cohort_flow"]
+    assert revised.steps[1].expected_outputs == ["figure:cohort_flow"]
+    assert revised.steps[2].expected_outputs == ["table:table_one"]
+    assert any(
+        finding.detail.get("reason") == "figure_exact_typed_source_rehome"
+        for finding in findings
+    )
+
+
 def test_split_table_and_figure_outputs_in_plan_no_op_when_pure_steps(ra):
     """Steps that are figure-only or table-only are left untouched."""
     from easyicu.research_agent.pipeline import (

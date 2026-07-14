@@ -1742,9 +1742,71 @@ def _split_table_and_figure_outputs_in_plan(
     new_steps: List[AnalysisStep] = []
     findings: List[ValidationFinding] = []
     existing_step_ids = {str(step.step_id) for step in plan.steps}
+    outputs_by_step = {
+        str(step.step_id): list(step.expected_outputs or []) for step in plan.steps
+    }
+
+    # A planner may attach a figure to the wrong mixed-output step even though
+    # another step declares the figure's exact typed table/statistic product.
+    # Repair only that structural, case-neutral identity: ``figure:x`` can be
+    # rehomed to the sole ``table:x``/``statistic:x`` producer.  Figures whose
+    # names intentionally differ from their source (for example ``love_plot``)
+    # remain Planner-owned and are not guessed from keywords.
+    render_sources_by_name: Dict[str, List[Tuple[str, str]]] = {}
+    for candidate in plan.steps:
+        candidate_id = str(candidate.step_id)
+        for output in candidate.expected_outputs or []:
+            parsed = typed_product(output)
+            if parsed is not None and parsed[0] in _RENDER_SOURCE_OUTPUT_KINDS:
+                render_sources_by_name.setdefault(parsed[1], []).append(
+                    (candidate_id, str(output))
+                )
+
+    for step in plan.steps:
+        step_id = str(step.step_id)
+        for output in list(outputs_by_step[step_id]):
+            parsed = typed_product(output)
+            if parsed is None or parsed[0] != "figure":
+                continue
+            exact_sources = render_sources_by_name.get(parsed[1], [])
+            if len(exact_sources) != 1:
+                continue
+            source_step_id, source_output = exact_sources[0]
+            if source_step_id == step_id:
+                continue
+            source_step = next(
+                item for item in plan.steps if str(item.step_id) == source_step_id
+            )
+            if (
+                f"{source_step_id}_figure" in existing_step_ids
+                or _normalised_method_head(str(source_step.method or ""))
+                in {"association_robustness", "bias_audit_association", "clustering"}
+                or typed_product(source_output)[0] != "table"
+            ):
+                continue
+            outputs_by_step[step_id].remove(output)
+            outputs_by_step[source_step_id].append(output)
+            findings.append(
+                ValidationFinding(
+                    validator="plan_contract",
+                    severity="warning",
+                    message=(
+                        f"Rehomed '{output}' from step '{step_id}' to the sole "
+                        f"exact typed source producer '{source_step_id}'."
+                    ),
+                    detail={
+                        "reason": "figure_exact_typed_source_rehome",
+                        "figure_output": str(output),
+                        "original_step_id": step_id,
+                        "source_step_id": source_step_id,
+                        "source_output": source_output,
+                    },
+                )
+            )
+
     typed_product_producers: Dict[Tuple[str, str], Set[str]] = {}
     for candidate in plan.steps:
-        for output in candidate.expected_outputs or []:
+        for output in outputs_by_step[str(candidate.step_id)]:
             parsed = typed_product(output)
             if parsed is not None:
                 typed_product_producers.setdefault(parsed, set()).add(
@@ -1752,8 +1814,13 @@ def _split_table_and_figure_outputs_in_plan(
                 )
 
     for step in plan.steps:
-        outputs = list(step.expected_outputs or [])
-        method = _normalised_method_head(str(step.method or ""))
+        outputs = outputs_by_step[str(step.step_id)]
+        working_step = (
+            step
+            if outputs == list(step.expected_outputs or [])
+            else step.model_copy(update={"expected_outputs": outputs})
+        )
+        method = _normalised_method_head(str(working_step.method or ""))
         if method in {
             "association_robustness",
             "bias_audit_association",
@@ -1769,7 +1836,7 @@ def _split_table_and_figure_outputs_in_plan(
             # which is what
             # ``test_mock_planner_emits_prediction_analysis_and_publication_for_prediction_question``
             # pins.
-            new_steps.append(step)
+            new_steps.append(working_step)
             continue
         figure_outputs = [out for out in outputs if _output_declares_figure(out)]
         non_figure_outputs = [out for out in outputs if out not in figure_outputs]
@@ -1811,10 +1878,10 @@ def _split_table_and_figure_outputs_in_plan(
             or not sources_have_unique_parent
             or (effect_figure_requested and not effect_figure_supported)
         ):
-            new_steps.append(step)
+            new_steps.append(working_step)
             continue
         # Keep the original step with the non-figure outputs.
-        non_figure_step = step.model_copy(
+        non_figure_step = working_step.model_copy(
             update={"expected_outputs": non_figure_outputs}
         )
         new_steps.append(non_figure_step)
@@ -1833,7 +1900,8 @@ def _split_table_and_figure_outputs_in_plan(
             inputs=render_source_outputs,
             expected_outputs=figure_outputs,
             method="visualization",
-            icu_rule_refs=list(step.icu_rule_refs or []) + ["visualization_rule"],
+            icu_rule_refs=list(working_step.icu_rule_refs or [])
+            + ["visualization_rule"],
         )
         new_steps.append(figure_step)
         findings.append(
