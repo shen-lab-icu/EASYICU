@@ -1,6 +1,6 @@
 # research_agent 结构去债 · 拆分清单(freeze 后执行) · 2026-07-14
 
-> **状态:已审阅，延期执行。** 当前 H2 Step 06 尚未收口，本文件只作为 freeze 后的候选迁移方案；任何源码移动都不得插入 E2/E3/H2/H3 development runs。2026-07-14 复审同时发现，原方案中的同名模块/目录、固定测试数、测试同步搬迁和“纯 git mv”表述均不够安全，以下已按可执行约束修正。
+> **状态:已审阅，延期执行。** H2 Step 06 已于 2026-07-14 收口，但 H2 后续步骤及 E2/E3/H3 development runs 尚未全部完成；本文件仍只作为 freeze 后的候选迁移方案，任何源码移动都不得插入当前实验。2026-07-14 复审同时发现，原方案中的同名模块/目录、固定测试数、测试同步搬迁和“纯 git mv”表述均不够安全，以下已按可执行约束修正。
 
 > 触发:2026-07-14 架构审阅。一次快照显示 research_agent 约占全仓 **57% 源码 / 73% 测试**,包根约 **134–135 个 .py**,含 3 个万行 monolith。这些是规模快照而非验收常量。不同静态审阅对 import cycle 的结论不一致，因此不能预设“无真循环”，必须先生成可复验的 import-graph/SCC 基线。这一任务只处理**结构债**，不夹带逻辑修复。
 >
@@ -119,6 +119,6 @@ icu_agent_bench · experiment_spec · case_contexts · easyicu_case_builder · i
 ## F. 当前决策与回主线条件
 
 - **现在不执行 A–E。** 当前唯一动作是把本方案修成 freeze 后可安全执行的计划，不改共享引擎结构。
-- 回到主线:H2 仅从当前失败的 Step 06 resume；00–05 与正文图不重跑。
+- 回到主线:H2 Step 06 已用同一 run 的 step-level resume 收口；下一步从 Step 07 继续，00–06 与正文图不重跑。证据见 `task_logs/20260714_h2_step06_framework_iteration.md`。
 - 允许启动本计划的证据:E2/E3/H2/H3 CURRENT 均明确收口、无 benchmark 进程、工作树清洁、完整 research-agent suite 绿、collection/API/import-graph 基线已归档。
 - 若拆分需要改变 validator 条件、严重度、runner 路由、prompt 或 evidence authority，立即停止并另开逻辑修复任务；不得把行为变化伪装成结构迁移。
