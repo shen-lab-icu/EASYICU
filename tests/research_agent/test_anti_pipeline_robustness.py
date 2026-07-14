@@ -1349,6 +1349,20 @@ def test_coder_context_receives_locked_spec_definitions_and_universe_contract(
     )
     assert "aggregation='count'" in (enriched.notes or "")
     assert "must never be replaced by nonmissingness" in (enriched.notes or "")
+    assert "reconcile them before applying the membership predicate" in (
+        enriched.notes or ""
+    )
+    assert "report invalid and discordant pair counts" in (enriched.notes or "")
+    assert "membership-changing disagreement" in (enriched.notes or "")
+    assert "mark that specification not_executable" in (enriched.notes or "")
+    assert "derive measurement availability from the designated" in (
+        enriched.notes or ""
+    )
+    assert "do not infer it only from isna()" in (enriched.notes or "")
+    assert "documented computational encoding" in (enriched.notes or "")
+    assert "do not silently map them into the reference category" in (
+        enriched.notes or ""
+    )
     assert "Cohort membership N and fitted analytic n are distinct" in (
         enriched.notes or ""
     )
