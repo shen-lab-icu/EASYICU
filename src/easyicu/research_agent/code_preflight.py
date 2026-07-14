@@ -603,6 +603,72 @@ def _authoritative_exposure_fallback_findings(
     return []
 
 
+def _finalized_exposure_reconciliation_findings(
+    tree: ast.Module, step: AnalysisStep
+) -> list[ValidationFinding]:
+    """Reject re-derivation of a row-aligned finalized exposure table.
+
+    A tabular ``primary_exposure_definition`` can be the producer-finalized,
+    row-aligned exposure itself.  Once a DataFrame branch reads values directly
+    from that typed artifact, raw-event reconciliation must not replace or
+    reinterpret those values.  This is an implementation boundary only; the
+    check does not choose the exposure or its scientific semantics.
+    """
+
+    authoritative_product = "artifact:primary_exposure_definition"
+    if authoritative_product not in {
+        str(value or "").strip().lower() for value in step.inputs or []
+    }:
+        return []
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If):
+            continue
+        dataframe_names: set[str] = set()
+        for call in ast.walk(node.test):
+            if not isinstance(call, ast.Call) or _call_name(call.func) != "isinstance":
+                continue
+            if len(call.args) < 2 or not _call_name(call.args[1]).endswith("DataFrame"):
+                continue
+            dataframe_names.update(_referenced_names(call.args[0]))
+        if not dataframe_names:
+            continue
+
+        body_nodes = [
+            candidate
+            for statement in node.body
+            for candidate in ast.walk(statement)
+        ]
+        reads_finalized_values = any(
+            isinstance(candidate, ast.Subscript)
+            and _referenced_names(candidate.value) & dataframe_names
+            for candidate in body_nodes
+        )
+        repeats_raw_event_reconciliation = any(
+            isinstance(candidate, ast.Call)
+            and _call_name(candidate.func).split(".")[-1]
+            == "reconcile_binary_event_presence"
+            for candidate in body_nodes
+        )
+        if reads_finalized_values and repeats_raw_event_reconciliation:
+            return [
+                ValidationFinding(
+                    validator="mechanical_code_preflight",
+                    severity="error",
+                    message=(
+                        "A row-aligned finalized primary-exposure table is read "
+                        "directly and then reinterpreted through raw binary-event "
+                        "reconciliation."
+                    ),
+                    detail={
+                        "reason": "finalized_exposure_reconciliation_fallback",
+                        "line": int(node.lineno),
+                    },
+                )
+            ]
+    return []
+
+
 def _undefined_direct_call_findings(tree: ast.Module) -> list[ValidationFinding]:
     """Reject direct calls whose Python name has no lexical binding or import."""
 
@@ -687,6 +753,7 @@ def audit_mechanical_code_contracts(
     findings.extend(_provenance_pair_scan_findings(tree))
     findings.extend(_authoritative_exposure_binding_findings(tree, step))
     findings.extend(_authoritative_exposure_fallback_findings(tree, step))
+    findings.extend(_finalized_exposure_reconciliation_findings(tree, step))
     findings.extend(_undefined_direct_call_findings(tree))
     return findings
 

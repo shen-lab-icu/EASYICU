@@ -417,6 +417,34 @@ def test_coder_repair_validates_finalized_binary_exposure_before_cast(ra):
     assert "without redefining it" in prompt
 
 
+def test_coder_repair_separates_finalized_table_from_raw_event_definition(ra):
+    llm = _RecordingLLM()
+    context = _context(ra).model_copy(update={"primary_exposure": "selected_first"})
+    step = ra.AnalysisStep(
+        step_id="diagnostics",
+        intent="Run diagnostics for the planner-owned exposure.",
+        inputs=["artifact:primary_exposure_definition"],
+        expected_outputs=["table:diagnostics"],
+        method="diagnostic_analysis",
+    )
+
+    CoderAgent(llm).repair(
+        context=context,
+        step=step,
+        code="helper_result = reconcile_binary_event_presence(frame)\n",
+        run_log=(
+            "The finalized exposure-table branch bypasses registered exposure "
+            "metadata validation before applying the sparse binary-event exception."
+        ),
+    )
+
+    prompt = llm.messages[-1].content
+    assert "DIAGNOSED TABULAR AUTHORITATIVE-EXPOSURE REPAIR" in prompt
+    assert "Do not fabricate source-concept, role, indicator-semantics" in prompt
+    assert "do not invoke the sparse binary-event reconciliation" in prompt
+    assert "Only a separate raw-definition mapping branch" in prompt
+
+
 def test_coder_repair_removes_constructed_exposure_fallback(ra):
     llm = _RecordingLLM()
     context = _context(ra).model_copy(update={"primary_exposure": "selected_first"})

@@ -612,6 +612,63 @@ except RuntimeError as exc:
     )
 
 
+def test_mechanical_preflight_blocks_reconciliation_of_finalized_exposure_table(ra):
+    step = ra.AnalysisStep(
+        step_id="diagnostics",
+        intent="Run planner-owned exposure diagnostics.",
+        inputs=["artifact:primary_exposure_definition"],
+        expected_outputs=["table:diagnostics"],
+        method="diagnostic_analysis",
+    )
+    code = """
+exposure_definition = typed['artifact:primary_exposure_definition']
+if isinstance(exposure_definition, pd.DataFrame):
+    finalized = exposure_definition[selected_exposure]
+    helper_result = reconcile_binary_event_presence(
+        frame,
+        count_column=registered_count,
+        measured_column=registered_measured,
+        representative_column=registered_representative,
+    )
+"""
+    findings = audit_mechanical_code_contracts(code, step)
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason")
+        == "finalized_exposure_reconciliation_fallback"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_accepts_direct_finalized_exposure_binding(ra):
+    step = ra.AnalysisStep(
+        step_id="diagnostics",
+        intent="Run planner-owned exposure diagnostics.",
+        inputs=["artifact:primary_exposure_definition"],
+        expected_outputs=["table:diagnostics"],
+        method="diagnostic_analysis",
+    )
+    code = """
+exposure_definition = typed['artifact:primary_exposure_definition']
+if isinstance(exposure_definition, pd.DataFrame):
+    finalized = pd.to_numeric(
+        exposure_definition[selected_exposure], errors='coerce'
+    )
+    if finalized.isna().any() or not finalized.isin([0, 1]).all():
+        raise RuntimeError('invalid finalized exposure')
+    treatment = finalized.astype(int)
+"""
+    findings = audit_mechanical_code_contracts(code, step)
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason")
+        == "finalized_exposure_reconciliation_fallback"
+        for finding in findings
+    )
+
+
 def test_mechanical_preflight_blocks_undefined_direct_helper_call(ra):
     code = """
 def main(frame):
