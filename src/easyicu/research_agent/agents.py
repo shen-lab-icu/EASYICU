@@ -1875,6 +1875,38 @@ def _repair_specialization(
             "scientific quantity, or candidate meaning.\n"
         )
 
+    integer_accounting_signals = (
+        "formats counts as whole numbers",
+        "fractional count values",
+        "silent rounding",
+        "integer like validation",
+    )
+    if any(signal in normalized for signal in integer_accounting_signals):
+        guidance.append(
+            "- DIAGNOSED ACCOUNTING-INTEGER REPAIR (binding): before any "
+            "whole-number formatting or plotting, validate every required count "
+            "and denominator as finite, non-negative (positive where required), "
+            "and integer-like within a small numeric tolerance. Any fractional "
+            "accounting value must fail the complete rendering step closed; do "
+            "not round, filter, replace, or reinterpret upstream counts.\n"
+        )
+
+    binding_metadata_signals = (
+        "unpersisted binding metadata",
+        "never persisted into any constructed binding record",
+        "keyerror relative_path",
+        "keyerror 'relative_path'",
+    )
+    if any(signal in normalized for signal in binding_metadata_signals):
+        guidance.append(
+            "- DIAGNOSED TYPED-BINDING METADATA REPAIR (binding): if later code "
+            "reads a manifest field such as `relative_path` from a local binding "
+            "record, persist that exact field when constructing the record or use "
+            "the already resolved path object. Do not invent, glob, or recompute "
+            "an upstream path, and keep evidence_id/sha256/loaded/row_count "
+            "reporting unchanged.\n"
+        )
+
     ordinal_covariate_signals = (
         "ordinal score",
         "ordinal covariate",

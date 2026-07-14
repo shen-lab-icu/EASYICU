@@ -240,6 +240,46 @@ def render(frame):
     )
 
 
+def test_mechanical_preflight_blocks_unpersisted_binding_metadata(ra):
+    code = """
+def load(binding):
+    relative_path = binding.get('relative_path')
+    record = {'evidence_id': binding.get('evidence_id'), 'loaded': True}
+    return {'binding': record, 'path': relative_path}
+
+def render(bindings):
+    return bindings['table:summary']['binding']['relative_path']
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "unpersisted_binding_metadata"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_accepts_persisted_binding_metadata(ra):
+    code = """
+def load(binding):
+    relative_path = binding.get('relative_path')
+    record = {
+        'evidence_id': binding.get('evidence_id'),
+        'relative_path': relative_path,
+        'loaded': True,
+    }
+    return {'binding': record, 'path': relative_path}
+
+def render(bindings):
+    return bindings['table:summary']['binding']['relative_path']
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "unpersisted_binding_metadata"
+        for finding in findings
+    )
+
+
 def test_llm_concept_audit_cache_reuses_identical_digest(tmp_path, ra):
     context = _context(ra)
     step = _figure_step(ra)
