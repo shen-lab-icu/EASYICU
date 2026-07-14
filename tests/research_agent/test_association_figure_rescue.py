@@ -417,7 +417,7 @@ def test_missingness_rescue_prefers_rich_measurement_process_over_attrition(
     step = AnalysisStep(
         step_id="02_exposure_and_missingness_audit_figure",
         intent="Render a source-status missingness matrix and availability panel.",
-        expected_outputs=["figure:missingness_matrix", "figure:availability_panel"],
+        expected_outputs=["figure:missingness_measurement_panel"],
     )
     summary = json.loads((out / "step_summary.json").read_text(encoding="utf-8"))
     findings = FigureSourceDataValidator().audit(
@@ -510,7 +510,7 @@ def test_missingness_rescue_accepts_scope_section_rich_schema(tmp_path: Path):
     step = AnalysisStep(
         step_id="02_exposure_and_missingness_audit_figure",
         intent="Render a missingness matrix and availability panel.",
-        expected_outputs=["figure:missingness_matrix", "figure:availability_panel"],
+        expected_outputs=["figure:missingness_measurement_panel"],
     )
     summary = json.loads((out / "step_summary.json").read_text(encoding="utf-8"))
     findings = FigureSourceDataValidator().audit(

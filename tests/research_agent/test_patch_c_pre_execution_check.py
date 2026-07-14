@@ -207,7 +207,10 @@ def test_coderagent_run_triggers_repair_on_violation_then_returns_clean_code():
     # The repair user message must include the violation block.
     repair_user_msg = llm.calls[1][-1].content
     assert "PRE-EXECUTION COMPATIBILITY CHECK FAILED" in repair_user_msg
-    assert "MiniBatchKMeans" in repair_user_msg or "minibatchkmeans" in repair_user_msg.lower()
+    assert (
+        "MiniBatchKMeans" in repair_user_msg
+        or "minibatchkmeans" in repair_user_msg.lower()
+    )
     # The agent records what happened.
     assert agent.last_compatibility_repair_attempts == 1
     # last_compatibility_violations reflects the FINAL state — clean now.
@@ -215,7 +218,9 @@ def test_coderagent_run_triggers_repair_on_violation_then_returns_clean_code():
 
 
 def test_coderagent_repair_rejects_non_script_output():
-    llm = _ScriptedLLM(["{}"])
+    # Minimal-patch mode gets one reply, then the full-rewrite fallback gets a
+    # second. Both are invalid so the final non-script guard must reject them.
+    llm = _ScriptedLLM(["{}", "{}"])
     agent = CoderAgent(llm)
 
     with pytest.raises(ValueError, match="non-script output"):
@@ -246,9 +251,8 @@ def test_coderagent_repair_allows_only_contract_named_method_modules():
 
     repair_prompt = llm.calls[0][-1].content
     assert "easyicu.research_agent.methods.*" in repair_prompt
-    assert "only those exact modules and symbols are allowed" in repair_prompt
-    assert "All other `easyicu.*` imports" in repair_prompt
-    assert "undocumented project-local modules remain forbidden" in repair_prompt
+    assert "explicitly named by the code contract" in repair_prompt
+    assert "All other project-local imports" in repair_prompt
 
 
 def test_coderagent_run_no_repair_when_first_attempt_is_clean():

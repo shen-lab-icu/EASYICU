@@ -9,10 +9,64 @@ from pathlib import Path
 def _write_panel(ra, tmp_path: Path, rows):
     from easyicu.research_agent.robustness_panel import (
         RobustnessPanel,
+        RobustnessSpec,
+        default_robustness_specs,
+        write_locked_robustness_specs,
         write_robustness_panel,
     )
+    from easyicu.research_agent.schema import AnalysisPlan
+    from easyicu.research_agent.cohort_schema import CohortDefinition
 
     evidence = ra.EvidenceStore(tmp_path)
+    specs = list(default_robustness_specs())
+    known = {spec.spec_id for spec in specs}
+    for row in rows:
+        if row.spec_id == "primary" or row.spec_id in known:
+            continue
+        kwargs = {}
+        if row.axis == "cohort":
+            kwargs["cohort_override"] = CohortDefinition(name=row.spec_id)
+        elif row.axis == "missing":
+            kwargs["missing_override"] = {"strategy": f"test_{row.spec_id}"}
+        elif row.axis == "outcome":
+            kwargs["outcome_override"] = {"target": row.spec_id}
+        specs.append(
+            RobustnessSpec(
+                spec_id=row.spec_id,
+                axis=row.axis,
+                description="Test-owned robustness specification.",
+                **kwargs,
+            )
+        )
+        known.add(row.spec_id)
+    plan = AnalysisPlan(research_question="test", steps=[], robustness_specs=specs)
+    write_locked_robustness_specs(
+        run_dir=tmp_path,
+        plan=plan,
+        evidence=evidence,
+        prompt_pack_version="test",
+        llm_signature="test",
+    )
+    for row in rows:
+        if not row.converged or row.point_estimate is None:
+            continue
+        payload = (
+            {
+                "primary_or": row.point_estimate,
+                "primary_ci_low": row.ci_low,
+                "primary_ci_high": row.ci_high,
+                "sample_size": row.n,
+            }
+            if row.spec_id == "primary"
+            else {"robustness_rows": [row.to_dict()]}
+        )
+        evidence.register_json(
+            kind="statistic",
+            description="Digest fixture row authority.",
+            payload=payload,
+            filename=f"{row.evidence_id}.json",
+            evidence_id=row.evidence_id,
+        )
     panel = RobustnessPanel.from_rows(
         rows,
         locked_at="2026-05-27T00:00:00Z",

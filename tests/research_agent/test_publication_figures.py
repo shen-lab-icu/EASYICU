@@ -18,6 +18,66 @@ from easyicu.research_agent.publication_figures import (
 )
 
 
+def _prepare_robustness_authority(ra, run_dir: Path, evidence, rows) -> None:
+    """Give panel fixtures the same lock + digest-bound row authority as runs."""
+    from easyicu.research_agent.cohort_schema import CohortDefinition
+    from easyicu.research_agent.robustness_panel import (
+        RobustnessSpec,
+        default_robustness_specs,
+        write_locked_robustness_specs,
+    )
+
+    specs = list(default_robustness_specs())
+    known = {spec.spec_id for spec in specs}
+    for row in rows:
+        if row.spec_id == "primary" or row.spec_id in known:
+            continue
+        kwargs = {}
+        if row.axis == "cohort":
+            kwargs["cohort_override"] = CohortDefinition(name=row.spec_id)
+        elif row.axis == "missing":
+            kwargs["missing_override"] = {"strategy": f"test_{row.spec_id}"}
+        elif row.axis == "outcome":
+            kwargs["outcome_override"] = {"target": row.spec_id}
+        specs.append(
+            RobustnessSpec(
+                spec_id=row.spec_id,
+                axis=row.axis,
+                description="Test-owned robustness specification.",
+                **kwargs,
+            )
+        )
+        known.add(row.spec_id)
+    plan = ra.AnalysisPlan(research_question="test", steps=[], robustness_specs=specs)
+    write_locked_robustness_specs(
+        run_dir=run_dir,
+        plan=plan,
+        evidence=evidence,
+        prompt_pack_version="test",
+        llm_signature="test",
+    )
+    for row in rows:
+        if not row.converged or row.point_estimate is None:
+            continue
+        payload = (
+            {
+                "primary_or": row.point_estimate,
+                "primary_ci_low": row.ci_low,
+                "primary_ci_high": row.ci_high,
+                "sample_size": row.n,
+            }
+            if row.spec_id == "primary"
+            else {"robustness_rows": [row.to_dict()]}
+        )
+        evidence.register_json(
+            kind="statistic",
+            description="Publication-figure fixture row authority.",
+            payload=payload,
+            filename=f"{row.evidence_id}.json",
+            evidence_id=row.evidence_id,
+        )
+
+
 @pytest.mark.parametrize("variant_count", [0, 3])
 def test_robustness_panel_publication_figure_has_no_header_title_overlap(
     ra, tmp_path: Path, variant_count: int
@@ -390,11 +450,14 @@ def test_publication_figure_skill_promotes_step_publication_bundle_before_robust
 
     panel = RobustnessPanel.from_rows(
         [
-            RobustnessPanelRow("primary", "primary", 100, 9.99, 9.0, 11.0, 0.1, "e1", True),
+            RobustnessPanelRow(
+                "primary", "primary", 100, 9.99, 9.0, 11.0, 0.1, "e1", True
+            ),
             RobustnessPanelRow("alt", "cohort", 90, 8.88, 8.0, 10.0, 0.2, "e2", True),
         ],
         locked_at="2026-07-02T00:00:00Z",
     )
+    _prepare_robustness_authority(ra, run_dir, evidence, panel.rows)
     write_robustness_panel(
         run_dir=run_dir,
         panel=panel,
@@ -1840,11 +1903,16 @@ def test_publication_figure_skill_renders_from_robustness_panel_without_table(
     evidence = ra.EvidenceStore(run_dir)
     panel = RobustnessPanel.from_rows(
         [
-            RobustnessPanelRow("primary", "primary", 100, 1.33, 1.2, 1.47, 0.1, "e1", True),
-            RobustnessPanelRow("alt_cohort", "cohort", 90, 1.10, 0.8, 1.52, 0.2, "e2", True),
+            RobustnessPanelRow(
+                "primary", "primary", 100, 1.33, 1.2, 1.47, 0.1, "e1", True
+            ),
+            RobustnessPanelRow(
+                "alt_cohort", "cohort", 90, 1.10, 0.8, 1.52, 0.2, "e2", True
+            ),
         ],
         locked_at="2026-05-27T00:00:00Z",
     )
+    _prepare_robustness_authority(ra, run_dir, evidence, panel.rows)
     write_robustness_panel(
         run_dir=run_dir,
         panel=panel,

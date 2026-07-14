@@ -194,7 +194,8 @@ _RAW_SOURCE_RULES: Tuple[RawSourceRule, ...] = (
         require_tokens=(
             ("nutrition",),
             ("nutritional",),
-            ("protein",),
+            ("protein", "intake"),
+            ("dietary", "protein"),
             ("caloric",),
             ("calorie",),
             ("enteral",),
@@ -527,6 +528,17 @@ class ExtendedFeasibilityIndex:
         # other-db) is the strongest actionable route.
         cross_hits: List[CrossDbConceptHit] = []
         for term in [pred, out, *analysis]:
+            # An explicit multi-token raw-source phrase (for example dietary
+            # protein intake) outranks a one-token fuzzy dictionary collision
+            # (for example the serum total-protein laboratory concept). Exact
+            # or ordinary dictionary concepts retain their usual priority.
+            raw = self.propose_raw_source(term)
+            term_tokens = frozenset(_tokens(term))
+            if raw is not None and any(
+                len(required) > 1 and all(token in term_tokens for token in required)
+                for required in raw.rule.require_tokens
+            ):
+                continue
             hit = self.resolve_construct_cross_db(term)
             if hit is not None:
                 cross_hits.append(hit)
