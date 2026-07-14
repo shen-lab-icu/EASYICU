@@ -274,6 +274,7 @@ _STRUCTURAL_REPAIRS = {
     "local_wilson_proportion_confint_v1",
     "matplotlib_errorbar_xerr_shape_v1",
     "primary_predictor_safe_summary_lookup_v1",
+    "provenance_fail_closed_guard_v1",
     "proportion_confint_nobs_keyword_v1",
     "publication_bundle_promote_v1",
     "remove_pandas_cut_observed_keyword_v1",

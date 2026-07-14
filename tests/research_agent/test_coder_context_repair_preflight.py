@@ -6,6 +6,7 @@ import pytest
 
 from easyicu.research_agent.agents import CoderAgent, _looks_like_python_script
 from easyicu.research_agent.code_preflight import audit_mechanical_code_contracts
+from easyicu.research_agent.code_repair import deterministic_concept_audit_repair
 from easyicu.research_agent.coder_context import (
     coder_guide_for_step,
     scoped_coder_context,
@@ -441,6 +442,36 @@ model.fit(frame)
         finding.detail
         and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
         for finding in findings
+    )
+
+
+def test_deterministic_repair_closes_provenance_preflight_finding(ra):
+    code = """
+def provenance_audit(frame):
+    checks = [{
+        'role': 'audit_only',
+        'invalid_pair_n': 1,
+        'discordant_n': 0,
+    }]
+    return {
+        'fail_closed': True,
+        'completed_step_allowed': False,
+        'checks': checks,
+    }
+
+audit = provenance_audit(frame)
+model.fit(frame)
+"""
+    initial = audit_mechanical_code_contracts(code, _figure_step(ra))
+    messages = [finding.message for finding in initial if finding.severity == "error"]
+    repaired, names = deterministic_concept_audit_repair(code, messages)
+    final = audit_mechanical_code_contracts(repaired, _figure_step(ra))
+
+    assert names == ["provenance_fail_closed_guard_v1"]
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in final
     )
 
 

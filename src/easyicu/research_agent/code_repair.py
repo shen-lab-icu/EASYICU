@@ -298,17 +298,138 @@ def deterministic_concept_audit_repair(
     code: str,
     audit_messages: Sequence[str],
 ) -> tuple[str, List[str]]:
-    """Compatibility no-op for concept-audit repair callers.
+    """Apply narrow, science-neutral repairs named by concept-audit errors.
 
     A concept finding may identify an invalid missing-value treatment, but
     replacing zero-imputation with complete-case analysis changes the cohort
     and missing-data strategy.  That scientific choice belongs to agent repair
-    (or fail-closed handling), so shared deterministic code no longer rewrites
-    it.  The helper remains importable for older integrations.
+    (or fail-closed handling), so shared deterministic code does not rewrite
+    it.  A missing *terminating guard* around an already-authored provenance
+    audit is different: inserting that guard only prevents invalid scientific
+    outputs from being published and does not choose any scientific value.
     """
 
-    del audit_messages
+    provenance_finding = any(
+        (
+            "measurement-provenance audit" in str(message).lower()
+            and "does not fail" in str(message).lower()
+        )
+        or "provenance_audit_not_fail_closed" in str(message).lower()
+        for message in audit_messages
+    )
+    if provenance_finding:
+        repaired = _patch_provenance_fail_closed_guard(code)
+        if repaired != code:
+            repair_name = "provenance_fail_closed_guard_v1"
+            return repaired, [repair_name]
     return code, []
+
+
+_PROVENANCE_FAILURE_KEYS = frozenset({"invalid_pair_n", "discordant_n"})
+_PROVENANCE_DECISION_KEYS = (
+    "fail_closed",
+    "completed_step_allowed",
+    "provenance_valid",
+)
+_PROVENANCE_GUARD_SENTINEL = "_easyicu_provenance_fail_closed_guard_v1"
+
+
+def _string_literals(node: ast.AST) -> set[str]:
+    return {
+        str(candidate.value).strip().lower()
+        for candidate in ast.walk(node)
+        if isinstance(candidate, ast.Constant) and isinstance(candidate.value, str)
+    }
+
+
+def _simple_call_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        prefix = _simple_call_name(node.value)
+        return f"{prefix}.{node.attr}" if prefix else node.attr
+    return ""
+
+
+def _patch_provenance_fail_closed_guard(code: str) -> str:
+    """Insert a terminating guard after an explicit provenance-audit call.
+
+    The transformation is intentionally source-local (line insertion, not
+    whole-script AST regeneration).  It is only available when the audit
+    function exposes an explicit decision field, so the repair never infers a
+    threshold or invents an audit policy from raw counts.
+    """
+
+    if _PROVENANCE_GUARD_SENTINEL in code:
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    marker_functions: dict[str, tuple[str, ...]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        tokens = _string_literals(node)
+        if not (_PROVENANCE_FAILURE_KEYS <= tokens and "audit_only" in tokens):
+            continue
+        decision_keys = tuple(
+            key for key in _PROVENANCE_DECISION_KEYS if key in tokens
+        )
+        if decision_keys:
+            marker_functions[node.name] = decision_keys
+    if not marker_functions:
+        return code
+
+    lines = code.splitlines(keepends=True)
+    insertions: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)) or node.value is None:
+            continue
+        if not isinstance(node.value, ast.Call):
+            continue
+        called = _simple_call_name(node.value.func).split(".")[-1]
+        decision_keys = marker_functions.get(called)
+        if not decision_keys:
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        target_names = [
+            target.id for target in targets if isinstance(target, ast.Name)
+        ]
+        if len(target_names) != 1:
+            continue
+
+        result_name = target_names[0]
+        source_line = lines[node.lineno - 1] if node.lineno <= len(lines) else ""
+        indent = source_line[: len(source_line) - len(source_line.lstrip())]
+        tests: list[str] = []
+        if "fail_closed" in decision_keys:
+            tests.append(f'{result_name}.get("fail_closed") is True')
+        if "completed_step_allowed" in decision_keys:
+            tests.append(f'{result_name}.get("completed_step_allowed") is not True')
+        if "provenance_valid" in decision_keys:
+            tests.append(f'{result_name}.get("provenance_valid") is not True')
+        if not tests:
+            continue
+        continuation = f"\n{indent}    or ".join(tests)
+        guard = (
+            f"{indent}# {_PROVENANCE_GUARD_SENTINEL}\n"
+            f"{indent}if (\n"
+            f"{indent}    {continuation}\n"
+            f"{indent}):\n"
+            f"{indent}    raise RuntimeError(\n"
+            f'{indent}        "Measurement provenance audit failed; "\n'
+            f'{indent}        "scientific outputs were not published."\n'
+            f"{indent}    )\n"
+        )
+        insertions.append((getattr(node, "end_lineno", node.lineno), guard))
+
+    if not insertions:
+        return code
+    for line_number, guard in sorted(insertions, reverse=True):
+        lines.insert(line_number, guard)
+    return "".join(lines)
 
 
 def _overadjustment_strip_names(offenders: Sequence[str]) -> List[str]:
