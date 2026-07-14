@@ -771,6 +771,90 @@ def _finalized_exposure_reconciliation_findings(
     return []
 
 
+def _typed_dataframe_erasure_findings(
+    tree: ast.Module, step: AnalysisStep
+) -> list[ValidationFinding]:
+    """Reject type cleanup that makes a later typed-DataFrame branch unreachable."""
+
+    if "artifact:primary_exposure_definition" not in {
+        str(value or "").strip().lower() for value in step.inputs or []
+    }:
+        return []
+
+    dataframe_branches: set[str] = set()
+    for call in ast.walk(tree):
+        if not isinstance(call, ast.Call) or _call_name(call.func) != "isinstance":
+            continue
+        if len(call.args) < 2 or not _call_name(call.args[1]).endswith("DataFrame"):
+            continue
+        if isinstance(call.args[0], ast.Name):
+            dataframe_branches.add(call.args[0].id)
+
+    if not dataframe_branches:
+        return []
+
+    for node in ast.walk(tree):
+        if (
+            not isinstance(node, ast.If)
+            or not isinstance(node.test, ast.UnaryOp)
+            or not isinstance(node.test.op, ast.Not)
+            or not isinstance(node.test.operand, ast.Call)
+            or _call_name(node.test.operand.func) != "isinstance"
+            or len(node.test.operand.args) < 2
+            or not isinstance(node.test.operand.args[0], ast.Name)
+        ):
+            continue
+        variable = node.test.operand.args[0].id
+        if variable not in dataframe_branches:
+            continue
+        accepted_types = {
+            _call_name(candidate)
+            for candidate in ast.walk(node.test.operand.args[1])
+            if isinstance(candidate, (ast.Name, ast.Attribute))
+        }
+        if any(name.endswith("DataFrame") for name in accepted_types):
+            continue
+        erases_value = False
+        for statement in node.body:
+            if not isinstance(statement, (ast.Assign, ast.AnnAssign)):
+                continue
+            targets = (
+                statement.targets
+                if isinstance(statement, ast.Assign)
+                else [statement.target]
+            )
+            if not any(
+                isinstance(target, ast.Name) and target.id == variable
+                for target in targets
+            ):
+                continue
+            value = statement.value
+            erases_value = (
+                isinstance(value, ast.Dict) and not value.keys
+            ) or (
+                isinstance(value, (ast.List, ast.Tuple)) and not value.elts
+            )
+            if erases_value:
+                break
+        if erases_value:
+            return [
+                ValidationFinding(
+                    validator="mechanical_code_preflight",
+                    severity="error",
+                    message=(
+                        "A supported typed DataFrame artifact is replaced by an "
+                        "empty fallback before its DataFrame resolver can consume it."
+                    ),
+                    detail={
+                        "reason": "typed_dataframe_artifact_erased",
+                        "line": int(node.lineno),
+                        "variable": variable,
+                    },
+                )
+            ]
+    return []
+
+
 def _undefined_direct_call_findings(tree: ast.Module) -> list[ValidationFinding]:
     """Reject direct calls whose Python name has no lexical binding or import."""
 
@@ -856,6 +940,7 @@ def audit_mechanical_code_contracts(
     findings.extend(_authoritative_exposure_binding_findings(tree, step))
     findings.extend(_authoritative_exposure_fallback_findings(tree, step))
     findings.extend(_finalized_exposure_reconciliation_findings(tree, step))
+    findings.extend(_typed_dataframe_erasure_findings(tree, step))
     findings.extend(_undefined_direct_call_findings(tree))
     return findings
 
