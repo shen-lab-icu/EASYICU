@@ -1561,7 +1561,11 @@ class CoderAgent:
         script.
         """
         family = infer_analysis_type(context)
-        repair_specialization = _repair_specialization(run_log=run_log, code=code)
+        repair_specialization = _repair_specialization(
+            context=context,
+            run_log=run_log,
+            code=code,
+        )
         messages = [
             LLMMessage(role="system", content=_SYSTEM_GUIDE + _CODER_GUIDE),
             LLMMessage(
@@ -1673,7 +1677,9 @@ class CoderAgent:
         return repaired
 
 
-def _repair_specialization(*, run_log: str, code: str) -> str:
+def _repair_specialization(
+    *, context: ResearchContext, run_log: str, code: str
+) -> str:
     """Add a binding repair contract for a diagnosed method-suite failure.
 
     The trigger is category-level validator evidence, never a benchmark item,
@@ -1698,6 +1704,29 @@ def _repair_specialization(*, run_log: str, code: str) -> str:
     if standard_helper_in_script or any(
         signal in normalized for signal in sparse_event_signals
     ):
+        metadata_candidates = []
+        for variable in context.variables:
+            if not variable.source_concept:
+                continue
+            if not re.search(
+                rf"(?<![A-Za-z0-9_]){re.escape(variable.name)}(?![A-Za-z0-9_])",
+                code,
+            ):
+                continue
+            metadata_candidates.append(
+                {
+                    "name": variable.name,
+                    "source_concept": variable.source_concept,
+                    "role": variable.role.value,
+                    "description": variable.description,
+                    "observed_domain": variable.observed_domain,
+                }
+            )
+        metadata_block = json.dumps(
+            metadata_candidates,
+            ensure_ascii=False,
+            sort_keys=True,
+        )
         guidance.append(
             "- DIAGNOSED SPARSE-EVENT REPAIR (binding): import and call "
             "`easyicu.research_agent.methods.source_status."
@@ -1718,6 +1747,9 @@ def _repair_specialization(*, run_log: str, code: str) -> str:
             "role/description evidence in the step summary, and fail closed when "
             "the context does not identify an event/indicator. Never hard-code "
             "`indicator_semantics` without this metadata binding.\n"
+            "  Authoritative ResearchContext metadata for variables referenced "
+            "by the current script (facts only; preserve the Agent's existing "
+            f"selection): {metadata_block}\n"
         )
 
     ordinal_covariate_signals = (

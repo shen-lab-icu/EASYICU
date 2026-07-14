@@ -134,6 +134,60 @@ def test_coder_repair_requires_standard_helper_after_sparse_event_diagnosis(ra):
     assert "Never hard-code `indicator_semantics`" in prompt
 
 
+def test_coder_sparse_event_repair_surfaces_referenced_context_metadata(ra):
+    llm = _RecordingLLM()
+    context = ra.ResearchContext(
+        research_question="Define the selected treatment event.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo", database="synthetic", n_stays=10, n_patients=10
+        ),
+        variables=[
+            ra.ConceptDescriptor(
+                name="treatment_first",
+                description="Registered treatment event indicator",
+                role="intervention",
+                dtype="float64",
+                source_concept="treatment_event",
+                observed_domain={"is_binary": True, "n_unique": 1},
+            ),
+            ra.ConceptDescriptor(
+                name="unreferenced_first",
+                description="Another event indicator",
+                role="intervention",
+                dtype="float64",
+                source_concept="other_event",
+            ),
+        ],
+    )
+    step = ra.AnalysisStep(
+        step_id="event_definition",
+        intent="Construct the Agent-selected binary event exposure.",
+        inputs=["treatment_first"],
+        expected_outputs=["table:event_definition"],
+        method="prespecified_binary_event_definition",
+    )
+
+    CoderAgent(llm).repair(
+        context=context,
+        step=step,
+        code="value = frame['treatment_first']\n",
+        run_log="Binary event presence lacks representative value reconciliation.",
+    )
+
+    prompt = llm.messages[-1].content
+    assert "Authoritative ResearchContext metadata" in prompt
+    metadata_line = next(
+        line
+        for line in prompt.splitlines()
+        if "Authoritative ResearchContext metadata" in line
+    )
+    assert '"name": "treatment_first"' in metadata_line
+    assert '"source_concept": "treatment_event"' in metadata_line
+    assert '"role": "intervention"' in metadata_line
+    assert '"description": "Registered treatment event indicator"' in metadata_line
+    assert "unreferenced_first" not in metadata_line
+
+
 def test_coder_repair_preserves_standard_helper_across_later_traceback(ra):
     llm = _RecordingLLM()
     step = ra.AnalysisStep(
