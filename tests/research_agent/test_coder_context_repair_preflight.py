@@ -9,6 +9,7 @@ from easyicu.research_agent.coder_context import (
     scoped_coder_context,
 )
 from easyicu.research_agent.concept_audit_cache import LLMConceptAuditCache
+from easyicu.research_agent.pipeline_resume import _looks_like_generated_python
 from easyicu.research_agent.schema import ValidationFinding
 
 
@@ -150,6 +151,7 @@ def test_patch_json_is_never_accepted_as_complete_python_script():
         }
     )
     assert not _looks_like_python_script(payload)
+    assert not _looks_like_generated_python(payload)
 
 
 def test_mechanical_preflight_blocks_arbitrary_numeric_column_fallback(ra):
