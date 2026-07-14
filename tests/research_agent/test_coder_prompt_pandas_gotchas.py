@@ -369,6 +369,18 @@ def test_coder_prompt_never_renders_partial_structural_accounting() -> None:
     assert "emit no partial accounting figure" in normalized
 
 
+def test_coder_prompt_forbids_arbitrary_figure_column_fallbacks() -> None:
+    from easyicu.research_agent.prompts import load_prompt_pack
+
+    normalized = " ".join(load_prompt_pack()["coder"].split())
+
+    assert "Resolve source columns only from explicit" in normalized
+    assert "Never fall back to the first numeric column" in normalized
+    assert "first non-numeric column" in normalized
+    assert "arbitrary frame-order choice" in normalized
+    assert "fail the rendering step closed" in normalized
+
+
 def test_coder_prompt_resolves_prior_tables_by_step_and_kind() -> None:
     from easyicu.research_agent.prompts import load_prompt_pack
 

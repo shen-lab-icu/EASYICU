@@ -301,6 +301,34 @@ def test_coder_repair_fail_closes_partial_structural_accounting_figure(ra):
     assert "do not change the cohort" in prompt
 
 
+def test_coder_repair_removes_arbitrary_figure_column_fallback(ra):
+    llm = _RecordingLLM()
+    step = ra.AnalysisStep(
+        step_id="registered_table_figure",
+        intent="Render the declared table without changing its schema.",
+        inputs=["table:registered_summary"],
+        expected_outputs=["figure:registered_summary"],
+        method="visualization",
+    )
+
+    CoderAgent(llm).repair(
+        context=_context(ra),
+        step=step,
+        code="count_col = next(c for c in frame if is_numeric(frame[c]))\n",
+        run_log=(
+            "Column discovery can silently bind the figure to an unintended "
+            "numeric column. The helper falls back to the first frame column "
+            "with any numeric value when no named count candidate is present."
+        ),
+    )
+
+    prompt = llm.messages[-1].content
+    assert "DIAGNOSED FIGURE SCHEMA-BINDING REPAIR" in prompt
+    assert "remove every fallback that chooses the first numeric column" in prompt
+    assert "explicit semantic candidate names" in prompt
+    assert "keep figure_files empty" in prompt
+
+
 def test_coder_repair_preserves_ordinal_covariate_without_linearizing_it(ra):
     llm = _RecordingLLM()
     step = ra.AnalysisStep(

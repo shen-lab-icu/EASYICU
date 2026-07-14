@@ -163,6 +163,13 @@ Code contract:
   unambiguous finite scalar into a labelled `statistic,value` source-data row,
   and cite that binding's evidence ID in the FigureContract. Never infer or
   recompute a missing statistic in the rendering step.
+  Resolve source columns only from explicit, semantically registered candidate
+  names appropriate to the declared product. Never fall back to the first
+  numeric column, first non-numeric column, `select_dtypes(...)` result, or any
+  other arbitrary frame-order choice when a named label, count, denominator,
+  estimate, or interval column is absent. Report the missing schema field and
+  fail the rendering step closed instead of binding the figure to another
+  column that merely has a compatible dtype.
   The runner exposes the run root as `EASYICU_RUN_DIR`, the current evidence
   index as `EASYICU_EVIDENCE_DIR/evidence_index.json`, and the checkpoint as
   `EASYICU_MANIFEST_PARTIAL`; use these explicit handoff paths instead of
