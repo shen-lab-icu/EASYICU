@@ -686,8 +686,11 @@ CLINICAL SCORE AND MISSINGNESS SEMANTICS:
   `easyicu.research_agent.methods.source_status.reconcile_binary_event_presence`
   with the three Agent-selected column names. It validates and renders the
   declared event definition but never selects the concept, exposure, cohort,
-  or model. Use its `values`, `audit`, and mutually exclusive `status_table`
-  directly; do not reconstruct overlapping source-status masks afterward.
+  or model. It returns a `BinaryEventPresenceResult` dataclass, not a mapping:
+  use the attributes `result.values`, `result.row_status`, `result.audit`, and
+  the mutually exclusive `result.status_table` directly. Do not require a dict,
+  call `result.get(...)`, or treat the documented dataclass return as helper
+  failure; do not reconstruct overlapping source-status masks afterward.
   Figure-only steps and steps without a declared measured input do not need
   this block. A method-specific `component_qc` block may report other
   method-specific checks, but need not duplicate this host-replayed audit.

@@ -1731,8 +1731,12 @@ def _repair_specialization(
             "- DIAGNOSED SPARSE-EVENT REPAIR (binding): import and call "
             "`easyicu.research_agent.methods.source_status."
             "reconcile_binary_event_presence` with the count, measured-flag, and "
-            "representative columns already selected by the Agent. Use its "
-            "`values`, `audit`, and `status_table` directly. Do not replace those "
+            "representative columns already selected by the Agent. It returns a "
+            "`BinaryEventPresenceResult` dataclass, NOT a dictionary or mapping. "
+            "Read `helper_result.values`, `helper_result.row_status`, "
+            "`helper_result.audit`, and `helper_result.status_table` as attributes; "
+            "never require `isinstance(helper_result, dict)`, call `.get(...)`, or "
+            "reinterpret a non-dict result as helper failure. Do not replace those "
             "columns, rebuild custom masks, silently numeric-coerce original "
             "representative values, or change the exposure, cohort, outcome, or "
             "model. Treat the helper's `values` contract as complete binary 0/1: "
@@ -1750,6 +1754,28 @@ def _repair_specialization(
             "  Authoritative ResearchContext metadata for variables referenced "
             "by the current script (facts only; preserve the Agent's existing "
             f"selection): {metadata_block}\n"
+        )
+
+    audit_only_signals = (
+        "incorrectly gated on measured",
+        "incorrectly gated on count",
+        "gated on measured and count",
+        "provenance audit only",
+        "provenance field as a value gate",
+        "observation counts audit-only",
+        "observation counts audit only",
+    )
+    if any(signal in normalized for signal in audit_only_signals):
+        guidance.append(
+            "- DIAGNOSED PROVENANCE/VALUE-SELECTION REPAIR (binding): keep the "
+            "declared physiological or ordered value column as the sole basis for "
+            "its descriptive non-missing denominator and categories. The companion "
+            "`*_measured*` and `*_n*` columns belong only to the separate provenance "
+            "audit. Do not require either companion to be present, positive, or "
+            "non-missing before summarizing an individual value, and do not combine "
+            "them into the value-validity mask. If the provenance pair is invalid or "
+            "discordant, fail the entire completed step after recording the audit; "
+            "never repair it by filtering rows or changing descriptive denominators.\n"
         )
 
     ordinal_covariate_signals = (

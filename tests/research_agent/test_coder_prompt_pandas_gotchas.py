@@ -171,6 +171,9 @@ def test_coder_prompt_keeps_sparse_event_negatives_in_exposure_denominator() -> 
     assert "Every reconciled positive row must carry" in coder_prompt
     assert "methods.source_status.reconcile_binary_event_presence" in coder_prompt
     assert "never selects the concept, exposure, cohort" in coder_prompt
+    assert "`BinaryEventPresenceResult` dataclass, not a mapping" in coder_prompt
+    assert "`result.values`" in coder_prompt
+    assert "Do not require a dict" in coder_prompt
     assert "do not reconstruct overlapping source-status masks" in coder_prompt
 
 
