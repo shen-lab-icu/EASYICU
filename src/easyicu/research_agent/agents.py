@@ -1554,6 +1554,7 @@ class CoderAgent:
         script.
         """
         family = infer_analysis_type(context)
+        repair_specialization = _repair_specialization(run_log)
         messages = [
             LLMMessage(role="system", content=_SYSTEM_GUIDE + _CODER_GUIDE),
             LLMMessage(
@@ -1587,7 +1588,10 @@ class CoderAgent:
                     "honoring explicit user preferences recorded in the "
                     "ResearchContext.\n\n"
                     "REPAIR CHECKLIST:\n"
-                    "- IMPORTS: " + coder_method_capability_block() + "\n"
+                    + repair_specialization
+                    + "- IMPORTS: "
+                    + coder_method_capability_block()
+                    + "\n"
                     "  **There is NO `easyicu.research_agent.rcs` / "
                     "`.metrics` / `.utils` etc.** — the analysis script runs in a "
                     "sandbox with a closed import contract. A method-specific "
@@ -1656,6 +1660,38 @@ class CoderAgent:
                 "the previous analysis script."
             )
         return repaired
+
+
+def _repair_specialization(run_log: str) -> str:
+    """Add a binding repair contract for a diagnosed method-suite failure.
+
+    The trigger is category-level validator evidence, never a benchmark item,
+    concept, variable, or figure name.  Scientific column selection remains in
+    the failed Agent script; the helper only validates that declared choice.
+    """
+
+    normalized = re.sub(r"[^a-z0-9]+", " ", str(run_log).lower()).strip()
+    sparse_event_signals = (
+        "binary event reconciliation",
+        "binary event presence",
+        "sparse event triad",
+        "count flag representative triad",
+        "representative value",
+        "reconcile binary event presence",
+    )
+    if not any(signal in normalized for signal in sparse_event_signals):
+        return ""
+    return (
+        "- DIAGNOSED SPARSE-EVENT REPAIR (binding): import and call "
+        "`easyicu.research_agent.methods.source_status."
+        "reconcile_binary_event_presence` with the count, measured-flag, and "
+        "representative columns already selected by the Agent. Use its "
+        "`values`, `audit`, and `status_table` directly. Do not replace those "
+        "columns, rebuild custom masks, silently numeric-coerce original "
+        "representative values, or change the exposure, cohort, outcome, or "
+        "model. The helper is the documented project-local import authorized "
+        "for this diagnosed contract.\n"
+    )
 
 
 # ---------------------------------------------------------------------------

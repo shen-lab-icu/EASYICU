@@ -61,6 +61,32 @@ def test_coder_prompt_allows_only_declared_figure_products(ra):
     assert "declares no figure product" not in prompt
 
 
+def test_coder_repair_requires_standard_helper_after_sparse_event_diagnosis(ra):
+    llm = _RecordingLLM()
+    step = ra.AnalysisStep(
+        step_id="event_definition",
+        intent="Construct the Agent-selected binary event exposure.",
+        inputs=["event_n", "event_measured", "event_max"],
+        expected_outputs=["table:event_definition"],
+        method="prespecified_binary_event_definition",
+    )
+
+    CoderAgent(llm).repair(
+        context=_context(ra),
+        step=step,
+        code="import pandas as pd\n",
+        run_log=(
+            "Binary event reconciliation accepts representative value 0 on "
+            "reconciled positive rows."
+        ),
+    )
+
+    prompt = llm.messages[-1].content
+    assert "DIAGNOSED SPARSE-EVENT REPAIR (binding)" in prompt
+    assert "methods.source_status.reconcile_binary_event_presence" in prompt
+    assert "Do not replace those columns" in prompt
+
+
 def _ordinary_run_repair_and_agentic_prompts(*, ra, step):  # noqa: ANN001
     context = _context(ra)
     llm = _RecordingLLM()
