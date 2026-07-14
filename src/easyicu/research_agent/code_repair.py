@@ -1173,7 +1173,12 @@ def _deterministic_runner_repair(
                             labels = [str(v) for v in groups.groups.keys()]
                             series = [g.dropna().values for _, g in groups]
                             if series:
-                                ax.boxplot(series, labels=labels)
+                                try:
+                                    ax.boxplot(series, tick_labels=labels)
+                                except TypeError:
+                                    # Matplotlib <3.9 used ``labels``; newer
+                                    # releases renamed it to ``tick_labels``.
+                                    ax.boxplot(series, labels=labels)
                         elif data is not None and y is not None:
                             ax.boxplot(data[y].dropna().values)
                         return ax

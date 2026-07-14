@@ -109,10 +109,27 @@ NPJ_DM_2026_06 = SubmissionProfile(
     expected_sofa2_dict_sha="b26e36b6ef5ea947027c8f7cd514fc5174545aa658187d6bdb8ec43f2a80b6aa",
 )
 
-DEFAULT_SUBMISSION_PROFILE_REF = NPJ_DM_2026_06.ref
+NPJ_DM_2026_07 = SubmissionProfile(
+    name="npj_dm",
+    version="20260708",
+    locked_at="2026-07-08T00:25:43-04:00",
+    evidence_enforcement_mode="strict",
+    writer_digest_widened=True,
+    enable_reproducibility_envelope=True,
+    requires_arm="aware",
+    requires_runner="docker",
+    # Re-locked after the cross-database bounds audit added or corrected six
+    # physiology/artifact ceilings in 836a896. Preserve older profiles as
+    # immutable replay contracts instead of silently changing their hashes.
+    expected_concept_dict_sha="bc377779ce0f6b7983b2f8f527a37c1c394cc38e4a64055c9d9268b5f4d451ea",
+    expected_sofa2_dict_sha="b26e36b6ef5ea947027c8f7cd514fc5174545aa658187d6bdb8ec43f2a80b6aa",
+)
+
+DEFAULT_SUBMISSION_PROFILE_REF = NPJ_DM_2026_07.ref
 SUBMISSION_PROFILE_REGISTRY: Dict[str, SubmissionProfile] = {
     NPJ_DM_2026_05.ref: NPJ_DM_2026_05,
     NPJ_DM_2026_06.ref: NPJ_DM_2026_06,
+    NPJ_DM_2026_07.ref: NPJ_DM_2026_07,
 }
 
 
@@ -124,13 +141,16 @@ def get_submission_profile(ref: Optional[str] = None) -> SubmissionProfile:
         return SUBMISSION_PROFILE_REGISTRY[key]
     except KeyError as exc:
         known = ", ".join(sorted(SUBMISSION_PROFILE_REGISTRY))
-        raise ValueError(f"Unknown submission profile {key!r}; choose from: {known}") from exc
+        raise ValueError(
+            f"Unknown submission profile {key!r}; choose from: {known}"
+        ) from exc
 
 
 __all__ = [
     "SubmissionProfile",
     "NPJ_DM_2026_05",
     "NPJ_DM_2026_06",
+    "NPJ_DM_2026_07",
     "DEFAULT_SUBMISSION_PROFILE_REF",
     "SUBMISSION_PROFILE_REGISTRY",
     "get_submission_profile",

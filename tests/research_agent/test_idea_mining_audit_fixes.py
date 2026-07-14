@@ -126,6 +126,8 @@ def test_raw_nutrition_downgrades_to_hold(index) -> None:
     assert verdict.case == "raw_extraction"
     assert "ingredientevents" in verdict.metadata["raw_table"]
     assert "coding agent" in verdict.reason
+    # Do not confuse dietary protein intake with the serum total-protein lab.
+    assert verdict.metadata["construct"] == "nutrition_intake"
 
 
 def test_raw_microbiology_downgrades_to_hold(index) -> None:

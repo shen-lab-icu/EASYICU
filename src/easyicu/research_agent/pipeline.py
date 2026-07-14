@@ -6317,9 +6317,12 @@ def _render_missingness_publication_bundle_from_prior_outputs(
         parent_evidence_id,
         status_source_id if rich_matrix_rendered else availability_source_id,
     ]
-    contract_source_data = [parent_evidence_id, availability_source_id]
+    # Figure contracts name concrete local CSV files; upstream evidence ids stay
+    # in the panel bindings above. A stem-only list leaves the strict source-data
+    # validator with no verifiable file and must not pass.
+    contract_source_data = [availability_source_path.name]
     if rich_matrix_rendered:
-        contract_source_data.append(status_source_id)
+        contract_source_data.append(status_source_path.name)
 
     contract = make_figure_contract(
         figure_id="missingness_measurement_panel",

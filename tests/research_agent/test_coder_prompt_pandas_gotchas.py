@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
-
 
 def test_coder_prompt_names_pandas_categorical_codes_gotcha() -> None:
     from easyicu.research_agent.prompts import load_prompt_pack
@@ -17,7 +15,6 @@ def test_coder_prompt_names_pandas_categorical_codes_gotcha() -> None:
 
 
 def test_coder_prompt_closes_categorical_distribution_denominators() -> None:
-    from easyicu.research_agent.agents import CoderAgent
     from easyicu.research_agent.prompts import load_prompt_pack
 
     coder_prompt = load_prompt_pack()["coder"]
@@ -27,12 +24,25 @@ def test_coder_prompt_closes_categorical_distribution_denominators() -> None:
     assert "counts must sum exactly to `n_nonmissing`" in normalized
     assert "silently omitted from the category rows" in normalized
 
+    from easyicu.research_agent.coder_context import coder_guide_for_step
+    from easyicu.research_agent.schema import AnalysisStep
+
     repair_normalized = " ".join(
-        inspect.getsource(CoderAgent.repair).lower().split()
+        coder_guide_for_step(
+            coder_prompt,
+            AnalysisStep(
+                step_id="descriptive",
+                intent="Summarize a categorical distribution.",
+                expected_outputs=["table:table_one"],
+                method="descriptive",
+            ),
+        )
+        .lower()
+        .split()
     )
-    assert "map each non-missing value to" in repair_normalized
-    assert "category counts sum to" in repair_normalized
-    assert "silently omitting it from all categories" in repair_normalized
+    assert "every non-missing observation must map to exactly one" in repair_normalized
+    assert "category counts must sum exactly to `n_nonmissing`" in repair_normalized
+    assert "silently omitted from the category rows" in repair_normalized
 
 
 def test_coder_prompt_forbids_bitwise_not_on_scalar_dtype_predicates() -> None:

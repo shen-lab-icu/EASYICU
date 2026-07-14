@@ -66,9 +66,14 @@ def test_planner_prompt_forbids_concept_id_synthesis() -> None:
     prompt = _build_planner_user_prompt(_context())
 
     assert "Synthesizing new names" in prompt
-    assert '"sofa2_admission"' in prompt
-    assert '"kdigo_aki_max"' in prompt
-    assert '"sepsis_onset_window"' in prompt
+    assert '"score_at_admission"' in prompt
+    assert '"concept_peak_window"' in prompt
+    assert '"condition_onset_window"' in prompt
+    # Shared prompts stay benchmark-neutral; case-specific names belong in the
+    # benchmark item or run protocol, not the global planner contract.
+    assert '"sofa2_admission"' not in prompt
+    assert '"kdigo_aki_max"' not in prompt
+    assert '"sepsis_onset_window"' not in prompt
 
 
 def test_planner_prompt_has_non_null_cohort_override_example() -> None:
