@@ -88,6 +88,44 @@ def test_step_scoped_coder_context_keeps_declared_family_and_drops_unrelated(ra)
     assert len(scoped.variables) <= 36
 
 
+def test_step_scoped_context_keeps_all_declared_source_concept_companions(ra):
+    variables = [
+        ra.ConceptDescriptor(name=f"filler_{index}", dtype="float64")
+        for index in range(45)
+    ]
+    variables.extend(
+        [
+            ra.ConceptDescriptor(
+                name="event_first", dtype="float64", source_concept="event"
+            ),
+            ra.ConceptDescriptor(name="event_n", dtype="int64", source_concept="event"),
+            ra.ConceptDescriptor(
+                name="event_measured_6h", dtype="bool", source_concept="event"
+            ),
+        ]
+    )
+    context = ra.ResearchContext(
+        research_question="Describe the planner-selected event.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo", database="synthetic", n_stays=20, n_patients=18
+        ),
+        variables=variables,
+    )
+    step = ra.AnalysisStep(
+        step_id="event",
+        intent="Use the declared event representation.",
+        inputs=["event_first"],
+        expected_outputs=["table:event_summary"],
+        method="descriptive_summary",
+    )
+
+    scoped = scoped_coder_context(context, step, max_variables=36)
+    names = {variable.name for variable in scoped.variables}
+
+    assert {"event_first", "event_n", "event_measured_6h"} <= names
+    assert len(scoped.variables) <= 36
+
+
 def test_figure_coder_guide_excludes_unrelated_method_families(ra):
     from easyicu.research_agent.agents import _CODER_GUIDE
 
@@ -234,6 +272,25 @@ def render(frame):
 """
     findings = audit_mechanical_code_contracts(code, _figure_step(ra))
     assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "structural_accounting_integer_validation"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_rejects_unrelated_integer_guard(ra):
+    code = """
+import numpy as np
+
+def render(frame):
+    heights = frame['height']
+    if not np.allclose(heights, np.round(heights)):
+        raise ValueError('fractional height')
+    counts = frame['score_count']
+    return [f"{value:,.0f}" for value in counts]
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    assert any(
         finding.detail
         and finding.detail.get("reason") == "structural_accounting_integer_validation"
         for finding in findings

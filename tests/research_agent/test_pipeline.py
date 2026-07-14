@@ -4243,7 +4243,7 @@ def test_split_rehomes_figure_to_sole_exact_typed_source_producer(ra):
             AnalysisStep(
                 step_id="02_cohort",
                 intent="Create the cohort accounting table.",
-                expected_outputs=["table:cohort_flow"],
+                expected_outputs=["table:cohort_flow", "table:cohort_diagnostics"],
                 method="cohort_definition_and_attrition",
             ),
             AnalysisStep(
@@ -4262,8 +4262,12 @@ def test_split_rehomes_figure_to_sole_exact_typed_source_producer(ra):
         "02_cohort_figure",
         "05_table_one",
     ]
-    assert revised.steps[0].expected_outputs == ["table:cohort_flow"]
+    assert revised.steps[0].expected_outputs == [
+        "table:cohort_flow",
+        "table:cohort_diagnostics",
+    ]
     assert revised.steps[1].inputs == ["table:cohort_flow"]
+    assert "table:cohort_diagnostics" not in revised.steps[1].inputs
     assert revised.steps[1].expected_outputs == ["figure:cohort_flow"]
     assert revised.steps[2].expected_outputs == ["table:table_one"]
     assert any(

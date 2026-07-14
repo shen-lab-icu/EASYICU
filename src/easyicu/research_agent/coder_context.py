@@ -190,12 +190,33 @@ def scoped_coder_context(
         for value in (context.target_outcome, context.primary_exposure)
         if value
     }
+    seed_names = declared | direct
+    if code:
+        seed_names.update(
+            variable.name.lower()
+            for variable in context.variables
+            if re.search(
+                rf"(?<![A-Za-z0-9_]){re.escape(variable.name)}(?![A-Za-z0-9_])",
+                code,
+            )
+        )
+    source_concepts = {
+        str(variable.source_concept).strip().lower()
+        for variable in context.variables
+        if variable.name.lower() in seed_names and variable.source_concept
+    }
     priority = []
     referenced = []
     remaining = []
     for variable in context.variables:
         name = variable.name.lower()
-        if name in declared or _variable_family(name) in families or name in direct:
+        source_concept = str(variable.source_concept or "").strip().lower()
+        if (
+            name in declared
+            or _variable_family(name) in families
+            or name in direct
+            or (source_concept and source_concept in source_concepts)
+        ):
             priority.append(variable)
         elif code and re.search(
             rf"(?<![A-Za-z0-9_]){re.escape(variable.name)}(?![A-Za-z0-9_])",

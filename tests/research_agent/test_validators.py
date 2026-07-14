@@ -1780,6 +1780,73 @@ def test_statistical_validator_accepts_reconciled_primary_exposure(
     ), findings
 
 
+def test_statistical_validator_blocks_fail_closed_exposure_without_cohort_n(
+    ra, tmp_path: Path
+):
+    ctx = _ctx_with_sofa(ra)
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1, 2], "death": [0, 1]}).to_parquet(
+        cohort_path, index=False
+    )
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    (out_dir / "step_summary.json").write_text("{}", encoding="utf-8")
+    step = ra.schema.AnalysisStep(step_id="baseline", intent="Describe the cohort")
+
+    findings = ra.StatisticalValidator().audit(
+        context=ctx,
+        cohort_path=cohort_path,
+        step=step,
+        out_dir=out_dir,
+        step_summary={
+            "primary_exposure": {
+                "reconciliation_status": "failed_closed",
+                "available_n": 0,
+            }
+        },
+    )
+
+    assert any(
+        finding.severity == "error"
+        and "no cohort row has a usable reconciled exposure" in finding.message
+        for finding in findings
+    ), findings
+
+
+def test_statistical_validator_blocks_all_unavailable_counts_without_cohort_n(
+    ra, tmp_path: Path
+):
+    ctx = _ctx_with_sofa(ra)
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1, 2], "death": [0, 1]}).to_parquet(
+        cohort_path, index=False
+    )
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    (out_dir / "step_summary.json").write_text("{}", encoding="utf-8")
+    step = ra.schema.AnalysisStep(step_id="baseline", intent="Describe the cohort")
+
+    findings = ra.StatisticalValidator().audit(
+        context=ctx,
+        cohort_path=cohort_path,
+        step=step,
+        out_dir=out_dir,
+        step_summary={
+            "primary_exposure": {
+                "reconciliation_status": "checked",
+                "missing_n": 2,
+                "counts": {"Unexposed": 0, "Exposed": 0, "Unavailable": 2},
+            }
+        },
+    )
+
+    assert any(
+        finding.severity == "error"
+        and "no cohort row has a usable reconciled exposure" in finding.message
+        for finding in findings
+    ), findings
+
+
 def test_statistical_validator_flags_primary_or_mismatch(ra, tmp_path: Path):
     """T1.6 — when the reported OR disagrees with primary_association.csv,
     the validator must surface an error finding."""
@@ -2566,6 +2633,8 @@ provenance_failed = any(
     row['invalid_pair_n'] or row['discordant_n']
     for row in measurement_provenance_audit['checks']
 )
+if provenance_failed:
+    raise RuntimeError('invalid measurement provenance')
 model.fit(frame[['marker_first']], assignment)
 """
     findings = ra.LLMConceptAuditor(
@@ -2590,6 +2659,58 @@ model.fit(frame[['marker_first']], assignment)
 
     assert findings[0].severity == "warning"
     assert findings[0].detail["downgraded_reason"]
+
+
+def test_llm_concept_auditor_does_not_downgrade_unused_provenance_flag(ra):
+    class _CompanionGatingFindingLLM:
+        def complete(self, messages, *, max_tokens=1024, temperature=0.0):
+            return json.dumps(
+                {
+                    "findings": [
+                        {
+                            "severity": "error",
+                            "message": (
+                                "First-value covariates can bypass their measured/"
+                                "source-status consistency checks."
+                            ),
+                            "detail": {
+                                "context": (
+                                    "The measured flags do not mask or invalidate "
+                                    "modeled first-value covariates."
+                                )
+                            },
+                        }
+                    ]
+                }
+            )
+
+    script = """
+measurement_provenance_audit = {
+    'checks': [{'invalid_pair_n': 1, 'discordant_n': 0, 'role': 'audit_only'}]
+}
+provenance_valid = False
+model.fit(frame[['marker_first']], assignment)
+"""
+    findings = ra.LLMConceptAuditor(_CompanionGatingFindingLLM()).audit(
+        context=ra.build_research_context(
+            research_question="Model assignment from early physiology.",
+            cohort=pd.DataFrame(
+                {
+                    "stay_id": [1, 2],
+                    "marker_first": [1.0, 2.0],
+                    "marker_measured": [1, 1],
+                    "marker_n": [1, 1],
+                }
+            ),
+            cohort_name="c",
+            database="synthetic",
+        ),
+        script_text=script,
+        step=None,
+    )
+
+    assert findings[0].severity == "error"
+    assert "downgraded_reason" not in findings[0].detail
 
 
 def test_llm_concept_auditor_preserves_companion_error_without_global_audit(ra):

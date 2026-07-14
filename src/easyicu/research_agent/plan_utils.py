@@ -1745,6 +1745,7 @@ def _split_table_and_figure_outputs_in_plan(
     outputs_by_step = {
         str(step.step_id): list(step.expected_outputs or []) for step in plan.steps
     }
+    rehomed_figure_dependencies: Dict[str, Dict[str, str]] = {}
 
     # A planner may attach a figure to the wrong mixed-output step even though
     # another step declares the figure's exact typed table/statistic product.
@@ -1777,8 +1778,14 @@ def _split_table_and_figure_outputs_in_plan(
             source_step = next(
                 item for item in plan.steps if str(item.step_id) == source_step_id
             )
+            source_already_owns_figure = any(
+                (candidate_product := typed_product(candidate_output)) is not None
+                and candidate_product[0] == "figure"
+                for candidate_output in outputs_by_step[source_step_id]
+            )
             if (
                 f"{source_step_id}_figure" in existing_step_ids
+                or source_already_owns_figure
                 or _normalised_method_head(str(source_step.method or ""))
                 in {"association_robustness", "bias_audit_association", "clustering"}
                 or typed_product(source_output)[0] != "table"
@@ -1786,6 +1793,9 @@ def _split_table_and_figure_outputs_in_plan(
                 continue
             outputs_by_step[step_id].remove(output)
             outputs_by_step[source_step_id].append(output)
+            rehomed_figure_dependencies.setdefault(source_step_id, {})[
+                str(output)
+            ] = source_output
             findings.append(
                 ValidationFinding(
                     validator="plan_contract",
@@ -1845,6 +1855,21 @@ def _split_table_and_figure_outputs_in_plan(
         # ``figure + log`` step would create an empty-input child that can only
         # guess or scan unrelated evidence.
         render_source_outputs = _typed_render_source_outputs(non_figure_outputs)
+        explicit_rehomed_dependencies = rehomed_figure_dependencies.get(
+            str(step.step_id), {}
+        )
+        if explicit_rehomed_dependencies:
+            # Rehoming is authorized by the exact typed product role that caused
+            # the move. Do not widen that closed dependency to every table owned
+            # by the producer. Figures requiring a multi-product renderer
+            # contract remain Planner-owned and are not inferred here.
+            render_source_outputs = list(
+                dict.fromkeys(
+                    explicit_rehomed_dependencies[figure_output]
+                    for figure_output in figure_outputs
+                    if figure_output in explicit_rehomed_dependencies
+                )
+            )
         render_source_identities = {
             parsed
             for output in render_source_outputs

@@ -1126,23 +1126,81 @@ def _downgrade_audit_only_companion_gating_findings(
     whole-step audit contract is absent.
     """
 
-    script_lower = str(script_text or "").lower()
-    audit_contract_present = all(
-        token in script_lower
-        for token in (
-            "measurement_provenance_audit",
-            "invalid_pair_n",
-            "discordant_n",
-            "audit_only",
-        )
-    ) and any(
-        token in script_lower
-        for token in (
-            "provenance_failed",
-            "provenance_error",
-            "provenance_valid",
-        )
+    derived_provenance_flags: set[str] = set()
+
+    def _failure_guard(test: ast.AST) -> bool:
+        if isinstance(test, ast.Name):
+            return test.id.lower() in derived_provenance_flags & {
+                "provenance_failed",
+                "provenance_error",
+            }
+        if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+            return (
+                isinstance(test.operand, ast.Name)
+                and test.operand.id.lower() in derived_provenance_flags
+                and test.operand.id.lower() == "provenance_valid"
+            )
+        if isinstance(test, ast.BoolOp) and isinstance(test.op, ast.Or):
+            return any(_failure_guard(value) for value in test.values)
+        if isinstance(test, ast.Compare) and len(test.ops) == len(test.comparators) == 1:
+            left = test.left
+            right = test.comparators[0]
+            if not isinstance(left, ast.Name) or not isinstance(right, ast.Constant):
+                return False
+            name = left.id.lower()
+            value = right.value
+            if name not in derived_provenance_flags:
+                return False
+            if name == "provenance_valid":
+                return isinstance(test.ops[0], (ast.Eq, ast.Is)) and value is False
+            if name in {"provenance_failed", "provenance_error"}:
+                return isinstance(test.ops[0], (ast.Eq, ast.Is)) and value is True
+        return False
+
+    try:
+        tree = ast.parse(str(script_text or ""))
+    except SyntaxError:
+        tree = None
+    ast_tokens = set()
+    if tree is not None:
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name):
+                ast_tokens.add(node.id.lower())
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                ast_tokens.add(node.value.lower())
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            value = node.value
+            value_tokens = {
+                str(candidate.value).lower()
+                for candidate in ast.walk(value)
+                if isinstance(candidate, ast.Constant)
+                and isinstance(candidate.value, str)
+            } | {
+                candidate.id.lower()
+                for candidate in ast.walk(value)
+                if isinstance(candidate, ast.Name)
+            }
+            if not value_tokens & {"invalid_pair_n", "discordant_n"}:
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            derived_provenance_flags.update(
+                target.id.lower() for target in targets if isinstance(target, ast.Name)
+            )
+    contract_tokens = {
+        "measurement_provenance_audit",
+        "invalid_pair_n",
+        "discordant_n",
+        "audit_only",
+    }
+    fail_closed_guard = tree is not None and any(
+        isinstance(node, ast.If)
+        and _failure_guard(node.test)
+        and any(isinstance(statement, ast.Raise) for statement in node.body)
+        for node in ast.walk(tree)
     )
+    audit_contract_present = contract_tokens.issubset(ast_tokens) and fail_closed_guard
     if not audit_contract_present:
         return list(findings)
 
@@ -5204,25 +5262,52 @@ class StatisticalValidator:
             )
             counts = primary_exposure.get("counts")
             usable_group_n = 0.0
+            counted_total_n = 0.0
             if isinstance(counts, Mapping):
                 for label, value in counts.items():
                     normalized_label = str(label).strip().lower()
+                    numeric = self._finite_nonnegative_count(value)
+                    if numeric is not None:
+                        counted_total_n += numeric
                     if any(
                         token in normalized_label
                         for token in ("unavailable", "missing", "unknown")
                     ):
                         continue
-                    numeric = self._finite_nonnegative_count(value)
                     if numeric is not None:
                         usable_group_n += numeric
-            all_missing = (
+            explicit_usable_counts = [
+                self._finite_nonnegative_count(primary_exposure.get(key))
+                for key in (
+                    "available_n",
+                    "nonmissing_n",
+                    "observed_n",
+                    "reconciled_n",
+                    "usable_n",
+                )
+                if key in primary_exposure
+            ]
+            explicit_no_usable = bool(explicit_usable_counts) and all(
+                value is not None and value <= 0 for value in explicit_usable_counts
+            )
+            all_missing_by_cohort = (
                 cohort_n is not None
                 and cohort_n > 0
                 and missing_n is not None
                 and missing_n >= cohort_n
                 and usable_group_n <= 0
             )
-            if status in {"unavailable", "failed", "error", "not_available"} or all_missing:
+            all_missing_by_counts = counted_total_n > 0 and usable_group_n <= 0
+            if status in {
+                "unavailable",
+                "failed",
+                "error",
+                "not_available",
+                "fail_closed",
+                "failed_closed",
+                "fail-closed",
+                "failed-closed",
+            } or all_missing_by_cohort or all_missing_by_counts or explicit_no_usable:
                 findings.append(
                     ValidationFinding(
                         validator=self.name,
