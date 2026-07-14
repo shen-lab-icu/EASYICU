@@ -212,6 +212,12 @@ Code contract:
   and reason in source-data audit fields and `step_summary.json`; never silently
   drop them. A row with `n == 0` cannot carry or display a rate, interval,
   median, quartile, or other numeric summary.
+  Structural accounting figures are stricter: for cohort flow, attrition,
+  denominator reconciliation, and source-availability accounting, never filter
+  an invalid required source row and render the remainder. Removing one row
+  changes the accounting universe. Instead fail the rendering step closed,
+  write the precise invalid-row reason to `step_summary.json`, leave
+  `figure_files` empty, and emit no partial accounting figure.
 - OPTIONAL trajectory: if os.environ.get("TRAJECTORY_PARQUET") is set, it
   is a LONG per-timepoint table with columns
   (stay_id, charttime, concept, value_num, value_str) — charttime is

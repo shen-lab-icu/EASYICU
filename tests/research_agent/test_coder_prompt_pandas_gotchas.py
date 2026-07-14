@@ -357,6 +357,18 @@ def test_coder_prompt_fail_closes_unverifiable_plotted_values() -> None:
     assert "A row with `n == 0` cannot carry or display" in coder_prompt
 
 
+def test_coder_prompt_never_renders_partial_structural_accounting() -> None:
+    from easyicu.research_agent.prompts import load_prompt_pack
+
+    coder_prompt = load_prompt_pack()["coder"]
+    normalized = " ".join(coder_prompt.split())
+
+    assert "Structural accounting figures are stricter" in coder_prompt
+    assert "never filter an invalid required source row" in normalized
+    assert "leave `figure_files` empty" in normalized
+    assert "emit no partial accounting figure" in normalized
+
+
 def test_coder_prompt_resolves_prior_tables_by_step_and_kind() -> None:
     from easyicu.research_agent.prompts import load_prompt_pack
 

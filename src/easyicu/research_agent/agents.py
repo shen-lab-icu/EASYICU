@@ -1806,6 +1806,34 @@ def _repair_specialization(
             "row indices, source table names, and the FigureContract unchanged.\n"
         )
 
+    structural_accounting_terms = (
+        "cohort flow",
+        "cohort accounting",
+        "attrition",
+        "denominator reconciliation",
+        "source availability accounting",
+    )
+    invalid_row_terms = (
+        "excluding invalid source rows",
+        "excluded invalid source rows",
+        "partial cohort flow",
+        "partial accounting",
+    )
+    if any(term in normalized for term in structural_accounting_terms) and any(
+        term in normalized for term in invalid_row_terms
+    ):
+        guidance.append(
+            "- DIAGNOSED STRUCTURAL-ACCOUNTING FIGURE REPAIR (binding): do not "
+            "filter invalid required rows and render a partial cohort-flow, "
+            "attrition, denominator-reconciliation, or source-availability "
+            "figure. Validate every required label, count, denominator, and "
+            "finite/nonnegative constraint before selecting rows. If any row is "
+            "invalid, set a precise fail-closed status in step_summary.json, keep "
+            "figure_files empty, and emit no figure or source-data bundle. Only "
+            "render when the complete bound accounting table passes validation; "
+            "do not change the cohort, denominator, or upstream values.\n"
+        )
+
     ordinal_covariate_signals = (
         "ordinal score",
         "ordinal covariate",
