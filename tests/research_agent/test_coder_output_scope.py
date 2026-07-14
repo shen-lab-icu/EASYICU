@@ -384,6 +384,37 @@ def test_coder_repair_binds_finalized_tabular_exposure_product(ra):
     assert "exact planner-selected `ResearchContext.primary_exposure`" in prompt
     assert 'fact is: "selected_first"' in prompt
     assert "Do not repeat raw-event reconciliation" in prompt
+    assert "Before any integer/boolean cast" in prompt
+    assert "non-missing, finite, and exactly in {0, 1}" in prompt
+    assert "Verify row alignment using the artifact's stable row key" in prompt
+    assert "retain the separate bidirectional count/measured provenance audit" in prompt
+
+
+def test_coder_repair_validates_finalized_binary_exposure_before_cast(ra):
+    llm = _RecordingLLM()
+    context = _context(ra).model_copy(update={"primary_exposure": "selected_first"})
+    step = ra.AnalysisStep(
+        step_id="diagnostics",
+        intent="Run diagnostics for the planner-owned exposure.",
+        inputs=["artifact:primary_exposure_definition"],
+        expected_outputs=["table:diagnostics"],
+        method="diagnostic_analysis",
+    )
+
+    CoderAgent(llm).repair(
+        context=context,
+        step=step,
+        code="treatment = exposure_table['selected_first'].astype(int)\n",
+        run_log=(
+            "Row-aligned exposure-table branch bypasses binary-event validation "
+            "and provenance reconciliation."
+        ),
+    )
+
+    prompt = llm.messages[-1].content
+    assert "DIAGNOSED TABULAR AUTHORITATIVE-EXPOSURE REPAIR" in prompt
+    assert "never let a fractional value be truncated" in prompt
+    assert "without redefining it" in prompt
 
 
 def test_coder_repair_removes_constructed_exposure_fallback(ra):
