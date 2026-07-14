@@ -12,6 +12,63 @@ import numpy as np
 import pandas as pd
 
 
+def test_wide_companion_columns_inherit_exact_base_concept_metadata(
+    ra, monkeypatch
+):
+    from easyicu.research_agent import context as context_module
+
+    def fake_info(name):
+        if name == "event_ind":
+            return {
+                "description": "Registered binary intervention indicator.",
+                "clinical_caveats": ["Treat structural absence as event-negative."],
+            }
+        return None
+
+    monkeypatch.setattr(context_module, "_safe_get_concept_info", fake_info)
+    frame = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3],
+            "event_ind_n": [0, 2, 1],
+            "event_ind_measured": [0, 1, 1],
+            "event_ind_max": [None, 1, 1],
+        }
+    )
+
+    context = ra.build_research_context(
+        research_question="Evaluate a registered intervention indicator.",
+        cohort=frame,
+        cohort_name="synthetic",
+        database="synthetic",
+    )
+
+    for column in ("event_ind_n", "event_ind_measured", "event_ind_max"):
+        descriptor = context.variable(column)
+        assert descriptor is not None
+        assert descriptor.source_concept == "event_ind"
+        assert descriptor.description == "Registered binary intervention indicator."
+        assert "Treat structural absence as event-negative." in (
+            descriptor.clinical_caveats
+        )
+
+
+def test_wide_concept_resolution_does_not_fuzzy_match_unknown_columns(
+    monkeypatch,
+):
+    from easyicu.research_agent import context as context_module
+
+    monkeypatch.setattr(
+        context_module,
+        "_safe_get_concept_info",
+        lambda name: {"description": "Known."} if name == "known" else None,
+    )
+
+    info, source = context_module._concept_info_for_wide_column("unknown_max")
+
+    assert info is None
+    assert source is None
+
+
 def test_build_context_basic(ra):
     df = pd.DataFrame({
         "stay_id": [1, 2, 3, 4],
