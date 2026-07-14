@@ -1834,6 +1834,26 @@ def _repair_specialization(
             "do not change the cohort, denominator, or upstream values.\n"
         )
 
+    arbitrary_column_signals = (
+        "column discovery can silently bind",
+        "unintended numeric column",
+        "first frame column with any numeric value",
+        "no named count candidate",
+        "arbitrary frame order",
+    )
+    if any(signal in normalized for signal in arbitrary_column_signals):
+        guidance.append(
+            "- DIAGNOSED FIGURE SCHEMA-BINDING REPAIR (binding): remove every "
+            "fallback that chooses the first numeric column, first non-numeric "
+            "column, dtype-selected column, or other frame-order-dependent "
+            "column. Resolve each plotted label, count, denominator, estimate, "
+            "and interval only from the script's explicit semantic candidate "
+            "names for the declared typed product. If no named candidate exists, "
+            "write the precise missing-schema reason to step_summary.json, keep "
+            "figure_files empty, and fail closed. Do not change the source table, "
+            "scientific quantity, or candidate meaning.\n"
+        )
+
     ordinal_covariate_signals = (
         "ordinal score",
         "ordinal covariate",
