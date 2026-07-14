@@ -1830,6 +1830,9 @@ def _repair_specialization(
         "ignores the loaded primary exposure definition",
         "hard codes the primary exposure",
         "hard coded primary exposure",
+        "authoritative primary exposure fallback",
+        "sparse event reconciliation can be authorized from a hardcoded fallback",
+        "constructed fallback metadata instead of failing closed",
     )
     if any(signal in normalized for signal in primary_exposure_binding_signals):
         guidance.append(
@@ -1841,13 +1844,16 @@ def _repair_specialization(
             "companions are unavailable. Do not substitute a hard-coded column, "
             "candidate list, dtype scan, frame-order fallback, count field, or "
             "measured-status field. Preserve the planner-owned exposure and all "
-            "other scientific choices.\n"
+            "other scientific choices. Do not catch a binding failure and construct "
+            "replacement source-concept, role, or indicator metadata.\n"
         )
 
     tabular_exposure_product_signals = (
         "primary exposure definition has no registered executable exposure column",
         "primary exposure definition is missing the registered exposure column",
         "primary exposure definition must be a mapping or tabular input",
+        "sparse event reconciliation can be authorized from a hardcoded fallback",
+        "authoritative primary exposure fallback",
     )
     if any(signal in normalized for signal in tabular_exposure_product_signals):
         selected_exposure = json.dumps(

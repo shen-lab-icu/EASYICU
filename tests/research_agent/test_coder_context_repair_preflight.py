@@ -560,6 +560,58 @@ def main():
     )
 
 
+def test_mechanical_preflight_blocks_constructed_authoritative_exposure_fallback(ra):
+    step = ra.AnalysisStep(
+        step_id="diagnostics",
+        intent="Run planner-owned exposure diagnostics.",
+        inputs=["artifact:primary_exposure_definition"],
+        expected_outputs=["table:diagnostics"],
+        method="diagnostic_analysis",
+    )
+    code = """
+exposure_definition = typed.get('artifact:primary_exposure_definition')
+try:
+    resolved = resolve_exposure_definition(exposure_definition, frame)
+except RuntimeError:
+    resolved = {
+        'exposure_column': 'candidate_event',
+        'source_concept': 'candidate',
+        'role': 'intervention',
+    }
+"""
+    findings = audit_mechanical_code_contracts(code, step)
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "authoritative_primary_exposure_fallback"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_accepts_fail_closed_authoritative_exposure_binding(ra):
+    step = ra.AnalysisStep(
+        step_id="diagnostics",
+        intent="Run planner-owned exposure diagnostics.",
+        inputs=["artifact:primary_exposure_definition"],
+        expected_outputs=["table:diagnostics"],
+        method="diagnostic_analysis",
+    )
+    code = """
+exposure_definition = typed.get('artifact:primary_exposure_definition')
+try:
+    resolved = resolve_exposure_definition(exposure_definition, frame)
+except RuntimeError as exc:
+    raise RuntimeError('authoritative exposure unavailable') from exc
+"""
+    findings = audit_mechanical_code_contracts(code, step)
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "authoritative_primary_exposure_fallback"
+        for finding in findings
+    )
+
+
 def test_mechanical_preflight_blocks_undefined_direct_helper_call(ra):
     code = """
 def main(frame):

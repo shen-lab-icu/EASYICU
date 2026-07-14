@@ -568,6 +568,41 @@ def _authoritative_exposure_binding_findings(
     return []
 
 
+def _authoritative_exposure_fallback_findings(
+    tree: ast.Module, step: AnalysisStep
+) -> list[ValidationFinding]:
+    authoritative_product = "artifact:primary_exposure_definition"
+    if authoritative_product not in {
+        str(value or "").strip().lower() for value in step.inputs or []
+    }:
+        return []
+
+    binding_keys = {"exposure_column", "source_concept", "role"}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Try):
+            continue
+        body_text = "\n".join(ast.unparse(statement) for statement in node.body)
+        if "exposure_definition" not in body_text:
+            continue
+        for handler in node.handlers:
+            if binding_keys <= _literal_string_tokens(handler):
+                return [
+                    ValidationFinding(
+                        validator="mechanical_code_preflight",
+                        severity="error",
+                        message=(
+                            "A failed authoritative exposure binding is replaced "
+                            "with constructed fallback metadata instead of failing "
+                            "closed."
+                        ),
+                        detail={
+                            "reason": "authoritative_primary_exposure_fallback"
+                        },
+                    )
+                ]
+    return []
+
+
 def _undefined_direct_call_findings(tree: ast.Module) -> list[ValidationFinding]:
     """Reject direct calls whose Python name has no lexical binding or import."""
 
@@ -651,6 +686,7 @@ def audit_mechanical_code_contracts(
     findings.extend(_provenance_fail_closed_findings(tree))
     findings.extend(_provenance_pair_scan_findings(tree))
     findings.extend(_authoritative_exposure_binding_findings(tree, step))
+    findings.extend(_authoritative_exposure_fallback_findings(tree, step))
     findings.extend(_undefined_direct_call_findings(tree))
     return findings
 
