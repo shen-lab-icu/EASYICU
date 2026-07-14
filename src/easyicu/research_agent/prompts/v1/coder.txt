@@ -662,8 +662,13 @@ CLINICAL SCORE AND MISSINGNESS SEMANTICS:
   `<concept>_n > 0` may encode event presence only if the count is complete,
   finite, non-negative, integer-like, the paired `<concept>_measured` flag is
   complete binary and agrees exactly with `(count > 0)`, and any non-missing
-  representative event value is binary positive and occurs on exactly those
-  same rows. Record `indicator_semantics="binary_event_presence"` and all
+  representative event value is binary positive only on exactly those same
+  rows. A positive-only event export may leave that representative value
+  structurally missing on reconciled negative rows; do not require an explicit
+  zero there. Every reconciled positive row must carry the binary positive
+  representative value, and any non-binary value or positive value on a
+  reconciled negative row is a contradiction. Record
+  `indicator_semantics="binary_event_presence"` and all
   reconciliation counts. The flag is then an event-presence companion, not an
   availability gate: retain reconciled count-zero/flag-zero rows as the
   negative class. Never restrict the analytic denominator to `measured == 1`
