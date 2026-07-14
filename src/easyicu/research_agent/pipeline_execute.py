@@ -247,6 +247,28 @@ def _merge_monotonic_concept_constraints(
     return merged
 
 
+def _persisted_monotonic_concept_constraints(
+    record: Mapping[str, Any] | None,
+) -> List[ValidationFinding]:
+    """Load binding constraints from the latest unfinished step record."""
+
+    if not isinstance(record, Mapping) or str(record.get("status") or "") == "ok":
+        return []
+    raw_constraints = record.get("monotonic_concept_constraints")
+    if not isinstance(raw_constraints, list):
+        return []
+    parsed: List[ValidationFinding] = []
+    for payload in raw_constraints:
+        if not isinstance(payload, Mapping):
+            continue
+        try:
+            finding = ValidationFinding.model_validate(payload)
+        except (TypeError, ValueError):
+            continue
+        parsed = _merge_monotonic_concept_constraints(parsed, [finding])
+    return parsed
+
+
 def _remove_standard_executor_pending_artifacts(out_dir: Path) -> None:
     """Remove private partial files before failed-run evidence discovery."""
 
@@ -4719,6 +4741,15 @@ def run_execute_phase(
 
     def _execute_one_step(step: AnalysisStep) -> Dict[str, Any]:
         nonlocal runtime_state
+        with shared_lock:
+            prior_step_record = next(
+                (
+                    record
+                    for record in current_step_records(per_step_records)
+                    if str(record.get("step_id") or "") == step.step_id
+                ),
+                None,
+            )
         step_record: Dict[str, Any] = {
             "step_id": step.step_id,
             "intent": step.intent,
@@ -4740,7 +4771,14 @@ def run_execute_phase(
         quarantine_superseded_by_fallback = False
         quarantine_policy_superseded = False
         pending_quarantined_errors: List[ValidationFinding] = []
-        monotonic_concept_constraints: List[ValidationFinding] = []
+        monotonic_concept_constraints = _persisted_monotonic_concept_constraints(
+            prior_step_record
+        )
+        if monotonic_concept_constraints:
+            step_record["monotonic_concept_constraints"] = [
+                finding.model_dump(mode="json")
+                for finding in monotonic_concept_constraints
+            ]
         preexecution_runner_repair_name: Optional[str] = None
         runner_repair_name: Optional[str] = None
         sealed_renderer_repair_id: Optional[str] = None
@@ -4925,6 +4963,11 @@ def run_execute_phase(
                 monotonic_concept_constraints,
                 candidates,
             )
+            if monotonic_concept_constraints:
+                step_record["monotonic_concept_constraints"] = [
+                    finding.model_dump(mode="json")
+                    for finding in monotonic_concept_constraints
+                ]
 
         def _quarantine_error_payloads(
             candidates: Sequence[ValidationFinding],
@@ -9293,6 +9336,7 @@ else:
         has_contract_error = step_record["status"] == "contract_failed"
         final_cleanup_finding: Optional[ValidationFinding] = None
         if step_record["status"] == "ok":
+            step_record.pop("monotonic_concept_constraints", None)
             try:
                 clear_quarantined_concept_draft(
                     run_dir=run_dir,

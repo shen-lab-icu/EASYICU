@@ -286,13 +286,57 @@ def test_quarantine_persists_repaired_constraints_across_later_repairs(
         run_dir=Path(result.workdir),
         step_id="01_summary",
     )
+    partial = json.loads(
+        (Path(result.workdir) / "manifest_partial.json").read_text(encoding="utf-8")
+    )
+    record = next(
+        item for item in partial["per_step_records"] if item["step_id"] == "01_summary"
+    )
 
     assert llm.repair_calls == 2
     assert checkpoint is not None
-    assert [finding["message"] for finding in checkpoint.findings] == [
+    expected_messages = [
         "Earlier repaired constraint must remain binding.",
         "Later contract repair introduced a new constraint.",
     ]
+    assert [finding["message"] for finding in checkpoint.findings] == expected_messages
+    assert [
+        finding["message"] for finding in record["monotonic_concept_constraints"]
+    ] == expected_messages
+
+
+def test_unfinished_step_record_restores_only_binding_concept_errors() -> None:
+    from easyicu.research_agent.pipeline_execute import (
+        _persisted_monotonic_concept_constraints,
+    )
+
+    error = {
+        "validator": "concept_usage_auditor",
+        "severity": "error",
+        "message": "Keep this repaired constraint binding.",
+        "detail": {"step_id": "01_summary"},
+    }
+    warning = {
+        "validator": "concept_usage_auditor",
+        "severity": "warning",
+        "message": "Do not persist informational findings.",
+        "detail": {"step_id": "01_summary"},
+    }
+
+    restored = _persisted_monotonic_concept_constraints(
+        {
+            "status": "contract_failed",
+            "monotonic_concept_constraints": [error, warning, error],
+        }
+    )
+
+    assert [finding.message for finding in restored] == [error["message"]]
+    assert (
+        _persisted_monotonic_concept_constraints(
+            {"status": "ok", "monotonic_concept_constraints": [error]}
+        )
+        == []
+    )
 
 
 def test_executed_script_digest_mismatch_blocks_outputs_before_evidence(
