@@ -4654,6 +4654,7 @@ def run_execute_phase(
             run_dir=run_dir,
         )
         resumed_code_reuse_used = False
+        critic_resume_repair_used = False
         resumed_quarantined_draft_used = False
         quarantined_draft_active = False
         quarantined_repair_materially_changed = False
@@ -5056,6 +5057,63 @@ def run_execute_phase(
                 total_steps=total_steps,
             )
             return repaired_code
+
+        def _resume_critic_repair_code() -> Optional[str]:
+            """Repair the selected prior script from structured Critic feedback."""
+
+            nonlocal critic_resume_repair_used
+            report = resume_controller.prior_negative_critic_report_for_step(
+                step.step_id
+            )
+            if report is None:
+                return None
+            resumed_code = resume_controller.prior_code_for_step(step.step_id)
+            if resumed_code is None:
+                return None
+            prior_code = _use_resumed_code(resumed_code)
+            critique_log = (
+                "PRIOR CRITIC REVIEW (binding repair requirements):\n"
+                + json.dumps(report, indent=2, ensure_ascii=False, default=str)
+            )
+            emit_progress(
+                "coder",
+                f"Repairing prior Critic findings for {step.step_id}.",
+                status="warning",
+                run_id=run_id,
+                step_id=step.step_id,
+                current_step=step_current,
+                total_steps=total_steps,
+            )
+            try:
+                repaired = coder.repair(
+                    context=coder_context,
+                    step=step,
+                    code=prior_code,
+                    run_log=critique_log,
+                    attempt=1,
+                )
+            except Exception as exc:
+                with shared_lock:
+                    findings.append(
+                        ValidationFinding(
+                            validator="critic_resume_repair",
+                            severity="warning",
+                            message=(
+                                "Prior Critic-guided repair was unavailable; "
+                                "falling back to ordinary code generation."
+                            ),
+                            detail={
+                                "step_id": step.step_id,
+                                "error_type": type(exc).__name__,
+                                "error": str(exc)[:300],
+                            },
+                        )
+                    )
+                return None
+            critic_resume_repair_used = True
+            step_record["critic_resume_repair"] = True
+            step_record["critic_resume_repair_status"] = report.get("status")
+            return repaired
 
         def _publication_figure_preflight_supported() -> bool:
             # Preflight may replace the coder, so names/prose are insufficient.
@@ -5506,12 +5564,22 @@ else:
             )
             else resume_controller.quarantined_concept_draft_for_step(step.step_id)
         )
+        resume_critic_repair_code = (
+            None
+            if (
+                preflight_trajectory_stability_code is not None
+                or preflight_figure_code is not None
+                or quarantined_resume_draft is not None
+            )
+            else _resume_critic_repair_code()
+        )
         resume_summary_repair_code = (
             None
             if (
                 preflight_trajectory_stability_code is not None
                 or preflight_figure_code is not None
                 or quarantined_resume_draft is not None
+                or resume_critic_repair_code is not None
             )
             else _resume_summary_repair_code()
         )
@@ -5521,6 +5589,7 @@ else:
             and preflight_figure_code is None
             and quarantined_resume_draft is None
             and resume_summary_repair_code is None
+            and resume_critic_repair_code is None
             and (
                 requested_resume_from_step_id != step.step_id
                 or reuse_selected_step_code_opt_in
@@ -5559,6 +5628,8 @@ else:
                 )
         elif quarantined_resume_draft is not None:
             code = _use_quarantined_draft(quarantined_resume_draft)
+        elif resume_critic_repair_code is not None:
+            code = resume_critic_repair_code
         elif resume_summary_repair_code is not None:
             code = resume_summary_repair_code
         elif preflight_resumed_code is not None:
@@ -5858,7 +5929,7 @@ else:
             return code_findings
 
         concept_repair_attempts = 0
-        llm_repair_used = False
+        llm_repair_used = critic_resume_repair_used
         concept_audit_error_count = 0
         deterministic_concept_repairs = 0
         _MAX_DETERMINISTIC_CONCEPT_REPAIRS = 3

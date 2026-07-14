@@ -518,6 +518,36 @@ class ResumeController:
             return prior_code, dict(payload)
         return None
 
+    def prior_negative_critic_report_for_step(
+        self,
+        step_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Return the latest fail-closed Critic report for a selected rerun.
+
+        The resume application intentionally drops the selected failed record
+        from the live ledger.  Keep its structured Critic feedback available as
+        repair input so the next attempt improves the prior Agent script instead
+        of blindly generating an unrelated replacement.
+        """
+
+        if not self.resume_from_step_id or step_id != self.resume_from_step_id:
+            return None
+        records = [
+            record
+            for record in (self.resume_state or {}).get("per_step_records", []) or []
+            if isinstance(record, dict) and record.get("step_id") == step_id
+        ]
+        for record in reversed(records):
+            if str(record.get("status") or "") != "critic_failed":
+                continue
+            report = record.get("critique_report")
+            if not isinstance(report, dict):
+                continue
+            if str(report.get("status") or "") not in {"needs_revision", "blocked"}:
+                continue
+            return dict(report)
+        return None
+
     def quarantined_concept_draft_for_step(
         self,
         step_id: str,
