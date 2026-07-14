@@ -6,7 +6,6 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-
 _SAFE_CODE = """
 import json
 import os
@@ -52,6 +51,12 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
 script = Path(__file__)
 script.write_text(script.read_text(encoding="utf-8") + "\\n# SELF_MUTATED\\n", encoding="utf-8")
 """
+
+_INITIAL_CONCEPT_ERROR_CODE = _SAFE_CODE + "\n# INITIAL_CONCEPT_ERROR\n"
+_LATER_CONTRACT_ERROR_CODE = (
+    _SAFE_CODE.replace('"phase": "initial"', '"phase": "repaired"')
+    + "\n# LATER_CONTRACT_ERROR\n"
+)
 
 
 class _RepairGateLLM:
@@ -104,6 +109,25 @@ class _SelfMutatingLLM(_RepairGateLLM):
         if "WRITE THE PYTHON CODE" in user.upper():
             self.write_calls += 1
             return _SELF_MUTATING_CODE
+        return super().complete(
+            messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+
+
+class _SequentialRepairLLM(_RepairGateLLM):
+    def complete(self, messages, *, max_tokens=2048, temperature=0.2):
+        user = next((m.content for m in reversed(messages) if m.role == "user"), "")
+        upper = user.upper()
+        if "WRITE THE PYTHON CODE" in upper:
+            self.write_calls += 1
+            return _INITIAL_CONCEPT_ERROR_CODE
+        if "REPAIR THE PYTHON CODE" in upper:
+            self.repair_calls += 1
+            if self.repair_calls == 1:
+                return _SAFE_CODE
+            return _LATER_CONTRACT_ERROR_CODE
         return super().complete(
             messages,
             max_tokens=max_tokens,
@@ -202,6 +226,75 @@ def test_contract_repair_reenters_concept_gate_before_runner(
     assert (run_dir / "steps" / "01_summary" / ".quarantine").is_dir()
 
 
+def test_quarantine_persists_repaired_constraints_across_later_repairs(
+    ra, tmp_path: Path, monkeypatch
+) -> None:
+    from easyicu.research_agent.audits.validators import (
+        ConceptUsageAuditor,
+        PrimaryModelContractValidator,
+    )
+    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.pipeline_resume import load_quarantined_concept_draft
+
+    def concept_audit(self, *, context, script_text, step):
+        del self, context
+        findings = []
+        if "INITIAL_CONCEPT_ERROR" in script_text:
+            findings.append(
+                ValidationFinding(
+                    validator="concept_usage_auditor",
+                    severity="error",
+                    message="Earlier repaired constraint must remain binding.",
+                    detail={"step_id": step.step_id},
+                )
+            )
+        if "LATER_CONTRACT_ERROR" in script_text:
+            findings.append(
+                ValidationFinding(
+                    validator="concept_usage_auditor",
+                    severity="error",
+                    message="Later contract repair introduced a new constraint.",
+                    detail={"step_id": step.step_id},
+                )
+            )
+        return findings
+
+    def contract_audit(self, *, step, step_summary, **kwargs):
+        del self, kwargs
+        if step_summary.get("phase") != "initial":
+            return []
+        return [
+            ValidationFinding(
+                validator="primary_model_contract",
+                severity="error",
+                message="Force a later contract repair.",
+                detail={"step_id": step.step_id},
+            )
+        ]
+
+    monkeypatch.setattr(ConceptUsageAuditor, "audit", concept_audit)
+    monkeypatch.setattr(PrimaryModelContractValidator, "audit", contract_audit)
+
+    llm = _SequentialRepairLLM()
+    result = _run(
+        _pipeline(ra, tmp_path, llm),
+        pd.DataFrame(
+            {"stay_id": [1, 2, 3], "value": [1.0, None, 3.0], "death": [0, 1, 0]}
+        ),
+    )
+    checkpoint = load_quarantined_concept_draft(
+        run_dir=Path(result.workdir),
+        step_id="01_summary",
+    )
+
+    assert llm.repair_calls == 2
+    assert checkpoint is not None
+    assert [finding["message"] for finding in checkpoint.findings] == [
+        "Earlier repaired constraint must remain binding.",
+        "Later contract repair introduced a new constraint.",
+    ]
+
+
 def test_executed_script_digest_mismatch_blocks_outputs_before_evidence(
     ra, tmp_path: Path
 ) -> None:
@@ -270,5 +363,7 @@ def test_keyboard_interrupt_during_concept_repair_saves_draft_and_reraises(
     assert llm.repair_calls == 1
     assert checkpoint is not None
     assert checkpoint.code.strip() == _SAFE_CODE.strip()
-    assert checkpoint.findings[0]["message"] == "Draft requires repair before execution."
+    assert (
+        checkpoint.findings[0]["message"] == "Draft requires repair before execution."
+    )
     assert not (run_dir / "steps" / "01_summary" / "analysis.py").exists()

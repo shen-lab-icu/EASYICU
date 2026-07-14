@@ -225,6 +225,28 @@ _STANDARD_EXECUTOR_INTERNAL_PENDING_ARTIFACTS = frozenset(
 _FIGURE_CONTRACT_SOURCE_DATA_SCHEMA_REPAIR_ID = "figure_contract_source_data_schema_v1"
 
 
+def _merge_monotonic_concept_constraints(
+    existing: Sequence[ValidationFinding],
+    candidates: Sequence[ValidationFinding],
+) -> List[ValidationFinding]:
+    """Merge binding concept errors without losing earlier repair constraints.
+
+    A later repair may introduce a different error after an earlier error has
+    already been removed from the current script.  Quarantine checkpoints must
+    retain both constraints so a resumed repair cannot regress the earlier fix.
+    """
+
+    merged = list(existing)
+    seen = {(finding.validator, finding.message) for finding in merged}
+    for finding in candidates:
+        key = (finding.validator, finding.message)
+        if finding.severity != "error" or key in seen:
+            continue
+        merged.append(finding)
+        seen.add(key)
+    return merged
+
+
 def _remove_standard_executor_pending_artifacts(out_dir: Path) -> None:
     """Remove private partial files before failed-run evidence discovery."""
 
@@ -4899,16 +4921,21 @@ def run_execute_phase(
         ) -> None:
             """Keep repaired scientific defects binding across later repairs."""
 
-            existing = {
-                (finding.validator, finding.message)
-                for finding in monotonic_concept_constraints
-            }
-            monotonic_concept_constraints.extend(
-                finding
-                for finding in candidates
-                if finding.severity == "error"
-                and (finding.validator, finding.message) not in existing
+            monotonic_concept_constraints[:] = _merge_monotonic_concept_constraints(
+                monotonic_concept_constraints,
+                candidates,
             )
+
+        def _quarantine_error_payloads(
+            candidates: Sequence[ValidationFinding],
+        ) -> List[Dict[str, Any]]:
+            """Serialize the complete cross-repair constraint set for resume."""
+
+            _remember_concept_constraints(candidates)
+            return [
+                finding.model_dump(mode="json")
+                for finding in monotonic_concept_constraints
+            ]
 
         def _monotonic_concept_constraint_log() -> str:
             if not monotonic_concept_constraints:
@@ -5984,11 +6011,7 @@ else:
             except BaseException:
                 # An operator interrupt must propagate, but a draft already
                 # rejected by deterministic findings remains resumable.
-                error_payloads = [
-                    finding.model_dump(mode="json")
-                    for finding in code_findings
-                    if finding.severity == "error"
-                ]
+                error_payloads = _quarantine_error_payloads(code_findings)
                 if error_payloads:
                     try:
                         store_quarantined_concept_draft(
@@ -6260,11 +6283,7 @@ else:
                                 run_dir=run_dir,
                                 step_id=step.step_id,
                                 code=code,
-                                findings=[
-                                    finding.model_dump(mode="json")
-                                    for finding in usage_findings
-                                    if finding.severity == "error"
-                                ],
+                                findings=_quarantine_error_payloads(usage_findings),
                             )
                             step_record["quarantined_draft_sha256"] = checkpoint.sha256
                             step_record["quarantined_draft_relative_path"] = (
@@ -6331,11 +6350,7 @@ else:
                             run_dir=run_dir,
                             step_id=step.step_id,
                             code=code,
-                            findings=[
-                                finding.model_dump(mode="json")
-                                for finding in usage_findings
-                                if finding.severity == "error"
-                            ],
+                            findings=_quarantine_error_payloads(usage_findings),
                         )
                         step_record["quarantined_draft_sha256"] = checkpoint.sha256
                         step_record["quarantined_draft_relative_path"] = (
@@ -6528,11 +6543,7 @@ else:
                         run_dir=run_dir,
                         step_id=step.step_id,
                         code=code,
-                        findings=[
-                            finding.model_dump(mode="json")
-                            for finding in usage_findings
-                            if finding.severity == "error"
-                        ],
+                        findings=_quarantine_error_payloads(usage_findings),
                     )
                     step_record["quarantined_draft_sha256"] = checkpoint.sha256
                     step_record["quarantined_draft_relative_path"] = (
@@ -6727,10 +6738,7 @@ else:
                             run_dir=run_dir,
                             step_id=step.step_id,
                             code=code,
-                            findings=[
-                                finding.model_dump(mode="json")
-                                for finding in post_mutation_errors
-                            ],
+                            findings=_quarantine_error_payloads(post_mutation_errors),
                         )
                         step_record["quarantined_draft_sha256"] = checkpoint.sha256
                         step_record["quarantined_draft_relative_path"] = (
