@@ -141,7 +141,45 @@ def test_external_execution_uses_database_and_operational_exposure_not_scoring_k
 
     assert captured["run"]["database"] == "eicu"
     assert captured["run"]["primary_exposure"] == "materialized_exposure_column"
+    assert captured["run"]["concept_descriptions"] is None
     assert item.primary_predictor == "concept_level_scoring_key"
     assert "gold_answer" not in captured["run"]
     assert "semantic_guardrails" not in captured["run"]
     assert captured["run"]["question"] == "Build a model."
+
+
+def test_question_exposed_exposure_label_is_typed_context_metadata(
+    monkeypatch, tmp_path
+):
+    item = _item("descriptive_association")
+    item.research_question = "Is admission lactate associated with mortality?"
+    item.primary_predictor = "lactate"
+    item.operational_exposure = "lact_max"
+
+    import easyicu.research_agent as rapkg
+    import tools.run_research_agent_bench as bench
+
+    captured: dict = {}
+
+    class CapturePipeline:
+        def __init__(self, **kwargs):
+            pass
+
+        def run(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(workdir=str(tmp_path))
+
+    monkeypatch.setattr(rapkg, "ResearchAgentPipeline", CapturePipeline)
+    monkeypatch.setattr(bench, "_score_arm", lambda **kwargs: {})
+
+    bench._run_one_arm(
+        item=item,
+        cohort=SimpleNamespace(columns=["lact_max", "death"]),
+        workdir=tmp_path,
+        disable_icu_context=False,
+        label="aware",
+        llm=object(),
+    )
+
+    assert captured["primary_exposure"] == "lact_max"
+    assert captured["concept_descriptions"] == {"lact_max": "lactate"}

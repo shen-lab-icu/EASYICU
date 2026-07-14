@@ -4870,12 +4870,31 @@ def run_execute_phase(
                 if not sealed_parent_digests:
                     return None
                 try:
+                    primary_descriptor = (
+                        agent_context.variable(agent_context.primary_exposure)
+                        if agent_context.primary_exposure
+                        else None
+                    )
                     sealed_product_slots = authorize_declared_figure_product_slots(
                         declared_products=declared_figure_products,
                         renderer_repair_id=exact_repair_id,
                         planner_parent_anchors=_sealed_parent_planner_anchors(
                             run_dir=run_dir,
                             figure_step_id=step.step_id,
+                        ),
+                        authoritative_display_subjects=(
+                            [
+                                value
+                                for value in (
+                                    agent_context.primary_exposure,
+                                    (
+                                        primary_descriptor.description
+                                        if primary_descriptor is not None
+                                        else None
+                                    ),
+                                )
+                                if value
+                            ]
                         ),
                     )
                 except ValueError:

@@ -976,6 +976,27 @@ def _run_one_arm(
         or getattr(item, "primary_predictor", None)
         or None
     )
+    exposure_display_name = getattr(item, "primary_predictor", None) or None
+    normalized_question = re.sub(
+        r"[^a-z0-9]+", "_", str(item.research_question or "").lower()
+    ).strip("_")
+    normalized_display_name = re.sub(
+        r"[^a-z0-9]+", "_", str(exposure_display_name or "").lower()
+    ).strip("_")
+    display_name_is_question_exposed = bool(
+        normalized_display_name
+        and re.search(
+            rf"(?:^|_){re.escape(normalized_display_name)}(?:_|$)",
+            normalized_question,
+        )
+    )
+    concept_descriptions = (
+        {str(operational_exposure): str(exposure_display_name)}
+        if operational_exposure
+        and exposure_display_name
+        and display_name_is_question_exposed
+        else None
+    )
     result = pipeline.run(
         question=item.research_question,
         cohort=cohort,
@@ -983,6 +1004,7 @@ def _run_one_arm(
         database=database,
         target_outcome=item.target_outcome,
         primary_exposure=operational_exposure,
+        concept_descriptions=concept_descriptions,
         inclusion_criteria=item.inclusion_criteria,
         resume_run_id=resolved_resume_run_id,
         resume_from_step_id=resume_from_step_id,
