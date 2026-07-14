@@ -7,6 +7,7 @@ rewrite the planner-owned exposure, outcome, cohort, method, or estimand.
 from __future__ import annotations
 
 import ast
+import builtins
 import re
 from typing import Optional
 
@@ -515,6 +516,49 @@ def _authoritative_exposure_binding_findings(
     return []
 
 
+def _undefined_direct_call_findings(tree: ast.Module) -> list[ValidationFinding]:
+    """Reject direct calls whose Python name has no lexical binding or import."""
+
+    known_names = set(dir(builtins))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            known_names.add(node.name)
+        elif isinstance(node, ast.Import):
+            known_names.update(alias.asname or alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            known_names.update(alias.asname or alias.name for alias in node.names)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            known_names.add(node.id)
+        elif isinstance(node, ast.arg):
+            known_names.add(node.arg)
+
+    unresolved: dict[str, int] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+            continue
+        if node.func.id not in known_names:
+            unresolved.setdefault(node.func.id, int(node.lineno))
+    if not unresolved:
+        return []
+    return [
+        ValidationFinding(
+            validator="mechanical_code_preflight",
+            severity="error",
+            message=(
+                "The script directly calls helper names that are neither defined "
+                "nor imported in the generated program."
+            ),
+            detail={
+                "reason": "undefined_helper_call",
+                "calls": [
+                    {"name": name, "line": line}
+                    for name, line in sorted(unresolved.items())
+                ],
+            },
+        )
+    ]
+
+
 def audit_mechanical_code_contracts(
     script_text: str,
     step: AnalysisStep,
@@ -554,6 +598,7 @@ def audit_mechanical_code_contracts(
     findings.extend(_binding_metadata_findings(tree))
     findings.extend(_provenance_fail_closed_findings(tree))
     findings.extend(_authoritative_exposure_binding_findings(tree, step))
+    findings.extend(_undefined_direct_call_findings(tree))
     return findings
 
 

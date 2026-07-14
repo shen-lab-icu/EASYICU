@@ -1838,6 +1838,16 @@ def _repair_specialization(
             "other scientific choices.\n"
         )
 
+    if "undefined helper call" in normalized:
+        guidance.append(
+            "- DIAGNOSED UNDEFINED-HELPER REPAIR: every directly called helper "
+            "must be defined in the script or imported from an authorized module. "
+            "Prefer calling an already defined equivalent helper; otherwise add a "
+            "minimal real implementation of the stated contract. Never insert a "
+            "stub, no-op, fabricated default, or exception-swallowing fallback. "
+            "Keep the planner-owned scientific choices unchanged.\n"
+        )
+
     figure_trace_signals = (
         "not verified against any row aligned upstream value vector",
         "unverified source value columns",
