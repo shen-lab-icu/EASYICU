@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from easyicu.research_agent.agents import CoderAgent
+from easyicu.research_agent.agents import CoderAgent, _looks_like_python_script
 from easyicu.research_agent.code_preflight import audit_mechanical_code_contracts
 from easyicu.research_agent.coder_context import (
     coder_guide_for_step,
@@ -134,6 +134,22 @@ def test_coder_repair_requests_full_rewrite_only_after_patch_failure(ra):
     assert repaired.endswith("value = 3")
     assert len(llm.calls) == 2
     assert "FULL-REWRITE FALLBACK" in llm.calls[1][0][-1].content
+
+
+def test_patch_json_is_never_accepted_as_complete_python_script():
+    payload = json.dumps(
+        {
+            "format": "easyicu.code_patch/1",
+            "edits": [
+                {
+                    "old": "def choose(frame):\n    return frame.columns[0]",
+                    "new": "def choose(frame):\n    return None",
+                    "expected_count": 1,
+                }
+            ],
+        }
+    )
+    assert not _looks_like_python_script(payload)
 
 
 def test_mechanical_preflight_blocks_arbitrary_numeric_column_fallback(ra):

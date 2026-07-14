@@ -29,6 +29,7 @@ generic dispatch Protocol because nothing in the codebase consumes one.
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -1658,8 +1659,9 @@ class CoderAgent:
                             + shared_contract
                             + "\nThe minimal patch could not be safely applied "
                             f"({patch_error}). Return only one complete runnable Python "
-                            "script. Preserve all planner-owned scientific choices and "
-                            "change only what the diagnosis requires.\n\n"
+                            "script. Do not return JSON, a patch object, or prose. "
+                            "Preserve all planner-owned scientific choices and change "
+                            "only what the diagnosis requires.\n\n"
                             "DIAGNOSED REPAIR CONTRACT:\n"
                             + repair_specialization
                             + "\nDIAGNOSIS / TRACEBACK:\n``\n"
@@ -1676,7 +1678,13 @@ class CoderAgent:
                     max_tokens=_CODER_MAX_TOKENS,
                     temperature=0.05,
                 )
-                repaired = _strip_code_fence(raw.strip())
+                try:
+                    # Some providers ignore the full-script instruction but
+                    # still emit a valid exact patch. Apply it rather than ever
+                    # executing the JSON payload as Python.
+                    repaired = apply_code_patch(code, raw)
+                except CodePatchError:
+                    repaired = _strip_code_fence(raw.strip())
         if not _looks_like_python_script(repaired):
             raise ValueError(
                 "Coder repair returned non-script output; refusing to replace "
@@ -2284,6 +2292,26 @@ def _strip_code_fence(text: str) -> str:
 def _looks_like_python_script(text: str) -> bool:
     stripped = (text or "").strip()
     if not stripped or stripped in {"{}", "[]", "null", "None"}:
+        return False
+    try:
+        payload = json.loads(stripped)
+    except (json.JSONDecodeError, TypeError):
+        payload = None
+    if isinstance(payload, dict) and payload.get("format") == PATCH_FORMAT:
+        return False
+    try:
+        tree = ast.parse(stripped)
+    except SyntaxError:
+        return False
+    if not tree.body:
+        return False
+    # A JSON patch with only strings/numbers is also a valid Python dict
+    # expression. It must never be accepted as an executable analysis script.
+    if all(
+        isinstance(node, ast.Expr)
+        and isinstance(node.value, (ast.Constant, ast.Dict, ast.List, ast.Set, ast.Tuple))
+        for node in tree.body
+    ):
         return False
     script_markers = (
         "\nimport ",
