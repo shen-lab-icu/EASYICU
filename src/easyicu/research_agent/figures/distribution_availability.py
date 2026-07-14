@@ -33,11 +33,16 @@ CONTROLLED_METHOD = "exposure_distribution_and_missingness_audit"
 _DISTRIBUTION_COLUMNS = {
     "row_type",
     "variable",
-    "category",
     "n",
     "denominator_n",
     "percentage",
     "fraction",
+}
+_DISTRIBUTION_OPTIONAL_COLUMNS = {
+    "category",
+    "analysis_set",
+    "time_window",
+    "unit",
 }
 _MEASUREMENT_COLUMNS = {
     "row_type",
@@ -80,7 +85,33 @@ def _unique_metric_name(
     if normalized_unit:
         allowed.add(f"{base}_{normalized_unit}")
     matches = [str(name) for name in names if _normalise(name) in allowed]
-    return matches[0] if len(matches) == 1 else None
+    if len({_normalise(name) for name in matches}) != len(matches):
+        return None
+    if normalized_unit:
+        qualified = [
+            name
+            for name in matches
+            if _normalise(name) == f"{base}_{normalized_unit}"
+        ]
+        if len(qualified) == 1:
+            return qualified[0]
+    bare = [name for name in matches if _normalise(name) == base]
+    return bare[0] if len(bare) == 1 else None
+
+
+def _metric_alias_names(
+    names: Collection[Any], base: str, *, unit: str
+) -> tuple[str, ...]:
+    """Return every closed-schema alias for one metric."""
+
+    allowed = {base}
+    normalized_unit = _normalise(unit)
+    if normalized_unit:
+        allowed.add(f"{base}_{normalized_unit}")
+    aliases = tuple(str(name) for name in names if _normalise(name) in allowed)
+    if len({_normalise(name) for name in aliases}) != len(aliases):
+        return ()
+    return aliases
 
 
 def _finite_number(value: Any) -> Optional[float]:
@@ -102,6 +133,20 @@ def _same(left: float, right: float, *, tolerance: float = 1e-9) -> bool:
     return math.isclose(left, right, rel_tol=1e-9, abs_tol=tolerance)
 
 
+def _same_alias(left: float, right: float) -> bool:
+    """Compare duplicate representations without scale-relative slack."""
+
+    return math.isclose(left, right, rel_tol=0.0, abs_tol=1e-12)
+
+
+def _normalised_optional(value: Any) -> tuple[bool, str]:
+    """Distinguish an absent cell from a present but invalid token."""
+
+    if value is None or pd.isna(value) or not str(value).strip():
+        return False, ""
+    return True, _normalise(value)
+
+
 def _wrapped_axis_label(value: Any, *, width: int = 22) -> str:
     """Wrap display-only category text without changing the source contract."""
 
@@ -121,6 +166,7 @@ def _read_selected_columns(
     *,
     metrics: bool,
     unit: str = "",
+    optional: Collection[str] = (),
 ) -> Optional[pd.DataFrame]:
     def _reader() -> Path | io.BytesIO:
         return io.BytesIO(source) if isinstance(source, bytes) else source
@@ -129,17 +175,21 @@ def _read_selected_columns(
         header = pd.read_csv(_reader(), nrows=0)
     except Exception:
         return None
-    selected = [str(column) for column in header.columns if str(column) in allowed]
+    selected = [
+        str(column)
+        for column in header.columns
+        if str(column) in allowed or str(column) in optional
+    ]
     if metrics:
         for base in _METRICS:
-            name = _unique_metric_name(header.columns, base, unit=unit)
-            if name is None:
+            aliases = _metric_alias_names(header.columns, base, unit=unit)
+            if not aliases:
                 return None
-            selected.append(name)
+            selected.extend(aliases)
     if not allowed.issubset(set(selected)):
         return None
     try:
-        return pd.read_csv(_reader(), usecols=selected)
+        return pd.read_csv(_reader(), usecols=list(dict.fromkeys(selected)))
     except Exception:
         return None
 
@@ -215,7 +265,11 @@ def prepare_distribution_availability_inputs(
         measurement_source = preverified_table_bytes[measurement_name]
 
     distribution_frame = _read_selected_columns(
-        distribution_source, _DISTRIBUTION_COLUMNS, metrics=True, unit=unit
+        distribution_source,
+        _DISTRIBUTION_COLUMNS,
+        metrics=True,
+        unit=unit,
+        optional=_DISTRIBUTION_OPTIONAL_COLUMNS,
     )
     measurement_frame = _read_selected_columns(
         measurement_source, _MEASUREMENT_COLUMNS, metrics=False
@@ -224,17 +278,30 @@ def prepare_distribution_availability_inputs(
         return None
 
     metric_columns: dict[str, str] = {}
+    metric_alias_columns: dict[str, tuple[str, ...]] = {}
+    summary_metric_aliases: dict[str, tuple[str, ...]] = {}
     summary_metric_names: dict[str, str] = {}
     for base in _METRICS:
-        table_name = _unique_metric_name(distribution_frame.columns, base, unit=unit)
         summary_name = _unique_metric_name(distribution.keys(), base, unit=unit)
-        if (
-            table_name is None
-            or summary_name is None
-            or _normalise(table_name) != _normalise(summary_name)
-        ):
+        table_aliases = _metric_alias_names(
+            distribution_frame.columns, base, unit=unit
+        )
+        declared_aliases = _metric_alias_names(distribution.keys(), base, unit=unit)
+        if summary_name is None or not table_aliases or not declared_aliases:
+            return None
+        exact = [
+            name
+            for name in table_aliases
+            if _normalise(name) == _normalise(summary_name)
+        ]
+        table_name = exact[0] if len(exact) == 1 else None
+        if table_name is None and len(table_aliases) == 1:
+            table_name = table_aliases[0]
+        if table_name is None:
             return None
         metric_columns[base] = table_name
+        metric_alias_columns[base] = table_aliases
+        summary_metric_aliases[base] = declared_aliases
         summary_metric_names[base] = summary_name
 
     row_type = distribution_frame["row_type"].fillna("").map(_normalise)
@@ -251,18 +318,69 @@ def prepare_distribution_availability_inputs(
         "valid_observed",
         f"valid_observed_{normalized_exposure}",
     }
-    normalized_categories = (
-        distribution_candidates["category"].fillna("").map(_normalise)
-    )
-    # The parent's structured distribution product is ordered.  Requiring its
-    # first distribution row to be the uniquely bound valid-observed row keeps
-    # an alternate summary row from silently taking precedence.
-    if normalized_categories.iloc[0] not in allowed_categories:
+    selectors: list[str] = []
+    category_presence: list[bool] = []
+    for _, row in distribution_candidates.iterrows():
+        category_present, normalized_category = _normalised_optional(
+            row.get("category")
+        )
+        analysis_set_present, normalized_analysis_set = _normalised_optional(
+            row.get("analysis_set")
+        )
+        if (category_present and not normalized_category) or (
+            analysis_set_present and not normalized_analysis_set
+        ):
+            return None
+        if category_present:
+            category_is_authoritative = normalized_category in allowed_categories
+            analysis_set_is_authoritative = (
+                normalized_analysis_set in allowed_categories
+            )
+            if analysis_set_present and (
+                category_is_authoritative != analysis_set_is_authoritative
+            ):
+                return None
+            selectors.append(normalized_category)
+        else:
+            selectors.append(normalized_analysis_set)
+        category_presence.append(category_present)
+    if not selectors or selectors[0] not in allowed_categories:
         return None
+    selector_series = pd.Series(selectors, index=distribution_candidates.index)
     candidates = distribution_candidates.loc[
-        normalized_categories.isin(allowed_categories)
+        selector_series.isin(allowed_categories)
     ].copy()
     if len(candidates) != 1:
+        return None
+    candidate = candidates.iloc[0]
+    candidate_position = distribution_candidates.index.get_loc(candidate.name)
+    category_present = category_presence[int(candidate_position)]
+    if (
+        not category_present
+        and row_type.loc[candidate.name] != f"{normalized_exposure}_distribution"
+    ):
+        return None
+
+    row_window_present, row_window = _normalised_optional(
+        candidate.get("time_window")
+    )
+    row_unit_present, row_unit = _normalised_optional(candidate.get("unit"))
+    declared_window_present, declared_window = _normalised_optional(
+        exposure.get("time_window")
+    )
+    declared_unit_present, declared_unit = _normalised_optional(unit)
+    if (
+        (row_window_present and not row_window)
+        or (row_unit_present and not row_unit)
+        or (
+            row_window_present
+            and (not declared_window_present or row_window != declared_window)
+        )
+        or (
+            row_unit_present
+            and (not declared_unit_present or row_unit != declared_unit)
+        )
+    ):
         return None
     observed_n = _nonnegative_integer(distribution.get("observed_n"))
     if observed_n is None or observed_n <= 0:
@@ -277,7 +395,11 @@ def prepare_distribution_availability_inputs(
         "denominator_n",
         "percentage",
         "fraction",
-        *metric_columns.values(),
+        *(
+            alias
+            for aliases in metric_alias_columns.values()
+            for alias in aliases
+        ),
     ]
     numeric = candidates[numeric_columns].apply(pd.to_numeric, errors="coerce")
     if numeric.isna().any().any() or len(numeric) != 1:
@@ -301,8 +423,27 @@ def prepare_distribution_availability_inputs(
     for base, column in metric_columns.items():
         value = _finite_number(reference[column])
         expected = _finite_number(distribution.get(summary_metric_names[base]))
-        if value is None or expected is None or not _same(value, expected):
+        if value is None or expected is None or not _same_alias(value, expected):
             return None
+        if any(
+            (alias_value := _finite_number(reference[alias])) is None
+            or not _same_alias(alias_value, value)
+            for alias in metric_alias_columns[base]
+        ):
+            return None
+        if any(
+            (alias_value := _finite_number(distribution.get(alias))) is None
+            or not _same_alias(alias_value, expected)
+            for alias in summary_metric_aliases[base]
+        ):
+            return None
+        if _normalise(column) != _normalise(summary_metric_names[base]):
+            if (
+                not row_unit_present
+                or not declared_unit_present
+                or row_unit != declared_unit
+            ):
+                return None
         metric_values[base] = value
     if not (
         metric_values["min"]
@@ -358,12 +499,7 @@ def prepare_distribution_availability_inputs(
     status_rows.insert(0, "source_row_index", status_rows.index.astype(int))
     status_n = pd.to_numeric(status_rows["n"], errors="coerce")
     status_denominator = pd.to_numeric(status_rows["denominator_n"], errors="coerce")
-    status_percentage = pd.to_numeric(status_rows["percentage"], errors="coerce")
-    status_fraction = pd.to_numeric(status_rows["fraction"], errors="coerce")
-    if any(
-        series.isna().any()
-        for series in (status_n, status_denominator, status_percentage, status_fraction)
-    ):
+    if status_n.isna().any() or status_denominator.isna().any():
         return None
     parsed_counts = [_nonnegative_integer(value) for value in status_n]
     parsed_denominators = [_nonnegative_integer(value) for value in status_denominator]
@@ -376,11 +512,24 @@ def prepare_distribution_availability_inputs(
     declared_assignment_n = _nonnegative_integer(measurement.get("status_assignment_n"))
     if declared_assignment_n is not None and declared_assignment_n != denominator_n:
         return None
-    for status, count, percentage, fraction in zip(
-        status_schema, counts, status_percentage, status_fraction
+    for status, count, percentage_raw, fraction_raw in zip(
+        status_schema,
+        counts,
+        status_rows["percentage"],
+        status_rows["fraction"],
     ):
         declared = _nonnegative_integer(counts_raw.get(status))
         if declared != count:
+            return None
+        percentage_missing = pd.isna(percentage_raw)
+        fraction_missing = pd.isna(fraction_raw)
+        if percentage_missing or fraction_missing:
+            if count != 0 or not (percentage_missing and fraction_missing):
+                return None
+            continue
+        percentage = _finite_number(percentage_raw)
+        fraction = _finite_number(fraction_raw)
+        if percentage is None or fraction is None:
             return None
         if not _same(float(percentage), 100.0 * count / denominator_n, tolerance=1e-6):
             return None
@@ -557,8 +706,8 @@ def render_distribution_availability_bundle_from_prior_outputs(
     ax_a.grid(axis="x", color=palette["neutral_light"], linewidth=0.55)
     add_panel_label(ax_a, "A", x=-0.08, y=1.03)
 
-    percentages = pd.to_numeric(prepared.status_rows["percentage"]).astype(float)
     counts = pd.to_numeric(prepared.status_rows["n"]).astype(int)
+    percentages = counts.astype(float) * 100.0 / prepared.denominator_n
     positions = range(len(prepared.status_schema))
     bars = ax_b.barh(positions, percentages, color=palette["blue_soft"], height=0.58)
     ax_b.set_yticks(list(positions))

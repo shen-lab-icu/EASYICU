@@ -80,7 +80,59 @@ def _write_parent(
             },
         ]
     )
-    if distribution_mutation == "ambiguous_rows":
+    if distribution_mutation in {
+        "windowed_alias_conflict",
+        "windowed_equivalent",
+        "windowed_large_anchor_conflict",
+        "windowed_large_alias_conflict",
+        "windowed_malformed_category",
+    }:
+        distribution.loc[0, "row_type"] = "marker_value_distribution"
+        distribution.loc[0, "category"] = None
+        distribution.loc[0, "analysis_set"] = "valid_observed_marker_value"
+        distribution.loc[0, "time_window"] = "first_24h"
+        distribution.loc[0, "unit"] = "units"
+        for metric in ("median", "q25", "q75"):
+            distribution.loc[0, metric] = distribution.loc[0, f"{metric}_units"]
+        distribution = distribution.rename(
+            columns={"min_units": "min", "max_units": "max"}
+        )
+        if distribution_mutation == "windowed_alias_conflict":
+            distribution.loc[0, "median"] = 9.5
+        elif distribution_mutation == "windowed_large_alias_conflict":
+            distribution.loc[0, "max_units"] = 1e12
+            distribution.loc[0, "max"] = 1e12 + 999
+        elif distribution_mutation == "windowed_large_anchor_conflict":
+            distribution.loc[0, "max"] = 1e12 + 999
+        elif distribution_mutation == "windowed_malformed_category":
+            distribution.loc[0, "category"] = "!!!"
+    elif distribution_mutation == "dimensionless_analysis_set":
+        distribution.loc[0, "row_type"] = "marker_value_distribution"
+        distribution.loc[0, "category"] = None
+        distribution.loc[0, "analysis_set"] = "valid_observed_marker_value"
+        distribution = distribution.rename(
+            columns={
+                "median_units": "median",
+                "q25_units": "q25",
+                "q75_units": "q75",
+                "min_units": "min",
+                "max_units": "max",
+            }
+        )
+    elif distribution_mutation == "category_alias_equivalent":
+        distribution.loc[0, "analysis_set"] = "valid_observed_marker_value"
+    elif distribution_mutation == "explicit_window_conflict":
+        distribution.loc[0, "time_window"] = "last_48h"
+    elif distribution_mutation == "explicit_unit_conflict":
+        distribution.loc[0, "unit"] = "wrong_units"
+    elif distribution_mutation == "selector_alias_conflict":
+        distribution.loc[0, "analysis_set"] = "all_finite_nonmissing"
+    elif distribution_mutation == "secondary_after_valid":
+        secondary = distribution.iloc[[0]].copy()
+        secondary["category"] = "secondary descriptive"
+        secondary["median_units"] = 9.5
+        distribution = pd.concat([distribution, secondary], ignore_index=True)
+    elif distribution_mutation == "ambiguous_rows":
         duplicate = distribution.iloc[[0]].copy()
         duplicate["median_units"] = 9.5
         distribution = pd.concat([distribution, duplicate], ignore_index=True)
@@ -98,6 +150,9 @@ def _write_parent(
         )
     elif distribution_mutation == "metric_name_mismatch":
         distribution = distribution.rename(columns={"median_units": "median"})
+    elif distribution_mutation == "metric_name_mismatch_with_unit":
+        distribution = distribution.rename(columns={"median_units": "median"})
+        distribution.loc[0, "unit"] = "units"
     elif distribution_mutation == "percentage_mismatch":
         distribution.loc[0, "percentage"] = 81.0
     distribution.to_csv(parent / "descriptive_distribution.csv", index=False)
@@ -165,6 +220,12 @@ def _write_parent(
             ],
             ignore_index=True,
         )
+    elif measurement_mutation == "zero_rates_missing":
+        zero = measurement["n"].eq(0)
+        measurement.loc[zero, ["percentage", "fraction"]] = None
+    elif measurement_mutation == "nonzero_rates_missing":
+        nonzero = measurement["source_status"].eq("no source")
+        measurement.loc[nonzero, ["percentage", "fraction"]] = None
     measurement.to_csv(parent / "source_availability.csv", index=False)
 
     schema = [status for status, _count in statuses]
@@ -181,6 +242,7 @@ def _write_parent(
             "column": "marker_value",
             "display_label": "Marker value",
             "unit": "units",
+            "time_window": "first_24h",
             "authoritative": exposure_mutation != "not_authoritative",
             "role": (
                 "alternate_exposure"
@@ -204,6 +266,23 @@ def _write_parent(
             "status_assignment_n": 10,
         },
     }
+    if distribution_mutation in {
+        "windowed_large_alias_conflict",
+        "windowed_large_anchor_conflict",
+    }:
+        summary["distribution"]["max_units"] = 1e12
+    elif distribution_mutation == "dimensionless_analysis_set":
+        summary["primary_exposure"].pop("unit")
+        summary["primary_exposure"].pop("time_window")
+        summary["distribution"] = {
+            "table": "descriptive_distribution.csv",
+            "observed_n": 8,
+            "median": 2.5,
+            "q25": 1.5,
+            "q75": 4.0,
+            "min": 0.5,
+            "max": 8.0,
+        }
     (parent / "step_summary.json").write_text(json.dumps(summary), encoding="utf-8")
 
     evidence = EvidenceStore(run_dir)
@@ -345,6 +424,69 @@ def test_verified_parent_contract_renders_without_outcome_products(
     assert availability_source["row_type"].eq("source_status").all()
 
     rendered_summary = json.loads((out / "step_summary.json").read_text("utf-8"))
+    figure_step = AnalysisStep(
+        step_id=FIGURE_STEP,
+        intent="Render the direct parent's planned descriptive audit.",
+        inputs=["table:descriptive_distribution", "table:source_availability"],
+        expected_outputs=["figure:publication_figure"],
+        method="publication_figure_generation",
+    )
+    findings = FigureSourceDataValidator().audit(
+        step=figure_step,
+        out_dir=out,
+        run_dir=tmp_path,
+        step_summary=rendered_summary,
+    )
+    assert findings == []
+
+    clean_contract = json.loads(contract_path.read_text("utf-8"))
+    for malformed_id in (
+        "figure:",
+        "figure:distribution:availability",
+        "figure:../distribution_availability",
+        "distribution:availability",
+        "../distribution_availability",
+    ):
+        malformed_contract = {**clean_contract, "figure_id": malformed_id}
+        contract_path.write_text(json.dumps(malformed_contract), encoding="utf-8")
+        malformed_findings = FigureSourceDataValidator().audit(
+            step=figure_step,
+            out_dir=out,
+            run_dir=tmp_path,
+            step_summary=rendered_summary,
+        )
+        assert any(
+            finding.detail.get("reason") == "figure_contract_export_mismatch"
+            for finding in malformed_findings
+        )
+
+
+def test_windowed_schema_equal_aliases_and_zero_count_blanks_renders(
+    tmp_path: Path,
+) -> None:
+    _write_parent(
+        tmp_path,
+        distribution_mutation="windowed_equivalent",
+        measurement_mutation="zero_rates_missing",
+    )
+    out = tmp_path / "steps" / FIGURE_STEP / "outputs"
+
+    assert (
+        deterministic_figure_repair_id_for_upstream(tmp_path, FIGURE_STEP) == REPAIR_ID
+    )
+    assert (
+        _render_publication_bundle_from_prior_outputs_for_step(
+            run_dir=tmp_path, current_step_id=FIGURE_STEP, out_dir=out
+        )
+        == REPAIR_ID
+    )
+    availability = pd.read_csv(out / "availability_panel_source_data.csv")
+    zero_rows = availability["n"].eq(0)
+    assert availability.loc[zero_rows, "percentage"].isna().all()
+    assert availability.loc[zero_rows, "fraction"].isna().all()
+    assert "0.0%" in (out / "distribution_availability.svg").read_text("utf-8")
+
+    rendered_summary = json.loads((out / "step_summary.json").read_text("utf-8"))
     findings = FigureSourceDataValidator().audit(
         step=AnalysisStep(
             step_id=FIGURE_STEP,
@@ -361,6 +503,25 @@ def test_verified_parent_contract_renders_without_outcome_products(
 
 
 @pytest.mark.parametrize(
+    "distribution_mutation",
+    (
+        "category_alias_equivalent",
+        "dimensionless_analysis_set",
+        "metric_name_mismatch_with_unit",
+        "secondary_after_valid",
+    ),
+)
+def test_closed_schema_equivalent_dialects_render(
+    tmp_path: Path, distribution_mutation: str
+) -> None:
+    _write_parent(tmp_path, distribution_mutation=distribution_mutation)
+
+    assert (
+        deterministic_figure_repair_id_for_upstream(tmp_path, FIGURE_STEP) == REPAIR_ID
+    )
+
+
+@pytest.mark.parametrize(
     ("kwargs", "stale_file"),
     (
         ({"method": "mixed_effects_regression"}, None),
@@ -371,11 +532,19 @@ def test_verified_parent_contract_renders_without_outcome_products(
         ({"distribution_mutation": "alternate_first"}, None),
         ({"distribution_mutation": "misnamed_metric"}, None),
         ({"distribution_mutation": "metric_name_mismatch"}, None),
+        ({"distribution_mutation": "windowed_alias_conflict"}, None),
+        ({"distribution_mutation": "windowed_large_anchor_conflict"}, None),
+        ({"distribution_mutation": "windowed_large_alias_conflict"}, None),
+        ({"distribution_mutation": "windowed_malformed_category"}, None),
+        ({"distribution_mutation": "explicit_window_conflict"}, None),
+        ({"distribution_mutation": "explicit_unit_conflict"}, None),
+        ({"distribution_mutation": "selector_alias_conflict"}, None),
         ({"distribution_mutation": "percentage_mismatch"}, None),
         ({"measurement_mutation": "open_partition"}, None),
         ({"measurement_mutation": "percentage_mismatch"}, None),
         ({"measurement_mutation": "extra_status"}, None),
         ({"measurement_mutation": "observed_count_mismatch"}, None),
+        ({"measurement_mutation": "nonzero_rates_missing"}, None),
         ({"exposure_mutation": "not_authoritative"}, None),
         ({"exposure_mutation": "wrong_role"}, None),
         ({"register_measurement": False}, None),
