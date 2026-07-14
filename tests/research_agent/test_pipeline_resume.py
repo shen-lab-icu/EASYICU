@@ -128,6 +128,41 @@ def test_pipeline_resume_entrypoints_are_importable() -> None:
     assert callable(upsert_step_record)
 
 
+def test_resume_exposes_latest_negative_critic_report_for_selected_step(tmp_path):
+    state = {
+        "per_step_records": [
+            {
+                "step_id": "02_model",
+                "status": "critic_failed",
+                "critique_report": {
+                    "status": "needs_revision",
+                    "concerns": ["Preserve the typed cohort binding."],
+                },
+            },
+            {
+                "step_id": "02_model",
+                "status": "critic_failed",
+                "critique_report": {
+                    "status": "needs_revision",
+                    "concerns": ["Keep observation counts audit-only."],
+                },
+            },
+        ]
+    }
+    controller = ResumeController(
+        plan=_plan(),
+        run_dir=tmp_path,
+        resume_state=state,
+        resume_from_step_id="02_model",
+    )
+
+    report = controller.prior_negative_critic_report_for_step("02_model")
+
+    assert report is not None
+    assert report["concerns"] == ["Keep observation counts audit-only."]
+    assert controller.prior_negative_critic_report_for_step("01_define") is None
+
+
 def test_finding_step_match_uses_exact_identifier_boundaries() -> None:
     finding = ValidationFinding(
         validator="runner",
