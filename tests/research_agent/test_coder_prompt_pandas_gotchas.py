@@ -145,6 +145,9 @@ def test_coder_prompt_keeps_sparse_event_negatives_in_exposure_denominator() -> 
         coder_prompt
     )
     assert "if the triad is incomplete or discordant, fail closed" in coder_prompt
+    assert "structurally missing on reconciled negative rows" in coder_prompt
+    assert "do not require an explicit" in coder_prompt
+    assert "Every reconciled positive row must carry" in coder_prompt
 
 
 def test_coder_prompt_applies_source_status_to_every_measurement_summary() -> None:
