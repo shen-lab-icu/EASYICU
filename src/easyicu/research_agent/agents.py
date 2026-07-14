@@ -1705,7 +1705,12 @@ def _repair_specialization(*, run_log: str, code: str) -> str:
             "exception, unavailable branch, or incomplete result. Do not write a "
             "validation mask that accepts NaN as a valid binary exposure. The "
             "helper is the documented project-local import authorized for this "
-            "diagnosed contract.\n"
+            "diagnosed contract. Before applying the exception, bind the selected "
+            "base `source_concept` to explicit event/indicator metadata from the "
+            "ResearchContext variable descriptors; record that binding and its "
+            "role/description evidence in the step summary, and fail closed when "
+            "the context does not identify an event/indicator. Never hard-code "
+            "`indicator_semantics` without this metadata binding.\n"
         )
 
     ordinal_covariate_signals = (
