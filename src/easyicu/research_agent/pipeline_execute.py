@@ -150,6 +150,7 @@ from .plan_utils import (
     _step_contract_findings,
     _step_contract_repair_guidance,
     _step_expects_figure,
+    _typed_plan_dag_findings,
 )
 from .pipeline_resume import (
     QuarantinedConceptDraft,
@@ -4079,7 +4080,7 @@ def run_execute_phase(
         # to revise existing steps in place on later passes. Cap of 0
         # disables the guard for backward compatibility.
         cap = pipeline._max_total_steps
-        if cap > 0 and len(revised.steps) > cap:
+        if cap > 0:
             protected_step_ids = [
                 str(record.get("step_id"))
                 for record in current_successful_step_records(completed_records or [])
@@ -4103,24 +4104,6 @@ def run_execute_phase(
                 )
                 for finding in cap_findings
             )
-            if not cap_findings:
-                dropped = [s.step_id for s in revised.steps[cap:]]
-                revised = revised.model_copy(
-                    update={"steps": list(revised.steps[:cap])}
-                )
-                findings.append(
-                    ValidationFinding(
-                        validator="replanner",
-                        severity="warning",
-                        message=(
-                            f"Replanner produced {len(dropped) + cap} steps; "
-                            f"truncated to max_total_steps={cap}. Dropped: "
-                            f"{', '.join(dropped[:6])}"
-                            + (" ..." if len(dropped) > 6 else "")
-                        ),
-                        detail={"dropped_step_ids": dropped, "cap": cap},
-                    )
-                )
 
         revised, robustness_lock_finding = (
             _preserve_locked_robustness_specs_after_replan(
@@ -4217,6 +4200,7 @@ def run_execute_phase(
         return revised
 
     trajectory_plan_blocked = False
+    typed_plan_dag_blocked = False
     probe_step_id = "00_probe"
     if pipeline._enable_probe_step and probe_step_id not in resumed_step_ids:
         probe_summary, probe_files = _build_probe_summary(
@@ -4256,11 +4240,33 @@ def run_execute_phase(
         per_step_records.append(probe_record)
         preexecuted_step_ids.add(probe_step_id)
         _flush_partial_manifest()
+        typed_plan_preflight = _typed_plan_dag_findings(plan)
         trajectory_preflight = trajectory_plan_dag_findings(
             plan=plan,
             context=context,
         )
         trajectory_directive = None
+        typed_plan_directive = None
+        if typed_plan_preflight:
+            typed_plan_directive = (
+                "Repair the plan's declared typed product DAG without changing "
+                "its scientific choices. Every typed kind:product input must "
+                "have exactly one declared producer, every required producer "
+                "must remain in the plan, and producers must precede consumers. "
+                "Do not invent an exposure, outcome, cohort, estimator, or "
+                "analysis method. Contract findings: "
+                + json.dumps(
+                    [
+                        {
+                            "message": finding.message,
+                            "detail": finding.detail,
+                        }
+                        for finding in typed_plan_preflight
+                    ],
+                    ensure_ascii=False,
+                    default=str,
+                )
+            )
         if trajectory_preflight:
             trajectory_directive = (
                 "Repair the agent-declared fixed-window trajectory plan DAG "
@@ -4287,8 +4293,24 @@ def run_execute_phase(
             reason="probe_summary",
             probe_summary_payload=probe_summary,
             completed_records=[probe_record],
-            directive=trajectory_directive,
-            force=bool(trajectory_preflight),
+            directive="\n\n".join(
+                directive
+                for directive in (typed_plan_directive, trajectory_directive)
+                if directive
+            )
+            or None,
+            force=bool(typed_plan_preflight or trajectory_preflight),
+        )
+
+    final_typed_plan_findings = _typed_plan_dag_findings(plan)
+    if final_typed_plan_findings:
+        typed_plan_dag_blocked = True
+        findings.extend(final_typed_plan_findings)
+        _flush_partial_manifest(
+            {
+                "typed_plan_dag_blocked": True,
+                "typed_plan_dag_error_count": len(final_typed_plan_findings),
+            }
         )
 
     final_trajectory_plan_findings = trajectory_plan_dag_findings(
@@ -9091,7 +9113,7 @@ else:
 
     steps_to_run = (
         []
-        if trajectory_plan_blocked
+        if trajectory_plan_blocked or typed_plan_dag_blocked
         else resume_controller.remaining_steps(
             plan=plan,
             executed_step_ids=set(preexecuted_step_ids),
@@ -9286,8 +9308,12 @@ else:
                             )
                         )
 
-    if not trajectory_plan_blocked and trajectory_plan_contract_applies(
+    if (
+        not trajectory_plan_blocked
+        and not typed_plan_dag_blocked
+        and trajectory_plan_contract_applies(
         plan=plan, context=context
+        )
     ):
         run_level_trajectory_findings = trajectory_bundle_findings(
             context=context,

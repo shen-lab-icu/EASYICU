@@ -4679,7 +4679,7 @@ def test_ensure_publication_figure_step_no_op_when_question_does_not_request_fig
     assert findings == []
 
 
-def test_plan_cap_preserves_appended_publication_figure_step(ra):
+def test_plan_cap_drops_figure_when_its_typed_source_closure_exceeds_cap(ra):
     from easyicu.research_agent.pipeline import (
         _cap_plan_preserving_figure_steps,
         _ensure_publication_figure_step_in_plan,
@@ -4708,9 +4708,15 @@ def test_plan_cap_preserves_appended_publication_figure_step(ra):
     capped, findings = _cap_plan_preserving_figure_steps(plan=with_figure, cap=4)
 
     assert len(capped.steps) == 4
-    assert any("publication_figure_fallback" in step.step_id for step in capped.steps)
+    assert not any("publication_figure_fallback" in step.step_id for step in capped.steps)
+    assert {output for step in capped.steps for output in step.expected_outputs} == {
+        "table:t1",
+        "table:t2",
+        "table:t3",
+        "table:t4",
+    }
     assert findings
-    assert findings[0].detail["preserved_figure_step_ids"]
+    assert findings[0].detail["dependency_displaced_figure_step_ids"]
 
 
 def test_plan_cap_preserves_figure_source_parent_pair(ra):

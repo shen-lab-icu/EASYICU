@@ -2117,6 +2117,170 @@ def _preserve_primary_estimand_step_after_replan(
     return preserved, findings
 
 
+def _typed_plan_dependency_graph(
+    steps: Sequence[AnalysisStep],
+) -> Tuple[Dict[str, Set[str]], List[ValidationFinding]]:
+    """Build the unique producer graph for every typed ``kind:product`` input.
+
+    The graph is deliberately method-agnostic.  Scientific methods remain
+    planner-owned; this helper only enforces the execution fact that a typed
+    input must have one declared producer in the same plan.  Missing and
+    ambiguous producers are reported rather than guessed.
+    """
+
+    producers: Dict[Tuple[str, str], List[str]] = {}
+    for step in steps:
+        for raw_output in step.expected_outputs or []:
+            product = typed_product(raw_output)
+            if product is not None:
+                producers.setdefault(product, []).append(step.step_id)
+
+    dependencies: Dict[str, Set[str]] = {step.step_id: set() for step in steps}
+    findings: List[ValidationFinding] = []
+    for step in steps:
+        for raw_input in step.inputs or []:
+            product = typed_product(raw_input)
+            if product is None:
+                continue
+            owner_ids = sorted(set(producers.get(product, [])))
+            if not owner_ids:
+                findings.append(
+                    ValidationFinding(
+                        validator="plan_typed_dag",
+                        severity="error",
+                        message=(
+                            "A typed plan input has no declared producer; the "
+                            "plan must be revised before execution."
+                        ),
+                        detail={
+                            "reason": "typed_input_producer_missing",
+                            "consumer_step_id": step.step_id,
+                            "typed_product": f"{product[0]}:{product[1]}",
+                        },
+                    )
+                )
+                continue
+            if len(owner_ids) != 1:
+                findings.append(
+                    ValidationFinding(
+                        validator="plan_typed_dag",
+                        severity="error",
+                        message=(
+                            "A typed plan input has multiple declared producers; "
+                            "the framework cannot choose one on the agent's behalf."
+                        ),
+                        detail={
+                            "reason": "typed_input_producer_ambiguous",
+                            "consumer_step_id": step.step_id,
+                            "typed_product": f"{product[0]}:{product[1]}",
+                            "producer_step_ids": owner_ids,
+                        },
+                    )
+                )
+                continue
+            producer_id = owner_ids[0]
+            if producer_id != step.step_id:
+                dependencies[step.step_id].add(producer_id)
+
+    # Figure children created by the plan splitter remain paired with their
+    # direct parent even when a legacy child omitted its typed table input.
+    step_ids = set(dependencies)
+    for step in steps:
+        if not _step_produces_figure(step):
+            continue
+        parent_id = _parent_step_id_for_figure_step(step)
+        if parent_id in step_ids and parent_id != step.step_id:
+            dependencies[step.step_id].add(parent_id)
+    return dependencies, findings
+
+
+def _stable_topological_plan_steps(
+    steps: Sequence[AnalysisStep],
+    dependencies: Mapping[str, Set[str]],
+) -> Tuple[List[AnalysisStep], List[str]]:
+    """Return a stable producer-before-consumer order and any cycle members."""
+
+    step_by_id = {step.step_id: step for step in steps}
+    original_index = {step.step_id: idx for idx, step in enumerate(steps)}
+    active_ids = set(step_by_id)
+    remaining = {
+        step_id: set(dependencies.get(step_id, set())) & active_ids
+        for step_id in active_ids
+    }
+    dependents: Dict[str, Set[str]] = {step_id: set() for step_id in active_ids}
+    for consumer_id, producer_ids in remaining.items():
+        for producer_id in producer_ids:
+            dependents[producer_id].add(consumer_id)
+
+    ready = sorted(
+        (step_id for step_id, producer_ids in remaining.items() if not producer_ids),
+        key=lambda step_id: original_index[step_id],
+    )
+    ordered_ids: List[str] = []
+    while ready:
+        step_id = ready.pop(0)
+        ordered_ids.append(step_id)
+        for consumer_id in sorted(
+            dependents[step_id], key=lambda value: original_index[value]
+        ):
+            remaining[consumer_id].discard(step_id)
+            if not remaining[consumer_id] and consumer_id not in ordered_ids:
+                ready.append(consumer_id)
+        ready.sort(key=lambda value: original_index[value])
+
+    cycle_ids = sorted(
+        active_ids - set(ordered_ids), key=lambda value: original_index[value]
+    )
+    if cycle_ids:
+        return list(steps), cycle_ids
+    return [step_by_id[step_id] for step_id in ordered_ids], []
+
+
+def _typed_plan_dag_findings(plan: AnalysisPlan) -> List[ValidationFinding]:
+    """Validate the generic typed product DAG without choosing any science."""
+
+    steps = list(plan.steps or [])
+    dependencies, findings = _typed_plan_dependency_graph(steps)
+    original_index = {step.step_id: idx for idx, step in enumerate(steps)}
+    for consumer_id, producer_ids in dependencies.items():
+        for producer_id in sorted(producer_ids):
+            if original_index.get(producer_id, -1) >= original_index.get(
+                consumer_id, len(steps)
+            ):
+                findings.append(
+                    ValidationFinding(
+                        validator="plan_typed_dag",
+                        severity="error",
+                        message=(
+                            "A typed plan producer must precede its consumer; the "
+                            "plan requires topological repair before execution."
+                        ),
+                        detail={
+                            "reason": "typed_input_producer_not_preceding_consumer",
+                            "producer_step_id": producer_id,
+                            "consumer_step_id": consumer_id,
+                        },
+                    )
+                )
+    _ordered, cycle_ids = _stable_topological_plan_steps(steps, dependencies)
+    if cycle_ids:
+        findings.append(
+            ValidationFinding(
+                validator="plan_typed_dag",
+                severity="error",
+                message=(
+                    "The typed plan dependency graph contains a cycle and cannot "
+                    "be executed without planner revision."
+                ),
+                detail={
+                    "reason": "typed_dependency_cycle",
+                    "cycle_step_ids": cycle_ids,
+                },
+            )
+        )
+    return findings
+
+
 def _cap_plan_preserving_figure_steps(
     *,
     plan: AnalysisPlan,
@@ -2137,8 +2301,47 @@ def _cap_plan_preserving_figure_steps(
     """
 
     steps = list(plan.steps or [])
-    if cap <= 0 or len(steps) <= cap:
+    if cap <= 0:
         return plan, []
+
+    # Even a plan already under the numerical cap still needs a stable typed
+    # dependency order.  Reordering unique producer edges is structural only;
+    # missing, ambiguous, or cyclic edges remain fail-closed findings.
+    if len(steps) <= cap:
+        dependencies, findings = _typed_plan_dependency_graph(steps)
+        ordered, cycle_ids = _stable_topological_plan_steps(steps, dependencies)
+        if cycle_ids:
+            findings.append(
+                ValidationFinding(
+                    validator="planner",
+                    severity="error",
+                    message=(
+                        "The plan has a typed dependency cycle; planner revision "
+                        "is required before execution."
+                    ),
+                    detail={
+                        "reason": "typed_dependency_cycle",
+                        "cycle_step_ids": cycle_ids,
+                    },
+                )
+            )
+        elif [step.step_id for step in ordered] != [step.step_id for step in steps]:
+            findings.append(
+                ValidationFinding(
+                    validator="planner",
+                    severity="warning",
+                    message=(
+                        "Reordered plan steps into stable typed producer-before-"
+                        "consumer order."
+                    ),
+                    detail={
+                        "reason": "typed_dependency_topological_reorder",
+                        "original_step_ids": [step.step_id for step in steps],
+                        "reordered_step_ids": [step.step_id for step in ordered],
+                    },
+                )
+            )
+        return plan.model_copy(update={"steps": ordered}), findings
 
     step_by_id = {step.step_id: step for step in steps}
     original_index = {step.step_id: idx for idx, step in enumerate(steps)}
@@ -2219,8 +2422,69 @@ def _cap_plan_preserving_figure_steps(
         if step.step_id in kept_ids and step.step_id not in original_kept_ids:
             preserved_step_ids.append(step.step_id)
 
+    # Dependency closure outranks display preservation.  A retained consumer is
+    # never allowed to lose its unique typed producer merely to fit one more
+    # figure under the cap.
+    dependencies, _full_plan_dependency_findings = _typed_plan_dependency_graph(steps)
+
+    def _expand_dependency_closure(ids: Set[str]) -> Set[str]:
+        closed = set(ids)
+        pending = list(ids)
+        while pending:
+            consumer_id = pending.pop()
+            for producer_id in dependencies.get(consumer_id, set()):
+                if producer_id not in closed:
+                    closed.add(producer_id)
+                    pending.append(producer_id)
+        return closed
+
+    kept_ids = _expand_dependency_closure(kept_ids)
+    hard_protected_ids = _expand_dependency_closure(set(protected_ids))
+
+    # Remove dependency leaves: first non-protected rendering leaves, then
+    # other non-protected leaves.  Removing a consumer can make its producers
+    # removable on the next pass, while no retained consumer is orphaned.
+    while len(kept_ids) > cap:
+        required_as_producer = {
+            producer_id
+            for consumer_id in kept_ids
+            for producer_id in dependencies.get(consumer_id, set())
+            if producer_id in kept_ids
+        }
+        leaf_candidates = [
+            step_id
+            for step_id in kept_ids
+            if step_id not in hard_protected_ids
+            and step_id not in required_as_producer
+        ]
+        if not leaf_candidates:
+            break
+        figure_leaves = [
+            step_id
+            for step_id in leaf_candidates
+            if _step_produces_figure(step_by_id[step_id])
+        ]
+        candidates = figure_leaves or leaf_candidates
+        displaced_id = max(candidates, key=lambda sid: original_index.get(sid, -1))
+        kept_ids.remove(displaced_id)
+        displaced_step_ids.append(displaced_id)
+
     kept = [step for step in steps if step.step_id in kept_ids]
+    _retained_dependencies, dependency_findings = _typed_plan_dependency_graph(kept)
+    kept_dependencies = {
+        step_id: set(dependencies.get(step_id, set())) & kept_ids
+        for step_id in kept_ids
+    }
+    kept, cycle_ids = _stable_topological_plan_steps(kept, kept_dependencies)
     dropped_ids = [step.step_id for step in steps if step.step_id not in kept_ids]
+    dependency_displaced_figure_step_ids = [
+        step_id
+        for step_id in preserved_step_ids
+        if step_id not in kept_ids
+    ]
+    preserved_step_ids = [
+        step_id for step_id in preserved_step_ids if step_id in kept_ids
+    ]
     capped = plan.model_copy(update={"steps": kept})
     findings = [
         ValidationFinding(
@@ -2237,10 +2501,46 @@ def _cap_plan_preserving_figure_steps(
                 "cap": cap,
                 "protected_step_ids": sorted(protected_ids),
                 "preserved_figure_step_ids": preserved_step_ids,
+                "dependency_displaced_figure_step_ids": (
+                    dependency_displaced_figure_step_ids
+                ),
                 "displaced_step_ids": displaced_step_ids,
             },
         )
     ]
+    findings.extend(dependency_findings)
+    if len(kept_ids) > cap:
+        findings.append(
+            ValidationFinding(
+                validator="planner",
+                severity="error",
+                message=(
+                    "The plan cap cannot be satisfied without dropping a protected "
+                    "step or one of its typed producers; planner revision is required."
+                ),
+                detail={
+                    "reason": "typed_dependency_closure_exceeds_cap",
+                    "cap": cap,
+                    "retained_step_ids": [step.step_id for step in kept],
+                    "protected_step_ids": sorted(hard_protected_ids),
+                },
+            )
+        )
+    if cycle_ids:
+        findings.append(
+            ValidationFinding(
+                validator="planner",
+                severity="error",
+                message=(
+                    "The retained plan has a typed dependency cycle; planner "
+                    "revision is required before execution."
+                ),
+                detail={
+                    "reason": "typed_dependency_cycle",
+                    "cycle_step_ids": cycle_ids,
+                },
+            )
+        )
     return capped, findings
 
 
