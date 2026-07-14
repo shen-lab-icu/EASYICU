@@ -117,6 +117,29 @@ def test_detector_passes_clean_script():
     assert detect_forbidden_pattern_usage(_CLEAN_SCRIPT, ctx) == []
 
 
+def test_detector_rejects_positional_sparse_event_helper_columns():
+    script = """\
+from easyicu.research_agent.methods.source_status import reconcile_binary_event_presence
+result = reconcile_binary_event_presence(frame, count_col, measured_col, representative_col)
+"""
+    violations = detect_forbidden_pattern_usage(script, _ordinal_context())
+    assert len(violations) == 1
+    assert violations[0]["kind"] == "method_helper_call_contract"
+
+
+def test_detector_accepts_keyword_only_sparse_event_helper_columns():
+    script = """\
+from easyicu.research_agent.methods.source_status import reconcile_binary_event_presence
+result = reconcile_binary_event_presence(
+    frame,
+    count_column=count_col,
+    measured_column=measured_col,
+    representative_column=representative_col,
+)
+"""
+    assert detect_forbidden_pattern_usage(script, _ordinal_context()) == []
+
+
 def test_detector_ignores_forbidden_pattern_when_variable_not_referenced():
     """Forbidden pattern present but variable not used → no violation."""
     ctx = _ordinal_context()

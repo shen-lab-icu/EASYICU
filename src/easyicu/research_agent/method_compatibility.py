@@ -322,7 +322,73 @@ def render_variable_constraints(context: ResearchContext) -> str:
 # ---------------------------------------------------------------------------
 
 
+import ast
 import re
+
+
+def _helper_call_contract_violations(code: str) -> List[Dict[str, object]]:
+    """Return deterministic API-contract violations for documented helpers.
+
+    This is intentionally limited to project-local method-suite helpers whose
+    keyword-only signature prevents scientifically meaningful columns from
+    being swapped accidentally.  Syntax-invalid scripts remain the syntax
+    gate's responsibility.
+    """
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return []
+
+    violations: List[Dict[str, object]] = []
+    required_keywords = {
+        "count_column",
+        "measured_column",
+        "representative_column",
+    }
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        function_name = None
+        if isinstance(node.func, ast.Name):
+            function_name = node.func.id
+        elif isinstance(node.func, ast.Attribute):
+            function_name = node.func.attr
+        if function_name != "reconcile_binary_event_presence":
+            continue
+
+        keyword_names = {
+            keyword.arg for keyword in node.keywords if keyword.arg is not None
+        }
+        has_expansion = any(keyword.arg is None for keyword in node.keywords)
+        frame_is_bound = len(node.args) == 1 or (
+            len(node.args) == 0 and "frame" in keyword_names
+        )
+        if (
+            frame_is_bound
+            and not has_expansion
+            and len(node.args) <= 1
+            and required_keywords <= keyword_names
+        ):
+            continue
+        violations.append(
+            {
+                "variable": "reconcile_binary_event_presence",
+                "kind": "method_helper_call_contract",
+                "matched_patterns": ["positional_or_incomplete_sparse_event_call"],
+                "preferred": (
+                    "frame positional or named",
+                    "count_column=...",
+                    "measured_column=...",
+                    "representative_column=...",
+                ),
+                "rationale": (
+                    "The sparse-event columns are keyword-only so their clinical "
+                    "roles cannot be silently swapped."
+                ),
+            }
+        )
+    return violations
 
 
 def _variable_referenced_in_code(var_name: str, code_lower: str) -> bool:
@@ -367,7 +433,7 @@ def detect_forbidden_pattern_usage(
     if not code:
         return []
     code_lower = code.lower()
-    violations: List[Dict[str, object]] = []
+    violations: List[Dict[str, object]] = _helper_call_contract_violations(code)
     selected_trajectory = {
         variable.name
         for variable in selected_trajectory_variables(
@@ -481,11 +547,10 @@ def format_violation_message(violations: List[Dict[str, object]]) -> str:
     lines = [
         "PRE-EXECUTION COMPATIBILITY CHECK FAILED.",
         "",
-        "Your script uses one or more analytical methods that are forbidden "
-        "for the variable kinds present in the research context. The check "
-        "is a deterministic substring scan over the variables you actually "
-        "referenced in the script; see Methods / Tier-assignment rule and "
-        "the variable-type method-compatibility checklist for the policy.",
+        "Your script uses one or more incompatible analytical methods or "
+        "violates a documented method-helper call contract. The deterministic "
+        "check is scoped to variables and helper calls actually referenced in "
+        "the script; see the method-compatibility and helper API contracts.",
         "",
         "Violations:",
     ]
@@ -500,9 +565,10 @@ def format_violation_message(violations: List[Dict[str, object]]) -> str:
         )
     lines.append("")
     lines.append(
-        "Rewrite the script using kind-appropriate methods. Do not pick a "
-        "different variant of the same forbidden family (e.g. switching "
-        "from `KMeans` to `MiniBatchKMeans` does not satisfy the check)."
+        "Rewrite the script using kind-appropriate methods and exact documented "
+        "helper signatures. Do not pick a different variant of the same forbidden "
+        "family (e.g. switching from `KMeans` to `MiniBatchKMeans` does not "
+        "satisfy the check)."
     )
     return "\n".join(lines)
 

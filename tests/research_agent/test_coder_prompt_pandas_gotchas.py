@@ -174,6 +174,8 @@ def test_coder_prompt_keeps_sparse_event_negatives_in_exposure_denominator() -> 
     assert "`BinaryEventPresenceResult` dataclass, not a mapping" in coder_prompt
     assert "`result.values`" in coder_prompt
     assert "Do not require a dict" in coder_prompt
+    assert "The three column arguments are keyword-only" in coder_prompt
+    assert "count_column=count_col" in coder_prompt
     assert "do not reconstruct overlapping source-status masks" in coder_prompt
 
 

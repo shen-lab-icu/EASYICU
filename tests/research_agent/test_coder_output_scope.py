@@ -218,6 +218,8 @@ def test_coder_repair_preserves_standard_helper_across_later_traceback(ra):
     assert "`BinaryEventPresenceResult` dataclass, NOT a dictionary" in prompt
     assert "`helper_result.values`" in prompt
     assert "never require `isinstance(helper_result, dict)`" in prompt
+    assert "Its three column arguments are keyword-only" in prompt
+    assert "count_column=count_col" in prompt
 
 
 def test_coder_repair_separates_provenance_audit_from_value_selection(ra):

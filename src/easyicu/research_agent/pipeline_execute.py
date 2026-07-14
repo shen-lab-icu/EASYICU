@@ -113,6 +113,10 @@ from .declared_product_contract import (
 from .estimators import fit_robustness_rows_from_records
 from .evidence import sha256_of_bytes, sha256_of_file
 from .llm import MockLLMClient
+from .method_compatibility import (
+    detect_forbidden_pattern_usage,
+    format_violation_message,
+)
 from .ordered_stratified_contract import ordered_stratified_numeric_findings
 from .pipeline import (
     _build_probe_summary,
@@ -5820,6 +5824,23 @@ else:
                     step=step,
                 )
             )
+            compatibility_violations = detect_forbidden_pattern_usage(
+                script_text,
+                context,
+                step,
+            )
+            if compatibility_violations:
+                code_findings.append(
+                    ValidationFinding(
+                        validator="method_compatibility",
+                        severity="error",
+                        message=format_violation_message(compatibility_violations),
+                        detail={
+                            "step_id": step.step_id,
+                            "violations": compatibility_violations,
+                        },
+                    )
+                )
             try:
                 if pipeline._enable_llm_concept_audit and (
                     deterministic_fallback_used or deterministic_standard_executor_used
