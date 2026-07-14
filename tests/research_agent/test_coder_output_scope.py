@@ -474,6 +474,32 @@ def test_coder_repair_completes_declared_assignment_product(ra):
     assert "DIAGNOSED TABULAR AUTHORITATIVE-EXPOSURE REPAIR" in prompt
 
 
+def test_coder_repair_preserves_typed_dataframe_artifact(ra):
+    llm = _RecordingLLM()
+    context = _context(ra).model_copy(update={"primary_exposure": "selected_first"})
+    step = ra.AnalysisStep(
+        step_id="assignment",
+        intent="Fit the Planner-owned assignment model.",
+        inputs=["artifact:primary_exposure_definition"],
+        expected_outputs=["artifact:assignment_model"],
+        method="confounder_selection_and_propensity_model",
+    )
+
+    CoderAgent(llm).repair(
+        context=context,
+        step=step,
+        code="exposure_definition = {}\n",
+        run_log=(
+            "The finalized primary exposure artifact is discarded before "
+            "exposure resolution."
+        ),
+    )
+
+    prompt = llm.messages[-1].content
+    assert "DIAGNOSED TABULAR AUTHORITATIVE-EXPOSURE REPAIR" in prompt
+    assert "never coerce a DataFrame to `{}`, `[]`, `None`, or text" in prompt
+
+
 def test_coder_repair_removes_constructed_exposure_fallback(ra):
     llm = _RecordingLLM()
     context = _context(ra).model_copy(update={"primary_exposure": "selected_first"})

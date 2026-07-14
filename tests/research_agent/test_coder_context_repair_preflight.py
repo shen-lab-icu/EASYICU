@@ -712,6 +712,62 @@ if isinstance(exposure_definition, pd.DataFrame):
     )
 
 
+def test_mechanical_preflight_blocks_erasure_of_supported_dataframe_artifact(ra):
+    step = ra.AnalysisStep(
+        step_id="assignment",
+        intent="Fit the Planner-owned assignment model.",
+        inputs=["artifact:primary_exposure_definition"],
+        expected_outputs=["artifact:assignment_model"],
+        method="confounder_selection_and_propensity_model",
+    )
+    code = """
+def resolve_exposure(exposure_definition):
+    if isinstance(exposure_definition, pd.DataFrame):
+        return exposure_definition[selected_exposure]
+    return None
+
+exposure_definition = typed.get('artifact:primary_exposure_definition')
+if not isinstance(exposure_definition, (dict, list, str)):
+    exposure_definition = {}
+resolved = resolve_exposure(exposure_definition)
+"""
+    findings = audit_mechanical_code_contracts(code, step)
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "typed_dataframe_artifact_erased"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_accepts_preserved_dataframe_artifact(ra):
+    step = ra.AnalysisStep(
+        step_id="assignment",
+        intent="Fit the Planner-owned assignment model.",
+        inputs=["artifact:primary_exposure_definition"],
+        expected_outputs=["artifact:assignment_model"],
+        method="confounder_selection_and_propensity_model",
+    )
+    code = """
+def resolve_exposure(exposure_definition):
+    if isinstance(exposure_definition, pd.DataFrame):
+        return exposure_definition[selected_exposure]
+    if isinstance(exposure_definition, dict):
+        return exposure_definition['exposure_column']
+    raise RuntimeError('unsupported typed exposure artifact')
+
+exposure_definition = typed.get('artifact:primary_exposure_definition')
+resolved = resolve_exposure(exposure_definition)
+"""
+    findings = audit_mechanical_code_contracts(code, step)
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "typed_dataframe_artifact_erased"
+        for finding in findings
+    )
+
+
 def test_mechanical_preflight_blocks_undefined_direct_helper_call(ra):
     code = """
 def main(frame):

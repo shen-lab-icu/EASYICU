@@ -1861,6 +1861,9 @@ def _repair_specialization(
         "finalized_exposure_reconciliation_fallback",
         "assignment model artifact but registered no successfully fitted assignment model",
         "assignment_model_unfitted",
+        "finalized primary exposure artifact is discarded before exposure resolution",
+        "typed dataframe artifact is replaced by an empty fallback",
+        "typed_dataframe_artifact_erased",
     )
     if any(signal in normalized for signal in tabular_exposure_product_signals):
         selected_exposure = json.dumps(
@@ -1876,7 +1879,10 @@ def _repair_specialization(
             "status, or representative column. Do not repeat raw-event reconciliation "
             "or demand mapping-only metadata fields from a finalized row-aligned "
             "artifact that already passed its producer gate. Keep SHA-bound typed-"
-            "input loading and row alignment intact, and fail closed if the exact "
+            "input loading and preserve every explicitly supported artifact form: "
+            "never coerce a DataFrame to `{}`, `[]`, `None`, or text before the "
+            "DataFrame branch runs. "
+            "Keep row alignment intact, and fail closed if the exact "
             "planner-selected column is absent. Before any integer/boolean cast, "
             "fail closed unless every finalized exposure value is non-missing, "
             "finite, and exactly in {0, 1}; never let a fractional value be truncated. "
