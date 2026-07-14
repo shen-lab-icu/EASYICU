@@ -6817,8 +6817,18 @@ class FigureSourceDataValidator:
                     )
                 )
                 continue
-            figure_id = cls._normalise(contract.get("figure_id"))
-            if figure_id and figure_id != cls._normalise(stem):
+            raw_figure_id = str(contract.get("figure_id") or "").strip()
+            safe_figure_id = re.fullmatch(
+                r"(?:figure:)?([A-Za-z0-9][A-Za-z0-9_.-]*)",
+                raw_figure_id,
+                flags=re.IGNORECASE,
+            )
+            figure_id = (
+                cls._normalise(safe_figure_id.group(1))
+                if safe_figure_id is not None
+                else ""
+            )
+            if not figure_id or figure_id != cls._normalise(stem):
                 findings.append(
                     ValidationFinding(
                         validator=cls.name,
