@@ -1799,6 +1799,9 @@ def _repair_specialization(
         "provenance audit not fail closed",
         "completed step allowed",
         "does not fail the completed step",
+        "provenance pair scan not bidirectional",
+        "count columns that lack a paired measured column",
+        "scans measured columns only",
     )
     if any(signal in normalized for signal in audit_only_signals):
         guidance.append(
@@ -1815,7 +1818,10 @@ def _repair_specialization(
             "frame used by the model. Derive required companion pairs from declared "
             "inputs and ResearchContext descriptors instead of a hard-coded column "
             "list, and raise before model fitting or output registration when a "
-            "required pair is unavailable, invalid, or discordant.\n"
+            "required pair is unavailable, invalid, or discordant. Build provenance "
+            "concept stems from both `*_measured` and `*_n` columns so that a "
+            "count-only or measured-only concept also fails closed; never scan in "
+            "only one direction.\n"
         )
 
     primary_exposure_binding_signals = (

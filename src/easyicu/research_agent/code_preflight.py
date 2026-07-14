@@ -445,6 +445,42 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
     ]
 
 
+def _provenance_pair_scan_findings(tree: ast.Module) -> list[ValidationFinding]:
+    """Reject an explicit measured-only scan that cannot see count-only concepts."""
+
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        tokens = _literal_string_tokens(node)
+        if not (_PROVENANCE_FAILURE_KEYS <= tokens and "audit_only" in tokens):
+            continue
+        scanned_suffixes: set[str] = set()
+        for candidate in ast.walk(node):
+            if not isinstance(candidate, ast.Call):
+                continue
+            if _call_name(candidate.func).split(".")[-1] != "endswith":
+                continue
+            scanned_suffixes.update(
+                token
+                for token in _literal_string_tokens(candidate)
+                if token in {"_measured", "_n"}
+            )
+        if "_measured" not in scanned_suffixes or "_n" in scanned_suffixes:
+            continue
+        return [
+            ValidationFinding(
+                validator="mechanical_code_preflight",
+                severity="error",
+                message=(
+                    "The measurement-provenance audit scans measured columns only "
+                    "and cannot fail closed for count-only concepts."
+                ),
+                detail={"reason": "provenance_pair_scan_not_bidirectional"},
+            )
+        ]
+    return []
+
+
 def _scope_nodes(statements: list[ast.stmt]) -> list[ast.AST]:
     """Walk one lexical scope without borrowing uses from nested functions."""
 
@@ -613,6 +649,7 @@ def audit_mechanical_code_contracts(
     findings.extend(_structural_integer_findings(tree, step))
     findings.extend(_binding_metadata_findings(tree))
     findings.extend(_provenance_fail_closed_findings(tree))
+    findings.extend(_provenance_pair_scan_findings(tree))
     findings.extend(_authoritative_exposure_binding_findings(tree, step))
     findings.extend(_undefined_direct_call_findings(tree))
     return findings

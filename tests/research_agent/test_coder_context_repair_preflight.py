@@ -429,6 +429,58 @@ model.fit(frame)
     )
 
 
+def test_mechanical_preflight_blocks_measured_only_provenance_scan(ra):
+    code = """
+def provenance_audit(frame):
+    measured_columns = [
+        column for column in frame.columns
+        if str(column).endswith('_measured')
+    ]
+    checks = []
+    for measured_column in measured_columns:
+        checks.append({
+            'role': 'audit_only',
+            'invalid_pair_n': 0,
+            'discordant_n': 0,
+        })
+    return {'checks': checks}
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_pair_scan_not_bidirectional"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_accepts_bidirectional_provenance_scan(ra):
+    code = """
+def provenance_audit(frame):
+    measured_columns = [
+        column for column in frame.columns
+        if str(column).endswith('_measured')
+    ]
+    count_columns = [
+        column for column in frame.columns
+        if str(column).endswith('_n')
+    ]
+    checks = [{
+        'role': 'audit_only',
+        'invalid_pair_n': 0,
+        'discordant_n': 0,
+    }]
+    return {'checks': checks, 'counts': count_columns, 'flags': measured_columns}
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_pair_scan_not_bidirectional"
+        for finding in findings
+    )
+
+
 def test_mechanical_preflight_blocks_unused_authoritative_exposure(ra):
     step = ra.AnalysisStep(
         step_id="diagnostics",

@@ -275,6 +275,32 @@ def test_coder_repair_fail_closes_nonterminating_provenance_audit(ra):
     assert "raise before model fitting or output registration" in prompt
 
 
+def test_coder_repair_requires_bidirectional_provenance_pairs(ra):
+    llm = _RecordingLLM()
+    step = ra.AnalysisStep(
+        step_id="diagnostics",
+        intent="Audit the planner-owned working data.",
+        inputs=["artifact:quality_checked_analysis_data"],
+        expected_outputs=["table:diagnostics"],
+        method="diagnostic_analysis",
+    )
+
+    CoderAgent(llm).repair(
+        context=_context(ra),
+        step=step,
+        code="measured = [c for c in frame if c.endswith('_measured')]\n",
+        run_log=(
+            "DETAIL: {\"reason\": "
+            "\"provenance_pair_scan_not_bidirectional\"}"
+        ),
+    )
+
+    prompt = llm.messages[-1].content
+    assert "DIAGNOSED PROVENANCE/VALUE-SELECTION REPAIR" in prompt
+    assert "from both `*_measured` and `*_n` columns" in prompt
+    assert "never scan in only one direction" in prompt
+
+
 def test_coder_repair_consumes_authoritative_exposure_definition(ra):
     llm = _RecordingLLM()
     step = ra.AnalysisStep(
