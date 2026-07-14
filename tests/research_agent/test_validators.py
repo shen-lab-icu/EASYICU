@@ -448,6 +448,182 @@ def test_step_summary_fraction_scale_does_not_drop_mixed_category_values() -> No
     assert findings[0].detail["summary_path"] == "observed_fraction.group_a"
 
 
+@pytest.mark.parametrize(
+    ("step_summary", "expected_path"),
+    (
+        (
+            {"observed_fraction": {"group_a": {"value": 40.0}}},
+            "observed_fraction.group_a.value",
+        ),
+        (
+            {
+                "overall_risk": {
+                    "interval": {"estimate": 10.0, "ci_low": 9.0, "ci_high": 11.0}
+                }
+            },
+            "overall_risk.interval.estimate",
+        ),
+        (
+            {
+                "observed_fraction": {
+                    "by_group": [{"group": "a", "value": 40.0}]
+                }
+            },
+            "observed_fraction.by_group.0.value",
+        ),
+    ),
+)
+def test_step_summary_fraction_scale_follows_explicit_metric_wrappers(
+    step_summary: dict[str, object], expected_path: str
+) -> None:
+    findings = StepSummaryFractionValidator().audit(
+        step=AnalysisStep(step_id="04_audit", intent="Audit bounded metrics."),
+        step_summary=step_summary,
+    )
+
+    assert findings
+    assert findings[0].detail["summary_path"] == expected_path
+
+
+def test_step_summary_fraction_scale_ignores_structured_record_metadata() -> None:
+    findings = StepSummaryFractionValidator().audit(
+        step=AnalysisStep(step_id="04_model", intent="Report absolute risk."),
+        step_summary={
+            "overall_risk": {"risk": 0.2, "bootstrap_replicates": 1_000}
+        },
+    )
+
+    assert findings == []
+
+
+@pytest.mark.parametrize(
+    "step_summary",
+    (
+        {"observed_fraction": {"by_group": [0.2, 40.0]}},
+        {"observed_fraction": {"point_estimate": 40.0}},
+        {"observed_fraction": {"result": 40.0}},
+        {"observed_fraction": {"estimates": {"group_a": 0.2, "group_b": 40.0}}},
+        {
+            "observed_fraction": {
+                "n": 100,
+                "group_a": 0.2,
+                "group_b": 40.0,
+            }
+        },
+        {"observed_fraction": {"metric": "aic", "group_a": 40.0}},
+        {"observed_fraction": {"unit": None, "value": 40.0}},
+        {"observed_fraction": {"unit": "unknown", "value": 40.0}},
+        {"observed_fraction": {"unit": 1, "value": 40.0}},
+        {"observed_fraction": {"metric": "availability", "value": 40.0}},
+        {
+            "observed_fraction": {
+                "summary": {"group_a": 0.2, "group_b": 40.0}
+            }
+        },
+        {"observed_fraction": {"data": [0.2, 40.0]}},
+        {"observed_fraction": {"payload": {"group_a": 40.0}}},
+        {"observed_fraction": {"items": [0.2, 40.0]}},
+        {"observed_fraction": {"estimate": 0.2, "group_a": 40.0}},
+        {"observed_fraction": {"value": 0.2, "group_a": 40.0}},
+        {"observed_fraction": {"fraction": 0.2, "group_a": 40.0}},
+        {"observed_fraction": {"point_estimate": 0.2, "group_a": 40.0}},
+        {"observed_fraction": {"result": 0.2, "group_a": 40.0}},
+        {"observed_fraction": {"ci_low": 0.1, "ci_high": 0.3, "group_a": 40.0}},
+        {"overall_risk": {"point": 40.0, "ci_low": 0.1, "ci_high": 0.3}},
+        {
+            "observed_fraction": {
+                "metric": "aic",
+                "value": 0.2,
+                "group_a": 40.0,
+            }
+        },
+    ),
+)
+def test_step_summary_fraction_scale_preserves_standard_metric_wrappers(
+    step_summary: dict[str, object],
+) -> None:
+    findings = StepSummaryFractionValidator().audit(
+        step=AnalysisStep(step_id="04_audit", intent="Audit bounded metrics."),
+        step_summary=step_summary,
+    )
+
+    assert findings
+    assert any(finding.detail["reported_value"] == 40.0 for finding in findings)
+
+
+@pytest.mark.parametrize(
+    "nested_record",
+    (
+        {"model_diagnostics": {"metric": "aic", "value": 123.0}},
+        {"counts": [{"group": "all", "value": 94_458}]},
+        {
+            "effect": {
+                "measure": "odds_ratio",
+                "estimate": 2.0,
+                "ci_low": 1.2,
+                "ci_high": 3.0,
+            }
+        },
+        {"display": {"unit": "percent", "value": 20.0}},
+        {"results": [{"metric": "aic", "value": 123.0}]},
+        {"by_group": [{"unit": "percent", "value": 20.0}]},
+        {
+            "levels": [
+                {
+                    "level": 4,
+                    "count": 1_256,
+                    "fraction": 0.013,
+                    "risk": 0.378,
+                    "ci_low": 0.352,
+                    "ci_high": 0.405,
+                }
+            ]
+        },
+        {
+            "estimates": [
+                {
+                    "measure": "odds_ratio",
+                    "estimate": 2.0,
+                    "ci_low": 1.2,
+                    "ci_high": 3.0,
+                }
+            ]
+        },
+        {"display": {"unit": "%", "value": 20.0}},
+        {"display": {"display_unit": "percent", "value": 20.0}},
+        {"display": {"value_unit": "percent", "value": 20.0}},
+        {"display": {"type": "percent", "value": 20.0}},
+        {"display": {"metric_type": "odds_ratio", "estimate": 2.0}},
+        {"model_fit": {"value": 123.0}},
+        {"sample_sizes": [{"value": 94_458}]},
+        {"value": 0.2, "decimal_places": 3},
+        {"estimate": 0.2, "model_version": 2},
+        {"group_a": {"deaths": 5_117, "prevalence": 0.12}},
+        {"estimate": 0.2, "format": {"digits": 3}},
+        {"estimate": 0.2, "rounding": {"decimal_places": 3}},
+        {"estimate": 0.2, "settings": {"precision": 3}},
+        {
+            "risk": 0.2,
+            "nobs": 94_458,
+            "total": 94_458,
+            "OR": 2.0,
+            "HR": 2.0,
+            "aic": 123.0,
+            "followup_days": 30,
+        },
+    ),
+)
+def test_step_summary_fraction_scale_does_not_cross_domain_boundaries(
+    nested_record: dict[str, object],
+) -> None:
+    findings = StepSummaryFractionValidator().audit(
+        step=AnalysisStep(step_id="04_model", intent="Report absolute risk."),
+        step_summary={"overall_risk": {"risk": 0.2, **nested_record}},
+    )
+
+    assert findings == []
+
+
 def test_step_summary_fraction_scale_ignores_method_and_count_fields() -> None:
     findings = StepSummaryFractionValidator().audit(
         step=AnalysisStep(step_id="04_model", intent="Fit a flexible model."),

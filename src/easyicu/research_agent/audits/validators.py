@@ -1415,6 +1415,10 @@ class StepSummaryFractionValidator:
             ).strip("_")
 
         effect_scale_names = {
+            "hr",
+            "or",
+            "rd",
+            "rr",
             "risk_ratio",
             "relative_risk",
             "odds_ratio",
@@ -1480,22 +1484,212 @@ class StepSummaryFractionValidator:
 
         structural_children = {
             "count",
+            "cases",
+            "deaths",
             "denominator",
             "event_n",
+            "events",
             "n",
+            "nobs",
+            "non_events",
             "numerator",
+            "observations",
+            "patients",
             "sample_size",
+            "stays",
+            "subjects",
+            "survivors",
+            "total",
             "total_n",
         }
         structural_suffixes = (
             "_count",
             "_denominator",
+            "_draws",
+            "_folds",
+            "_iterations",
             "_n",
             "_numerator",
+            "_replicates",
             "_sample_size",
         )
         structural_prefixes = ("n_", "num_", "number_")
+        coordinate_children = {
+            "category",
+            "category_code",
+            "code",
+            "cutpoint",
+            "decimal_places",
+            "df",
+            "digits",
+            "group",
+            "group_id",
+            "id",
+            "index",
+            "label",
+            "level",
+            "level_id",
+            "name",
+            "order",
+            "precision",
+            "rank",
+            "random_seed",
+            "seed",
+            "stratum",
+            "stratum_id",
+            "threshold",
+            "timepoint",
+            "timepoint_index",
+            "version",
+        }
+        coordinate_suffixes = (
+            "_category",
+            "_code",
+            "_cutpoint",
+            "_days",
+            "_places",
+            "_group",
+            "_hours",
+            "_id",
+            "_index",
+            "_label",
+            "_level",
+            "_minutes",
+            "_months",
+            "_name",
+            "_order",
+            "_precision",
+            "_rank",
+            "_seconds",
+            "_seed",
+            "_stratum",
+            "_threshold",
+            "_timepoint",
+            "_version",
+            "_years",
+        )
+        scalar_value_children = {
+            "estimate",
+            "fraction",
+            "point_estimate",
+            "result",
+            "value",
+        }
         generic_ci_children = {"ci_low", "ci_high", "ci_lower", "ci_upper"}
+        scale_descriptor_names = {
+            "effect_measure",
+            "estimand",
+            "measure",
+            "measure_type",
+            "metric",
+            "metric_name",
+            "scale",
+            "statistic",
+            "type",
+            "unit",
+            "units",
+        }
+        bounded_scale_descriptors = {
+            "0_1",
+            "dimensionless",
+            "proportion",
+            "unit_interval",
+            "unitless",
+            "zero_to_one",
+        }
+        non_bounded_scale_descriptors = {
+            "aic",
+            "attributable_fraction",
+            "attributable_risk",
+            "auc",
+            "beta",
+            "bic",
+            "c_statistic",
+            "coefficient",
+            "count",
+            "counts",
+            "deviance",
+            "excess_risk",
+            "frequency",
+            "hazard_ratio",
+            "hr",
+            "iqr",
+            "log_likelihood",
+            "log_odds",
+            "logit",
+            "mae",
+            "mean",
+            "median",
+            "mse",
+            "n",
+            "odds_ratio",
+            "or",
+            "pct",
+            "percent",
+            "percentage",
+            "population_attributable_fraction",
+            "rd",
+            "relative_risk",
+            "risk_difference",
+            "risk_ratio",
+            "rmse",
+            "rr",
+            "sample_size",
+            "sd",
+            "se",
+            "standard_deviation",
+            "standard_error",
+            "variance",
+        }
+        domain_changing_tokens = {
+            "audit",
+            "audits",
+            "bootstrap",
+            "bootstraps",
+            "coefficient",
+            "coefficients",
+            "count",
+            "counts",
+            "diagnostic",
+            "diagnostics",
+            "distribution",
+            "distributions",
+            "draw",
+            "draws",
+            "effect",
+            "effects",
+            "fit",
+            "fits",
+            "format",
+            "formats",
+            "formatting",
+            "fold",
+            "folds",
+            "iteration",
+            "iterations",
+            "metadata",
+            "option",
+            "options",
+            "parameter",
+            "parameters",
+            "percentile",
+            "percentiles",
+            "quantile",
+            "quantiles",
+            "replicate",
+            "replicates",
+            "rounding",
+            "runtime",
+            "sample",
+            "samples",
+            "size",
+            "sizes",
+            "setting",
+            "settings",
+            "statistic",
+            "statistics",
+            "timing",
+        }
 
         def is_structural_child(name: str) -> bool:
             return (
@@ -1506,8 +1700,16 @@ class StepSummaryFractionValidator:
 
         def blocks_inherited_context(key: Any, name: str) -> bool:
             ci_base = re.sub(r"_(?:ci_)?(?:low|high|lower|upper)$", "", name)
+            name_tokens = set(name.split("_"))
             return (
                 is_structural_child(name)
+                or name in coordinate_children
+                or (
+                    name.endswith(coordinate_suffixes)
+                    and not name.startswith("by_")
+                )
+                or name in non_bounded_scale_descriptors
+                or bool(name_tokens & domain_changing_tokens)
                 or any(
                     token in name for token in ("pct", "percent", "percentage")
                 )
@@ -1524,12 +1726,53 @@ class StepSummaryFractionValidator:
                 }
             )
 
+        def is_scale_descriptor_name(name: str) -> bool:
+            return name in scale_descriptor_names or name.endswith(
+                ("_measure", "_metric", "_scale", "_type", "_unit", "_units")
+            )
+
+        def mapping_declares_non_bounded_scale(value: Any) -> bool:
+            if not isinstance(value, dict):
+                return False
+            for key, descriptor in value.items():
+                if not is_scale_descriptor_name(normalise_key(key)) or not isinstance(
+                    descriptor, str
+                ):
+                    continue
+                if descriptor.strip() == "%":
+                    return True
+                descriptor_name = normalise_key(descriptor)
+                if not descriptor_name:
+                    continue
+                if (
+                    bounded_field_kind(descriptor_name) is not None
+                    or descriptor_name in bounded_scale_descriptors
+                ):
+                    continue
+                if (
+                    descriptor_name in non_bounded_scale_descriptors
+                    or is_effect_scale_field(descriptor_name)
+                ):
+                    return True
+            return False
+
+        def mapping_has_generic_metric_payload(value: Any) -> bool:
+            return isinstance(value, dict) and any(
+                normalise_key(key) in scalar_value_children | generic_ci_children
+                for key in value
+            )
+
         def visit(
             value: Any,
             path: tuple[str, ...] = (),
             bounded_context: Optional[str] = None,
         ) -> None:
             if isinstance(value, dict):
+                local_non_bounded_scale = bool(
+                    bounded_context
+                    and mapping_has_generic_metric_payload(value)
+                    and mapping_declares_non_bounded_scale(value)
+                )
                 sibling_kinds = {
                     kind
                     for key in value
@@ -1544,19 +1787,17 @@ class StepSummaryFractionValidator:
                 for key, child in value.items():
                     normalised = normalise_key(key)
                     key_context = bounded_field_kind(key)
-                    # A bounded owner may directly contain a category->value map
-                    # or a structured metric record.  Do not let that context
-                    # leak through a named nested container such as
-                    # ``absolute_risk.bili_distribution``; the nested key must
-                    # establish its own bounded semantics.
-                    inherited_context = (
-                        None if isinstance(child, (dict, list)) else bounded_context
-                    )
-                    if inherited_context and blocks_inherited_context(key, normalised):
-                        inherited_context = None
+                    inherited_context = bounded_context
+                    if inherited_context:
+                        if blocks_inherited_context(key, normalised):
+                            inherited_context = None
+                        elif local_non_bounded_scale and normalised in (
+                            scalar_value_children | generic_ci_children
+                        ):
+                            inherited_context = None
                     if normalised in generic_ci_children and (
                         sibling_context or bounded_context
-                    ) and not has_effect_scale_sibling:
+                    ) and not has_effect_scale_sibling and not local_non_bounded_scale:
                         key_context = sibling_context or bounded_context
                     visit(
                         child,
