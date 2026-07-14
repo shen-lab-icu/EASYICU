@@ -2463,6 +2463,64 @@ def test_llm_concept_auditor_checks_summary_source_status_bypasses(ra):
     assert "unless the script later mutates" in prompt
 
 
+def test_llm_concept_auditor_prioritizes_late_declared_input_companions(ra):
+    from easyicu.research_agent.schema import VariableRole
+
+    variables = [
+        ra.ConceptDescriptor(name=f"filler_{index}", dtype="float64")
+        for index in range(85)
+    ]
+    variables.extend(
+        [
+            ra.ConceptDescriptor(
+                name="event_n",
+                dtype="int64",
+                role=VariableRole.META,
+            ),
+            ra.ConceptDescriptor(
+                name="event_measured",
+                dtype="int64",
+                role=VariableRole.META,
+            ),
+            ra.ConceptDescriptor(
+                name="event_max",
+                dtype="float64",
+                role=VariableRole.INTERVENTION,
+                clinical_caveats=["Registered sparse event indicator."],
+            ),
+        ]
+    )
+    context = ra.ResearchContext(
+        research_question="Evaluate a declared binary event exposure.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="synthetic",
+            database="synthetic",
+            n_patients=2,
+            n_stays=2,
+        ),
+        variables=variables,
+    )
+    step = ra.AnalysisStep(
+        step_id="event_protocol",
+        intent="Validate the declared event exposure.",
+        inputs=["event_n"],
+        expected_outputs=["table:protocol"],
+        method="target_trial_emulation_protocol",
+    )
+
+    prompt = ra.LLMConceptAuditor(ra.MockLLMClient())._prompt(
+        context=context,
+        script_text="event_max = frame['event_max']",
+        step=step,
+    )
+
+    assert '"name": "event_n"' in prompt
+    assert '"name": "event_measured"' in prompt
+    assert '"name": "event_max"' in prompt
+    assert '"role": "intervention"' in prompt
+    assert "Registered sparse event indicator." in prompt
+
+
 def test_llm_concept_auditor_sees_late_independent_count_qc(ra):
     auditor = ra.LLMConceptAuditor(ra.MockLLMClient())
     ctx = ra.build_research_context(
