@@ -1856,6 +1856,9 @@ def _repair_specialization(
         "authoritative primary exposure fallback",
         "row aligned exposure table branch bypasses binary event validation",
         "row aligned exposure table branch bypasses binary event validation and provenance reconciliation",
+        "finalized exposure table branch bypasses registered exposure metadata validation",
+        "finalized exposure reconciliation fallback",
+        "finalized_exposure_reconciliation_fallback",
     )
     if any(signal in normalized for signal in tabular_exposure_product_signals):
         selected_exposure = json.dumps(
@@ -1877,7 +1880,13 @@ def _repair_specialization(
             "finite, and exactly in {0, 1}; never let a fractional value be truncated. "
             "Verify row alignment using the artifact's stable row key or exact index, "
             "and retain the separate bidirectional count/measured provenance audit. "
-            "These checks validate the locked exposure without redefining it. The "
+            "Do not fabricate source-concept, role, indicator-semantics, count, "
+            "measured, or representative metadata inside the finalized-DataFrame "
+            "branch, and do not invoke the sparse binary-event reconciliation "
+            "helper in that branch. Only a separate raw-definition mapping branch "
+            "with registered metadata may use that helper. Do not fall through "
+            "between the two artifact forms. These checks validate the locked "
+            "exposure without redefining it. The "
             "current planner-selected exposure "
             f"fact is: {selected_exposure}.\n"
         )
