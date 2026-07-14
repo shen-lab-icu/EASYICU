@@ -151,6 +151,58 @@ def _response_namespace_from_payload(payload: Dict[str, Any]) -> Any:
     return SimpleNamespace(choices=choices, usage=usage_ns)
 
 
+def _response_namespace_from_stream(stream: Any) -> Any:
+    """Collect an OpenAI chat-completion stream into the normal response shape.
+
+    Streaming is transport-only: downstream agents still receive the same final
+    string and usage metadata when the provider supplies it.  The stream is
+    always closed, including when iteration raises, so retries do not leak a
+    socket to a local OpenAI-compatible proxy.
+    """
+
+    content_parts: List[str] = []
+    reasoning_parts: List[str] = []
+    finish_reason: Optional[str] = None
+    usage = None
+    saw_choice = False
+    try:
+        for chunk in stream:
+            chunk_usage = getattr(chunk, "usage", None)
+            if chunk_usage is not None:
+                usage = chunk_usage
+            for choice in getattr(chunk, "choices", None) or []:
+                saw_choice = True
+                choice_finish = getattr(choice, "finish_reason", None)
+                if choice_finish is not None:
+                    finish_reason = choice_finish
+                delta = getattr(choice, "delta", None)
+                if delta is None:
+                    continue
+                content = getattr(delta, "content", None)
+                if isinstance(content, str):
+                    content_parts.append(content)
+                for attr in ("reasoning_content", "reasoning"):
+                    value = getattr(delta, attr, None)
+                    if isinstance(value, str):
+                        reasoning_parts.append(value)
+                        break
+    finally:
+        close = getattr(stream, "close", None)
+        if callable(close):
+            close()
+
+    if not saw_choice:
+        return SimpleNamespace(choices=[], usage=usage)
+    reasoning = "".join(reasoning_parts)
+    message = SimpleNamespace(
+        content="".join(content_parts),
+        reasoning_content=reasoning or None,
+        reasoning=reasoning or None,
+    )
+    choice = SimpleNamespace(message=message, finish_reason=finish_reason)
+    return SimpleNamespace(choices=[choice], usage=usage)
+
+
 # ---------------------------------------------------------------------------
 # OpenAI client (optional — only imported on first use)
 # ---------------------------------------------------------------------------
@@ -178,9 +230,10 @@ class OpenAIClient:
 
         pipeline = ResearchAgentPipeline(llm=llm, ...)
 
-    The class deliberately does not bundle prompt templates or
-    streaming logic — that lives in :mod:`agents` so any provider can
-    be swapped in.
+    The class deliberately does not bundle prompt templates.  Set
+    ``EASYICU_LLM_STREAM=1`` to use transport-level streaming for long
+    OpenAI-compatible responses; downstream agents still receive one final
+    response string.
     """
 
     name = "openai"
@@ -440,7 +493,22 @@ class OpenAIClient:
                 resp.raise_for_status()
                 data = resp.json()
                 return _response_namespace_from_payload(data)
-            resp = self._client.chat.completions.create(**create_kwargs)  # type: ignore[union-attr,arg-type]
+            stream_enabled = str(
+                os.environ.get("EASYICU_LLM_STREAM", "") or ""
+            ).strip().lower() in {"1", "true", "yes", "on"}
+            if stream_enabled:
+                # Do not send ``stream_options`` unconditionally: several local
+                # OpenAI-compatible proxies accept SSE streaming but reject the
+                # optional include-usage extension.  Usage is still collected
+                # when a provider includes it in any chunk; otherwise the
+                # existing MeteredClient heuristic remains the fallback.
+                stream = self._client.chat.completions.create(  # type: ignore[union-attr,arg-type]
+                    **create_kwargs,
+                    stream=True,
+                )
+                resp = _response_namespace_from_stream(stream)
+            else:
+                resp = self._client.chat.completions.create(**create_kwargs)  # type: ignore[union-attr,arg-type]
             # Eager validation of the envelope so transient null-choices/null-
             # message responses surface here and are caught by the retry loop
             # below, rather than crashing the caller with `'NoneType' object
