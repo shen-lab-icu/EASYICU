@@ -163,6 +163,11 @@ _NOVELTY_CONSERVATISM_ORDER: Tuple[NoveltyLabel, ...] = (
     "apparently_gap",
 )
 
+# A secondary-index broad recall above this count means the field is populated
+# there even if PubMed under-indexes it -> the apparent gap is a coverage
+# artifact. Mirrors ``_label_prior_art``'s ``sparse_threshold`` semantics.
+_CORROBORATION_SPARSE_MAX = 5
+
 
 def _more_conservative_novelty(a: NoveltyLabel, b: NoveltyLabel) -> NoveltyLabel:
     """Return the LESS-novel (more conservative) of two novelty labels.
@@ -241,8 +246,18 @@ def assess_prior_art_for_idea(
     top_n: int = 20,
     novelty_judge: Optional[Callable[..., Mapping[str, Any]]] = None,
     cross_db_targets: Optional[Sequence[str]] = None,
+    corroborating_search_client: Optional[Any] = None,
 ) -> PriorArtAssessment:
     """Run layered prior-art triage for one literature-derived idea.
+
+    ``corroborating_search_client`` (optional) hardens the single strongest
+    novelty label. The count screen runs against one index (PubMed); a topic
+    studied mainly in preprints / proceedings / non-MEDLINE venues can show a low
+    PubMed count that is a *coverage* artifact, not novelty. When the label is
+    ``apparently_gap`` and this second client is supplied, the broad recall is
+    re-run against it: a non-sparse second-index count DEMOTES the verdict to
+    ``crowded_but_differentiable``. Like the LLM judge, it can only ever tighten
+    a claim of novelty, never upgrade one -- the count screen stays the veto net.
 
     ``cross_db_targets`` (optional) enables the cross-database transportability
     novelty axis: when the field is crowded with same-topic prior art but none of
@@ -329,6 +344,42 @@ def assess_prior_art_for_idea(
         same_topic_screen_status = (
             "prior-art search unavailable, NOT screened; " + same_topic_screen_status
         )
+    corroboration_note = ""
+    if (
+        novelty_label == "apparently_gap"
+        and corroborating_search_client is not None
+        and prior_art_screen_ran
+    ):
+        corroboration = _run_prior_art_query(
+            corroborating_search_client,
+            query_type="broad",
+            query=queries["broad"],
+            max_results=top_n,
+            idea=idea,
+        )
+        corroboration_ran = bool(getattr(corroboration, "search_ok", True))
+        if corroboration_ran and corroboration.hit_count > _CORROBORATION_SPARSE_MAX:
+            novelty_label = "crowded_but_differentiable"
+            corroboration_note = (
+                f" A secondary index returned {corroboration.hit_count} broad "
+                "hits, so the apparent PubMed gap is a single-index coverage "
+                "artifact; downgraded to crowded_but_differentiable."
+            )
+            same_topic_screen_status += (
+                "; secondary-index corroboration DEMOTED the apparent gap"
+            )
+        elif corroboration_ran:
+            corroboration_note = (
+                " A secondary index also returned a sparse broad recall, "
+                "corroborating the apparent gap across two indices."
+            )
+            same_topic_screen_status += (
+                "; secondary-index corroboration held the apparent gap"
+            )
+        else:
+            same_topic_screen_status += (
+                "; secondary-index corroboration unavailable (single index only)"
+            )
     judge_rationale: Optional[str] = None
     if novelty_judge is not None:
         novelty_label, judge_rationale = _apply_novelty_judge(
@@ -355,6 +406,8 @@ def assess_prior_art_for_idea(
         "a novelty claim and requires human prior-art review. "
         f"Same-topic screen status: {same_topic_screen_status}."
     )
+    if corroboration_note:
+        statement += corroboration_note
     if judge_rationale:
         statement += f" LLM differentiation note: {judge_rationale}"
     payload = {
