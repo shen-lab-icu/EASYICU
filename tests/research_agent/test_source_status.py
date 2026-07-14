@@ -47,6 +47,7 @@ def test_positive_only_event_triad_retains_negative_rows():
         ([0, 1], [0, 1], [1, 1]),
         ([0, 1.5], [0, 1], [None, 1]),
         ([0, 1], [0, 1], [None, 2]),
+        ([0, 1], [0, 1], [None, "yes"]),
     ],
 )
 def test_sparse_event_triad_fails_closed_on_any_contradiction(

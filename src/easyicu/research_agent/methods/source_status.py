@@ -50,7 +50,8 @@ def reconcile_binary_event_presence(
 
     count = _numeric(frame[count_column])
     measured = _numeric(frame[measured_column])
-    representative = _numeric(frame[representative_column])
+    representative_raw = frame[representative_column]
+    representative = _numeric(representative_raw)
 
     count_valid = (
         count.notna()
@@ -67,7 +68,11 @@ def reconcile_binary_event_presence(
     event_present = count.gt(0)
     pair_discordant = pair_valid & measured.ne(event_present.astype(int))
 
-    representative_valid = representative.isna() | representative.isin([0, 1])
+    representative_coercion_invalid = representative_raw.notna() & representative.isna()
+    representative_valid = (
+        ~representative_coercion_invalid
+        & (representative.isna() | representative.isin([0, 1]))
+    )
     positive_missing = event_present & representative.ne(1)
     negative_positive = ~event_present & representative.eq(1)
     invalid = (
@@ -87,6 +92,9 @@ def reconcile_binary_event_presence(
         "invalid_pair_n": int((~pair_valid).sum()),
         "discordant_n": int(pair_discordant.sum()),
         "representative_invalid_n": int((~representative_valid).sum()),
+        "representative_coercion_invalid_n": int(
+            representative_coercion_invalid.sum()
+        ),
         "positive_representative_missing_n": int(positive_missing.sum()),
         "negative_representative_positive_n": int(negative_positive.sum()),
         "event_present_n": int(event_present.sum()),
