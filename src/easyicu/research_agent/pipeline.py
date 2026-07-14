@@ -9318,6 +9318,81 @@ def _distribution_availability_parent_digest_seal(
     return {name: digests[name] for name in sorted(required_names)}
 
 
+def _absolute_risk_parent_digest_seal(
+    run_dir: Path,
+    figure_step_id: str,
+) -> Optional[dict[str, str]]:
+    """Validate and seal the absolute-risk renderer's exact parent product."""
+
+    digests = _verified_direct_parent_artifact_digests(run_dir, figure_step_id)
+    required_names = {
+        "step_summary.json",
+        "outcome_incidence.csv",
+        "exposure_prevalence.csv",
+    }
+    if not digests or not required_names <= set(digests):
+        return None
+    request_step = _resolve_upstream_manifest_step(run_dir, figure_step_id)
+    if not isinstance(request_step, Mapping):
+        return None
+    from .declared_product_contract import (
+        read_digest_bound_artifact_snapshot,
+        typed_product,
+    )
+    from .figures.absolute_risk import (
+        CONTROLLED_METHOD,
+        prepare_absolute_risk_inputs,
+    )
+
+    if str(request_step.get("method") or "").strip().lower() != CONTROLLED_METHOD:
+        return None
+    declared_tables = {
+        parsed
+        for raw in (request_step.get("expected_outputs") or [])
+        if (parsed := typed_product(raw)) is not None and parsed[0] == "table"
+    }
+    if declared_tables != {
+        ("table", "outcome_incidence"),
+        ("table", "exposure_prevalence"),
+    }:
+        return None
+    sealed = {name: digests[name] for name in sorted(required_names)}
+    parent_step_id = str(figure_step_id or "").removesuffix("_figure")
+    parent_out = Path(run_dir) / "steps" / parent_step_id / "outputs"
+    try:
+        context_payload = json.loads(
+            (Path(run_dir) / "research_context.json").read_text(encoding="utf-8")
+        )
+        expected_primary_exposure = str(
+            context_payload.get("primary_exposure") or ""
+        ).strip()
+        expected_target_outcome = str(
+            context_payload.get("target_outcome") or ""
+        ).strip()
+        if not expected_primary_exposure or not expected_target_outcome:
+            return None
+        snapshot = read_digest_bound_artifact_snapshot(
+            parent_out=parent_out,
+            artifact_digests=sealed,
+        )
+        summary = json.loads(snapshot["step_summary.json"].decode("utf-8"))
+    except (OSError, KeyError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        return None
+    if (
+        not isinstance(summary, Mapping)
+        or prepare_absolute_risk_inputs(
+            summary,
+            snapshot["outcome_incidence.csv"],
+            snapshot["exposure_prevalence.csv"],
+            expected_primary_exposure=expected_primary_exposure,
+            expected_target_outcome=expected_target_outcome,
+        )
+        is None
+    ):
+        return None
+    return sealed
+
+
 def _sealed_renderer_parent_digest_seal(
     run_dir: Path,
     figure_step_id: str,
@@ -9330,6 +9405,8 @@ def _sealed_renderer_parent_digest_seal(
     )
     if repair_id == distribution_id:
         return _distribution_availability_parent_digest_seal(run_dir, figure_step_id)
+    if repair_id == "absolute_risk_incidence_prevalence_publication_bundle_v1":
+        return _absolute_risk_parent_digest_seal(run_dir, figure_step_id)
     digests = _verified_direct_parent_artifact_digests(run_dir, figure_step_id)
     if not digests or "step_summary.json" not in digests:
         return None
@@ -9384,7 +9461,18 @@ def _render_authorized_sealed_publication_bundle(
     if "step_summary.json" not in snapshot:
         return None
 
-    if repair_id == (
+    if repair_id == "absolute_risk_incidence_prevalence_publication_bundle_v1":
+        from .figures.absolute_risk import (
+            render_absolute_risk_bundle_from_prior_outputs,
+        )
+
+        observed = render_absolute_risk_bundle_from_prior_outputs(
+            run_dir=run_dir,
+            current_step_id=current_step_id,
+            out_dir=out_dir,
+            preverified_parent_artifacts=snapshot,
+        )
+    elif repair_id == (
         "distribution_availability_publication_bundle_from_parent_outputs_v1"
     ):
         from .figures.distribution_availability import (
@@ -9582,6 +9670,14 @@ def deterministic_figure_repair_id_for_upstream(
             repair_id
             if _distribution_availability_parent_digest_seal(run_dir, step_id)
             is not None
+            else None
+        )
+    if repair_id == "absolute_risk_incidence_prevalence_publication_bundle_v1":
+        required_tables = {"outcome_incidence.csv", "exposure_prevalence.csv"}
+        return (
+            repair_id
+            if required_tables <= verified_tables
+            and _absolute_risk_parent_digest_seal(run_dir, step_id) is not None
             else None
         )
     if repair_id == "sensitivity_publication_bundle_from_locked_summary_v1":

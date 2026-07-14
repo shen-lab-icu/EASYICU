@@ -25,6 +25,9 @@ from easyicu.research_agent.schema import AnalysisStep
 SEALED_DISTRIBUTION_REPAIR = (
     "distribution_availability_publication_bundle_from_parent_outputs_v1"
 )
+SEALED_ABSOLUTE_RISK_REPAIR = (
+    "absolute_risk_incidence_prevalence_publication_bundle_v1"
+)
 SEALED_IMPLEMENTATION_DIGEST = "a" * 64
 SEALED_PARENT_DIGESTS = {
     "step_summary.json": "1" * 64,
@@ -1649,6 +1652,51 @@ def test_host_slot_authorization_accepts_parent_anchored_subject():
         "figure:planned_distribution": "distribution",
         "figure:planned_availability": "availability",
     }
+
+
+def test_host_slot_authorization_preserves_role_by_exposure_subject():
+    assert authorize_declared_figure_product_slots(
+        declared_products=["figure:absolute_risk_by_lactate"],
+        renderer_repair_id=SEALED_ABSOLUTE_RISK_REPAIR,
+        planner_parent_anchors=[
+            "artifact:adult_lactate_complete_case",
+            "lact_max",
+            "death",
+            "table:outcome_incidence",
+            "table:exposure_prevalence",
+        ],
+        authoritative_display_subjects=["lact_max", "lactate"],
+    ) == {"figure:absolute_risk_by_lactate": "absolute_risk"}
+
+
+@pytest.mark.parametrize(
+    "unowned_subject",
+    [
+        "death",
+        "age",
+        "unrelated_treatment",
+        "lactulose",
+    ],
+)
+def test_host_slot_authorization_rejects_role_by_nonexposure_subject(
+    unowned_subject,
+):
+    with pytest.raises(ValueError):
+        authorize_declared_figure_product_slots(
+            declared_products=[f"figure:absolute_risk_by_{unowned_subject}"],
+            renderer_repair_id=SEALED_ABSOLUTE_RISK_REPAIR,
+            planner_parent_anchors=[
+                "artifact:adult_lactate_complete_case",
+                "artifact:adult_lactulose_complete_case",
+                "lact_max",
+                "death",
+                "age",
+                "unrelated_treatment",
+                "table:outcome_incidence",
+                "table:exposure_prevalence",
+            ],
+            authoritative_display_subjects=["lact_max", "lactate"],
+        )
 
 
 def test_digest_bound_snapshot_parses_the_verified_bytes_after_path_mutation(tmp_path):

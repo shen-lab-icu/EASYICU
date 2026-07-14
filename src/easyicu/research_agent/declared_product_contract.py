@@ -123,6 +123,7 @@ _EFFECT_PRODUCT_BASES = frozenset(
 )
 
 _PRODUCT_SLOT_SUFFIXES: Mapping[str, tuple[tuple[str, ...], ...]] = {
+    "absolute_risk": (("absolute", "risk"),),
     "distribution": (("distribution",),),
     "availability": (
         ("availability",),
@@ -162,6 +163,28 @@ _NESTED_DISPLAY_ROLE_SUFFIXES: tuple[tuple[str, ...], ...] = (
     ("forest",),
     ("heatmap",),
     ("plot",),
+)
+
+_OPERATIONAL_SUBJECT_SUFFIXES = frozenset(
+    {
+        "any",
+        "count",
+        "ever",
+        "first",
+        "flag",
+        "indicator",
+        "last",
+        "max",
+        "mean",
+        "measured",
+        "median",
+        "min",
+        "n",
+        "observed",
+        "raw",
+        "sum",
+        "value",
+    }
 )
 
 
@@ -273,20 +296,33 @@ def read_digest_bound_artifact_snapshot(
 
 def _planner_product_slot_and_subject(
     product_name: str, allowed_slots: set[str]
-) -> tuple[str, tuple[str, ...]]:
+) -> tuple[str, tuple[str, ...], str]:
     tokens = tuple(part for part in _normalise(product_name).split("_") if part)
-    matches = {
-        (slot, suffix)
-        for slot in allowed_slots
-        for suffix in _PRODUCT_SLOT_SUFFIXES.get(slot, ())
-        if len(tokens) >= len(suffix) and tokens[-len(suffix) :] == suffix
-    }
+    matches: set[tuple[str, tuple[str, ...], tuple[str, ...], str]] = set()
+    for slot in allowed_slots:
+        for role_tokens in _PRODUCT_SLOT_SUFFIXES.get(slot, ()):
+            if (
+                len(tokens) >= len(role_tokens)
+                and tokens[-len(role_tokens) :] == role_tokens
+            ):
+                matches.add(
+                    (slot, role_tokens, tokens[: -len(role_tokens)], "subject_role")
+                )
+            if (
+                len(tokens) > len(role_tokens) + 1
+                and tokens[: len(role_tokens)] == role_tokens
+                and tokens[len(role_tokens)] == "by"
+            ):
+                matches.add(
+                    (slot, role_tokens, tokens[len(role_tokens) + 1 :], "role_by_subject")
+                )
     if len(matches) != 1:
         raise ValueError(
             "Planner figure role does not map uniquely to an authorized product slot"
         )
-    slot, suffix = matches.pop()
-    subject = tokens[: -len(suffix)] if suffix else tokens
+    slot, _role_tokens, subject, syntax = matches.pop()
+    if not subject and syntax == "role_by_subject":
+        raise ValueError("Planner figure role has an empty scientific subject")
     if any(
         tuple(subject[index : index + len(role_suffix)]) == role_suffix
         for role_suffix in _NESTED_DISPLAY_ROLE_SUFFIXES
@@ -296,7 +332,37 @@ def _planner_product_slot_and_subject(
             "Planner figure role nests an incompatible display archetype in "
             "its scientific subject"
         )
-    return slot, subject
+    return slot, subject, syntax
+
+
+def _subject_tokens_compatible(
+    declared_subject: tuple[str, ...], authoritative_subject: tuple[str, ...]
+) -> bool:
+    """Match a display label to one host-owned operational exposure.
+
+    Operational columns may add a standard aggregation suffix (for example
+    ``marker_max``). Human-readable aliases must be supplied explicitly by the
+    host context; lexical prefix guesses are intentionally forbidden. This
+    comparison is only one half of authorization: the exact declared subject
+    must also occur in a typed direct-parent anchor.
+    """
+
+    reduced = list(authoritative_subject)
+    while len(reduced) > 1 and reduced[-1] in _OPERATIONAL_SUBJECT_SUFFIXES:
+        reduced.pop()
+    return bool(declared_subject) and declared_subject in {
+        authoritative_subject,
+        tuple(reduced),
+    }
+
+
+def _contains_token_sequence(
+    container: tuple[str, ...], candidate: tuple[str, ...]
+) -> bool:
+    return bool(candidate) and any(
+        container[index : index + len(candidate)] == candidate
+        for index in range(len(container) - len(candidate) + 1)
+    )
 
 
 def authorize_declared_figure_product_slots(
@@ -304,6 +370,7 @@ def authorize_declared_figure_product_slots(
     declared_products: Sequence[str],
     renderer_repair_id: str,
     planner_parent_anchors: Sequence[str],
+    authoritative_display_subjects: Sequence[str] = (),
 ) -> dict[str, str]:
     """Build the host-owned exact product-to-slot authorization.
 
@@ -343,16 +410,37 @@ def authorize_declared_figure_product_slots(
             raise ValueError("Planner products are not unique typed figure roles")
         seen.add(parsed)
         canonical.append(parsed)
-        slot, subject = _planner_product_slot_and_subject(parsed[1], allowed_slots)
-        if subject and not any(
-            len(parent_tokens) >= len(subject)
-            and parent_tokens[: len(subject)] == subject
+        slot, subject, syntax = _planner_product_slot_and_subject(
+            parsed[1], allowed_slots
+        )
+        parent_subject_anchored = any(
+            (
+                len(parent_tokens) >= len(subject)
+                and parent_tokens[: len(subject)] == subject
+            )
+            if syntax == "subject_role"
+            else _contains_token_sequence(parent_tokens, subject)
             for parent_tokens in parent_token_sequences
-        ):
+        )
+        if subject and not parent_subject_anchored:
             raise ValueError(
                 "Planner figure role subject is not anchored to a verified "
                 "Planner direct-parent product"
             )
+        if syntax == "role_by_subject":
+            authoritative_tokens = {
+                tuple(part for part in _normalise(value).split("_") if part)
+                for value in authoritative_display_subjects
+                if _normalise(value)
+            }
+            if not authoritative_tokens or not any(
+                _subject_tokens_compatible(subject, expected)
+                for expected in authoritative_tokens
+            ):
+                raise ValueError(
+                    "Planner role-by-subject figure does not match the host-owned "
+                    "display subject"
+                )
         if slot in claimed_slots:
             raise ValueError(
                 "Planner figure roles do not map to distinct contract product slots"
