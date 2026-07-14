@@ -1630,6 +1630,44 @@ def test_standalone_figure_uses_host_resolved_parent_not_step_id_suffix(
     assert [item for item in findings if item.severity == "error"] == []
 
 
+def test_figure_source_accepts_hash_bound_evidence_copy_basename(tmp_path: Path):
+    parent_path, figure_out, records = _write_authoritative_figure_trace_run(tmp_path)
+    digest = hashlib.sha256(parent_path.read_bytes()).hexdigest()
+    evidence_id = f"table_outcome_by_group_{digest[:8]}"
+    evidence_name = f"{evidence_id}__{parent_path.name}"
+    pd.DataFrame(
+        {
+            "group": ["low", "high"],
+            "mortality_rate": [0.1, 0.2],
+            "source_table": [evidence_name, evidence_name],
+        }
+    ).to_csv(figure_out / "publication_figure_source_data.csv", index=False)
+
+    findings = FigureSourceDataValidator().audit(
+        step=AnalysisStep(
+            step_id="05_publication_figure",
+            intent="Render the exact hash-bound table copy.",
+            inputs=["table:outcome_by_group"],
+            method="publication_figure",
+        ),
+        out_dir=figure_out,
+        run_dir=tmp_path,
+        step_summary={},
+        completed_step_records=records,
+        resolved_input_bindings={
+            "table:outcome_by_group": {
+                "declared_kind": "table",
+                "product": "outcome_by_group",
+                "produced_by_step": "01_parent",
+                "evidence_id": evidence_id,
+                "sha256": digest,
+            }
+        },
+    )
+
+    assert [item for item in findings if item.severity == "error"] == []
+
+
 def test_figure_source_rejects_summary_parent_that_conflicts_with_host_binding(
     tmp_path: Path,
 ):

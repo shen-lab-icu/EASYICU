@@ -7758,6 +7758,7 @@ class FigureSourceDataValidator:
         )
         table_products: Dict[Path, str] = dict(same_step_tables)
         table_frames: Dict[Path, pd.DataFrame] = {}
+        declared_table_aliases: Dict[str, Set[Path]] = {}
         bound_tabular_paths: Set[Path] = set()
         unsupported_value_inputs: List[str] = []
         if resolved_input_bindings is not None:
@@ -7792,6 +7793,11 @@ class FigureSourceDataValidator:
                         invalid_bound_evidence.append(raw_input)
                         continue
                     bound_path = item["path"]
+                    evidence_path = item.get("evidence_path")
+                    if isinstance(evidence_path, Path):
+                        declared_table_aliases.setdefault(
+                            evidence_path.name, set()
+                        ).add(bound_path.resolve())
                 elif (
                     not self._safe_regular_run_file(bound_path, run_dir=run_dir)
                     or self._sha256_file(bound_path) != expected_sha
@@ -8285,6 +8291,8 @@ class FigureSourceDataValidator:
                             path
                             for path in candidate_tables
                             if path.name == declared_name
+                            or path.resolve()
+                            in declared_table_aliases.get(declared_name, set())
                         },
                         key=str,
                     )
@@ -9014,6 +9022,7 @@ class FigureSourceDataValidator:
             ):
                 authorised[evidence_id] = {
                     "path": output_path.resolve(),
+                    "evidence_path": evidence_path.resolve(),
                     "sha256": expected_sha,
                     "produced_by_step": step_id,
                 }
