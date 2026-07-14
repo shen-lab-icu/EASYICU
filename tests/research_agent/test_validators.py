@@ -2599,6 +2599,101 @@ def test_llm_concept_auditor_checks_summary_source_status_bypasses(ra):
     assert "unless the script later mutates" in prompt
     assert "fails closed for the whole completed step" in prompt
     assert "must not change its row-level denominator" in prompt
+    assert "row-aligned finalized table" in prompt
+    assert "use it directly" in prompt
+    assert "must neither redefine nor overwrite the finalized exposure" in prompt
+    assert "Do not demand a second sparse-event reconciliation" in prompt
+
+
+def test_llm_concept_auditor_downgrades_finalized_exposure_rederivation_demand(ra):
+    class _FalseReconciliationDemandLLM:
+        def complete(self, messages, *, max_tokens=1024, temperature=0.0):
+            return json.dumps(
+                {
+                    "findings": [
+                        {
+                            "severity": "error",
+                            "message": (
+                                "A finalized DataFrame exposure path bypasses the "
+                                "required binary-event triad reconciliation."
+                            ),
+                            "detail": {
+                                "context": (
+                                    "The row-aligned values are validated but the "
+                                    "script does not call "
+                                    "reconcile_binary_event_presence."
+                                )
+                            },
+                        }
+                    ]
+                }
+            )
+
+    script = """
+REQUESTED_INPUTS = ['artifact:primary_exposure_definition']
+if isinstance(exposure_definition, pd.DataFrame):
+    finalized = pd.to_numeric(exposure_definition['vasopressor'], errors='coerce')
+    if finalized.isna().any() or not np.isfinite(finalized).all() or not finalized.isin([0, 1]).all():
+        raise RuntimeError('invalid finalized exposure')
+    treatment = finalized.astype(int)
+"""
+    findings = ra.LLMConceptAuditor(_FalseReconciliationDemandLLM()).audit(
+        context=ra.build_research_context(
+            research_question="Assess balance by vasopressor exposure.",
+            cohort=pd.DataFrame({"stay_id": [1, 2], "vasopressor": [0, 1]}),
+            cohort_name="c",
+            database="synthetic",
+            primary_exposure="vasopressor",
+        ),
+        script_text=script,
+        step=None,
+    )
+
+    assert findings[0].severity == "warning"
+    assert findings[0].detail["downgraded_reason"]
+
+
+def test_llm_concept_auditor_keeps_finalized_exposure_override_blocking(ra):
+    from easyicu.research_agent.audits.validators import (
+        _downgrade_finalized_exposure_reconciliation_findings,
+    )
+    from easyicu.research_agent.contracts import ValidationFinding
+
+    script = """
+REQUESTED_INPUTS = ['artifact:primary_exposure_definition']
+if isinstance(exposure_definition, pd.DataFrame):
+    finalized = pd.to_numeric(exposure_definition['vasopressor'], errors='coerce')
+    if finalized.isna().any() or not np.isfinite(finalized).all() or not finalized.isin([0, 1]).all():
+        raise RuntimeError('invalid finalized exposure')
+    treatment = helper_result.values
+"""
+    context = ra.build_research_context(
+        research_question="Assess balance by vasopressor exposure.",
+        cohort=pd.DataFrame({"stay_id": [1, 2], "vasopressor": [0, 1]}),
+        cohort_name="c",
+        database="synthetic",
+        primary_exposure="vasopressor",
+    )
+    findings = _downgrade_finalized_exposure_reconciliation_findings(
+        findings=[
+            ValidationFinding(
+                validator="llm_concept_auditor",
+                severity="error",
+                message="The finalized exposure artifact is bypassed.",
+                detail={
+                    "context": (
+                        "The script ignores its values and overwrites them with "
+                        "raw companion reconciliation."
+                    )
+                },
+            )
+        ],
+        context=context,
+        script_text=script,
+    )
+
+    assert findings[0].severity == "error"
+    assert "downgraded_reason" not in findings[0].detail
 
 
 def test_llm_concept_auditor_downgrades_companion_value_gating_false_positive(ra):
