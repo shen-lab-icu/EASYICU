@@ -2459,6 +2459,8 @@ def test_llm_concept_auditor_checks_summary_source_status_bypasses(ra):
     assert "structurally missing on reconciled negative rows" in prompt
     assert "do not require an explicit zero there" in prompt
     assert "reject any non-binary value" in prompt
+    assert "methods.source_status.reconcile_binary_event_presence" in prompt
+    assert "unless the script later mutates" in prompt
 
 
 def test_llm_concept_auditor_sees_late_independent_count_qc(ra):

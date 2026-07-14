@@ -673,7 +673,12 @@ CLINICAL SCORE AND MISSINGNESS SEMANTICS:
   availability gate: retain reconciled count-zero/flag-zero rows as the
   negative class. Never restrict the analytic denominator to `measured == 1`
   or `count > 0`; if the triad is incomplete or discordant, fail closed instead
-  of using the count as the exposure.
+  of using the count as the exposure. Prefer the standard method-suite helper
+  `easyicu.research_agent.methods.source_status.reconcile_binary_event_presence`
+  with the three Agent-selected column names. It validates and renders the
+  declared event definition but never selects the concept, exposure, cohort,
+  or model. Use its `values`, `audit`, and mutually exclusive `status_table`
+  directly; do not reconstruct overlapping source-status masks afterward.
   Figure-only steps and steps without a declared measured input do not need
   this block. A method-specific `component_qc` block may report other
   method-specific checks, but need not duplicate this host-replayed audit.
