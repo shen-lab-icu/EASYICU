@@ -135,7 +135,7 @@ def test_figure_coder_guide_excludes_unrelated_method_families(ra):
     guide = coder_guide_for_step(_CODER_GUIDE, _figure_step(ra))
 
     assert "For rendering-only figure steps" in guide
-    assert "Use matplotlib's \"Agg\" backend" in guide
+    assert 'Use matplotlib\'s "Agg" backend' in guide
     assert "TABLE-ONE / DESCRIPTIVE SUMMARIES:" not in guide
     assert "ROBUSTNESS:" not in guide
     assert len(guide) < len(_CODER_GUIDE) * 0.7
@@ -145,9 +145,7 @@ def test_coder_repair_applies_minimal_patch_without_full_rewrite(ra):
     patch = json.dumps(
         {
             "format": "easyicu.code_patch/1",
-            "edits": [
-                {"old": "value = 1", "new": "value = 2", "expected_count": 1}
-            ],
+            "edits": [{"old": "value = 1", "new": "value = 2", "expected_count": 1}],
         }
     )
     llm = _SequenceLLM([patch])
@@ -274,7 +272,8 @@ def render(frame):
 """
     findings = audit_mechanical_code_contracts(code, _figure_step(ra))
     assert not any(
-        finding.detail and finding.detail.get("reason") == "structural_accounting_filter"
+        finding.detail
+        and finding.detail.get("reason") == "structural_accounting_filter"
         for finding in findings
     )
 
@@ -300,7 +299,8 @@ def render(frame):
     findings = audit_mechanical_code_contracts(code, _figure_step(ra))
 
     assert not any(
-        finding.detail and finding.detail.get("reason") == "structural_accounting_filter"
+        finding.detail
+        and finding.detail.get("reason") == "structural_accounting_filter"
         for finding in findings
     )
 
@@ -315,7 +315,8 @@ def render(frame, labels):
     findings = audit_mechanical_code_contracts(code, _figure_step(ra))
 
     assert not any(
-        finding.detail and finding.detail.get("reason") == "structural_accounting_filter"
+        finding.detail
+        and finding.detail.get("reason") == "structural_accounting_filter"
         for finding in findings
     )
 
@@ -589,6 +590,45 @@ def provenance_audit(frame):
     )
 
 
+def test_mechanical_preflight_blocks_double_first_time_companion(ra):
+    code = """
+def timing_audit(frame, candidates):
+    rows = []
+    for candidate in candidates:
+        time_column = f"{candidate}_first_time"
+        rows.append((frame[candidate], time_column))
+    return rows
+
+candidate_covariates = ["age", "gcs_first", "lact_first"]
+timing_candidates = [value for value in candidate_covariates if value != "age"]
+timing_audit(frame, timing_candidates)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "double_first_time_companion_suffix"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_accepts_stem_to_first_time_companion(ra):
+    code = """
+def timing_audit(frame, candidates):
+    return [f"{candidate}_first_time" for candidate in candidates]
+
+timing_candidates = ["gcs", "lact"]
+timing_audit(frame, timing_candidates)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "double_first_time_companion_suffix"
+        for finding in findings
+    )
+
+
 def test_mechanical_preflight_blocks_unused_authoritative_exposure(ra):
     step = ra.AnalysisStep(
         step_id="diagnostics",
@@ -743,8 +783,7 @@ if isinstance(exposure_definition, pd.DataFrame):
 
     assert any(
         finding.detail
-        and finding.detail.get("reason")
-        == "finalized_exposure_reconciliation_fallback"
+        and finding.detail.get("reason") == "finalized_exposure_reconciliation_fallback"
         for finding in findings
     )
 
@@ -771,8 +810,7 @@ if isinstance(exposure_definition, pd.DataFrame):
 
     assert not any(
         finding.detail
-        and finding.detail.get("reason")
-        == "finalized_exposure_reconciliation_fallback"
+        and finding.detail.get("reason") == "finalized_exposure_reconciliation_fallback"
         for finding in findings
     )
 
@@ -845,9 +883,7 @@ def main(frame):
         for item in findings
         if item.detail and item.detail.get("reason") == "undefined_helper_call"
     )
-    assert finding.detail["calls"] == [
-        {"name": "resolve_declared_product", "line": 3}
-    ]
+    assert finding.detail["calls"] == [{"name": "resolve_declared_product", "line": 3}]
 
 
 def test_mechanical_preflight_accepts_defined_and_imported_helper_calls(ra):

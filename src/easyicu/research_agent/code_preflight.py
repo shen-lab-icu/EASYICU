@@ -173,9 +173,7 @@ def _mask_incomplete_test(test: ast.AST, mask_name: str) -> bool:
     if isinstance(operator, (ast.NotEq, ast.IsNot)):
         return (
             _is_mask_method_call(left, mask_name, "sum") and _is_len_call(right)
-        ) or (
-            _is_mask_method_call(right, mask_name, "sum") and _is_len_call(left)
-        )
+        ) or (_is_mask_method_call(right, mask_name, "sum") and _is_len_call(left))
     return False
 
 
@@ -188,9 +186,7 @@ def _mask_complete_test(test: ast.AST, mask_name: str) -> bool:
     right = test.comparators[0]
     if not isinstance(test.ops[0], (ast.Eq, ast.Is)):
         return False
-    return (
-        _is_mask_method_call(left, mask_name, "sum") and _is_len_call(right)
-    ) or (
+    return (_is_mask_method_call(left, mask_name, "sum") and _is_len_call(right)) or (
         _is_mask_method_call(right, mask_name, "sum") and _is_len_call(left)
     )
 
@@ -228,7 +224,9 @@ def _is_boolean_mask_expression(node: ast.AST) -> bool:
     return False
 
 
-def _structural_filter_findings(tree: ast.Module, step: AnalysisStep) -> list[ValidationFinding]:
+def _structural_filter_findings(
+    tree: ast.Module, step: AnalysisStep
+) -> list[ValidationFinding]:
     if normalised_method_head(step.method) not in _RENDER_METHODS:
         return []
     accounting_products = _typed_input_products(step) & _STRUCTURAL_ACCOUNTING_PRODUCTS
@@ -359,9 +357,7 @@ def _has_integer_like_accounting_guard(tree: ast.Module) -> bool:
 
     def _guard_references_accounting_value(test: ast.AST) -> bool:
         call_functions = {
-            id(node.func)
-            for node in ast.walk(test)
-            if isinstance(node, ast.Call)
+            id(node.func) for node in ast.walk(test) if isinstance(node, ast.Call)
         }
         for candidate in ast.walk(test):
             if id(candidate) in call_functions:
@@ -473,9 +469,7 @@ def _literal_string_tokens(node: ast.AST) -> set[str]:
 
 def _referenced_names(node: ast.AST) -> set[str]:
     return {
-        candidate.id
-        for candidate in ast.walk(node)
-        if isinstance(candidate, ast.Name)
+        candidate.id for candidate in ast.walk(node) if isinstance(candidate, ast.Name)
     }
 
 
@@ -503,13 +497,14 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
         if not isinstance(node, (ast.Assign, ast.AnnAssign)) or node.value is None:
             continue
         targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-        target_names = {
-            target.id for target in targets if isinstance(target, ast.Name)
-        }
+        target_names = {target.id for target in targets if isinstance(target, ast.Name)}
         if not target_names:
             continue
         assignments.append((target_names, node.value))
-        if isinstance(node.value, ast.Call) and _call_name(node.value.func) in marker_functions:
+        if (
+            isinstance(node.value, ast.Call)
+            and _call_name(node.value.func) in marker_functions
+        ):
             result_names.update(target_names)
 
     for node in ast.walk(tree):
@@ -551,8 +546,7 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
         test_tokens = _literal_string_tokens(node.test)
         test_names = _referenced_names(node.test)
         if test_names & guard_names and (
-            test_names & derived_names
-            or test_tokens & _PROVENANCE_DECISION_KEYS
+            test_names & derived_names or test_tokens & _PROVENANCE_DECISION_KEYS
         ):
             return []
 
@@ -670,7 +664,10 @@ def _authoritative_exposure_binding_findings(
 
         for node in nodes:
             if isinstance(node, ast.Call):
-                call_inputs = [*node.args, *[keyword.value for keyword in node.keywords]]
+                call_inputs = [
+                    *node.args,
+                    *[keyword.value for keyword in node.keywords],
+                ]
                 if any(
                     _referenced_names(value) & definition_names for value in call_inputs
                 ):
@@ -720,9 +717,7 @@ def _authoritative_exposure_fallback_findings(
                             "with constructed fallback metadata instead of failing "
                             "closed."
                         ),
-                        detail={
-                            "reason": "authoritative_primary_exposure_fallback"
-                        },
+                        detail={"reason": "authoritative_primary_exposure_fallback"},
                     )
                 ]
     return []
@@ -760,9 +755,7 @@ def _finalized_exposure_reconciliation_findings(
             continue
 
         body_nodes = [
-            candidate
-            for statement in node.body
-            for candidate in ast.walk(statement)
+            candidate for statement in node.body for candidate in ast.walk(statement)
         ]
         reads_finalized_values = any(
             isinstance(candidate, ast.Subscript)
@@ -852,9 +845,7 @@ def _typed_dataframe_erasure_findings(
             ):
                 continue
             value = statement.value
-            erases_value = (
-                isinstance(value, ast.Dict) and not value.keys
-            ) or (
+            erases_value = (isinstance(value, ast.Dict) and not value.keys) or (
                 isinstance(value, (ast.List, ast.Tuple)) and not value.elts
             )
             if erases_value:
@@ -886,7 +877,9 @@ def _undefined_direct_call_findings(tree: ast.Module) -> list[ValidationFinding]
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             known_names.add(node.name)
         elif isinstance(node, ast.Import):
-            known_names.update(alias.asname or alias.name.split(".")[0] for alias in node.names)
+            known_names.update(
+                alias.asname or alias.name.split(".")[0] for alias in node.names
+            )
         elif isinstance(node, ast.ImportFrom):
             known_names.update(alias.asname or alias.name for alias in node.names)
         elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
@@ -919,6 +912,136 @@ def _undefined_direct_call_findings(tree: ast.Module) -> list[ValidationFinding]
             },
         )
     ]
+
+
+def _first_time_companion_findings(tree: ast.Module) -> list[ValidationFinding]:
+    """Reject ``value_first`` + ``_first_time`` double-suffix composition."""
+
+    assignments: dict[str, list[ast.AST]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)) or node.value is None:
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        for target in targets:
+            if isinstance(target, ast.Name):
+                assignments.setdefault(target.id, []).append(node.value)
+
+    def origin_literals(name: str, seen: set[str]) -> set[str]:
+        if name in seen:
+            return set()
+        seen = {*seen, name}
+        values: set[str] = set()
+        for expression in assignments.get(name, []):
+            values.update(
+                str(candidate.value)
+                for candidate in ast.walk(expression)
+                if isinstance(candidate, ast.Constant)
+                and isinstance(candidate.value, str)
+            )
+            for candidate in ast.walk(expression):
+                if isinstance(candidate, ast.Name) and candidate.id != name:
+                    values.update(origin_literals(candidate.id, seen))
+        return values
+
+    functions = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    for function_name, function in functions.items():
+        parameters = [argument.arg for argument in function.args.args]
+        risky_parameters: list[tuple[int, str, int]] = []
+        for node in ast.walk(function):
+            if not isinstance(node, ast.Assign) or not isinstance(
+                node.value, ast.JoinedStr
+            ):
+                continue
+            values = node.value.values
+            if len(values) != 2:
+                continue
+            formatted, suffix = values
+            if not (
+                isinstance(formatted, ast.FormattedValue)
+                and isinstance(formatted.value, ast.Name)
+                and isinstance(suffix, ast.Constant)
+                and suffix.value == "_first_time"
+            ):
+                continue
+            item_name = formatted.value.id
+            iterator_name = next(
+                (
+                    loop.iter.id
+                    for loop in ast.walk(function)
+                    if isinstance(loop, ast.For)
+                    and isinstance(loop.target, ast.Name)
+                    and loop.target.id == item_name
+                    and isinstance(loop.iter, ast.Name)
+                    and loop.iter.id in parameters
+                ),
+                "",
+            )
+            if iterator_name:
+                risky_parameters.append(
+                    (parameters.index(iterator_name), item_name, int(node.lineno))
+                )
+
+        for parameter_index, item_name, line in risky_parameters:
+            for call in ast.walk(tree):
+                if not isinstance(call, ast.Call):
+                    continue
+                if _call_name(call.func).split(".")[-1] != function_name:
+                    continue
+                argument: ast.AST | None = None
+                if parameter_index < len(call.args):
+                    argument = call.args[parameter_index]
+                elif parameter_index < len(parameters):
+                    parameter_name = parameters[parameter_index]
+                    argument = next(
+                        (
+                            keyword.value
+                            for keyword in call.keywords
+                            if keyword.arg == parameter_name
+                        ),
+                        None,
+                    )
+                if argument is None:
+                    continue
+                literals = {
+                    str(candidate.value)
+                    for candidate in ast.walk(argument)
+                    if isinstance(candidate, ast.Constant)
+                    and isinstance(candidate.value, str)
+                }
+                for candidate in ast.walk(argument):
+                    if isinstance(candidate, ast.Name):
+                        literals.update(origin_literals(candidate.id, set()))
+                first_aggregates = sorted(
+                    value
+                    for value in literals
+                    if value.endswith("_first") and not value.endswith("_first_time")
+                )
+                if not first_aggregates:
+                    continue
+                return [
+                    ValidationFinding(
+                        validator="mechanical_code_preflight",
+                        severity="error",
+                        message=(
+                            "A first-value column name is concatenated with "
+                            "'_first_time' without removing its existing "
+                            "'_first' suffix, so valid companion timestamps "
+                            "would be looked up as '*_first_first_time'."
+                        ),
+                        detail={
+                            "reason": "double_first_time_companion_suffix",
+                            "function": function_name,
+                            "line": line,
+                            "loop_variable": item_name,
+                            "first_value_examples": first_aggregates[:8],
+                        },
+                    )
+                ]
+    return []
 
 
 def audit_mechanical_code_contracts(
@@ -965,6 +1088,7 @@ def audit_mechanical_code_contracts(
     findings.extend(_finalized_exposure_reconciliation_findings(tree, step))
     findings.extend(_typed_dataframe_erasure_findings(tree, step))
     findings.extend(_undefined_direct_call_findings(tree))
+    findings.extend(_first_time_companion_findings(tree))
     return findings
 
 

@@ -340,6 +340,18 @@ def deterministic_concept_audit_repair(
             repair_name = "provenance_bidirectional_pair_scan_v1"
             repaired = bidirectional
             repair_names.append(repair_name)
+
+    first_time_companion_finding = any(
+        "double_first_time_companion_suffix" in str(message).lower()
+        or "looked up as '*_first_first_time'" in str(message).lower()
+        for message in audit_messages
+    )
+    if first_time_companion_finding:
+        normalized = _patch_first_time_companion_name(repaired)
+        if normalized != repaired:
+            repair_name = "normalize_first_time_companion_v1"
+            repaired = normalized
+            repair_names.append(repair_name)
     return repaired, repair_names
 
 
@@ -553,6 +565,49 @@ def _patch_provenance_bidirectional_pair_scan(code: str) -> str:
     for line_number, patch in sorted(insertions, reverse=True):
         lines.insert(line_number, patch)
     return "".join(lines)
+
+
+def _patch_first_time_companion_name(code: str) -> str:
+    """Normalize ``*_first`` before appending the ``*_first_time`` suffix."""
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    replacements: list[tuple[int, int, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.JoinedStr) or len(node.values) != 2:
+            continue
+        formatted, suffix = node.values
+        if not (
+            isinstance(formatted, ast.FormattedValue)
+            and isinstance(formatted.value, ast.Name)
+            and isinstance(suffix, ast.Constant)
+            and suffix.value == "_first_time"
+            and node.lineno == getattr(node, "end_lineno", node.lineno)
+        ):
+            continue
+        source = ast.get_source_segment(code, node)
+        if not source:
+            continue
+        item_name = formatted.value.id
+        replacement = f"f\"{{{item_name}.removesuffix('_first')}}_first_time\""
+        line_start = sum(
+            len(line) for line in code.splitlines(keepends=True)[: node.lineno - 1]
+        )
+        replacements.append(
+            (
+                line_start + node.col_offset,
+                line_start + getattr(node, "end_col_offset", node.col_offset),
+                replacement,
+            )
+        )
+    if not replacements:
+        return code
+    repaired = code
+    for start, end, replacement in sorted(replacements, reverse=True):
+        repaired = repaired[:start] + replacement + repaired[end:]
+    return repaired
 
 
 def _overadjustment_strip_names(offenders: Sequence[str]) -> List[str]:

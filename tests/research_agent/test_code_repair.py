@@ -832,6 +832,31 @@ def provenance_audit(frame, measured_columns):
     assert twice == once
 
 
+def test_concept_repair_normalizes_first_time_companion_suffix():
+    code = """
+def timing_columns(candidates):
+    return [f"{candidate}_first_time" for candidate in candidates]
+""".lstrip()
+    out, names = deterministic_concept_audit_repair(
+        code,
+        ["double_first_time_companion_suffix"],
+    )
+
+    assert names == ["normalize_first_time_companion_v1"]
+    namespace = {}
+    exec(out, namespace)
+    assert namespace["timing_columns"](["gcs_first", "lact"]) == [
+        "gcs_first_time",
+        "lact_first_time",
+    ]
+    twice, names2 = deterministic_concept_audit_repair(
+        out,
+        ["double_first_time_companion_suffix"],
+    )
+    assert names2 == []
+    assert twice == out
+
+
 # ---------------------------------------------------------------------------
 # seaborn matplotlib fallback (baseline-library sandbox)
 # ---------------------------------------------------------------------------
