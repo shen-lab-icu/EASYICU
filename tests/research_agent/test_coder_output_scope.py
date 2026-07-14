@@ -87,6 +87,10 @@ def test_coder_repair_requires_standard_helper_after_sparse_event_diagnosis(ra):
     assert "Do not replace those columns" in prompt
     assert "fail closed if any returned value is missing" in prompt
     assert "never publish a completed exposure artefact" in prompt
+    assert "bind the selected base `source_concept`" in prompt
+    assert "explicit event/indicator metadata" in prompt
+    assert "record that binding" in prompt
+    assert "Never hard-code `indicator_semantics`" in prompt
 
 
 def test_coder_repair_preserves_standard_helper_across_later_traceback(ra):

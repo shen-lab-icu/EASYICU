@@ -629,10 +629,12 @@ CLINICAL SCORE AND MISSINGNESS SEMANTICS:
 - When one measured concept has several per-stay summaries (for example
   `<concept>_first`, `_max`, `_min`, or `_mean`) plus source-presence fields
   such as `<concept>_n` or `<concept>_measured`, apply the same source-status
-  consistency gate to EVERY summary. A summary-specific validity mask must
-  combine its numeric/domain check with the shared source-present and
-  non-contradictory indicator mask; it must not bypass that gate merely
-  because the summary value is finite or in range.
+  consistency audit to EVERY summary. Keep the physiological summary's own
+  numeric/domain validity mask separate from that provenance audit: count and
+  measured fields must not exclude individual values, redefine missingness, or
+  change descriptive/model denominators. If the paired provenance audit is
+  invalid or discordant, fail the completed step instead of filtering those
+  rows and continuing with altered results.
 - Every non-figure, result-bearing step that declares a `<concept>_measured`
   input must audit that flag against its mechanically paired `<concept>_n`
   provenance field. This

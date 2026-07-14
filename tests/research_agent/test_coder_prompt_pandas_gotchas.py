@@ -181,10 +181,11 @@ def test_coder_prompt_applies_source_status_to_every_measurement_summary() -> No
 
     assert "several per-stay summaries" in coder_prompt
     assert "apply the same source-status" in coder_prompt
-    assert "consistency gate to EVERY summary" in coder_prompt
-    assert "shared source-present" in coder_prompt
-    assert "merely" in coder_prompt
-    assert "because the summary value is finite or in range" in coder_prompt
+    assert "consistency audit to EVERY summary" in coder_prompt
+    assert "numeric/domain validity mask separate" in coder_prompt
+    assert "must not exclude individual values" in coder_prompt
+    assert "change descriptive/model denominators" in coder_prompt
+    assert "fail the completed step instead of filtering" in coder_prompt
 
 
 def test_coder_prompt_uses_one_host_replayed_count_flag_contract() -> None:
