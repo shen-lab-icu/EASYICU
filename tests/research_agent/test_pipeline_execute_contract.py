@@ -642,6 +642,23 @@ def test_execute_phase_routes_figure_contracts_through_early_repair_loop():
     assert "figure_source_validator.audit(" in before_early_gate
 
 
+def test_figure_repair_precedes_output_evidence_and_numeric_claim_seal():
+    from easyicu.research_agent import pipeline_execute
+
+    source = inspect.getsource(pipeline_execute.run_execute_phase)
+    seal = source.index("sealed_result_digests =")
+    artifact_registration = source.index("for art in run_result.artefacts:", seal)
+    numeric_registration = source.index(
+        "evidence.register_step_summary_numerics(", artifact_registration
+    )
+    final_repair = source.rindex("_repair_publication_figure_in_staging(")
+
+    assert final_repair < seal < artifact_registration < numeric_registration
+    assert "_repair_publication_figure_in_staging(" not in source[
+        artifact_registration:
+    ]
+
+
 def test_execute_phase_host_verifies_measurement_provenance_at_every_contract_gate():
     import ast
 
@@ -658,7 +675,10 @@ def test_execute_phase_host_verifies_measurement_provenance_at_every_contract_ga
         and node.func.value.id == "step_summary_integrity_validator"
     ]
 
-    assert len(calls) == 3
+    # Early repair screening and the final read-only contract review both
+    # replay locked measurement provenance.  The former third call belonged to
+    # the retired post-registration figure-repair branch.
+    assert len(calls) == 2
     for call in calls:
         keywords = {keyword.arg: keyword.value for keyword in call.keywords}
         assert isinstance(keywords.get("cohort_path"), ast.Name)

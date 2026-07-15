@@ -2839,6 +2839,70 @@ def _ensure_step_figure_contract(
     return contract_path
 
 
+def _load_step_summary_from_outputs(out_dir: Path) -> Dict[str, Any]:
+    """Load the current staged summary without granting it evidence authority."""
+
+    summary_path = out_dir / "step_summary.json"
+    if not summary_path.exists():
+        return {}
+    try:
+        loaded = json.loads(summary_path.read_text(encoding="utf-8"))
+    except Exception:
+        loaded = None
+    return loaded if isinstance(loaded, dict) else {"raw": loaded}
+
+
+def _write_host_input_binding_receipts(
+    *,
+    out_dir: Path,
+    step_summary: Mapping[str, Any],
+    resolved_input_bindings: Mapping[str, Mapping[str, Any]],
+) -> Dict[str, Any]:
+    """Seal exact input receipts for a host-owned deterministic renderer.
+
+    A sealed renderer consumes only the host-resolved artifacts authorized by
+    its parent digest seal.  Generated code must normally report its own
+    receipts, but asking a host-owned renderer to manufacture those receipts is
+    both redundant and weaker than recording them here from the authority
+    bindings.  An unreadable table is deliberately omitted so the downstream
+    integrity validator fails closed on incomplete coverage.
+    """
+
+    receipts: List[Dict[str, Any]] = []
+    for input_key, raw_binding in sorted(resolved_input_bindings.items()):
+        if not isinstance(raw_binding, Mapping):
+            continue
+        binding = dict(raw_binding)
+        path = Path(str(binding.get("absolute_path") or ""))
+        receipt: Dict[str, Any] = {
+            "input_key": str(input_key),
+            "loaded": True,
+        }
+        for field in ("evidence_id", "sha256"):
+            value = binding.get(field)
+            if value is not None:
+                receipt[field] = value
+        if StepSummaryIntegrityValidator._is_tabular_binding(binding):
+            try:
+                receipt["row_count"] = (
+                    StepSummaryIntegrityValidator._table_row_count(path)
+                )
+            except Exception:
+                continue
+        receipts.append(receipt)
+
+    updated = dict(step_summary)
+    updated["input_bindings"] = receipts
+    summary_path = out_dir / "step_summary.json"
+    temporary_path = summary_path.with_suffix(".json.tmp")
+    temporary_path.write_text(
+        json.dumps(updated, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    temporary_path.replace(summary_path)
+    return updated
+
+
 def _figure_contract_source_data_canonicalization_candidate(
     *,
     contract_path: Path,
@@ -7539,6 +7603,14 @@ else:
                         visual_step_summary = vloaded
                     else:
                         visual_step_summary = {"raw": vloaded}
+                if runner_repair_name and is_sealed_renderer_repair(
+                    runner_repair_name
+                ):
+                    visual_step_summary = _write_host_input_binding_receipts(
+                        out_dir=run_result.out_dir,
+                        step_summary=visual_step_summary,
+                        resolved_input_bindings=resolved_input_bindings,
+                    )
                 if is_trajectory_stability_standard:
                     terminal_status = (
                         str(visual_step_summary.get("status") or "").strip().lower()
@@ -8949,6 +9021,187 @@ else:
             )
             return step_record
 
+        # Finalise every result-bearing figure before any output is copied into
+        # EvidenceStore or any numeric claim is registered.  The staged repair
+        # replaces the entire output directory, so running it after registration
+        # would leave evidence digests and claims bound to a retired draft.
+        step_summary = _load_step_summary_from_outputs(run_result.out_dir)
+        if runner_repair_name and is_sealed_renderer_repair(runner_repair_name):
+            step_summary = _write_host_input_binding_receipts(
+                out_dir=run_result.out_dir,
+                step_summary=step_summary,
+                resolved_input_bindings=resolved_input_bindings,
+            )
+        _ensure_step_figure_contract(
+            step=step,
+            out_dir=run_result.out_dir,
+            step_summary=step_summary,
+            evidence_ids=[script_record.evidence_id, *lineage_input_evidence_ids],
+        )
+        with shared_lock:
+            preseal_completed_records = list(per_step_records)
+        preseal_contract_findings = figure_contract_validator.audit(
+            step=step,
+            out_dir=run_result.out_dir,
+            run_dir=run_dir,
+            step_summary=step_summary,
+        )
+        preseal_source_findings = figure_source_validator.audit(
+            step=step,
+            out_dir=run_result.out_dir,
+            run_dir=run_dir,
+            step_summary=step_summary,
+            completed_step_records=preseal_completed_records,
+            resolved_input_bindings=resolved_input_bindings,
+        )
+        preseal_figure_errors = [
+            finding
+            for finding in preseal_contract_findings + preseal_source_findings
+            if finding.severity == "error"
+        ]
+        repairable_publication_step = (
+            publication_step
+            and sealed_renderer_authorized_code_sha256 is None
+            and _step_has_figure_only_output_contract(step)
+            and deterministic_figure_family_supported_for_upstream(
+                run_dir, step.step_id
+            )
+        )
+        if repairable_publication_step and preseal_figure_errors:
+            repaired = _repair_publication_figure_in_staging(
+                run_dir=run_dir,
+                current_step_id=step.step_id,
+                out_dir=run_result.out_dir,
+                step_text=f"{step.intent} {step.method}",
+                authorizer=lambda repair_id: _automatic_repair_authorized(
+                    repair_id,
+                    step=step,
+                    source="publication_figure_quality_repair",
+                ),
+            )
+            if repaired is not None:
+                runner_repair_name = repaired
+                step_record["runner_repair"] = repaired
+                _record_repair(
+                    repair_id=repaired,
+                    step_id=step.step_id,
+                    trigger={
+                        "source": "publication_figure_quality_repair",
+                        "blocked_by": [
+                            finding.message for finding in preseal_figure_errors[:5]
+                        ],
+                    },
+                    transformation=(
+                        "Replaced invalid figure-step exports with a deterministic "
+                        "publication figure from the registered parent table for "
+                        "this step type before evidence sealing."
+                    ),
+                )
+                step_summary = _load_step_summary_from_outputs(run_result.out_dir)
+                if is_sealed_renderer_repair(repaired):
+                    step_summary = _write_host_input_binding_receipts(
+                        out_dir=run_result.out_dir,
+                        step_summary=step_summary,
+                        resolved_input_bindings=resolved_input_bindings,
+                    )
+                _ensure_step_figure_contract(
+                    step=step,
+                    out_dir=run_result.out_dir,
+                    step_summary=step_summary,
+                    evidence_ids=[
+                        script_record.evidence_id,
+                        *lineage_input_evidence_ids,
+                    ],
+                )
+                preseal_contract_findings = figure_contract_validator.audit(
+                    step=step,
+                    out_dir=run_result.out_dir,
+                    run_dir=run_dir,
+                    step_summary=step_summary,
+                )
+                preseal_source_findings = figure_source_validator.audit(
+                    step=step,
+                    out_dir=run_result.out_dir,
+                    run_dir=run_dir,
+                    step_summary=step_summary,
+                    completed_step_records=preseal_completed_records,
+                    resolved_input_bindings=resolved_input_bindings,
+                )
+
+        preseal_figure_errors = [
+            finding
+            for finding in preseal_contract_findings + preseal_source_findings
+            if finding.severity == "error"
+        ]
+        if preseal_figure_errors:
+            preseal_contract_findings = _bind_findings_to_step_attempt(
+                preseal_contract_findings,
+                step_id=step.step_id,
+                attempt_id=attempt_id,
+                checkpoint_id=review_checkpoint_id,
+            )
+            preseal_source_findings = _bind_findings_to_step_attempt(
+                preseal_source_findings,
+                step_id=step.step_id,
+                attempt_id=attempt_id,
+                checkpoint_id=review_checkpoint_id,
+            )
+            step_record.update(
+                {
+                    "status": "contract_failed",
+                    "diagnostic_only": True,
+                    "step_summary": step_summary,
+                    "contract_findings": [
+                        finding.model_dump()
+                        for finding in preseal_contract_findings
+                    ],
+                    "figure_source_findings": [
+                        finding.model_dump() for finding in preseal_source_findings
+                    ],
+                    "evidence_ids": [script_record.evidence_id],
+                    "result_evidence_sealed": False,
+                }
+            )
+            with shared_lock:
+                findings.extend(preseal_contract_findings)
+                findings.extend(preseal_source_findings)
+                per_step_records.append(step_record)
+                _flush_partial_manifest()
+            emit_progress(
+                "contract",
+                f"Figure validation failed before evidence sealing for {step.step_id}.",
+                status="error",
+                run_id=run_id,
+                step_id=step.step_id,
+                current_step=step_current,
+                total_steps=total_steps,
+            )
+            return step_record
+
+        # This is the seal boundary.  From here onward result artifacts are
+        # immutable: validation may fail closed, but no repair can mutate them.
+        if run_result.outputs_safe_to_collect:
+            run_result.artefacts = sorted(
+                path
+                for path in run_result.out_dir.iterdir()
+                if path.is_file()
+                and not (
+                    deterministic_standard_executor_used
+                    and _is_standard_executor_internal_artifact(path)
+                )
+            )
+        sealed_result_digests = {
+            path.name: sha256_of_file(path) for path in run_result.artefacts
+        }
+        step_record["result_seal_sha256"] = sha256_of_bytes(
+            json.dumps(
+                sealed_result_digests,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+        step_record["result_evidence_sealed"] = True
+
         evidence_ids_for_step: List[str] = [script_record.evidence_id]
         step_summary_record_id: Optional[str] = None
         for art in run_result.artefacts:
@@ -9054,21 +9307,6 @@ else:
                 )
             evidence_ids_for_step.append(rec.evidence_id)
 
-        step_summary: Dict[str, Any] = {}
-        ssj = run_result.out_dir / "step_summary.json"
-        if ssj.exists():
-            try:
-                loaded = json.loads(ssj.read_text(encoding="utf-8"))
-            except Exception:
-                loaded = None
-            if isinstance(loaded, dict):
-                step_summary = loaded
-            else:
-                # The coder emitted a non-dict JSON (bare string /
-                # list / number). Keep it accessible but coerce to
-                # a dict so every downstream consumer that calls
-                # ``.get(...)`` still works.
-                step_summary = {"raw": loaded}
         if step_summary_record_id is not None:
             step_record["step_summary_evidence_id"] = step_summary_record_id
         if (
@@ -9194,45 +9432,6 @@ else:
                 reason=standard_executor_terminal_reason,
             )
             return step_record
-        auto_contract_path = _ensure_step_figure_contract(
-            step=step,
-            out_dir=run_result.out_dir,
-            step_summary=step_summary,
-            evidence_ids=evidence_ids_for_step,
-        )
-        if auto_contract_path is not None:
-            generation_mode = _script_generation_mode(
-                repair_attempts=repair_attempts,
-                fallback_used=deterministic_fallback_used,
-                standard_executor_used=deterministic_standard_executor_used,
-                runner_repair_name=runner_repair_name,
-                resumed_code_reuse=resumed_code_reuse_used,
-                concept_repair_used=concept_repair_used,
-                llm_repair_used=llm_repair_used,
-            )
-            rec = evidence.register_file(
-                kind="log",
-                description=(
-                    f"Auto-generated figure contract for step {step.step_id}."
-                ),
-                source_path=auto_contract_path,
-                produced_by_step=step.step_id,
-                inputs=lineage_input_evidence_ids or None,
-                script_evidence_id=script_record.evidence_id,
-                aliases=_semantic_aliases_for(step, auto_contract_path),
-                producer="runner",
-                generation_mode=generation_mode,
-                metadata={
-                    "script_evidence_id": script_record.evidence_id,
-                    "figure_role": figure_role or "analysis_figure",
-                    "synthesis": "step_summary_figure_contract_v1",
-                    **repair_evidence_metadata,
-                },
-            )
-            evidence_ids_for_step.append(rec.evidence_id)
-            run_result.artefacts = sorted(
-                set([*run_result.artefacts, auto_contract_path])
-            )
         stat_findings = stat_validator.audit(
             context=context,
             cohort_path=cohort_path,
@@ -9387,179 +9586,6 @@ else:
             completed_step_records=completed_records_snapshot,
             resolved_input_bindings=resolved_input_bindings,
         )
-        figure_gate_errors = [
-            finding
-            for finding in contract_findings + figure_source_findings
-            if finding.severity == "error"
-            and finding.validator in {"figure_contract_quality", "figure_source_data"}
-        ]
-        repairable_publication_step = (
-            publication_step
-            and sealed_renderer_authorized_code_sha256 is None
-            and _step_has_figure_only_output_contract(step)
-            and deterministic_figure_family_supported_for_upstream(
-                run_dir, step.step_id
-            )
-        )
-        if repairable_publication_step and figure_gate_errors:
-            repaired = _repair_publication_figure_in_staging(
-                run_dir=run_dir,
-                current_step_id=step.step_id,
-                out_dir=run_result.out_dir,
-                step_text=f"{step.intent} {step.method}",
-                authorizer=lambda repair_id: _automatic_repair_authorized(
-                    repair_id,
-                    step=step,
-                    source="publication_figure_quality_repair",
-                ),
-            )
-            transformation = (
-                "Replaced invalid figure-step exports with a deterministic "
-                "publication figure from the registered parent table for this "
-                "step type."
-            )
-            if repaired is not None:
-                runner_repair_name = repaired
-                step_record["runner_repair"] = repaired
-                _record_repair(
-                    repair_id=repaired,
-                    step_id=step.step_id,
-                    trigger={
-                        "source": "publication_figure_quality_repair",
-                        "blocked_by": [
-                            finding.message for finding in figure_gate_errors[:5]
-                        ],
-                    },
-                    transformation=transformation,
-                )
-                run_result.artefacts = sorted(
-                    p for p in run_result.out_dir.iterdir() if p.is_file()
-                )
-                repaired_summary = run_result.out_dir / "step_summary.json"
-                if repaired_summary.exists():
-                    try:
-                        loaded_summary = json.loads(
-                            repaired_summary.read_text(encoding="utf-8")
-                        )
-                        if isinstance(loaded_summary, dict):
-                            step_summary = loaded_summary
-                    except Exception:
-                        pass
-                contract_findings = _step_contract_findings(
-                    step=step,
-                    step_summary=step_summary,
-                    completed_step_records=completed_records_snapshot,
-                    resolved_input_bindings=resolved_input_bindings,
-                    out_dir=run_result.out_dir,
-                )
-                contract_findings.extend(
-                    _cohort_definition_sensitivity_contract_findings(
-                        step=step,
-                        step_summary=step_summary,
-                        out_dir=run_result.out_dir,
-                        run_dir=run_dir,
-                        universe_path=universe_path,
-                        cohort_path=cohort_path,
-                        context=context,
-                        completed_step_records=completed_records_snapshot,
-                    )
-                )
-                contract_findings.extend(
-                    cross_step_cohort_lock_validator.audit(
-                        step=step,
-                        step_summary=step_summary,
-                        completed_step_records=completed_records_snapshot,
-                    )
-                )
-                contract_findings.extend(
-                    cross_step_registered_output_validator.audit(
-                        step=step,
-                        step_summary=step_summary,
-                        completed_step_records=completed_records_snapshot,
-                    )
-                )
-                contract_findings.extend(
-                    cross_step_reconciliation_trace_validator.audit(
-                        step=step,
-                        step_summary=step_summary,
-                        out_dir=run_result.out_dir,
-                    )
-                )
-                contract_findings.extend(
-                    step_summary_integrity_validator.audit(
-                        step=step,
-                        step_summary=step_summary,
-                        resolved_input_bindings=resolved_input_bindings,
-                        cohort_path=cohort_path,
-                    )
-                )
-                contract_findings.extend(
-                    step_summary_fraction_validator.audit(
-                        step=step,
-                        step_summary=step_summary,
-                    )
-                )
-                contract_findings.extend(
-                    cross_step_source_status_validator.audit(
-                        step=step,
-                        step_summary=step_summary,
-                        completed_step_records=completed_records_snapshot,
-                    )
-                )
-                contract_findings.extend(
-                    primary_model_contract_validator.audit(
-                        step=step,
-                        step_summary=step_summary,
-                        context=context,
-                        completed_step_records=completed_records_snapshot,
-                        out_dir=run_result.out_dir,
-                        cohort_path=cohort_path,
-                    )
-                )
-                contract_findings.extend(
-                    _primary_exposure_contract_findings(
-                        step=step,
-                        step_summary=step_summary,
-                        context=context,
-                    )
-                )
-                contract_findings.extend(
-                    _primary_exposure_measurement_filter_findings(
-                        step=step,
-                        step_summary=step_summary,
-                        context=context,
-                    )
-                )
-                contract_findings.extend(
-                    _primary_exposure_overadjustment_findings(
-                        step=step,
-                        context=context,
-                        out_dir=run_result.out_dir,
-                    )
-                )
-                contract_findings.extend(
-                    _primary_model_leakage_findings(
-                        step=step,
-                        context=context,
-                        out_dir=run_result.out_dir,
-                    )
-                )
-                contract_findings.extend(
-                    figure_contract_validator.audit(
-                        step=step,
-                        out_dir=run_result.out_dir,
-                        run_dir=run_dir,
-                        step_summary=step_summary,
-                    )
-                )
-                figure_source_findings = figure_source_validator.audit(
-                    step=step,
-                    out_dir=run_result.out_dir,
-                    run_dir=run_dir,
-                    step_summary=step_summary,
-                    completed_step_records=completed_records_snapshot,
-                    resolved_input_bindings=resolved_input_bindings,
-                )
         stat_findings = _bind_findings_to_step_attempt(
             stat_findings,
             step_id=step.step_id,
@@ -9742,6 +9768,34 @@ else:
         evidence_ids_for_step.append(interp_record.evidence_id)
         step_record["evidence_ids"] = list(dict.fromkeys(evidence_ids_for_step))
         step_record.pop("review_pending", None)
+        mutated_after_seal = [
+            name
+            for name, expected_digest in sealed_result_digests.items()
+            if not (candidate := run_result.out_dir / name).is_file()
+            or sha256_of_file(candidate) != expected_digest
+        ]
+        if mutated_after_seal:
+            seal_finding = ValidationFinding(
+                validator="result_evidence_seal",
+                severity="error",
+                message=(
+                    f"Result artifacts for step {step.step_id} changed after the "
+                    "validate-and-seal boundary; registered evidence was retired."
+                ),
+                detail={
+                    "step_id": step.step_id,
+                    "attempt_id": attempt_id,
+                    "checkpoint_id": review_checkpoint_id,
+                    "mutated_artifacts": sorted(mutated_after_seal),
+                },
+            )
+            contract_findings.append(seal_finding)
+            step_record["contract_findings"] = [
+                finding.model_dump() for finding in contract_findings
+            ]
+            step_record["result_evidence_sealed"] = False
+            with shared_lock:
+                findings.append(seal_finding)
         _propagate_findings_to_evidence(
             evidence_ids_for_step,
             usage_findings
