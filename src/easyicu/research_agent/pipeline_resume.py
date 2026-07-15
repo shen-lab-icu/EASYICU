@@ -459,19 +459,39 @@ class ResumeController:
         self,
         step_id: str,
     ) -> Optional[Tuple[str, Dict[str, Any]]]:
-        """Return the latest evidence-bound code for an explicitly resumed step.
+        """Return eligible evidence-bound code for a resumed step.
 
         Repair code is registered in ``evidence_index.json`` before the whole
         step record necessarily reaches ``manifest_partial.json``.  A process
         interrupted during a later repair must therefore consult both fresh
         on-disk sources rather than remain pinned to the resume-state snapshot
         captured at pipeline startup.
+
+        Explicit resume preserves its historical selected-step behaviour.  On
+        implicit resume, code is merely offered when the newest outer record
+        for this step is ``contract_failed``.  The execute phase remains the
+        authority for the stronger one-shot, digest, input, and scientific-
+        signature checks before any candidate can bypass initial generation.
         """
 
-        if (
-            not self.resume_from_step_id
-            or step_id != self.resume_from_step_id
-        ):
+        explicitly_selected = (
+            self.resume_from_step_id is not None and step_id == self.resume_from_step_id
+        )
+        latest_records = current_step_records(
+            [
+                record
+                for record in (
+                    (self.resume_state or {}).get("per_step_records", []) or []
+                )
+                if isinstance(record, dict) and record.get("step_id")
+            ]
+        )
+        implicitly_failed_contract = self.resume_from_step_id is None and any(
+            str(record.get("step_id") or "") == step_id
+            and str(record.get("status") or "").strip().lower() == "contract_failed"
+            for record in latest_records
+        )
+        if not explicitly_selected and not implicitly_failed_contract:
             return None
 
         payloads: List[Any] = list(
