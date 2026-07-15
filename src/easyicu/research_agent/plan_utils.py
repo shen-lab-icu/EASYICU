@@ -153,6 +153,76 @@ def _augment_measurement_companion_inputs(
     return revised, [finding]
 
 
+_REPORT_INPUT_PRODUCT_KINDS = frozenset({"manifest", "statistic", "table"})
+
+
+def _augment_report_typed_product_inputs(
+    *,
+    plan: AnalysisPlan,
+) -> tuple[AnalysisPlan, List[ValidationFinding]]:
+    """Bind report steps to prior Planner-declared result products.
+
+    This is structural dependency closure only: the Planner still chooses every
+    analysis and product.  A report consumer should not silently recompute those
+    results from raw cohort columns when their typed producers fail.
+    """
+
+    producer_counts: Dict[Tuple[str, str], int] = {}
+    for step in plan.steps or []:
+        for output in step.expected_outputs or []:
+            product = typed_product(output)
+            if product is not None:
+                producer_counts[product] = producer_counts.get(product, 0) + 1
+
+    prior_outputs: List[str] = []
+    revised_steps: List[AnalysisStep] = []
+    additions_by_step: Dict[str, List[str]] = {}
+    for step in plan.steps or []:
+        is_report = any(
+            (product := typed_product(output)) is not None and product[0] == "report"
+            for output in step.expected_outputs or []
+        )
+        inputs = list(step.inputs or [])
+        seen = set(inputs)
+        additions: List[str] = []
+        if is_report:
+            for output in prior_outputs:
+                product = typed_product(output)
+                if (
+                    product is None
+                    or product[0] not in _REPORT_INPUT_PRODUCT_KINDS
+                    or producer_counts.get(product) != 1
+                    or output in seen
+                ):
+                    continue
+                inputs.append(output)
+                additions.append(output)
+                seen.add(output)
+        if additions:
+            additions_by_step[str(step.step_id)] = additions
+            revised_steps.append(step.model_copy(update={"inputs": inputs}))
+        else:
+            revised_steps.append(step)
+        prior_outputs.extend(str(output) for output in step.expected_outputs or [])
+
+    if not additions_by_step:
+        return plan, []
+    return plan.model_copy(update={"steps": revised_steps}), [
+        ValidationFinding(
+            validator="planner_input_closure",
+            severity="info",
+            message=(
+                "Bound report consumers to unique prior typed result products "
+                "so failed producers cannot be silently recomputed from raw data."
+            ),
+            detail={
+                "reason": "report_typed_product_input_closure",
+                "added_inputs_by_step": additions_by_step,
+            },
+        )
+    ]
+
+
 def _problematic_metric_keys(
     payload: Any,
     fragments: Sequence[str],

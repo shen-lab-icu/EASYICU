@@ -798,16 +798,7 @@ class LLMConceptAuditor:
             for finding in findings
         ):
             return findings
-        findings = _downgrade_metadata_supported_outcome_findings(
-            findings=findings,
-            context=context,
-            script_text=script_text,
-        )
-        findings = _downgrade_audit_only_companion_gating_findings(
-            findings=findings,
-            script_text=script_text,
-        )
-        return _downgrade_finalized_exposure_reconciliation_findings(
+        return _reclassify_llm_concept_findings(
             findings=findings,
             context=context,
             script_text=script_text,
@@ -888,7 +879,20 @@ class LLMConceptAuditor:
                 "name": v.name,
                 "description": v.description,
                 "role": v.role.value,
+                "unit": v.unit,
                 "source_concept": v.source_concept,
+                "observed_domain": v.observed_domain,
+                "is_ordinal": v.is_ordinal,
+                "ordinal_levels": v.ordinal_levels,
+                "range_policy": (
+                    {
+                        "plausibility_range": v.valid_range,
+                        "semantics": "flag_only",
+                        "out_of_range_action": "retain_and_flag",
+                    }
+                    if v.valid_range is not None
+                    else None
+                ),
                 "allowed_aggregations": [a.value for a in v.allowed_aggregations],
                 "pitfalls": v.pitfalls,
                 "clinical_caveats": v.clinical_caveats,
@@ -922,6 +926,18 @@ class LLMConceptAuditor:
             "value column's own missingness and numeric/domain rules determine its "
             "descriptive or modelling availability; the companions audit source "
             "provenance and must not change its row-level denominator. "
+            "A ConceptDescriptor `valid_range` is host-owned physiological "
+            "plausibility metadata, not a locked eligibility or exclusion rule. "
+            "Its typed `range_policy` is therefore `flag_only` with "
+            "`retain_and_flag`: retaining a finite continuous value outside that "
+            "range is not an ERROR unless a separate typed protocol contract "
+            "explicitly locks exclusion. Do still report non-finite values, "
+            "violations of a binary domain, and invalid ordinal levels as ERRORs. "
+            "If you request exclusion, invalidation, or fail-close solely because "
+            "a finite continuous value is outside this plausibility range, use "
+            "issue_code `plausibility_range_exclusion_required` and include "
+            "`detail.variable`, `detail.requested_action`, and "
+            "`detail.value_class='finite_outside_plausibility_range'`. "
             "When `artifact:primary_exposure_definition` is a row-aligned "
             "finalized table, its exact Planner-selected binary column is the "
             "authoritative exposure. Validate its alignment, completeness, "
@@ -977,7 +993,8 @@ class LLMConceptAuditor:
             "cases use exactly `audit_only_companion_row_gating_required`, "
             "`finalized_exposure_missing_reconciliation`, "
             "`finalized_exposure_overridden`, or "
-            "`finalized_exposure_forced_raw_reconciliation`; use `other` for "
+            "`finalized_exposure_forced_raw_reconciliation`, or "
+            "`plausibility_range_exclusion_required`; use `other` for "
             "anything else. Message text is explanatory only, never routing.\n\n"
             "Return JSON only: "
             '{"findings":[{"severity":"info|warning|error",'
@@ -1007,6 +1024,7 @@ _LLM_CONCEPT_ISSUE_CODES = frozenset(
         "finalized_exposure_missing_reconciliation",
         "finalized_exposure_overridden",
         "finalized_exposure_forced_raw_reconciliation",
+        "plausibility_range_exclusion_required",
         "other",
     }
 )
@@ -2281,6 +2299,95 @@ def _downgrade_finalized_exposure_reconciliation_findings(
                 continue
         downgraded.append(finding)
     return downgraded
+
+
+def _reclassify_flag_only_plausibility_range_findings(
+    *,
+    findings: Sequence[ValidationFinding],
+    context: ResearchContext,
+) -> List[ValidationFinding]:
+    """Keep plausible-range metadata from silently changing the analysis set."""
+
+    issue_code = "plausibility_range_exclusion_required"
+    exclusion_actions = {"drop", "exclude", "fail_closed", "invalidate"}
+    reclassified: List[ValidationFinding] = []
+    for finding in findings:
+        detail = dict(finding.detail or {})
+        if not (
+            finding.validator == LLMConceptAuditor.name
+            and finding.severity == "error"
+            and str(detail.get("issue_code") or "") == issue_code
+            and str(detail.get("requested_action") or "").strip().lower()
+            in exclusion_actions
+            and str(detail.get("value_class") or "").strip().lower()
+            == "finite_outside_plausibility_range"
+        ):
+            reclassified.append(finding)
+            continue
+
+        variable = str(detail.get("variable") or "").strip()
+        descriptor = context.variable(variable) if variable else None
+        observed_domain = (
+            dict(getattr(descriptor, "observed_domain", None) or {})
+            if descriptor is not None
+            else {}
+        )
+        strict_discrete_domain = bool(
+            descriptor is not None
+            and (
+                descriptor.is_ordinal
+                or descriptor.ordinal_levels
+                or observed_domain.get("is_binary") is True
+            )
+        )
+        if (
+            descriptor is None
+            or descriptor.valid_range is None
+            or strict_discrete_domain
+        ):
+            reclassified.append(finding)
+            continue
+
+        detail.setdefault(
+            "downgraded_reason",
+            "ConceptDescriptor.valid_range is a flag-only physiological "
+            "plausibility range. Finite continuous values outside it remain in "
+            "the Planner-owned analysis set unless a typed protocol contract "
+            "locks another action.",
+        )
+        detail.setdefault("range_policy_authority", "concept_descriptor_flag_only")
+        reclassified.append(
+            finding.model_copy(update={"severity": "warning", "detail": detail})
+        )
+    return reclassified
+
+
+def _reclassify_llm_concept_findings(
+    *,
+    findings: Sequence[ValidationFinding],
+    context: ResearchContext,
+    script_text: str,
+) -> List[ValidationFinding]:
+    """Apply the same host-owned policy chain to fresh and cached LLM audits."""
+
+    reclassified = _downgrade_metadata_supported_outcome_findings(
+        findings=findings,
+        context=context,
+        script_text=script_text,
+    )
+    reclassified = _downgrade_audit_only_companion_gating_findings(
+        findings=reclassified,
+        script_text=script_text,
+    )
+    reclassified = _reclassify_flag_only_plausibility_range_findings(
+        findings=reclassified,
+        context=context,
+    )
+    return _downgrade_finalized_exposure_reconciliation_findings(
+        findings=reclassified,
+        context=context,
+        script_text=script_text,
+    )
 
 
 def _strip_jsonish(text: str) -> str:

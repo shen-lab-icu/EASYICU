@@ -1,6 +1,7 @@
 """Generic typed-DAG guards for plan capping and execution order."""
 
 from easyicu.research_agent.plan_utils import (
+    _augment_report_typed_product_inputs,
     _cap_plan_preserving_figure_steps,
     _typed_plan_dag_findings,
 )
@@ -112,3 +113,52 @@ def test_missing_typed_producer_remains_fail_closed():
         for finding in dag_findings
     )
 
+
+
+def test_report_consumes_unique_prior_typed_results_without_raw_recomputation():
+    plan = AnalysisPlan(
+        research_question="Generic observational analysis",
+        steps=[
+            _step("01_cohort", outputs=["table:cohort_flow", "artifact:frame"]),
+            _step("02_model", outputs=["statistic:primary_estimate"]),
+            _step("03_figure", outputs=["figure:primary_estimate"]),
+            _step(
+                "04_report",
+                inputs=["raw_marker"],
+                outputs=["report:analysis_results"],
+                method="scientific_reporting",
+            ),
+        ],
+    )
+
+    revised, findings = _augment_report_typed_product_inputs(plan=plan)
+    report = revised.steps[-1]
+
+    assert report.inputs == [
+        "raw_marker",
+        "table:cohort_flow",
+        "statistic:primary_estimate",
+    ]
+    assert "artifact:frame" not in report.inputs
+    assert "figure:primary_estimate" not in report.inputs
+    assert (findings[0].detail or {}).get("reason") == (
+        "report_typed_product_input_closure"
+    )
+    assert _typed_plan_dag_findings(revised) == []
+
+
+def test_report_closure_skips_ambiguous_and_later_products():
+    plan = AnalysisPlan(
+        research_question="Generic reporting dependencies",
+        steps=[
+            _step("01_a", outputs=["table:duplicate"]),
+            _step("02_b", outputs=["table:duplicate"]),
+            _step("03_report", outputs=["report:interim"]),
+            _step("04_later", outputs=["table:later_result"]),
+        ],
+    )
+
+    revised, findings = _augment_report_typed_product_inputs(plan=plan)
+
+    assert revised.steps[2].inputs == []
+    assert findings == []

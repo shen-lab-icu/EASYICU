@@ -22,7 +22,7 @@ from easyicu.research_agent.audits.validators import (
     FigureSourceDataValidator,
     StepSummaryFractionValidator,
 )
-from easyicu.research_agent.schema import AnalysisStep
+from easyicu.research_agent.schema import AnalysisStep, ValidationFinding
 
 
 def _prior_source_status_record(*, valid_n: int = 41_210, total_n: int = 94_458):
@@ -2661,6 +2661,116 @@ def test_llm_concept_auditor_prompt_includes_outcome_semantics(ra):
     assert "Named time windows:" in prompt
 
 
+def _plausibility_range_context(ra, *, binary: bool = False):
+    return ra.ResearchContext(
+        research_question="Assess a continuous ICU marker.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="c",
+            database="synthetic",
+            n_stays=3,
+            n_patients=3,
+        ),
+        variables=[
+            ra.ConceptDescriptor(
+                name="marker",
+                description="Continuous ICU marker",
+                dtype="float64",
+                unit="units",
+                valid_range=[0.0, 10.0],
+                observed_domain={
+                    "min": 1.0,
+                    "max": 12.0,
+                    "is_binary": binary,
+                },
+            )
+        ],
+        primary_exposure="marker",
+    )
+
+
+def test_llm_concept_auditor_prompt_declares_flag_only_plausibility_policy(ra):
+    auditor = ra.LLMConceptAuditor(ra.MockLLMClient())
+    prompt = auditor._prompt(
+        context=_plausibility_range_context(ra),
+        script_text="model.fit(frame[['marker']])",
+        step=None,
+    )
+
+    assert '"plausibility_range": [0.0, 10.0]' in prompt
+    assert '"out_of_range_action": "retain_and_flag"' in prompt
+    assert '"is_binary": false' in prompt
+    assert "not a locked eligibility or exclusion rule" in prompt
+    assert "finite continuous value outside that range is not an ERROR" in prompt
+    assert "plausibility_range_exclusion_required" in prompt
+
+
+def test_llm_concept_auditor_reclassifies_typed_flag_only_range_demand(ra):
+    class _RangeDemandLLM:
+        def complete(self, messages, *, max_tokens=1024, temperature=0.0):
+            return json.dumps(
+                {
+                    "findings": [
+                        {
+                            "severity": "error",
+                            "message": "Finite values outside the plausible range should be excluded.",
+                            "detail": {
+                                "issue_code": "plausibility_range_exclusion_required",
+                                "variable": "marker",
+                                "requested_action": "exclude",
+                                "value_class": "finite_outside_plausibility_range",
+                            },
+                        }
+                    ]
+                }
+            )
+
+    findings = ra.LLMConceptAuditor(_RangeDemandLLM()).audit(
+        context=_plausibility_range_context(ra),
+        script_text="model.fit(frame[['marker']])",
+    )
+
+    assert len(findings) == 1
+    assert findings[0].severity == "warning"
+    assert findings[0].detail["range_policy_authority"] == (
+        "concept_descriptor_flag_only"
+    )
+
+
+@pytest.mark.parametrize(
+    ("binary", "variable", "value_class"),
+    [
+        (True, "marker", "finite_outside_plausibility_range"),
+        (False, "marker", "nonfinite_value"),
+        (False, "unknown_marker", "finite_outside_plausibility_range"),
+    ],
+)
+def test_flag_only_range_reclassifier_preserves_strict_or_unbound_errors(
+    ra, binary, variable, value_class
+):
+    from easyicu.research_agent.audits.validators import (
+        _reclassify_flag_only_plausibility_range_findings,
+    )
+
+    finding = ValidationFinding(
+        validator="llm_concept_auditor",
+        severity="error",
+        message="The candidate value should be excluded.",
+        detail={
+            "issue_code": "plausibility_range_exclusion_required",
+            "variable": variable,
+            "requested_action": "exclude",
+            "value_class": value_class,
+        },
+    )
+
+    findings = _reclassify_flag_only_plausibility_range_findings(
+        findings=[finding],
+        context=_plausibility_range_context(ra, binary=binary),
+    )
+
+    assert findings[0].severity == "error"
+
+
 def test_llm_concept_auditor_checks_summary_source_status_bypasses(ra):
     auditor = ra.LLMConceptAuditor(ra.MockLLMClient())
     ctx = ra.build_research_context(
@@ -3429,14 +3539,12 @@ model.fit(frame[['marker_first']], assignment)
     ).audit(
         context=ra.build_research_context(
             research_question="Model assignment from early physiology.",
-            cohort=pd.DataFrame(
-                {
-                    "stay_id": [1, 2],
-                    "marker_first": [1.0, 2.0],
-                    "marker_measured": [1, 1],
-                    "marker_n": [1, 1],
-                }
-            ),
+            cohort=pd.DataFrame({
+                "stay_id": [1, 2],
+                "marker_first": [1.0, 2.0],
+                "marker_measured": [1, 1],
+                "marker_n": [1, 1],
+            }),
             cohort_name="c",
             database="synthetic",
         ),
@@ -3452,12 +3560,14 @@ model.fit(frame[['marker_first']], assignment)
     ).audit(
         context=ra.build_research_context(
             research_question="Model assignment from early physiology.",
-            cohort=pd.DataFrame({
-                "stay_id": [1, 2],
-                "marker_first": [1.0, 2.0],
-                "marker_measured": [1, 1],
-                "marker_n": [1, 1],
-            }),
+            cohort=pd.DataFrame(
+                {
+                    "stay_id": [1, 2],
+                    "marker_first": [1.0, 2.0],
+                    "marker_measured": [1, 1],
+                    "marker_n": [1, 1],
+                }
+            ),
             cohort_name="c",
             database="synthetic",
         ),
