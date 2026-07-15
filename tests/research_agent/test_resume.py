@@ -2670,10 +2670,15 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     assert not (run_dir / "steps" / "01_summary" / ".quarantine").exists()
 
 
+@pytest.mark.parametrize(
+    "legacy_stale_checkpoint",
+    [False, True],
+    ids=["repair-on-resume", "already-repaired-stale-finding"],
+)
 def test_resume_reaudits_material_deterministic_quarantine_repair(
-    ra, tmp_path: Path, monkeypatch
+    ra, tmp_path: Path, monkeypatch, legacy_stale_checkpoint: bool
 ) -> None:
-    """A deterministic code mutation retires stale findings, not the gate."""
+    """A clean deterministic replay retires stale findings, not the gate."""
 
     import easyicu.research_agent.pipeline_execute as execute_module
 
@@ -2794,7 +2799,62 @@ if __name__ == "__main__":
     assert first_llm.repair_calls == 1
     assert (run_dir / "steps" / "01_summary" / ".quarantine").is_dir()
 
+    if legacy_stale_checkpoint:
+        from easyicu.research_agent.pipeline_resume import (
+            load_quarantined_concept_draft,
+            store_quarantined_concept_draft,
+        )
+
+        stale_draft = load_quarantined_concept_draft(
+            run_dir=run_dir,
+            step_id="01_summary",
+        )
+        assert stale_draft is not None
+        stale_messages = [
+            value
+            for finding in stale_draft.findings
+            for value in (
+                finding.get("message"),
+                (finding.get("detail") or {}).get("reason"),
+            )
+            if value
+        ]
+        repaired_checkpoint_code, repair_names = real_repair(
+            stale_draft.code,
+            stale_messages,
+        )
+        assert repair_names == ["provenance_fail_closed_guard_v1"]
+        assert repaired_checkpoint_code != stale_draft.code
+        # Reproduce the legacy checkpoint written by the pre-fix execute loop:
+        # the exact digest is already repaired, but its pre-repair deterministic
+        # finding was accidentally persisted beside it.
+        store_quarantined_concept_draft(
+            run_dir=run_dir,
+            step_id="01_summary",
+            code=repaired_checkpoint_code,
+            findings=list(stale_draft.findings),
+        )
+
     repair_enabled["value"] = True
+    from easyicu.research_agent.runner import CodeRunner
+
+    quarantine_absent_at_runner = []
+    original_run = CodeRunner.run
+
+    def run_after_quarantine_revalidation(
+        self, *, step_id, code, resolved_inputs_path=None
+    ):
+        quarantine_absent_at_runner.append(
+            not (run_dir / "steps" / step_id / ".quarantine").exists()
+        )
+        return original_run(
+            self,
+            step_id=step_id,
+            code=code,
+            resolved_inputs_path=resolved_inputs_path,
+        )
+
+    monkeypatch.setattr(CodeRunner, "run", run_after_quarantine_revalidation)
     resumed_llm = DeterministicResumeLLM()
     resumed_pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
@@ -2829,13 +2889,113 @@ if __name__ == "__main__":
     )
     assert resumed_llm.write_calls == 0
     assert resumed_llm.repair_calls == 0
+    assert quarantine_absent_at_runner == [True]
     assert record["status"] == "ok"
-    assert record["deterministic_concept_repairs"] == 1
-    assert record["quarantined_repair_materially_changed"] is True
-    assert record["quarantined_repair_succeeded"] is True
+    if legacy_stale_checkpoint:
+        assert not record.get("deterministic_concept_repairs")
+        assert not record.get("quarantined_repair_materially_changed")
+        assert record["quarantined_repair_succeeded"] is False
+        assert record["quarantine_deterministic_revalidation_succeeded"] is True
+        retired = record["quarantine_deterministic_revalidated_findings"]
+        assert retired[0]["validator"] == "mechanical_code_preflight"
+        assert retired[0]["quarantined_script_sha256"]
+        assert retired[0]["deterministic_gate_fingerprint"]
+        assert record["quarantine_retired_by"] == (
+            "deterministic_code_gate_revalidation"
+        )
+    else:
+        assert record["deterministic_concept_repairs"] == 1
+        assert record["quarantined_repair_materially_changed"] is True
+        assert record["quarantined_repair_succeeded"] is True
+        assert not record.get("quarantine_deterministic_revalidation_succeeded")
     assert record["quarantine_retired"] is True
     assert not record.get("monotonic_concept_constraints")
     assert not (run_dir / "steps" / "01_summary" / ".quarantine").exists()
+
+
+def test_quarantine_deterministic_revalidation_is_fail_closed() -> None:
+    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.pipeline_execute import (
+        _quarantined_deterministic_errors_resolved_by_current_gate,
+    )
+
+    script = "import os\nvalue = 1\n"
+    digest = hashlib.sha256(script.encode("utf-8")).hexdigest()
+    mechanical_error = ValidationFinding(
+        validator="mechanical_code_preflight",
+        severity="error",
+        message="A deterministic mechanical error from the prior digest.",
+    )
+
+    resolved = _quarantined_deterministic_errors_resolved_by_current_gate(
+        prior_errors=[mechanical_error],
+        current_findings=[],
+        script_text=script,
+        quarantined_script_sha256=digest,
+    )
+    assert resolved is not None
+    assert resolved[0]["quarantined_script_sha256"] == digest
+    assert resolved[0]["deterministic_gate_fingerprint"]
+
+    assert (
+        _quarantined_deterministic_errors_resolved_by_current_gate(
+            prior_errors=[mechanical_error],
+            current_findings=[],
+            script_text=script + "value = 2\n",
+            quarantined_script_sha256=digest,
+        )
+        is None
+    )
+    assert (
+        _quarantined_deterministic_errors_resolved_by_current_gate(
+            prior_errors=[mechanical_error],
+            current_findings=[mechanical_error],
+            script_text=script,
+            quarantined_script_sha256=digest,
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "foreign_validator",
+    [
+        "llm_concept_auditor",
+        "provider_call_budget",
+        "provider_call_budget_receipt",
+    ],
+)
+def test_quarantine_deterministic_revalidation_never_retires_foreign_or_mixed_errors(
+    foreign_validator: str,
+) -> None:
+    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.pipeline_execute import (
+        _quarantined_deterministic_errors_resolved_by_current_gate,
+    )
+
+    script = "import os\nvalue = 1\n"
+    digest = hashlib.sha256(script.encode("utf-8")).hexdigest()
+    deterministic_error = ValidationFinding(
+        validator="mechanical_code_preflight",
+        severity="error",
+        message="A deterministic mechanical error from the prior digest.",
+    )
+    foreign_error = ValidationFinding(
+        validator=foreign_validator,
+        severity="error",
+        message="A non-replayable error remains binding.",
+    )
+
+    for prior_errors in ([foreign_error], [deterministic_error, foreign_error]):
+        assert (
+            _quarantined_deterministic_errors_resolved_by_current_gate(
+                prior_errors=prior_errors,
+                current_findings=[],
+                script_text=script,
+                quarantined_script_sha256=digest,
+            )
+            is None
+        )
 
 
 def _policy_supersession_context_and_script(ra):
