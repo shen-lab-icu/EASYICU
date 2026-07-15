@@ -8688,6 +8688,51 @@ def test_step_contract_repair_guidance_for_clustering_contract(ra):
     assert "self-contained" in guidance
 
 
+def test_step_contract_repair_guidance_preserves_assignment_model_roster(ra):
+    from easyicu.research_agent.pipeline import _step_contract_repair_guidance
+
+    step = ra.AnalysisStep(
+        step_id="balance",
+        intent="Diagnose the Planner-owned assignment models.",
+        inputs=["artifact:assignment_model"],
+        expected_outputs=["artifact:balance_diagnostics"],
+        method="positivity_and_balance_diagnostics",
+    )
+    guidance = _step_contract_repair_guidance(
+        step=step,
+        step_summary={
+            "diagnostic_status": "not_computable",
+            "skipped_reason": "model roster requires an explicit binding",
+        },
+        code="raise RuntimeError('model roster requires an explicit binding')",
+        input_bindings={
+            "artifact:assignment_model": {
+                "product_contract": {
+                    "models": [
+                        {
+                            "model_id": "declared-a",
+                            "analysis_set": "set-a",
+                            "fit_status": "fitted",
+                            "propensity_score_column": "ps_a",
+                        },
+                        {
+                            "model_id": "declared-b",
+                            "analysis_set": "set-b",
+                            "fit_status": "fitted",
+                            "propensity_score_column": "ps_b",
+                        },
+                    ]
+                }
+            }
+        },
+    )
+
+    assert "Planner-owned model roster" in guidance
+    assert "every fitted roster entry" in guidance
+    assert "declared-a" in guidance and "declared-b" in guidance
+    assert "do not choose the first row" in guidance
+
+
 def test_semantic_aliases_include_step_id_and_prediction_aliases(ra, tmp_path: Path):
     from easyicu.research_agent.pipeline import _semantic_aliases_for
 

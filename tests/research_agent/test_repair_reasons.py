@@ -60,3 +60,16 @@ def test_swallowed_provenance_helper_has_typed_fail_closed_reason():
     assert typed_repair_ticket([finding])[0]["reason"] == (
         RepairReason.PROVENANCE_NOT_FAIL_CLOSED.value
     )
+
+
+def test_uncomputed_declared_diagnostic_has_typed_reason():
+    finding = ValidationFinding(
+        validator="declared_product_contract",
+        severity="error",
+        message="wording may change",
+        detail={"kind": "declared_diagnostic_not_completed"},
+    )
+
+    assert typed_repair_ticket([finding])[0]["reason"] == (
+        RepairReason.DIAGNOSTIC_NOT_COMPLETED.value
+    )
