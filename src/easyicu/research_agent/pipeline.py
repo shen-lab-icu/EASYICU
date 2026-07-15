@@ -3341,6 +3341,7 @@ class ResearchAgentPipeline:
                 run_dir=run_dir,
                 plan=plan,
                 universe_path=cohort_path,
+                context=context,
             )
             if analysis_cohort["status"] == "applied":
                 findings.append(

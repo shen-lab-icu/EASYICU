@@ -565,6 +565,102 @@ def write_locked_cohort_definition(
 ANALYSIS_COHORT_FILENAME = "cohort_analysis.parquet"
 
 
+def _declares_analysis_cohort(step: Any) -> bool:
+    for raw in getattr(step, "expected_outputs", ()) or ():
+        kind, separator, name = str(raw or "").strip().casefold().partition(":")
+        if separator and kind in {"artifact", "dataset", "table"} and name == (
+            "analysis_cohort"
+        ):
+            return True
+    return False
+
+
+def _planner_declared_context_column_bindings(
+    *,
+    definition: CohortDefinition,
+    plan: Any,
+    context: Any,
+    columns: Any,
+) -> Dict[str, str]:
+    """Bind canonical predicate concepts to explicitly planned wide columns.
+
+    The Planner still owns every predicate.  This helper only bridges a
+    canonical ``concept_id`` to a materialised output column when all authority
+    signals agree: exactly one analysis-cohort producer declares the column as
+    an input, the ResearchContext names it as the operational exposure or
+    outcome, and its descriptor binds it to the same ``source_concept``.  This
+    prevents a sibling output from the same composite loader from masquerading
+    as the selected analysis variable.  Ambiguity fails closed; no dtype,
+    token, or frame-order fallback is allowed.
+    """
+
+    if context is None:
+        return {}
+    producers = [
+        step
+        for step in getattr(plan, "steps", ()) or ()
+        if _declares_analysis_cohort(step)
+    ]
+    if len(producers) != 1:
+        return {}
+    available = {str(column) for column in columns}
+    operational_outputs = {
+        str(getattr(context, field, "") or "").strip()
+        for field in ("primary_exposure", "target_outcome")
+        if str(getattr(context, field, "") or "").strip() in available
+    }
+    if not operational_outputs:
+        return {}
+    declared_inputs = {
+        str(value).strip()
+        for value in getattr(producers[0], "inputs", ()) or ()
+        if str(value or "").strip() in available and ":" not in str(value)
+    }
+    if not declared_inputs:
+        return {}
+
+    descriptors_by_source: Dict[str, set[str]] = {}
+    for descriptor in getattr(context, "variables", ()) or ():
+        name = str(getattr(descriptor, "name", "") or "").strip()
+        source_concept = str(
+            getattr(descriptor, "source_concept", "") or ""
+        ).strip()
+        role = getattr(descriptor, "role", "")
+        role_value = str(getattr(role, "value", role) or "").strip().casefold()
+        if (
+            not name
+            or not source_concept
+            or name not in declared_inputs
+            or name not in operational_outputs
+            or role_value in {"id", "meta", "time"}
+        ):
+            continue
+        descriptors_by_source.setdefault(source_concept, set()).add(name)
+
+    bindings: Dict[str, str] = {}
+    predicate_concepts = {
+        predicate.concept_id
+        for predicate in (*definition.inclusion, *definition.exclusion)
+        if _resolve_predicate_column(
+            columns,
+            predicate.concept_id,
+            predicate.aggregation,
+        )
+        is None
+    }
+    for concept_id in sorted(predicate_concepts):
+        candidates = sorted(descriptors_by_source.get(concept_id, ()))
+        if len(candidates) > 1:
+            raise CohortDataError(
+                "cohort predicate column binding is ambiguous for concept "
+                f"{concept_id!r}; Planner-declared ResearchContext candidates: "
+                + ", ".join(repr(candidate) for candidate in candidates)
+            )
+        if len(candidates) == 1:
+            bindings[concept_id] = candidates[0]
+    return bindings
+
+
 def coerce_isfinite_safe_dtypes(frame: Any) -> Any:
     """Downcast pandas nullable-extension and boolean-object columns to numpy
     ``float64`` so downstream ``np.isfinite`` / ``to_numpy()`` in generated
@@ -620,6 +716,7 @@ def materialize_locked_analysis_cohort(
     run_dir: Path,
     plan: Any,
     universe_path: Path,
+    context: Any = None,
     stem: str = "cohort_analysis",
 ) -> Dict[str, Any]:
     """Apply the locked cohort definition to the universe → analysis cohort.
@@ -650,7 +747,17 @@ def materialize_locked_analysis_cohort(
         import pandas as pd  # type: ignore
 
         universe = pd.read_parquet(universe_path)
-        cohort = build_cohort(definition, universe).reset_index(drop=True)
+        column_bindings = _planner_declared_context_column_bindings(
+            definition=definition,
+            plan=plan,
+            context=context,
+            columns=universe.columns,
+        )
+        cohort = build_cohort(
+            definition,
+            universe,
+            column_bindings=column_bindings,
+        ).reset_index(drop=True)
     except Exception as exc:  # fall back to the universe; never break the run
         result.update(status="error", error=f"{type(exc).__name__}: {exc}")
         return result
@@ -666,6 +773,14 @@ def materialize_locked_analysis_cohort(
         "cohort_sha256": cohort_definition_sha(definition),
         "n_universe": int(len(universe)),
         "n_analysis_cohort": int(len(cohort)),
+        "predicate_column_bindings": [
+            {
+                "concept_id": concept_id,
+                "column": column,
+                "basis": "planner_declared_operational_output_source_concept",
+            }
+            for concept_id, column in sorted(column_bindings.items())
+        ],
     }
     (Path(run_dir) / f"{stem}_provenance.json").write_text(
         json.dumps(provenance, indent=2, ensure_ascii=False), encoding="utf-8"
@@ -691,7 +806,12 @@ def assert_cohort_definition_locked(*, run_dir: Path, plan: Any) -> None:
         )
 
 
-def build_cohort(definition: CohortDefinition, data: Any = None) -> Any:
+def build_cohort(
+    definition: CohortDefinition,
+    data: Any = None,
+    *,
+    column_bindings: Optional[Dict[str, str]] = None,
+) -> Any:
     """Apply a CTAS definition to a stay-level dataframe.
 
     This MVP intentionally supports a small deterministic surface. The broader
@@ -718,9 +838,9 @@ def build_cohort(definition: CohortDefinition, data: Any = None) -> Any:
         raise TypeError("build_cohort data must be a pandas DataFrame")
     mask = pd.Series(True, index=data.index)
     for pred in definition.inclusion:
-        mask &= _predicate_mask(data, pred)
+        mask &= _predicate_mask(data, pred, column_bindings=column_bindings)
     for pred in definition.exclusion:
-        mask &= ~_predicate_mask(data, pred)
+        mask &= ~_predicate_mask(data, pred, column_bindings=column_bindings)
     return data.loc[mask].copy()
 
 
@@ -774,7 +894,11 @@ _CONCEPT_OUTPUT_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
 
 
 def _resolve_predicate_column(
-    columns: Any, concept_id: str, aggregation: str
+    columns: Any,
+    concept_id: str,
+    aggregation: str,
+    *,
+    column_bindings: Optional[Dict[str, str]] = None,
 ) -> Optional[str]:
     """Resolve a predicate ``concept_id`` to an actual universe column.
 
@@ -793,6 +917,9 @@ def _resolve_predicate_column(
     aggregated = f"{concept_id}_{aggregation}"
     if aggregated in cols:
         return aggregated
+    bound = str((column_bindings or {}).get(concept_id) or "").strip()
+    if bound and bound in cols:
+        return bound
     for stem in _CONCEPT_OUTPUT_COLUMN_ALIASES.get(concept_id, ()):
         if stem in cols:
             return stem
@@ -802,13 +929,23 @@ def _resolve_predicate_column(
     return None
 
 
-def _predicate_mask(data: Any, pred: ConceptPredicate) -> Any:
+def _predicate_mask(
+    data: Any,
+    pred: ConceptPredicate,
+    *,
+    column_bindings: Optional[Dict[str, str]] = None,
+) -> Any:
     if pred.aggregation not in _IMPLEMENTED_AGGREGATIONS:
         raise NotImplementedError(
             f"aggregation {pred.aggregation!r} is not implemented by the CTAS "
             "dataframe builder"
         )
-    column = _resolve_predicate_column(data.columns, pred.concept_id, pred.aggregation)
+    column = _resolve_predicate_column(
+        data.columns,
+        pred.concept_id,
+        pred.aggregation,
+        column_bindings=column_bindings,
+    )
     if column is None:
         raise CohortDataError(
             f"cohort dataframe is missing concept column {pred.concept_id!r} "

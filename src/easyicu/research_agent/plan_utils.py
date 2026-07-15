@@ -35,6 +35,8 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 from pydantic import ValidationError
 
 from .declared_product_contract import (
+    PLAN_MATERIALIZABLE_TYPED_OUTPUT_KINDS,
+    RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
     _primary_analysis_cohort_attrition_candidate,
     declared_product_contract_findings,
     effect_adjustment_family,
@@ -2367,18 +2369,61 @@ def _typed_plan_dependency_graph(
     """
 
     producers: Dict[Tuple[str, str], List[str]] = {}
+    findings: List[ValidationFinding] = []
     for step in steps:
         for raw_output in step.expected_outputs or []:
             product = typed_product(raw_output)
-            if product is not None:
-                producers.setdefault(product, []).append(step.step_id)
+            if product is None:
+                continue
+            if product[0] not in PLAN_MATERIALIZABLE_TYPED_OUTPUT_KINDS:
+                findings.append(
+                    ValidationFinding(
+                        validator="plan_typed_dag",
+                        severity="error",
+                        message=(
+                            "A typed plan output uses a product kind that the "
+                            "runtime cannot materialise; the plan must be revised "
+                            "before execution."
+                        ),
+                        detail={
+                            "reason": "typed_output_kind_not_materializable",
+                            "producer_step_id": step.step_id,
+                            "typed_product": f"{product[0]}:{product[1]}",
+                            "supported_kinds": sorted(
+                                PLAN_MATERIALIZABLE_TYPED_OUTPUT_KINDS
+                            ),
+                        },
+                    )
+                )
+                continue
+            producers.setdefault(product, []).append(step.step_id)
 
     dependencies: Dict[str, Set[str]] = {step.step_id: set() for step in steps}
-    findings: List[ValidationFinding] = []
     for step in steps:
         for raw_input in step.inputs or []:
             product = typed_product(raw_input)
             if product is None:
+                continue
+            if product[0] not in RUNTIME_BINDABLE_TYPED_INPUT_KINDS:
+                findings.append(
+                    ValidationFinding(
+                        validator="plan_typed_dag",
+                        severity="error",
+                        message=(
+                            "A typed plan input uses a product kind that the "
+                            "runtime cannot bind to current evidence; the plan "
+                            "must be revised before execution."
+                        ),
+                        detail={
+                            "reason": "typed_input_kind_not_runtime_bindable",
+                            "consumer_step_id": step.step_id,
+                            "typed_product": f"{product[0]}:{product[1]}",
+                            "supported_kinds": sorted(
+                                RUNTIME_BINDABLE_TYPED_INPUT_KINDS
+                            ),
+                        },
+                    )
+                )
                 continue
             owner_ids = sorted(set(producers.get(product, [])))
             if not owner_ids:

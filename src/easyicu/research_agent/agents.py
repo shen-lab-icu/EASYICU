@@ -63,7 +63,10 @@ from .code_patch import (
     repair_code_excerpt,
 )
 from .coder_context import coder_guide_for_step, scoped_coder_context
-from .declared_product_contract import typed_product as _canonical_typed_product
+from .declared_product_contract import (
+    RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
+    typed_product as _canonical_typed_product,
+)
 from .plan_utils import (
     _cohort_predicate_partition_safety_rules,
     _primary_analysis_cohort_canonical_schema_rules,
@@ -1448,23 +1451,13 @@ def _declared_output_scope_contract(step: AnalysisStep) -> str:
 def _typed_input_scope_contract(step: AnalysisStep) -> str:
     """Bind Planner-owned consumer scope to run-authoritative input files."""
 
-    supported_kinds = {
-        "artifact",
-        "dataset",
-        "figure",
-        "log",
-        "manifest",
-        "model",
-        "statistic",
-        "table",
-    }
     declared_inputs = list(step.inputs or [])
     if not declared_inputs:
         return ""
     typed_inputs = []
     for item in declared_inputs:
         parsed = _canonical_typed_product(item)
-        if parsed is not None and parsed[0] in supported_kinds:
+        if parsed is not None and parsed[0] in RUNTIME_BINDABLE_TYPED_INPUT_KINDS:
             typed_inputs.append(str(item))
     return (
         "TYPED INPUT BINDING (binding):\n"

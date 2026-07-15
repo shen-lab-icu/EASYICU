@@ -113,6 +113,8 @@ from .deterministic_robustness import (
     robustness_sensitivity_preflight_code,
 )
 from .declared_product_contract import (
+    RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
+    RUNTIME_TYPED_INPUT_EVIDENCE_KINDS,
     authorize_declared_figure_product_slots,
     primary_analysis_cohort_integrity_findings,
     primary_analysis_cohort_producer_uses_universe,
@@ -579,42 +581,12 @@ class _EvidenceLineageResolutionError(RuntimeError):
         )
 
 
-_TYPED_INPUT_KINDS = frozenset(
-    {
-        "artifact",
-        "dataset",
-        "figure",
-        "log",
-        "manifest",
-        "model",
-        "statistic",
-        "table",
-    }
-)
-
-# Typed products describe the logical contract while EvidenceStore kinds describe
-# the physical evidence class.  Most pairs are exact.  The three adapters below
-# are deliberate and closed: tabular datasets are stored as tables, serialized
-# models/manifests as logs, and generic artifacts may be either a table or a log.
-# Code and figures are never compatible with a generic scientific artifact.
-_TYPED_INPUT_EVIDENCE_KINDS: Mapping[str, frozenset[str]] = {
-    "artifact": frozenset({"log", "table"}),
-    "dataset": frozenset({"table"}),
-    "figure": frozenset({"figure"}),
-    "log": frozenset({"log"}),
-    "manifest": frozenset({"log"}),
-    "model": frozenset({"log"}),
-    "statistic": frozenset({"statistic"}),
-    "table": frozenset({"table"}),
-}
-
-
 def _evidence_kind_matches_typed_product(
     record: Any,
     typed_product: Tuple[str, str],
 ) -> bool:
     evidence_kind = str(_evidence_record_field(record, "kind") or "").strip().lower()
-    return evidence_kind in _TYPED_INPUT_EVIDENCE_KINDS.get(
+    return evidence_kind in RUNTIME_TYPED_INPUT_EVIDENCE_KINDS.get(
         typed_product[0], frozenset()
     )
 
@@ -628,7 +600,7 @@ def _typed_input_product(value: Any) -> Optional[Tuple[str, str]]:
     """Return a canonical ``(kind, product)`` for a typed plan dependency."""
 
     parsed = _canonical_typed_product(value)
-    if parsed is None or parsed[0] not in _TYPED_INPUT_KINDS:
+    if parsed is None or parsed[0] not in RUNTIME_BINDABLE_TYPED_INPUT_KINDS:
         return None
     return parsed
 
@@ -6084,6 +6056,7 @@ def run_execute_phase(
                 run_dir=run_dir,
                 plan=candidate_plan,
                 universe_path=universe_path,
+                context=context,
             )
         except Exception as exc:  # never break the run; fall back to the error
             findings.append(
@@ -12595,10 +12568,11 @@ else:
             )
 
         executed_step_ids = set(preexecuted_step_ids)
-        remaining_steps = resume_controller.remaining_steps(
-            plan=plan,
-            executed_step_ids=executed_step_ids,
-        )
+        # ``steps_to_run`` already carries the fail-closed plan-preflight
+        # decision above.  Recomputing from the full plan here would revive
+        # every step after a typed-DAG/trajectory contract ERROR and spend
+        # Coder calls on a plan the host has declared non-executable.
+        remaining_steps = list(steps_to_run)
         while remaining_steps:
             step = remaining_steps.pop(0)
             record = _execute_one_step(step)

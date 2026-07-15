@@ -69,6 +69,37 @@ _KNOWN_FILE_SUFFIXES = frozenset(
     }
 )
 
+# Typed-product capabilities are shared by planning, Coder guidance, and the
+# execution-time evidence resolver.  Keep the parser permissive so callers can
+# report an unsupported ``kind:name`` token precisely, but keep the capabilities
+# themselves closed: a plan must not appear executable when the runtime cannot
+# bind the declared product to current evidence.
+RUNTIME_TYPED_INPUT_EVIDENCE_KINDS: Mapping[str, frozenset[str]] = {
+    "artifact": frozenset({"log", "table"}),
+    "dataset": frozenset({"table"}),
+    "figure": frozenset({"figure"}),
+    "log": frozenset({"log"}),
+    "manifest": frozenset({"log"}),
+    "model": frozenset({"log"}),
+    "statistic": frozenset({"statistic"}),
+    "table": frozenset({"table"}),
+}
+RUNTIME_BINDABLE_TYPED_INPUT_KINDS = frozenset(RUNTIME_TYPED_INPUT_EVIDENCE_KINDS)
+
+# ``audit`` and ``test`` have explicit output-registration contracts, while a
+# terminal ``report`` is materialised by the writer rather than consumed as a
+# step input.  They are therefore valid plan outputs but are deliberately not
+# runtime-bindable inputs.  Adding a new kind requires implementing its physical
+# registration and (if consumable) digest-bound evidence mapping first.
+PLAN_MATERIALIZABLE_TYPED_OUTPUT_KINDS = frozenset(
+    {
+        *RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
+        "audit",
+        "report",
+        "test",
+    }
+)
+
 
 def is_failed_step_status(value: Any) -> bool:
     """Return whether a generated summary explicitly reports failure.
