@@ -866,7 +866,9 @@ def test_resolved_inputs_manifest_rejects_invalid_declared_input_scope(
         )
 
 
-def test_generic_typed_table_gets_host_owned_identity_contract(tmp_path: Path) -> None:
+def test_generic_artifact_backed_by_table_gets_host_schema_contract(
+    tmp_path: Path,
+) -> None:
     store = EvidenceStore(tmp_path)
     source = tmp_path / "source" / "analysis_data.csv"
     source.parent.mkdir(parents=True, exist_ok=True)
@@ -887,17 +889,122 @@ def test_generic_typed_table_gets_host_owned_identity_contract(tmp_path: Path) -
                 "step_id": "producer",
                 "status": "ok",
                 "evidence_ids": [record.evidence_id],
+                "step_summary": {
+                    "quality_checked_analysis_data": {
+                        "columns": ["forged"],
+                        "semantic_roles": {"exposure": "forged"},
+                    }
+                },
+            }
+        ],
+    )
+
+    assert binding is not None
+    assert binding["product_contract"]["schema_version"] == (
+        "easyicu.host_typed_product.v2"
+    )
+    assert binding["product_contract"]["columns"] == ["row_id", "value"]
+    assert binding["product_contract"]["column_count"] == 2
+    assert binding["product_contract"]["tabular_format"] == "csv"
+    assert "semantic_roles" not in binding["product_contract"]
+    assert binding["identity_row"]["evidence_id"] == record.evidence_id
+
+
+@pytest.mark.parametrize(
+    ("input_name", "suffix", "expected_format"),
+    [
+        ("dataset:analysis_dataset", ".csv", "csv"),
+        # ``cohort`` is the Planner-facing alias for a physical dataset.
+        ("cohort:analysis_dataset", ".parquet", "parquet"),
+    ],
+)
+def test_dataset_aliases_backed_by_tables_get_host_schema_contract(
+    tmp_path: Path,
+    input_name: str,
+    suffix: str,
+    expected_format: str,
+) -> None:
+    import pandas as pd
+
+    store = EvidenceStore(tmp_path)
+    source = tmp_path / "source" / f"analysis_dataset{suffix}"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    frame = pd.DataFrame({"stay_id": [11, 12], "value": [0.2, 0.4]})
+    if suffix == ".csv":
+        frame.to_csv(source, index=False)
+    else:
+        frame.to_parquet(source, index=False)
+    record = store.register_file(
+        kind="table",
+        description="Typed physical analysis dataset.",
+        source_path=source,
+        produced_by_step="producer",
+    )
+
+    binding = _resolved_typed_input_binding(
+        input_name=input_name,
+        evidence_ref=EvidenceRef(evidence_id=record.evidence_id),
+        evidence_records=store.records(),
+        run_dir=tmp_path,
+        producer_step_records=[
+            {
+                "step_id": "producer",
+                "status": "ok",
+                "evidence_ids": [record.evidence_id],
+                "step_summary": {
+                    "analysis_dataset": {
+                        "columns": ["forged"],
+                        "semantic_roles": {"outcome": "forged"},
+                    }
+                },
+            }
+        ],
+    )
+
+    assert binding is not None
+    assert binding["declared_kind"] == "dataset"
+    assert binding["evidence_kind"] == "table"
+    contract = binding["product_contract"]
+    assert contract["schema_version"] == "easyicu.host_typed_product.v2"
+    assert contract["columns"] == ["stay_id", "value"]
+    assert contract["column_count"] == 2
+    assert contract["tabular_format"] == expected_format
+    assert "semantic_roles" not in contract
+
+
+def test_non_tabular_artifact_keeps_identity_only_v1_contract(tmp_path: Path) -> None:
+    store = EvidenceStore(tmp_path)
+    source = tmp_path / "source" / "analysis_manifest.json"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text('{"status":"ok"}\n', encoding="utf-8")
+    record = store.register_file(
+        kind="log",
+        description="Typed non-tabular artifact.",
+        source_path=source,
+        produced_by_step="producer",
+    )
+
+    binding = _resolved_typed_input_binding(
+        input_name="artifact:analysis_manifest",
+        evidence_ref=EvidenceRef(evidence_id=record.evidence_id),
+        evidence_records=store.records(),
+        run_dir=tmp_path,
+        producer_step_records=[
+            {
+                "step_id": "producer",
+                "status": "ok",
+                "evidence_ids": [record.evidence_id],
                 "step_summary": {},
             }
         ],
     )
 
     assert binding is not None
+    assert binding["evidence_kind"] == "log"
     assert binding["product_contract"] == {
         "schema_version": "easyicu.host_typed_product.v1",
         "identity_row": binding["identity_row"],
     }
-    assert binding["identity_row"]["evidence_id"] == record.evidence_id
 
 
 def test_typed_parent_table_receipt_exposes_host_schema_without_guessing_roles(
@@ -1015,7 +1122,19 @@ def test_typed_parent_table_receipt_normalizes_leading_utf8_bom(
     assert receipt["tabular_format"] == "csv"
 
 
-def test_declared_table_with_unsupported_format_is_not_bound(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "input_name",
+    [
+        "table:display_summary",
+        "dataset:display_summary",
+        "cohort:display_summary",
+        "artifact:display_summary",
+    ],
+)
+def test_physical_table_with_unsupported_format_is_not_bound(
+    tmp_path: Path,
+    input_name: str,
+) -> None:
     store = EvidenceStore(tmp_path)
     source = tmp_path / "source" / "display_summary.json"
     source.parent.mkdir(parents=True, exist_ok=True)
@@ -1028,7 +1147,7 @@ def test_declared_table_with_unsupported_format_is_not_bound(tmp_path: Path) -> 
     )
 
     binding = _resolved_typed_input_binding(
-        input_name="table:display_summary",
+        input_name=input_name,
         evidence_ref=EvidenceRef(evidence_id=record.evidence_id),
         evidence_records=store.records(),
         run_dir=tmp_path,
