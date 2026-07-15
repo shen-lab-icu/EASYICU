@@ -434,6 +434,7 @@ def test_failed_contract_code_reuse_requires_exact_checkpoint_authority():
         ("plan_scientific_signature", ["changed"]),
         ("provider_call_budget_receipt_invalid", True),
         ("quarantined_requires_repair", True),
+        ("resumed_failed_contract_code_preflight", True),
     ):
         changed = copy.deepcopy(prior_record)
         changed[key] = value

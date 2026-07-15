@@ -23,6 +23,7 @@ from typing import Callable, Dict, Iterator, Optional, Tuple, TypeVar
 
 _T = TypeVar("_T")
 _RESERVATION_UNSPECIFIED = object()
+PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION = 2
 
 
 class ProviderCallBudgetError(RuntimeError):
@@ -107,7 +108,7 @@ def load_provider_call_budget_receipt(
             "Provider-call receipt digest is missing or invalid"
         )
     schema_version = payload.get("schema_version")
-    if schema_version not in {1, 2}:
+    if schema_version not in {1, PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION}:
         raise ProviderCallBudgetReceiptError(
             "Provider-call receipt schema version is unsupported"
         )
@@ -131,7 +132,7 @@ def load_provider_call_budget_receipt(
         raise ProviderCallBudgetReceiptError("Provider-call receipt history is invalid")
 
     stored_reservation: Optional[str] = None
-    if schema_version == 2:
+    if schema_version == PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION:
         raw_reservation = payload.get("reserved_final_category")
         if raw_reservation is not None:
             if not isinstance(raw_reservation, str) or not raw_reservation.strip():
@@ -217,7 +218,7 @@ class StepProviderCallBudget:
         if self._receipt_path is None:
             return
         payload: Dict[str, object] = {
-            "schema_version": 2,
+            "schema_version": PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION,
             "step_id": self._step_id,
             "limit": self._limit,
             "categories": list(self._categories),

@@ -208,6 +208,7 @@ from .repair_registry import (
     repair_metadata_for,
 )
 from .provider_budget import (
+    PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION,
     ProviderCallBudgetError,
     ProviderCallBudgetReceiptError,
     StepProviderCallBudget,
@@ -355,7 +356,9 @@ def _extract_cohort_definition_with_provider_budget(
         "step_provider_call_remaining": snapshot["remaining"],
         "step_provider_call_budget_exhausted": snapshot["exhausted"],
         "step_provider_call_categories": snapshot["categories"],
-        "step_provider_call_receipt_version": 1,
+        "step_provider_call_receipt_version": (
+            PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION
+        ),
         "step_provider_call_receipt": str(receipt_path.relative_to(run_dir)),
     }
 
@@ -913,6 +916,7 @@ def _failed_contract_code_can_be_reused_before_coder(
     if (
         prior_step_record.get("provider_call_budget_receipt_invalid") is True
         or prior_step_record.get("quarantined_requires_repair") is True
+        or prior_step_record.get("resumed_failed_contract_code_preflight") is True
         or prior_step_record.get("returncode") != 0
         or prior_step_record.get("timed_out") is not False
         or prior_step_record.get("outputs_safe_to_collect") is not True
@@ -6978,7 +6982,8 @@ def run_execute_phase(
         elif (
             provider_receipt_integrity_error is None
             and isinstance(prior_step_record, Mapping)
-            and prior_step_record.get("step_provider_call_receipt_version") == 1
+            and prior_step_record.get("step_provider_call_receipt_version")
+            in {1, PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION}
             and prior_provider_attempts > 0
         ):
             provider_receipt_integrity_error = (
@@ -7009,7 +7014,9 @@ def run_execute_phase(
             step_record["step_provider_call_reservation_released"] = snapshot[
                 "reservation_released"
             ]
-            step_record["step_provider_call_receipt_version"] = 1
+            step_record["step_provider_call_receipt_version"] = (
+                PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION
+            )
             step_record["step_provider_call_receipt"] = (
                 provider_receipt_relative_path if snapshot["used"] else None
             )

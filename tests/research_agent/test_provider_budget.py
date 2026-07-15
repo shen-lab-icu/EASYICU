@@ -10,6 +10,7 @@ import pytest
 
 from easyicu.research_agent.audits.validators import LLMConceptAuditor
 from easyicu.research_agent.provider_budget import (
+    PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION,
     ProviderCallBudgetExhausted,
     ProviderCallBudgetReceiptError,
     StepProviderCallBudget,
@@ -100,6 +101,10 @@ def test_pre_step_cohort_translation_has_durable_shared_provider_budget(tmp_path
         "cohort_definition_translation",
         "cohort_definition_translation",
     ]
+    assert (
+        second_snapshot["step_provider_call_receipt_version"]
+        == PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION
+    )
     receipt_path = provider_call_budget_receipt_path(
         tmp_path,
         step_id=owner_step_id,
@@ -112,6 +117,9 @@ def test_pre_step_cohort_translation_has_durable_shared_provider_budget(tmp_path
         step_id=owner_step_id,
     )
     assert stored_limit == 2
+    assert json.loads(receipt_path.read_text(encoding="utf-8"))["schema_version"] == (
+        PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION
+    )
     assert stored_categories == (
         "cohort_definition_translation",
         "cohort_definition_translation",
