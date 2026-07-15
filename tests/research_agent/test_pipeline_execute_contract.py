@@ -362,6 +362,40 @@ def test_every_deterministic_statistical_error_fails_outer_step():
     assert status == "contract_failed"
 
 
+def test_first_step_checkpoint_selector_preserves_agent_owned_step_id():
+    from easyicu.research_agent.pipeline_execute import (
+        _resolve_stop_after_step_selector,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    plan = AnalysisPlan(
+        research_question="Summarize this ICU cohort.",
+        steps=[
+            AnalysisStep(
+                step_id="agent_generated_cohort_name",
+                intent="Define the planned cohort.",
+                inputs=["stay_id"],
+                expected_outputs=["table:analysis_cohort"],
+                method="cohort_definition",
+            ),
+            AnalysisStep(
+                step_id="agent_generated_summary_name",
+                intent="Summarize the planned cohort.",
+                inputs=["table:analysis_cohort"],
+                expected_outputs=["table:summary"],
+                method="descriptive_summary",
+            ),
+        ],
+    )
+
+    assert _resolve_stop_after_step_selector(plan, "@first") == (
+        "agent_generated_cohort_name"
+    )
+    assert _resolve_stop_after_step_selector(plan, "agent_generated_summary_name") == (
+        "agent_generated_summary_name"
+    )
+
+
 def test_failed_contract_code_reuse_requires_exact_checkpoint_authority():
     import copy
     import hashlib
