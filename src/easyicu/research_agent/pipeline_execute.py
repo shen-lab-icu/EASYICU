@@ -1136,8 +1136,9 @@ def _write_resolved_inputs_manifest(
     run_dir: Path,
     step_id: str,
     bindings: Mapping[str, Mapping[str, Any]],
+    context_path: Optional[Path] = None,
 ) -> Path:
-    """Persist bindings outside the writable step overlay for runtime use."""
+    """Persist the step's authority capsule outside its writable overlay."""
 
     safe_step_id = str(step_id or "")
     if (
@@ -1151,11 +1152,25 @@ def _write_resolved_inputs_manifest(
     manifest_dir = Path(run_dir).resolve() / "resolved_inputs"
     manifest_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = manifest_dir / f"{safe_step_id}.json"
-    payload = {
-        "schema_version": "1.0",
+    payload: Dict[str, Any] = {
+        "schema_version": "2.0",
         "step_id": safe_step_id,
         "inputs": {str(key): dict(value) for key, value in bindings.items()},
     }
+    if context_path is not None:
+        resolved_context = Path(context_path).resolve()
+        run_root = Path(run_dir).resolve()
+        if not resolved_context.is_file():
+            raise ValueError("context_path must name an existing context file")
+        try:
+            relative_context = resolved_context.relative_to(run_root).as_posix()
+        except ValueError as exc:
+            raise ValueError("context_path must be contained by run_dir") from exc
+        payload["context"] = {
+            "relative_path": relative_context,
+            "absolute_path": str(resolved_context),
+            "sha256": sha256_of_file(resolved_context),
+        }
     temporary_path = manifest_path.with_suffix(".json.tmp")
     temporary_path.write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
@@ -4985,6 +5000,7 @@ def run_execute_phase(
             run_dir=run_dir,
             step_id=step.step_id,
             bindings=resolved_input_bindings,
+            context_path=plan_result.context_path,
         )
         step_record["resolved_inputs_path"] = str(
             resolved_inputs_path.relative_to(run_dir)
