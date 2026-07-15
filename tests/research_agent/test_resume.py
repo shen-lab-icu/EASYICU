@@ -1974,6 +1974,9 @@ def test_quarantine_policy_supersession_reclassifies_finalized_only_false_overri
     )
     script = """
 REQUESTED_INPUTS = ['artifact:primary_exposure_definition']
+exposure_binding = resolved_inputs['artifact:primary_exposure_definition']
+exposure_definition = exposure_binding['value']
+product_contract = exposure_binding['product_contract']
 def resolve_exposure(definition, product_contract, frame):
     if not isinstance(definition, pd.DataFrame):
         raise RuntimeError('finalized table required')
@@ -1989,6 +1992,7 @@ treatment = resolve_exposure(exposure_definition, product_contract, frame)
         severity="error",
         message="Finalized exposure is overwritten.",
         detail={
+            "issue_code": "finalized_exposure_overridden",
             "context": (
                 "The script replaces treatment with "
                 "reconcile_binary_event_presence values."

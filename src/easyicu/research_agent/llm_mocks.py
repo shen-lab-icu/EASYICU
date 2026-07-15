@@ -638,6 +638,7 @@ def _mock_code_declared_figure(*, step_id: str, prompt: str) -> str:
                 "declared_product": declared_product,
                 "path": run_dir / relative_path,
                 "evidence_id": binding.get("evidence_id"),
+                "sha256": binding.get("sha256"),
                 "evidence_kind": binding.get("evidence_kind"),
                 "product": binding.get("product"),
                 "produced_by_step": binding.get("produced_by_step"),
@@ -725,6 +726,22 @@ def _mock_code_declared_figure(*, step_id: str, prompt: str) -> str:
         for item in source_candidates
         if item.get("evidence_id")
     ))
+    input_bindings = []
+    for item in source_candidates:
+        receipt = {
+            "input_key": str(item["declared_product"]),
+            "loaded": True,
+            "evidence_id": item.get("evidence_id"),
+            "sha256": item.get("sha256"),
+        }
+        if item["path"] == source_path:
+            receipt["row_count"] = int(len(source))
+        elif not str(item["declared_product"]).lower().startswith("statistic:"):
+            raise RuntimeError(
+                f"Unsupported bound input for render-only step {step_id}: "
+                f"{item['declared_product']}"
+            )
+        input_bindings.append(receipt)
 
     output_files = {}
     figure_files = []
@@ -858,6 +875,7 @@ def _mock_code_declared_figure(*, step_id: str, prompt: str) -> str:
         "figure_files": figure_files,
         "figure_contract_files": contract_files,
         "source_data_files": source_data_files,
+        "input_bindings": input_bindings,
     }
     (out_dir / "step_summary.json").write_text(
         json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8"
