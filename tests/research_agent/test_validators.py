@@ -2603,6 +2603,8 @@ def test_llm_concept_auditor_checks_summary_source_status_bypasses(ra):
     assert "use it directly" in prompt
     assert "must neither redefine nor overwrite the finalized exposure" in prompt
     assert "Do not demand a second sparse-event reconciliation" in prompt
+    assert "detail.issue_code" in prompt
+    assert "Message text is explanatory only, never routing" in prompt
 
 
 def test_llm_concept_auditor_downgrades_finalized_exposure_rederivation_demand(ra):
@@ -2618,6 +2620,7 @@ def test_llm_concept_auditor_downgrades_finalized_exposure_rederivation_demand(r
                                 "required binary-event triad reconciliation."
                             ),
                             "detail": {
+                                "issue_code": "finalized_exposure_missing_reconciliation",
                                 "context": (
                                     "The row-aligned values are validated but the "
                                     "script does not call "
@@ -2630,12 +2633,15 @@ def test_llm_concept_auditor_downgrades_finalized_exposure_rederivation_demand(r
             )
 
     script = """
-REQUESTED_INPUTS = ['artifact:primary_exposure_definition']
+exposure_binding = resolved_inputs['artifact:primary_exposure_definition']
+exposure_definition = load_typed_table(exposure_binding)
+product_contract = exposure_binding['product_contract']
 if isinstance(exposure_definition, pd.DataFrame):
     finalized = pd.to_numeric(exposure_definition['vasopressor'], errors='coerce')
     if finalized.isna().any() or not np.isfinite(finalized).all() or not finalized.isin([0, 1]).all():
         raise RuntimeError('invalid finalized exposure')
     treatment = finalized.astype(int)
+    frame['vasopressor'] = treatment
 """
     findings = ra.LLMConceptAuditor(_FalseReconciliationDemandLLM()).audit(
         context=ra.build_research_context(
@@ -2660,7 +2666,9 @@ def test_llm_concept_auditor_keeps_finalized_exposure_override_blocking(ra):
     from easyicu.research_agent.contracts import ValidationFinding
 
     script = """
-REQUESTED_INPUTS = ['artifact:primary_exposure_definition']
+exposure_binding = resolved_inputs['artifact:primary_exposure_definition']
+exposure_definition = load_typed_table(exposure_binding)
+product_contract = exposure_binding['product_contract']
 if isinstance(exposure_definition, pd.DataFrame):
     finalized = pd.to_numeric(exposure_definition['vasopressor'], errors='coerce')
     if finalized.isna().any() or not np.isfinite(finalized).all() or not finalized.isin([0, 1]).all():
@@ -2681,6 +2689,7 @@ if isinstance(exposure_definition, pd.DataFrame):
                 severity="error",
                 message="The finalized exposure artifact is bypassed.",
                 detail={
+                    "issue_code": "finalized_exposure_overridden",
                     "context": (
                         "The script ignores its values and overwrites them with "
                         "raw companion reconciliation."
@@ -2703,7 +2712,9 @@ def test_llm_concept_auditor_downgrades_raw_resolver_branch_false_override(ra):
     from easyicu.research_agent.contracts import ValidationFinding
 
     script = """
-REQUESTED_INPUTS = ['artifact:primary_exposure_definition']
+exposure_binding = resolved_inputs['artifact:primary_exposure_definition']
+exposure_definition = load_typed_table(exposure_binding)
+product_contract = exposure_binding['product_contract']
 def resolve_raw_exposure(definition, frame):
     return reconcile_binary_event_presence(frame)
 
@@ -2733,20 +2744,66 @@ frame['vasopressor'] = treatment
                     "reconciliation."
                 ),
                 detail={
+                    "issue_code": "finalized_exposure_overridden",
                     "context": (
                         "After resolving the finalized artifact, the script "
                         "unconditionally replaces treatment with "
                         "reconcile_binary_event_presence."
                     )
                 },
-            )
+            ),
+            ValidationFinding(
+                validator="llm_concept_auditor",
+                severity="error",
+                message="The script overwrites the finalized exposure.",
+                detail={"context": "English prose is not a routing contract."},
+            ),
         ],
         context=context,
         script_text=script,
     )
 
-    assert findings[0].severity == "warning"
+    assert [finding.severity for finding in findings] == ["warning", "error"]
     assert "AST control-flow verification" in findings[0].detail["downgraded_reason"]
+    assert "downgraded_reason" not in findings[1].detail
+
+    decoy_findings = _downgrade_finalized_exposure_reconciliation_findings(
+        findings=[
+            findings[0].model_copy(
+                update={
+                    "severity": "error",
+                    "detail": {"issue_code": "finalized_exposure_overridden"},
+                }
+            )
+        ],
+        context=context,
+        script_text=script.replace(
+            "isinstance(exposure_definition, pd.DataFrame)",
+            "isinstance(decoy, pd.DataFrame)",
+        ),
+    )
+    assert decoy_findings[0].severity == "error"
+    assert "downgraded_reason" not in decoy_findings[0].detail
+
+    unbound_findings = _downgrade_finalized_exposure_reconciliation_findings(
+        findings=[
+            findings[0].model_copy(
+                update={
+                    "severity": "error",
+                    "detail": {"issue_code": "finalized_exposure_overridden"},
+                }
+            )
+        ],
+        context=context,
+        script_text=script.replace(
+            "exposure_binding = resolved_inputs['artifact:primary_exposure_definition']\n"
+            "exposure_definition = load_typed_table(exposure_binding)\n"
+            "product_contract = exposure_binding['product_contract']",
+            "REQUESTED_INPUTS = ['artifact:primary_exposure_definition']",
+        ),
+    )
+    assert unbound_findings[0].severity == "error"
+    assert "downgraded_reason" not in unbound_findings[0].detail
 
 
 def test_llm_concept_auditor_keeps_post_branch_reconciliation_blocking(ra):
@@ -2756,7 +2813,9 @@ def test_llm_concept_auditor_keeps_post_branch_reconciliation_blocking(ra):
     from easyicu.research_agent.contracts import ValidationFinding
 
     script = """
-REQUESTED_INPUTS = ['artifact:primary_exposure_definition']
+exposure_binding = resolved_inputs['artifact:primary_exposure_definition']
+exposure_definition = load_typed_table(exposure_binding)
+product_contract = exposure_binding['product_contract']
 def resolve_raw_exposure(definition, frame):
     return reconcile_binary_event_presence(frame)
 
@@ -2783,6 +2842,7 @@ treatment = resolve_raw_exposure(exposure_definition, frame).values
                 severity="error",
                 message="The finalized exposure is overwritten.",
                 detail={
+                    "issue_code": "finalized_exposure_overridden",
                     "context": (
                         "The script replaces the finalized values with "
                         "reconcile_binary_event_presence."
@@ -2805,7 +2865,9 @@ def test_llm_concept_auditor_accepts_contract_bound_finalized_branch(ra):
     from easyicu.research_agent.contracts import ValidationFinding
 
     script = """
-REQUESTED_INPUTS = ['artifact:primary_exposure_definition']
+exposure_binding = resolved_inputs['artifact:primary_exposure_definition']
+exposure_definition = load_typed_table(exposure_binding)
+product_contract = exposure_binding['product_contract']
 def resolve_finalized_exposure(definition, product_contract, frame):
     executable = product_contract['executable_column']
     finalized = pd.to_numeric(definition[executable], errors='coerce')
@@ -2841,6 +2903,7 @@ frame[product_contract['executable_column']] = treatment
                     "with a second helper result."
                 ),
                 detail={
+                    "issue_code": "finalized_exposure_overridden",
                     "context": (
                         "It unconditionally runs "
                         "reconcile_binary_event_presence after resolving the "
@@ -2867,7 +2930,9 @@ def test_llm_concept_auditor_accepts_finalized_only_consumer_without_helper_call
     from easyicu.research_agent.contracts import ValidationFinding
 
     script = f"""
-REQUESTED_INPUTS = ['artifact:primary_exposure_definition']
+exposure_binding = resolved_inputs['artifact:primary_exposure_definition']
+exposure_definition = load_typed_table(exposure_binding)
+product_contract = exposure_binding['product_contract']
 def {resolver_name}(definition, product_contract, frame):
     if not isinstance(definition, pd.DataFrame):
         raise RuntimeError('finalized table required')
@@ -2894,6 +2959,7 @@ treatment = {resolver_name}(
                 severity="error",
                 message="The script overwrites the finalized exposure.",
                 detail={
+                    "issue_code": "finalized_exposure_overridden",
                     "context": (
                         "It assigns reconcile_binary_event_presence values after "
                         "the finalized binding."
@@ -2908,6 +2974,7 @@ treatment = {resolver_name}(
                     "through sparse-event triad validation."
                 ),
                 detail={
+                    "issue_code": "finalized_exposure_forced_raw_reconciliation",
                     "context": (
                         "It requires source_count_column and raw companion fields."
                     )
@@ -2938,6 +3005,7 @@ def test_llm_concept_auditor_downgrades_companion_value_gating_false_positive(ra
                                 "measured/source-status consistency checks."
                             ),
                             "detail": {
+                                "issue_code": "audit_only_companion_row_gating_required",
                                 "context": (
                                     "The script audits measured/count pairs on the "
                                     "original dataframe, but the flags do not mask or "
@@ -2984,6 +3052,29 @@ model.fit(frame[['marker_first']], assignment)
     assert findings[0].severity == "warning"
     assert findings[0].detail["downgraded_reason"]
 
+    conditional_findings = ra.LLMConceptAuditor(
+        _CompanionGatingFalsePositiveLLM()
+    ).audit(
+        context=ra.build_research_context(
+            research_question="Model assignment from early physiology.",
+            cohort=pd.DataFrame({
+                "stay_id": [1, 2],
+                "marker_first": [1.0, 2.0],
+                "marker_measured": [1, 1],
+                "marker_n": [1, 1],
+            }),
+            cohort_name="c",
+            database="synthetic",
+        ),
+        script_text=script.replace(
+            "raise RuntimeError('invalid measurement provenance')",
+            "if strict_mode:\n        raise RuntimeError('invalid measurement provenance')",
+        ),
+        step=None,
+    )
+    assert conditional_findings[0].severity == "error"
+    assert "downgraded_reason" not in conditional_findings[0].detail
+
 
 def test_llm_concept_auditor_does_not_downgrade_unused_provenance_flag(ra):
     class _CompanionGatingFindingLLM:
@@ -2998,6 +3089,7 @@ def test_llm_concept_auditor_does_not_downgrade_unused_provenance_flag(ra):
                                 "source-status consistency checks."
                             ),
                             "detail": {
+                                "issue_code": "audit_only_companion_row_gating_required",
                                 "context": (
                                     "The measured flags do not mask or invalidate "
                                     "modeled first-value covariates."
