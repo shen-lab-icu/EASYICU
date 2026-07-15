@@ -340,6 +340,15 @@ from .runtime_artifacts import (
     verified_run_evidence_path,
     write_json_artifact,
 )
+from .run_input_capsule import (
+    RUN_INPUT_CAPSULE_EVIDENCE_ID,
+    RUN_INPUT_CAPSULE_FILENAME,
+    RunInputIdentityError,
+    build_environment_identity,
+    build_scientific_identity,
+    prepare_existing_resume_input,
+    seal_run_input_capsule,
+)
 from .audits.validators import (
     ClinicalConstraintValidator,
     CohortAuditor,
@@ -1728,14 +1737,15 @@ def _migrate_legacy_resume_trajectory_stability_spec(
 
 def _load_resume_state(run_dir: Path) -> Optional[Dict[str, Any]]:
     partial = run_dir / "manifest_partial.json"
-    if not partial.exists():
+    checkpoint = partial if partial.exists() else run_dir / "manifest.json"
+    if not checkpoint.exists():
         return None
     try:
-        loaded = json.loads(partial.read_text(encoding="utf-8"))
+        loaded = json.loads(checkpoint.read_text(encoding="utf-8"))
     except Exception as exc:
-        raise ValueError(f"Cannot resume from corrupt checkpoint: {partial}") from exc
+        raise ValueError(f"Cannot resume from corrupt checkpoint: {checkpoint}") from exc
     if not isinstance(loaded, dict):
-        raise ValueError(f"Cannot resume from non-object checkpoint: {partial}")
+        raise ValueError(f"Cannot resume from non-object checkpoint: {checkpoint}")
     return loaded
 
 
@@ -2195,38 +2205,58 @@ class ResearchAgentPipeline:
         run_language: str,
         experiment_spec_path: Optional[Path],
         resume_state: Optional[Dict[str, Any]],
+        resume_context_evidence_path: Optional[Path],
+        run_scientific_identity: Dict[str, Any],
+        run_environment_identity: Dict[str, Any],
         resume_from_step_id: Optional[str],
         emit_progress: Callable[..., None],
     ) -> _PlanPhaseResult:
         """Build context, attach memory, and emit an execution plan."""
-        builder = (
-            build_naive_research_context
-            if self._disable_icu_context
-            else build_research_context
-        )
-        context = builder(
-            research_question=question,
-            cohort=cohort_path,
-            cohort_name=cohort_name,
-            database=database,
-            target_outcome=target_outcome,
-            primary_exposure=primary_exposure,
-            cross_database_validation=cross_database_validation,
-            inclusion_criteria=inclusion_criteria,
-            exclusion_criteria=exclusion_criteria,
-            id_columns=id_columns,
-            time_columns=time_columns,
-            outcome_columns=outcome_columns,
-            concept_descriptions=concept_descriptions,
-            time_windows=time_windows,
-            user_preferences=user_preferences,
-            notes=notes,
-        )
         context_path = run_dir / "research_context.json"
-        context_path.write_text(
-            context.model_dump_json(indent=2),
-            encoding="utf-8",
-        )
+        if resume_context_evidence_path is not None:
+            # Resume context authority is the digest-verified evidence copy,
+            # never a newly built context from the incoming call. Scientific
+            # identity was compared before this phase and before any run-dir
+            # write. Restore a stale mutable working copy only from that sealed
+            # authority; do not reserialize it (timestamps/provenance paths are
+            # part of the original evidence bytes).
+            context = ResearchContext.model_validate_json(
+                resume_context_evidence_path.read_text(encoding="utf-8")
+            )
+            if (
+                not context_path.is_file()
+                or sha256_of_file(context_path)
+                != sha256_of_file(resume_context_evidence_path)
+            ):
+                shutil.copy2(resume_context_evidence_path, context_path)
+        else:
+            builder = (
+                build_naive_research_context
+                if self._disable_icu_context
+                else build_research_context
+            )
+            context = builder(
+                research_question=question,
+                cohort=cohort_path,
+                cohort_name=cohort_name,
+                database=database,
+                target_outcome=target_outcome,
+                primary_exposure=primary_exposure,
+                cross_database_validation=cross_database_validation,
+                inclusion_criteria=inclusion_criteria,
+                exclusion_criteria=exclusion_criteria,
+                id_columns=id_columns,
+                time_columns=time_columns,
+                outcome_columns=outcome_columns,
+                concept_descriptions=concept_descriptions,
+                time_windows=time_windows,
+                user_preferences=user_preferences,
+                notes=notes,
+            )
+            context_path.write_text(
+                context.model_dump_json(indent=2),
+                encoding="utf-8",
+            )
         emit_progress(
             "context",
             "Research context built.",
@@ -2279,6 +2309,16 @@ class ResearchAgentPipeline:
                 evidence_id="experiment_spec",
                 producer="pipeline",
                 generation_mode="system",
+            )
+        if evidence.get(RUN_INPUT_CAPSULE_EVIDENCE_ID) is None:
+            seal_run_input_capsule(
+                run_dir=run_dir,
+                evidence=evidence,
+                scientific_identity=run_scientific_identity,
+                initial_environment=run_environment_identity,
+                context_path=context_path,
+                cohort_path=cohort_path,
+                experiment_spec_path=experiment_spec_path,
             )
         architecture_profile = default_architecture_profile()
         architecture_json = run_dir / "architecture_profile.json"
@@ -3671,11 +3711,76 @@ class ResearchAgentPipeline:
 
         _emit_progress("run", "Starting research-agent run.")
 
+        spec_obj: Optional[ExperimentSpec] = None
+        if experiment_spec is not None:
+            spec_obj = (
+                experiment_spec
+                if isinstance(experiment_spec, ExperimentSpec)
+                else ExperimentSpec.model_validate(experiment_spec)
+            )
+        llm = self._llm
+        if llm is None:
+            raise RuntimeError("LLM client is unexpectedly missing after validation.")
+        run_scientific_identity = build_scientific_identity(
+            cohort=cohort,
+            question=question,
+            cohort_name=cohort_name,
+            database=database,
+            target_outcome=target_outcome,
+            primary_exposure=primary_exposure,
+            cross_database_validation=cross_database_validation,
+            inclusion_criteria=inclusion_criteria,
+            exclusion_criteria=exclusion_criteria,
+            id_columns=id_columns,
+            time_columns=time_columns,
+            outcome_columns=outcome_columns,
+            time_windows=time_windows,
+            concept_descriptions=concept_descriptions,
+            user_preferences=user_preferences,
+            notes=notes,
+            skill_key=(skill_obj.key if skill_obj is not None else None),
+            experiment_spec=spec_obj,
+            source_files=source_files,
+            disable_icu_context=self._disable_icu_context,
+        )
+        run_environment_identity = build_environment_identity(
+            llm_signature=self._llm_signature(llm)
+        )
+
         resume_state: Optional[Dict[str, Any]] = None
+        resume_context_evidence_path: Optional[Path] = None
+        resume_input_verified = False
+        experiment_spec_path: Optional[Path] = None
         if resume_run_id:
             run_id = resume_run_id
             run_dir = self.workdir / run_id
-            resume_state = _load_resume_state(run_dir)
+            if run_dir.exists():
+                resume_state = _load_resume_state(run_dir)
+                if resume_state is None and any(run_dir.iterdir()):
+                    raise RunInputIdentityError(
+                        "Cannot resume safely: the requested run directory is "
+                        "non-empty but has no readable checkpoint."
+                    )
+                if resume_state is not None:
+                    prepared_resume = prepare_existing_resume_input(
+                        run_dir=run_dir,
+                        resume_state=resume_state,
+                        scientific_identity=run_scientific_identity,
+                        current_environment=run_environment_identity,
+                        cohort=cohort,
+                        question=question,
+                        resume_from_step_id=resume_from_step_id,
+                        enforcement_mode=self._evidence_enforcement_mode,
+                        load_compatible_plan=_load_compatible_resume_plan,
+                    )
+                    resume_state = prepared_resume.resume_state
+                    resume_input_verified = prepared_resume.input_verified
+                    resume_context_evidence_path = (
+                        prepared_resume.context_evidence_path
+                    )
+                    experiment_spec_path = prepared_resume.experiment_spec_path
+                    if prepared_resume.cohort_path is not None:
+                        cohort_path = prepared_resume.cohort_path
             run_dir.mkdir(parents=True, exist_ok=True)
         else:
             run_id = (
@@ -3686,27 +3791,29 @@ class ResearchAgentPipeline:
             )
             run_dir = self.workdir / run_id
             run_dir.mkdir(parents=True, exist_ok=True)
-        audit_logger = AuditLogger(run_dir / "audit_log.jsonl")
 
-        experiment_spec_path: Optional[Path] = None
-        if experiment_spec is not None:
-            spec_obj = (
-                experiment_spec
-                if isinstance(experiment_spec, ExperimentSpec)
-                else ExperimentSpec.model_validate(experiment_spec)
-            )
+        if not resume_input_verified and spec_obj is not None:
             experiment_spec_path = dump_experiment_spec(
                 spec_obj,
                 run_dir / "experiment_spec.yaml",
             )
 
-        cohort_path = self._materialise_cohort(cohort, run_dir)
-        _emit_progress(
-            "cohort",
-            "Cohort materialised to parquet.",
-            run_id=run_id,
-            path=str(cohort_path),
-        )
+        if not resume_input_verified:
+            cohort_path = self._materialise_cohort(cohort, run_dir)
+            _emit_progress(
+                "cohort",
+                "Cohort materialised to parquet.",
+                run_id=run_id,
+                path=str(cohort_path),
+            )
+        else:
+            _emit_progress(
+                "cohort",
+                "Verified immutable staged cohort for resume.",
+                run_id=run_id,
+                path=str(cohort_path),
+            )
+        audit_logger = AuditLogger(run_dir / "audit_log.jsonl")
 
         cache_key: Optional[str] = None
         if self._enable_cache and not resume_run_id:
@@ -3731,10 +3838,6 @@ class ResearchAgentPipeline:
                     run_id=cached.run_id,
                 )
                 return cached
-
-        llm = self._llm
-        if llm is None:
-            raise RuntimeError("LLM client is unexpectedly missing after validation.")
 
         def _plan_invoker():
             return self._run_plan_phase(
@@ -3761,6 +3864,9 @@ class ResearchAgentPipeline:
                 run_language=run_language,
                 experiment_spec_path=experiment_spec_path,
                 resume_state=resume_state,
+                resume_context_evidence_path=resume_context_evidence_path,
+                run_scientific_identity=run_scientific_identity,
+                run_environment_identity=run_environment_identity,
                 resume_from_step_id=resume_from_step_id,
                 emit_progress=_emit_progress,
             )

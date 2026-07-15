@@ -34,8 +34,19 @@ from easyicu.research_agent.pipeline import (
 )
 from easyicu.research_agent.evidence import EvidenceStore
 from easyicu.research_agent.plan_utils import _render_only_figure_step_intent
+from easyicu.research_agent.context import build_research_context
+from easyicu.research_agent.run_input_capsule import (
+    RUN_INPUT_CAPSULE_FILENAME,
+    RunInputIdentityError,
+    build_environment_identity,
+    build_scientific_identity,
+    invalidate_unverified_successful_steps,
+    load_verified_run_input_capsule,
+    prepare_existing_resume_input,
+    seal_run_input_capsule,
+)
 from easyicu.research_agent.runtime_artifacts import verified_run_evidence_path
-from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep, TimeWindow
 
 
 def _run_full(ra, synthetic_cohort, workdir: Path):
@@ -62,6 +73,601 @@ def _write_bench_resume_checkpoint(run_dir: Path, *, complete: bool = False) -> 
             json.dumps({"gates": {"execution_complete": True}}),
             encoding="utf-8",
         )
+
+
+def _write_capsule_resume_fixture(ra, tmp_path: Path):
+    """Create a pre-execution run whose input identity is already sealed."""
+
+    run_id = "run_capsule_identity"
+    run_dir = tmp_path / run_id
+    run_dir.mkdir()
+    cohort = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4],
+            "exposure_a": [0, 1, 0, 1],
+            "outcome": [0, 1, 0, 1],
+        }
+    )
+    cohort_path = run_dir / "cohort.parquet"
+    cohort.to_parquet(cohort_path, index=False)
+    window = TimeWindow(
+        name="first_24h",
+        anchor="icu_admission",
+        start_hours=0,
+        end_hours=24,
+        rationale="Prespecified baseline window.",
+    )
+    run_kwargs = {
+        "question": "Is exposure A associated with the outcome?",
+        "cohort": cohort,
+        "cohort_name": "capsule_cohort",
+        "database": "synthetic",
+        "target_outcome": "outcome",
+        "primary_exposure": "exposure_a",
+        "inclusion_criteria": ["adult ICU stays"],
+        "exclusion_criteria": ["missing outcome"],
+        "id_columns": ["stay_id"],
+        "outcome_columns": ["outcome"],
+        "time_windows": [window],
+        "concept_descriptions": {"exposure_a": "Prespecified binary exposure."},
+        "notes": "Prespecified context note.",
+        "resume_run_id": run_id,
+        "stop_after_analysis": True,
+    }
+    context = build_research_context(
+        research_question=run_kwargs["question"],
+        cohort=cohort_path,
+        cohort_name=run_kwargs["cohort_name"],
+        database=run_kwargs["database"],
+        target_outcome=run_kwargs["target_outcome"],
+        primary_exposure=run_kwargs["primary_exposure"],
+        inclusion_criteria=run_kwargs["inclusion_criteria"],
+        exclusion_criteria=run_kwargs["exclusion_criteria"],
+        id_columns=run_kwargs["id_columns"],
+        outcome_columns=run_kwargs["outcome_columns"],
+        time_windows=run_kwargs["time_windows"],
+        concept_descriptions=run_kwargs["concept_descriptions"],
+        notes=run_kwargs["notes"],
+    )
+    context_path = run_dir / "research_context.json"
+    context_path.write_text(context.model_dump_json(indent=2), encoding="utf-8")
+    plan = AnalysisPlan(
+        research_question=run_kwargs["question"],
+        steps=[
+            AnalysisStep(
+                step_id="01_summary",
+                intent="Summarize the prespecified cohort.",
+                inputs=["exposure_a", "outcome"],
+                expected_outputs=["table:summary"],
+                method="descriptive_statistics",
+            )
+        ],
+    )
+    plan_path = run_dir / "analysis_plan.json"
+    plan_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
+    evidence = EvidenceStore(run_dir)
+    evidence.register_file(
+        kind="log",
+        description="Frozen research context.",
+        source_path=context_path,
+        evidence_id="research_context",
+        producer="pipeline",
+        generation_mode="system",
+    )
+    evidence.register_file(
+        kind="log",
+        description="Frozen analysis plan.",
+        source_path=plan_path,
+        evidence_id="analysis_plan",
+        producer="planner",
+        generation_mode="llm",
+    )
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=ra.MockLLMClient(),
+        enable_literature=False,
+        enable_memory=False,
+        enable_latex=False,
+    )
+    identity = build_scientific_identity(
+        cohort=cohort,
+        question=run_kwargs["question"],
+        cohort_name=run_kwargs["cohort_name"],
+        database=run_kwargs["database"],
+        target_outcome=run_kwargs["target_outcome"],
+        primary_exposure=run_kwargs["primary_exposure"],
+        cross_database_validation=None,
+        inclusion_criteria=run_kwargs["inclusion_criteria"],
+        exclusion_criteria=run_kwargs["exclusion_criteria"],
+        id_columns=run_kwargs["id_columns"],
+        time_columns=None,
+        outcome_columns=run_kwargs["outcome_columns"],
+        time_windows=run_kwargs["time_windows"],
+        concept_descriptions=run_kwargs["concept_descriptions"],
+        user_preferences=None,
+        notes=run_kwargs["notes"],
+        skill_key=None,
+        experiment_spec=None,
+        source_files=None,
+        disable_icu_context=False,
+    )
+    seal_run_input_capsule(
+        run_dir=run_dir,
+        evidence=evidence,
+        scientific_identity=identity,
+        initial_environment=build_environment_identity(llm_signature="mock"),
+        context_path=context_path,
+        cohort_path=cohort_path,
+        experiment_spec_path=None,
+    )
+    (run_dir / "manifest_partial.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "easyicu.research_manifest_partial/1",
+                "run_id": run_id,
+                "context_path": context_path.name,
+                "plan_path": plan_path.name,
+                "per_step_records": [],
+                "evidence": [
+                    record.model_dump(mode="json") for record in evidence.records()
+                ],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return pipeline, run_dir, run_kwargs
+
+
+@pytest.mark.parametrize(
+    "changed_field",
+    [
+        "cohort",
+        "question",
+        "primary_exposure",
+        "target_outcome",
+        "time_windows",
+        "inclusion_criteria",
+        "exclusion_criteria",
+        "concept_descriptions",
+        "notes",
+    ],
+)
+def test_resume_rejects_scientific_identity_drift_before_any_write(
+    ra,
+    tmp_path: Path,
+    changed_field: str,
+):
+    pipeline, run_dir, base_kwargs = _write_capsule_resume_fixture(ra, tmp_path)
+    before = {
+        str(path.relative_to(run_dir)): path.read_bytes()
+        for path in run_dir.rglob("*")
+        if path.is_file()
+    }
+    kwargs = dict(base_kwargs)
+    if changed_field == "cohort":
+        changed = kwargs["cohort"].copy()
+        changed.loc[0, "outcome"] = 1
+        kwargs["cohort"] = changed
+    elif changed_field == "question":
+        kwargs[changed_field] = "Is a different exposure associated with outcome?"
+    elif changed_field == "primary_exposure":
+        kwargs[changed_field] = "exposure_b"
+    elif changed_field == "target_outcome":
+        kwargs[changed_field] = "different_outcome"
+    elif changed_field == "time_windows":
+        kwargs[changed_field] = [
+            TimeWindow(
+                name="first_48h",
+                anchor="icu_admission",
+                start_hours=0,
+                end_hours=48,
+            )
+        ]
+    elif changed_field == "inclusion_criteria":
+        kwargs[changed_field] = ["paediatric ICU stays"]
+    elif changed_field == "exclusion_criteria":
+        kwargs[changed_field] = ["exclude exposed stays"]
+    elif changed_field == "concept_descriptions":
+        kwargs[changed_field] = {"exposure_a": "A different scientific definition."}
+    else:
+        kwargs[changed_field] = "A different study context."
+
+    with pytest.raises(RunInputIdentityError, match="different scientific input"):
+        pipeline.run(**kwargs)
+
+    after = {
+        str(path.relative_to(run_dir)): path.read_bytes()
+        for path in run_dir.rglob("*")
+        if path.is_file()
+    }
+    assert after == before
+
+
+def test_resume_environment_drift_is_receipted_without_overwriting_inputs(
+    ra,
+    tmp_path: Path,
+    monkeypatch,
+):
+    from easyicu.research_agent import pipeline as pipeline_module
+
+    pipeline, run_dir, run_kwargs = _write_capsule_resume_fixture(ra, tmp_path)
+    context_before = (run_dir / "research_context.json").read_bytes()
+    cohort_before = (run_dir / "cohort.parquet").read_bytes()
+    original_environment = pipeline_module.build_environment_identity(
+        llm_signature="model-drift"
+    )
+    changed_environment = {
+        **original_environment,
+        "engine_code_sha256": "f" * 64,
+        "validator_code_sha256": "e" * 64,
+    }
+    monkeypatch.setattr(
+        pipeline_module,
+        "build_environment_identity",
+        lambda *, llm_signature: changed_environment,
+    )
+
+    class DifferentModelLLM:
+        name = "different-model"
+
+        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
+            return "{}"
+
+    pipeline._llm = DifferentModelLLM()
+
+    def stop_after_receipt(**_kwargs):
+        raise RuntimeError("stop after resume receipt")
+
+    monkeypatch.setattr(pipeline, "_run_plan_phase", stop_after_receipt)
+    with pytest.raises(RuntimeError, match="stop after resume receipt"):
+        pipeline.run(**run_kwargs)
+
+    receipts = sorted(run_dir.glob("resume_environment_receipt_*.json"))
+    assert len(receipts) == 1
+    payload = json.loads(receipts[0].read_text(encoding="utf-8"))
+    assert payload["environment_drift"] is True
+    assert {
+        "llm_signature",
+        "llm_signature_sha256",
+        "engine_code_sha256",
+        "validator_code_sha256",
+    } <= set(payload["changed_fields"])
+    assert (run_dir / "research_context.json").read_bytes() == context_before
+    assert (run_dir / "cohort.parquet").read_bytes() == cohort_before
+    assert (run_dir / RUN_INPUT_CAPSULE_FILENAME).is_file()
+
+
+def test_legacy_failed_attempt_without_capsule_cannot_mix_new_inputs(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "legacy_failed_attempt"
+    run_dir.mkdir()
+
+    with pytest.raises(RunInputIdentityError, match="after any step attempt"):
+        prepare_existing_resume_input(
+            run_dir=run_dir,
+            resume_state={
+                "per_step_records": [
+                    {"step_id": "01_model", "status": "execution_failed"}
+                ]
+            },
+            scientific_identity={"question": "new study"},
+            current_environment={"llm_signature": "mock"},
+            cohort=pd.DataFrame({"x": [1]}),
+            question="new study",
+            resume_from_step_id=None,
+            enforcement_mode=None,
+            load_compatible_plan=lambda **_kwargs: pytest.fail(
+                "an attempted legacy run must fail before plan reuse"
+            ),
+        )
+
+
+def test_resume_invalidates_only_successes_with_unverified_evidence(tmp_path: Path):
+    run_dir = tmp_path / "run_evidence_invalidation"
+    run_dir.mkdir()
+    evidence = EvidenceStore(run_dir)
+    source_a = run_dir / "a.json"
+    source_b = run_dir / "b.json"
+    source_a.write_text('{"n": 1}', encoding="utf-8")
+    source_b.write_text('{"n": 2}', encoding="utf-8")
+    record_a = evidence.register_file(
+        kind="statistic",
+        description="Step A summary.",
+        source_path=source_a,
+        evidence_id="step_a_summary",
+        produced_by_step="01_a",
+    )
+    record_b = evidence.register_file(
+        kind="statistic",
+        description="Step B summary.",
+        source_path=source_b,
+        evidence_id="step_b_summary",
+        produced_by_step="02_b",
+    )
+    state = {
+        "per_step_records": [
+            {"step_id": "01_a", "status": "ok", "evidence_ids": [record_a.evidence_id]},
+            {"step_id": "02_b", "status": "ok", "evidence_ids": [record_b.evidence_id]},
+        ],
+        "findings": [],
+    }
+    Path(verified_run_evidence_path(run_dir, record_a)).unlink()
+    records = {
+        record["evidence_id"]: record
+        for record in json.loads(
+            (run_dir / "evidence" / "evidence_index.json").read_text(encoding="utf-8")
+        )
+    }
+
+    updated, invalidated = invalidate_unverified_successful_steps(
+        run_dir=run_dir,
+        resume_state=state,
+        records=records,
+    )
+
+    latest = {
+        record["step_id"]: record
+        for record in updated["per_step_records"]
+    }
+    assert invalidated == {
+        "01_a": "evidence step_a_summary failed path/digest verification"
+    }
+    assert latest["01_a"]["status"] == "resume_evidence_invalid"
+    assert latest["02_b"]["status"] == "ok"
+
+
+def test_resume_invalidates_downstream_success_when_upstream_evidence_is_bad(
+    tmp_path: Path,
+):
+    run_dir = tmp_path / "run_upstream_evidence_invalidation"
+    run_dir.mkdir()
+    evidence = EvidenceStore(run_dir)
+    upstream_path = run_dir / "upstream.json"
+    downstream_path = run_dir / "downstream.json"
+    upstream_path.write_text('{"n": 1}', encoding="utf-8")
+    downstream_path.write_text('{"estimate": 2}', encoding="utf-8")
+    upstream = evidence.register_file(
+        kind="statistic",
+        description="Upstream authority.",
+        source_path=upstream_path,
+        evidence_id="upstream_summary",
+        produced_by_step="01_upstream",
+    )
+    downstream = evidence.register_file(
+        kind="statistic",
+        description="Downstream result derived from upstream authority.",
+        source_path=downstream_path,
+        evidence_id="downstream_summary",
+        produced_by_step="02_downstream",
+        inputs=[upstream.evidence_id],
+    )
+    state = {
+        "per_step_records": [
+            {
+                "step_id": "01_upstream",
+                "status": "ok",
+                "evidence_ids": [upstream.evidence_id],
+            },
+            {
+                "step_id": "02_downstream",
+                "status": "ok",
+                "evidence_ids": [downstream.evidence_id],
+            },
+        ],
+        "findings": [],
+    }
+    Path(verified_run_evidence_path(run_dir, upstream)).unlink()
+    records = {
+        record["evidence_id"]: record
+        for record in json.loads(
+            (run_dir / "evidence" / "evidence_index.json").read_text(
+                encoding="utf-8"
+            )
+        )
+    }
+
+    updated, invalidated = invalidate_unverified_successful_steps(
+        run_dir=run_dir,
+        resume_state=state,
+        records=records,
+    )
+
+    assert set(invalidated) == {"01_upstream", "02_downstream"}
+    assert "upstream_summary failed path/digest verification" in invalidated[
+        "02_downstream"
+    ]
+    latest = {
+        record["step_id"]: record for record in updated["per_step_records"]
+    }
+    assert latest["01_upstream"]["status"] == "resume_evidence_invalid"
+    assert latest["02_downstream"]["status"] == "resume_evidence_invalid"
+
+
+def test_pipeline_resume_passes_invalidated_evidence_step_to_execution(
+    ra,
+    tmp_path: Path,
+    monkeypatch,
+):
+    pipeline, run_dir, run_kwargs = _write_capsule_resume_fixture(ra, tmp_path)
+    output = run_dir / "summary.json"
+    output.write_text('{"n": 4}', encoding="utf-8")
+    evidence = EvidenceStore(run_dir)
+    record = evidence.register_file(
+        kind="statistic",
+        description="Prior summary.",
+        source_path=output,
+        evidence_id="prior_summary",
+        produced_by_step="01_summary",
+    )
+    partial_path = run_dir / "manifest_partial.json"
+    partial = json.loads(partial_path.read_text(encoding="utf-8"))
+    partial["per_step_records"] = [
+        {
+            "step_id": "01_summary",
+            "status": "ok",
+            "evidence_ids": [record.evidence_id],
+        }
+    ]
+    partial["evidence"] = [
+        item.model_dump(mode="json") for item in evidence.records()
+    ]
+    partial_path.write_text(json.dumps(partial, indent=2), encoding="utf-8")
+    Path(verified_run_evidence_path(run_dir, record)).unlink()
+
+    observed = {}
+
+    def capture_resume_state(**kwargs):
+        observed.update(kwargs["resume_state"])
+        raise RuntimeError("captured invalidated resume state")
+
+    monkeypatch.setattr(pipeline, "_run_plan_phase", capture_resume_state)
+    with pytest.raises(RuntimeError, match="captured invalidated"):
+        pipeline.run(**run_kwargs)
+
+    current = {
+        item["step_id"]: item
+        for item in observed["per_step_records"]
+    }
+    assert current["01_summary"]["status"] == "resume_evidence_invalid"
+    assert any(
+        finding.get("validator") == "resume_evidence_integrity"
+        for finding in observed["findings"]
+    )
+
+
+def test_legacy_completed_resume_is_adopted_only_from_verified_context_and_cohort(
+    ra,
+    tmp_path: Path,
+):
+    pipeline, run_dir, run_kwargs = _write_capsule_resume_fixture(ra, tmp_path)
+    evidence = EvidenceStore(run_dir)
+    result_path = run_dir / "legacy_result.json"
+    result_path.write_text('{"n": 4}', encoding="utf-8")
+    result_record = evidence.register_file(
+        kind="statistic",
+        description="Legacy completed result.",
+        source_path=result_path,
+        evidence_id="legacy_result",
+        produced_by_step="01_summary",
+    )
+    provenance_path = run_dir / "provenance_sources.json"
+    provenance_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "easyicu.provenance_sources/1",
+                "records": [
+                    {
+                        "relative_path": "cohort.parquet",
+                        "role": "cohort",
+                        "sha256": hashlib.sha256(
+                            (run_dir / "cohort.parquet").read_bytes()
+                        ).hexdigest(),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    evidence.register_file(
+        kind="log",
+        description="Legacy cohort provenance.",
+        source_path=provenance_path,
+        evidence_id="provenance_sources",
+    )
+
+    index_path = run_dir / "evidence" / "evidence_index.json"
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    capsule_record = next(
+        record for record in index if record["evidence_id"] == "run_input_capsule"
+    )
+    Path(run_dir / capsule_record["relative_path"]).unlink()
+    index_path.write_text(
+        json.dumps(
+            [
+                record
+                for record in index
+                if record["evidence_id"] != "run_input_capsule"
+            ],
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    aliases_path = run_dir / "evidence" / "evidence_aliases.json"
+    aliases = json.loads(aliases_path.read_text(encoding="utf-8"))
+    aliases_path.write_text(
+        json.dumps(
+            {
+                alias: evidence_id
+                for alias, evidence_id in aliases.items()
+                if evidence_id != "run_input_capsule"
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / RUN_INPUT_CAPSULE_FILENAME).unlink()
+
+    partial = json.loads((run_dir / "manifest_partial.json").read_text(encoding="utf-8"))
+    partial.update(
+        {
+            "llm_signature": "mock",
+            "prompt_pack_version": "legacy-prompts/v1",
+            "prompt_pack_files": {},
+            "per_step_records": [
+                {
+                    "step_id": "01_summary",
+                    "status": "ok",
+                    "evidence_ids": [result_record.evidence_id],
+                }
+            ],
+        }
+    )
+    (run_dir / "manifest_partial.json").write_text(
+        json.dumps(partial, indent=2), encoding="utf-8"
+    )
+    scientific_identity = build_scientific_identity(
+        cohort=run_kwargs["cohort"],
+        question=run_kwargs["question"],
+        cohort_name=run_kwargs["cohort_name"],
+        database=run_kwargs["database"],
+        target_outcome=run_kwargs["target_outcome"],
+        primary_exposure=run_kwargs["primary_exposure"],
+        cross_database_validation=None,
+        inclusion_criteria=run_kwargs["inclusion_criteria"],
+        exclusion_criteria=run_kwargs["exclusion_criteria"],
+        id_columns=run_kwargs["id_columns"],
+        time_columns=None,
+        outcome_columns=run_kwargs["outcome_columns"],
+        time_windows=run_kwargs["time_windows"],
+        concept_descriptions=run_kwargs["concept_descriptions"],
+        user_preferences=None,
+        notes=run_kwargs["notes"],
+        skill_key=None,
+        experiment_spec=None,
+        source_files=None,
+        disable_icu_context=False,
+    )
+    prepared = prepare_existing_resume_input(
+        run_dir=run_dir,
+        resume_state=partial,
+        scientific_identity=scientific_identity,
+        current_environment=build_environment_identity(llm_signature="mock"),
+        cohort=run_kwargs["cohort"],
+        question=run_kwargs["question"],
+        resume_from_step_id=None,
+        enforcement_mode="soft",
+        load_compatible_plan=_load_compatible_resume_plan,
+    )
+
+    assert prepared.input_verified is True
+    adopted = load_verified_run_input_capsule(
+        run_dir=run_dir,
+        scientific_identity=scientific_identity,
+    )
+    assert adopted.capsule.legacy_adopted is True
+    assert prepared.resume_state["resume_environment_drift"] is True
 
 
 def test_bench_runner_explicit_resume_id_wins_over_auto_discovery(tmp_path: Path):
