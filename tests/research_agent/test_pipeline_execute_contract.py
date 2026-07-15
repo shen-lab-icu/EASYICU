@@ -83,9 +83,7 @@ def test_consistent_local_figure_source_descriptor_is_canonicalized_for_consumer
     )
     payload = json.loads(contract_path.read_text(encoding="utf-8"))
     assert payload["source_data"] == ["result_source_data.csv"]
-    assert _contract_payload_source_references(payload) == [
-        "result_source_data.csv"
-    ]
+    assert _contract_payload_source_references(payload) == ["result_source_data.csv"]
     assert _string_list(payload["source_data"]) == ["result_source_data.csv"]
 
 
@@ -272,9 +270,7 @@ def test_code_repair_findings_keep_only_blocking_errors():
         ]
     )
 
-    assert [finding.message for finding in findings] == [
-        "Repair this blocking error."
-    ]
+    assert [finding.message for finding in findings] == ["Repair this blocking error."]
     assert findings[0].detail == {"reason": "blocking_contract"}
 
 
@@ -364,6 +360,91 @@ def test_every_deterministic_statistical_error_fails_outer_step():
     )
 
     assert status == "contract_failed"
+
+
+def test_failed_contract_code_reuse_requires_exact_checkpoint_authority():
+    import copy
+    import hashlib
+
+    from easyicu.research_agent.pipeline_execute import (
+        _failed_contract_code_can_be_reused_before_coder,
+        _serializable_plan_scientific_scope_signature,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    step = AnalysisStep(
+        step_id="01_summary",
+        intent="Summarize the declared cohort.",
+        inputs=["stay_id"],
+        expected_outputs=["table:summary"],
+        method="descriptive_summary",
+    )
+    plan = AnalysisPlan(
+        research_question="Summarize this ICU cohort.",
+        steps=[step],
+    )
+    code = "import pandas as pd\nprint(pd.__version__)\n"
+    digest = hashlib.sha256(code.encode("utf-8")).hexdigest()
+    evidence_record = {
+        "evidence_id": "code_summary",
+        "sha256": digest,
+    }
+    resolved_inputs_sha256 = "a" * 64
+    run_input_capsule_sha256 = "b" * 64
+    prior_record = {
+        "step_id": step.step_id,
+        "status": "contract_failed",
+        "returncode": 0,
+        "timed_out": False,
+        "outputs_safe_to_collect": True,
+        "executed_code_sha256": digest,
+        "concept_approved_code_sha256": digest,
+        "script_evidence_id": evidence_record["evidence_id"],
+        "resolved_inputs_sha256": resolved_inputs_sha256,
+        "run_input_capsule_sha256": run_input_capsule_sha256,
+        "plan_scientific_signature": (
+            _serializable_plan_scientific_scope_signature(plan)
+        ),
+        "analysis_request": {"step": step.model_dump(mode="json")},
+    }
+
+    def allowed(record, resumed=(code, evidence_record)):
+        return _failed_contract_code_can_be_reused_before_coder(
+            prior_step_record=record,
+            resumed_code=resumed,
+            step=step,
+            plan=plan,
+            resolved_inputs_sha256=resolved_inputs_sha256,
+            run_input_capsule_sha256=run_input_capsule_sha256,
+        )
+
+    assert allowed(prior_record) is True
+
+    mutations = []
+    for key, value in (
+        ("status", "ok"),
+        ("returncode", 1),
+        ("timed_out", True),
+        ("outputs_safe_to_collect", False),
+        ("executed_code_sha256", "0" * 64),
+        ("concept_approved_code_sha256", "0" * 64),
+        ("script_evidence_id", "different_code"),
+        ("resolved_inputs_sha256", "0" * 64),
+        ("run_input_capsule_sha256", "0" * 64),
+        ("plan_scientific_signature", ["changed"]),
+        ("provider_call_budget_receipt_invalid", True),
+        ("quarantined_requires_repair", True),
+    ):
+        changed = copy.deepcopy(prior_record)
+        changed[key] = value
+        mutations.append(changed)
+    changed_step = copy.deepcopy(prior_record)
+    changed_step["analysis_request"]["step"]["method"] = "different_method"
+    mutations.append(changed_step)
+
+    assert all(allowed(record) is False for record in mutations)
+    mismatched_evidence = dict(evidence_record, sha256="f" * 64)
+    assert allowed(prior_record, (code, mismatched_evidence)) is False
 
 
 @pytest.mark.parametrize("critique_status", ["needs_revision", "blocked"])
@@ -654,12 +735,8 @@ def test_figure_repair_precedes_output_evidence_and_numeric_claim_seal():
     status_resolution = source.index(
         'step_record["status"] = _step_status_from_contract_findings('
     )
-    numeric_authority_publish = source.rindex(
-        "_register_current_step_numeric_claims()"
-    )
-    result_authority_publish = source.rindex(
-        "evidence.publish_step_success_aliases("
-    )
+    numeric_authority_publish = source.rindex("_register_current_step_numeric_claims()")
+    result_authority_publish = source.rindex("evidence.publish_step_success_aliases(")
     final_repair = source.rindex("_repair_publication_figure_in_staging(")
 
     assert final_repair < seal < artifact_registration < numeric_registration
@@ -669,12 +746,10 @@ def test_figure_repair_precedes_output_evidence_and_numeric_claim_seal():
         < result_authority_publish
         < numeric_authority_publish
     )
-    assert "publish_aliases=False" in source[
-        artifact_registration:status_resolution
-    ]
-    assert "_repair_publication_figure_in_staging(" not in source[
-        artifact_registration:
-    ]
+    assert "publish_aliases=False" in source[artifact_registration:status_resolution]
+    assert (
+        "_repair_publication_figure_in_staging(" not in source[artifact_registration:]
+    )
 
 
 def test_execute_phase_deterministically_requires_typed_exposure_consumption():
@@ -978,9 +1053,9 @@ def test_plan_and_execute_result_dataclass_shapes_match_contracts_module():
         "resume_state",
     }
     missing = required_plan_fields - plan_fields
-    assert not missing, (
-        f"_PlanPhaseResult is missing fields {missing} consumed by run_execute_phase."
-    )
+    assert (
+        not missing
+    ), f"_PlanPhaseResult is missing fields {missing} consumed by run_execute_phase."
 
     exec_fields = {f.name for f in fields(_ExecutePhaseResult)}
     required_exec_fields = {

@@ -1893,9 +1893,21 @@ def test_resume_from_completed_step_can_stop_after_that_step(
     )
 
 
-@pytest.mark.parametrize("reuse_step_code", [False, True])
+@pytest.mark.parametrize(
+    ("reuse_step_code", "mark_prior_contract_failed", "expected_coder_calls"),
+    [
+        (False, False, 1),
+        (True, False, 0),
+        (False, True, 0),
+    ],
+)
 def test_resume_from_step_reuses_prior_code(
-    ra, tmp_path: Path, monkeypatch, reuse_step_code: bool
+    ra,
+    tmp_path: Path,
+    monkeypatch,
+    reuse_step_code: bool,
+    mark_prior_contract_failed: bool,
+    expected_coder_calls: int,
 ):
     """Resume reuses valid prior code only on failure or explicit opt-in."""
 
@@ -1993,6 +2005,14 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     run_dir = Path(first.workdir)
     partial_path = run_dir / "manifest_partial.json"
     partial = json.loads(partial_path.read_text(encoding="utf-8"))
+    if mark_prior_contract_failed:
+        for ledger_name in ("per_step_records", "step_attempt_history"):
+            prior_record = next(
+                record
+                for record in reversed(partial.get(ledger_name, []))
+                if record.get("step_id") == "04_primary_association"
+            )
+            prior_record["status"] = "contract_failed"
     bad_code_path = run_dir / "evidence" / "code_bad__analysis.py"
     bad_code_path.write_text("{}", encoding="utf-8")
     partial["evidence"].append(
@@ -2066,7 +2086,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         stop_after_analysis=True,
     )
     assert second.run_id == first.run_id
-    assert second_llm.coder_calls == (0 if reuse_step_code else 1)
+    assert second_llm.coder_calls == expected_coder_calls
 
     partial = json.loads(
         (Path(second.workdir) / "manifest_partial.json").read_text(encoding="utf-8")
@@ -2124,10 +2144,14 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         for finding in partial["findings"]
         if finding.get("validator") == "coder"
     ]
-    if reuse_step_code:
+    preflight_reuse = reuse_step_code or mark_prior_contract_failed
+    if preflight_reuse:
         assert any("before requesting a new coder script" in m for m in coder_messages)
     else:
         assert any("Coder agent failed" in m for m in coder_messages)
+    assert records[-1].get("resumed_failed_contract_code_preflight") is (
+        True if mark_prior_contract_failed else None
+    )
 
 
 def test_concept_repair_failure_resumes_quarantined_draft_fail_closed(
@@ -2696,7 +2720,7 @@ def test_resume_reaudits_material_deterministic_quarantine_repair(
         gated_repair,
     )
 
-    draft_code = '''
+    draft_code = """
 import json
 import os
 from pathlib import Path
@@ -2730,7 +2754,7 @@ def main():
 
 if __name__ == "__main__":
     main()
-'''
+"""
 
     class DeterministicResumeLLM:
         name = "deterministic-quarantine-resume"

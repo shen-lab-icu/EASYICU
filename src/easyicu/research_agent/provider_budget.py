@@ -22,6 +22,7 @@ from typing import Callable, Dict, Iterator, Optional, Tuple, TypeVar
 
 
 _T = TypeVar("_T")
+_RESERVATION_UNSPECIFIED = object()
 
 
 class ProviderCallBudgetError(RuntimeError):
@@ -38,15 +39,20 @@ class ProviderCallBudgetExhausted(ProviderCallBudgetError):
         limit: int,
         used: int,
         step_id: Optional[str] = None,
+        reserved_for: Optional[str] = None,
     ) -> None:
         self.category = category
         self.limit = limit
         self.used = used
         self.step_id = step_id
+        self.reserved_for = reserved_for
         scope = f" for step {step_id!r}" if step_id else ""
+        reservation = (
+            f"; final slot reserved for {reserved_for!r}" if reserved_for else ""
+        )
         super().__init__(
-            f"LLM provider-call budget exhausted{scope}: "
-            f"category={category!r}, used={used}, limit={limit}."
+            f"LLM provider-call budget unavailable{scope}: "
+            f"category={category!r}, used={used}, limit={limit}{reservation}."
         )
 
 
@@ -82,6 +88,7 @@ def load_provider_call_budget_receipt(
     path: Path,
     *,
     step_id: str,
+    expected_reserved_final_category: object = _RESERVATION_UNSPECIFIED,
 ) -> Tuple[int, Tuple[str, ...]]:
     """Load and verify a durable receipt, failing closed on any corruption."""
 
@@ -99,7 +106,8 @@ def load_provider_call_budget_receipt(
         raise ProviderCallBudgetReceiptError(
             "Provider-call receipt digest is missing or invalid"
         )
-    if payload.get("schema_version") != 1:
+    schema_version = payload.get("schema_version")
+    if schema_version not in {1, 2}:
         raise ProviderCallBudgetReceiptError(
             "Provider-call receipt schema version is unsupported"
         )
@@ -120,9 +128,41 @@ def load_provider_call_budget_receipt(
         )
     normalized = tuple(str(item).strip() for item in categories)
     if any(not item for item in normalized) or len(normalized) > limit:
-        raise ProviderCallBudgetReceiptError(
-            "Provider-call receipt history is invalid"
-        )
+        raise ProviderCallBudgetReceiptError("Provider-call receipt history is invalid")
+
+    stored_reservation: Optional[str] = None
+    if schema_version == 2:
+        raw_reservation = payload.get("reserved_final_category")
+        if raw_reservation is not None:
+            if not isinstance(raw_reservation, str) or not raw_reservation.strip():
+                raise ProviderCallBudgetReceiptError(
+                    "Provider-call receipt has an invalid final reservation"
+                )
+            stored_reservation = raw_reservation.strip()
+    if expected_reserved_final_category is not _RESERVATION_UNSPECIFIED:
+        if expected_reserved_final_category is None:
+            expected_reservation = None
+        elif (
+            isinstance(expected_reserved_final_category, str)
+            and expected_reserved_final_category.strip()
+        ):
+            expected_reservation = expected_reserved_final_category.strip()
+        else:
+            raise ValueError("expected final reservation must be non-empty or None")
+        if schema_version == 1:
+            # Existing audit-enabled runs can migrate conservatively: the
+            # constructor below always re-arms the final slot, regardless of
+            # historical concept-audit calls.  An audit-disabled resume cannot
+            # prove that disabling was the original policy and therefore
+            # fails closed instead of silently weakening the run.
+            if expected_reservation is None:
+                raise ProviderCallBudgetReceiptError(
+                    "Legacy provider-call receipt does not bind final-audit policy"
+                )
+        elif stored_reservation != expected_reservation:
+            raise ProviderCallBudgetReceiptError(
+                "Provider-call receipt final-audit policy changed on resume"
+            )
     return limit, normalized
 
 
@@ -136,6 +176,7 @@ class StepProviderCallBudget:
         step_id: Optional[str] = None,
         consumed_categories: Tuple[str, ...] = (),
         receipt_path: Optional[Path] = None,
+        reserved_final_category: Optional[str] = None,
     ) -> None:
         if isinstance(limit, bool) or not isinstance(limit, int):
             raise TypeError("provider-call budget limit must be an integer")
@@ -148,22 +189,43 @@ class StepProviderCallBudget:
             raise ValueError("restored provider-call categories must be non-empty")
         self._categories: list[str] = list(restored)
         self._receipt_path = Path(receipt_path) if receipt_path is not None else None
+        self._reserved_final_category = (
+            str(reserved_final_category).strip() if reserved_final_category else None
+        )
+        # A historical call in the same category is not proof that the current
+        # code + authority binding was audited.  The reservation is released
+        # only after the caller binds and completes one exact final token.
+        self._required_reservation_token: Optional[str] = None
+        self._completed_reservation_token: Optional[str] = None
+        self._reservation_released = False
         self._lock = Lock()
+
+    def _can_consume_locked(self, category: str) -> bool:
+        used = len(self._categories)
+        if used >= self._limit:
+            return False
+        if (
+            self._reserved_final_category
+            and not self._reservation_released
+            and category != self._reserved_final_category
+            and self._limit - used <= 1
+        ):
+            return False
+        return True
 
     def _persist_locked(self) -> None:
         if self._receipt_path is None:
             return
         payload: Dict[str, object] = {
-            "schema_version": 1,
+            "schema_version": 2,
             "step_id": self._step_id,
             "limit": self._limit,
             "categories": list(self._categories),
+            "reserved_final_category": self._reserved_final_category,
         }
         payload["sha256"] = _receipt_digest(payload)
         path = self._receipt_path
-        temp_path = path.with_name(
-            f".{path.name}.{os.getpid()}.{id(self)}.tmp"
-        )
+        temp_path = path.with_name(f".{path.name}.{os.getpid()}.{id(self)}.tmp")
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             temp_path.write_text(
@@ -193,12 +255,22 @@ class StepProviderCallBudget:
             raise ValueError("provider-call category must be non-empty")
         with self._lock:
             used = len(self._categories)
-            if used >= self._limit:
+            if not self._can_consume_locked(normalized):
+                reserved_for = (
+                    self._reserved_final_category
+                    if (
+                        self._reserved_final_category
+                        and not self._reservation_released
+                        and normalized != self._reserved_final_category
+                    )
+                    else None
+                )
                 raise ProviderCallBudgetExhausted(
                     category=normalized,
                     limit=self._limit,
                     used=used,
                     step_id=self._step_id,
+                    reserved_for=reserved_for,
                 )
             self._categories.append(normalized)
             try:
@@ -209,6 +281,61 @@ class StepProviderCallBudget:
                 self._categories.pop()
                 raise
             return used + 1
+
+    def can_consume(self, category: str) -> bool:
+        """Return whether ``category`` may reserve the next provider call."""
+
+        normalized = str(category).strip()
+        if not normalized:
+            return False
+        with self._lock:
+            return self._can_consume_locked(normalized)
+
+    def bind_reserved_category(self, category: str, *, token: str) -> None:
+        """Bind the final reservation to one exact code/authority audit token."""
+
+        normalized = str(category).strip()
+        normalized_token = str(token).strip()
+        if not normalized_token:
+            raise ValueError("reservation token must be non-empty")
+        with self._lock:
+            if normalized != self._reserved_final_category:
+                raise ValueError("category does not own this provider reservation")
+            if self._required_reservation_token != normalized_token:
+                self._required_reservation_token = normalized_token
+                self._completed_reservation_token = None
+                self._reservation_released = False
+
+    def complete_reserved_category(self, category: str, *, token: str) -> None:
+        """Record that the exact bound audit token passed its final gate."""
+
+        normalized = str(category).strip()
+        normalized_token = str(token).strip()
+        with self._lock:
+            if normalized != self._reserved_final_category:
+                raise ValueError("category does not own this provider reservation")
+            if (
+                not normalized_token
+                or normalized_token != self._required_reservation_token
+            ):
+                raise ValueError("reservation token is not the current bound audit")
+            self._completed_reservation_token = normalized_token
+
+    def release_reserved_category(self, category: str, *, token: str) -> None:
+        """Release the slot only for the exact audit token that passed."""
+
+        normalized = str(category).strip()
+        normalized_token = str(token).strip()
+        with self._lock:
+            if normalized != self._reserved_final_category:
+                raise ValueError("category does not own this provider reservation")
+            if (
+                not normalized_token
+                or normalized_token != self._required_reservation_token
+                or normalized_token != self._completed_reservation_token
+            ):
+                raise ValueError("reservation token has not completed the final audit")
+            self._reservation_released = True
 
     @property
     def limit(self) -> int:
@@ -252,6 +379,10 @@ class StepProviderCallBudget:
                 "exhausted": len(categories) >= self._limit,
                 "categories": list(categories),
                 "category_counts": counts,
+                "reserved_final_category": self._reserved_final_category,
+                "reservation_bound": self._required_reservation_token is not None,
+                "reservation_completed": self._completed_reservation_token is not None,
+                "reservation_released": self._reservation_released,
             }
 
 
@@ -310,7 +441,7 @@ def active_provider_retry_available() -> bool:
     """Return whether a scoped transport call can afford another attempt."""
 
     state = _ACTIVE_PROVIDER_CALL.get()
-    return state is None or state.budget.remaining > 0
+    return state is None or state.budget.can_consume(state.category)
 
 
 def complete_with_provider_budget(
