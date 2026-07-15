@@ -1065,6 +1065,7 @@ def _resolved_typed_input_binding(
     evidence_ref: EvidenceRef,
     evidence_records: Sequence[Any],
     run_dir: Path,
+    producer_step_records: Sequence[Mapping[str, Any]] = (),
 ) -> Optional[Dict[str, Any]]:
     """Build the exact, digest-verified runtime binding for one typed input."""
 
@@ -1093,7 +1094,7 @@ def _resolved_typed_input_binding(
     except ValueError:
         return None
     declared_kind, product_name = typed_product
-    return {
+    binding = {
         "evidence_id": evidence_ref.evidence_id,
         "declared_kind": declared_kind,
         "product": product_name,
@@ -1105,6 +1106,22 @@ def _resolved_typed_input_binding(
             _evidence_record_field(record, "produced_by_step") or ""
         ),
     }
+    for step_record in reversed(list(producer_step_records)):
+        if str(step_record.get("status") or "") != "ok":
+            continue
+        evidence_ids = {
+            str(value) for value in (step_record.get("evidence_ids") or [])
+        }
+        if evidence_ref.evidence_id not in evidence_ids:
+            continue
+        step_summary = step_record.get("step_summary")
+        if not isinstance(step_summary, Mapping):
+            break
+        product_contract = step_summary.get(product_name)
+        if isinstance(product_contract, Mapping):
+            binding["product_contract"] = dict(product_contract)
+        break
+    return binding
 
 
 def _write_resolved_inputs_manifest(
@@ -4690,6 +4707,7 @@ def run_execute_phase(
                         evidence_ref=ref,
                         evidence_records=evidence_snapshot,
                         run_dir=run_dir,
+                        producer_step_records=records_snapshot,
                     )
                     if binding is None:
                         failures.append(
