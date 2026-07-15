@@ -47,3 +47,16 @@ def test_llm_concept_finding_has_typed_semantics_reason_without_phrase_routing()
     assert typed_repair_ticket([finding])[0]["reason"] == (
         RepairReason.SCIENTIFIC_SEMANTICS_VIOLATION.value
     )
+
+
+def test_swallowed_provenance_helper_has_typed_fail_closed_reason():
+    finding = ValidationFinding(
+        validator="mechanical_code_preflight",
+        severity="error",
+        message="arbitrary wording",
+        detail={"reason": "provenance_helper_error_swallowed"},
+    )
+
+    assert typed_repair_ticket([finding])[0]["reason"] == (
+        RepairReason.PROVENANCE_NOT_FAIL_CLOSED.value
+    )

@@ -6369,7 +6369,14 @@ else:
             # own pattern (a re-audit then finds nothing left to change).
             if deterministic_concept_repairs < _MAX_DETERMINISTIC_CONCEPT_REPAIRS:
                 _audit_error_msgs = [
-                    f.message for f in usage_findings if f.severity == "error"
+                    value
+                    for finding in usage_findings
+                    if finding.severity == "error"
+                    for value in (
+                        finding.message,
+                        str((finding.detail or {}).get("reason") or ""),
+                    )
+                    if value
                 ]
                 _det_code, _det_names = deterministic_concept_audit_repair(
                     code, _audit_error_msgs
