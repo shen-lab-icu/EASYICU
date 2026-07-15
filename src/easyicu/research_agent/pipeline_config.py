@@ -94,6 +94,11 @@ class PipelineConfig:
     # contract/visual repairs and runtime-crash repairs each get their own),
     # so genuinely broken steps still terminate.
     max_code_repair_attempts: int = 3
+    # Cross-gate stop-loss. Concept, contract, visual, and runtime repair used
+    # to each receive the per-class budget above, multiplying model calls for
+    # one local defect. Keep legacy per-class limits for compatibility, but cap
+    # actual LLM repair calls across the whole step.
+    max_step_llm_repair_attempts: int = 2
     enable_deterministic_code_fallback: bool = False
     enable_deterministic_planner_fallback: bool = False
     enable_deterministic_runner_repair: bool = True

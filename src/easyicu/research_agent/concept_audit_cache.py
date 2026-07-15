@@ -7,13 +7,13 @@ import json
 import os
 import threading
 from pathlib import Path
-from typing import Optional
+from typing import Any, Mapping, Optional
 
 from .prompts import PROMPT_PACK_VERSION
 from .schema import AnalysisStep, ResearchContext, ValidationFinding
 
 
-_CACHE_SCHEMA = "easyicu.llm_concept_audit_cache/2"
+_CACHE_SCHEMA = "easyicu.llm_concept_audit_cache/3"
 _AUDIT_POLICY_VERSION = "2026-07-14-step-scoped-v1"
 _LOCK = threading.Lock()
 
@@ -31,7 +31,16 @@ class LLMConceptAuditCache:
         step: AnalysisStep,
         script_text: str,
         audit_prompt: str,
+        authority_bindings: Optional[Mapping[str, Any]] = None,
+        validator_implementation_sha256: Optional[str] = None,
     ) -> str:
+        authority_payload = json.dumps(
+            authority_bindings or {},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
         payload = {
             "schema": _CACHE_SCHEMA,
             "policy": _AUDIT_POLICY_VERSION,
@@ -40,6 +49,12 @@ class LLMConceptAuditCache:
                 audit_prompt.encode("utf-8")
             ).hexdigest(),
             "script_sha256": hashlib.sha256(script_text.encode("utf-8")).hexdigest(),
+            "authority_bindings_sha256": hashlib.sha256(
+                authority_payload
+            ).hexdigest(),
+            "validator_implementation_sha256": str(
+                validator_implementation_sha256 or ""
+            ),
             "step": step.model_dump(mode="json"),
             "context": context.model_dump(mode="json"),
         }

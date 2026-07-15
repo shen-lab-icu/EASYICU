@@ -134,6 +134,9 @@ def test_primary_exposure_binding_contract_canonicalizes_one_declared_column(
     assert contract["column"] == "treatment"
     assert contract["executable_column"] == "treatment"
     assert contract["exposure_column"] == "treatment"
+    assert contract["authoritative_primary_exposure"] == "treatment"
+    assert contract["window"] == "baseline"
+    assert contract["time_window"] == "baseline"
 
 
 def test_primary_exposure_binding_contract_does_not_resolve_conflicting_columns(
@@ -155,6 +158,28 @@ def test_primary_exposure_binding_contract_does_not_resolve_conflicting_columns(
     assert contract["column"] == "treatment_a"
     assert contract["executable_column"] == "treatment_b"
     assert "exposure_column" not in contract
+    assert "authoritative_primary_exposure" not in contract
+
+
+def test_primary_exposure_binding_contract_does_not_resolve_conflicting_windows(
+    tmp_path,
+):
+    artifact = tmp_path / "primary_exposure.parquet"
+    contract = typed_product_binding_contract(
+        product_name="primary_exposure_definition",
+        step_summary={
+            "primary_exposure_definition": {
+                "column": "treatment",
+                "window": "baseline",
+                "time_window": "follow_up",
+            }
+        },
+        artifact_path=artifact,
+    )
+
+    assert contract is not None
+    assert contract["window"] == "baseline"
+    assert contract["time_window"] == "follow_up"
 SEALED_ABSOLUTE_RISK_REPAIR = "absolute_risk_incidence_prevalence_publication_bundle_v1"
 SEALED_IMPLEMENTATION_DIGEST = "a" * 64
 SEALED_PARENT_DIGESTS = {

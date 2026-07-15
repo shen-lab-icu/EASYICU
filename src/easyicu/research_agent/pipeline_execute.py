@@ -28,6 +28,7 @@ import ast
 import csv
 import hashlib
 import importlib
+import inspect
 import json
 import logging
 import math
@@ -137,6 +138,7 @@ from .pipeline import (
     _semantic_aliases_for,
 )
 from .publication_figures import make_figure_contract
+from .repair_reasons import typed_repair_ticket
 from .plan_utils import (
     _augment_measurement_companion_inputs,
     _cap_plan_preserving_figure_steps,
@@ -3767,6 +3769,13 @@ def run_execute_phase(
     primary_model_contract_validator = PrimaryModelContractValidator()
     statistical_guard = StatisticalGuard()
     llm_concept_audit_cache = LLMConceptAuditCache(run_dir)
+    llm_concept_auditor_source = inspect.getsourcefile(LLMConceptAuditor)
+    llm_concept_auditor_implementation_sha256 = (
+        sha256_of_file(Path(llm_concept_auditor_source))
+        if llm_concept_auditor_source
+        and Path(llm_concept_auditor_source).is_file()
+        else ""
+    )
     runtime_state = supervisor.bootstrap_state(run_id=run_id, context=context)
     repair_ledger = RepairLedger(run_dir / "repairs_applied.json")
     repair_ledger_lock = threading.Lock()
@@ -4787,6 +4796,7 @@ def run_execute_phase(
         )
         resumed_code_reuse_used = False
         critic_resume_repair_used = False
+        step_llm_repair_attempts = 0
         resumed_quarantined_draft_used = False
         quarantined_draft_active = False
         quarantined_repair_materially_changed = False
@@ -4794,6 +4804,30 @@ def run_execute_phase(
         quarantine_superseded_by_fallback = False
         quarantine_policy_superseded = False
         pending_quarantined_errors: List[ValidationFinding] = []
+
+        def _llm_repair_budget_available() -> bool:
+            return (
+                step_llm_repair_attempts
+                < pipeline._max_step_llm_repair_attempts
+            )
+
+        def _consume_llm_repair_budget(repair_class: str) -> bool:
+            nonlocal step_llm_repair_attempts
+            if not _llm_repair_budget_available():
+                step_record["step_llm_repair_budget_exhausted"] = True
+                step_record["step_llm_repair_budget"] = (
+                    pipeline._max_step_llm_repair_attempts
+                )
+                return False
+            step_llm_repair_attempts += 1
+            step_record["step_llm_repair_attempts"] = step_llm_repair_attempts
+            step_record["step_llm_repair_budget"] = (
+                pipeline._max_step_llm_repair_attempts
+            )
+            step_record.setdefault("step_llm_repair_classes", []).append(
+                str(repair_class)
+            )
+            return True
         monotonic_concept_constraints = _persisted_monotonic_concept_constraints(
             prior_step_record
         )
@@ -5218,6 +5252,8 @@ def run_execute_phase(
                 return None
             resumed_code = resume_controller.prior_code_for_step(step.step_id)
             if resumed_code is None:
+                return None
+            if not _consume_llm_repair_budget("critic_resume"):
                 return None
             prior_code = _use_resumed_code(resumed_code)
             critique_log = (
@@ -6056,6 +6092,10 @@ else:
                             step=step,
                             script_text=script_text,
                             audit_prompt=audit_prompt,
+                            authority_bindings=resolved_input_bindings,
+                            validator_implementation_sha256=(
+                                llm_concept_auditor_implementation_sha256
+                            ),
                         )
                         cached_findings = llm_concept_audit_cache.get(audit_key)
                         if cached_findings is not None:
@@ -6339,7 +6379,10 @@ else:
                     code = _det_code
                     continue
 
-            if concept_repair_attempts >= pipeline._max_code_repair_attempts:
+            if (
+                concept_repair_attempts >= pipeline._max_code_repair_attempts
+                or not _llm_repair_budget_available()
+            ):
                 fallback_code = _deterministic_fallback_code("concept_audit")
                 if fallback_code is not None:
                     fallback_checkpoint_error: Optional[Exception] = None
@@ -6529,6 +6572,8 @@ else:
                 return step_record
 
             concept_repair_attempts += 1
+            if not _consume_llm_repair_budget("concept"):
+                raise AssertionError("LLM repair budget changed without mutation")
             step_record["concept_repair_attempts"] = concept_repair_attempts
             emit_progress(
                 "coder",
@@ -6552,6 +6597,9 @@ else:
                 )
                 for f in blocking_usage_findings
             )
+            structured_repair_ticket = typed_repair_ticket(
+                blocking_usage_findings
+            )
             _remember_concept_constraints(blocking_usage_findings)
             try:
                 repaired_code = coder.repair(
@@ -6560,7 +6608,16 @@ else:
                     code=code,
                     run_log=(
                         "Static concept audit blocked this script before "
-                        "execution. Fix all ICU-rule violations.\n\n" + audit_log
+                        "execution. Fix all ICU-rule violations.\n\n"
+                        "TYPED REPAIR TICKET (authoritative routing):\n"
+                        + json.dumps(
+                            structured_repair_ticket,
+                            indent=2,
+                            ensure_ascii=False,
+                            default=str,
+                        )
+                        + "\n\nHUMAN-READABLE FINDINGS:\n"
+                        + audit_log
                     ),
                     attempt=concept_repair_attempts,
                 )
@@ -7295,6 +7352,7 @@ else:
                             )
                         elif (
                             visual_repair_attempts >= pipeline._max_code_repair_attempts
+                            or not _llm_repair_budget_available()
                         ):
                             fallback_code = _deterministic_fallback_code("visual_qa")
                             if fallback_code is not None:
@@ -7353,6 +7411,10 @@ else:
                             # error was a deterministic layout/cosmetic issue.
                         else:
                             visual_repair_attempts += 1
+                            if not _consume_llm_repair_budget("visual"):
+                                raise AssertionError(
+                                    "LLM repair budget changed without mutation"
+                                )
                             repair_attempts += 1
                             step_record["code_repair_attempts"] = repair_attempts
                             step_record["visual_repair_attempts"] = (
@@ -7970,7 +8032,11 @@ else:
                         )
                         _clear_output_dir(run_result.out_dir)
                         continue
-                    if contract_repair_attempts >= pipeline._max_code_repair_attempts:
+                    if (
+                        contract_repair_attempts
+                        >= pipeline._max_code_repair_attempts
+                        or not _llm_repair_budget_available()
+                    ):
                         with shared_lock:
                             findings.extend(early_contract_findings)
                             step_record["status"] = "contract_failed"
@@ -7995,6 +8061,10 @@ else:
                         return step_record
 
                     contract_repair_attempts += 1
+                    if not _consume_llm_repair_budget("contract"):
+                        raise AssertionError(
+                            "LLM repair budget changed without mutation"
+                        )
                     repair_attempts += 1
                     step_record["code_repair_attempts"] = repair_attempts
                     step_record["contract_repair_attempts"] = contract_repair_attempts
@@ -8009,6 +8079,9 @@ else:
                         contract_repair_attempts=contract_repair_attempts,
                     )
                     contract_log = _contract_repair_log(early_contract_errors)
+                    structured_repair_ticket = typed_repair_ticket(
+                        early_contract_errors
+                    )
                     repair_guidance = _step_contract_repair_guidance(
                         step=step,
                         step_summary=visual_step_summary,
@@ -8034,6 +8107,13 @@ else:
                                 )
                                 + "\n\nREPAIR GUIDANCE:\n"
                                 + repair_guidance
+                                + "\n\nTYPED REPAIR TICKET (authoritative routing):\n"
+                                + json.dumps(
+                                    structured_repair_ticket,
+                                    indent=2,
+                                    ensure_ascii=False,
+                                    default=str,
+                                )
                                 + "\n\nSTRUCTURED CONTRACT FINDINGS (authoritative):\n"
                                 + contract_log
                                 + _monotonic_concept_constraint_log()
@@ -8238,7 +8318,10 @@ else:
                 _clear_output_dir(run_result.out_dir)
                 continue
 
-            if runtime_repair_attempts >= pipeline._max_code_repair_attempts:
+            if (
+                runtime_repair_attempts >= pipeline._max_code_repair_attempts
+                or not _llm_repair_budget_available()
+            ):
                 fallback_code = _deterministic_fallback_code("execution_failure")
                 if fallback_code is not None:
                     code = fallback_code
@@ -8272,6 +8355,8 @@ else:
 
             repair_attempts += 1
             runtime_repair_attempts += 1
+            if not _consume_llm_repair_budget("runtime"):
+                raise AssertionError("LLM repair budget changed without mutation")
             step_record["code_repair_attempts"] = repair_attempts
             step_record["runtime_repair_attempts"] = runtime_repair_attempts
             emit_progress(

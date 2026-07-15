@@ -1778,6 +1778,7 @@ class ResearchAgentPipeline:
         disable_icu_context: bool = False,
         context_top_k: Optional[int] = None,
         max_code_repair_attempts: int = 3,
+        max_step_llm_repair_attempts: int = 2,
         enable_deterministic_code_fallback: bool = False,
         enable_deterministic_planner_fallback: bool = False,
         enable_deterministic_runner_repair: bool = True,
@@ -1893,6 +1894,9 @@ class ResearchAgentPipeline:
         self._disable_icu_context = bool(disable_icu_context)
         self._context_top_k = int(context_top_k) if context_top_k else None
         self._max_code_repair_attempts = max(0, int(max_code_repair_attempts))
+        self._max_step_llm_repair_attempts = max(
+            0, int(max_step_llm_repair_attempts)
+        )
         self._enable_deterministic_code_fallback = bool(
             enable_deterministic_code_fallback
         )
@@ -4298,6 +4302,7 @@ class ResearchAgentPipeline:
             "enable_probe_step": bool(self._enable_probe_step),
             "enable_replanning": bool(self._enable_replanning),
             "max_code_repair_attempts": self._max_code_repair_attempts,
+            "max_step_llm_repair_attempts": self._max_step_llm_repair_attempts,
             "enable_deterministic_code_fallback": bool(
                 self._enable_deterministic_code_fallback
             ),
