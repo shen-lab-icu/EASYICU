@@ -65,6 +65,7 @@ from .code_patch import (
 from .coder_context import coder_guide_for_step, scoped_coder_context
 from .declared_product_contract import typed_product as _canonical_typed_product
 from .plan_utils import (
+    _cohort_predicate_partition_safety_rules,
     _primary_analysis_cohort_canonical_schema_rules,
     effect_output_authorized,
 )
@@ -1380,6 +1381,19 @@ def _primary_analysis_cohort_output_contract(step: AnalysisStep) -> str:
     )
 
 
+def _cohort_predicate_partition_safety_contract(step: AnalysisStep) -> str:
+    """Render host-owned safety around Planner-owned cohort predicates."""
+
+    rules = _cohort_predicate_partition_safety_rules(step)
+    if not rules:
+        return ""
+    return (
+        "COHORT-PREDICATE PARTITION SAFETY (binding):\n"
+        + "\n".join(f"- {rule}" for rule in rules)
+        + "\n"
+    )
+
+
 def _declared_output_scope_contract(step: AnalysisStep) -> str:
     """Keep code generation inside the plan's typed product boundary.
 
@@ -1556,6 +1570,7 @@ class CoderAgent:
                     f"Method: {step.method or '(unspecified — choose conservatively)'}\n\n"
                     + _declared_output_scope_contract(step)
                     + _primary_analysis_cohort_output_contract(step)
+                    + _cohort_predicate_partition_safety_contract(step)
                     + _typed_input_scope_contract(step)
                     + coder_method_capability_block()
                     + trajectory_phenotyping_code_contract(
@@ -1656,6 +1671,7 @@ class CoderAgent:
             f"Method: {step.method or '(unspecified)'}\n\n"
             + _declared_output_scope_contract(step)
             + _primary_analysis_cohort_output_contract(step)
+            + _cohort_predicate_partition_safety_contract(step)
             + _typed_input_scope_contract(step)
             + trajectory_phenotyping_code_contract(context=context, step=step)
             + trajectory_role_code_contract(context=context, step=step)

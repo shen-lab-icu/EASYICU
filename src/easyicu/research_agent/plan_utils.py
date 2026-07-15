@@ -4540,6 +4540,38 @@ def _primary_analysis_cohort_canonical_schema_rules(
     )
 
 
+def _cohort_predicate_partition_safety_rules(
+    step: AnalysisStep,
+) -> tuple[str, ...]:
+    """Render mechanical safety rules for a declared cohort-flow owner.
+
+    The rules make Planner-owned predicates executable without choosing their
+    scientific meaning.  Routing relies on the same closed method/product
+    contract used by the host cohort-change gate; prose, benchmark names, and
+    variable names cannot activate it.
+    """
+
+    if not _cohort_change_contract_applies(step):
+        return ()
+    return (
+        "Before evaluating each Planner-owned numeric eligibility predicate, "
+        "coerce its declared value explicitly and build a finite-value mask; "
+        "a non-null check alone is insufficient because positive or negative "
+        "infinity can otherwise satisfy a threshold.",
+        "Never allow a missing, unparseable, or non-finite value to satisfy a "
+        "numeric eligibility predicate. Apply only the missing/invalid policy "
+        "already declared by the Planner or host contract. If such values are "
+        "observed and no policy authorizes their retained/excluded placement, "
+        "fail the cohort step closed instead of inventing a scientific rule.",
+        "At every predicate stage, construct retained and excluded masks that "
+        "are mutually exclusive and exhaustive over the rows at that stage, "
+        "and assert n_at_start_rows = n_remaining_rows + n_excluded_rows before "
+        "writing outputs. Any optional missing/invalid diagnostic categories "
+        "must also be mutually exclusive and exhaustive and must not become "
+        "additional Planner predicates.",
+    )
+
+
 def _step_contract_repair_guidance(
     *,
     step: AnalysisStep,
@@ -4602,6 +4634,7 @@ def _step_contract_repair_guidance(
             + json.dumps(roster, ensure_ascii=False, sort_keys=True)
         )
     guidance.extend(_primary_analysis_cohort_canonical_schema_rules(step))
+    guidance.extend(_cohort_predicate_partition_safety_rules(step))
     if is_ordered_stratified_analysis_step(step):
         guidance.append(
             "Keep this as an agent-authored ordered-stratified analysis, but call "
