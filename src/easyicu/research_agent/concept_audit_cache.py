@@ -13,9 +13,24 @@ from .prompts import PROMPT_PACK_VERSION
 from .schema import AnalysisStep, ResearchContext, ValidationFinding
 
 
-_CACHE_SCHEMA = "easyicu.llm_concept_audit_cache/3"
+_CACHE_SCHEMA = "easyicu.llm_concept_audit_cache/4"
 _AUDIT_POLICY_VERSION = "2026-07-14-step-scoped-v1"
 _LOCK = threading.Lock()
+_NON_SEMANTIC_CONTEXT_FIELDS = frozenset(
+    {"created_at", "generated_at", "updated_at"}
+)
+
+
+def _semantic_context_payload(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            str(key): _semantic_context_payload(item)
+            for key, item in value.items()
+            if str(key) not in _NON_SEMANTIC_CONTEXT_FIELDS
+        }
+    if isinstance(value, list):
+        return [_semantic_context_payload(item) for item in value]
+    return value
 
 
 class LLMConceptAuditCache:
@@ -56,7 +71,7 @@ class LLMConceptAuditCache:
                 validator_implementation_sha256 or ""
             ),
             "step": step.model_dump(mode="json"),
-            "context": context.model_dump(mode="json"),
+            "context": _semantic_context_payload(context.model_dump(mode="json")),
         }
         encoded = json.dumps(
             payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")

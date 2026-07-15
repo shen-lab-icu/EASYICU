@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import timedelta
 import json
 
 import pytest
@@ -1107,3 +1108,13 @@ def test_llm_concept_audit_cache_reuses_identical_digest(tmp_path, ra):
     )
     assert changed_validator_key != key
     assert cache.get(changed_validator_key) is None
+
+    timestamp_only_key = cache.key(
+        context=context.model_copy(
+            update={"created_at": context.created_at + timedelta(hours=1)}
+        ),
+        step=step,
+        script_text="import os\n",
+        audit_prompt="auditor prompt v1",
+    )
+    assert timestamp_only_key == key
