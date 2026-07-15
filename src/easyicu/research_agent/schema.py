@@ -1062,6 +1062,7 @@ class AnalysisManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_version: str = "easyicu.research_manifest/1"
+    checkpoint_sequence: Optional[int] = Field(default=None, ge=1)
     run_id: str
     research_question: str
     started_at: datetime

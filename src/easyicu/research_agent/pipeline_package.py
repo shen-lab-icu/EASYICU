@@ -53,6 +53,7 @@ from .runtime_artifacts import (
     render_workflow_graph_mermaid,
     verified_run_evidence_path,
     write_json_artifact,
+    write_run_checkpoint,
 )
 from .robustness_panel import PANEL_FILENAME, load_robustness_panel
 from .schema import AnalysisManifest, PipelineResult, ResearchContext
@@ -897,8 +898,8 @@ def finalise_success(
         notes=manifest_notes,
     )
     manifest_path = run_dir / "manifest.json"
-    manifest_path.write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
     execute_result.flush_partial_manifest()
+    write_run_checkpoint(manifest_path, manifest.model_dump(mode="json"))
 
     if pipeline._memory is not None:
         pipeline._memory.record(
@@ -1024,7 +1025,7 @@ def finalise_aborted(
         notes=f"aborted: {reason}",
     )
     manifest_path = run_dir / "manifest.json"
-    manifest_path.write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
+    write_run_checkpoint(manifest_path, manifest.model_dump(mode="json"))
     return PipelineResult(
         run_id=run_id,
         workdir=str(run_dir),

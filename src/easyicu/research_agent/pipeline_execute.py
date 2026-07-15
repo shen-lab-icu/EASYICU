@@ -207,6 +207,7 @@ from .runtime_artifacts import (
     current_step_records,
     current_successful_step_records,
     verified_run_evidence_path,
+    write_run_checkpoint,
 )
 from .scalar_utils import _expected_numeric_annotations_for_step
 from .side_findings import SideFinding
@@ -3904,10 +3905,7 @@ def run_execute_phase(
         }
         if extra:
             payload.update(extra)
-        (run_dir / "manifest_partial.json").write_text(
-            json.dumps(payload, indent=2, ensure_ascii=False, default=str),
-            encoding="utf-8",
-        )
+        write_run_checkpoint(run_dir / "manifest_partial.json", payload)
 
     runtime_packets = {
         "clinical_semantics_resolution": runtime_state.semantics,

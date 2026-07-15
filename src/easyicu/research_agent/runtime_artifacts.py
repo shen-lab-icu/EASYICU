@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import stat
+import tempfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
@@ -175,38 +178,202 @@ def current_evidence_records(
     return current
 
 
+class RunArtifactAuthorityError(ValueError):
+    """A run checkpoint exists but cannot safely establish current authority."""
+
+
+@contextmanager
+def _checkpoint_write_lock(run_dir: Path):
+    """Serialize checkpoint sequence allocation across local resume processes."""
+
+    import fcntl
+
+    lock_path = run_dir / ".manifest.checkpoint.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _checkpoint_sequence(payload: Mapping[str, Any]) -> Optional[int]:
+    value = payload.get("checkpoint_sequence")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        return None
+    return value
+
+
+def _next_checkpoint_sequence(run_dir: Path) -> int:
+    sequences: List[int] = []
+    for name in ("manifest_partial.json", "manifest.json"):
+        path = run_dir / name
+        if not path.exists():
+            continue
+        payload = _read_run_checkpoint(path, newest=True)
+        sequence = _checkpoint_sequence(payload)
+        if sequence is not None:
+            sequences.append(sequence)
+    return max(sequences, default=0) + 1
+
+
+def write_run_checkpoint(
+    path: str | Path,
+    payload: Mapping[str, Any],
+) -> int:
+    """Atomically persist one monotonically sequenced run checkpoint.
+
+    The temporary file lives beside the destination so ``os.replace`` is an
+    atomic same-filesystem operation.  A small advisory lock makes sequence
+    allocation and replacement indivisible across concurrent local resumes.
+    """
+
+    destination = Path(path)
+    run_dir = destination.parent
+    run_dir.mkdir(parents=True, exist_ok=True)
+    with _checkpoint_write_lock(run_dir):
+        sequence = _next_checkpoint_sequence(run_dir)
+        body = dict(payload)
+        body["checkpoint_sequence"] = sequence
+        encoded = json.dumps(
+            body,
+            indent=2,
+            ensure_ascii=False,
+            default=str,
+        ).encode("utf-8")
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            dir=run_dir,
+        )
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(encoded)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, destination)
+            directory_fd = os.open(run_dir, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        finally:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+        return sequence
+
+
+def _read_run_checkpoint(path: Path, *, newest: bool) -> Dict[str, Any]:
+    position = "newest " if newest else ""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError) as exc:
+        raise RunArtifactAuthorityError(
+            f"Run {position}checkpoint {path.name} is corrupt or unreadable; "
+            "refusing to fall back to older artifact authority."
+        ) from exc
+    if not isinstance(payload, dict):
+        raise RunArtifactAuthorityError(
+            f"Run {position}checkpoint {path.name} is corrupt: expected a JSON "
+            "object; refusing to fall back to older artifact authority."
+        )
+    return payload
+
+
 def load_run_artifact_authority(
     run_dir: str | Path,
 ) -> Optional[Dict[str, Any]]:
     """Load the newest checkpoint that declares a per-step execution ledger.
 
-    The most recently modified valid manifest wins; a live resumed partial can
-    therefore supersede an older final manifest, while a stale partial cannot
-    mask a later final failure.  A mapping that explicitly contains
+    The most recently modified manifest is the authority candidate; a live
+    resumed partial can therefore supersede an older final manifest, while a
+    stale partial cannot mask a later final failure.  The candidate is selected
+    *before* parsing so a corrupt or unreadable newest checkpoint fails closed
+    instead of replaying an older success or masquerading as a legacy run.  A
+    mapping that explicitly contains
     ``per_step_records`` is modern authority even when that field is empty or
     malformed; callers must not fall back to append-only step directories in
     that case.  ``None`` therefore means *legacy, no ledger field anywhere*, not
-    merely "no currently successful steps".
+    merely "no currently successful steps".  A run with no manifest at all,
+    or only a valid legacy manifest that never declared a ledger, retains the
+    historical ``None`` compatibility signal.
     """
 
     root = Path(run_dir)
-    candidates: List[tuple[int, int, Dict[str, Any]]] = []
+    candidates: List[tuple[int, int, Path]] = []
     for name in ("manifest_partial.json", "manifest.json"):
         path = root / name
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
             modified_ns = path.stat().st_mtime_ns
-        except (OSError, ValueError, TypeError):
+        except FileNotFoundError:
             continue
-        if isinstance(payload, dict) and "per_step_records" in payload:
-            # Prefer the actually newest durable checkpoint.  Partial wins only
-            # on a timestamp tie, preserving the live-resume convention without
-            # letting a stale partial mask a later final failure.
-            partial_tiebreak = 1 if name == "manifest_partial.json" else 0
-            candidates.append((modified_ns, partial_tiebreak, payload))
+        except OSError as exc:
+            raise RunArtifactAuthorityError(
+                f"Run checkpoint {path.name} cannot be inspected; refusing to "
+                "fall back to another artifact authority."
+            ) from exc
+        # Prefer the actually newest durable checkpoint.  Partial wins only on
+        # a timestamp tie, preserving the live-resume convention without
+        # letting a stale partial mask a later final failure.
+        partial_tiebreak = 1 if name == "manifest_partial.json" else 0
+        candidates.append((modified_ns, partial_tiebreak, path))
     if not candidates:
         return None
-    return max(candidates, key=lambda item: (item[0], item[1]))[2]
+
+    ordered = sorted(candidates, key=lambda item: (item[0], item[1]), reverse=True)
+    newest_path = ordered[0][2]
+    newest_payload = _read_run_checkpoint(newest_path, newest=True)
+    parsed: List[tuple[int, int, Path, Dict[str, Any]]] = [
+        (*ordered[0], newest_payload)
+    ]
+    for modified_ns, tiebreak, older_path in ordered[1:]:
+        try:
+            older_payload = _read_run_checkpoint(older_path, newest=False)
+        except RunArtifactAuthorityError:
+            # An unreadable older checkpoint cannot supersede a readable newer
+            # one.  It remains historical corruption, not current authority.
+            continue
+        parsed.append((modified_ns, tiebreak, older_path, older_payload))
+
+    newest_sequence = _checkpoint_sequence(newest_payload)
+    sequenced = [
+        (sequence, modified_ns, tiebreak, path, payload)
+        for modified_ns, tiebreak, path, payload in parsed
+        if (sequence := _checkpoint_sequence(payload)) is not None
+    ]
+    if newest_sequence is None and sequenced:
+        raise RunArtifactAuthorityError(
+            f"Run newest checkpoint {newest_path.name} lacks a monotonic "
+            "checkpoint_sequence while an older sequenced checkpoint exists; "
+            "refusing ambiguous authority rollback."
+        )
+    if sequenced:
+        _, _, _, authority_path, authority_payload = max(
+            sequenced,
+            key=lambda item: (item[0], item[1], item[2]),
+        )
+    else:
+        authority_path, authority_payload = newest_path, newest_payload
+    if "per_step_records" in authority_payload:
+        return authority_payload
+
+    # A single valid pre-ledger manifest is a genuine legacy run.  When an
+    # older modern ledger also exists, however, the newest ledger-less object
+    # is a damaged checkpoint boundary, not permission to replay old success.
+    for _, _, older_path, older_payload in parsed:
+        if older_path == authority_path:
+            continue
+        if "per_step_records" in older_payload:
+            raise RunArtifactAuthorityError(
+                f"Run newest checkpoint {authority_path.name} does not declare "
+                "per_step_records; refusing to replay the older checkpoint "
+                f"{older_path.name}."
+            )
+    return None
 
 
 def current_run_evidence_records(
@@ -619,6 +786,8 @@ __all__ = [
     "active_step_evidence_ids",
     "current_evidence_records",
     "verified_run_evidence_path",
+    "RunArtifactAuthorityError",
+    "write_run_checkpoint",
     "load_run_artifact_authority",
     "current_run_evidence_records",
     "current_run_evidence_paths",

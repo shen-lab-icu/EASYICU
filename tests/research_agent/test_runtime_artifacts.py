@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 
 def test_workflow_graph_and_replay_bundle_build(ra, tmp_path: Path):
@@ -172,18 +173,12 @@ def test_newer_final_manifest_supersedes_stale_partial_authority(tmp_path: Path)
     partial = tmp_path / "manifest_partial.json"
     final = tmp_path / "manifest.json"
     partial.write_text(
-        json.dumps(
-            {"per_step_records": [{"step_id": "01_model", "status": "ok"}]}
-        ),
+        json.dumps({"per_step_records": [{"step_id": "01_model", "status": "ok"}]}),
         encoding="utf-8",
     )
     final.write_text(
         json.dumps(
-            {
-                "per_step_records": [
-                    {"step_id": "01_model", "status": "contract_failed"}
-                ]
-            }
+            {"per_step_records": [{"step_id": "01_model", "status": "contract_failed"}]}
         ),
         encoding="utf-8",
     )
@@ -194,3 +189,127 @@ def test_newer_final_manifest_supersedes_stale_partial_authority(tmp_path: Path)
 
     assert authority is not None
     assert authority["per_step_records"][-1]["status"] == "contract_failed"
+
+
+def test_corrupt_newest_manifest_cannot_replay_older_success(tmp_path: Path):
+    from easyicu.research_agent.runtime_artifacts import (
+        RunArtifactAuthorityError,
+        load_run_artifact_authority,
+    )
+
+    final = tmp_path / "manifest.json"
+    partial = tmp_path / "manifest_partial.json"
+    final.write_text(
+        json.dumps({"per_step_records": [{"step_id": "01_model", "status": "ok"}]}),
+        encoding="utf-8",
+    )
+    partial.write_text("{corrupt newest checkpoint", encoding="utf-8")
+    os.utime(final, ns=(1_000_000_000, 1_000_000_000))
+    os.utime(partial, ns=(2_000_000_000, 2_000_000_000))
+
+    with pytest.raises(
+        RunArtifactAuthorityError,
+        match=r"newest checkpoint.*manifest_partial\.json.*corrupt",
+    ):
+        load_run_artifact_authority(tmp_path)
+
+
+def test_corrupt_only_manifest_is_not_reported_as_legacy(tmp_path: Path):
+    from easyicu.research_agent.runtime_artifacts import (
+        RunArtifactAuthorityError,
+        current_run_evidence_records,
+    )
+
+    (tmp_path / "manifest_partial.json").write_text(
+        "{corrupt checkpoint",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RunArtifactAuthorityError, match="corrupt"):
+        current_run_evidence_records(tmp_path)
+
+
+def test_newest_manifest_missing_ledger_cannot_replay_older_success(tmp_path: Path):
+    from easyicu.research_agent.runtime_artifacts import (
+        RunArtifactAuthorityError,
+        load_run_artifact_authority,
+    )
+
+    final = tmp_path / "manifest.json"
+    partial = tmp_path / "manifest_partial.json"
+    final.write_text(
+        json.dumps({"per_step_records": [{"step_id": "01_model", "status": "ok"}]}),
+        encoding="utf-8",
+    )
+    partial.write_text(json.dumps({"evidence": []}), encoding="utf-8")
+    os.utime(final, ns=(1_000_000_000, 1_000_000_000))
+    os.utime(partial, ns=(2_000_000_000, 2_000_000_000))
+
+    with pytest.raises(
+        RunArtifactAuthorityError,
+        match=r"newest checkpoint.*does not declare per_step_records",
+    ):
+        load_run_artifact_authority(tmp_path)
+
+
+def test_missing_manifests_keep_legacy_authority_signal(tmp_path: Path):
+    from easyicu.research_agent.runtime_artifacts import (
+        current_run_evidence_records,
+        load_run_artifact_authority,
+    )
+
+    assert load_run_artifact_authority(tmp_path) is None
+    assert current_run_evidence_records(tmp_path) is None
+
+
+def test_checkpoint_writer_is_atomic_and_monotonically_sequenced(tmp_path: Path):
+    from easyicu.research_agent.runtime_artifacts import write_run_checkpoint
+
+    first = write_run_checkpoint(
+        tmp_path / "manifest_partial.json",
+        {"per_step_records": [{"step_id": "01", "status": "ok"}]},
+    )
+    second = write_run_checkpoint(
+        tmp_path / "manifest.json",
+        {"per_step_records": [{"step_id": "01", "status": "contract_failed"}]},
+    )
+
+    assert (first, second) == (1, 2)
+    payload = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
+    assert payload["checkpoint_sequence"] == 2
+    assert not list(tmp_path.glob(".manifest*.tmp"))
+
+
+def test_checkpoint_sequence_outranks_mtime_for_current_authority(tmp_path: Path):
+    from easyicu.research_agent.runtime_artifacts import load_run_artifact_authority
+
+    partial = tmp_path / "manifest_partial.json"
+    final = tmp_path / "manifest.json"
+    partial.write_text(
+        json.dumps(
+            {
+                "checkpoint_sequence": 3,
+                "per_step_records": [{"step_id": "01", "status": "ok"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    final.write_text(
+        json.dumps(
+            {
+                "checkpoint_sequence": 4,
+                "per_step_records": [
+                    {"step_id": "01", "status": "contract_failed"}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    os.utime(final, ns=(1_000_000_000, 1_000_000_000))
+    os.utime(partial, ns=(2_000_000_000, 2_000_000_000))
+
+    authority = load_run_artifact_authority(tmp_path)
+
+    assert authority is not None
+    assert authority["checkpoint_sequence"] == 4
+    assert authority["per_step_records"][0]["status"] == "contract_failed"
