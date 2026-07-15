@@ -1,19 +1,26 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 
 import pytest
 
 from easyicu.research_agent.cohort_schema import CohortDefinition
-from easyicu.research_agent.declared_product_contract import typed_product
+from easyicu.research_agent.declared_product_contract import (
+    typed_product,
+    typed_product_schema_receipt,
+)
 from easyicu.research_agent.evidence import EvidenceStore, sha256_of_file
 from easyicu.research_agent.pipeline_execute import (
+    _failed_contract_code_can_be_reused_before_coder,
     _plan_scientific_scope_signature,
     _plan_signature,
     _preserve_completed_step_snapshots_after_replan,
     _resolve_typed_input_evidence,
     _resolve_typed_artifact_evidence,
     _resolved_typed_input_binding,
+    _typed_parent_schema_context_block,
     _write_resolved_inputs_manifest,
 )
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep, EvidenceRef
@@ -683,7 +690,7 @@ def test_typed_table_uses_current_resume_authority_and_writes_exact_manifest(
     assert binding["product_contract"]["value_column"] == "x"
     assert binding["product_contract"]["scale"] == "standardized"
     assert binding["product_contract"]["schema_version"] == (
-        "easyicu.host_typed_product.v1"
+        "easyicu.host_typed_product.v2"
     )
     assert binding["product_contract"]["identity_row"] == binding["identity_row"]
     assert binding["identity_row"]["input_key"] == "table:scaling_summary"
@@ -720,6 +727,57 @@ def test_typed_table_uses_current_resume_authority_and_writes_exact_manifest(
         manifest_binding["absolute_path"]
     )
     original_manifest_sha = sha256_of_file(manifest_path)
+    legacy_payload = json.loads(json.dumps(payload))
+    legacy_payload["inputs"]["table:scaling_summary"]["product_contract"][
+        "schema_version"
+    ] = "easyicu.host_typed_product.v1"
+    legacy_bytes = (json.dumps(legacy_payload, indent=2, sort_keys=True) + "\n").encode(
+        "utf-8"
+    )
+    legacy_manifest_sha = hashlib.sha256(legacy_bytes).hexdigest()
+    assert legacy_manifest_sha != original_manifest_sha
+
+    code = "import os\n"
+    code_sha = hashlib.sha256(code.encode("utf-8")).hexdigest()
+    evidence_record = {"evidence_id": "code_consumer", "sha256": code_sha}
+    prior_record = {
+        "step_id": "consumer",
+        "status": "contract_failed",
+        "returncode": 0,
+        "timed_out": False,
+        "outputs_safe_to_collect": True,
+        "executed_code_sha256": code_sha,
+        "concept_approved_code_sha256": code_sha,
+        "script_evidence_id": evidence_record["evidence_id"],
+        "resolved_inputs_sha256": legacy_manifest_sha,
+        "run_input_capsule_sha256": "b" * 64,
+        "plan_scientific_signature": _scope_signature(plan),
+        "analysis_request": {"step": plan.steps[1].model_dump(mode="json")},
+    }
+    assert (
+        _failed_contract_code_can_be_reused_before_coder(
+            prior_step_record=prior_record,
+            resumed_code=(code, evidence_record),
+            step=plan.steps[1],
+            plan=plan,
+            resolved_inputs_sha256=original_manifest_sha,
+            run_input_capsule_sha256="b" * 64,
+        )
+        is False
+    )
+    prior_record["resolved_inputs_sha256"] = original_manifest_sha
+    assert (
+        _failed_contract_code_can_be_reused_before_coder(
+            prior_step_record=prior_record,
+            resumed_code=(code, evidence_record),
+            step=plan.steps[1],
+            plan=plan,
+            resolved_inputs_sha256=original_manifest_sha,
+            run_input_capsule_sha256="b" * 64,
+        )
+        is True
+    )
+
     changed_manifest_path = _write_resolved_inputs_manifest(
         run_dir=tmp_path,
         step_id="consumer",
@@ -840,6 +898,192 @@ def test_generic_typed_table_gets_host_owned_identity_contract(tmp_path: Path) -
         "identity_row": binding["identity_row"],
     }
     assert binding["identity_row"]["evidence_id"] == record.evidence_id
+
+
+def test_typed_parent_table_receipt_exposes_host_schema_without_guessing_roles(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(tmp_path)
+    source = tmp_path / "source" / "display_summary.csv"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(
+        "band,point,lower,upper\nA,0.2,0.1,0.3\n",
+        encoding="utf-8",
+    )
+    record = store.register_file(
+        kind="table",
+        description="Typed display summary.",
+        source_path=source,
+        produced_by_step="producer",
+    )
+    binding = _resolved_typed_input_binding(
+        input_name="table:display_summary",
+        evidence_ref=EvidenceRef(evidence_id=record.evidence_id),
+        evidence_records=store.records(),
+        run_dir=tmp_path,
+        producer_step_records=[
+            {
+                "step_id": "producer",
+                "status": "ok",
+                "evidence_ids": [record.evidence_id],
+                # Producer-authored physical schema is not authority. The host
+                # replaces it with the digest-verified artifact header.
+                "step_summary": {
+                    "display_summary": {
+                        "columns": ["forged"],
+                        "semantic_roles": {"estimate": "forged"},
+                    }
+                },
+            }
+        ],
+    )
+
+    assert binding is not None
+    contract = binding["product_contract"]
+    assert contract["columns"] == ["band", "point", "lower", "upper"]
+    assert contract["column_count"] == 4
+    assert contract["tabular_format"] == "csv"
+    assert "semantic_roles" not in contract
+    assert contract["schema_version"] == "easyicu.host_typed_product.v2"
+
+    context_block = _typed_parent_schema_context_block(
+        {"table:display_summary": binding}
+    )
+    assert '"columns":["band","point","lower","upper"]' in context_block
+    assert '"column_count":4' in context_block
+    assert '"tabular_format":"csv"' in context_block
+    assert "semantic_roles" not in context_block
+    assert str(source) not in context_block
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        "group,group\n",
+        "group,\n",
+        "group, group \n",
+        "group,\ufeffgroup\n",
+        f"{'x' * 257},value\n",
+    ],
+)
+def test_typed_parent_table_receipt_rejects_unsafe_physical_headers(
+    tmp_path: Path,
+    header: str,
+) -> None:
+    store = EvidenceStore(tmp_path)
+    source = tmp_path / "source" / "display_summary.csv"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(header + "1,2\n", encoding="utf-8")
+    record = store.register_file(
+        kind="table",
+        description="Typed table with an unsafe physical header.",
+        source_path=source,
+        produced_by_step="producer",
+    )
+    binding = _resolved_typed_input_binding(
+        input_name="table:display_summary",
+        evidence_ref=EvidenceRef(evidence_id=record.evidence_id),
+        evidence_records=store.records(),
+        run_dir=tmp_path,
+        producer_step_records=[
+            {
+                "step_id": "producer",
+                "status": "ok",
+                "evidence_ids": [record.evidence_id],
+                "step_summary": {},
+            }
+        ],
+    )
+
+    assert binding is None
+
+
+def test_typed_parent_table_receipt_normalizes_leading_utf8_bom(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "display_summary.csv"
+    source.write_bytes(b"\xef\xbb\xbfband,point\nA,0.2\n")
+
+    receipt = typed_product_schema_receipt(
+        artifact_path=source,
+        expected_sha256=sha256_of_file(source),
+    )
+
+    assert receipt is not None
+    assert receipt["columns"] == ["band", "point"]
+    assert receipt["column_count"] == 2
+    assert receipt["tabular_format"] == "csv"
+
+
+def test_declared_table_with_unsupported_format_is_not_bound(tmp_path: Path) -> None:
+    store = EvidenceStore(tmp_path)
+    source = tmp_path / "source" / "display_summary.json"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text('[{"band":"A","point":0.2}]\n', encoding="utf-8")
+    record = store.register_file(
+        kind="table",
+        description="Table evidence without a host schema adapter.",
+        source_path=source,
+        produced_by_step="producer",
+    )
+
+    binding = _resolved_typed_input_binding(
+        input_name="table:display_summary",
+        evidence_ref=EvidenceRef(evidence_id=record.evidence_id),
+        evidence_records=store.records(),
+        run_dir=tmp_path,
+        producer_step_records=[
+            {
+                "step_id": "producer",
+                "status": "ok",
+                "evidence_ids": [record.evidence_id],
+                "step_summary": {},
+            }
+        ],
+    )
+
+    assert binding is None
+
+
+def test_typed_parent_schema_context_is_bounded_and_points_to_full_manifest() -> None:
+    columns = [f"field_{index}" for index in range(140)]
+    block = _typed_parent_schema_context_block(
+        {
+            "table:wide_display": {
+                "absolute_path": "/private/should/not/enter/the/prompt.csv",
+                "product_contract": {
+                    "tabular_format": "csv",
+                    "column_count": len(columns),
+                    "columns": columns,
+                },
+            }
+        }
+    )
+
+    assert '"columns_omitted_from_prompt_n":108' in block
+    assert "EASYICU_RESOLVED_INPUTS_JSON product_contract.columns" in block
+    assert "/private/should/not/enter" not in block
+    assert len(block.encode("utf-8")) <= 16 * 1024
+
+
+def test_typed_parent_schema_context_has_a_total_transport_limit() -> None:
+    long_columns = [f"field_{index}_{'x' * 120}" for index in range(80)]
+    bindings = {
+        f"table:display_{index}": {
+            "product_contract": {
+                "tabular_format": "csv",
+                "column_count": len(long_columns),
+                "columns": long_columns,
+            },
+        }
+        for index in range(20)
+    }
+
+    block = _typed_parent_schema_context_block(bindings)
+
+    assert len(block.encode("utf-8")) <= 16 * 1024
+    assert "omitted_typed_parent_receipt_n" in block
+    assert "EASYICU_RESOLVED_INPUTS_JSON" in block
 
 
 def test_scientific_typed_product_without_coordinates_is_not_bound(
