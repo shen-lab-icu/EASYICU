@@ -11,10 +11,13 @@ combines:
 * normalised run knobs (question, target_outcome, skill, database, ...);
 * a bag of caller-supplied flags (``enable_*``, ``max_*``, ``latex_*``,
   ``context_top_k``, ``disable_icu_context``, ...);
-* a short signature of the configured LLM(s).
+* caller-supplied scientific inputs that are not represented by the cohort;
+* the configured LLM topology and model(s);
+* hashes of the engine, validators, prompts, and concept dictionaries.
 
-Cache hits are validated by checking that the manifest file referenced
-by an index entry still exists; stale entries are silently evicted.
+Cache hits are fail-closed.  A prior run is reusable only when its final
+manifest and run-status gates prove that it is a complete, manuscript-ready
+run.  Paused, partial, aborted, or blocked runs are never cache entries.
 """
 
 from __future__ import annotations
@@ -23,10 +26,28 @@ import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional, Sequence
 
 from .llm import MockLLMClient
+from .prompts import PROMPT_PACK_VERSION, prompt_pack_files
 from .schema import PipelineResult
+
+
+_CACHE_KEY_SCHEMA_VERSION = "easyicu.pipeline_cache_key/2"
+_CACHE_READY_STATUSES = frozenset({"manuscript_ready", "publication_ready"})
+_CACHE_REQUIRED_GATES = (
+    "execution_complete",
+    "evidence_complete",
+    "numeric_verified",
+    "analysis_validated",
+    "manuscript_ready",
+)
+_NON_COMPLETE_NOTE_TOKENS = (
+    "paused_after_analysis",
+    "pipeline aborted",
+    "aborted:",
+    "stopped after",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -41,6 +62,60 @@ def hash_file(path: Path, *, chunk: int = 1024 * 1024) -> str:
         for buf in iter(lambda: fh.read(chunk), b""):
             h.update(buf)
     return h.hexdigest()
+
+
+def _canonical_sha256(value: Any) -> str:
+    blob = json.dumps(
+        value,
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def _tree_sha256(root: Path, paths: Sequence[Path]) -> str:
+    return _canonical_sha256(
+        {
+            str(path.relative_to(root)): hash_file(path)
+            for path in sorted(paths)
+            if path.is_file()
+        }
+    )
+
+
+def runtime_identity() -> Dict[str, Any]:
+    """Return code/prompt/concept identities that affect cached output.
+
+    This is evaluated at key construction time rather than captured as a
+    module constant, so a long-lived service cannot reuse a pre-change key
+    after a hot deployment.
+    """
+
+    package_root = Path(__file__).resolve().parent
+    engine_paths = list(package_root.rglob("*.py"))
+    validator_paths = [
+        package_root / "code_preflight.py",
+        package_root / "declared_product_contract.py",
+        package_root / "audits" / "base.py",
+        package_root / "audits" / "patterns.py",
+        package_root / "audits" / "validators.py",
+        package_root / "audits" / "step_summary_integrity.py",
+    ]
+    prompt_files = prompt_pack_files()
+    data_root = package_root.parent / "data"
+    concept_files = {
+        name: hash_file(data_root / name) if (data_root / name).is_file() else "missing"
+        for name in ("concept-dict.json", "sofa2-dict.json")
+    }
+    return {
+        "engine_code_sha256": _tree_sha256(package_root, engine_paths),
+        "validator_code_sha256": _tree_sha256(package_root, validator_paths),
+        "prompt_pack_version": PROMPT_PACK_VERSION,
+        "prompt_pack_sha256": _canonical_sha256(prompt_files),
+        "concept_dictionary_sha256": _canonical_sha256(concept_files),
+    }
 
 
 def llm_signature(llm: Any) -> str:
@@ -78,6 +153,132 @@ def iter_mock_clients(llm: Any):
         for child in llm.iter_clients():
             if isinstance(child, MockLLMClient):
                 yield child
+
+
+def _read_json_object(path: Path) -> Optional[Dict[str, Any]]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    return dict(payload) if isinstance(payload, dict) else None
+
+
+def _resolve_run_artifact(
+    run_dir: Path,
+    relative_value: Any,
+    *,
+    default: Optional[str] = None,
+) -> Optional[Path]:
+    relative_text = str(relative_value or default or "").strip()
+    relative = Path(relative_text)
+    if (
+        not relative_text
+        or relative.is_absolute()
+        or any(part in {"", ".", ".."} for part in relative.parts)
+    ):
+        return None
+    candidate = run_dir / relative
+    try:
+        candidate.resolve(strict=True).relative_to(run_dir.resolve(strict=True))
+    except (OSError, ValueError):
+        return None
+    return candidate if candidate.is_file() and not candidate.is_symlink() else None
+
+
+def _completed_run_payload(
+    *,
+    run_dir: Path,
+    expected_run_id: str,
+) -> Optional[tuple[Dict[str, Path], Dict[str, Any]]]:
+    """Return verified result paths only for a complete reusable run."""
+
+    manifest_path = run_dir / "manifest.json"
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        return None
+    manifest = _read_json_object(manifest_path)
+    if manifest is None or str(manifest.get("run_id") or "") != expected_run_id:
+        return None
+    if not manifest.get("finished_at"):
+        return None
+    notes = str(manifest.get("notes") or "").lower()
+    if any(token in notes for token in _NON_COMPLETE_NOTE_TOKENS):
+        return None
+    if bool(manifest.get("writer_probe_mode")):
+        return None
+
+    # A newer partial checkpoint means a resume has superseded this final
+    # manifest.  Corrupt checkpoint state is never authority to reuse old work.
+    partial_path = run_dir / "manifest_partial.json"
+    if partial_path.exists():
+        partial = _read_json_object(partial_path)
+        if partial is None:
+            return None
+        final_seq = manifest.get("checkpoint_sequence")
+        partial_seq = partial.get("checkpoint_sequence")
+        if isinstance(final_seq, int) or isinstance(partial_seq, int):
+            if not (
+                isinstance(final_seq, int)
+                and isinstance(partial_seq, int)
+                and final_seq > partial_seq
+            ):
+                return None
+        elif partial_path.stat().st_mtime_ns > manifest_path.stat().st_mtime_ns:
+            return None
+
+    readiness = manifest.get("readiness")
+    if not isinstance(readiness, Mapping) or any(
+        readiness.get(gate) is not True for gate in _CACHE_REQUIRED_GATES
+    ):
+        return None
+
+    records = manifest.get("per_step_records")
+    if not isinstance(records, list) or not records:
+        return None
+    latest: Dict[str, str] = {}
+    for record in records:
+        if not isinstance(record, Mapping):
+            return None
+        step_id = str(record.get("step_id") or "").strip()
+        if step_id:
+            latest[step_id] = str(record.get("status") or "").strip().lower()
+    if not latest or set(latest.values()) != {"ok"}:
+        return None
+
+    paths: Dict[str, Path] = {}
+    for key, manifest_key, default in (
+        ("context", "context_path", "research_context.json"),
+        ("plan", "plan_path", "analysis_plan.json"),
+        ("report", "report_path", "results_report.md"),
+        ("manuscript", "manuscript_path", "manuscript_scaffold_bound.md"),
+    ):
+        resolved = _resolve_run_artifact(
+            run_dir,
+            manifest.get(manifest_key),
+            default=default,
+        )
+        if resolved is None:
+            return None
+        paths[key] = resolved
+
+    artifact_paths = manifest.get("artifact_paths")
+    status_relative = (
+        artifact_paths.get("run_status")
+        if isinstance(artifact_paths, Mapping)
+        else None
+    )
+    status_path = _resolve_run_artifact(
+        run_dir,
+        status_relative,
+        default="run_status.json",
+    )
+    if status_path is None:
+        return None
+    run_status = _read_json_object(status_path)
+    if run_status is None or str(run_status.get("status") or "") not in (
+        _CACHE_READY_STATUSES
+    ):
+        return None
+    return paths, manifest
 
 
 # ---------------------------------------------------------------------------
@@ -118,15 +319,33 @@ class PipelineCache:
         stop_after_analysis: bool,
         manuscript_language: str,
         flags: Mapping[str, Any],
+        science_inputs: Optional[Mapping[str, Any]] = None,
+        identity_hashes: Optional[Mapping[str, Any]] = None,
     ) -> str:
         """Compose the deterministic cache key for this run.
 
         ``flags`` is a free-form mapping of additional configuration
-        knobs that should invalidate the cache when changed. Values are
-        coerced through ``json.dumps(sort_keys=True)`` so they must be
-        JSON-serialisable.
+        knobs that should invalidate the cache when changed.
+
+        ``science_inputs`` is the host-owned identity envelope for inputs not
+        represented by the materialised cohort itself (for example exposure,
+        eligibility criteria, time windows, context settings, and experiment
+        specification).  It is optional for API compatibility, but production
+        callers should pass the complete run-request envelope.
+
+        ``identity_hashes`` permits a caller to add or override environment
+        identities.  The default always includes current engine, validator,
+        prompt, and concept-dictionary hashes.
         """
+        environment = runtime_identity()
+        environment.update(dict(identity_hashes or {}))
+
+        # Experiment specifications are materialised before the current cache
+        # lookup.  Bind their bytes even for legacy callers that have not yet
+        # adopted ``science_inputs``.
+        spec_path = Path(cohort_path).parent / "experiment_spec.yaml"
         payload: Dict[str, Any] = {
+            "schema_version": _CACHE_KEY_SCHEMA_VERSION,
             "cohort_sha256": hash_file(cohort_path),
             "question": (question or "").strip(),
             "target_outcome": (target_outcome or "").strip(),
@@ -135,14 +354,14 @@ class PipelineCache:
             "stop_after_analysis": bool(stop_after_analysis),
             "manuscript_language": manuscript_language,
             "llm": llm_signature(llm),
+            "experiment_spec_sha256": (
+                hash_file(spec_path) if spec_path.is_file() else None
+            ),
+            "science_inputs": dict(science_inputs or {}),
+            "flags": dict(flags),
+            "environment": environment,
         }
-        for key, value in flags.items():
-            if isinstance(value, bool):
-                payload[key] = bool(value)
-            else:
-                payload[key] = value
-        blob = json.dumps(payload, sort_keys=True, ensure_ascii=False)
-        return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+        return _canonical_sha256(payload)
 
     # -- index storage --------------------------------------------------
 
@@ -168,11 +387,12 @@ class PipelineCache:
     # -- query / record -------------------------------------------------
 
     def lookup(self, cache_key: str) -> Optional[PipelineResult]:
-        """Return a previous :class:`PipelineResult` if the artefacts
-        it points at still exist on disk; otherwise None.
+        """Return a prior complete :class:`PipelineResult`, otherwise ``None``.
 
-        Stale entries whose run_dir or manifest is missing are silently
-        evicted from the index.
+        Existence alone is not completion.  The final manifest, current step
+        ledger, plan coverage, readiness gates, and run status must agree that
+        the run reached a manuscript-ready terminal state.  Invalid entries
+        are evicted so repeated calls do not repeatedly inspect them.
         """
         index = self.load_index()
         entry = index.get(cache_key)
@@ -181,29 +401,50 @@ class PipelineCache:
         run_id = entry.get("run_id")
         workdir = entry.get("workdir")
         if not run_id or not workdir:
-            return None
-        run_dir = Path(workdir)
-        manifest = run_dir / "manifest.json"
-        if not manifest.exists():
             index.pop(cache_key, None)
             self.save_index(index)
             return None
+        run_dir = Path(workdir)
+        manifest = run_dir / "manifest.json"
+        completed = _completed_run_payload(run_dir=run_dir, expected_run_id=run_id)
+        if completed is None:
+            index.pop(cache_key, None)
+            self.save_index(index)
+            return None
+        paths, manifest_payload = completed
         try:
             return PipelineResult(
                 run_id=run_id,
                 workdir=str(run_dir),
-                context_path=str(run_dir / "research_context.json"),
-                plan_path=str(run_dir / "analysis_plan.json"),
+                context_path=str(paths["context"]),
+                plan_path=str(paths["plan"]),
                 manifest_path=str(manifest),
-                report_path=str(run_dir / "results_report.md"),
-                manuscript_path=str(run_dir / "manuscript_scaffold_bound.md"),
-                evidence_count=int(entry.get("evidence_count") or 0),
-                findings_count=int(entry.get("findings_count") or 0),
+                report_path=str(paths["report"]),
+                manuscript_path=str(paths["manuscript"]),
+                evidence_count=len(manifest_payload.get("evidence") or []),
+                findings_count=len(manifest_payload.get("findings") or []),
             )
         except Exception:
             return None
 
     def record_hit(self, cache_key: str, result: PipelineResult) -> None:
+        """Record ``result`` only when host-owned completion gates pass."""
+
+        run_dir = Path(result.workdir)
+        if (
+            _completed_run_payload(
+                run_dir=run_dir,
+                expected_run_id=str(result.run_id),
+            )
+            is None
+        ):
+            # If a key was previously present, a newer partial/blocked result
+            # must not leave the old authority reachable under that key.
+            index = self.load_index()
+            if cache_key in index:
+                index.pop(cache_key, None)
+                self.save_index(index)
+            return
         index = self.load_index()
         index[cache_key] = {
             "run_id": result.run_id,
