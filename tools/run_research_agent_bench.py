@@ -1955,7 +1955,8 @@ def main() -> int:
         default=None,
         help=(
             "Stop execution after the named plan step. Useful for reviewing one "
-            "resumed step at a time."
+            "resumed step at a time. Use '@first' to stop after the Agent's "
+            "first planned step without depending on its generated step id."
         ),
     )
     parser.add_argument(

@@ -885,6 +885,19 @@ def _serializable_plan_scientific_scope_signature(
     return list(_plan_scientific_scope_signature(plan))
 
 
+def _resolve_stop_after_step_selector(
+    plan: AnalysisPlan,
+    requested: Optional[str],
+) -> Optional[str]:
+    """Resolve a structural checkpoint without guessing Agent-owned step ids."""
+
+    if requested != "@first":
+        return requested
+    if not plan.steps:
+        raise ValueError("stop_after_step_id='@first' requires a non-empty plan")
+    return str(plan.steps[0].step_id)
+
+
 def _failed_contract_code_can_be_reused_before_coder(
     *,
     prior_step_record: Optional[Mapping[str, Any]],
@@ -5587,6 +5600,7 @@ def run_execute_phase(
                 metadata={"reason": "measurement_companion_input_closure"},
             )
         plan_result.plan_path = plan_path
+    stop_after_step_id = _resolve_stop_after_step_selector(plan, stop_after_step_id)
     resume_controller = ResumeController(
         plan=plan,
         run_dir=run_dir,
