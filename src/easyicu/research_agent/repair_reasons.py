@@ -7,6 +7,7 @@ changing repair routing.
 
 from __future__ import annotations
 
+import json
 from enum import Enum
 from typing import Any, Mapping, Sequence
 
@@ -78,10 +79,16 @@ def repair_reason_for_finding(finding: ValidationFinding) -> RepairReason:
 def typed_repair_ticket(
     findings: Sequence[ValidationFinding],
 ) -> list[dict[str, Any]]:
-    """Return a stable, deduplicated ticket for the repair coordinator."""
+    """Return one typed ticket per reason while retaining every occurrence.
+
+    Findings at two code locations may share a reason but require two edits.
+    Only byte-equivalent occurrence payloads are folded; different line/path/
+    evidence details remain visible to the Coder in one aggregated repair pass.
+    """
 
     ticket: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, str]] = set()
+    grouped: dict[tuple[str, str, str], dict[str, Any]] = {}
+    seen_occurrences: set[str] = set()
     for finding in findings:
         reason = repair_reason_for_finding(finding)
         detail = dict(finding.detail or {})
@@ -89,17 +96,38 @@ def typed_repair_ticket(
             detail.get("reason") or detail.get("kind") or ""
         ).strip()
         key = (reason.value, finding.validator, structured_reason)
-        if key in seen:
-            continue
-        seen.add(key)
-        ticket.append(
+        occurrence = {
+            "message": str(finding.message or ""),
+            "detail": detail,
+            "evidence_ids": list(finding.evidence_ids or []),
+        }
+        occurrence_key = json.dumps(
             {
+                "group": key,
+                "occurrence": occurrence,
+            },
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=str,
+        )
+        if occurrence_key in seen_occurrences:
+            continue
+        seen_occurrences.add(occurrence_key)
+        item = grouped.get(key)
+        if item is None:
+            item = {
                 "reason": reason.value,
                 "validator": finding.validator,
                 "structured_reason": structured_reason or None,
                 "detail": detail,
+                "occurrences": [],
             }
-        )
+            grouped[key] = item
+            ticket.append(item)
+        item["occurrences"].append(occurrence)
+    for item in ticket:
+        item["occurrence_count"] = len(item["occurrences"])
     return ticket
 
 

@@ -19,7 +19,7 @@ def test_typed_repair_ticket_uses_structured_reason_not_message():
     )
 
 
-def test_typed_repair_ticket_deduplicates_same_structured_reason():
+def test_typed_repair_ticket_groups_reason_but_retains_distinct_occurrences():
     findings = [
         ValidationFinding(
             validator="code_preflight",
@@ -34,6 +34,24 @@ def test_typed_repair_ticket_deduplicates_same_structured_reason():
 
     assert len(ticket) == 1
     assert ticket[0]["reason"] == RepairReason.STRUCTURAL_ACCOUNTING_INVALID.value
+    assert ticket[0]["occurrence_count"] == 2
+    assert [
+        occurrence["detail"]["line"] for occurrence in ticket[0]["occurrences"]
+    ] == [10, 20]
+
+
+def test_typed_repair_ticket_folds_only_identical_occurrences():
+    finding = ValidationFinding(
+        validator="code_preflight",
+        severity="error",
+        message="same finding",
+        detail={"reason": "structural_accounting_filter", "line": 10},
+        evidence_ids=["script_01"],
+    )
+
+    ticket = typed_repair_ticket([finding, finding.model_copy(deep=True)])
+
+    assert ticket[0]["occurrence_count"] == 1
 
 
 def test_llm_concept_finding_has_typed_semantics_reason_without_phrase_routing():
