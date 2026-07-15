@@ -432,9 +432,16 @@ def test_numeric_replay_is_wired_before_the_existing_in_run_repair_gate() -> Non
         "early_contract_findings += ordered_stratified_numeric_findings"
     )
     repair_gate = source.index("early_contract_errors =", replay)
+    typed_ticket = source.index(
+        "structured_repair_ticket = typed_repair_ticket(", repair_gate
+    )
 
     assert replay < repair_gate
-    assert 'finding.validator == "ordered_stratified_contract"' in source
+    # Every error returned by the replay now enters the aggregate typed repair
+    # ticket. The retired validator-name string filter would have made this
+    # contract depend on prose/routing text and could silently drop a new typed
+    # occurrence.
+    assert repair_gate < typed_ticket
 
 
 def test_controlled_method_has_no_whole_step_deterministic_runner() -> None:
