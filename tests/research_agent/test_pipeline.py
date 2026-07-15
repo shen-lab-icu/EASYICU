@@ -845,6 +845,8 @@ def test_runtime_crash_after_contract_repair_gets_its_own_repair_budget(
     assert record["status"] == "ok"
     assert record["code_repair_attempts"] == 2
     assert record.get("runtime_repair_attempts") == 1
+    assert record["step_llm_repair_attempts"] == 2
+    assert record["step_llm_repair_classes"] == ["contract", "runtime"]
 
 
 def test_method_substitution_contract_repair_is_blocked_when_budget_is_zero(

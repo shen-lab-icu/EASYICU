@@ -1032,3 +1032,25 @@ def test_llm_concept_audit_cache_reuses_identical_digest(tmp_path, ra):
     )
     assert changed_prompt_key != key
     assert cache.get(changed_prompt_key) is None
+
+    changed_authority_key = cache.key(
+        context=context,
+        step=step,
+        script_text="import os\n",
+        audit_prompt="auditor prompt v1",
+        authority_bindings={
+            "artifact:primary_exposure_definition": {"sha256": "changed"}
+        },
+    )
+    assert changed_authority_key != key
+    assert cache.get(changed_authority_key) is None
+
+    changed_validator_key = cache.key(
+        context=context,
+        step=step,
+        script_text="import os\n",
+        audit_prompt="auditor prompt v1",
+        validator_implementation_sha256="b" * 64,
+    )
+    assert changed_validator_key != key
+    assert cache.get(changed_validator_key) is None

@@ -250,6 +250,18 @@ def typed_product_binding_contract(
                 executable_column = next(iter(declared_columns))
                 contract["executable_column"] = executable_column
                 contract["exposure_column"] = executable_column
+                contract.setdefault(
+                    "authoritative_primary_exposure", executable_column
+                )
+            declared_windows = {
+                str(contract.get(key) or "").strip()
+                for key in ("window", "time_window")
+                if str(contract.get(key) or "").strip()
+            }
+            if len(declared_windows) == 1:
+                time_window = next(iter(declared_windows))
+                contract["window"] = time_window
+                contract["time_window"] = time_window
         return contract
     if _normalise(product_name) != "assignment_model":
         return None
