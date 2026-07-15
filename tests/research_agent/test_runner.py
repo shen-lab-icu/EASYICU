@@ -80,7 +80,8 @@ def test_code_runner_exposes_run_level_artifact_env(ra, tmp_path: Path):
             "import json, os\n"
             "from pathlib import Path\n"
             "payload = {k: os.environ.get(k) for k in [\n"
-            "  'EASYICU_RUN_DIR', 'EASYICU_EVIDENCE_DIR', 'EASYICU_MANIFEST_PARTIAL'\n"
+            "  'EASYICU_RUN_DIR', 'EASYICU_EVIDENCE_DIR', 'EASYICU_MANIFEST_PARTIAL',\n"
+            "  'EASYICU_RUN_ARTIFACT_AUTHORITY_SNAPSHOT'\n"
             "]}\n"
             "Path(os.environ['STEP_OUT_DIR'], 'env.json').write_text(json.dumps(payload))\n"
         ),
@@ -93,6 +94,71 @@ def test_code_runner_exposes_run_level_artifact_env(ra, tmp_path: Path):
     assert payload["EASYICU_MANIFEST_PARTIAL"] == str(
         (run_dir / "manifest_partial.json").resolve()
     )
+    assert payload["EASYICU_RUN_ARTIFACT_AUTHORITY_SNAPSHOT"] is None
+    assert not (
+        run_dir / "steps" / "env_probe" / ".run_artifact_authority_snapshot.json"
+    ).exists()
+
+
+def test_code_runner_exposes_digest_bound_current_authority_snapshot(
+    ra, tmp_path: Path
+):
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "manifest_partial.json").write_text(
+        json.dumps(
+            {
+                "checkpoint_sequence": 7,
+                "per_step_records": [{"step_id": "01_primary", "status": "ok"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    runner = ra.CodeRunner(
+        workdir=run_dir,
+        cohort_parquet=cohort_path,
+        timeout_seconds=10,
+        allow_unsafe_host_fallback=True,
+    )
+
+    result = runner.run(
+        step_id="authority_probe",
+        code=(
+            "import hashlib, json, os\n"
+            "from pathlib import Path\n"
+            "from easyicu.research_agent.deterministic_robustness import (\n"
+            "    _run_robustness_preflight_from_env,\n"
+            ")\n"
+            "path = Path(os.environ['EASYICU_RUN_ARTIFACT_AUTHORITY_SNAPSHOT'])\n"
+            "raw = path.read_bytes()\n"
+            "payload = {\n"
+            "  'path': str(path),\n"
+            "  'expected': os.environ['EASYICU_RUN_ARTIFACT_AUTHORITY_SNAPSHOT_SHA256'],\n"
+            "  'observed': hashlib.sha256(raw).hexdigest(),\n"
+            "  'snapshot': json.loads(raw),\n"
+            "}\n"
+            "Path(os.environ['STEP_OUT_DIR'], 'authority.json').write_text(json.dumps(payload))\n"
+        ),
+    )
+
+    assert result.succeeded
+    payload = json.loads(
+        (result.out_dir / "authority.json").read_text(encoding="utf-8")
+    )
+    assert payload["expected"] == payload["observed"]
+    assert payload["snapshot"]["checkpoint_sequence"] == 7
+    assert payload["snapshot"]["authority"]["per_step_records"] == [
+        {"step_id": "01_primary", "status": "ok"}
+    ]
+    assert set(payload["snapshot"]["authority"]) == {
+        "run_id",
+        "checkpoint_sequence",
+        "per_step_records",
+        "evidence",
+    }
+    assert Path(payload["path"]).parent == run_dir / "steps" / "authority_probe"
 
 
 def test_code_runner_exposes_exact_resolved_inputs_manifest(ra, tmp_path: Path):

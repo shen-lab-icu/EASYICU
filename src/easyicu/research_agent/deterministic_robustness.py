@@ -110,6 +110,10 @@ _STRUCTURED_MISSING_STRATEGIES = {
     "complete_case",
     "source_aware_categories_no_imputation",
 }
+_AUTHORITY_SNAPSHOT_SCHEMA = "easyicu.run_artifact_authority_snapshot/1"
+_AUTHORITY_SNAPSHOT_ENV = "EASYICU_RUN_ARTIFACT_AUTHORITY_SNAPSHOT"
+_AUTHORITY_SNAPSHOT_SHA_ENV = "EASYICU_RUN_ARTIFACT_AUTHORITY_SNAPSHOT_SHA256"
+_AUTHORITY_ERROR_ENV = "EASYICU_RUN_ARTIFACT_AUTHORITY_ERROR"
 
 
 def robustness_sensitivity_preflight_code() -> str:
@@ -129,9 +133,6 @@ def robustness_sensitivity_preflight_code() -> str:
 def _run_robustness_preflight_from_env() -> None:
     out_dir = Path(os.environ["STEP_OUT_DIR"])
     run_dir = Path(os.environ.get("EASYICU_RUN_DIR") or out_dir.parents[2])
-    manifest_path = Path(
-        os.environ.get("EASYICU_MANIFEST_PARTIAL") or run_dir / "manifest_partial.json"
-    )
     context_path = Path(
         os.environ.get("EASYICU_RESEARCH_CONTEXT") or run_dir / "research_context.json"
     )
@@ -142,10 +143,29 @@ def _run_robustness_preflight_from_env() -> None:
     cohort_path = Path(os.environ["COHORT_PARQUET"])
     universe_raw = os.environ.get("EASYICU_UNIVERSE_PARQUET")
     universe_path = Path(universe_raw) if universe_raw else None
+    authority_payload: Optional[Dict[str, Any]] = None
+    authority_error = str(os.environ.get(_AUTHORITY_ERROR_ENV) or "").strip()
+    try:
+        snapshot_raw = str(os.environ.get(_AUTHORITY_SNAPSHOT_ENV) or "").strip()
+        snapshot_sha256 = str(os.environ.get(_AUTHORITY_SNAPSHOT_SHA_ENV) or "").strip()
+        if not snapshot_raw or not snapshot_sha256:
+            raise ValueError(
+                authority_error
+                or "host-selected run artifact authority snapshot is unavailable"
+            )
+        authority_payload = _load_authority_snapshot(
+            path=Path(snapshot_raw),
+            expected_sha256=snapshot_sha256,
+            run_dir=run_dir,
+        )
+        authority_error = ""
+    except Exception as exc:
+        authority_error = str(exc)
     _run_robustness_preflight(
         out_dir=out_dir,
         run_dir=run_dir,
-        manifest_path=manifest_path,
+        authority_payload=authority_payload,
+        authority_error=authority_error,
         context_path=context_path,
         lock_path=lock_path,
         cohort_path=cohort_path,
@@ -157,7 +177,8 @@ def _run_robustness_preflight(
     *,
     out_dir: Path,
     run_dir: Path,
-    manifest_path: Path,
+    authority_payload: Optional[Dict[str, Any]],
+    authority_error: str,
     context_path: Path,
     lock_path: Path,
     cohort_path: Path,
@@ -183,11 +204,12 @@ def _run_robustness_preflight(
         context = SimpleNamespace()
         blocking_reasons.append(f"Research context unavailable: {exc}")
 
-    manifest_payload: Dict[str, Any] = {}
-    try:
-        manifest_payload = _load_manifest(manifest_path, run_dir=run_dir)
-    except Exception as exc:
-        blocking_reasons.append(f"Run manifest unavailable: {exc}")
+    manifest_payload = authority_payload or {}
+    if authority_payload is None:
+        blocking_reasons.append(
+            "Current run artifact authority unavailable: "
+            + (authority_error or "no digest-bound authority snapshot was supplied")
+        )
     records = manifest_payload.get("per_step_records") or []
     if not isinstance(records, list):
         records = []
@@ -1585,17 +1607,81 @@ def _load_json_object(path: Path) -> Dict[str, Any]:
     return payload
 
 
-def _load_manifest(path: Path, *, run_dir: Path) -> Dict[str, Any]:
-    candidates = [path, run_dir / "manifest_partial.json", run_dir / "manifest.json"]
-    errors: List[str] = []
-    for candidate in dict.fromkeys(candidates):
-        if not candidate.exists():
-            continue
-        try:
-            return _load_json_object(candidate)
-        except Exception as exc:
-            errors.append(f"{candidate.name}: {exc}")
-    raise ValueError("; ".join(errors) or "no manifest file exists")
+def _canonical_authority_bytes(payload: Dict[str, Any]) -> bytes:
+    return (
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def _load_authority_snapshot(
+    *,
+    path: Path,
+    expected_sha256: str,
+    run_dir: Path,
+) -> Dict[str, Any]:
+    """Read the host-selected current checkpoint receipt exactly once.
+
+    The deterministic runner is intentionally not allowed to inspect
+    ``manifest_partial.json`` or ``manifest.json``.  It consumes only the
+    snapshot selected by :func:`runtime_artifacts.load_run_artifact_authority`
+    on the trusted host and verifies both the receipt bytes and its embedded
+    authority digest before parsing any step record.
+    """
+
+    digest = str(expected_sha256 or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise ValueError("run artifact authority snapshot digest is invalid")
+    candidate = _contained_regular_file(Path(path), Path(run_dir))
+    if candidate is None:
+        raise ValueError(
+            "run artifact authority snapshot is not a contained regular file"
+        )
+    try:
+        snapshot_bytes = candidate.read_bytes()
+    except OSError as exc:
+        raise ValueError("run artifact authority snapshot is unreadable") from exc
+    if hashlib.sha256(snapshot_bytes).hexdigest() != digest:
+        raise ValueError("run artifact authority snapshot digest mismatch")
+    try:
+        snapshot = json.loads(snapshot_bytes)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("run artifact authority snapshot is invalid JSON") from exc
+    if not isinstance(snapshot, dict):
+        raise ValueError("run artifact authority snapshot must be a JSON object")
+    if snapshot.get("schema_version") != _AUTHORITY_SNAPSHOT_SCHEMA:
+        raise ValueError("run artifact authority snapshot schema is unsupported")
+    authority = snapshot.get("authority")
+    if not isinstance(authority, dict):
+        raise ValueError("run artifact authority snapshot has no authority payload")
+    authority_sha256 = str(snapshot.get("authority_sha256") or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", authority_sha256):
+        raise ValueError("run artifact authority receipt digest is invalid")
+    if hashlib.sha256(_canonical_authority_bytes(authority)).hexdigest() != (
+        authority_sha256
+    ):
+        raise ValueError("run artifact authority receipt digest mismatch")
+    checkpoint_sequence = snapshot.get("checkpoint_sequence")
+    if (
+        isinstance(checkpoint_sequence, bool)
+        or not isinstance(checkpoint_sequence, int)
+        or checkpoint_sequence < 1
+        or authority.get("checkpoint_sequence") != checkpoint_sequence
+    ):
+        raise ValueError(
+            "run artifact authority snapshot is not bound to a current checkpoint"
+        )
+    if not isinstance(authority.get("per_step_records"), list):
+        raise ValueError(
+            "run artifact authority checkpoint has no valid per-step ledger"
+        )
+    return authority
 
 
 def _load_locked_specs(
