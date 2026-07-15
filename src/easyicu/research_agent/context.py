@@ -521,6 +521,7 @@ def _describe_column(
     source_tables: List[str] = []
     item_ids: List[str] = []
     unit_normalization: Optional[str] = None
+    analysis_window: Optional[str] = None
     temporal_resolution: Optional[str] = None
     clinical_caveats: List[str] = []
     missingness_semantics: Optional[str] = None
@@ -541,6 +542,14 @@ def _describe_column(
         source_tables = meta.get("source_tables") or []
         item_ids = meta.get("item_ids") or []
         unit_normalization = meta.get("unit_normalization")
+        raw_analysis_window = meta.get("analysis_window") or info.get(
+            "analysis_window"
+        )
+        analysis_window = (
+            str(raw_analysis_window).strip()
+            if isinstance(raw_analysis_window, str) and raw_analysis_window.strip()
+            else None
+        )
         temporal_resolution = meta.get("temporal_resolution")
         clinical_caveats = meta.get("clinical_caveats") or []
         missingness_semantics = meta.get("missingness_semantics")
@@ -581,6 +590,7 @@ def _describe_column(
         source_tables=source_tables,
         item_ids=item_ids,
         unit_normalization=unit_normalization,
+        analysis_window=analysis_window,
         temporal_resolution=temporal_resolution,
         fixed_window_trajectory=fixed_window_trajectory,
         pitfalls=list(hint.pitfalls),
