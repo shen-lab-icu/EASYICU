@@ -922,10 +922,13 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         if record.get("step_id") == "01_summary"
     )
     assert noop_llm.write_calls == 0
-    assert noop_llm.repair_calls == 3
+    assert noop_llm.repair_calls == 2
     assert noop_record["status"] == "blocked_by_concept_audit"
     assert noop_record["quarantined_repair_succeeded"] is False
-    assert noop_record["quarantined_repair_noop_count"] == 3
+    assert noop_record["quarantined_repair_noop_count"] == 2
+    assert noop_record["step_llm_repair_attempts"] == 2
+    assert noop_record["step_llm_repair_budget"] == 2
+    assert noop_record["step_llm_repair_budget_exhausted"] is True
     assert not (run_dir / "steps" / "01_summary" / "analysis.py").exists()
     assert (run_dir / "steps" / "01_summary" / ".quarantine").is_dir()
 
