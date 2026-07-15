@@ -943,9 +943,16 @@ class LLMConceptAuditor:
             "Call it a fixed-horizon outcome only when the script actually labels "
             "or constructs 28/30-day mortality, uses another mortality column, or "
             "derives the event from event-time/follow-up data.\n\n"
+            "Every finding must include `detail.issue_code`. For these narrow "
+            "cases use exactly `audit_only_companion_row_gating_required`, "
+            "`finalized_exposure_missing_reconciliation`, "
+            "`finalized_exposure_overridden`, or "
+            "`finalized_exposure_forced_raw_reconciliation`; use `other` for "
+            "anything else. Message text is explanatory only, never routing.\n\n"
             "Return JSON only: "
             '{"findings":[{"severity":"info|warning|error",'
-            '"message":"short finding","detail":{"optional":"context"}}]}. '
+            '"message":"short finding","detail":{"issue_code":"other",'
+            '"optional":"context"}}]}. '
             "Use an empty findings list if no issue is visible.\n\n"
             f"Step: {step.step_id if step else '(unknown)'}\n"
             f"Step intent: {step.intent if step else '(unknown)'}\n"
@@ -1140,19 +1147,16 @@ def _downgrade_audit_only_companion_gating_findings(
     whole-step audit contract is absent.
     """
 
-    derived_provenance_flags: set[str] = set()
+    issue_code = "audit_only_companion_row_gating_required"
+    derived_provenance_flags: Dict[str, bool] = {}
 
     def _failure_guard(test: ast.AST) -> bool:
         if isinstance(test, ast.Name):
-            return test.id.lower() in derived_provenance_flags & {
-                "provenance_failed",
-                "provenance_error",
-            }
+            return derived_provenance_flags.get(test.id.lower()) is True
         if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
             return (
                 isinstance(test.operand, ast.Name)
-                and test.operand.id.lower() in derived_provenance_flags
-                and test.operand.id.lower() == "provenance_valid"
+                and derived_provenance_flags.get(test.operand.id.lower()) is False
             )
         if isinstance(test, ast.BoolOp) and isinstance(test.op, ast.Or):
             return any(_failure_guard(value) for value in test.values)
@@ -1165,10 +1169,10 @@ def _downgrade_audit_only_companion_gating_findings(
             value = right.value
             if name not in derived_provenance_flags:
                 return False
-            if name == "provenance_valid":
-                return isinstance(test.ops[0], (ast.Eq, ast.Is)) and value is False
-            if name in {"provenance_failed", "provenance_error"}:
-                return isinstance(test.ops[0], (ast.Eq, ast.Is)) and value is True
+            return (
+                isinstance(test.ops[0], (ast.Eq, ast.Is))
+                and value is derived_provenance_flags[name]
+            )
         return False
 
     try:
@@ -1196,12 +1200,32 @@ def _downgrade_audit_only_companion_gating_findings(
                 for candidate in ast.walk(value)
                 if isinstance(candidate, ast.Name)
             }
-            if not value_tokens & {"invalid_pair_n", "discordant_n"}:
+            if not {"invalid_pair_n", "discordant_n"}.issubset(value_tokens):
+                continue
+            if not any(
+                isinstance(candidate, ast.Name)
+                and candidate.id.lower() == "measurement_provenance_audit"
+                for candidate in ast.walk(value)
+            ):
+                continue
+            failure_value: Optional[bool] = None
+            if isinstance(value, ast.Call) and _call_name(value).lower() == "any":
+                failure_value = True
+            elif (
+                isinstance(value, ast.UnaryOp)
+                and isinstance(value.op, ast.Not)
+                and isinstance(value.operand, ast.Call)
+                and _call_name(value.operand).lower() == "any"
+            ):
+                failure_value = False
+            if failure_value is None:
                 continue
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            derived_provenance_flags.update(
-                target.id.lower() for target in targets if isinstance(target, ast.Name)
-            )
+            derived_provenance_flags.update({
+                target.id.lower(): failure_value
+                for target in targets
+                if isinstance(target, ast.Name)
+            })
     contract_tokens = {
         "measurement_provenance_audit",
         "invalid_pair_n",
@@ -1211,37 +1235,18 @@ def _downgrade_audit_only_companion_gating_findings(
     fail_closed_guard = tree is not None and any(
         isinstance(node, ast.If)
         and _failure_guard(node.test)
-        and any(isinstance(statement, ast.Raise) for statement in node.body)
+        and bool(node.body)
+        and isinstance(node.body[0], ast.Raise)
         for node in ast.walk(tree)
     )
     audit_contract_present = contract_tokens.issubset(ast_tokens) and fail_closed_guard
     if not audit_contract_present:
         return list(findings)
 
-    false_positive_signals = (
-        "do not mask or invalidate modeled",
-        "not mask or invalidate modeled",
-        "not used to mask",
-        "without using the measured flag to mask",
-        "based largely on value non-missingness",
-        "bypass their measured/source-status consistency checks",
-    )
     downgraded: List[ValidationFinding] = []
     for finding in findings:
         if finding.validator == LLMConceptAuditor.name and finding.severity == "error":
-            text = " ".join(
-                [
-                    finding.message or "",
-                    json.dumps(finding.detail or {}, ensure_ascii=False, default=str),
-                ]
-            ).lower()
-            companion_context = "measured" in text and any(
-                token in text
-                for token in ("first-value", "first value", "covariate", "summary")
-            )
-            if companion_context and any(
-                token in text for token in false_positive_signals
-            ):
+            if str((finding.detail or {}).get("issue_code") or "") == issue_code:
                 detail = dict(finding.detail or {})
                 detail.setdefault(
                     "downgraded_reason",
@@ -1269,6 +1274,183 @@ def _call_name(node: ast.Call) -> str:
     return ""
 
 
+_PRIMARY_EXPOSURE_ARTIFACT = "artifact:primary_exposure_definition"
+
+
+def _authoritative_exposure_names(tree: ast.Module) -> set[str]:
+    """Names proven to receive the host-bound primary-exposure artifact."""
+
+    literals = {
+        str(node.value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+    if _PRIMARY_EXPOSURE_ARTIFACT not in literals:
+        return set()
+    names: set[str] = set()
+    functions = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)) or node.value is None:
+            continue
+        value_literals = {
+            str(item.value)
+            for item in ast.walk(node.value)
+            if isinstance(item, ast.Constant) and isinstance(item.value, str)
+        }
+        if _PRIMARY_EXPOSURE_ARTIFACT not in value_literals:
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        names.update(target.id for target in targets if isinstance(target, ast.Name))
+    changed = True
+    while changed:
+        changed = False
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+                referenced = {
+                    item.id
+                    for item in ast.walk(node.value)
+                    if isinstance(item, ast.Name)
+                }
+                if not referenced & names:
+                    continue
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                for target in targets:
+                    if isinstance(target, ast.Name) and target.id not in names:
+                        names.add(target.id)
+                        changed = True
+            if not isinstance(node, ast.Call) or _call_name(node) not in functions:
+                continue
+            function = functions[_call_name(node)]
+            parameters = [*function.args.posonlyargs, *function.args.args]
+            for parameter, argument in zip(parameters, node.args):
+                if any(
+                    isinstance(item, ast.Name) and item.id in names
+                    for item in ast.walk(argument)
+                ) and parameter.arg not in names:
+                    names.add(parameter.arg)
+                    changed = True
+            keyword_parameters = {parameter.arg for parameter in parameters}
+            for keyword in node.keywords:
+                if (
+                    keyword.arg in keyword_parameters
+                    and any(
+                        isinstance(item, ast.Name) and item.id in names
+                        for item in ast.walk(keyword.value)
+                    )
+                    and keyword.arg not in names
+                ):
+                    names.add(str(keyword.arg))
+                    changed = True
+    return names
+
+
+def _verified_authoritative_exposure_flow(
+    script_text: str,
+    *,
+    primary_exposure: str,
+) -> bool:
+    """Require one selected exposure value to reach validation and consumption."""
+
+    try:
+        tree = ast.parse(str(script_text or ""))
+    except SyntaxError:
+        return False
+    authority_names = _authoritative_exposure_names(tree)
+    if not authority_names:
+        return False
+    contract_columns = {
+        target.id
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Assign, ast.AnnAssign))
+        and node.value is not None
+        and "executable_column" in {
+            str(item.value)
+            for item in ast.walk(node.value)
+            if isinstance(item, ast.Constant) and isinstance(item.value, str)
+        }
+        and any(
+            isinstance(item, ast.Name) and item.id in authority_names
+            for item in ast.walk(node.value)
+        )
+        for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
+        if isinstance(target, ast.Name)
+    }
+
+    def selects_authority(node: ast.AST) -> bool:
+        for item in ast.walk(node):
+            if not isinstance(item, ast.Subscript):
+                continue
+            if not any(
+                isinstance(name, ast.Name) and name.id in authority_names
+                for name in ast.walk(item.value)
+            ):
+                continue
+            slice_names = {
+                name.id for name in ast.walk(item.slice) if isinstance(name, ast.Name)
+            }
+            slice_literals = {
+                str(value.value)
+                for value in ast.walk(item.slice)
+                if isinstance(value, ast.Constant) and isinstance(value.value, str)
+            }
+            if primary_exposure in slice_literals or slice_names & contract_columns:
+                return True
+        return False
+
+    selected: set[str] = set()
+    assignments = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None
+    ]
+    changed = True
+    while changed:
+        changed = False
+        for node in assignments:
+            referenced = {
+                item.id for item in ast.walk(node.value) if isinstance(item, ast.Name)
+            }
+            if not selects_authority(node.value) and not referenced & selected:
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            new = {target.id for target in targets if isinstance(target, ast.Name)} - selected
+            if new:
+                selected.update(new)
+                changed = True
+    if not selected:
+        return False
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+    domain_checked = any(
+        _call_name(call) == "isin"
+        and {0, 1} <= {
+            item.value
+            for item in ast.walk(call)
+            if isinstance(item, ast.Constant) and isinstance(item.value, (int, float))
+        }
+        and any(name.id in selected for name in ast.walk(call) if isinstance(name, ast.Name))
+        for call in calls
+    )
+    finite_checked = any(
+        _call_name(call) in {"isfinite", "isna", "notna"}
+        and any(name.id in selected for name in ast.walk(call) if isinstance(name, ast.Name))
+        for call in calls
+    )
+    consumed = any(
+        isinstance(node, ast.Return)
+        and node.value is not None
+        and any(name.id in selected for name in ast.walk(node.value) if isinstance(name, ast.Name))
+        or isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Subscript) for target in node.targets)
+        and any(name.id in selected for name in ast.walk(node.value) if isinstance(name, ast.Name))
+        for node in ast.walk(tree)
+    )
+    return domain_checked and finite_checked and consumed
+
+
 def _finalized_branch_isolates_reconciliation(script_text: str) -> bool:
     """Prove that raw-event reconciliation is unreachable on a DataFrame path.
 
@@ -1284,6 +1466,9 @@ def _finalized_branch_isolates_reconciliation(script_text: str) -> bool:
     try:
         tree = ast.parse(str(script_text or ""))
     except SyntaxError:
+        return False
+    authority_names = _authoritative_exposure_names(tree)
+    if not authority_names:
         return False
 
     reconciliation_name = "reconcile_binary_event_presence"
@@ -1353,6 +1538,10 @@ def _finalized_branch_isolates_reconciliation(script_text: str) -> bool:
             and isinstance(test.func, ast.Name)
             and test.func.id == "isinstance"
             and len(test.args) >= 2
+            and any(
+                isinstance(name, ast.Name) and name.id in authority_names
+                for name in ast.walk(test.args[0])
+            )
             and (
                 (isinstance(test.args[1], ast.Name) and test.args[1].id == "DataFrame")
                 or (
@@ -1409,84 +1598,34 @@ def _downgrade_finalized_exposure_reconciliation_findings(
 
     primary_exposure = str(context.primary_exposure or "").strip()
     script = str(script_text or "")
-    normalized_script = re.sub(r"\s+", "", script.lower())
     reconciliation_isolated = _finalized_branch_isolates_reconciliation(script)
     reconciliation_absent = not _has_executable_reconciliation_call(script)
-    literal_direct_binding = bool(
-        primary_exposure
-        and "artifact:primary_exposure_definition" in script
-        and "dataframe" in script.lower()
-        and re.search(
-            rf"\[\s*['\"]{re.escape(primary_exposure)}['\"]\s*\]",
-            script,
-        )
-        and ".isin([0,1])" in normalized_script
-        and ("isfinite(" in normalized_script or ".notna()" in normalized_script)
+    direct_binding = _verified_authoritative_exposure_flow(
+        script,
+        primary_exposure=primary_exposure,
     )
     contracted_direct_binding = bool(
-        (reconciliation_isolated or reconciliation_absent)
-        and "artifact:primary_exposure_definition" in script
-        and "dataframe" in script.lower()
+        direct_binding
         and "product_contract" in script
         and "executable_column" in script
-        and ".isin([0,1])" in normalized_script
-        and ("isfinite(" in normalized_script or ".notna()" in normalized_script)
     )
-    direct_binding = literal_direct_binding or contracted_direct_binding
     if not direct_binding:
         return list(findings)
 
-    missing_reconciliation_signals = (
-        "bypasses the required binary-event triad reconciliation",
-        "bypasses binary-event triad reconciliation",
-        "bypasses the binary-event triad reconciliation",
-        "does not call reconcile_binary_event_presence",
-        "does not invoke reconcile_binary_event_presence",
-        "without the required companion-consistency audit",
-    )
-    finalized_override_signals = (
-        "ignores its values",
-        "ignores the finalized",
-        "overwrites",
-        "overwritten",
-        "discards",
-        "replaces the finalized",
-        "replaces treatment",
-        "replaces exposure",
-        "instead of the finalized",
-        "raw companions determine",
-    )
-    false_forced_reconciliation_signals = (
-        "forced through sparse-event triad",
-        "forced through the sparse-event triad",
-        "requires source_count_column",
-        "requires the source_count_column",
-        "requires raw companion",
-        "requires the raw companion",
-    )
     downgraded: List[ValidationFinding] = []
     for finding in findings:
         if finding.validator == LLMConceptAuditor.name and finding.severity == "error":
-            text = " ".join(
-                [
-                    finding.message or "",
-                    json.dumps(finding.detail or {}, ensure_ascii=False, default=str),
-                ]
-            ).lower()
-            complains_only_about_reconciliation = any(
-                signal in text for signal in missing_reconciliation_signals
-            ) and not any(signal in text for signal in finalized_override_signals)
-            false_override_claim = (
-                (reconciliation_isolated or reconciliation_absent)
-                and "reconcile_binary_event_presence" in text
-                and any(signal in text for signal in finalized_override_signals)
+            issue_code = str((finding.detail or {}).get("issue_code") or "")
+            complains_only_about_reconciliation = (
+                issue_code == "finalized_exposure_missing_reconciliation"
+            )
+            false_override_claim = issue_code == "finalized_exposure_overridden" and (
+                reconciliation_isolated or reconciliation_absent
             )
             false_forced_reconciliation_claim = (
                 reconciliation_absent
                 and contracted_direct_binding
-                and any(
-                    signal in text for signal in false_forced_reconciliation_signals
-                )
+                and issue_code == "finalized_exposure_forced_raw_reconciliation"
             )
             if (
                 complains_only_about_reconciliation
