@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,43 @@ from easyicu.research_agent.trajectory_plan_contract import (
 )
 
 _TRIVIAL_CODE = "value = 1\n"
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _load_exact_resolved_inputs(
+    resolved_inputs_path: Path,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Load the exact host-resolved files and build verified receipts."""
+
+    resolved = json.loads(resolved_inputs_path.read_text(encoding="utf-8"))
+    raw_bindings = resolved.get("inputs")
+    assert isinstance(raw_bindings, dict)
+    loaded: dict[str, Any] = {}
+    receipts: list[dict[str, Any]] = []
+    for input_key, raw_binding in sorted(raw_bindings.items()):
+        assert isinstance(raw_binding, dict)
+        path = Path(str(raw_binding["absolute_path"]))
+        assert path.is_file()
+        assert _sha256(path) == raw_binding["sha256"]
+        receipt = {
+            "input_key": input_key,
+            "evidence_id": raw_binding["evidence_id"],
+            "sha256": raw_binding["sha256"],
+            "loaded": True,
+        }
+        if path.suffix.lower() == ".csv":
+            value = pd.read_csv(path)
+            receipt["row_count"] = int(len(value))
+        elif path.suffix.lower() == ".json":
+            value = json.loads(path.read_text(encoding="utf-8"))
+        else:
+            raise AssertionError(f"unsupported controlled fixture input: {path}")
+        loaded[input_key] = value
+        receipts.append(receipt)
+    return loaded, receipts
 
 
 def _stability_spec() -> dict[str, Any]:
@@ -142,6 +180,8 @@ class _TerminalPlanLLM:
             return _TRIVIAL_CODE
         if "INTERPRET THE RESULTS" in upper:
             return "The registered supporting products were reviewed."
+        if "EVERY FINDING MUST INCLUDE" in upper and "RETURN JSON ONLY" in upper:
+            return json.dumps({"findings": []})
         return "{}"
 
 
@@ -152,17 +192,26 @@ class _TerminalRunner:
         workdir: Path,
         stability_mode: str,
         timeout_seconds: float,
+        exact_binding_consumption: dict[str, set[str]],
     ) -> None:
         self.workdir = Path(workdir)
         self.stability_mode = stability_mode
         self.timeout_seconds = float(timeout_seconds)
         self.calls: list[str] = []
+        self.exact_binding_consumption = exact_binding_consumption
 
     @staticmethod
     def _write_json(path: Path, payload: dict[str, Any]) -> None:
         path.write_text(json.dumps(payload), encoding="utf-8")
 
-    def _write_upstream_outputs(self, step_id: str, out_dir: Path) -> None:
+    def _write_upstream_outputs(
+        self,
+        step_id: str,
+        out_dir: Path,
+        *,
+        resolved_inputs_path: Path | None,
+    ) -> None:
+        input_bindings: list[dict[str, Any]] = []
         if step_id == "01_representation":
             pd.DataFrame(
                 {
@@ -192,12 +241,25 @@ class _TerminalRunner:
                 ),
             }
         elif step_id == "02_candidates":
+            assert resolved_inputs_path is not None
+            loaded, input_bindings = _load_exact_resolved_inputs(resolved_inputs_path)
+            expected_keys = {
+                "artifact:trajectory_representation",
+                "manifest:trajectory_representation_schema",
+            }
+            assert set(loaded) == expected_keys
+            representation = loaded["artifact:trajectory_representation"]
+            representation_schema = loaded["manifest:trajectory_representation_schema"]
+            assert isinstance(representation, pd.DataFrame)
+            assert isinstance(representation_schema, dict)
+            self.exact_binding_consumption["02_candidates"] = set(loaded)
+            identifiers = representation["opaque_id"].tolist()
             pd.DataFrame({"model_id": ["candidate-2"]}).to_csv(
                 out_dir / "candidate_cluster_models.csv", index=False
             )
             pd.DataFrame(
                 {
-                    "opaque_id": ["a", "b", "c", "d"],
+                    "opaque_id": identifiers,
                     "chosen_partition": [0, 0, 1, 1],
                 }
             ).to_csv(out_dir / "candidate_cluster_assignments.csv", index=False)
@@ -223,7 +285,11 @@ class _TerminalRunner:
             raise AssertionError(f"unexpected upstream step {step_id}")
         self._write_json(
             out_dir / "step_summary.json",
-            {"status": "ok", "output_files": output_files},
+            {
+                "status": "ok",
+                "input_bindings": input_bindings,
+                "output_files": output_files,
+            },
         )
 
     def _write_terminal_outputs(self, out_dir: Path) -> None:
@@ -264,7 +330,6 @@ class _TerminalRunner:
         code: str,
         resolved_inputs_path: Path | None = None,
     ) -> RunResult:
-        del resolved_inputs_path
         self.calls.append(step_id)
         cwd = self.workdir / "steps" / step_id
         out_dir = cwd / "outputs"
@@ -324,7 +389,11 @@ class _TerminalRunner:
         if step_id == "03_stability":
             self._write_terminal_outputs(out_dir)
         else:
-            self._write_upstream_outputs(step_id, out_dir)
+            self._write_upstream_outputs(
+                step_id,
+                out_dir,
+                resolved_inputs_path=resolved_inputs_path,
+            )
         return RunResult(
             step_id=step_id,
             script_path=script_path,
@@ -419,12 +488,14 @@ def _run_terminal_case(
         )
     llm = _TerminalPlanLLM()
     runner_holder: dict[str, _TerminalRunner] = {}
+    exact_binding_consumption: dict[str, set[str]] = {}
 
     def runner_factory(*, workdir, timeout_seconds, **_kwargs):
         runner = _TerminalRunner(
             workdir=Path(workdir),
             stability_mode=stability_mode,
             timeout_seconds=timeout_seconds,
+            exact_binding_consumption=exact_binding_consumption,
         )
         runner_holder["runner"] = runner
         return runner
@@ -503,6 +574,10 @@ def test_trajectory_stability_terminal_failures_never_enter_repair_or_fallback(
     assert stability_record["diagnostic_only"] is True
     assert stability_record["standard_executor_terminal_reason"] == expected_reason
     assert llm.repair_calls == 0
+    assert runner.exact_binding_consumption.get("02_candidates") == {
+        "artifact:trajectory_representation",
+        "manifest:trajectory_representation_schema",
+    }
     assert runner.calls.count("03_stability") == expected_runner_calls
     if expected_runner_calls:
         assert runner.timeout_seconds == 1_234.0
@@ -525,9 +600,7 @@ def test_trajectory_stability_terminal_failures_never_enter_repair_or_fallback(
 
     evidence = EvidenceStore(run_dir)
     assert not any(
-        record.relative_path.endswith(
-            ".cluster_stability_assignments.pending.csv"
-        )
+        record.relative_path.endswith(".cluster_stability_assignments.pending.csv")
         for record in evidence.records()
     )
     assert [

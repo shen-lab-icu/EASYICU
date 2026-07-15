@@ -80,17 +80,23 @@ def _write_upstream_bundle(
             * (cluster + 1)
             * 5.0
         )
-    matrix = centers[labels] + rng.normal(0.0, 0.18, size=(len(labels), len(centers[0])))
+    matrix = centers[labels] + rng.normal(
+        0.0, 0.18, size=(len(labels), len(centers[0]))
+    )
     # Exercise the observed-data implementation without creating all-missing rows.
     matrix[np.arange(len(labels)) % 17 == 0, -1] = np.nan
 
-    identifiers = [f"opaque-unit-{n_clusters}-{index:04d}" for index in range(len(labels))]
+    identifiers = [
+        f"opaque-unit-{n_clusters}-{index:04d}" for index in range(len(labels))
+    ]
     representation = pd.DataFrame(matrix, columns=list(representation_columns))
     representation.insert(0, id_column, identifiers)
     reference_labels = [f"group::{100 + int(value)}" for value in labels]
-    assignments = pd.DataFrame(
-        {id_column: identifiers, assignment_column: reference_labels}
-    ).sample(frac=1.0, random_state=91).reset_index(drop=True)
+    assignments = (
+        pd.DataFrame({id_column: identifiers, assignment_column: reference_labels})
+        .sample(frac=1.0, random_state=91)
+        .reset_index(drop=True)
+    )
 
     upstream = run_dir / "upstream"
     upstream.mkdir(parents=True)
@@ -184,6 +190,34 @@ def _sample_hash(values: pd.Series) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _assert_complete_input_receipts(
+    *,
+    summary: dict[str, object],
+    resolved_inputs: dict[str, object],
+    representation_n: int,
+    assignment_n: int,
+) -> None:
+    raw_inputs = resolved_inputs["inputs"]
+    assert isinstance(raw_inputs, dict)
+    raw_receipts = summary["input_bindings"]
+    assert isinstance(raw_receipts, list)
+    receipts = {receipt["input_key"]: receipt for receipt in raw_receipts}
+    assert set(receipts) == set(raw_inputs)
+    for input_key, binding in raw_inputs.items():
+        assert isinstance(binding, dict)
+        assert receipts[input_key]["loaded"] is True
+        assert receipts[input_key]["evidence_id"] == binding["evidence_id"]
+        assert receipts[input_key]["sha256"] == binding["sha256"]
+    assert receipts["artifact:trajectory_representation"]["row_count"] == (
+        representation_n
+    )
+    assert receipts["artifact:candidate_cluster_assignments"]["row_count"] == (
+        assignment_n
+    )
+    assert "row_count" not in receipts["manifest:trajectory_representation_schema"]
+    assert "row_count" not in receipts["manifest:candidate_cluster_solution_schema"]
+
+
 @pytest.mark.parametrize(
     ("n_clusters", "id_column", "coordinates", "assignment_column"),
     [
@@ -228,6 +262,12 @@ def test_executor_is_case_neutral_and_replayable(
         == "candidate_labels_preserved_report_only_no_stability_decision"
     )
     assert "stable" not in summary
+    _assert_complete_input_receipts(
+        summary=summary,
+        resolved_inputs=resolved,
+        representation_n=len(representation),
+        assignment_n=len(candidate_assignments),
+    )
 
     final_assignments = pd.read_csv(out_dir / "cluster_assignments.csv")
     expected_by_id = candidate_assignments.set_index(id_column)[assignment_column]
@@ -425,9 +465,7 @@ def test_executor_fails_closed_when_sampled_reference_has_one_cluster(
     ] = "group::200"
     assignment_path = tmp_path / "upstream" / "opaque_candidate_labels.csv"
     assignments.to_csv(assignment_path, index=False)
-    assignment_binding = resolved["inputs"][
-        "artifact:candidate_cluster_assignments"
-    ]
+    assignment_binding = resolved["inputs"]["artifact:candidate_cluster_assignments"]
     assignment_binding["sha256"] = _sha256(assignment_path)
 
     out_dir = tmp_path / "step_outputs"
@@ -439,6 +477,12 @@ def test_executor_fails_closed_when_sampled_reference_has_one_cluster(
     )
 
     assert summary["status"] == "failed_closed"
+    _assert_complete_input_receipts(
+        summary=summary,
+        resolved_inputs=resolved,
+        representation_n=len(representation),
+        assignment_n=len(assignments),
+    )
     failures = json.loads(
         (tmp_path / "step_outputs" / "cluster_stability_refit_failures.json").read_text(
             encoding="utf-8"
@@ -501,9 +545,10 @@ def test_threshold_failure_fails_closed_without_changing_selected_solution(
     assert "selected k was not changed" in " ".join(summary["errors"])
 
     final_assignments = pd.read_csv(out_dir / "cluster_assignments.csv")
-    assert final_assignments["uninterpreted_id"].tolist() == representation[
-        "uninterpreted_id"
-    ].tolist()
+    assert (
+        final_assignments["uninterpreted_id"].tolist()
+        == representation["uninterpreted_id"].tolist()
+    )
     assert final_assignments.set_index("uninterpreted_id")["cluster"].to_dict() == (
         candidate_assignments.set_index("uninterpreted_id")["frozen_label"].to_dict()
     )

@@ -220,6 +220,32 @@ def _binding_provenance(inputs: Mapping[str, Any], key: str) -> dict[str, Any]:
     }
 
 
+def _loaded_input_receipt(
+    *,
+    inputs: Mapping[str, Any],
+    key: str,
+    value: Any,
+) -> dict[str, Any]:
+    """Return one truthful receipt for an exact input already loaded above."""
+
+    binding = inputs.get(key)
+    if not isinstance(binding, Mapping):
+        raise ValueError(f"missing typed input binding: {key}")
+    evidence_id = str(binding.get("evidence_id") or "").strip()
+    sha256 = str(binding.get("sha256") or "").strip()
+    if not evidence_id or not sha256:
+        raise ValueError(f"typed input binding lacks identity metadata: {key}")
+    receipt: dict[str, Any] = {
+        "input_key": key,
+        "evidence_id": evidence_id,
+        "sha256": sha256,
+        "loaded": True,
+    }
+    if isinstance(value, pd.DataFrame):
+        receipt["row_count"] = int(len(value))
+    return receipt
+
+
 def _require_evidence_link(
     *,
     payload: Mapping[str, Any],
@@ -745,6 +771,8 @@ def run_trajectory_stability(
     summary["trajectory_stability_spec"] = spec.model_dump(mode="json")
     try:
         inputs = _load_resolved_inputs(resolved_inputs)
+        input_receipts: list[dict[str, Any]] = []
+        summary["input_bindings"] = input_receipts
         missing_bindings = sorted(STABILITY_EXECUTOR_INPUTS - set(inputs))
         if missing_bindings:
             raise ValueError(f"required typed bindings are absent: {missing_bindings}")
@@ -754,22 +782,27 @@ def run_trajectory_stability(
                 "trajectory stability executor received undeclared typed bindings: "
                 f"{unexpected_bindings}"
             )
-        representation = _read_bound(
-            inputs=inputs, key="artifact:trajectory_representation", run_dir=run_dir
-        )
-        assignments = _read_bound(
-            inputs=inputs, key="artifact:candidate_cluster_assignments", run_dir=run_dir
-        )
-        representation_schema = _read_bound(
-            inputs=inputs,
-            key="manifest:trajectory_representation_schema",
-            run_dir=run_dir,
-        )
-        solution_schema = _read_bound(
-            inputs=inputs,
-            key="manifest:candidate_cluster_solution_schema",
-            run_dir=run_dir,
-        )
+        loaded_inputs: dict[str, Any] = {}
+        for input_key in sorted(STABILITY_EXECUTOR_INPUTS):
+            loaded_value = _read_bound(
+                inputs=inputs,
+                key=input_key,
+                run_dir=run_dir,
+            )
+            loaded_inputs[input_key] = loaded_value
+            input_receipts.append(
+                _loaded_input_receipt(
+                    inputs=inputs,
+                    key=input_key,
+                    value=loaded_value,
+                )
+            )
+        representation = loaded_inputs["artifact:trajectory_representation"]
+        assignments = loaded_inputs["artifact:candidate_cluster_assignments"]
+        representation_schema = loaded_inputs[
+            "manifest:trajectory_representation_schema"
+        ]
+        solution_schema = loaded_inputs["manifest:candidate_cluster_solution_schema"]
         if not isinstance(representation, pd.DataFrame) or not isinstance(
             assignments, pd.DataFrame
         ):
@@ -784,12 +817,16 @@ def run_trajectory_stability(
             inputs=inputs,
             input_key="artifact:trajectory_representation",
         )
-        expected_representation_sha = str(
-            representation_schema.get("representation_sha256") or ""
-        ).strip().lower()
-        bound_representation_sha = str(
-            inputs["artifact:trajectory_representation"].get("sha256") or ""
-        ).strip().lower()
+        expected_representation_sha = (
+            str(representation_schema.get("representation_sha256") or "")
+            .strip()
+            .lower()
+        )
+        bound_representation_sha = (
+            str(inputs["artifact:trajectory_representation"].get("sha256") or "")
+            .strip()
+            .lower()
+        )
         if (
             not expected_representation_sha
             or expected_representation_sha != bound_representation_sha
@@ -904,9 +941,7 @@ def run_trajectory_stability(
             )
             try:
                 if sample_id_hash in seen_hashes:
-                    raise ValueError(
-                        "subsample membership duplicated an earlier refit"
-                    )
+                    raise ValueError("subsample membership duplicated an earlier refit")
                 reference_sample = reference_array[positions]
                 if np.unique(reference_sample).size < 2:
                     raise ValueError(
@@ -1023,9 +1058,7 @@ def run_trajectory_stability(
         stability.to_csv(out_dir / "cluster_stability.csv", index=False)
         if not assignments_header_written or not pending_assignments_path.is_file():
             raise ValueError("successful refits did not produce assignment rows")
-        pending_assignments_path.replace(
-            out_dir / "cluster_stability_assignments.csv"
-        )
+        pending_assignments_path.replace(out_dir / "cluster_stability_assignments.csv")
 
         final_assignments = pd.DataFrame(
             {id_column: ids.tolist(), "cluster": reference_array.tolist()}

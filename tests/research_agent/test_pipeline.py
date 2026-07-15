@@ -25,6 +25,15 @@ def _step_record_by_id(records, step_id: str):
     raise AssertionError(f"step record {step_id!r} not found in {records!r}")
 
 
+def _empty_custom_llm_response(user_prompt: str) -> str:
+    """Return the schema-valid empty response for the active test prompt."""
+
+    upper = str(user_prompt or "").upper()
+    if "EVERY FINDING MUST INCLUDE" in upper and "RETURN JSON ONLY" in upper:
+        return json.dumps({"findings": []})
+    return "{}"
+
+
 def test_pipeline_end_to_end_synthetic_cohort(ra, synthetic_cohort, tmp_path: Path):
     pipeline = ra.ResearchAgentPipeline(workdir=tmp_path, llm=ra.MockLLMClient())
     result = pipeline.run(
@@ -460,7 +469,7 @@ print(json.dumps(summary))
                 return "The cohort table was produced {evidence:table_one}."
             if "MANUSCRIPT SCAFFOLD" in upper:
                 return "# Title\n\n## Results\n\nThe cohort table was produced {evidence:table_one}.\n\n(left to the human author)"
-            return "{}"
+            return _empty_custom_llm_response(user)
 
     cohort = pd.DataFrame({"age": [50, 60, 70], "death": [0, 1, 0]})
     pipeline = ra.ResearchAgentPipeline(
@@ -597,7 +606,7 @@ print(json.dumps(summary))
                 return "The requested descriptive output was produced."
             if "MANUSCRIPT SCAFFOLD" in upper:
                 return "# Title\n\n## Results\n\nDescriptive outputs were produced.\n"
-            return "{}"
+            return _empty_custom_llm_response(user)
 
     cohort = pd.DataFrame(
         {"lab_max": [1.0, 2.0, 3.0, np.nan, np.nan], "death": [0, 1, 0, 0, 1]}
@@ -690,7 +699,7 @@ print(json.dumps(summary))
                 return "The fixed-cohort reconciliation was completed."
             if "MANUSCRIPT SCAFFOLD" in upper:
                 return "# Title\n\n## Results\n\nThe cohort was retained.\n"
-            return "{}"
+            return _empty_custom_llm_response(user)
 
     cohort = pd.DataFrame({"age": [40, 50, 60, 70, 80], "death": [0, 1, 0, 1, 0]})
     pipeline = ra.ResearchAgentPipeline(
@@ -812,7 +821,7 @@ def test_runtime_crash_after_contract_repair_gets_its_own_repair_budget(
                     "# Title\n\n## Results\n\nThe adjusted odds ratio was estimated "
                     "{evidence:primary_association}.\n\n(left to the human author)"
                 )
-            return "{}"
+            return _empty_custom_llm_response(user)
 
     cohort = pd.DataFrame({"age": [50, 60, 70], "death": [0, 1, 0]})
     pipeline = ra.ResearchAgentPipeline(
@@ -929,7 +938,7 @@ print(json.dumps(summary))
                 )
             if "MANUSCRIPT SCAFFOLD" in upper:
                 return "# Title\n\n## Results\n\nAnalysis stopped after execution."
-            return "{}"
+            return _empty_custom_llm_response(user)
 
     cohort = pd.DataFrame(
         {
@@ -1058,7 +1067,7 @@ print(json.dumps(summary))
                 return "The step completed with registered evidence."
             if "MANUSCRIPT SCAFFOLD" in upper:
                 return "# Title\n\n## Results\n\nAnalysis stopped after execution."
-            return "{}"
+            return _empty_custom_llm_response(user)
 
     cohort = pd.DataFrame(
         {
@@ -1331,7 +1340,7 @@ print(json.dumps(summary))
                 return "The repaired table was produced {evidence:primary_association_table}."
             if "MANUSCRIPT SCAFFOLD" in upper:
                 return "# Title\n\n## Results\n\nThe repaired table was produced {evidence:primary_association_table}.\n\n(left to the human author)"
-            return "{}"
+            return _empty_custom_llm_response(user)
 
     cohort = pd.DataFrame({"sofa2": [0, 1, 3, 4], "death": [1, 0, 0, 1]})
     pipeline = ra.ResearchAgentPipeline(
@@ -1410,7 +1419,7 @@ def test_pipeline_falls_back_to_deterministic_code_after_repair_failure(
                 return "The fallback table was produced {evidence:table_one}."
             if "MANUSCRIPT SCAFFOLD" in upper:
                 return "# Title\n\n## Results\n\nThe fallback table was produced {evidence:table_one}.\n\n(left to the human author)"
-            return "{}"
+            return _empty_custom_llm_response(user)
 
     cohort = pd.DataFrame({"sofa2": [0, 1, 3, 4], "death": [1, 0, 0, 1]})
     pipeline = ra.ResearchAgentPipeline(
@@ -1434,7 +1443,10 @@ def test_pipeline_falls_back_to_deterministic_code_after_repair_failure(
     )
     record = _step_record_by_id(partial["per_step_records"], "01_table_one")
     assert record["status"] == "ok"
-    assert record["deterministic_code_fallback"] == "execution_failure"
+    # The repair provider returned the identical known-broken script. The
+    # repair layer now detects that no-op without rerunning it, so the causal
+    # fallback reason is the failed repair rather than another execution.
+    assert record["deterministic_code_fallback"] == "repair_failed"
 
 
 def test_pipeline_falls_back_when_repair_model_call_fails(ra, tmp_path: Path):
@@ -1471,7 +1483,7 @@ def test_pipeline_falls_back_when_repair_model_call_fails(ra, tmp_path: Path):
                 return "The fallback table was produced {evidence:table_one}."
             if "MANUSCRIPT SCAFFOLD" in upper:
                 return "# Title\n\n## Results\n\nThe fallback table was produced {evidence:table_one}.\n\n(left to the human author)"
-            return "{}"
+            return _empty_custom_llm_response(user)
 
     cohort = pd.DataFrame({"sofa2": [0, 1, 3, 4], "death": [1, 0, 0, 1]})
     pipeline = ra.ResearchAgentPipeline(
@@ -1532,7 +1544,7 @@ def test_pipeline_falls_back_when_successful_script_writes_no_artefacts(
                 return "The fallback table was produced {evidence:table_one}."
             if "MANUSCRIPT SCAFFOLD" in upper:
                 return "# Title\n\n## Results\n\nThe fallback table was produced {evidence:table_one}.\n\n(left to the human author)"
-            return "{}"
+            return _empty_custom_llm_response(user)
 
     cohort = pd.DataFrame({"sofa2": [0, 1, 3, 4], "death": [1, 0, 0, 1]})
     pipeline = ra.ResearchAgentPipeline(
@@ -2177,7 +2189,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
                 return "See {evidence:primary_association}."
             if "MANUSCRIPT SCAFFOLD" in upper:
                 return "# Title\n\n## Results\n\nSee {evidence:primary_association}.\n\n(left to the human author)"
-            return "{}"
+            return _empty_custom_llm_response(user)
 
     cohort = pd.DataFrame(
         {

@@ -140,6 +140,8 @@ class _VisualGovernanceLLM:
             return "The summary is available {evidence:summary}."
         if "MANUSCRIPT SCAFFOLD" in upper:
             return "# Title\n\n## Results\n\nSummary {evidence:summary}."
+        if "EVERY FINDING MUST INCLUDE" in upper and "RETURN JSON ONLY" in upper:
+            return json.dumps({"findings": []})
         return "{}"
 
 
