@@ -800,8 +800,7 @@ def test_primary_model_contract_configure_step_is_not_misclassified_as_figure():
 
     assert PrimaryModelContractValidator._activates(configure, _context(), {}) is True
     assert (
-        PrimaryModelContractValidator._activates(figure_only, _context(), {})
-        is False
+        PrimaryModelContractValidator._activates(figure_only, _context(), {}) is False
     )
 
 
@@ -1010,15 +1009,35 @@ def test_primary_model_contract_does_not_expand_legacy_simple_steps(
 
 
 def test_primary_model_contract_is_wired_into_all_contract_passes() -> None:
-    source = (
-        Path(__file__).resolve().parents[2]
-        / "src"
-        / "easyicu"
-        / "research_agent"
-        / "pipeline_execute.py"
-    ).read_text(encoding="utf-8")
+    import ast
+    import inspect
 
-    assert source.count("primary_model_contract_validator.audit(") == 3
+    from easyicu.research_agent import pipeline_execute
+
+    def _direct_calls(function) -> list[ast.Call]:
+        tree = ast.parse(inspect.getsource(function))
+        return [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "audit"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "primary_model_contract_validator"
+        ]
+
+    early_calls = _direct_calls(pipeline_execute.run_execute_phase)
+    final_calls = _direct_calls(pipeline_execute._evaluate_final_deterministic_gates)
+
+    # The mutable execution loop owns one early repair gate. The extracted
+    # read-only evaluator owns the single final authority gate after all
+    # repairable output checks have passed.
+    assert len(early_calls) == 1
+    assert len(final_calls) == 1
+    for call in [*early_calls, *final_calls]:
+        keywords = {keyword.arg: keyword.value for keyword in call.keywords}
+        assert isinstance(keywords.get("cohort_path"), ast.Name)
+        assert keywords["cohort_path"].id == "cohort_path"
 
 
 def test_primary_model_contract_rejects_noncanonical_machine_fields(
@@ -1216,10 +1235,13 @@ def test_primary_model_contract_allows_explicit_reference_row_without_interval(
     cohort_path, out_dir = _write_inputs(tmp_path)
     table_path = out_dir / "model_coefficients.csv"
     table = pd.read_csv(table_path)
-    reference = table.loc[
-        table["model_id"].eq("lab_source_aware")
-        & table["term_role"].eq("exposure")
-    ].iloc[0].copy()
+    reference = (
+        table.loc[
+            table["model_id"].eq("lab_source_aware") & table["term_role"].eq("exposure")
+        ]
+        .iloc[0]
+        .copy()
+    )
     reference.update(
         {
             "term": "lab_max_reference_level",
@@ -1420,9 +1442,7 @@ def test_primary_model_contract_rejects_quantile_log_odds_scale(tmp_path: Path):
     cohort_path, out_dir, contracts = _write_mixed_outcome_inputs(tmp_path)
     table_path = out_dir / "model_coefficients.csv"
     table = pd.read_csv(table_path)
-    table.loc[
-        table["model_id"].eq("continuous_secondary"), "effect_scale"
-    ] = "log_odds"
+    table.loc[table["model_id"].eq("continuous_secondary"), "effect_scale"] = "log_odds"
     table.to_csv(table_path, index=False)
 
     findings = PrimaryModelContractValidator().audit(
@@ -1443,9 +1463,7 @@ def test_primary_model_contract_requires_scale_for_continuous_fitted_terms(
     cohort_path, out_dir, contracts = _write_mixed_outcome_inputs(tmp_path)
     table_path = out_dir / "model_coefficients.csv"
     table = pd.read_csv(table_path)
-    table.loc[
-        table["model_id"].eq("continuous_secondary"), "effect_scale"
-    ] = None
+    table.loc[table["model_id"].eq("continuous_secondary"), "effect_scale"] = None
     table.to_csv(table_path, index=False)
 
     findings = PrimaryModelContractValidator().audit(
@@ -1630,7 +1648,7 @@ def test_coder_prompt_declares_primary_model_canonical_enums() -> None:
     assert "`analysis_set` is exactly `source_aware` or `complete_case`" in prompt
     assert "`drop_missing_baseline` or" in prompt
     assert "`fit_status` is exactly `fitted`" in prompt
-    assert "keep `exposure_role=\"primary\"`" in prompt
+    assert 'keep `exposure_role="primary"`' in prompt
     assert "use and report `alpha <= 1/n`" in prompt
     assert "planner-owned `model_requirements`" in prompt
     assert "matching `requirement_id`" in prompt
@@ -1674,17 +1692,13 @@ def test_primary_model_contract_rejects_unreported_or_strong_ridge_penalty(
     contracts[0]["fit_method"] = "statsmodels_glm_l2_regularized"
     missing_path = tmp_path / "missing_strength"
     missing_path.mkdir()
-    missing_strength = _issue_types(
-        _audit(missing_path, contracts=contracts)
-    )
+    missing_strength = _issue_types(_audit(missing_path, contracts=contracts))
     assert "statsmodels_penalty_strength_not_reported" in missing_strength
 
     contracts[0]["fit_method"] = "statsmodels_glm_ridge(alpha=1.0)"
     strong_path = tmp_path / "strong_penalty"
     strong_path.mkdir()
-    strong_penalty = _issue_types(
-        _audit(strong_path, contracts=contracts)
-    )
+    strong_penalty = _issue_types(_audit(strong_path, contracts=contracts))
     assert "statsmodels_penalty_too_strong_for_separation_fallback" in strong_penalty
 
 

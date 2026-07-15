@@ -25,6 +25,42 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _load_exact_resolved_inputs(
+    resolved_inputs_path: Path,
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, dict[str, Any]]]:
+    """Load exact host bindings and return truthful consumption receipts."""
+
+    resolved = json.loads(resolved_inputs_path.read_text(encoding="utf-8"))
+    raw_bindings = resolved.get("inputs")
+    assert isinstance(raw_bindings, dict)
+    loaded: dict[str, Any] = {}
+    receipts: list[dict[str, Any]] = []
+    bindings: dict[str, dict[str, Any]] = {}
+    for input_key, raw_binding in sorted(raw_bindings.items()):
+        assert isinstance(raw_binding, dict)
+        binding = dict(raw_binding)
+        path = Path(str(binding["absolute_path"]))
+        assert path.is_file()
+        assert _sha256(path) == binding["sha256"]
+        receipt = {
+            "input_key": input_key,
+            "evidence_id": binding["evidence_id"],
+            "sha256": binding["sha256"],
+            "loaded": True,
+        }
+        if path.suffix.lower() == ".csv":
+            value = pd.read_csv(path)
+            receipt["row_count"] = int(len(value))
+        elif path.suffix.lower() == ".json":
+            value = json.loads(path.read_text(encoding="utf-8"))
+        else:
+            raise AssertionError(f"unsupported controlled fixture input: {path}")
+        loaded[input_key] = value
+        receipts.append(receipt)
+        bindings[input_key] = binding
+    return loaded, receipts, bindings
+
+
 def _stability_spec() -> dict[str, Any]:
     return {
         "resampling_method": "subsample_without_replacement",
@@ -41,9 +77,7 @@ def _stability_spec() -> dict[str, Any]:
         "evaluation_scope": "sampled_overlap",
         "label_alignment": "hungarian_maximum_overlap",
         "label_alignment_reference": "frozen_candidate_assignments",
-        "label_alignment_tie_break": (
-            "minimum_rank_distance_then_lexicographic_v1"
-        ),
+        "label_alignment_tie_break": ("minimum_rank_distance_then_lexicographic_v1"),
         "final_assignment_policy": "copy_selected_candidate_labels",
         "minimum_successful_resamples": 2,
         "failed_refit_policy": "record_once_no_retry",
@@ -151,6 +185,8 @@ class _PlanAndCoderLLM:
             return "value = 1\n"
         if "INTERPRET THE RESULTS" in upper:
             return "The registered supporting products were reviewed."
+        if "EVERY FINDING MUST INCLUDE" in upper and "RETURN JSON ONLY" in upper:
+            return json.dumps({"findings": []})
         return "{}"
 
 
@@ -162,6 +198,7 @@ class _HybridTrajectoryRunner:
         self.calls: list[str] = []
         self.candidate_labels: dict[str, str] = {}
         self.downstream_resolved_assignments = False
+        self.exact_binding_consumption: dict[str, set[str]] = {}
 
     @staticmethod
     def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -244,14 +281,24 @@ class _HybridTrajectoryRunner:
             },
         )
 
-    def _write_candidates(self, out_dir: Path) -> None:
-        evidence = EvidenceStore(self.workdir)
-        representation_schema = evidence.get("trajectory_representation_schema")
-        assert representation_schema is not None
-        representation = evidence.get("trajectory_representation")
-        assert representation is not None
-        representation_path = self.workdir / representation.relative_path
-        identifiers = pd.read_csv(representation_path)["opaque_id"].tolist()
+    def _write_candidates(
+        self,
+        out_dir: Path,
+        *,
+        resolved_inputs_path: Path,
+    ) -> None:
+        loaded, receipts, bindings = _load_exact_resolved_inputs(resolved_inputs_path)
+        expected_keys = {
+            "artifact:trajectory_representation",
+            "manifest:trajectory_representation_schema",
+        }
+        assert set(loaded) == expected_keys
+        representation = loaded["artifact:trajectory_representation"]
+        representation_schema = loaded["manifest:trajectory_representation_schema"]
+        assert isinstance(representation, pd.DataFrame)
+        assert isinstance(representation_schema, dict)
+        self.exact_binding_consumption["02_candidates"] = set(loaded)
+        identifiers = representation["opaque_id"].tolist()
         labels = ["group::100"] * 60 + ["group::200"] * 60
         assignments = pd.DataFrame(
             {"opaque_id": identifiers, "chosen_partition": labels}
@@ -312,7 +359,7 @@ class _HybridTrajectoryRunner:
                 "direction": "minimize",
                 "selected_criterion_value": 100.0,
                 "representation_schema_evidence_id": (
-                    representation_schema.evidence_id
+                    bindings["manifest:trajectory_representation_schema"]["evidence_id"]
                 ),
                 "candidate_assignments_evidence_id": assignment_evidence_id,
             },
@@ -323,10 +370,9 @@ class _HybridTrajectoryRunner:
                 "status": "ok",
                 "analysis_family": "trajectory_clustering",
                 "n_clusters": 2,
-                "clustering_method": (
-                    "latent_class_diagonal_gaussian_mixture"
-                ),
+                "clustering_method": ("latent_class_diagonal_gaussian_mixture"),
                 "cluster_selection": selection,
+                "input_bindings": receipts,
                 "output_files": {
                     "artifact:candidate_cluster_models": (
                         "candidate_cluster_models.csv"
@@ -348,15 +394,15 @@ class _HybridTrajectoryRunner:
         *,
         resolved_inputs_path: Path,
     ) -> None:
-        resolved = json.loads(resolved_inputs_path.read_text(encoding="utf-8"))
-        binding = resolved["inputs"]["artifact:cluster_assignments"]
-        assignments_path = self.workdir / binding["relative_path"]
-        assert _sha256(assignments_path) == binding["sha256"]
-        assignments = pd.read_csv(assignments_path)
+        loaded, receipts, _bindings = _load_exact_resolved_inputs(resolved_inputs_path)
+        assert set(loaded) == {"artifact:cluster_assignments"}
+        assignments = loaded["artifact:cluster_assignments"]
+        assert isinstance(assignments, pd.DataFrame)
         assert assignments.set_index("opaque_id")["cluster"].to_dict() == (
             self.candidate_labels
         )
         self.downstream_resolved_assignments = True
+        self.exact_binding_consumption["04_characterization"] = set(loaded)
 
         sizes = assignments.groupby("cluster", as_index=False).size()
         sizes["proportion"] = sizes["size"] / len(assignments)
@@ -370,9 +416,8 @@ class _HybridTrajectoryRunner:
                 "status": "ok",
                 "analysis_family": "trajectory_clustering",
                 "n_clusters": 2,
-                "clustering_method": (
-                    "latent_class_diagonal_gaussian_mixture"
-                ),
+                "clustering_method": ("latent_class_diagonal_gaussian_mixture"),
+                "input_bindings": receipts,
                 "output_files": {
                     "table:trajectory_profiles": "trajectory_profiles.csv",
                     "table:cluster_sizes": "cluster_sizes.csv",
@@ -398,7 +443,11 @@ class _HybridTrajectoryRunner:
         if step_id == "01_representation":
             self._write_representation(out_dir)
         elif step_id == "02_candidates":
-            self._write_candidates(out_dir)
+            assert resolved_inputs_path is not None
+            self._write_candidates(
+                out_dir,
+                resolved_inputs_path=resolved_inputs_path,
+            )
         elif step_id == "03_stability":
             assert "run_trajectory_stability" in code
             assert resolved_inputs_path is not None
@@ -510,14 +559,10 @@ def test_typed_trajectory_stability_success_is_evidence_bound_and_continues(
     partial = json.loads(
         (run_dir / "manifest_partial.json").read_text(encoding="utf-8")
     )
-    latest = {
-        record["step_id"]: record for record in partial["per_step_records"]
-    }
+    latest = {record["step_id"]: record for record in partial["per_step_records"]}
     stability_record = latest["03_stability"]
     downstream_record = latest["04_characterization"]
-    ordinary_runners = [
-        runner for timeout, runner in runner_records if timeout == 17.0
-    ]
+    ordinary_runners = [runner for timeout, runner in runner_records if timeout == 17.0]
     standard_runners = [
         runner for timeout, runner in runner_records if timeout == 1_234.0
     ]
@@ -547,12 +592,23 @@ def test_typed_trajectory_stability_success_is_evidence_bound_and_continues(
     assert standard_calls == ["03_stability"]
     assert "03_stability" not in ordinary_calls
     assert "04_characterization" in ordinary_calls
+    assert any(runner.downstream_resolved_assignments for runner in ordinary_runners)
     assert any(
-        runner.downstream_resolved_assignments for runner in ordinary_runners
+        runner.exact_binding_consumption.get("02_candidates")
+        == {
+            "artifact:trajectory_representation",
+            "manifest:trajectory_representation_schema",
+        }
+        for runner in ordinary_runners
     )
-    standard_script = (
-        run_dir / "steps" / "03_stability" / "analysis.py"
-    ).read_text(encoding="utf-8")
+    assert any(
+        runner.exact_binding_consumption.get("04_characterization")
+        == {"artifact:cluster_assignments"}
+        for runner in ordinary_runners
+    )
+    standard_script = (run_dir / "steps" / "03_stability" / "analysis.py").read_text(
+        encoding="utf-8"
+    )
     for native_thread_env in (
         "VECLIB_MAXIMUM_THREADS",
         "OMP_NUM_THREADS",

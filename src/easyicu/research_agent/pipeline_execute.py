@@ -1378,9 +1378,7 @@ def _resolved_typed_input_binding(
     for step_record in reversed(list(producer_step_records)):
         if str(step_record.get("status") or "") != "ok":
             continue
-        evidence_ids = {
-            str(value) for value in (step_record.get("evidence_ids") or [])
-        }
+        evidence_ids = {str(value) for value in (step_record.get("evidence_ids") or [])}
         if evidence_ref.evidence_id not in evidence_ids:
             continue
         step_summary = step_record.get("step_summary")
@@ -1781,9 +1779,7 @@ def _step_status_from_contract_findings(
     has_contract_error = any(
         finding.severity == "error"
         for finding in (
-            list(contract_findings)
-            + list(figure_source_findings)
-            + list(stat_findings)
+            list(contract_findings) + list(figure_source_findings) + list(stat_findings)
         )
     )
     if has_contract_error:
@@ -2978,14 +2974,8 @@ def _filter_success_alias_bindings(
             if not alias:
                 continue
             existing_id = str(existing_aliases.get(alias) or "").strip()
-            existing_owner = str(
-                owners_by_evidence_id.get(existing_id) or ""
-            ).strip()
-            if (
-                existing_id
-                and existing_id != evidence_id
-                and existing_owner != step_id
-            ):
+            existing_owner = str(owners_by_evidence_id.get(existing_id) or "").strip()
+            if existing_id and existing_id != evidence_id and existing_owner != step_id:
                 retained[alias] = existing_id
                 continue
             accepted.append(alias)
@@ -3046,7 +3036,8 @@ def _filter_success_alias_bindings(
                 == "figure"
             ]
             stems = {
-                Path(product_sources[evidence_id]).stem for evidence_id in figure_claimants
+                Path(product_sources[evidence_id]).stem
+                for evidence_id in figure_claimants
             }
             # PNG/SVG/PDF exports with one stem are formats of the same logical
             # figure, not competing scientific products. Prefer the editable
@@ -3072,13 +3063,16 @@ def _filter_success_alias_bindings(
                 best_rank = format_rank.get(
                     Path(product_sources[ranked[0]]).suffix.lower(), 99
                 )
-                if sum(
-                    format_rank.get(
-                        Path(product_sources[evidence_id]).suffix.lower(), 99
+                if (
+                    sum(
+                        format_rank.get(
+                            Path(product_sources[evidence_id]).suffix.lower(), 99
+                        )
+                        == best_rank
+                        for evidence_id in ranked
                     )
-                    == best_rank
-                    for evidence_id in ranked
-                ) == 1:
+                    == 1
+                ):
                     selected_product = ranked[0]
         if selected_product is None:
             continue
@@ -3289,8 +3283,8 @@ def _write_host_input_binding_receipts(
                 receipt[field] = value
         if StepSummaryIntegrityValidator._is_tabular_binding(binding):
             try:
-                receipt["row_count"] = (
-                    StepSummaryIntegrityValidator._table_row_count(path)
+                receipt["row_count"] = StepSummaryIntegrityValidator._table_row_count(
+                    path
                 )
             except Exception:
                 continue
@@ -4275,7 +4269,9 @@ def _verified_resume_step_summary(
         field=field,
         expected_kind="statistic",
         expected_source_name=(
-            "probe_summary.json" if field == "probe_summary_evidence_id" else "step_summary.json"
+            "probe_summary.json"
+            if field == "probe_summary_evidence_id"
+            else "step_summary.json"
         ),
         evidence_by_id=evidence_by_id,
         run_dir=run_dir,
@@ -4405,7 +4401,9 @@ def _materialize_verified_step_output_view(
             )
         verified_path = verified_run_evidence_path(run_dir, authority)
         if verified_path is None:
-            raise ValueError(f"listed evidence {evidence_id} failed digest verification")
+            raise ValueError(
+                f"listed evidence {evidence_id} failed digest verification"
+            )
         source_name = _registered_source_name(authority, verified_path)
         if (
             not source_name
@@ -4413,7 +4411,9 @@ def _materialize_verified_step_output_view(
             or "/" in source_name
             or "\\" in source_name
         ):
-            raise ValueError(f"listed evidence {evidence_id} has no safe source filename")
+            raise ValueError(
+                f"listed evidence {evidence_id} has no safe source filename"
+            )
         prior_id = copied.get(source_name)
         if prior_id is not None and prior_id != evidence_id:
             raise ValueError(f"multiple listed evidence records claim {source_name}")
@@ -5152,7 +5152,9 @@ def _selectively_revalidate_resume_successes(
                     figure_contract_validator=FigureContractQualityValidator(),
                     figure_source_validator=FigureSourceDataValidator(),
                 )
-            if any(finding.severity == "error" for finding in gate_findings.all_findings()):
+            if any(
+                finding.severity == "error" for finding in gate_findings.all_findings()
+            ):
                 append_invalid(
                     prior_record=prior_record,
                     reason="current deterministic artifact gates failed",
@@ -5293,8 +5295,7 @@ def _selectively_revalidate_resume_successes(
         if earlier_invalid:
             raise RunInputIdentityError(
                 "Cannot start resume after deterministic-validator-invalid "
-                "upstream evidence; resume at or before: "
-                + ", ".join(earlier_invalid)
+                "upstream evidence; resume at or before: " + ", ".join(earlier_invalid)
             )
 
     if invalid_payloads:
@@ -5539,8 +5540,7 @@ def run_execute_phase(
     llm_concept_auditor_source = inspect.getsourcefile(LLMConceptAuditor)
     llm_concept_auditor_implementation_sha256 = (
         sha256_of_file(Path(llm_concept_auditor_source))
-        if llm_concept_auditor_source
-        and Path(llm_concept_auditor_source).is_file()
+        if llm_concept_auditor_source and Path(llm_concept_auditor_source).is_file()
         else ""
     )
     runtime_state = supervisor.bootstrap_state(run_id=run_id, context=context)
@@ -5866,14 +5866,10 @@ def run_execute_phase(
                 "status": "ok",
                 "generation_mode": _HOST_COHORT_MATERIALIZER_GENERATION_MODE,
                 "step_authority_kind": _HOST_COHORT_MATERIALIZER_AUTHORITY_KIND,
-                _HOST_COHORT_MATERIALIZER_AUTHORITY_FIELD: (
-                    cohort_record.evidence_id
-                ),
+                _HOST_COHORT_MATERIALIZER_AUTHORITY_FIELD: (cohort_record.evidence_id),
                 "step_summary": {
                     "output_files": {
-                        "table:analysis_cohort": str(
-                            cohort_path.relative_to(run_dir)
-                        )
+                        "table:analysis_cohort": str(cohort_path.relative_to(run_dir))
                     },
                     "n_universe": int(result["n_universe"]),
                     "n_analysis_cohort": int(result["n_cohort"]),
@@ -6720,9 +6716,7 @@ def run_execute_phase(
             run_dir,
             step_id=step.step_id,
         )
-        provider_receipt_relative_path = str(
-            provider_receipt_path.relative_to(run_dir)
-        )
+        provider_receipt_relative_path = str(provider_receipt_path.relative_to(run_dir))
         prior_provider_categories: tuple[str, ...] = ()
         prior_provider_attempts = 0
         provider_receipt_integrity_error: Optional[str] = None
@@ -6760,13 +6754,10 @@ def run_execute_phase(
                     normalized_categories = tuple(
                         str(item).strip() for item in prior_categories_raw
                     )
-                    if (
-                        any(not item for item in normalized_categories)
-                        or prior_attempts_raw != len(normalized_categories)
-                    ):
-                        provider_receipt_integrity_error = (
-                            "Prior provider-call attempts and category history disagree."
-                        )
+                    if any(
+                        not item for item in normalized_categories
+                    ) or prior_attempts_raw != len(normalized_categories):
+                        provider_receipt_integrity_error = "Prior provider-call attempts and category history disagree."
                     else:
                         prior_provider_attempts = prior_attempts_raw
                         prior_provider_categories = normalized_categories
@@ -6777,11 +6768,9 @@ def run_execute_phase(
 
         if provider_receipt_integrity_error is None and provider_receipt_path.exists():
             try:
-                receipt_limit, receipt_categories = (
-                    load_provider_call_budget_receipt(
-                        provider_receipt_path,
-                        step_id=step.step_id,
-                    )
+                receipt_limit, receipt_categories = load_provider_call_budget_receipt(
+                    provider_receipt_path,
+                    step_id=step.step_id,
                 )
                 effective_provider_limit = min(
                     effective_provider_limit,
@@ -6825,9 +6814,7 @@ def run_execute_phase(
             step_record["step_provider_call_budget"] = snapshot["limit"]
             step_record["step_provider_call_attempts"] = snapshot["used"]
             step_record["step_provider_call_remaining"] = snapshot["remaining"]
-            step_record["step_provider_call_budget_exhausted"] = snapshot[
-                "exhausted"
-            ]
+            step_record["step_provider_call_budget_exhausted"] = snapshot["exhausted"]
             step_record["step_provider_call_categories"] = snapshot["categories"]
             step_record["step_provider_call_receipt_version"] = 1
             step_record["step_provider_call_receipt"] = (
@@ -6889,10 +6876,7 @@ def run_execute_phase(
         pending_quarantined_errors: List[ValidationFinding] = []
 
         def _llm_repair_budget_available() -> bool:
-            return (
-                step_llm_repair_attempts
-                < pipeline._max_step_llm_repair_attempts
-            )
+            return step_llm_repair_attempts < pipeline._max_step_llm_repair_attempts
 
         def _consume_llm_repair_budget(repair_class: str) -> bool:
             nonlocal step_llm_repair_attempts
@@ -6911,6 +6895,7 @@ def run_execute_phase(
                 str(repair_class)
             )
             return True
+
         monotonic_concept_constraints = _persisted_monotonic_concept_constraints(
             prior_step_record
         )
@@ -8080,8 +8065,22 @@ else:
             fallback_coder = CoderAgent(MockLLMClient(context=coder_context))
             return fallback_coder.run(context=coder_context, step=step)
 
-        def _concept_findings_for_code(script_text: str) -> List[ValidationFinding]:
-            """Run the single pre-execution concept gate for one code digest."""
+        llm_concept_audit_completed_digests: set[str] = set()
+
+        def _concept_findings_for_code(
+            script_text: str,
+            *,
+            include_llm: bool,
+        ) -> List[ValidationFinding]:
+            """Run deterministic code gates and, when requested, the LLM audit.
+
+            Deterministic semantic/mechanical checks always run before execution.
+            The comparatively expensive LLM audit is reserved for an exact code
+            digest that has already executed successfully and passed the early
+            host-owned output contracts.  Stored quarantine errors remain part of
+            the deterministic pre-execution decision and therefore can never be
+            bypassed by deferring a fresh LLM call.
+            """
 
             nonlocal quarantined_draft_active
             nonlocal quarantine_policy_superseded
@@ -8144,8 +8143,13 @@ else:
                         total_steps=total_steps,
                     )
             try:
-                if pipeline._enable_llm_concept_audit and (
-                    deterministic_fallback_used or deterministic_standard_executor_used
+                if (
+                    include_llm
+                    and pipeline._enable_llm_concept_audit
+                    and (
+                        deterministic_fallback_used
+                        or deterministic_standard_executor_used
+                    )
                 ):
                     generation_mode = (
                         "deterministic_standard"
@@ -8167,7 +8171,11 @@ else:
                             },
                         )
                     )
-                elif pipeline._enable_llm_concept_audit and deterministic_errors:
+                elif (
+                    include_llm
+                    and pipeline._enable_llm_concept_audit
+                    and deterministic_errors
+                ):
                     code_findings.append(
                         ValidationFinding(
                             validator="llm_concept_auditor",
@@ -8189,7 +8197,7 @@ else:
                             },
                         )
                     )
-                elif pipeline._enable_llm_concept_audit:
+                elif include_llm and pipeline._enable_llm_concept_audit:
                     llm_audit_client = (
                         pipeline._llm_concept_auditor_client
                         or role_resolver("analyzer")
@@ -8235,6 +8243,9 @@ else:
                                 )
                             )
                             code_findings.extend(cached_findings)
+                            llm_concept_audit_completed_digests.add(
+                                sha256_of_bytes(script_text.encode("utf-8"))
+                            )
                             step_record["llm_concept_audit_cache_hits"] = (
                                 int(
                                     step_record.get("llm_concept_audit_cache_hits") or 0
@@ -8251,6 +8262,9 @@ else:
                             _sync_provider_budget()
                             llm_concept_audit_cache.put(audit_key, llm_findings)
                             code_findings.extend(llm_findings)
+                            llm_concept_audit_completed_digests.add(
+                                sha256_of_bytes(script_text.encode("utf-8"))
+                            )
             except ProviderCallBudgetError as exc:
                 _sync_provider_budget()
                 receipt_error = isinstance(exc, ProviderCallBudgetReceiptError)
@@ -8306,6 +8320,33 @@ else:
                 )
             return code_findings
 
+        def _authorized_deterministic_concept_repair(
+            *,
+            script_text: str,
+            error_messages: Sequence[str],
+            source: str,
+        ) -> Tuple[str, List[str]]:
+            """Return an all-or-nothing centrally authorized mechanical repair."""
+
+            candidate_code, repair_names = deterministic_concept_audit_repair(
+                script_text,
+                error_messages,
+            )
+            if not repair_names or candidate_code == script_text:
+                return script_text, []
+            for repair_name in repair_names:
+                if (
+                    _authorize_automatic_repair(
+                        (repair_name, candidate_code),
+                        step=step,
+                        source=source,
+                        before_code=script_text,
+                    )
+                    is None
+                ):
+                    return script_text, []
+            return candidate_code, list(repair_names)
+
         concept_repair_attempts = 0
         llm_repair_used = critic_resume_repair_used
         concept_audit_error_count = 0
@@ -8320,7 +8361,7 @@ else:
             # proof and force an otherwise unnecessary LLM repair.
             if not quarantined_draft_active:
                 code = reorder_forward_references(code)
-            usage_findings = _concept_findings_for_code(code)
+            usage_findings = _concept_findings_for_code(code, include_llm=False)
             step_record["usage_findings"] = [f.model_dump() for f in usage_findings]
             concept_audit_error_count += sum(
                 1
@@ -8458,23 +8499,11 @@ else:
                     )
                     if value
                 ]
-                _det_code, _det_names = deterministic_concept_audit_repair(
-                    code, _audit_error_msgs
+                _det_code, _det_names = _authorized_deterministic_concept_repair(
+                    script_text=code,
+                    error_messages=_audit_error_msgs,
+                    source="deterministic_concept_audit_repair",
                 )
-                if _det_names and _det_code != code:
-                    denied_names = [
-                        name
-                        for name in _det_names
-                        if _authorize_automatic_repair(
-                            (name, _det_code),
-                            step=step,
-                            source="deterministic_concept_audit_repair",
-                            before_code=code,
-                        )
-                        is None
-                    ]
-                    if denied_names:
-                        _det_code, _det_names = code, []
                 if _det_names and _det_code != code:
                     deterministic_concept_repairs += 1
                     applied_concept_repair_names.extend(_det_names)
@@ -8741,9 +8770,7 @@ else:
                 )
                 for f in blocking_usage_findings
             )
-            structured_repair_ticket = typed_repair_ticket(
-                blocking_usage_findings
-            )
+            structured_repair_ticket = typed_repair_ticket(blocking_usage_findings)
             _remember_concept_constraints(blocking_usage_findings)
             try:
                 repaired_code = coder.repair(
@@ -8951,6 +8978,8 @@ else:
         standard_executor_terminal_reason: Optional[str] = None
         standard_executor_terminal_summary: Dict[str, Any] = {}
         standard_executor_terminal_findings: List[ValidationFinding] = []
+        deterministic_contract_approved_code_digest: Optional[str] = None
+        final_concept_gate_approved_code_digest: Optional[str] = None
         while True:
             code = reorder_forward_references(code)
             candidate_code_digest = sha256_of_bytes(code.encode("utf-8"))
@@ -8989,13 +9018,23 @@ else:
                     per_step_records.append(step_record)
                     _flush_partial_manifest()
                 return step_record
-            if candidate_code_digest != concept_approved_code_digest:
-                # Every code mutation after execution (visual, contract,
-                # runtime, deterministic, or fallback) returns through this
-                # single digest-gated pre-execution concept audit. Never let a
-                # repair bypass the safety gate merely because it originated
-                # inside the runner loop.
-                usage_findings = _concept_findings_for_code(code)
+            final_llm_audit_due = bool(
+                candidate_code_digest == deterministic_contract_approved_code_digest
+                and candidate_code_digest != final_concept_gate_approved_code_digest
+            )
+            if (
+                candidate_code_digest != concept_approved_code_digest
+                or final_llm_audit_due
+            ):
+                # Every mutation still returns through deterministic semantic and
+                # mechanical gates before execution.  The LLM concept auditor is
+                # invoked only for the exact digest whose local run and early
+                # deterministic contracts already passed, preventing runtime- or
+                # contract-broken drafts from consuming repeated audit calls.
+                usage_findings = _concept_findings_for_code(
+                    code,
+                    include_llm=final_llm_audit_due,
+                )
                 step_record["usage_findings"] = [
                     finding.model_dump() for finding in usage_findings
                 ]
@@ -9003,6 +9042,13 @@ else:
                     finding for finding in usage_findings if finding.severity == "error"
                 ]
                 if post_mutation_errors:
+                    if final_llm_audit_due:
+                        # These outputs came from a digest rejected by the final
+                        # semantic audit.  They are never eligible for later
+                        # sealing/current authority, and a repaired digest must
+                        # execute afresh before it can regain contract approval.
+                        deterministic_contract_approved_code_digest = None
+                        _clear_output_dir(run_dir / "steps" / step.step_id / "outputs")
                     post_mutation_messages = [
                         value
                         for finding in post_mutation_errors
@@ -9017,27 +9063,12 @@ else:
                         < _MAX_DETERMINISTIC_CONCEPT_REPAIRS
                     ):
                         deterministic_code, deterministic_names = (
-                            deterministic_concept_audit_repair(
-                                code,
-                                post_mutation_messages,
+                            _authorized_deterministic_concept_repair(
+                                script_text=code,
+                                error_messages=post_mutation_messages,
+                                source=("post_mutation_deterministic_concept_repair"),
                             )
                         )
-                        if deterministic_names and deterministic_code != code:
-                            denied_names = [
-                                name
-                                for name in deterministic_names
-                                if _authorize_automatic_repair(
-                                    (name, deterministic_code),
-                                    step=step,
-                                    source=(
-                                        "post_mutation_deterministic_concept_repair"
-                                    ),
-                                    before_code=code,
-                                )
-                                is None
-                            ]
-                            if denied_names:
-                                deterministic_code, deterministic_names = code, []
                         if deterministic_names and deterministic_code != code:
                             before_code = code
                             code = deterministic_code
@@ -9075,15 +9106,11 @@ else:
 
                     if _llm_repair_budget_available():
                         concept_repair_attempts += 1
-                        if not _consume_llm_repair_budget(
-                            "post_mutation_concept"
-                        ):
+                        if not _consume_llm_repair_budget("post_mutation_concept"):
                             raise AssertionError(
                                 "LLM repair budget changed without mutation"
                             )
-                        step_record["concept_repair_attempts"] = (
-                            concept_repair_attempts
-                        )
+                        step_record["concept_repair_attempts"] = concept_repair_attempts
                         emit_progress(
                             "coder",
                             (
@@ -9097,9 +9124,7 @@ else:
                             repair_attempts=step_llm_repair_attempts,
                         )
                         _remember_concept_constraints(post_mutation_errors)
-                        post_mutation_ticket = typed_repair_ticket(
-                            post_mutation_errors
-                        )
+                        post_mutation_ticket = typed_repair_ticket(post_mutation_errors)
                         post_mutation_log = "\n".join(
                             (
                                 f"{finding.severity.upper()}: {finding.message}"
@@ -9150,7 +9175,49 @@ else:
                             continue
                         except Exception as exc:
                             _sync_provider_budget()
+                            checkpoint_error: Optional[Exception] = None
+                            try:
+                                checkpoint = store_quarantined_concept_draft(
+                                    run_dir=run_dir,
+                                    step_id=step.step_id,
+                                    code=code,
+                                    findings=_quarantine_error_payloads(
+                                        post_mutation_errors
+                                    ),
+                                )
+                                step_record["quarantined_draft_sha256"] = (
+                                    checkpoint.sha256
+                                )
+                                step_record["quarantined_draft_relative_path"] = (
+                                    checkpoint.relative_path
+                                )
+                                step_record["quarantined_requires_repair"] = True
+                            except Exception as checkpoint_exc:
+                                checkpoint_error = checkpoint_exc
+                            fallback_code = _deterministic_fallback_code(
+                                "concept_repair_failed"
+                            )
+                            if fallback_code is not None:
+                                code = fallback_code
+                                _clear_output_dir(
+                                    run_dir / "steps" / step.step_id / "outputs"
+                                )
+                                continue
                             with shared_lock:
+                                findings.extend(usage_findings)
+                                if checkpoint_error is not None:
+                                    findings.append(
+                                        ValidationFinding(
+                                            validator="resume",
+                                            severity="warning",
+                                            message=(
+                                                "Could not preserve the rejected final "
+                                                "concept-audit draft for step "
+                                                f"{step.step_id}: {checkpoint_error}"
+                                            ),
+                                            detail={"step_id": step.step_id},
+                                        )
+                                    )
                                 findings.append(
                                     ValidationFinding(
                                         validator="coder",
@@ -9163,6 +9230,19 @@ else:
                                         detail={"step_id": step.step_id},
                                     )
                                 )
+                                step_record["status"] = "repair_failed"
+                                per_step_records.append(step_record)
+                                _flush_partial_manifest()
+                            emit_progress(
+                                "coder",
+                                f"Concept-audit repair failed for {step.step_id}.",
+                                status="error",
+                                run_id=run_id,
+                                step_id=step.step_id,
+                                current_step=step_current,
+                                total_steps=total_steps,
+                            )
+                            return step_record
 
                     if not _llm_repair_budget_available():
                         step_record["step_llm_repair_budget_exhausted"] = True
@@ -9225,6 +9305,35 @@ else:
                 step_record["concept_approved_code_sha256"] = (
                     concept_approved_code_digest
                 )
+                step_record["deterministic_preflight_approved_code_sha256"] = (
+                    concept_approved_code_digest
+                )
+                if final_llm_audit_due:
+                    final_concept_gate_approved_code_digest = candidate_code_digest
+                    step_record["final_concept_gate_approved_code_sha256"] = (
+                        final_concept_gate_approved_code_digest
+                    )
+                    if candidate_code_digest in llm_concept_audit_completed_digests:
+                        step_record["llm_concept_audit_status"] = "completed"
+                        step_record["llm_concept_approved_code_sha256"] = (
+                            candidate_code_digest
+                        )
+                    elif not pipeline._enable_llm_concept_audit:
+                        step_record["llm_concept_audit_status"] = "disabled"
+                    elif (
+                        deterministic_fallback_used
+                        or deterministic_standard_executor_used
+                    ):
+                        step_record["llm_concept_audit_status"] = (
+                            "skipped_trusted_deterministic_code"
+                        )
+                    else:
+                        step_record["llm_concept_audit_status"] = (
+                            "skipped_no_auditor_client"
+                        )
+                    # Reuse the already validated outputs.  No second execution
+                    # of unchanged code is needed after the digest-bound audit.
+                    break
 
             concept_repair_used = bool(
                 concept_repair_attempts or deterministic_concept_repairs
@@ -9444,9 +9553,7 @@ else:
             )
             script_evidence_id = (
                 "code_analysis_"
-                + hashlib.sha256(
-                    script_authority.encode("utf-8")
-                ).hexdigest()[:16]
+                + hashlib.sha256(script_authority.encode("utf-8")).hexdigest()[:16]
             )
             script_record = evidence.register_file(
                 kind="code",
@@ -9566,9 +9673,7 @@ else:
                         visual_step_summary = vloaded
                     else:
                         visual_step_summary = {"raw": vloaded}
-                if runner_repair_name and is_sealed_renderer_repair(
-                    runner_repair_name
-                ):
+                if runner_repair_name and is_sealed_renderer_repair(runner_repair_name):
                     visual_step_summary = _write_host_input_binding_receipts(
                         out_dir=run_result.out_dir,
                         step_summary=visual_step_summary,
@@ -10364,8 +10469,7 @@ else:
                         _clear_output_dir(run_result.out_dir)
                         continue
                     if (
-                        contract_repair_attempts
-                        >= pipeline._max_code_repair_attempts
+                        contract_repair_attempts >= pipeline._max_code_repair_attempts
                         or not _llm_repair_budget_available()
                     ):
                         with shared_lock:
@@ -10541,7 +10645,14 @@ else:
                     )
                     _clear_output_dir(run_result.out_dir)
                     continue
-                break
+                deterministic_contract_approved_code_digest = candidate_code_digest
+                step_record["deterministic_contract_approved_code_sha256"] = (
+                    deterministic_contract_approved_code_digest
+                )
+                # Return once through the digest gate for the single final LLM
+                # concept audit.  The output directory is intentionally retained;
+                # on approval it proceeds without re-executing unchanged code.
+                continue
 
             if log_path.exists():
                 run_log = log_path.read_text(encoding="utf-8", errors="replace")
@@ -10689,98 +10800,119 @@ else:
                 )
                 return step_record
 
-            repair_attempts += 1
-            runtime_repair_attempts += 1
-            if not _consume_llm_repair_budget("runtime"):
-                raise AssertionError("LLM repair budget changed without mutation")
-            step_record["code_repair_attempts"] = repair_attempts
-            step_record["runtime_repair_attempts"] = runtime_repair_attempts
-            emit_progress(
-                "coder",
-                f"Repairing failed script for {step.step_id}.",
-                run_id=run_id,
-                step_id=step.step_id,
-                current_step=step_current,
-                total_steps=total_steps,
-                repair_attempts=repair_attempts,
-            )
-            try:
-                code = coder.repair(
-                    context=coder_context,
-                    step=step,
-                    code=code,
-                    run_log=run_log,
-                    attempt=repair_attempts,
-                    provider_budget=provider_budget,
-                    provider_category="runtime_repair",
-                )
-                _sync_provider_budget()
-                llm_repair_used = True
-                _clear_output_dir(run_result.out_dir)
-            except Exception as exc:
-                _sync_provider_budget()
-                # 🔧 2026-05-16: distinguish transient LLM/parse failures from
-                # exhausted budget. JSON-parse errors after the OpenAIClient
-                # retry chain already exhausted its own backoff still bubble up
-                # here; treat them as one used repair attempt and loop instead
-                # of immediately bailing out. Only fall through to the
-                # deterministic fallback / repair_failed branch when we've
-                # genuinely used up max_code_repair_attempts.
-                _msg = str(exc).lower()
-                _is_transient = (
-                    isinstance(exc, json.JSONDecodeError)
-                    or "expecting value" in _msg
-                    or ("json" in _msg and "decode" in _msg)
-                    or "503" in _msg
-                    or "rate" in _msg
-                )
-                if (
-                    _is_transient
-                    and runtime_repair_attempts < pipeline._max_code_repair_attempts
-                ):
-                    emit_progress(
-                        "coder",
-                        f"Transient repair failure for {step.step_id} "
-                        f"(attempt {repair_attempts}): {type(exc).__name__}; retrying.",
-                        run_id=run_id,
-                        step_id=step.step_id,
-                        current_step=step_current,
-                        total_steps=total_steps,
-                        repair_attempts=repair_attempts,
-                    )
-                    # The retained `code` is unchanged → next loop iteration
-                    # will re-run the same script, fail the same way, then
-                    # come back here for repair attempt N+1 with the same
-                    # traceback in run_log. That gives the LLM another shot
-                    # at producing parseable output.
-                    continue
-
-                fallback_code = _deterministic_fallback_code("repair_failed")
-                if fallback_code is not None:
-                    code = fallback_code
-                    _clear_output_dir(run_result.out_dir)
-                    continue
-                with shared_lock:
-                    findings.append(
-                        ValidationFinding(
-                            validator="coder",
-                            severity="error",
-                            message=f"Coder repair failed for step {step.step_id}: {exc}",
-                        )
-                    )
-                    step_record["status"] = "repair_failed"
-                    per_step_records.append(step_record)
-                    _flush_partial_manifest()
+            runtime_repair_applied = False
+            runtime_repair_fallback_applied = False
+            while (
+                runtime_repair_attempts < pipeline._max_code_repair_attempts
+                and _llm_repair_budget_available()
+            ):
+                repair_attempts += 1
+                runtime_repair_attempts += 1
+                if not _consume_llm_repair_budget("runtime"):
+                    raise AssertionError("LLM repair budget changed without mutation")
+                step_record["code_repair_attempts"] = repair_attempts
+                step_record["runtime_repair_attempts"] = runtime_repair_attempts
                 emit_progress(
                     "coder",
-                    f"Repair failed for {step.step_id}.",
-                    status="error",
+                    f"Repairing failed script for {step.step_id}.",
                     run_id=run_id,
                     step_id=step.step_id,
                     current_step=step_current,
                     total_steps=total_steps,
+                    repair_attempts=repair_attempts,
                 )
-                return step_record
+                try:
+                    repaired_code = coder.repair(
+                        context=coder_context,
+                        step=step,
+                        code=code,
+                        run_log=run_log,
+                        attempt=repair_attempts,
+                        provider_budget=provider_budget,
+                        provider_category="runtime_repair",
+                    )
+                    _sync_provider_budget()
+                    if not _python_repair_is_materially_changed(code, repaired_code):
+                        raise RuntimeError(
+                            "Runtime repair returned no material Python change."
+                        )
+                    code = repaired_code
+                    llm_repair_used = True
+                    runtime_repair_applied = True
+                    _clear_output_dir(run_result.out_dir)
+                    break
+                except Exception as exc:
+                    _sync_provider_budget()
+                    # Transport/parse failure did not change the candidate. Retry
+                    # the repair request itself with the same code and traceback;
+                    # never pay to execute a digest whose failure is already known.
+                    message = str(exc).lower()
+                    is_noop_repair = "no material python change" in message
+                    is_transient = (
+                        isinstance(exc, json.JSONDecodeError)
+                        or "expecting value" in message
+                        or ("json" in message and "decode" in message)
+                        or "503" in message
+                        or "rate" in message
+                    )
+                    can_retry_repair = bool(
+                        (is_transient or is_noop_repair)
+                        and runtime_repair_attempts < pipeline._max_code_repair_attempts
+                        and _llm_repair_budget_available()
+                        and not provider_budget.exhausted
+                    )
+                    if can_retry_repair:
+                        emit_progress(
+                            "coder",
+                            (
+                                f"Repair attempt did not yield usable code for "
+                                f"{step.step_id} "
+                                f"(attempt {repair_attempts}): {type(exc).__name__}; "
+                                "retrying the repair without re-executing unchanged code."
+                            ),
+                            run_id=run_id,
+                            step_id=step.step_id,
+                            current_step=step_current,
+                            total_steps=total_steps,
+                            repair_attempts=repair_attempts,
+                        )
+                        continue
+
+                    # The causal failure is the unavailable repair, not a new
+                    # runner failure. Preserve that reason even when the logical
+                    # or provider-call budget became exhausted on this attempt.
+                    fallback_code = _deterministic_fallback_code("repair_failed")
+                    if fallback_code is not None:
+                        code = fallback_code
+                        runtime_repair_fallback_applied = True
+                        _clear_output_dir(run_result.out_dir)
+                        break
+                    with shared_lock:
+                        findings.append(
+                            ValidationFinding(
+                                validator="coder",
+                                severity="error",
+                                message=(
+                                    f"Coder repair failed for step {step.step_id}: {exc}"
+                                ),
+                            )
+                        )
+                        step_record["status"] = "repair_failed"
+                        per_step_records.append(step_record)
+                        _flush_partial_manifest()
+                    emit_progress(
+                        "coder",
+                        f"Repair failed for {step.step_id}.",
+                        status="error",
+                        run_id=run_id,
+                        step_id=step.step_id,
+                        current_step=step_current,
+                        total_steps=total_steps,
+                    )
+                    return step_record
+
+            if runtime_repair_applied or runtime_repair_fallback_applied:
+                continue
 
         publication_step = _step_requires_publication_figure_exports(
             step
@@ -11127,8 +11259,7 @@ else:
                     "diagnostic_only": True,
                     "step_summary": step_summary,
                     "contract_findings": [
-                        finding.model_dump()
-                        for finding in preseal_contract_findings
+                        finding.model_dump() for finding in preseal_contract_findings
                     ],
                     "figure_source_findings": [
                         finding.model_dump() for finding in preseal_source_findings
@@ -11216,9 +11347,7 @@ else:
                 )
                 summary_evidence_id = (
                     "statistic_step_summary_"
-                    + hashlib.sha256(
-                        summary_authority.encode("utf-8")
-                    ).hexdigest()[:16]
+                    + hashlib.sha256(summary_authority.encode("utf-8")).hexdigest()[:16]
                 )
                 rec = evidence.register_file(
                     kind="statistic",
@@ -11625,9 +11754,7 @@ else:
         )
         interpretation_evidence_id = (
             "log_interpretation_"
-            + hashlib.sha256(
-                interpretation_authority.encode("utf-8")
-            ).hexdigest()[:16]
+            + hashlib.sha256(interpretation_authority.encode("utf-8")).hexdigest()[:16]
         )
         interp_record = evidence.register_text(
             kind="log",
@@ -11734,29 +11861,23 @@ else:
                     success_alias_bindings,
                     retained_cross_step_aliases,
                     suppressed_basename_evidence_ids,
-                ) = (
-                    _filter_success_alias_bindings(
-                        pending_success_aliases,
-                        existing_aliases=evidence.aliases(),
-                        owners_by_evidence_id={
-                            record.evidence_id: str(
-                                record.produced_by_step or ""
-                            ).strip()
-                            for record in current_evidence_records
-                        },
-                        step_id=step.step_id,
-                        records_by_evidence_id={
-                            record.evidence_id: record
-                            for record in current_evidence_records
-                        },
-                    )
+                ) = _filter_success_alias_bindings(
+                    pending_success_aliases,
+                    existing_aliases=evidence.aliases(),
+                    owners_by_evidence_id={
+                        record.evidence_id: str(record.produced_by_step or "").strip()
+                        for record in current_evidence_records
+                    },
+                    step_id=step.step_id,
+                    records_by_evidence_id={
+                        record.evidence_id: record
+                        for record in current_evidence_records
+                    },
                 )
                 evidence.publish_step_success_aliases(
                     success_alias_bindings,
                     step_id=step.step_id,
-                    suppressed_basename_evidence_ids=(
-                        suppressed_basename_evidence_ids
-                    ),
+                    suppressed_basename_evidence_ids=(suppressed_basename_evidence_ids),
                 )
                 if retained_cross_step_aliases:
                     step_record["retained_cross_step_aliases"] = (

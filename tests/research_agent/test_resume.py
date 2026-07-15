@@ -515,9 +515,7 @@ def test_resume_migrates_missing_script_only_from_explicit_summary_authority(
     records = {
         record["evidence_id"]: record
         for record in json.loads(
-            (run_dir / "evidence" / "evidence_index.json").read_text(
-                encoding="utf-8"
-            )
+            (run_dir / "evidence" / "evidence_index.json").read_text(encoding="utf-8")
         )
     }
 
@@ -533,9 +531,7 @@ def test_resume_migrates_missing_script_only_from_explicit_summary_authority(
     migrated = updated["per_step_records"][-1]
     assert migrated["status"] == "ok"
     assert migrated["script_evidence_id"] == script.evidence_id
-    assert migrated["resume_authority_migrated_fields"] == [
-        "script_evidence_id"
-    ]
+    assert migrated["resume_authority_migrated_fields"] == ["script_evidence_id"]
 
 
 def test_resume_does_not_migrate_missing_script_from_unlisted_or_ambiguous_code(
@@ -565,9 +561,7 @@ def test_resume_does_not_migrate_missing_script_from_unlisted_or_ambiguous_code(
     records = {
         record["evidence_id"]: record
         for record in json.loads(
-            (run_dir / "evidence" / "evidence_index.json").read_text(
-                encoding="utf-8"
-            )
+            (run_dir / "evidence" / "evidence_index.json").read_text(encoding="utf-8")
         )
     }
 
@@ -598,9 +592,7 @@ def test_resume_migrates_exact_host_owned_probe_without_script_or_analyzer(
     records = {
         record["evidence_id"]: record
         for record in json.loads(
-            (run_dir / "evidence" / "evidence_index.json").read_text(
-                encoding="utf-8"
-            )
+            (run_dir / "evidence" / "evidence_index.json").read_text(encoding="utf-8")
         )
     }
 
@@ -648,9 +640,7 @@ def test_resume_probe_rejects_arbitrary_table_as_host_authority(
     records = {
         record["evidence_id"]: record
         for record in json.loads(
-            (run_dir / "evidence" / "evidence_index.json").read_text(
-                encoding="utf-8"
-            )
+            (run_dir / "evidence" / "evidence_index.json").read_text(encoding="utf-8")
         )
     }
 
@@ -661,9 +651,7 @@ def test_resume_probe_rejects_arbitrary_table_as_host_authority(
     )
 
     assert invalidated == {
-        "00_probe": (
-            "successful host probe checkpoint lacks migrated probe authority"
-        )
+        "00_probe": ("successful host probe checkpoint lacks migrated probe authority")
     }
     assert updated["per_step_records"][-1]["status"] == "resume_evidence_invalid"
 
@@ -682,9 +670,7 @@ def test_resume_migrates_exact_host_owned_cohort_materializer_without_script(
     records = {
         record["evidence_id"]: record
         for record in json.loads(
-            (run_dir / "evidence" / "evidence_index.json").read_text(
-                encoding="utf-8"
-            )
+            (run_dir / "evidence" / "evidence_index.json").read_text(encoding="utf-8")
         )
     }
 
@@ -698,10 +684,7 @@ def test_resume_migrates_exact_host_owned_cohort_materializer_without_script(
     assert checkpoint == original
     assert len(updated["per_step_records"]) == 2
     migrated = updated["per_step_records"][-1]
-    assert (
-        migrated["step_authority_kind"]
-        == "host_deterministic_cohort_materializer"
-    )
+    assert migrated["step_authority_kind"] == "host_deterministic_cohort_materializer"
     assert migrated["cohort_table_evidence_id"] == cohort.evidence_id
     assert "step_summary_evidence_id" not in migrated
     assert "script_evidence_id" not in migrated
@@ -744,9 +727,7 @@ def test_resume_cohort_materializer_rejects_non_authoritative_table(
     records = {
         record["evidence_id"]: record
         for record in json.loads(
-            (run_dir / "evidence" / "evidence_index.json").read_text(
-                encoding="utf-8"
-            )
+            (run_dir / "evidence" / "evidence_index.json").read_text(encoding="utf-8")
         )
     }
 
@@ -791,9 +772,7 @@ def test_resume_does_not_generalize_script_free_authority_to_other_deterministic
     records = {
         record["evidence_id"]: record
         for record in json.loads(
-            (run_dir / "evidence" / "evidence_index.json").read_text(
-                encoding="utf-8"
-            )
+            (run_dir / "evidence" / "evidence_index.json").read_text(encoding="utf-8")
         )
     }
 
@@ -824,9 +803,7 @@ def test_resume_cohort_materializer_rejects_tampered_authority(
     records = {
         record["evidence_id"]: record
         for record in json.loads(
-            (run_dir / "evidence" / "evidence_index.json").read_text(
-                encoding="utf-8"
-            )
+            (run_dir / "evidence" / "evidence_index.json").read_text(encoding="utf-8")
         )
     }
     migrated_state, invalidated = invalidate_unverified_successful_steps(
@@ -845,8 +822,7 @@ def test_resume_cohort_materializer_rejects_tampered_authority(
 
     assert invalidated == {
         "01_cohort_definition": (
-            "evidence analysis_cohort_execute_repair failed path/digest "
-            "verification"
+            "evidence analysis_cohort_execute_repair failed path/digest " "verification"
         )
     }
     assert updated["per_step_records"][-1]["status"] == "resume_evidence_invalid"
@@ -865,9 +841,7 @@ def test_resume_cohort_materializer_rejects_checkpoint_count_mismatch(
     records = {
         record["evidence_id"]: record
         for record in json.loads(
-            (run_dir / "evidence" / "evidence_index.json").read_text(
-                encoding="utf-8"
-            )
+            (run_dir / "evidence" / "evidence_index.json").read_text(encoding="utf-8")
         )
     }
     migrated_state, invalidated = invalidate_unverified_successful_steps(
@@ -907,9 +881,7 @@ def test_resume_cohort_materializer_rejects_canonical_cohort_drift(
     records = {
         record["evidence_id"]: record
         for record in json.loads(
-            (run_dir / "evidence" / "evidence_index.json").read_text(
-                encoding="utf-8"
-            )
+            (run_dir / "evidence" / "evidence_index.json").read_text(encoding="utf-8")
         )
     }
     migrated_state, invalidated = invalidate_unverified_successful_steps(
@@ -969,10 +941,7 @@ def test_resume_invalidates_only_successes_with_unverified_evidence(tmp_path: Pa
         records=records,
     )
 
-    latest = {
-        record["step_id"]: record
-        for record in updated["per_step_records"]
-    }
+    latest = {record["step_id"]: record for record in updated["per_step_records"]}
     assert invalidated == {
         "01_a": "evidence step_a_summary failed path/digest verification"
     }
@@ -1010,9 +979,7 @@ def test_resume_cannot_hide_tampered_summary_by_dropping_its_required_id(
     records = {
         record["evidence_id"]: record
         for record in json.loads(
-            (run_dir / "evidence" / "evidence_index.json").read_text(
-                encoding="utf-8"
-            )
+            (run_dir / "evidence" / "evidence_index.json").read_text(encoding="utf-8")
         )
     }
 
@@ -1061,9 +1028,7 @@ def test_resume_requires_each_explicit_step_authority_in_evidence_ids(
     records = {
         record["evidence_id"]: record
         for record in json.loads(
-            (run_dir / "evidence" / "evidence_index.json").read_text(
-                encoding="utf-8"
-            )
+            (run_dir / "evidence" / "evidence_index.json").read_text(encoding="utf-8")
         )
     }
 
@@ -1108,9 +1073,7 @@ def test_resume_run_level_evidence_cannot_substitute_for_required_step_authority
     records = {
         record["evidence_id"]: record
         for record in json.loads(
-            (run_dir / "evidence" / "evidence_index.json").read_text(
-                encoding="utf-8"
-            )
+            (run_dir / "evidence" / "evidence_index.json").read_text(encoding="utf-8")
         )
     }
 
@@ -1152,9 +1115,7 @@ def test_resume_explicit_run_level_receipt_cannot_impersonate_step_summary(
     records = {
         record["evidence_id"]: record
         for record in json.loads(
-            (run_dir / "evidence" / "evidence_index.json").read_text(
-                encoding="utf-8"
-            )
+            (run_dir / "evidence" / "evidence_index.json").read_text(encoding="utf-8")
         )
     }
 
@@ -1188,9 +1149,7 @@ def test_resume_requires_interpretation_field_when_analyzer_evidence_exists(
     records = {
         record["evidence_id"]: record
         for record in json.loads(
-            (run_dir / "evidence" / "evidence_index.json").read_text(
-                encoding="utf-8"
-            )
+            (run_dir / "evidence" / "evidence_index.json").read_text(encoding="utf-8")
         )
     }
 
@@ -1202,8 +1161,7 @@ def test_resume_requires_interpretation_field_when_analyzer_evidence_exists(
 
     assert invalidated == {
         "01_model": (
-            "successful checkpoint is missing required "
-            "interpretation_evidence_id"
+            "successful checkpoint is missing required " "interpretation_evidence_id"
         )
     }
 
@@ -1235,9 +1193,7 @@ def test_resume_invalidates_downstream_success_when_upstream_evidence_is_bad(
     records = {
         record["evidence_id"]: record
         for record in json.loads(
-            (run_dir / "evidence" / "evidence_index.json").read_text(
-                encoding="utf-8"
-            )
+            (run_dir / "evidence" / "evidence_index.json").read_text(encoding="utf-8")
         )
     }
 
@@ -1248,12 +1204,11 @@ def test_resume_invalidates_downstream_success_when_upstream_evidence_is_bad(
     )
 
     assert set(invalidated) == {"01_upstream", "02_downstream"}
-    assert "upstream_summary failed path/digest verification" in invalidated[
-        "02_downstream"
-    ]
-    latest = {
-        record["step_id"]: record for record in updated["per_step_records"]
-    }
+    assert (
+        "upstream_summary failed path/digest verification"
+        in invalidated["02_downstream"]
+    )
+    latest = {record["step_id"]: record for record in updated["per_step_records"]}
     assert latest["01_upstream"]["status"] == "resume_evidence_invalid"
     assert latest["02_downstream"]["status"] == "resume_evidence_invalid"
 
@@ -1264,13 +1219,11 @@ def test_resume_transitively_invalidates_intact_downstream_authorities(
     run_dir = tmp_path / "run_transitive_checkpoint_invalidation"
     run_dir.mkdir()
     evidence = EvidenceStore(run_dir)
-    upstream_checkpoint, _, upstream_summary, _ = (
-        _register_resume_step_authorities(
-            run_dir=run_dir,
-            evidence=evidence,
-            step_id="01_upstream",
-            prefix="upstream",
-        )
+    upstream_checkpoint, _, upstream_summary, _ = _register_resume_step_authorities(
+        run_dir=run_dir,
+        evidence=evidence,
+        step_id="01_upstream",
+        prefix="upstream",
     )
     middle_checkpoint, _, middle_summary, _ = _register_resume_step_authorities(
         run_dir=run_dir,
@@ -1296,9 +1249,7 @@ def test_resume_transitively_invalidates_intact_downstream_authorities(
     records = {
         record["evidence_id"]: record
         for record in json.loads(
-            (run_dir / "evidence" / "evidence_index.json").read_text(
-                encoding="utf-8"
-            )
+            (run_dir / "evidence" / "evidence_index.json").read_text(encoding="utf-8")
         )
     }
 
@@ -1328,9 +1279,7 @@ def test_resume_transitively_invalidates_intact_downstream_authorities(
             f"via evidence {middle_summary.evidence_id}"
         ),
     }
-    current = {
-        record["step_id"]: record for record in updated["per_step_records"]
-    }
+    current = {record["step_id"]: record for record in updated["per_step_records"]}
     assert {
         current[step_id]["status"]
         for step_id in ("01_upstream", "02_middle", "03_downstream")
@@ -1362,9 +1311,7 @@ def test_pipeline_resume_passes_invalidated_evidence_step_to_execution(
             "evidence_ids": [record.evidence_id],
         }
     ]
-    partial["evidence"] = [
-        item.model_dump(mode="json") for item in evidence.records()
-    ]
+    partial["evidence"] = [item.model_dump(mode="json") for item in evidence.records()]
     partial_path.write_text(json.dumps(partial, indent=2), encoding="utf-8")
     Path(verified_run_evidence_path(run_dir, record)).unlink()
 
@@ -1378,10 +1325,7 @@ def test_pipeline_resume_passes_invalidated_evidence_step_to_execution(
     with pytest.raises(RuntimeError, match="captured invalidated"):
         pipeline.run(**run_kwargs)
 
-    current = {
-        item["step_id"]: item
-        for item in observed["per_step_records"]
-    }
+    current = {item["step_id"]: item for item in observed["per_step_records"]}
     assert current["01_summary"]["status"] == "resume_evidence_invalid"
     assert any(
         finding.get("validator") == "resume_evidence_integrity"
@@ -1461,7 +1405,9 @@ def test_legacy_completed_resume_is_adopted_only_from_verified_context_and_cohor
     )
     (run_dir / RUN_INPUT_CAPSULE_FILENAME).unlink()
 
-    partial = json.loads((run_dir / "manifest_partial.json").read_text(encoding="utf-8"))
+    partial = json.loads(
+        (run_dir / "manifest_partial.json").read_text(encoding="utf-8")
+    )
     partial.update(
         {
             "llm_signature": "mock",
@@ -1661,13 +1607,9 @@ def test_resume_prefers_latest_compatible_plan_revision(tmp_path: Path):
         ],
     )
     original_path = run_dir / "analysis_plan.json"
-    original_path.write_text(
-        original.model_dump_json(indent=2), encoding="utf-8"
-    )
+    original_path.write_text(original.model_dump_json(indent=2), encoding="utf-8")
     revision_path = run_dir / "analysis_plan_revision_2.json"
-    revision_path.write_text(
-        revision.model_dump_json(indent=2), encoding="utf-8"
-    )
+    revision_path.write_text(revision.model_dump_json(indent=2), encoding="utf-8")
     evidence = EvidenceStore(run_dir)
     evidence.register_file(
         kind="log",
@@ -1797,7 +1739,9 @@ def test_partial_manifest_checkpoints_executed_step_before_interpretation(
 
     run_dirs = sorted(tmp_path.glob("run_*"))
     assert run_dirs
-    partial = json.loads((run_dirs[-1] / "manifest_partial.json").read_text(encoding="utf-8"))
+    partial = json.loads(
+        (run_dirs[-1] / "manifest_partial.json").read_text(encoding="utf-8")
+    )
     records = partial.get("per_step_records") or []
     pending = [
         record
@@ -1834,7 +1778,9 @@ def test_resume_skips_completed_steps(ra, synthetic_cohort, tmp_path: Path):
     assert second.run_id == first.run_id, "resume must reuse the same run_id"
     assert second.workdir == first.workdir, "resume must reuse the same workdir"
 
-    partial_after = json.loads((run_dir / "manifest_partial.json").read_text(encoding="utf-8"))
+    partial_after = json.loads(
+        (run_dir / "manifest_partial.json").read_text(encoding="utf-8")
+    )
     statuses_after = [r.get("status") for r in partial_after["per_step_records"]]
     # No new step record should have been added, every step was already ok.
     assert len(partial_after["per_step_records"]) == n_records_before, statuses_after
@@ -1856,7 +1802,8 @@ def test_resume_reruns_missing_step(ra, synthetic_cohort, tmp_path: Path):
     assert len(records) >= 2, "need ≥2 steps to test partial resume"
     drop_index = next(
         (
-            i for i, record in enumerate(records)
+            i
+            for i, record in enumerate(records)
             if record.get("step_id") == "04_primary_association"
         ),
         len(records) - 1,
@@ -1879,9 +1826,9 @@ def test_resume_reruns_missing_step(ra, synthetic_cohort, tmp_path: Path):
 
     partial_after = json.loads(partial_path.read_text(encoding="utf-8"))
     new_step_ids = [r["step_id"] for r in partial_after["per_step_records"]]
-    assert dropped["step_id"] in new_step_ids, (
-        f"dropped step {dropped['step_id']!r} was not re-executed; new ids: {new_step_ids}"
-    )
+    assert (
+        dropped["step_id"] in new_step_ids
+    ), f"dropped step {dropped['step_id']!r} was not re-executed; new ids: {new_step_ids}"
 
 
 def test_resume_from_completed_step_can_stop_after_that_step(
@@ -2019,11 +1966,13 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
                 temperature=temperature,
             )
 
-    cohort = pd.DataFrame({
-        "stay_id": [1, 2, 3, 4],
-        "sofa2": [0, 1, 3, 6],
-        "death": [1, 0, 0, 1],
-    })
+    cohort = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4],
+            "sofa2": [0, 1, 3, 6],
+            "death": [1, 0, 0, 1],
+        }
+    )
     first_pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=SingleStepLLM(),
@@ -2046,43 +1995,47 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     partial = json.loads(partial_path.read_text(encoding="utf-8"))
     bad_code_path = run_dir / "evidence" / "code_bad__analysis.py"
     bad_code_path.write_text("{}", encoding="utf-8")
-    partial["evidence"].append({
-        "evidence_id": "code_bad",
-        "kind": "code",
-        "description": "Malformed code evidence that must not be reused.",
-        "relative_path": "evidence/code_bad__analysis.py",
-        "sha256": "bad",
-        "produced_by_step": "04_primary_association",
-        "inputs": [],
-        "script_evidence_id": None,
-        "producer": "coder",
-        "generation_mode": "llm",
-        "finding_severity": None,
-        "finding_messages": [],
-        "metadata": {},
-        "created_at": "2026-07-01T00:00:00Z",
-    })
-    partial.setdefault("findings", []).extend([
+    partial["evidence"].append(
         {
-            "validator": "step_contract",
-            "severity": "error",
-            "message": (
-                "stale pre-resume error for step "
-                "04_primary_association should be cleared"
-            ),
-            "detail": {"step_id": "04_primary_association"},
-        },
-        {
-            "validator": "manuscript_gate",
-            "severity": "error",
-            "message": "stale pre-resume gate error should be cleared",
-            "detail": {
-                "failed_steps": [
-                    {"step_id": "04_primary_association", "status": "failed"}
-                ]
+            "evidence_id": "code_bad",
+            "kind": "code",
+            "description": "Malformed code evidence that must not be reused.",
+            "relative_path": "evidence/code_bad__analysis.py",
+            "sha256": "bad",
+            "produced_by_step": "04_primary_association",
+            "inputs": [],
+            "script_evidence_id": None,
+            "producer": "coder",
+            "generation_mode": "llm",
+            "finding_severity": None,
+            "finding_messages": [],
+            "metadata": {},
+            "created_at": "2026-07-01T00:00:00Z",
+        }
+    )
+    partial.setdefault("findings", []).extend(
+        [
+            {
+                "validator": "step_contract",
+                "severity": "error",
+                "message": (
+                    "stale pre-resume error for step "
+                    "04_primary_association should be cleared"
+                ),
+                "detail": {"step_id": "04_primary_association"},
             },
-        },
-    ])
+            {
+                "validator": "manuscript_gate",
+                "severity": "error",
+                "message": "stale pre-resume gate error should be cleared",
+                "detail": {
+                    "failed_steps": [
+                        {"step_id": "04_primary_association", "status": "failed"}
+                    ]
+                },
+            },
+        ]
+    )
     partial_path.write_text(
         json.dumps(partial, indent=2, ensure_ascii=False),
         encoding="utf-8",
@@ -2132,9 +2085,10 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         for record in partial["evidence"]
         if record.get("evidence_id") == records[-1]["resumed_code_evidence_id"]
     )
-    assert records[-1]["resumed_from_generation_mode"] == source_code_record[
-        "generation_mode"
-    ]
+    assert (
+        records[-1]["resumed_from_generation_mode"]
+        == source_code_record["generation_mode"]
+    )
     final_code_records = [
         record
         for record in partial["evidence"]
@@ -2143,19 +2097,18 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         and record.get("generation_mode") == "resumed_code_reuse"
     ]
     assert final_code_records
-    assert records[-1]["script_evidence_id"] == final_code_records[-1][
-        "evidence_id"
-    ]
-    assert final_code_records[-1]["evidence_id"] != records[-1][
-        "resumed_code_evidence_id"
-    ]
+    assert records[-1]["script_evidence_id"] == final_code_records[-1]["evidence_id"]
+    assert (
+        final_code_records[-1]["evidence_id"] != records[-1]["resumed_code_evidence_id"]
+    )
     assert final_code_records[-1]["description"].startswith(
         "Reused prior agent-generated analysis script"
     )
     assert final_code_records[-1]["metadata"]["resumed_code_evidence_id"]
-    assert final_code_records[-1]["metadata"][
-        "resumed_from_generation_mode"
-    ] == source_code_record["generation_mode"]
+    assert (
+        final_code_records[-1]["metadata"]["resumed_from_generation_mode"]
+        == source_code_record["generation_mode"]
+    )
     assert not any(
         "stale pre-resume" in finding.get("message", "")
         for finding in partial["findings"]
@@ -2184,6 +2137,11 @@ def test_concept_repair_failure_resumes_quarantined_draft_fail_closed(
 
     from easyicu.research_agent.audits.validators import LLMConceptAuditor
     from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.runner import CodeRunner
+    from easyicu.research_agent.runtime_artifacts import (
+        current_evidence_records,
+        current_successful_step_ids,
+    )
 
     audit_state = {"emit_error": True, "reject_marker": None}
     persisted_message = "Displayed percentage is not reconciled to its denominator."
@@ -2205,6 +2163,19 @@ def test_concept_repair_failure_resumes_quarantined_draft_fail_closed(
         ]
 
     monkeypatch.setattr(LLMConceptAuditor, "audit", fake_audit)
+    runner_calls: list[str] = []
+    original_run = CodeRunner.run
+
+    def recording_run(self, *, step_id, code, resolved_inputs_path=None):
+        runner_calls.append(step_id)
+        return original_run(
+            self,
+            step_id=step_id,
+            code=code,
+            resolved_inputs_path=resolved_inputs_path,
+        )
+
+    monkeypatch.setattr(CodeRunner, "run", recording_run)
 
     draft_code = """
 import json
@@ -2308,12 +2279,23 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     assert first_record["status"] == "repair_failed"
     assert first_llm.write_calls == 1
     assert first_llm.repair_calls == 1
-    assert not (run_dir / "steps" / "01_summary" / "analysis.py").exists()
+    assert runner_calls == ["01_summary"]
+    assert (run_dir / "steps" / "01_summary" / "analysis.py").exists()
+    assert not any((run_dir / "steps" / "01_summary" / "outputs").iterdir())
     assert (run_dir / "steps" / "01_summary" / ".quarantine").is_dir()
-    assert not any(
-        record.get("kind") == "code"
-        and record.get("produced_by_step") == "01_summary"
+    assert any(
+        record.get("kind") == "code" and record.get("produced_by_step") == "01_summary"
         for record in first_partial["evidence"]
+    )
+    assert "01_summary" not in current_successful_step_ids(
+        first_partial["per_step_records"]
+    )
+    assert not any(
+        record.get("produced_by_step") == "01_summary"
+        for record in current_evidence_records(
+            first_partial["evidence"],
+            first_partial["per_step_records"],
+        )
     )
 
     # Simulate a nondeterministic auditor forgetting its prior error. The saved
@@ -2345,7 +2327,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     assert second_llm.write_calls == 0
     assert second_llm.repair_calls == 1
     assert persisted_message in second_llm.repair_prompts[-1]
-    assert not (run_dir / "steps" / "01_summary" / "analysis.py").exists()
+    assert runner_calls == ["01_summary"]
     assert (run_dir / "steps" / "01_summary" / ".quarantine").is_dir()
 
     # Both allowed logical repairs have now been spent across two processes.
@@ -2395,7 +2377,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     assert noop_record["step_llm_repair_attempts"] == 2
     assert noop_record["step_llm_repair_budget"] == 2
     assert noop_record["step_llm_repair_budget_exhausted"] is True
-    assert not (run_dir / "steps" / "01_summary" / "analysis.py").exists()
+    assert runner_calls == ["01_summary"]
     assert (run_dir / "steps" / "01_summary" / ".quarantine").is_dir()
 
     # Once the cross-resume logical repair budget is exhausted, another resume
@@ -2433,14 +2415,12 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         load_quarantined_concept_draft,
     )
 
-    latest_draft = load_quarantined_concept_draft(
-        run_dir=run_dir, step_id="01_summary"
-    )
+    latest_draft = load_quarantined_concept_draft(run_dir=run_dir, step_id="01_summary")
     assert latest_draft is not None
     assert partial_llm.repair_calls == 0
     assert "draft_marker" in latest_draft.code
     assert "partial_marker" not in latest_draft.code
-    assert not (run_dir / "steps" / "01_summary" / "analysis.py").exists()
+    assert runner_calls == ["01_summary"]
 
 
 @pytest.mark.parametrize(
@@ -2460,9 +2440,7 @@ def test_quarantined_repair_materiality_rejects_inert_edits(after: str) -> None:
     before = "import os\nvalue = 1\n"
 
     assert not _python_repair_is_materially_changed(before, after)
-    assert _python_repair_is_materially_changed(
-        before, "import os\nvalue = 2\n"
-    )
+    assert _python_repair_is_materially_changed(before, "import os\nvalue = 2\n")
 
 
 def test_logical_repair_budget_restore_is_monotonic_across_early_failure() -> None:
@@ -2683,9 +2661,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     assert record["resumed_quarantined_draft"] is True
     assert record["quarantined_repair_succeeded"] is False
     assert record["quarantine_policy_superseded"] is True
-    assert record["quarantine_policy_superseded_findings"][0][
-        "downgraded_reason"
-    ]
+    assert record["quarantine_policy_superseded_findings"][0]["downgraded_reason"]
     assert record["quarantine_retired_by"] == (
         "deterministic_validator_policy_supersession"
     )
@@ -2759,9 +2735,7 @@ def test_quarantine_policy_supersession_reclassifies_the_stored_error(ra) -> Non
         current_findings=[],
         context=context,
         script_text=script,
-        quarantined_script_sha256=hashlib.sha256(
-            script.encode("utf-8")
-        ).hexdigest(),
+        quarantined_script_sha256=hashlib.sha256(script.encode("utf-8")).hexdigest(),
     )
 
     assert result is not None
@@ -2837,7 +2811,7 @@ model = sm.Logit(outcome, pd.DataFrame({'treatment': treatment}))
             "context": (
                 "The script replaces treatment with "
                 "reconcile_binary_event_presence values."
-            )
+            ),
         },
     )
 
@@ -2846,9 +2820,7 @@ model = sm.Logit(outcome, pd.DataFrame({'treatment': treatment}))
         current_findings=[],
         context=context,
         script_text=script,
-        quarantined_script_sha256=hashlib.sha256(
-            script.encode("utf-8")
-        ).hexdigest(),
+        quarantined_script_sha256=hashlib.sha256(script.encode("utf-8")).hexdigest(),
     )
 
     assert result is not None
@@ -3031,14 +3003,11 @@ def test_quarantine_policy_supersession_does_not_trust_fresh_audit_absence_or_wa
     result = _quarantined_errors_superseded_by_current_policy(
         prior_errors=[ineligible_prior],
         current_findings=[
-            ValidationFinding.model_validate(finding)
-            for finding in current_findings
+            ValidationFinding.model_validate(finding) for finding in current_findings
         ],
         context=context,
         script_text=script,
-        quarantined_script_sha256=hashlib.sha256(
-            script.encode("utf-8")
-        ).hexdigest(),
+        quarantined_script_sha256=hashlib.sha256(script.encode("utf-8")).hexdigest(),
     )
 
     assert result is None
@@ -3062,9 +3031,7 @@ def test_quarantine_policy_supersession_requires_zero_current_errors(ra) -> None
         ],
         context=context,
         script_text=script,
-        quarantined_script_sha256=hashlib.sha256(
-            script.encode("utf-8")
-        ).hexdigest(),
+        quarantined_script_sha256=hashlib.sha256(script.encode("utf-8")).hexdigest(),
     )
 
     assert result is None
@@ -3086,8 +3053,9 @@ def test_resume_reuses_locked_plan_instead_of_replanning(
     run_dir = Path(first.workdir)
     plan_path = run_dir / "analysis_plan.json"
     plan_bytes_before = plan_path.read_bytes()
-    step_ids_before = [s["step_id"] for s in json.loads(
-        plan_path.read_text(encoding="utf-8"))["steps"]]
+    step_ids_before = [
+        s["step_id"] for s in json.loads(plan_path.read_text(encoding="utf-8"))["steps"]
+    ]
     assert step_ids_before, "first run produced no plan steps"
 
     class DifferentPlanLLM:
@@ -3097,23 +3065,25 @@ def test_resume_reuses_locked_plan_instead_of_replanning(
         name = "different-plan-llm"
 
         def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            user = next(
-                (m.content for m in reversed(messages) if m.role == "user"), ""
-            )
+            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
             upper = user.upper()
             if "ICU-AWARE RESEARCH PLAN" in upper:
-                return json.dumps({
-                    "research_question": "Is admission SOFA-2 associated with ICU mortality?",
-                    "steps": [{
-                        "step_id": "88_resume_should_ignore_this",
-                        "intent": "This plan must be ignored on resume.",
-                        "inputs": ["sofa2", "death"],
-                        "expected_outputs": ["table:ignored"],
-                        "method": "descriptive",
-                        "icu_rule_refs": ["aggregation_rule_for"],
-                    }],
-                    "rationale": "resume must not use this plan",
-                })
+                return json.dumps(
+                    {
+                        "research_question": "Is admission SOFA-2 associated with ICU mortality?",
+                        "steps": [
+                            {
+                                "step_id": "88_resume_should_ignore_this",
+                                "intent": "This plan must be ignored on resume.",
+                                "inputs": ["sofa2", "death"],
+                                "expected_outputs": ["table:ignored"],
+                                "method": "descriptive",
+                                "icu_rule_refs": ["aggregation_rule_for"],
+                            }
+                        ],
+                        "rationale": "resume must not use this plan",
+                    }
+                )
             if "INTERPRET THE RESULTS" in upper:
                 return "Reused-plan interpretation {evidence:primary_association}."
             if "MANUSCRIPT SCAFFOLD" in upper:
@@ -3131,8 +3101,9 @@ def test_resume_reuses_locked_plan_instead_of_replanning(
     )
     assert second.run_id == first.run_id
 
-    step_ids_after = [s["step_id"] for s in json.loads(
-        plan_path.read_text(encoding="utf-8"))["steps"]]
+    step_ids_after = [
+        s["step_id"] for s in json.loads(plan_path.read_text(encoding="utf-8"))["steps"]
+    ]
     assert step_ids_after == step_ids_before, (
         "resume re-planned instead of reusing the locked plan: "
         f"{step_ids_before} -> {step_ids_after}"
@@ -3231,7 +3202,11 @@ def test_resume_adopts_legacy_figure_edge_migration_without_replanning(
 
         def complete(self, messages, *, max_tokens=2048, temperature=0.2):
             user = next(
-                (message.content for message in reversed(messages) if message.role == "user"),
+                (
+                    message.content
+                    for message in reversed(messages)
+                    if message.role == "user"
+                ),
                 "",
             )
             upper = user.upper()
@@ -3299,14 +3274,14 @@ def test_resume_adopts_legacy_figure_edge_migration_without_replanning(
     assert partial["plan_path"] == revision_path.name
     assert any(
         finding.get("validator") == "planner_schema_migration"
-        and (finding.get("detail") or {}).get("kind")
-        == "legacy_figure_render_edge"
+        and (finding.get("detail") or {}).get("kind") == "legacy_figure_render_edge"
         for finding in partial["findings"]
     )
 
 
-def test_resume_to_nonexistent_run_id_starts_fresh_directory(ra, synthetic_cohort,
-                                                             tmp_path: Path):
+def test_resume_to_nonexistent_run_id_starts_fresh_directory(
+    ra, synthetic_cohort, tmp_path: Path
+):
     """Passing a resume_run_id that has no prior run_dir should still
     work — the pipeline creates the directory and runs everything from
     scratch (the partial manifest is just absent)."""
@@ -3340,18 +3315,22 @@ def test_final_manifest_keeps_step_records_for_metered_hosted_stub(ra, tmp_path:
             user = next((m.content for m in reversed(messages) if m.role == "user"), "")
             upper = user.upper()
             if "ICU-AWARE RESEARCH PLAN" in upper:
-                return json.dumps({
-                    "research_question": "Is SOFA associated with ICU mortality?",
-                    "steps": [{
-                        "step_id": "04_primary_association",
-                        "intent": "Estimate SOFA and ICU mortality association.",
-                        "inputs": ["sofa2", "death"],
-                        "expected_outputs": ["table:primary_association"],
-                        "method": "descriptive",
-                        "icu_rule_refs": ["aggregation_rule_for"],
-                    }],
-                    "rationale": "single-step hosted-stub resume test",
-                })
+                return json.dumps(
+                    {
+                        "research_question": "Is SOFA associated with ICU mortality?",
+                        "steps": [
+                            {
+                                "step_id": "04_primary_association",
+                                "intent": "Estimate SOFA and ICU mortality association.",
+                                "inputs": ["sofa2", "death"],
+                                "expected_outputs": ["table:primary_association"],
+                                "method": "descriptive",
+                                "icu_rule_refs": ["aggregation_rule_for"],
+                            }
+                        ],
+                        "rationale": "single-step hosted-stub resume test",
+                    }
+                )
             if "WRITE THE PYTHON CODE" in upper:
                 return """
 import json
@@ -3376,11 +3355,13 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
                 return "# Title\n\n## Results\n\nThe table is available {evidence:primary_association}."
             return "{}"
 
-    cohort = pd.DataFrame({
-        "stay_id": [1, 2, 3, 4],
-        "sofa2": [0, 1, 3, 6],
-        "death": [1, 0, 0, 1],
-    })
+    cohort = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4],
+            "sofa2": [0, 1, 3, 6],
+            "death": [1, 0, 0, 1],
+        }
+    )
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=HostedStubLLM(),
@@ -3399,7 +3380,9 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
 
     run_dir = Path(result.workdir)
     manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
-    partial = json.loads((run_dir / "manifest_partial.json").read_text(encoding="utf-8"))
+    partial = json.loads(
+        (run_dir / "manifest_partial.json").read_text(encoding="utf-8")
+    )
 
     assert manifest["per_step_records"], "final manifest dropped per-step records"
     assert manifest["per_step_records"] == partial["per_step_records"]
