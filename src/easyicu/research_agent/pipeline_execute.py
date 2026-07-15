@@ -254,6 +254,15 @@ _STANDARD_EXECUTOR_INTERNAL_PENDING_ARTIFACTS = frozenset(
 )
 _FIGURE_CONTRACT_SOURCE_DATA_SCHEMA_REPAIR_ID = "figure_contract_source_data_schema_v1"
 _DETERMINISTIC_GATE_SCHEMA_VERSION = "easyicu.deterministic_step_gate/1"
+_DETERMINISTIC_CODE_GATE_VALIDATORS = frozenset(
+    {
+        "analysis_pattern_auditor",
+        "concept_usage_auditor",
+        "mechanical_code_preflight",
+        "method_compatibility",
+        "typed_input_authority_flow",
+    }
+)
 _COHORT_TRANSLATION_PROVIDER_CATEGORY = "cohort_definition_translation"
 _HOST_COHORT_TRANSLATION_BUDGET_STEP_ID = "host_cohort_definition_translation"
 
@@ -1547,6 +1556,49 @@ def _python_repair_is_materially_changed(before: str, after: str) -> bool:
     if before_semantic is not None and before_semantic == after_semantic:
         return False
     return True
+
+
+def _quarantined_deterministic_errors_resolved_by_current_gate(
+    *,
+    prior_errors: Sequence[ValidationFinding],
+    current_findings: Sequence[ValidationFinding],
+    script_text: str,
+    quarantined_script_sha256: str,
+) -> Optional[List[Dict[str, Any]]]:
+    """Prove that exact-digest, host-owned deterministic errors are stale.
+
+    Older execute loops could persist a deterministically repaired script while
+    accidentally retaining the pre-repair finding beside its new digest.  Such
+    a checkpoint has no further code mutation to trigger ordinary quarantine
+    retirement.  Replaying the complete current deterministic gate is a safe
+    migration only for the closed set of validators that gate owns.  LLM,
+    provider-budget, receipt, and mixed-origin errors remain binding.
+    """
+
+    digest = hashlib.sha256(script_text.encode("utf-8")).hexdigest()
+    if digest != str(quarantined_script_sha256 or ""):
+        return None
+    if not prior_errors or any(
+        finding.severity != "error"
+        or finding.validator not in _DETERMINISTIC_CODE_GATE_VALIDATORS
+        for finding in prior_errors
+    ):
+        return None
+    if any(finding.severity == "error" for finding in current_findings):
+        return None
+
+    gate_stamp = _deterministic_gate_stamp()
+    return [
+        {
+            "validator": finding.validator,
+            "message": finding.message,
+            "prior_severity": finding.severity,
+            "quarantined_script_sha256": digest,
+            "revalidated_by": "current_deterministic_code_gate",
+            **gate_stamp,
+        }
+        for finding in prior_errors
+    ]
 
 
 def _quarantined_errors_superseded_by_current_policy(
@@ -6909,6 +6961,7 @@ def run_execute_phase(
         quarantined_repair_succeeded = False
         quarantine_superseded_by_fallback = False
         quarantine_policy_superseded = False
+        quarantine_deterministic_revalidated = False
         pending_quarantined_errors: List[ValidationFinding] = []
 
         def _llm_repair_budget_available() -> bool:
@@ -8119,6 +8172,7 @@ else:
             """
 
             nonlocal quarantined_draft_active
+            nonlocal quarantine_deterministic_revalidated
             nonlocal quarantine_policy_superseded
             nonlocal pending_quarantined_errors
 
@@ -8136,19 +8190,53 @@ else:
                 and finding.validator != "llm_concept_auditor"
             ]
             if pending_quarantined_errors:
+                deterministic_revalidation = (
+                    _quarantined_deterministic_errors_resolved_by_current_gate(
+                        prior_errors=pending_quarantined_errors,
+                        current_findings=code_findings,
+                        script_text=script_text,
+                        quarantined_script_sha256=str(
+                            step_record.get("quarantined_draft_sha256") or ""
+                        ),
+                    )
+                )
+                if deterministic_revalidation is not None:
+                    quarantine_deterministic_revalidated = True
+                    quarantined_draft_active = False
+                    pending_quarantined_errors = []
+                    step_record["quarantine_deterministic_revalidation_succeeded"] = (
+                        True
+                    )
+                    step_record["quarantine_deterministic_revalidated_findings"] = (
+                        deterministic_revalidation
+                    )
+                    emit_progress(
+                        "audit",
+                        (
+                            "Retiring stored deterministic concept errors after "
+                            f"exact-digest revalidation for {step.step_id}."
+                        ),
+                        status="warning",
+                        run_id=run_id,
+                        step_id=step.step_id,
+                        current_step=step_current,
+                        total_steps=total_steps,
+                    )
                 # Policy supersession is a deterministic decision about the
                 # exact quarantined digest.  Make it before the optional LLM
                 # audit so a retired historical error cannot trigger (or be
                 # regenerated by) an unnecessary repair call first.
-                supersession = _quarantined_errors_superseded_by_current_policy(
-                    prior_errors=pending_quarantined_errors,
-                    current_findings=code_findings,
-                    context=context,
-                    script_text=script_text,
-                    quarantined_script_sha256=str(
-                        step_record.get("quarantined_draft_sha256") or ""
-                    ),
-                )
+                supersession = None
+                if pending_quarantined_errors:
+                    supersession = _quarantined_errors_superseded_by_current_policy(
+                        prior_errors=pending_quarantined_errors,
+                        current_findings=code_findings,
+                        context=context,
+                        script_text=script_text,
+                        quarantined_script_sha256=str(
+                            step_record.get("quarantined_draft_sha256") or ""
+                        ),
+                    )
                 if supersession is not None:
                     reclassified_findings, provenance = supersession
                     existing_keys = {
@@ -8975,7 +9063,11 @@ else:
             )
             return step_record
 
-        if quarantined_repair_succeeded or quarantine_policy_superseded:
+        if (
+            quarantined_repair_succeeded
+            or quarantine_policy_superseded
+            or quarantine_deterministic_revalidated
+        ):
             try:
                 clear_quarantined_concept_draft(
                     run_dir=run_dir,
@@ -8986,6 +9078,10 @@ else:
                 if quarantine_policy_superseded:
                     step_record["quarantine_retired_by"] = (
                         "deterministic_validator_policy_supersession"
+                    )
+                elif quarantine_deterministic_revalidated:
+                    step_record["quarantine_retired_by"] = (
+                        "deterministic_code_gate_revalidation"
                     )
             except ValueError as exc:
                 cleanup_finding = ValidationFinding(
