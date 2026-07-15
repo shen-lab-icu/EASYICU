@@ -110,6 +110,7 @@ from .deterministic_robustness import (
 from .declared_product_contract import (
     authorize_declared_figure_product_slots,
     read_digest_bound_artifact_snapshot,
+    typed_product_binding_contract,
     typed_product as _canonical_typed_product,
 )
 from .estimators import fit_robustness_rows_from_records
@@ -1117,9 +1118,13 @@ def _resolved_typed_input_binding(
         step_summary = step_record.get("step_summary")
         if not isinstance(step_summary, Mapping):
             break
-        product_contract = step_summary.get(product_name)
-        if isinstance(product_contract, Mapping):
-            binding["product_contract"] = dict(product_contract)
+        product_contract = typed_product_binding_contract(
+            product_name=product_name,
+            step_summary=step_summary,
+            artifact_path=verified_path,
+        )
+        if product_contract is not None:
+            binding["product_contract"] = product_contract
         break
     return binding
 

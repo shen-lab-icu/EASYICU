@@ -12,6 +12,7 @@ an exposure, outcome, cohort, estimator, or analysis method.
 from __future__ import annotations
 
 import json
+import csv
 import hashlib
 import math
 import os
@@ -207,6 +208,74 @@ _HOST_RECEIPT_SUBTREES = frozenset({"sealed_renderer_parent_digests"})
 
 def _normalise(value: object) -> str:
     return re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+
+
+def _tabular_artifact_columns(path: Path) -> list[str]:
+    """Read only a verified artifact's schema for typed product binding."""
+
+    suffix = path.suffix.lower()
+    if suffix in {".csv", ".tsv"}:
+        delimiter = "\t" if suffix == ".tsv" else ","
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            return [str(value) for value in next(csv.reader(handle, delimiter=delimiter))]
+    if suffix in {".parquet", ".pq"}:
+        import pyarrow.parquet as pq
+
+        return [str(value) for value in pq.read_schema(path).names]
+    return []
+
+
+def typed_product_binding_contract(
+    *,
+    product_name: str,
+    step_summary: Mapping[str, Any],
+    artifact_path: Path,
+) -> dict[str, Any] | None:
+    """Return producer-declared coordinates needed to consume a typed product.
+
+    This binds metadata already chosen by the producer. It never selects a
+    cohort, exposure, outcome, model, method, or estimand for the consumer.
+    """
+
+    exact_contract = step_summary.get(product_name)
+    if isinstance(exact_contract, Mapping):
+        return dict(exact_contract)
+    if _normalise(product_name) != "assignment_model":
+        return None
+
+    raw_models = step_summary.get("assignment_models")
+    if not isinstance(raw_models, list):
+        return None
+    columns = _tabular_artifact_columns(artifact_path)
+    normalized_columns = {column: _normalise(column) for column in columns}
+    bound_models: list[dict[str, Any]] = []
+    for raw_model in raw_models:
+        if not isinstance(raw_model, Mapping):
+            continue
+        model = dict(raw_model)
+        identifiers = {
+            _normalise(raw_model.get(key))
+            for key in ("analysis_set", "model_id")
+            if _normalise(raw_model.get(key))
+        }
+        identifiers.update(
+            identifier.removeprefix("assignment_")
+            for identifier in list(identifiers)
+            if identifier.startswith("assignment_")
+        )
+        candidates: list[str] = []
+        for column, normalized_column in normalized_columns.items():
+            for prefix in ("propensity_score_", "propensity_", "ps_"):
+                if normalized_column.startswith(prefix) and normalized_column[
+                    len(prefix) :
+                ] in identifiers:
+                    candidates.append(column)
+                    break
+        unique_candidates = sorted(set(candidates))
+        if len(unique_candidates) == 1:
+            model["propensity_score_column"] = unique_candidates[0]
+        bound_models.append(model)
+    return {"models": bound_models}
 
 
 def _canonical_kind(value: object) -> str:
@@ -1327,4 +1396,5 @@ __all__ = [
     "effect_measure_family",
     "effect_role_family",
     "typed_product",
+    "typed_product_binding_contract",
 ]
