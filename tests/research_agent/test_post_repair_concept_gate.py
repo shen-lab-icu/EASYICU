@@ -58,6 +58,29 @@ _LATER_CONTRACT_ERROR_CODE = (
     + "\n# LATER_CONTRACT_ERROR\n"
 )
 
+_INVALID_HELPER_REPAIR_CODE = """
+import json
+import os
+import pandas as pd
+
+def summarize(frame):
+    return {"n": int(len(frame)), "phase": "repaired"}
+
+df = pd.read_parquet(os.environ["COHORT_PARQUET"])
+out = os.environ["STEP_OUT_DIR"]
+summary = summarize(df, unexpected=True)
+pd.DataFrame([summary]).to_csv(os.path.join(out, "cohort_summary.csv"), index=False)
+with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
+    json.dump(summary, f)
+"""
+
+_RECOVERED_REPAIR_CODE = _SAFE_CODE.replace(
+    'summary = {"n": int(len(df)), "phase": "initial"}',
+    'summary = {"n": int(len(df)), "phase": "repaired", "output_files": '
+    '[{"kind": "table", "name": "cohort_summary", '
+    '"path": "cohort_summary.csv"}]}',
+)
+
 
 class _RepairGateLLM:
     name = "post-repair-concept-gate-llm"
@@ -128,6 +151,25 @@ class _SequentialRepairLLM(_RepairGateLLM):
             if self.repair_calls == 1:
                 return _SAFE_CODE
             return _LATER_CONTRACT_ERROR_CODE
+        return super().complete(
+            messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+
+
+class _MechanicalRecoveryLLM(_RepairGateLLM):
+    def complete(self, messages, *, max_tokens=2048, temperature=0.2):
+        user = next((m.content for m in reversed(messages) if m.role == "user"), "")
+        upper = user.upper()
+        if "WRITE THE PYTHON CODE" in upper:
+            self.write_calls += 1
+            return _SAFE_CODE
+        if "REPAIR THE PYTHON CODE" in upper:
+            self.repair_calls += 1
+            if self.repair_calls == 1:
+                return _INVALID_HELPER_REPAIR_CODE
+            return _RECOVERED_REPAIR_CODE
         return super().complete(
             messages,
             max_tokens=max_tokens,
@@ -217,13 +259,56 @@ def test_contract_repair_reenters_concept_gate_before_runner(
         item for item in partial["per_step_records"] if item["step_id"] == "01_summary"
     )
 
-    assert llm.repair_calls == 1
+    assert llm.repair_calls == 2
     assert any("UNSAFE_POST_REPAIR" in script for script in audited_scripts)
     assert record["status"] == "blocked_by_concept_audit"
     assert not (
         run_dir / "steps" / "01_summary" / "outputs" / "unsafe_executed.txt"
     ).exists()
     assert (run_dir / "steps" / "01_summary" / ".quarantine").is_dir()
+
+
+def test_contract_repair_mechanical_error_uses_remaining_step_budget(
+    ra, tmp_path: Path, monkeypatch
+) -> None:
+    from easyicu.research_agent.audits.validators import PrimaryModelContractValidator
+    from easyicu.research_agent.contracts import ValidationFinding
+
+    def contract_audit(self, *, step, step_summary, **kwargs):
+        del self, kwargs
+        if step_summary.get("phase") != "initial":
+            return []
+        return [
+            ValidationFinding(
+                validator="primary_model_contract",
+                severity="error",
+                message="Force one contract repair for the orchestration test.",
+                detail={"step_id": step.step_id},
+            )
+        ]
+
+    monkeypatch.setattr(PrimaryModelContractValidator, "audit", contract_audit)
+    llm = _MechanicalRecoveryLLM()
+    result = _run(
+        _pipeline(ra, tmp_path, llm),
+        pd.DataFrame(
+            {"stay_id": [1, 2, 3], "value": [1.0, 2.0, 3.0], "death": [0, 1, 0]}
+        ),
+    )
+    partial = json.loads(
+        (Path(result.workdir) / "manifest_partial.json").read_text(encoding="utf-8")
+    )
+    record = next(
+        item for item in partial["per_step_records"] if item["step_id"] == "01_summary"
+    )
+
+    assert llm.repair_calls == 2
+    assert record["status"] == "ok"
+    assert record["step_llm_repair_attempts"] == 2
+    assert record["step_llm_repair_classes"] == [
+        "contract",
+        "post_mutation_concept",
+    ]
 
 
 def test_quarantine_persists_repaired_constraints_across_later_repairs(

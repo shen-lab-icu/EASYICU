@@ -6917,6 +6917,168 @@ else:
                     finding for finding in usage_findings if finding.severity == "error"
                 ]
                 if post_mutation_errors:
+                    post_mutation_messages = [
+                        value
+                        for finding in post_mutation_errors
+                        for value in (
+                            finding.message,
+                            str((finding.detail or {}).get("reason") or ""),
+                        )
+                        if value
+                    ]
+                    if (
+                        deterministic_concept_repairs
+                        < _MAX_DETERMINISTIC_CONCEPT_REPAIRS
+                    ):
+                        deterministic_code, deterministic_names = (
+                            deterministic_concept_audit_repair(
+                                code,
+                                post_mutation_messages,
+                            )
+                        )
+                        if deterministic_names and deterministic_code != code:
+                            denied_names = [
+                                name
+                                for name in deterministic_names
+                                if _authorize_automatic_repair(
+                                    (name, deterministic_code),
+                                    step=step,
+                                    source=(
+                                        "post_mutation_deterministic_concept_repair"
+                                    ),
+                                    before_code=code,
+                                )
+                                is None
+                            ]
+                            if denied_names:
+                                deterministic_code, deterministic_names = code, []
+                        if deterministic_names and deterministic_code != code:
+                            before_code = code
+                            code = deterministic_code
+                            deterministic_concept_repairs += 1
+                            applied_concept_repair_names.extend(deterministic_names)
+                            step_record["deterministic_concept_repairs"] = (
+                                deterministic_concept_repairs
+                            )
+                            step_record["applied_concept_repair_names"] = list(
+                                applied_concept_repair_names
+                            )
+                            for repair_name in deterministic_names:
+                                _record_repair(
+                                    repair_id=repair_name,
+                                    step_id=step.step_id,
+                                    trigger={
+                                        "gate": "post_mutation_concept_audit",
+                                        "audit_errors": post_mutation_messages,
+                                    },
+                                    transformation=(
+                                        "deterministic concept repair after a "
+                                        "contract/runtime mutation"
+                                    ),
+                                    before_code=before_code,
+                                    after_code=code,
+                                    selection_rule=(
+                                        "applied only because a typed mechanical "
+                                        "error named the anti-pattern"
+                                    ),
+                                )
+                            _clear_output_dir(
+                                run_dir / "steps" / step.step_id / "outputs"
+                            )
+                            continue
+
+                    if _llm_repair_budget_available():
+                        concept_repair_attempts += 1
+                        if not _consume_llm_repair_budget(
+                            "post_mutation_concept"
+                        ):
+                            raise AssertionError(
+                                "LLM repair budget changed without mutation"
+                            )
+                        step_record["concept_repair_attempts"] = (
+                            concept_repair_attempts
+                        )
+                        emit_progress(
+                            "coder",
+                            (
+                                "Repairing post-mutation concept violation for "
+                                f"{step.step_id}."
+                            ),
+                            run_id=run_id,
+                            step_id=step.step_id,
+                            current_step=step_current,
+                            total_steps=total_steps,
+                            repair_attempts=step_llm_repair_attempts,
+                        )
+                        _remember_concept_constraints(post_mutation_errors)
+                        post_mutation_ticket = typed_repair_ticket(
+                            post_mutation_errors
+                        )
+                        post_mutation_log = "\n".join(
+                            (
+                                f"{finding.severity.upper()}: {finding.message}"
+                                + (
+                                    "\nDETAIL: "
+                                    + json.dumps(
+                                        finding.detail,
+                                        ensure_ascii=False,
+                                        sort_keys=True,
+                                    )
+                                    if finding.detail
+                                    else ""
+                                )
+                            )
+                            for finding in post_mutation_errors
+                        )
+                        try:
+                            code = coder.repair(
+                                context=coder_context,
+                                step=step,
+                                code=code,
+                                run_log=(
+                                    "A contract or runtime repair produced a new "
+                                    "code digest that failed pre-execution audit. "
+                                    "Fix every typed error with the smallest change; "
+                                    "preserve the earlier contract repair and all "
+                                    "Planner-owned science.\n\n"
+                                    "TYPED REPAIR TICKET (authoritative routing):\n"
+                                    + json.dumps(
+                                        post_mutation_ticket,
+                                        indent=2,
+                                        ensure_ascii=False,
+                                        default=str,
+                                    )
+                                    + "\n\nFINDINGS:\n"
+                                    + post_mutation_log
+                                    + _monotonic_concept_constraint_log()
+                                ),
+                                attempt=concept_repair_attempts,
+                            )
+                            llm_repair_used = True
+                            _clear_output_dir(
+                                run_dir / "steps" / step.step_id / "outputs"
+                            )
+                            continue
+                        except Exception as exc:
+                            with shared_lock:
+                                findings.append(
+                                    ValidationFinding(
+                                        validator="coder",
+                                        severity="error",
+                                        message=(
+                                            "Coder repair failed after post-mutation "
+                                            "concept audit for step "
+                                            f"{step.step_id}: {exc}"
+                                        ),
+                                        detail={"step_id": step.step_id},
+                                    )
+                                )
+
+                    if not _llm_repair_budget_available():
+                        step_record["step_llm_repair_budget_exhausted"] = True
+                        step_record["step_llm_repair_budget"] = (
+                            pipeline._max_step_llm_repair_attempts
+                        )
                     checkpoint_error: Optional[Exception] = None
                     try:
                         checkpoint = store_quarantined_concept_draft(
