@@ -1579,6 +1579,7 @@ def _write_resolved_inputs_manifest(
     *,
     run_dir: Path,
     step_id: str,
+    planner_declared_inputs: Sequence[str],
     bindings: Mapping[str, Mapping[str, Any]],
     context_path: Optional[Path] = None,
 ) -> Path:
@@ -1593,13 +1594,35 @@ def _write_resolved_inputs_manifest(
         or "\\" in safe_step_id
     ):
         raise ValueError("step_id must be a single safe path component")
+    declared_inputs: List[str] = []
+    seen_declared_inputs: Set[str] = set()
+    for item in planner_declared_inputs:
+        if not isinstance(item, str) or not item.strip():
+            raise ValueError(
+                "planner_declared_inputs must contain only non-empty strings"
+            )
+        if item in seen_declared_inputs:
+            raise ValueError("planner_declared_inputs must not contain duplicates")
+        seen_declared_inputs.add(item)
+        declared_inputs.append(item)
+    declared_typed_inputs = {
+        item for item in declared_inputs if _typed_input_product(item) is not None
+    }
+    binding_keys = set(bindings)
+    if any(not isinstance(key, str) for key in binding_keys) or (
+        binding_keys != declared_typed_inputs
+    ):
+        raise ValueError(
+            "resolved input bindings must be exact Planner-declared typed inputs"
+        )
     manifest_dir = Path(run_dir).resolve() / "resolved_inputs"
     manifest_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = manifest_dir / f"{safe_step_id}.json"
     payload: Dict[str, Any] = {
-        "schema_version": "2.0",
+        "schema_version": "2.1",
         "step_id": safe_step_id,
-        "inputs": {str(key): dict(value) for key, value in bindings.items()},
+        "planner_declared_inputs": declared_inputs,
+        "inputs": {key: dict(value) for key, value in bindings.items()},
     }
     if context_path is not None:
         resolved_context = Path(context_path).resolve()
@@ -7366,6 +7389,7 @@ def run_execute_phase(
         resolved_inputs_path = _write_resolved_inputs_manifest(
             run_dir=run_dir,
             step_id=step.step_id,
+            planner_declared_inputs=step.inputs,
             bindings=resolved_input_bindings,
             context_path=plan_result.context_path,
         )
