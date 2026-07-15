@@ -344,6 +344,28 @@ def test_required_model_contract_error_fail_closes_outer_step_and_run():
     ]
 
 
+def test_every_deterministic_statistical_error_fails_outer_step():
+    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.pipeline_execute import (
+        _step_status_from_contract_findings,
+    )
+
+    status = _step_status_from_contract_findings(
+        contract_findings=[],
+        figure_source_findings=[],
+        stat_findings=[
+            ValidationFinding(
+                validator="statistical_sanity",
+                severity="error",
+                message="A deterministic statistical contract failed.",
+                detail={"issue": "impossible_denominator"},
+            )
+        ],
+    )
+
+    assert status == "contract_failed"
+
+
 @pytest.mark.parametrize("critique_status", ["needs_revision", "blocked"])
 def test_negative_critic_review_fail_closes_outer_step(critique_status):
     from easyicu.research_agent.pipeline_execute import (

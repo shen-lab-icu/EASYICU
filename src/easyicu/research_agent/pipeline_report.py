@@ -1573,6 +1573,8 @@ def _partition_findings_by_supersession(
     findings: Sequence[ValidationFinding],
     *,
     success_step_ids: set,
+    latest_attempt_ids: Optional[Dict[str, str]] = None,
+    known_attempt_ids: Optional[Dict[str, set[str]]] = None,
     plan: Optional[AnalysisPlan] = None,
     known_step_ids: Optional[set] = None,
     gate_state: Optional[Dict[str, bool]] = None,
@@ -1615,6 +1617,8 @@ def _partition_findings_by_supersession(
     audit traceability.
     """
     gate_state = gate_state or {}
+    latest_attempt_ids = latest_attempt_ids or {}
+    known_attempt_ids = known_attempt_ids or {}
     active: List[ValidationFinding] = []
     superseded: List[ValidationFinding] = []
     # Precompute this across the whole batch so legacy classification is
@@ -1642,6 +1646,22 @@ def _partition_findings_by_supersession(
         sid = explicit_sid or legacy_sid
         if sid:
             if sid in success_step_ids:
+                finding_attempt_id = str(
+                    (f.detail or {}).get("attempt_id") or ""
+                ).strip()
+                latest_attempt_id = str(latest_attempt_ids.get(sid) or "").strip()
+                if f.severity == "error" and finding_attempt_id:
+                    # A current-attempt ERROR can never be hidden merely because
+                    # an inconsistent outer record says ``ok``.  Retire only a
+                    # finding whose attempt is a known, older ledger entry.
+                    known_for_step = known_attempt_ids.get(sid, set())
+                    if (
+                        not latest_attempt_id
+                        or finding_attempt_id == latest_attempt_id
+                        or finding_attempt_id not in known_for_step
+                    ):
+                        active.append(f)
+                        continue
                 superseded.append(f)
                 continue
             if (
@@ -1768,6 +1788,22 @@ def _compute_readiness_gates(
     # recovery sequence.
     success_step_ids = _successful_step_ids(per_step_records)
     known_step_ids = _step_ids_in_records(per_step_records)
+    known_attempt_ids: Dict[str, set[str]] = {}
+    for record in per_step_records:
+        if not isinstance(record, dict):
+            continue
+        step_id = str(record.get("step_id") or "").strip()
+        attempt_id = str(record.get("attempt_id") or "").strip()
+        if step_id and attempt_id:
+            known_attempt_ids.setdefault(step_id, set()).add(attempt_id)
+    latest_attempt_ids = {
+        str(record.get("step_id") or "").strip(): str(
+            record.get("attempt_id") or ""
+        ).strip()
+        for record in current_step_records(per_step_records)
+        if str(record.get("step_id") or "").strip()
+        and str(record.get("attempt_id") or "").strip()
+    }
     # Compute current gate state once so the gate-state supersession
     # rule sees the final values, not the transient mid-run snapshot
     # the finding was emitted under.
@@ -1813,6 +1849,8 @@ def _compute_readiness_gates(
     active_findings, superseded_findings = _partition_findings_by_supersession(
         findings,
         success_step_ids=success_step_ids,
+        latest_attempt_ids=latest_attempt_ids,
+        known_attempt_ids=known_attempt_ids,
         plan=plan,
         known_step_ids=known_step_ids,
         gate_state=current_gate_state,
