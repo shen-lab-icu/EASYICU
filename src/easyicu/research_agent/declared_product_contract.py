@@ -263,7 +263,36 @@ def typed_product_binding_contract(
                 contract["window"] = time_window
                 contract["time_window"] = time_window
         return contract
-    if _normalise(product_name) != "assignment_model":
+    normalized_product = _normalise(product_name)
+    if normalized_product == "prespecified_confounder_set":
+        if artifact_path.suffix.lower() != ".json":
+            return None
+        try:
+            artifact_payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(artifact_payload, Mapping):
+            return None
+        selected = artifact_payload.get("selected_covariates")
+        if not isinstance(selected, list):
+            return None
+        covariates = [str(value).strip() for value in selected]
+        if (
+            not covariates
+            or any(not value for value in covariates)
+            or len(set(covariates)) != len(covariates)
+        ):
+            return None
+        contract: dict[str, Any] = {
+            "covariates": covariates,
+            "source_field": "selected_covariates",
+        }
+        for key in ("ordinal_encoding", "missingness_plan"):
+            value = artifact_payload.get(key)
+            if isinstance(value, Mapping):
+                contract[key] = dict(value)
+        return contract
+    if normalized_product != "assignment_model":
         return None
 
     raw_models = step_summary.get("assignment_models")
