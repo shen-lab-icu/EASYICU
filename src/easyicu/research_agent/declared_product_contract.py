@@ -561,6 +561,13 @@ def _canonical_kind(value: object) -> str:
     kind = _normalise(value)
     if kind in _FIGURE_KINDS:
         return "figure"
+    # A cohort is a scientifically scoped tabular dataset, not a distinct
+    # physical evidence class.  Canonicalising the Planner-facing alias here
+    # keeps plan DAG construction, declared-output validation, and runtime
+    # evidence binding on the same identity.  The alias never chooses or
+    # modifies cohort membership; it only closes the typed product boundary.
+    if kind == "cohort":
+        return "dataset"
     if kind in {"metric", "statistics"}:
         return "statistic"
     return kind
@@ -1105,7 +1112,49 @@ def _registered_products(
             figure_paths.append((path, explicit_figure_list))
 
     def add_container(value: Any, *, explicit_figure_list: bool = False) -> None:
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                add_container(item, explicit_figure_list=explicit_figure_list)
+            return
         if isinstance(value, Mapping):
+            # Coder outputs commonly use a structured product receipt rather
+            # than a ``kind:name -> path`` mapping.  Bind only the closed
+            # ``kind``/``name``/``path`` shape and only when the physical file
+            # class is compatible with the canonical typed kind.  This lets a
+            # harmless filename prefix differ from the logical product name
+            # without turning arbitrary summary prose into product authority.
+            descriptor_kind = value.get("kind") or value.get("product_type")
+            descriptor_name = value.get("name")
+            typed_descriptor_name = _typed_product(descriptor_name)
+            canonical_descriptor_kind = _canonical_kind(descriptor_kind)
+            if typed_descriptor_name is not None:
+                descriptor = (
+                    typed_descriptor_name
+                    if canonical_descriptor_kind == typed_descriptor_name[0]
+                    else None
+                )
+            else:
+                descriptor = _typed_product(
+                    f"{descriptor_kind}:{descriptor_name}"
+                    if descriptor_kind is not None and descriptor_name is not None
+                    else ""
+                )
+            descriptor_path = next(
+                (
+                    value.get(key)
+                    for key in ("path", "relative_path", "filename")
+                    if isinstance(value.get(key), str)
+                    and str(value.get(key)).strip()
+                ),
+                None,
+            )
+            descriptor_paths = [
+                path for path in _iter_paths(descriptor_path) if is_actual_output(path)
+            ]
+            if descriptor is not None and any(
+                descriptor[0] in _file_kinds(path) for path in descriptor_paths
+            ):
+                products.add(descriptor)
             for raw_role, child in value.items():
                 role = _typed_product(raw_role)
                 paths = [path for path in _iter_paths(child) if is_actual_output(path)]

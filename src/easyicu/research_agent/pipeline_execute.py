@@ -654,20 +654,56 @@ def _declared_typed_product_paths(
     paths: List[str] = []
     for container_name in ("output_files", "outputs"):
         container = step_summary.get(container_name)
-        if not isinstance(container, Mapping):
-            continue
-        for typed_key, value in container.items():
-            if _typed_input_product(typed_key) != typed_product:
-                continue
-            declared = True
-            if isinstance(value, str) and value.strip():
-                paths.append(value.strip())
-            elif isinstance(value, (list, tuple)):
-                paths.extend(
-                    str(item).strip()
-                    for item in value
-                    if isinstance(item, str) and item.strip()
+        if isinstance(container, Mapping):
+            for typed_key, value in container.items():
+                if _typed_input_product(typed_key) != typed_product:
+                    continue
+                declared = True
+                if isinstance(value, str) and value.strip():
+                    paths.append(value.strip())
+                elif isinstance(value, (list, tuple)):
+                    paths.extend(
+                        str(item).strip()
+                        for item in value
+                        if isinstance(item, str) and item.strip()
+                    )
+        elif isinstance(container, (list, tuple)):
+            for item in container:
+                if not isinstance(item, Mapping):
+                    continue
+                kind = item.get("kind") or item.get("product_type")
+                name = item.get("name")
+                named_product = _typed_input_product(name)
+                kind_product = _typed_input_product(f"{kind}:placeholder")
+                if named_product is not None:
+                    descriptor_product = (
+                        named_product
+                        if kind_product is not None
+                        and named_product[0] == kind_product[0]
+                        else None
+                    )
+                else:
+                    descriptor_product = _typed_input_product(f"{kind}:{name}")
+                if descriptor_product != typed_product:
+                    continue
+                declared = True
+                value = next(
+                    (
+                        item.get(key)
+                        for key in ("path", "relative_path", "filename")
+                        if isinstance(item.get(key), str)
+                        and str(item.get(key)).strip()
+                    ),
+                    None,
                 )
+                if isinstance(value, str) and value.strip():
+                    paths.append(value.strip())
+                elif isinstance(value, (list, tuple)):
+                    paths.extend(
+                        str(path).strip()
+                        for path in value
+                        if isinstance(path, str) and path.strip()
+                    )
     return declared, list(dict.fromkeys(paths))
 
 

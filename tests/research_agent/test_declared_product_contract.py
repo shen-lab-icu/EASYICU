@@ -27,6 +27,48 @@ SEALED_DISTRIBUTION_REPAIR = (
 )
 
 
+def test_cohort_typed_product_is_canonical_dataset_identity():
+    assert typed_product("cohort:locked_analysis_rows.parquet") == (
+        "dataset",
+        "locked_analysis_rows",
+    )
+
+
+def test_cohort_typed_product_is_realised_by_its_tabular_dataset(tmp_path):
+    out_dir = tmp_path / "outputs"
+    out_dir.mkdir()
+    (out_dir / "cohort_locked_analysis_rows.parquet").write_bytes(
+        b"parquet-placeholder"
+    )
+    step = AnalysisStep(
+        step_id="lock_analysis_rows",
+        intent="Materialize the Planner-defined analysis cohort.",
+        expected_outputs=["cohort:locked_analysis_rows"],
+    )
+
+    findings = declared_product_contract_findings(
+        step=step,
+        step_summary={
+            "status": "completed",
+            "output_files": [
+                {
+                    "kind": "cohort",
+                    "name": "cohort:locked_analysis_rows",
+                    "relative_path": "cohort_locked_analysis_rows.parquet",
+                }
+            ],
+        },
+        effect_method_authorized=False,
+        out_dir=out_dir,
+    )
+
+    assert not [
+        finding
+        for finding in findings
+        if finding.detail.get("kind") == "declared_product_missing"
+    ]
+
+
 def _assignment_cohort(tmp_path, *, stay_ids=(101,)):
     path = tmp_path / "cohort.csv"
     path.write_text(
