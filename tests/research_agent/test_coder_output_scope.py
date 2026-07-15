@@ -273,6 +273,8 @@ def test_coder_repair_fail_closes_nonterminating_provenance_audit(ra):
     assert "same authoritative typed working frame used by the model" in prompt
     assert "instead of a hard-coded column list" in prompt
     assert "raise before model fitting or output registration" in prompt
+    assert "treat an empty checks collection as failure" in prompt
+    assert "Do not rely only on an `any(...)` or `all(...)` generator" in prompt
 
 
 def test_coder_repair_requires_bidirectional_provenance_pairs(ra):
@@ -827,6 +829,11 @@ def test_coder_prompt_binds_typed_inputs_to_resolved_manifest(ra):
     for prompt in prompts:
         assert "TYPED INPUT BINDING (binding)" in prompt
         assert "EASYICU_RESOLVED_INPUTS_JSON" in prompt
+        assert "manifest['planner_declared_inputs']" in prompt
+        assert "exact Planner-owned consumer scope" in prompt
+        assert "producer product's semantics" in prompt
+        assert "only eligible raw-variable or column coordinates" in prompt
+        assert "Do not discover them by scanning the full ResearchContext" in prompt
         assert "manifest['context']" in prompt
         assert "immutable Agent-produced ResearchContext" in prompt
         assert "do not copy prompt literals" in prompt
@@ -839,6 +846,24 @@ def test_coder_prompt_binds_typed_inputs_to_resolved_manifest(ra):
         assert "for each loaded tabular input, its row_count" in prompt
         assert "every shared non-key column" in prompt
         assert "The host repeats that key-and-value comparison" in prompt
+
+
+def test_coder_prompts_bind_untyped_only_inputs_to_planner_scope(ra):
+    step = ra.AnalysisStep(
+        step_id="consume_raw_columns",
+        intent="Validate the Planner-declared raw inputs.",
+        inputs=["selected_first", "selected_measured"],
+        expected_outputs=["table:result"],
+        method="descriptive_summary",
+    )
+
+    prompts = _ordinary_run_repair_and_agentic_prompts(ra=ra, step=step)
+    for prompt in prompts:
+        assert "TYPED INPUT BINDING (binding)" in prompt
+        assert "applies even when the step declares only untyped" in prompt
+        assert "manifest['planner_declared_inputs']" in prompt
+        assert "['selected_first', 'selected_measured']" in prompt
+        assert "Exact typed inputs for this step: []" in prompt
 
 
 def test_runtime_only_builds_visualization_request_for_figure_step(ra):

@@ -63,7 +63,11 @@ from .code_patch import (
     repair_code_excerpt,
 )
 from .coder_context import coder_guide_for_step, scoped_coder_context
-from .plan_utils import effect_output_authorized
+from .declared_product_contract import typed_product as _canonical_typed_product
+from .plan_utils import (
+    _primary_analysis_cohort_canonical_schema_rules,
+    effect_output_authorized,
+)
 from .prompts import PROMPT_PACK_VERSION, load_prompt_pack
 from .provider_budget import StepProviderCallBudget, complete_with_provider_budget
 from .schema import (
@@ -1363,6 +1367,19 @@ _MAX_PRE_EXEC_COMPATIBILITY_REPAIRS = 2
 _CODER_MAX_TOKENS = 8192
 
 
+def _primary_analysis_cohort_output_contract(step: AnalysisStep) -> str:
+    """Render the canonical host schema for the exact cohort product family."""
+
+    rules = _primary_analysis_cohort_canonical_schema_rules(step)
+    if not rules:
+        return ""
+    return (
+        "PRIMARY ANALYSIS-COHORT PRODUCT SCHEMA (binding):\n"
+        + "\n".join(f"- {rule}" for rule in rules)
+        + "\n"
+    )
+
+
 def _declared_output_scope_contract(step: AnalysisStep) -> str:
     """Keep code generation inside the plan's typed product boundary.
 
@@ -1415,7 +1432,7 @@ def _declared_output_scope_contract(step: AnalysisStep) -> str:
 
 
 def _typed_input_scope_contract(step: AnalysisStep) -> str:
-    """Bind planned upstream products to their run-authoritative files."""
+    """Bind Planner-owned consumer scope to run-authoritative input files."""
 
     supported_kinds = {
         "artifact",
@@ -1427,17 +1444,32 @@ def _typed_input_scope_contract(step: AnalysisStep) -> str:
         "statistic",
         "table",
     }
-    typed_inputs = []
-    for item in step.inputs or []:
-        kind, separator, product = str(item or "").strip().partition(":")
-        if separator and kind.strip().lower() in supported_kinds and product.strip():
-            typed_inputs.append(str(item))
-    if not typed_inputs:
+    declared_inputs = list(step.inputs or [])
+    if not declared_inputs:
         return ""
+    typed_inputs = []
+    for item in declared_inputs:
+        parsed = _canonical_typed_product(item)
+        if parsed is not None and parsed[0] in supported_kinds:
+            typed_inputs.append(str(item))
     return (
         "TYPED INPUT BINDING (binding):\n"
-        "- This step has typed upstream inputs. At instrumented execution, read "
-        "the JSON manifest at os.environ['EASYICU_RESOLVED_INPUTS_JSON'].\n"
+        "- At instrumented execution, read the JSON manifest at "
+        "os.environ['EASYICU_RESOLVED_INPUTS_JSON']. This applies even when the "
+        "step declares only untyped raw-variable inputs.\n"
+        "- manifest['planner_declared_inputs'] is the exact Planner-owned consumer "
+        "scope, preserving its original order and spelling. Treat typed kind:name "
+        "entries as product identities and the remaining entries as the only "
+        "eligible raw-variable or column coordinates for this step.\n"
+        "- manifest['inputs'] contains only host-bound typed products. A binding's "
+        "product_contract describes the producer product's semantics; it does not "
+        "define or widen this consumer step's input scope.\n"
+        "- When choosing which Planner-declared raw columns a provenance or "
+        "consumer-column check covers, select candidates only from "
+        "manifest['planner_declared_inputs'] and verify them in the exact bound "
+        "table. Do not discover them by scanning the full ResearchContext, every "
+        "DataFrame, dtypes, frame order, or name suffixes. Producer-specific "
+        "executable coordinates remain governed by product_contract.\n"
         "- The same manifest binds the immutable Agent-produced ResearchContext "
         "under manifest['context'] with relative_path and sha256. When runtime "
         "semantic metadata is needed, load that exact file from EASYICU_RUN_DIR "
@@ -1468,6 +1500,7 @@ def _typed_input_scope_contract(step: AnalysisStep) -> str:
         "value_columns_checked, and value_mismatch_n=0 only after actually "
         "comparing them. The host repeats that key-and-value comparison. If it "
         "was not performed, do not call the reconciliation checked.\n"
+        f"- Exact Planner-declared inputs for this step: {declared_inputs}\n"
         f"- Exact typed inputs for this step: {typed_inputs}\n"
     )
 
@@ -1522,6 +1555,7 @@ class CoderAgent:
                     f"{json.dumps([item.model_dump(mode='json') for item in step.model_requirements], ensure_ascii=False)}\n"
                     f"Method: {step.method or '(unspecified — choose conservatively)'}\n\n"
                     + _declared_output_scope_contract(step)
+                    + _primary_analysis_cohort_output_contract(step)
                     + _typed_input_scope_contract(step)
                     + coder_method_capability_block()
                     + trajectory_phenotyping_code_contract(
@@ -1621,6 +1655,7 @@ class CoderAgent:
             f"{json.dumps([item.model_dump(mode='json') for item in step.model_requirements], ensure_ascii=False)}\n"
             f"Method: {step.method or '(unspecified)'}\n\n"
             + _declared_output_scope_contract(step)
+            + _primary_analysis_cohort_output_contract(step)
             + _typed_input_scope_contract(step)
             + trajectory_phenotyping_code_contract(context=context, step=step)
             + trajectory_role_code_contract(context=context, step=step)
@@ -1862,7 +1897,11 @@ def _repair_specialization(
             "required pair is unavailable, invalid, or discordant. Build provenance "
             "concept stems from both `*_measured` and `*_n` columns so that a "
             "count-only or measured-only concept also fails closed; never scan in "
-            "only one direction.\n"
+            "only one direction. Materialize failures in a directly populated "
+            "collection, treat an empty checks collection as failure, and guard "
+            "that collection before any scientific sink. Do not rely only on an "
+            "`any(...)` or `all(...)` generator reduction whose collection and "
+            "failure flow cannot be verified independently by the host.\n"
         )
 
     primary_exposure_binding_signals = (

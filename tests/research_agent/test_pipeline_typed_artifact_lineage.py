@@ -695,11 +695,22 @@ def test_typed_table_uses_current_resume_authority_and_writes_exact_manifest(
     manifest_path = _write_resolved_inputs_manifest(
         run_dir=tmp_path,
         step_id="consumer",
+        planner_declared_inputs=[
+            "table:scaling_summary",
+            "selected_first",
+            "selected_measured",
+        ],
         bindings={"table:scaling_summary": binding},
         context_path=context_path,
     )
     payload = __import__("json").loads(manifest_path.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == "2.0"
+    assert payload["schema_version"] == "2.1"
+    assert payload["planner_declared_inputs"] == [
+        "table:scaling_summary",
+        "selected_first",
+        "selected_measured",
+    ]
+    assert list(payload["inputs"]) == ["table:scaling_summary"]
     assert payload["context"]["relative_path"] == "research_context.json"
     assert payload["context"]["sha256"] == sha256_of_file(context_path)
     manifest_binding = payload["inputs"]["table:scaling_summary"]
@@ -708,6 +719,15 @@ def test_typed_table_uses_current_resume_authority_and_writes_exact_manifest(
     assert tmp_path / manifest_binding["relative_path"] == Path(
         manifest_binding["absolute_path"]
     )
+    original_manifest_sha = sha256_of_file(manifest_path)
+    changed_manifest_path = _write_resolved_inputs_manifest(
+        run_dir=tmp_path,
+        step_id="consumer",
+        planner_declared_inputs=["table:scaling_summary", "selected_n"],
+        bindings={"table:scaling_summary": binding},
+        context_path=context_path,
+    )
+    assert sha256_of_file(changed_manifest_path) != original_manifest_sha
 
 
 def test_resolved_inputs_manifest_rejects_context_outside_run(tmp_path: Path) -> None:
@@ -720,8 +740,71 @@ def test_resolved_inputs_manifest_rejects_context_outside_run(tmp_path: Path) ->
         _write_resolved_inputs_manifest(
             run_dir=run_dir,
             step_id="consumer",
+            planner_declared_inputs=[],
             bindings={},
             context_path=outside,
+        )
+
+
+def test_resolved_inputs_manifest_keeps_untyped_inputs_out_of_bindings(
+    tmp_path: Path,
+) -> None:
+    manifest_path = _write_resolved_inputs_manifest(
+        run_dir=tmp_path,
+        step_id="consumer",
+        planner_declared_inputs=["selected_first", "selected_measured"],
+        bindings={},
+    )
+
+    payload = __import__("json").loads(manifest_path.read_text(encoding="utf-8"))
+    assert payload["planner_declared_inputs"] == [
+        "selected_first",
+        "selected_measured",
+    ]
+    assert payload["inputs"] == {}
+
+
+def test_resolved_inputs_manifest_rejects_undeclared_binding(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="exact Planner-declared typed inputs"):
+        _write_resolved_inputs_manifest(
+            run_dir=tmp_path,
+            step_id="consumer",
+            planner_declared_inputs=["selected_first"],
+            bindings={"table:unplanned": {}},
+        )
+
+
+def test_resolved_inputs_manifest_rejects_missing_declared_typed_binding(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="exact Planner-declared typed inputs"):
+        _write_resolved_inputs_manifest(
+            run_dir=tmp_path,
+            step_id="consumer",
+            planner_declared_inputs=["table:planned", "selected_first"],
+            bindings={},
+        )
+
+
+@pytest.mark.parametrize(
+    ("planner_declared_inputs", "message"),
+    [
+        (["selected_first", "selected_first"], "must not contain duplicates"),
+        ([""], "only non-empty strings"),
+        ([1], "only non-empty strings"),
+    ],
+)
+def test_resolved_inputs_manifest_rejects_invalid_declared_input_scope(
+    tmp_path: Path,
+    planner_declared_inputs: list[object],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        _write_resolved_inputs_manifest(
+            run_dir=tmp_path,
+            step_id="consumer",
+            planner_declared_inputs=planner_declared_inputs,  # type: ignore[arg-type]
+            bindings={},
         )
 
 

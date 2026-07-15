@@ -35,6 +35,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 from pydantic import ValidationError
 
 from .declared_product_contract import (
+    _primary_analysis_cohort_attrition_candidate,
     declared_product_contract_findings,
     effect_adjustment_family,
     effect_bearing_name,
@@ -4503,6 +4504,42 @@ def _step_contract_findings(
     return findings
 
 
+def _primary_analysis_cohort_canonical_schema_rules(
+    step: AnalysisStep,
+) -> tuple[str, ...]:
+    """Return schema rules only for the closed primary-cohort product family.
+
+    These rules describe how to render Planner-owned eligibility decisions; they
+    do not choose or modify any cohort predicate.  Exact typed products are the
+    routing authority so benchmark prose, step ids, and clinical variable names
+    cannot activate the contract.
+    """
+
+    if not _primary_analysis_cohort_attrition_candidate(step):
+        return ()
+    return (
+        "Write exact top-level integer fields `n_universe` and "
+        "`n_final_analysis_cohort` in step_summary.json; do not hide either "
+        "denominator in a nested mapping or under an approximate alias.",
+        "For every declared cohort-flow or cohort-attrition table, write exactly "
+        "one first `universe` row followed by exactly one row for every "
+        "Planner-owned inclusion predicate and then every Planner-owned exclusion "
+        "predicate, preserving their declared order. Do not split a predicate "
+        "into an additional missingness, unknown-status, or complete-case row.",
+        "Each such table must contain the canonical columns `criterion_id`, "
+        "`n_at_start_rows`, `n_remaining_rows`, and `n_excluded_rows`. The universe "
+        "row starts and remains at `n_universe` with zero excluded; every later "
+        "row starts at the previous row's remaining count and satisfies "
+        "n_excluded_rows = n_at_start_rows - n_remaining_rows.",
+        "Set `criterion_id` to exactly `universe` for the first row. For predicates, "
+        "use `{include|exclude}_{order:02d}_{normalized_concept_id}`, with one "
+        "1-based order across the Planner inclusion list followed by the exclusion "
+        "list; normalize concept_id to lowercase ASCII tokens separated by single "
+        "underscores. Use the identical ordered ids and counts in every declared "
+        "flow/attrition table.",
+    )
+
+
 def _step_contract_repair_guidance(
     *,
     step: AnalysisStep,
@@ -4564,6 +4601,7 @@ def _step_contract_repair_guidance(
             "Current typed roster facts: "
             + json.dumps(roster, ensure_ascii=False, sort_keys=True)
         )
+    guidance.extend(_primary_analysis_cohort_canonical_schema_rules(step))
     if is_ordered_stratified_analysis_step(step):
         guidance.append(
             "Keep this as an agent-authored ordered-stratified analysis, but call "
