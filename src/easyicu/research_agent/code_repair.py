@@ -608,26 +608,33 @@ def _patch_swallowed_reconciliation_error(code: str) -> str:
         if not calls_reconciliation:
             continue
         for handler in node.handlers:
-            caught = (
-                _simple_call_name(handler.type).split(".")[-1]
-                if handler.type is not None
-                else ""
+            caught_nodes = (
+                handler.type.elts
+                if isinstance(handler.type, ast.Tuple)
+                else [handler.type]
             )
-            if handler.type is not None and caught not in {
-                "BaseException",
-                "Exception",
-                "ValueError",
-            }:
+            caught = {
+                _simple_call_name(candidate).split(".")[-1]
+                for candidate in caught_nodes
+                if candidate is not None
+            }
+            if handler.type is not None and not caught.intersection(
+                {"BaseException", "Exception", "TypeError", "ValueError"}
+            ):
                 continue
-            if any(isinstance(candidate, ast.Raise) for candidate in ast.walk(handler)):
+            if handler.body and isinstance(handler.body[0], ast.Raise):
                 continue
-            source_line = lines[handler.lineno - 1]
-            handler_indent = source_line[: len(source_line) - len(source_line.lstrip())]
+            if not handler.body:
+                continue
+            first_statement_line = lines[handler.body[0].lineno - 1]
+            statement_indent = first_statement_line[
+                : len(first_statement_line) - len(first_statement_line.lstrip())
+            ]
             patch = (
-                f"{handler_indent}    # {_PROVENANCE_HELPER_RERAISE_SENTINEL}\n"
-                f"{handler_indent}    raise\n"
+                f"{statement_indent}# {_PROVENANCE_HELPER_RERAISE_SENTINEL}\n"
+                f"{statement_indent}raise\n"
             )
-            insertions.append((handler.lineno, patch))
+            insertions.append((handler.body[0].lineno - 1, patch))
 
     if not insertions:
         return code
