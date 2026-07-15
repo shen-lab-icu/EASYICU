@@ -239,7 +239,18 @@ def typed_product_binding_contract(
 
     exact_contract = step_summary.get(product_name)
     if isinstance(exact_contract, Mapping):
-        return dict(exact_contract)
+        contract = dict(exact_contract)
+        if _normalise(product_name) == "primary_exposure_definition":
+            declared_columns = {
+                str(contract.get(key) or "").strip()
+                for key in ("column", "executable_column", "exposure_column")
+                if str(contract.get(key) or "").strip()
+            }
+            if len(declared_columns) == 1:
+                executable_column = next(iter(declared_columns))
+                contract["executable_column"] = executable_column
+                contract["exposure_column"] = executable_column
+        return contract
     if _normalise(product_name) != "assignment_model":
         return None
 
