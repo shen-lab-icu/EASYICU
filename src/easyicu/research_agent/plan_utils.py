@@ -42,6 +42,7 @@ from .declared_product_contract import (
     effect_estimand_tier,
     effect_measure_family,
     effect_role_family,
+    is_failed_step_status,
     typed_product,
 )
 from .icu_rules import (
@@ -4029,17 +4030,7 @@ def _step_contract_findings(
 
     findings: List[ValidationFinding] = []
     reported_status = str(step_summary.get("status") or "").strip().lower()
-    if reported_status in {
-        "blocked",
-        "error",
-        "failed",
-        "execution_failed",
-        "contract_failed",
-        "fail_closed",
-        "failed_closed",
-        "repair_failed",
-        "skipped",
-    }:
+    if is_failed_step_status(reported_status):
         findings.append(
             ValidationFinding(
                 validator="step_contract",

@@ -752,6 +752,70 @@ provenance = measurement_provenance_audit(frame)
     assert out == code
 
 
+def test_concept_repair_terminates_full_inline_provenance_failure_branch():
+    code = """
+def main(frame):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    audit = {
+        'role': 'audit_only',
+        'invalid_pair_n': invalid_pair_n,
+        'discordant_n': discordant_n,
+    }
+    if invalid_pair_n > 0 or discordant_n > 0:
+        final_mask = False
+        summary['status'] = 'failed_provenance_audit'
+    publish_outputs(frame, final_mask)
+""".lstrip()
+
+    out, names = deterministic_concept_audit_repair(
+        code, ["provenance_audit_not_fail_closed"]
+    )
+
+    assert names == ["provenance_fail_closed_guard_v1"]
+    assert "_easyicu_provenance_fail_closed_guard_v1" in out
+    tree = ast.parse(out)
+    main = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "main"
+    )
+    failure_guard = next(node for node in main.body if isinstance(node, ast.If))
+    assert isinstance(failure_guard.body[0], ast.Raise)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        """
+    if invalid_pair_n > 0:
+        summary['status'] = 'failed_provenance_audit'
+""",
+        """
+    model.fit(frame)
+    if invalid_pair_n > 0 or discordant_n > 0:
+        summary['status'] = 'failed_provenance_audit'
+""",
+    ],
+)
+def test_concept_repair_does_not_insert_unsafe_inline_provenance_guard(body):
+    code = (
+        "def main(frame):\n"
+        "    invalid_pair_n = 1\n"
+        "    discordant_n = 0\n"
+        "    audit = {'role': 'audit_only', 'invalid_pair_n': invalid_pair_n, "
+        "'discordant_n': discordant_n}\n"
+        f"{body}"
+    )
+
+    out, names = deterministic_concept_audit_repair(
+        code, ["provenance_audit_not_fail_closed"]
+    )
+
+    assert names == []
+    assert out == code
+
+
 def test_concept_repair_provenance_guard_is_idempotent():
     code = """
 def provenance_audit(frame):
