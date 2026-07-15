@@ -2857,15 +2857,18 @@ frame[product_contract['executable_column']] = treatment
     assert "AST control-flow verification" in findings[0].detail["downgraded_reason"]
 
 
-def test_llm_concept_auditor_accepts_finalized_only_consumer_without_helper_call(ra):
+@pytest.mark.parametrize("resolver_name", ["resolve_finalized_exposure", "resolve_exposure"])
+def test_llm_concept_auditor_accepts_finalized_only_consumer_without_helper_call(
+    ra, resolver_name
+):
     from easyicu.research_agent.audits.validators import (
         _downgrade_finalized_exposure_reconciliation_findings,
     )
     from easyicu.research_agent.contracts import ValidationFinding
 
-    script = """
+    script = f"""
 REQUESTED_INPUTS = ['artifact:primary_exposure_definition']
-def resolve_finalized_exposure(definition, product_contract, frame):
+def {resolver_name}(definition, product_contract, frame):
     if not isinstance(definition, pd.DataFrame):
         raise RuntimeError('finalized table required')
     executable = product_contract['executable_column']
@@ -2873,7 +2876,7 @@ def resolve_finalized_exposure(definition, product_contract, frame):
     if finalized.isna().any() or not np.isfinite(finalized).all() or not finalized.isin([0, 1]).all():
         raise RuntimeError('invalid finalized exposure')
     return finalized.astype(int)
-treatment = resolve_finalized_exposure(
+treatment = {resolver_name}(
     exposure_definition, product_contract, frame
 )
 """

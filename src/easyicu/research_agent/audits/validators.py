@@ -1429,7 +1429,6 @@ def _downgrade_finalized_exposure_reconciliation_findings(
         and "dataframe" in script.lower()
         and "product_contract" in script
         and "executable_column" in script
-        and "resolve_finalized_exposure" in script
         and ".isin([0,1])" in normalized_script
         and ("isfinite(" in normalized_script or ".notna()" in normalized_script)
     )
