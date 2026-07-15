@@ -225,6 +225,25 @@ def _tabular_artifact_columns(path: Path) -> list[str]:
     return []
 
 
+def _assignment_artifact_frame(
+    path: Path,
+    *,
+    columns: Sequence[str],
+):
+    """Read only assignment-product identity and score columns."""
+
+    import pandas as pd
+
+    suffix = path.suffix.lower()
+    if suffix == ".csv":
+        return pd.read_csv(path, usecols=list(columns))
+    if suffix == ".tsv":
+        return pd.read_csv(path, sep="\t", usecols=list(columns))
+    if suffix in {".parquet", ".pq"}:
+        return pd.read_parquet(path, columns=list(columns))
+    return None
+
+
 def typed_product_binding_contract(
     *,
     product_name: str,
@@ -361,7 +380,89 @@ def typed_product_binding_contract(
         model["fit_status"] = "fitted"
         model["propensity_score_column"] = unique_candidates[0]
         bound_models.append(model)
-    return {"models": bound_models} if bound_models else None
+    if not bound_models:
+        return None
+    declared_identity_columns = {
+        str(value).strip()
+        for value in (
+            step_summary.get("assignment_model_row_key"),
+            step_summary.get("row_identity_column"),
+            *[
+                model.get("row_identity_column")
+                for model in bound_models
+                if isinstance(model, Mapping)
+            ],
+        )
+        if str(value or "").strip()
+    }
+    if len(declared_identity_columns) > 1:
+        return None
+    if declared_identity_columns:
+        identity_column = next(iter(declared_identity_columns))
+        if identity_column not in columns:
+            return None
+    else:
+        identity_candidates = [
+            column
+            for column in columns
+            if _normalise(column)
+            in {
+                "encounter_id",
+                "patient_id",
+                "row_id",
+                "row_index",
+                "stay_id",
+                "subject_id",
+            }
+        ]
+        if len(identity_candidates) != 1:
+            return None
+        identity_column = identity_candidates[0]
+    score_columns = [
+        str(model["propensity_score_column"]) for model in bound_models
+    ]
+    try:
+        frame = _assignment_artifact_frame(
+            artifact_path,
+            columns=[identity_column, *score_columns],
+        )
+    except Exception:
+        return None
+    if frame is None or frame.empty:
+        return None
+    identity = frame[identity_column]
+    if identity.isna().any() or identity.duplicated().any():
+        return None
+    import numpy as np
+    import pandas as pd
+
+    for model in bound_models:
+        score_column = str(model["propensity_score_column"])
+        score = pd.to_numeric(frame[score_column], errors="coerce")
+        nonmissing = score.notna()
+        values = score[nonmissing].to_numpy(dtype=float)
+        if (
+            not values.size
+            or not np.isfinite(values).all()
+            or bool(((values < 0.0) | (values > 1.0)).any())
+        ):
+            return None
+        declared_n = model.get("n")
+        if (
+            isinstance(declared_n, bool)
+            or declared_n is not None
+            and (
+                not isinstance(declared_n, int)
+                or declared_n < 1
+                or declared_n != int(nonmissing.sum())
+            )
+        ):
+            return None
+        model["row_identity_column"] = identity_column
+    return {
+        "row_identity_column": identity_column,
+        "models": bound_models,
+    }
 
 
 def _canonical_kind(value: object) -> str:

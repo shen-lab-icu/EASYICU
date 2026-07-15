@@ -84,6 +84,59 @@ def test_assignment_binding_contract_does_not_fallback_to_arbitrary_numeric_colu
     assert contract is None
 
 
+@pytest.mark.parametrize("score", ["nan", "inf", "-0.01", "1.01"])
+def test_assignment_binding_contract_rejects_invalid_propensity_values(
+    tmp_path, score
+):
+    artifact = tmp_path / "assignment_model.csv"
+    artifact.write_text(
+        f"row_index,propensity_source_aware\n0,{score}\n",
+        encoding="utf-8",
+    )
+
+    contract = typed_product_binding_contract(
+        product_name="assignment_model",
+        step_summary={
+            "assignment_models": [
+                {
+                    "model_id": "assignment_source_aware",
+                    "analysis_set": "source_aware",
+                    "fit_status": "fitted",
+                    "n": 1,
+                }
+            ]
+        },
+        artifact_path=artifact,
+    )
+
+    assert contract is None
+
+
+def test_assignment_binding_contract_checks_row_identity_and_declared_n(tmp_path):
+    artifact = tmp_path / "assignment_model.csv"
+    artifact.write_text(
+        "row_index,propensity_source_aware\n0,0.2\n0,0.3\n",
+        encoding="utf-8",
+    )
+
+    contract = typed_product_binding_contract(
+        product_name="assignment_model",
+        step_summary={
+            "assignment_models": [
+                {
+                    "model_id": "assignment_source_aware",
+                    "analysis_set": "source_aware",
+                    "fit_status": "fitted",
+                    "n": 1,
+                }
+            ]
+        },
+        artifact_path=artifact,
+    )
+
+    assert contract is None
+
+
 def test_declared_diagnostic_rejects_not_computable_placeholder():
     step = AnalysisStep(
         step_id="diagnostics",
