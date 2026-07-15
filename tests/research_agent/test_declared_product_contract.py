@@ -81,8 +81,7 @@ def test_assignment_binding_contract_does_not_fallback_to_arbitrary_numeric_colu
         artifact_path=artifact,
     )
 
-    assert contract is not None
-    assert "propensity_score_column" not in contract["models"][0]
+    assert contract is None
 
 
 def test_declared_diagnostic_rejects_not_computable_placeholder():
@@ -118,7 +117,8 @@ def test_declared_diagnostic_rejects_not_computable_placeholder():
 def test_primary_exposure_binding_contract_canonicalizes_one_declared_column(
     tmp_path,
 ):
-    artifact = tmp_path / "primary_exposure.parquet"
+    artifact = tmp_path / "primary_exposure.csv"
+    artifact.write_text("stay_id,treatment\n1,0\n", encoding="utf-8")
     contract = typed_product_binding_contract(
         product_name="primary_exposure_definition",
         step_summary={
@@ -142,7 +142,8 @@ def test_primary_exposure_binding_contract_canonicalizes_one_declared_column(
 def test_primary_exposure_binding_contract_does_not_resolve_conflicting_columns(
     tmp_path,
 ):
-    artifact = tmp_path / "primary_exposure.parquet"
+    artifact = tmp_path / "primary_exposure.csv"
+    artifact.write_text("stay_id,treatment_a,treatment_b\n1,0,1\n", encoding="utf-8")
     contract = typed_product_binding_contract(
         product_name="primary_exposure_definition",
         step_summary={
@@ -154,17 +155,14 @@ def test_primary_exposure_binding_contract_does_not_resolve_conflicting_columns(
         artifact_path=artifact,
     )
 
-    assert contract is not None
-    assert contract["column"] == "treatment_a"
-    assert contract["executable_column"] == "treatment_b"
-    assert "exposure_column" not in contract
-    assert "authoritative_primary_exposure" not in contract
+    assert contract is None
 
 
 def test_primary_exposure_binding_contract_does_not_resolve_conflicting_windows(
     tmp_path,
 ):
-    artifact = tmp_path / "primary_exposure.parquet"
+    artifact = tmp_path / "primary_exposure.csv"
+    artifact.write_text("stay_id,treatment\n1,0\n", encoding="utf-8")
     contract = typed_product_binding_contract(
         product_name="primary_exposure_definition",
         step_summary={
@@ -177,9 +175,7 @@ def test_primary_exposure_binding_contract_does_not_resolve_conflicting_windows(
         artifact_path=artifact,
     )
 
-    assert contract is not None
-    assert contract["window"] == "baseline"
-    assert contract["time_window"] == "follow_up"
+    assert contract is None
 
 
 def test_confounder_binding_contract_uses_exact_declared_covariate_field(tmp_path):

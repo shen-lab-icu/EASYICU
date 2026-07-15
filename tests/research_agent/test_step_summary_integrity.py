@@ -211,6 +211,35 @@ def test_integrity_accepts_truthful_host_verified_reconciliation(
     assert findings == []
 
 
+def test_integrity_rejects_empty_receipts_for_resolved_inputs(tmp_path: Path) -> None:
+    findings = StepSummaryIntegrityValidator().audit(
+        step=_step(),
+        step_summary={"input_bindings": []},
+        resolved_input_bindings=_resolved_bindings(tmp_path),
+    )
+
+    issues = {finding.detail["issue"] for finding in findings}
+    assert "input_binding_coverage_incomplete" in issues
+
+
+def test_integrity_requires_digest_identity_in_each_receipt(tmp_path: Path) -> None:
+    summary = _truthful_summary()
+    summary["input_bindings"][0].pop("sha256")
+
+    findings = StepSummaryIntegrityValidator().audit(
+        step=_step(),
+        step_summary=summary,
+        resolved_input_bindings=_resolved_bindings(tmp_path),
+    )
+
+    assert any(
+        finding.detail["issue"] == "input_binding_identity_missing"
+        and finding.detail["input_key"] == REFERENCE_KEY
+        and finding.detail["field"] == "sha256"
+        for finding in findings
+    )
+
+
 def test_integrity_does_not_claim_unrelated_checked_qc() -> None:
     findings = StepSummaryIntegrityValidator().audit(
         step=_step(),
