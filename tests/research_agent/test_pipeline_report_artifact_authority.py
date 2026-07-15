@@ -11,6 +11,7 @@ from easyicu.research_agent.evidence import EvidenceStore
 from easyicu.research_agent.pipeline_report import (
     _latest_publication_figure_audit_status,
     _publication_figure_bundle_ready,
+    _publication_provenance_ready,
 )
 from easyicu.research_agent.publication_figures import (
     PUBLICATION_FIGURE_SKILL_POLICY_VERSION,
@@ -61,6 +62,93 @@ def _publication_bundle(tmp_path: Path) -> tuple[EvidenceStore, dict[str, Path]]
         )
         paths[suffix] = tmp_path / record.relative_path
     return evidence, paths
+
+
+def _register_provenance(
+    evidence: EvidenceStore,
+    tmp_path: Path,
+    records: list[dict],
+) -> None:
+    path = tmp_path / "provenance_sources.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "easyicu.provenance_sources/1",
+                "records": records,
+            }
+        ),
+        encoding="utf-8",
+    )
+    evidence.register_file(
+        kind="log",
+        description="Raw/cohort source provenance.",
+        source_path=path,
+        evidence_id="provenance_sources",
+        producer="pipeline",
+        generation_mode="system",
+    )
+
+
+def test_publication_provenance_requires_digest_for_every_declared_source(
+    tmp_path: Path,
+) -> None:
+    evidence = EvidenceStore(tmp_path)
+    _register_provenance(
+        evidence,
+        tmp_path,
+        [
+            {
+                "relative_path": "cohort.parquet",
+                "sha256": "a" * 64,
+                "skipped_reason": None,
+            },
+            {
+                "relative_path": "large_raw.csv",
+                "sha256": None,
+                "skipped_reason": "exceeds_cap:2147483648",
+            },
+        ],
+    )
+
+    status = _publication_provenance_ready(evidence=evidence, run_dir=tmp_path)
+
+    assert status["publication_provenance_ready"] is False
+    assert status["publication_provenance_error"] == "unhashed_declared_sources"
+    assert status["publication_provenance_invalid_sources"] == [
+        {
+            "index": 1,
+            "relative_path": "large_raw.csv",
+            "skipped_reason": "exceeds_cap:2147483648",
+        }
+    ]
+
+
+def test_publication_provenance_accepts_only_complete_digest_bundle(
+    tmp_path: Path,
+) -> None:
+    evidence = EvidenceStore(tmp_path)
+    _register_provenance(
+        evidence,
+        tmp_path,
+        [
+            {
+                "relative_path": "cohort.parquet",
+                "sha256": "0" * 64,
+                "skipped_reason": None,
+            },
+            {
+                "relative_path": "raw.csv",
+                "sha256": "f" * 64,
+                "skipped_reason": None,
+            },
+        ],
+    )
+
+    status = _publication_provenance_ready(evidence=evidence, run_dir=tmp_path)
+
+    assert status["publication_provenance_ready"] is True
+    assert status["publication_provenance_invalid_sources"] == []
+    assert status["publication_provenance_error"] is None
 
 
 @pytest.mark.parametrize("mutation", ["delete", "tamper", "symlink"])

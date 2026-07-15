@@ -6029,6 +6029,30 @@ def _register_complete_display_suite_for_readiness(
     table_step_id: str | None = None,
     publication_source_step_id: str | None = None,
 ) -> dict[str, list[str]]:
+    provenance_path = tmp_path / "provenance_sources.json"
+    provenance_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "easyicu.provenance_sources/1",
+                "records": [
+                    {
+                        "relative_path": "cohort.parquet",
+                        "sha256": "a" * 64,
+                        "skipped_reason": None,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    evidence.register_file(
+        kind="log",
+        description="Raw/cohort source provenance.",
+        source_path=provenance_path,
+        evidence_id="provenance_sources",
+        producer="pipeline",
+        generation_mode="system",
+    )
     table_one_path = tmp_path / "table_one.csv"
     table_one_path.write_text("variable,value\nage,64\n", encoding="utf-8")
     table_record = evidence.register_file(
