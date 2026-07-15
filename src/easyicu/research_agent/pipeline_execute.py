@@ -84,8 +84,7 @@ from .audits.validators import (
     StatisticalGuard,
     StatisticalValidator,
     StepSummaryFractionValidator,
-    _downgrade_finalized_exposure_reconciliation_findings,
-    _downgrade_metadata_supported_outcome_findings,
+    _reclassify_llm_concept_findings,
     _verified_authoritative_exposure_flow,
 )
 from .audits.patterns import AnalysisPatternAuditor
@@ -146,6 +145,7 @@ from .publication_figures import make_figure_contract
 from .repair_reasons import typed_repair_ticket
 from .plan_utils import (
     _augment_measurement_companion_inputs,
+    _augment_report_typed_product_inputs,
     _cap_plan_preserving_figure_steps,
     _clustering_contract_applies,
     _cohort_definition_contract_findings,
@@ -1575,13 +1575,8 @@ def _quarantined_errors_superseded_by_current_policy(
         return None
     if any(finding.severity != "error" for finding in prior_errors):
         return None
-    reclassified = _downgrade_metadata_supported_outcome_findings(
+    reclassified = _reclassify_llm_concept_findings(
         findings=prior_errors,
-        context=context,
-        script_text=script_text,
-    )
-    reclassified = _downgrade_finalized_exposure_reconciliation_findings(
-        findings=reclassified,
         context=context,
         script_text=script_text,
     )
@@ -6127,6 +6122,11 @@ def run_execute_phase(
         # truncates excess late-stage steps and forces the replanner
         # to revise existing steps in place on later passes. Cap of 0
         # disables the guard for backward compatibility.
+        revised, report_input_findings = _augment_report_typed_product_inputs(
+            plan=revised
+        )
+        findings.extend(report_input_findings)
+
         cap = pipeline._max_total_steps
         if cap > 0:
             protected_step_ids = [
@@ -8264,19 +8264,10 @@ else:
                             # current authority.  Replay them on every cache hit
                             # so an old ERROR cannot survive a validator-policy
                             # fix merely because the LLM result was reusable.
-                            cached_findings = (
-                                _downgrade_metadata_supported_outcome_findings(
-                                    findings=cached_findings,
-                                    context=context,
-                                    script_text=script_text,
-                                )
-                            )
-                            cached_findings = (
-                                _downgrade_finalized_exposure_reconciliation_findings(
-                                    findings=cached_findings,
-                                    context=context,
-                                    script_text=script_text,
-                                )
+                            cached_findings = _reclassify_llm_concept_findings(
+                                findings=cached_findings,
+                                context=context,
+                                script_text=script_text,
                             )
                             code_findings.extend(cached_findings)
                             llm_concept_audit_completed_digests.add(

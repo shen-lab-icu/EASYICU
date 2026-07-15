@@ -250,6 +250,7 @@ from .pipeline_writer_aux import (
     _summarise_table_one_rows,
 )
 from .plan_utils import (
+    _augment_report_typed_product_inputs,
     _cap_plan_preserving_figure_steps,
     _clustering_contract_applies,
     _cohort_definition_contract_findings,
@@ -3214,6 +3215,10 @@ class ResearchAgentPipeline:
             findings.extend(plan_contract_findings)
             plan, split_findings = _split_table_and_figure_outputs_in_plan(plan=plan)
             findings.extend(split_findings)
+            plan, report_input_findings = _augment_report_typed_product_inputs(
+                plan=plan
+            )
+            findings.extend(report_input_findings)
             # Force a declared figure step whenever the publication-figure skill
             # will produce one regardless of the plan: the scorer reads
             # analysis_plan.json, and a question-only heuristic misses tasks
