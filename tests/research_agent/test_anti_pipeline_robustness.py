@@ -1450,11 +1450,14 @@ def test_prespecified_robustness_alias_is_gated_but_mixed_contract_is_not(
     assert mixed_findings == []
 
 
-def test_locked_sensitivity_contract_is_wired_into_all_three_contract_passes() -> None:
+def test_locked_sensitivity_contract_is_wired_into_both_contract_passes() -> None:
     from easyicu.research_agent.pipeline_execute import run_execute_phase
 
     source = inspect.getsource(run_execute_phase)
-    assert source.count("_cohort_definition_sensitivity_contract_findings(") == 3
+    # Figure repair now completes before evidence seal/registration.  The old
+    # third pass belonged to the retired post-registration mutation branch;
+    # the remaining pre-seal and final read-only passes are the two authorities.
+    assert source.count("_cohort_definition_sensitivity_contract_findings(") == 2
 
 
 def test_later_repairs_receive_prior_concept_findings_as_regression_constraints():

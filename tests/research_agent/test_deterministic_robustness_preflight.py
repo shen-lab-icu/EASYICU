@@ -183,7 +183,11 @@ def _prepare_run(tmp_path: Path, *, include_primary: bool) -> tuple[Path, Path, 
                 },
             }
         )
-    manifest = {"run_id": "test_run", "per_step_records": records}
+    manifest = {
+        "run_id": "test_run",
+        "checkpoint_sequence": 1,
+        "per_step_records": records,
+    }
     (run_dir / "manifest_partial.json").write_text(json.dumps(manifest))
     return out_dir, cohort_path, universe_path
 
@@ -194,8 +198,19 @@ def _run_generated(
     out_dir: Path,
     cohort_path: Path,
     universe_path: Path,
+    tamper_snapshot: bool = False,
 ) -> None:
+    from easyicu.research_agent.runner import (
+        _capture_run_artifact_authority_snapshot,
+    )
+
     run_dir = out_dir.parents[2]
+    snapshot_path, snapshot_sha256, authority_error = (
+        _capture_run_artifact_authority_snapshot(
+            workdir=run_dir,
+            step_dir=out_dir.parent,
+        )
+    )
     monkeypatch.setenv("STEP_OUT_DIR", str(out_dir))
     monkeypatch.setenv("COHORT_PARQUET", str(cohort_path))
     monkeypatch.setenv("EASYICU_UNIVERSE_PARQUET", str(universe_path))
@@ -203,6 +218,27 @@ def _run_generated(
     monkeypatch.setenv(
         "EASYICU_MANIFEST_PARTIAL", str(run_dir / "manifest_partial.json")
     )
+    if snapshot_path is not None and snapshot_sha256:
+        if tamper_snapshot:
+            snapshot_path.write_bytes(snapshot_path.read_bytes() + b" ")
+        monkeypatch.setenv(
+            "EASYICU_RUN_ARTIFACT_AUTHORITY_SNAPSHOT",
+            str(snapshot_path),
+        )
+        monkeypatch.setenv(
+            "EASYICU_RUN_ARTIFACT_AUTHORITY_SNAPSHOT_SHA256",
+            snapshot_sha256,
+        )
+        monkeypatch.delenv("EASYICU_RUN_ARTIFACT_AUTHORITY_ERROR", raising=False)
+    else:
+        monkeypatch.delenv("EASYICU_RUN_ARTIFACT_AUTHORITY_SNAPSHOT", raising=False)
+        monkeypatch.delenv(
+            "EASYICU_RUN_ARTIFACT_AUTHORITY_SNAPSHOT_SHA256", raising=False
+        )
+        monkeypatch.setenv(
+            "EASYICU_RUN_ARTIFACT_AUTHORITY_ERROR",
+            authority_error or "authority unavailable",
+        )
     code = robustness_sensitivity_preflight_code()
     exec(compile(code, "<robustness-preflight>", "exec"), {})
 
@@ -342,6 +378,75 @@ def test_preflight_fails_closed_without_completed_primary_estimate(
         "converged",
     ]
     assert not matrix["converged"].astype(bool).any()
+
+
+def test_preflight_does_not_fall_back_when_newest_checkpoint_is_corrupt(
+    tmp_path: Path, monkeypatch
+) -> None:
+    out_dir, cohort_path, universe_path = _prepare_run(tmp_path, include_primary=True)
+    run_dir = out_dir.parents[2]
+    (run_dir / "manifest_partial.json").replace(run_dir / "manifest.json")
+    (run_dir / "manifest_partial.json").write_text("{corrupt", encoding="utf-8")
+
+    _run_generated(
+        monkeypatch,
+        out_dir=out_dir,
+        cohort_path=cohort_path,
+        universe_path=universe_path,
+    )
+
+    summary = json.loads((out_dir / "step_summary.json").read_text())
+    assert summary["status"] == "blocked"
+    assert "refusing to fall back" in summary["blocking_reason"]
+    assert json.loads((out_dir / "primary_or.json").read_text())["value"] is None
+
+
+def test_preflight_latest_failed_primary_supersedes_older_success(
+    tmp_path: Path, monkeypatch
+) -> None:
+    out_dir, cohort_path, universe_path = _prepare_run(tmp_path, include_primary=True)
+    manifest_path = out_dir.parents[2] / "manifest_partial.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["checkpoint_sequence"] = 2
+    manifest["per_step_records"].append(
+        {
+            "step_id": "07_primary_model",
+            "status": "contract_failed",
+            "step_summary": {"status": "rejected"},
+        }
+    )
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    _run_generated(
+        monkeypatch,
+        out_dir=out_dir,
+        cohort_path=cohort_path,
+        universe_path=universe_path,
+    )
+
+    summary = json.loads((out_dir / "step_summary.json").read_text())
+    assert summary["status"] == "blocked"
+    assert "completed primary estimate" in summary["blocking_reason"]
+    assert json.loads((out_dir / "primary_or.json").read_text())["value"] is None
+
+
+def test_preflight_rejects_tampered_host_authority_snapshot(
+    tmp_path: Path, monkeypatch
+) -> None:
+    out_dir, cohort_path, universe_path = _prepare_run(tmp_path, include_primary=True)
+
+    _run_generated(
+        monkeypatch,
+        out_dir=out_dir,
+        cohort_path=cohort_path,
+        universe_path=universe_path,
+        tamper_snapshot=True,
+    )
+
+    summary = json.loads((out_dir / "step_summary.json").read_text())
+    assert summary["status"] == "blocked"
+    assert "snapshot digest mismatch" in summary["blocking_reason"]
+    assert json.loads((out_dir / "primary_or.json").read_text())["value"] is None
 
 
 def test_preflight_fails_closed_without_locked_specs(
@@ -580,6 +685,7 @@ def test_structured_preflight_replays_exact_primary_code_and_emits_spec_by_model
         json.dumps(
             {
                 "run_id": "structured_replay",
+                "checkpoint_sequence": 1,
                 "per_step_records": [
                     {
                         "step_id": "07_primary_model",

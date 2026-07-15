@@ -278,6 +278,61 @@ def test_build_command_maps_resolved_inputs_manifest_into_container(
     )
 
 
+def test_build_command_maps_digest_bound_authority_snapshot_into_container(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from easyicu.research_agent.runner import (
+        _capture_run_artifact_authority_snapshot,
+    )
+
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+    run_dir = tmp_path / "run"
+    runner = ra.DockerRunner(workdir=run_dir, cohort_parquet=cohort)
+    step_dir, script_path, out_dir = runner.prepare_step_dir("consume")
+    script_path.write_text("print('hi')\n", encoding="utf-8")
+    (run_dir / "manifest_partial.json").write_text(
+        json.dumps(
+            {
+                "checkpoint_sequence": 3,
+                "per_step_records": [{"step_id": "01_primary", "status": "ok"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    snapshot_path, snapshot_sha256, error = _capture_run_artifact_authority_snapshot(
+        workdir=run_dir,
+        step_dir=step_dir,
+    )
+    assert snapshot_path is not None
+    assert snapshot_sha256
+    assert error is None
+
+    cmd = runner.build_command(
+        step_id="consume",
+        script_path=script_path,
+        out_dir=out_dir,
+        authority_snapshot_path=snapshot_path,
+        authority_snapshot_sha256=snapshot_sha256,
+    )
+
+    env_pairs = [cmd[i + 1] for i, token in enumerate(cmd) if token == "-e"]
+    env_dict = dict(pair.split("=", 1) for pair in env_pairs)
+    assert env_dict["EASYICU_RUN_ARTIFACT_AUTHORITY_SNAPSHOT"] == (
+        "/easyicu-run/steps/consume/.run_artifact_authority_snapshot.json"
+    )
+    assert env_dict["EASYICU_RUN_ARTIFACT_AUTHORITY_SNAPSHOT_SHA256"] == snapshot_sha256
+    snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    assert set(snapshot["authority"]) == {
+        "run_id",
+        "checkpoint_sequence",
+        "per_step_records",
+        "evidence",
+    }
+
+
 def test_build_command_passes_through_advanced_flags(
     ra,
     tmp_path: Path,
@@ -355,6 +410,9 @@ def test_run_invokes_subprocess_and_writes_log(
     assert cmd[0] == runner.docker_executable and cmd[1] == "run"
     assert immutable_id in cmd
     assert "img:0" not in cmd
+    assert not any(
+        "EASYICU_RUN_ARTIFACT_AUTHORITY_SNAPSHOT=" in token for token in cmd
+    )
     cidfile_arg = next(token for token in cmd if token.startswith("--cidfile="))
     assert not Path(cidfile_arg.split("=", 1)[1]).exists()
 
@@ -383,6 +441,9 @@ def test_run_invokes_subprocess_and_writes_log(
     assert "* shap" not in capability_block
     # Script persisted to disk before run.
     assert result.script_path.read_text(encoding="utf-8") == "print('hi')\n"
+    assert not (
+        result.cwd / ".run_artifact_authority_snapshot.json"
+    ).exists()
 
 
 def test_docker_coder_capabilities_use_image_snapshot_before_first_step(

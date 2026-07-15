@@ -31,6 +31,7 @@ the artefacts.
 
 from __future__ import annotations
 
+import ast
 import glob
 import hashlib
 import json
@@ -64,6 +65,153 @@ _SAFE_INHERITED_ENV_KEYS = (
     "SSL_CERT_FILE",
     "SSL_CERT_DIR",
 )
+
+_RUN_ARTIFACT_AUTHORITY_SNAPSHOT_SCHEMA = "easyicu.run_artifact_authority_snapshot/1"
+_RUN_ARTIFACT_AUTHORITY_SNAPSHOT_ENV = "EASYICU_RUN_ARTIFACT_AUTHORITY_SNAPSHOT"
+_RUN_ARTIFACT_AUTHORITY_SNAPSHOT_SHA_ENV = (
+    "EASYICU_RUN_ARTIFACT_AUTHORITY_SNAPSHOT_SHA256"
+)
+_RUN_ARTIFACT_AUTHORITY_ERROR_ENV = "EASYICU_RUN_ARTIFACT_AUTHORITY_ERROR"
+_ROBUSTNESS_AUTHORITY_ENTRYPOINT = "_run_robustness_preflight_from_env"
+
+
+def _canonical_json_bytes(payload: object) -> bytes:
+    return (
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def _replace_regular_file_atomically(destination: Path, payload: bytes) -> None:
+    """Replace one host-owned control file without following an old link."""
+
+    temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with temporary.open("xb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _remove_authority_snapshot(path: Path) -> None:
+    """Remove a stale runner-control snapshot without traversing a symlink."""
+
+    try:
+        metadata = os.lstat(path)
+    except FileNotFoundError:
+        return
+    if stat.S_ISDIR(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode):
+        shutil.rmtree(path)
+    else:
+        path.unlink(missing_ok=True)
+
+
+def _capture_run_artifact_authority_snapshot(
+    *, workdir: Path, step_dir: Path
+) -> tuple[Optional[Path], Optional[str], Optional[str]]:
+    """Freeze current host-selected artifact authority for one subprocess.
+
+    Generated and deterministic code must not choose between live/final
+    manifests itself.  The trusted host resolves the newest checkpoint once,
+    serializes that exact authority into a receipt, and binds the receipt bytes
+    to an environment-supplied SHA-256 digest.  Missing or corrupt current
+    authority deliberately yields no snapshot, so consumers can fail closed
+    without replaying an older checkpoint.
+    """
+
+    from .runtime_artifacts import (
+        RunArtifactAuthorityError,
+        current_evidence_records,
+        current_step_records,
+        load_run_artifact_authority,
+    )
+
+    destination = step_dir / ".run_artifact_authority_snapshot.json"
+    try:
+        authority = load_run_artifact_authority(workdir)
+    except RunArtifactAuthorityError as exc:
+        _remove_authority_snapshot(destination)
+        return None, None, str(exc)
+    if authority is None:
+        _remove_authority_snapshot(destination)
+        return None, None, "No current per-step checkpoint authority is available."
+
+    raw_step_records = authority.get("per_step_records")
+    if not isinstance(raw_step_records, list):
+        _remove_authority_snapshot(destination)
+        return None, None, "Current checkpoint has no valid per-step ledger."
+    active_step_records = [
+        dict(record) for record in current_step_records(raw_step_records)
+    ]
+    raw_evidence = authority.get("evidence")
+    evidence_records = raw_evidence if isinstance(raw_evidence, list) else []
+    active_evidence = current_evidence_records(
+        evidence_records,
+        active_step_records,
+    )
+    # The subprocess receives only the current scientific authority closure,
+    # never the complete manifest (findings, prompts, repairs, notes, etc.).
+    authority = {
+        "run_id": authority.get("run_id"),
+        "checkpoint_sequence": authority.get("checkpoint_sequence"),
+        "per_step_records": active_step_records,
+        "evidence": [
+            dict(record) if isinstance(record, dict) else record
+            for record in active_evidence
+        ],
+    }
+    authority_bytes = _canonical_json_bytes(authority)
+    authority_sha256 = hashlib.sha256(authority_bytes).hexdigest()
+    snapshot = {
+        "schema_version": _RUN_ARTIFACT_AUTHORITY_SNAPSHOT_SCHEMA,
+        "checkpoint_sequence": authority.get("checkpoint_sequence"),
+        "authority_sha256": authority_sha256,
+        "authority": authority,
+    }
+    snapshot_bytes = _canonical_json_bytes(snapshot)
+    snapshot_sha256 = hashlib.sha256(snapshot_bytes).hexdigest()
+    _replace_regular_file_atomically(destination, snapshot_bytes)
+    return destination.resolve(), snapshot_sha256, None
+
+
+def _code_requests_robustness_authority_snapshot(code: str) -> bool:
+    """Recognise the exact host-owned robustness entrypoint import."""
+
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, TypeError, ValueError):
+        return False
+    return any(
+        isinstance(node, ast.ImportFrom)
+        and node.module == "easyicu.research_agent.deterministic_robustness"
+        and any(
+            alias.name == _ROBUSTNESS_AUTHORITY_ENTRYPOINT for alias in node.names
+        )
+        for node in ast.walk(tree)
+    )
+
+
+def _authority_snapshot_for_code(
+    *, code: str, workdir: Path, step_dir: Path
+) -> tuple[Optional[Path], Optional[str], Optional[str]]:
+    if _code_requests_robustness_authority_snapshot(code):
+        return _capture_run_artifact_authority_snapshot(
+            workdir=workdir,
+            step_dir=step_dir,
+        )
+    _remove_authority_snapshot(
+        step_dir / ".run_artifact_authority_snapshot.json"
+    )
+    return None, None, None
 
 
 def _safe_path_component(value: str, *, label: str) -> str:
@@ -356,6 +504,15 @@ class CodeRunner:
         # Persist the script BEFORE running so it is hashable as evidence
         # even if execution crashes.
         script_path.write_text(code, encoding="utf-8")
+        (
+            authority_snapshot_path,
+            authority_snapshot_sha256,
+            authority_snapshot_error,
+        ) = _authority_snapshot_for_code(
+            code=code,
+            workdir=self.workdir,
+            step_dir=step_dir,
+        )
 
         # Generated code gets only a small non-secret ambient environment.
         # API keys, cloud credentials, SSH agent sockets and unrelated project
@@ -384,6 +541,11 @@ class CodeRunner:
         env["EASYICU_MANIFEST_PARTIAL"] = str(
             (self.workdir / "manifest_partial.json").resolve()
         )
+        if authority_snapshot_path is not None and authority_snapshot_sha256:
+            env[_RUN_ARTIFACT_AUTHORITY_SNAPSHOT_ENV] = str(authority_snapshot_path)
+            env[_RUN_ARTIFACT_AUTHORITY_SNAPSHOT_SHA_ENV] = authority_snapshot_sha256
+        elif authority_snapshot_error:
+            env[_RUN_ARTIFACT_AUTHORITY_ERROR_ENV] = authority_snapshot_error
         # Defensive aliases: agent-emitted scripts frequently invent
         # alternative env-var names for the canonical inputs (e.g.
         # ``STEP_OUTPUT_DIR``, ``EASYICU_OUTPUT_DIR``, ``OUT_DIR``,
@@ -1000,6 +1162,9 @@ class DockerRunner:
         out_dir: Path,
         runtime_image: Optional[str] = None,
         resolved_inputs_path: Optional[Path] = None,
+        authority_snapshot_path: Optional[Path] = None,
+        authority_snapshot_sha256: Optional[str] = None,
+        authority_snapshot_error: Optional[str] = None,
     ) -> List[str]:
         """Compose the ``docker run`` argv for a single step."""
         step_id = _safe_path_component(step_id, label="step_id")
@@ -1007,6 +1172,23 @@ class DockerRunner:
             resolved_inputs_path,
             workdir=self.workdir,
         )
+        authority_snapshot_path = _validated_resolved_inputs_path(
+            authority_snapshot_path,
+            workdir=self.workdir,
+        )
+        if authority_snapshot_path is not None:
+            digest = str(authority_snapshot_sha256 or "").strip().lower()
+            if len(digest) != 64 or any(
+                character not in "0123456789abcdef" for character in digest
+            ):
+                raise ValueError(
+                    "authority_snapshot_sha256 must be a SHA-256 hex digest"
+                )
+            authority_snapshot_sha256 = digest
+        elif authority_snapshot_sha256:
+            raise ValueError(
+                "authority_snapshot_path is required when its digest is supplied"
+            )
         container_step_dir = self._container_step_dir(step_id)
         cmd: List[str] = [
             self.docker_executable,
@@ -1094,6 +1276,18 @@ class DockerRunner:
             env["EASYICU_RESOLVED_INPUTS_JSON"] = (
                 f"{self.CONTAINER_RUN_ROOT}/{relative_manifest.as_posix()}"
             )
+        if authority_snapshot_path is not None and authority_snapshot_sha256:
+            relative_snapshot = authority_snapshot_path.relative_to(
+                self.workdir.resolve()
+            )
+            env[_RUN_ARTIFACT_AUTHORITY_SNAPSHOT_ENV] = (
+                f"{self.CONTAINER_RUN_ROOT}/{relative_snapshot.as_posix()}"
+            )
+            env[_RUN_ARTIFACT_AUTHORITY_SNAPSHOT_SHA_ENV] = authority_snapshot_sha256
+        elif authority_snapshot_error:
+            env[_RUN_ARTIFACT_AUTHORITY_ERROR_ENV] = " ".join(
+                str(authority_snapshot_error).split()
+            )[:1000]
         for key, value in env.items():
             cmd.extend(["-e", f"{key}={value}"])
 
@@ -1384,6 +1578,15 @@ class DockerRunner:
         log_path = step_dir / "run.log"
         self._write_regular_file(script_path, code)
         self._remove_lexical_path(log_path)
+        (
+            authority_snapshot_path,
+            authority_snapshot_sha256,
+            authority_snapshot_error,
+        ) = _authority_snapshot_for_code(
+            code=code,
+            workdir=self.workdir,
+            step_dir=step_dir,
+        )
 
         if self.pull_image:
             try:
@@ -1407,6 +1610,9 @@ class DockerRunner:
             out_dir=out_dir,
             runtime_image=str(runtime_provenance["image_id"]),
             resolved_inputs_path=resolved_inputs_path,
+            authority_snapshot_path=authority_snapshot_path,
+            authority_snapshot_sha256=authority_snapshot_sha256,
+            authority_snapshot_error=authority_snapshot_error,
         )
         # Keep the host-written cidfile outside the step's read-write mount so
         # generated code cannot replace the container id used for teardown.
