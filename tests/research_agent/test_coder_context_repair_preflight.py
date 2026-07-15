@@ -14,6 +14,10 @@ from easyicu.research_agent.coder_context import (
 )
 from easyicu.research_agent.concept_audit_cache import LLMConceptAuditCache
 from easyicu.research_agent.pipeline_resume import _looks_like_generated_python
+from easyicu.research_agent.provider_budget import (
+    ProviderCallBudgetExhausted,
+    StepProviderCallBudget,
+)
 from easyicu.research_agent.schema import ValidationFinding
 
 
@@ -92,6 +96,18 @@ def test_step_scoped_coder_context_keeps_declared_family_and_drops_unrelated(ra)
     assert len(scoped.variables) <= 36
 
 
+def test_step_scoped_context_does_not_pad_unused_capacity(ra):
+    context = _context(ra, variable_count=70)
+
+    scoped = scoped_coder_context(context, _figure_step(ra))
+
+    assert {variable.name for variable in scoped.variables} == {
+        "selected_first",
+        "selected_measured",
+        "outcome",
+    }
+
+
 def test_step_scoped_context_keeps_all_declared_source_concept_companions(ra):
     variables = [
         ra.ConceptDescriptor(name=f"filler_{index}", dtype="float64")
@@ -130,6 +146,40 @@ def test_step_scoped_context_keeps_all_declared_source_concept_companions(ra):
     assert len(scoped.variables) <= 36
 
 
+def test_step_scoped_context_never_truncates_an_authoritative_companion_family(ra):
+    variables = [
+        ra.ConceptDescriptor(
+            name=f"event_companion_{index}",
+            dtype="float64",
+            source_concept="event",
+        )
+        for index in range(40)
+    ]
+    context = ra.ResearchContext(
+        research_question="Describe the planner-selected event.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo", database="synthetic", n_stays=20, n_patients=18
+        ),
+        variables=variables,
+        primary_exposure="event_companion_0",
+        target_outcome="outcome",
+    )
+    step = ra.AnalysisStep(
+        step_id="event_summary",
+        intent="Summarise the declared event.",
+        inputs=["event_companion_0"],
+        expected_outputs=["table:event_summary"],
+        method="descriptive_summary",
+    )
+
+    scoped = scoped_coder_context(context, step, max_variables=36)
+
+    assert len(scoped.variables) == 40
+    assert {variable.name for variable in scoped.variables} == {
+        f"event_companion_{index}" for index in range(40)
+    }
+
+
 def test_figure_coder_guide_excludes_unrelated_method_families(ra):
     from easyicu.research_agent.agents import _CODER_GUIDE
 
@@ -165,16 +215,38 @@ def test_coder_repair_applies_minimal_patch_without_full_rewrite(ra):
 
 def test_coder_repair_requests_full_rewrite_only_after_patch_failure(ra):
     llm = _SequenceLLM(["not json", "import os\nvalue = 3\n"])
+    budget = StepProviderCallBudget(2, step_id="render")
     repaired = CoderAgent(llm).repair(
         context=_context(ra),
         step=_figure_step(ra),
         code="import os\nvalue = 1\n",
         run_log="ERROR: local value is invalid",
+        provider_budget=budget,
     )
 
     assert repaired.endswith("value = 3")
     assert len(llm.calls) == 2
+    assert budget.used == 2
+    assert budget.categories == ("repair_patch", "repair_full_rewrite")
     assert "FULL-REWRITE FALLBACK" in llm.calls[1][0][-1].content
+
+
+def test_coder_repair_budget_exhaustion_prevents_full_rewrite(ra):
+    llm = _SequenceLLM(["not json", "import os\nvalue = 3\n"])
+    budget = StepProviderCallBudget(1, step_id="render")
+
+    with pytest.raises(ProviderCallBudgetExhausted) as exc_info:
+        CoderAgent(llm).repair(
+            context=_context(ra),
+            step=_figure_step(ra),
+            code="import os\nvalue = 1\n",
+            run_log="ERROR: local value is invalid",
+            provider_budget=budget,
+        )
+
+    assert exc_info.value.category == "repair_full_rewrite"
+    assert len(llm.calls) == 1
+    assert budget.categories == ("repair_patch",)
 
 
 def test_patch_json_is_never_accepted_as_complete_python_script():
@@ -637,6 +709,33 @@ def audit_event_presence(frame):
     )
 
 
+def test_mechanical_preflight_blocks_import_aliased_tuple_swallow(ra):
+    code = """
+from easyicu.research_agent.methods.source_status import (
+    reconcile_binary_event_presence as reconcile,
+)
+
+def audit_event_presence(frame):
+    try:
+        result = reconcile(
+            frame,
+            count_column=count_column,
+            measured_column=measured_column,
+            representative_column=representative_column,
+        )
+    except (ValueError, TypeError) as exc:
+        return {'status': 'unavailable', 'reason': str(exc)}
+    return {'status': 'checked', 'audit': result.audit}
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_helper_error_swallowed"
+        for finding in findings
+    )
+
+
 def test_mechanical_preflight_blocks_conditionally_reraised_reconciliation_error(ra):
     code = """
 def audit_event_presence(frame, strict):
@@ -674,6 +773,241 @@ def audit_event_presence(frame):
         )
     except (ValueError, TypeError):
         raise
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_helper_error_swallowed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_blocks_reraise_suppressed_by_finally_return(ra):
+    code = """
+def audit_event_presence(frame):
+    try:
+        return reconcile_binary_event_presence(
+            frame,
+            count_column=count_column,
+            measured_column=measured_column,
+            representative_column=representative_column,
+        )
+    except (ValueError, TypeError):
+        raise
+    finally:
+        return {'status': 'unavailable'}
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_helper_error_swallowed"
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize(
+    "control_flow", ["return {'status': 'unavailable'}", "break", "continue"]
+)
+def test_mechanical_preflight_blocks_finally_control_flow_without_except(
+    ra, control_flow
+):
+    if control_flow in {"break", "continue"}:
+        body = f"""
+def audit_event_presence(frame):
+    while True:
+        try:
+            reconcile_binary_event_presence(
+                frame,
+                count_column=count_column,
+                measured_column=measured_column,
+                representative_column=representative_column,
+            )
+        finally:
+            {control_flow}
+"""
+    else:
+        body = f"""
+def audit_event_presence(frame):
+    try:
+        reconcile_binary_event_presence(
+            frame,
+            count_column=count_column,
+            measured_column=measured_column,
+            representative_column=representative_column,
+        )
+    finally:
+        {control_flow}
+"""
+
+    findings = audit_mechanical_code_contracts(body, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_helper_error_swallowed"
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize("call_region", ["else", "handler"])
+def test_mechanical_preflight_blocks_finally_suppression_after_try_body(
+    ra, call_region
+):
+    if call_region == "else":
+        region = """
+    else:
+        reconcile_binary_event_presence(
+            frame,
+            count_column=count_column,
+            measured_column=measured_column,
+            representative_column=representative_column,
+        )
+"""
+        code = f"""
+def audit_event_presence(frame):
+    try:
+        prepare_audit()
+    except LookupError:
+        raise
+{region}
+    finally:
+        return {{'status': 'unavailable'}}
+"""
+    else:
+        region = """
+    except LookupError:
+        reconcile_binary_event_presence(
+            frame,
+            count_column=count_column,
+            measured_column=measured_column,
+            representative_column=representative_column,
+        )
+"""
+        code = f"""
+def audit_event_presence(frame):
+    try:
+        prepare_audit()
+{region}
+    finally:
+        return {{'status': 'unavailable'}}
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_helper_error_swallowed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_blocks_simple_reconciliation_alias_in_finally(ra):
+    code = """
+def audit_event_presence(frame):
+    reconcile = reconcile_binary_event_presence
+    try:
+        reconcile(
+            frame,
+            count_column=count_column,
+            measured_column=measured_column,
+            representative_column=representative_column,
+        )
+    finally:
+        return {'status': 'unavailable'}
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_helper_error_swallowed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_ignores_unexecuted_nested_reconciliation_body(ra):
+    code = """
+def audit_event_presence(frame):
+    try:
+        def deferred_audit():
+            return reconcile_binary_event_presence(
+                frame,
+                count_column=count_column,
+                measured_column=measured_column,
+                representative_column=representative_column,
+            )
+        prepare_audit()
+    except ValueError:
+        return {'status': 'unavailable'}
+    finally:
+        cleanup_temporary_files()
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_helper_error_swallowed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_does_not_borrow_alias_from_nested_scope(ra):
+    code = """
+def audit_event_presence(frame):
+    reconcile = safe_lookup
+    def deferred_audit():
+        reconcile = reconcile_binary_event_presence
+        return reconcile(frame)
+    try:
+        reconcile(frame)
+    except ValueError:
+        return {'status': 'lookup_unavailable'}
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_helper_error_swallowed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_accepts_finally_cleanup_that_propagates(ra):
+    code = """
+def audit_event_presence(frame):
+    try:
+        return reconcile_binary_event_presence(
+            frame,
+            count_column=count_column,
+            measured_column=measured_column,
+            representative_column=representative_column,
+        )
+    finally:
+        cleanup_temporary_files()
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_helper_error_swallowed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_accepts_break_inside_finally_local_loop(ra):
+    code = """
+def audit_event_presence(frame):
+    try:
+        return reconcile_binary_event_presence(
+            frame,
+            count_column=count_column,
+            measured_column=measured_column,
+            representative_column=representative_column,
+        )
+    finally:
+        for path in temporary_files:
+            cleanup(path)
+            break
 """
     findings = audit_mechanical_code_contracts(code, _figure_step(ra))
 
@@ -1295,11 +1629,16 @@ def test_llm_concept_audit_cache_reuses_identical_digest(tmp_path, ra):
     context = _context(ra)
     step = _figure_step(ra)
     cache = LLMConceptAuditCache(tmp_path)
+    cache_identity = {
+        "environment_sha256": "environment-a",
+        "auditor_identity": "auditor:model-a",
+    }
     key = cache.key(
         context=context,
         step=step,
         script_text="import os\n",
         audit_prompt="auditor prompt v1",
+        **cache_identity,
     )
     finding = ValidationFinding(
         validator="llm_concept_auditor",
@@ -1319,6 +1658,7 @@ def test_llm_concept_audit_cache_reuses_identical_digest(tmp_path, ra):
         step=step,
         script_text="import json\n",
         audit_prompt="auditor prompt v1",
+        **cache_identity,
     )
     assert changed_key != key
     assert cache.get(changed_key) is None
@@ -1328,6 +1668,7 @@ def test_llm_concept_audit_cache_reuses_identical_digest(tmp_path, ra):
         step=step,
         script_text="import os\n",
         audit_prompt="auditor prompt v2",
+        **cache_identity,
     )
     assert changed_prompt_key != key
     assert cache.get(changed_prompt_key) is None
@@ -1337,6 +1678,7 @@ def test_llm_concept_audit_cache_reuses_identical_digest(tmp_path, ra):
         step=step,
         script_text="import os\n",
         audit_prompt="auditor prompt v1",
+        **cache_identity,
         authority_bindings={
             "artifact:primary_exposure_definition": {"sha256": "changed"}
         },
@@ -1349,6 +1691,7 @@ def test_llm_concept_audit_cache_reuses_identical_digest(tmp_path, ra):
         step=step,
         script_text="import os\n",
         audit_prompt="auditor prompt v1",
+        **cache_identity,
         validator_implementation_sha256="b" * 64,
     )
     assert changed_validator_key != key
@@ -1361,5 +1704,62 @@ def test_llm_concept_audit_cache_reuses_identical_digest(tmp_path, ra):
         step=step,
         script_text="import os\n",
         audit_prompt="auditor prompt v1",
+        **cache_identity,
     )
     assert timestamp_only_key == key
+
+    changed_environment_key = cache.key(
+        context=context,
+        step=step,
+        script_text="import os\n",
+        audit_prompt="auditor prompt v1",
+        environment_sha256="environment-b",
+        auditor_identity=cache_identity["auditor_identity"],
+    )
+    assert changed_environment_key != key
+    assert cache.get(changed_environment_key) is None
+
+    changed_auditor_key = cache.key(
+        context=context,
+        step=step,
+        script_text="import os\n",
+        audit_prompt="auditor prompt v1",
+        environment_sha256=cache_identity["environment_sha256"],
+        auditor_identity="auditor:model-b",
+    )
+    assert changed_auditor_key != key
+    assert cache.get(changed_auditor_key) is None
+
+
+@pytest.mark.parametrize(
+    "issue_code",
+    [
+        "llm_concept_audit_provider_failure",
+        "llm_concept_audit_response_invalid",
+    ],
+)
+def test_llm_concept_audit_cache_does_not_persist_transient_failures(
+    tmp_path,
+    ra,
+    issue_code,
+):
+    cache = LLMConceptAuditCache(tmp_path)
+    key = cache.key(
+        context=_context(ra),
+        step=_figure_step(ra),
+        script_text="import os\n",
+        audit_prompt="auditor prompt v1",
+        environment_sha256="environment-a",
+        auditor_identity="auditor:model-a",
+    )
+    failure = ValidationFinding(
+        validator="llm_concept_auditor",
+        severity="error",
+        message="The audit did not produce a reusable semantic result.",
+        detail={"issue_code": issue_code},
+    )
+
+    cache.put(key, [failure])
+
+    assert cache.get(key) is None
+    assert not cache.path.exists()

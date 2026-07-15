@@ -184,6 +184,12 @@ def scoped_coder_context(
         for value in (step.inputs or [])
         if ":" not in str(value or "") and str(value or "").strip()
     }
+    declared.update(
+        str(value or "").strip().lower()
+        for requirement in (step.model_requirements or [])
+        for value in (requirement.outcome, requirement.exposure_source)
+        if str(value or "").strip()
+    )
     families = {_variable_family(value) for value in declared}
     direct = {
         str(value).strip().lower()
@@ -207,7 +213,6 @@ def scoped_coder_context(
     }
     priority = []
     referenced = []
-    remaining = []
     for variable in context.variables:
         name = variable.name.lower()
         source_concept = str(variable.source_concept or "").strip().lower()
@@ -223,9 +228,15 @@ def scoped_coder_context(
             code,
         ):
             referenced.append(variable)
-        else:
-            remaining.append(variable)
-    selected = (priority + referenced + remaining)[: max(1, int(max_variables))]
+    # ``max_variables`` is a transport target, not permission to cut an
+    # authoritative concept family in half.  Keep every declared/direct/code
+    # variable and every source_concept companion as one atomic capsule.  Do
+    # not pad spare capacity with unrelated cohort columns; that was the main
+    # source of 36-column prompts whose useful metadata was still incomplete.
+    cap = max(1, int(max_variables))
+    selected = list(priority)
+    if len(selected) < cap:
+        selected.extend(referenced[: cap - len(selected)])
     return context.model_copy(update={"variables": selected})
 
 

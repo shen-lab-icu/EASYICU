@@ -99,6 +99,12 @@ class PipelineConfig:
     # one local defect. Keep legacy per-class limits for compatibility, but cap
     # actual LLM repair calls across the whole step.
     max_step_llm_repair_attempts: int = 2
+    # Real coder/concept-audit provider attempts share one crash-safe budget,
+    # including initial generation, transport/fallback retries, compatibility
+    # repair, patch, and full-rewrite fallback. Five supports the worst-case
+    # verifiable cycle generation -> audit -> patch -> rewrite -> re-audit;
+    # the normal minimal-patch path uses four.
+    max_step_provider_calls: int = 5
     enable_deterministic_code_fallback: bool = False
     enable_deterministic_planner_fallback: bool = False
     enable_deterministic_runner_repair: bool = True

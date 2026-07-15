@@ -65,6 +65,7 @@ from .code_patch import (
 from .coder_context import coder_guide_for_step, scoped_coder_context
 from .plan_utils import effect_output_authorized
 from .prompts import PROMPT_PACK_VERSION, load_prompt_pack
+from .provider_budget import StepProviderCallBudget, complete_with_provider_budget
 from .schema import (
     AggregationRule,
     AgentRuntimeState,
@@ -1488,7 +1489,13 @@ class CoderAgent:
         self.last_compatibility_violations: List[Dict[str, object]] = []
         self.last_compatibility_repair_attempts: int = 0
 
-    def run(self, *, context: ResearchContext, step: AnalysisStep) -> str:
+    def run(
+        self,
+        *,
+        context: ResearchContext,
+        step: AnalysisStep,
+        provider_budget: Optional[StepProviderCallBudget] = None,
+    ) -> str:
         from .method_compatibility import (
             detect_forbidden_pattern_usage,
             format_violation_message,
@@ -1537,7 +1544,15 @@ class CoderAgent:
                 ),
             ),
         ]
-        raw = self.llm.complete(messages, max_tokens=_CODER_MAX_TOKENS, temperature=0.1)
+        raw = complete_with_provider_budget(
+            budget=provider_budget,
+            category="initial_generation",
+            call=lambda: self.llm.complete(
+                messages,
+                max_tokens=_CODER_MAX_TOKENS,
+                temperature=0.1,
+            ),
+        )
         code = _strip_code_fence(raw.strip())
 
         # Patch C: post-codegen pre-execution compatibility enforcement.
@@ -1562,6 +1577,8 @@ class CoderAgent:
                 code=code,
                 run_log=err,
                 attempt=attempt,
+                provider_budget=provider_budget,
+                provider_category="compatibility_repair",
             )
         return code
 
@@ -1573,6 +1590,8 @@ class CoderAgent:
         code: str,
         run_log: str,
         attempt: int = 1,
+        provider_budget: Optional[StepProviderCallBudget] = None,
+        provider_category: str = "repair",
     ) -> str:
         """Apply a minimal exact patch, falling back to one full rewrite.
 
@@ -1649,8 +1668,14 @@ class CoderAgent:
                 ),
             ),
         ]
-        raw_patch = self.llm.complete(
-            patch_messages, max_tokens=min(2048, _CODER_MAX_TOKENS), temperature=0.0
+        raw_patch = complete_with_provider_budget(
+            budget=provider_budget,
+            category=f"{provider_category}_patch",
+            call=lambda: self.llm.complete(
+                patch_messages,
+                max_tokens=min(2048, _CODER_MAX_TOKENS),
+                temperature=0.0,
+            ),
         )
         try:
             repaired = apply_code_patch(code, raw_patch)
@@ -1690,10 +1715,14 @@ class CoderAgent:
                         ),
                     ),
                 ]
-                raw = self.llm.complete(
-                    fallback_messages,
-                    max_tokens=_CODER_MAX_TOKENS,
-                    temperature=0.05,
+                raw = complete_with_provider_budget(
+                    budget=provider_budget,
+                    category=f"{provider_category}_full_rewrite",
+                    call=lambda: self.llm.complete(
+                        fallback_messages,
+                        max_tokens=_CODER_MAX_TOKENS,
+                        temperature=0.05,
+                    ),
                 )
                 try:
                     # Some providers ignore the full-script instruction but
@@ -2100,6 +2129,7 @@ class AnalyzerAgent:
         step: AnalysisStep,
         step_summary: Dict[str, Any],
         evidence_ids: Sequence[str],
+        provider_budget: Optional[StepProviderCallBudget] = None,
     ) -> str:
         messages = [
             LLMMessage(role="system", content=_SYSTEM_GUIDE),
@@ -2119,7 +2149,13 @@ class AnalyzerAgent:
                 ),
             ),
         ]
-        return self.llm.complete(messages, max_tokens=512, temperature=0.2).strip()
+        return complete_with_provider_budget(
+            budget=provider_budget,
+            category="analyzer",
+            call=lambda: self.llm.complete(
+                messages, max_tokens=512, temperature=0.2
+            ),
+        ).strip()
 
 
 # ---------------------------------------------------------------------------
