@@ -364,33 +364,595 @@ def test_legacy_failed_attempt_without_capsule_cannot_mix_new_inputs(
         )
 
 
+def _register_resume_step_authorities(
+    *,
+    run_dir: Path,
+    evidence: EvidenceStore,
+    step_id: str,
+    prefix: str,
+    summary_inputs: tuple[str, ...] = (),
+):
+    """Create the three host-owned authorities of a completed step."""
+
+    script_path = run_dir / f"{prefix}_analysis.py"
+    summary_path = run_dir / f"{prefix}_step_summary.json"
+    interpretation_path = run_dir / f"{prefix}_interpretation.md"
+    script_path.write_text("print('analysis')\n", encoding="utf-8")
+    summary_path.write_text('{"estimate": 1}', encoding="utf-8")
+    interpretation_path.write_text("Evidence-bound interpretation.\n", encoding="utf-8")
+    script = evidence.register_file(
+        kind="code",
+        description="Step script.",
+        source_path=script_path,
+        evidence_id=f"{prefix}_script",
+        produced_by_step=step_id,
+        producer="coder",
+    )
+    summary = evidence.register_file(
+        kind="statistic",
+        description="Step summary.",
+        source_path=summary_path,
+        evidence_id=f"{prefix}_summary",
+        produced_by_step=step_id,
+        inputs=list(summary_inputs),
+        script_evidence_id=script.evidence_id,
+        producer="runner",
+    )
+    interpretation = evidence.register_file(
+        kind="log",
+        description="Step interpretation.",
+        source_path=interpretation_path,
+        evidence_id=f"{prefix}_interpretation",
+        produced_by_step=step_id,
+        script_evidence_id=script.evidence_id,
+        producer="analyzer",
+    )
+    checkpoint = {
+        "step_id": step_id,
+        "status": "ok",
+        "evidence_ids": [
+            script.evidence_id,
+            summary.evidence_id,
+            interpretation.evidence_id,
+        ],
+        "step_summary_evidence_id": summary.evidence_id,
+        "script_evidence_id": script.evidence_id,
+        "interpretation_evidence_id": interpretation.evidence_id,
+    }
+    return checkpoint, script, summary, interpretation
+
+
+def _register_legacy_host_probe_authorities(
+    *,
+    run_dir: Path,
+    evidence: EvidenceStore,
+):
+    summary_path = run_dir / "probe_summary.json"
+    table_path = run_dir / "probe_variable_profile.csv"
+    summary_path.write_text('{"n": 4}', encoding="utf-8")
+    table_path.write_text("variable,non_missing_n\nexposure,4\n", encoding="utf-8")
+    summary = evidence.register_file(
+        kind="statistic",
+        description="Deterministic probe summary.",
+        source_path=summary_path,
+        evidence_id="statistic_probe_summary_fixture",
+        produced_by_step="00_probe",
+        producer="pipeline",
+        generation_mode="deterministic_probe",
+    )
+    table = evidence.register_file(
+        kind="table",
+        description="Deterministic probe variable profile.",
+        source_path=table_path,
+        evidence_id="table_probe_variable_profile_fixture",
+        produced_by_step="00_probe",
+        producer="pipeline",
+        generation_mode="deterministic_probe",
+    )
+    checkpoint = {
+        "step_id": "00_probe",
+        "status": "ok",
+        "evidence_ids": [table.evidence_id, summary.evidence_id],
+    }
+    return checkpoint, summary, table
+
+
+def _register_legacy_host_cohort_materializer_authority(
+    *,
+    run_dir: Path,
+    evidence: EvidenceStore,
+    step_id: str = "01_cohort_definition",
+    evidence_id: str = "analysis_cohort_execute_repair",
+    source_name: str = "cohort_analysis.parquet",
+    produced_by_step: str | None = None,
+):
+    cohort_path = run_dir / source_name
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2],
+            "exposure": [0, 1],
+            "outcome": [0, 1],
+        }
+    ).to_parquet(cohort_path, index=False)
+    cohort = evidence.register_file(
+        kind="table",
+        description="Host-materialized analysis cohort.",
+        source_path=cohort_path,
+        evidence_id=evidence_id,
+        produced_by_step=produced_by_step or step_id,
+        producer="cohort_repair",
+        generation_mode="llm",
+        metadata={"reason": "probe_summary"},
+    )
+    checkpoint = {
+        "step_id": step_id,
+        "status": "ok",
+        "generation_mode": "deterministic_cohort_materializer",
+        "step_summary": {
+            "output_files": {"table:analysis_cohort": source_name},
+            "n_universe": 4,
+            "n_analysis_cohort": 2,
+        },
+        "evidence_ids": [cohort.evidence_id],
+    }
+    return checkpoint, cohort
+
+
+def test_resume_migrates_missing_script_only_from_explicit_summary_authority(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "legacy_script_authority"
+    run_dir.mkdir()
+    evidence = EvidenceStore(run_dir)
+    checkpoint, script, _, _ = _register_resume_step_authorities(
+        run_dir=run_dir,
+        evidence=evidence,
+        step_id="01_model",
+        prefix="legacy",
+    )
+    checkpoint.pop("script_evidence_id")
+    original = dict(checkpoint)
+    records = {
+        record["evidence_id"]: record
+        for record in json.loads(
+            (run_dir / "evidence" / "evidence_index.json").read_text(
+                encoding="utf-8"
+            )
+        )
+    }
+
+    updated, invalidated = invalidate_unverified_successful_steps(
+        run_dir=run_dir,
+        resume_state={"per_step_records": [checkpoint], "findings": []},
+        records=records,
+    )
+
+    assert invalidated == {}
+    assert checkpoint == original
+    assert len(updated["per_step_records"]) == 2
+    migrated = updated["per_step_records"][-1]
+    assert migrated["status"] == "ok"
+    assert migrated["script_evidence_id"] == script.evidence_id
+    assert migrated["resume_authority_migrated_fields"] == [
+        "script_evidence_id"
+    ]
+
+
+def test_resume_does_not_migrate_missing_script_from_unlisted_or_ambiguous_code(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "ambiguous_legacy_script_authority"
+    run_dir.mkdir()
+    evidence = EvidenceStore(run_dir)
+    checkpoint, _, _, _ = _register_resume_step_authorities(
+        run_dir=run_dir,
+        evidence=evidence,
+        step_id="01_model",
+        prefix="legacy",
+    )
+    checkpoint.pop("script_evidence_id")
+    decoy_path = run_dir / "decoy_analysis.py"
+    decoy_path.write_text("print('decoy')\n", encoding="utf-8")
+    decoy = evidence.register_file(
+        kind="code",
+        description="A second active code record must make migration ambiguous.",
+        source_path=decoy_path,
+        evidence_id="legacy_decoy_script",
+        produced_by_step="01_model",
+        producer="coder",
+    )
+    checkpoint["evidence_ids"].append(decoy.evidence_id)
+    records = {
+        record["evidence_id"]: record
+        for record in json.loads(
+            (run_dir / "evidence" / "evidence_index.json").read_text(
+                encoding="utf-8"
+            )
+        )
+    }
+
+    updated, invalidated = invalidate_unverified_successful_steps(
+        run_dir=run_dir,
+        resume_state={"per_step_records": [checkpoint], "findings": []},
+        records=records,
+    )
+
+    assert invalidated == {
+        "01_model": "successful checkpoint is missing required script_evidence_id"
+    }
+    assert len(updated["per_step_records"]) == 2
+    assert updated["per_step_records"][-1]["status"] == "resume_evidence_invalid"
+
+
+def test_resume_migrates_exact_host_owned_probe_without_script_or_analyzer(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "legacy_host_probe"
+    run_dir.mkdir()
+    evidence = EvidenceStore(run_dir)
+    checkpoint, summary, table = _register_legacy_host_probe_authorities(
+        run_dir=run_dir,
+        evidence=evidence,
+    )
+    original = dict(checkpoint)
+    records = {
+        record["evidence_id"]: record
+        for record in json.loads(
+            (run_dir / "evidence" / "evidence_index.json").read_text(
+                encoding="utf-8"
+            )
+        )
+    }
+
+    updated, invalidated = invalidate_unverified_successful_steps(
+        run_dir=run_dir,
+        resume_state={"per_step_records": [checkpoint], "findings": []},
+        records=records,
+    )
+
+    assert invalidated == {}
+    assert checkpoint == original
+    migrated = updated["per_step_records"][-1]
+    assert migrated["step_authority_kind"] == "host_deterministic_probe"
+    assert migrated["probe_summary_evidence_id"] == summary.evidence_id
+    assert migrated["probe_table_evidence_id"] == table.evidence_id
+    assert "script_evidence_id" not in migrated
+    assert "interpretation_evidence_id" not in migrated
+
+
+def test_resume_probe_rejects_arbitrary_table_as_host_authority(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "invalid_host_probe"
+    run_dir.mkdir()
+    evidence = EvidenceStore(run_dir)
+    checkpoint, _, table = _register_legacy_host_probe_authorities(
+        run_dir=run_dir,
+        evidence=evidence,
+    )
+    wrong_path = run_dir / "unrelated_probe_table.csv"
+    wrong_path.write_text("variable,n\nexposure,4\n", encoding="utf-8")
+    wrong = evidence.register_file(
+        kind="table",
+        description="Unrelated deterministic table.",
+        source_path=wrong_path,
+        evidence_id="table_unrelated_probe_fixture",
+        produced_by_step="00_probe",
+        producer="pipeline",
+        generation_mode="deterministic_probe",
+    )
+    checkpoint["evidence_ids"] = [
+        wrong.evidence_id if value == table.evidence_id else value
+        for value in checkpoint["evidence_ids"]
+    ]
+    records = {
+        record["evidence_id"]: record
+        for record in json.loads(
+            (run_dir / "evidence" / "evidence_index.json").read_text(
+                encoding="utf-8"
+            )
+        )
+    }
+
+    updated, invalidated = invalidate_unverified_successful_steps(
+        run_dir=run_dir,
+        resume_state={"per_step_records": [checkpoint], "findings": []},
+        records=records,
+    )
+
+    assert invalidated == {
+        "00_probe": (
+            "successful host probe checkpoint lacks migrated probe authority"
+        )
+    }
+    assert updated["per_step_records"][-1]["status"] == "resume_evidence_invalid"
+
+
+def test_resume_migrates_exact_host_owned_cohort_materializer_without_script(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "legacy_host_cohort_materializer"
+    run_dir.mkdir()
+    evidence = EvidenceStore(run_dir)
+    checkpoint, cohort = _register_legacy_host_cohort_materializer_authority(
+        run_dir=run_dir,
+        evidence=evidence,
+    )
+    original = dict(checkpoint)
+    records = {
+        record["evidence_id"]: record
+        for record in json.loads(
+            (run_dir / "evidence" / "evidence_index.json").read_text(
+                encoding="utf-8"
+            )
+        )
+    }
+
+    updated, invalidated = invalidate_unverified_successful_steps(
+        run_dir=run_dir,
+        resume_state={"per_step_records": [checkpoint], "findings": []},
+        records=records,
+    )
+
+    assert invalidated == {}
+    assert checkpoint == original
+    assert len(updated["per_step_records"]) == 2
+    migrated = updated["per_step_records"][-1]
+    assert (
+        migrated["step_authority_kind"]
+        == "host_deterministic_cohort_materializer"
+    )
+    assert migrated["cohort_table_evidence_id"] == cohort.evidence_id
+    assert "step_summary_evidence_id" not in migrated
+    assert "script_evidence_id" not in migrated
+    assert "interpretation_evidence_id" not in migrated
+    replayed, invalidated = invalidate_unverified_successful_steps(
+        run_dir=run_dir,
+        resume_state=updated,
+        records=records,
+    )
+    assert invalidated == {}
+    assert len(replayed["per_step_records"]) == 2
+
+
+@pytest.mark.parametrize(
+    ("variant", "fixture_overrides"),
+    [
+        (
+            "arbitrary_table",
+            {
+                "evidence_id": "unrelated_deterministic_table",
+                "source_name": "unrelated.parquet",
+            },
+        ),
+        ("cross_step", {"produced_by_step": "99_other_step"}),
+    ],
+)
+def test_resume_cohort_materializer_rejects_non_authoritative_table(
+    tmp_path: Path,
+    variant: str,
+    fixture_overrides: dict[str, str],
+) -> None:
+    run_dir = tmp_path / variant
+    run_dir.mkdir()
+    evidence = EvidenceStore(run_dir)
+    checkpoint, _ = _register_legacy_host_cohort_materializer_authority(
+        run_dir=run_dir,
+        evidence=evidence,
+        **fixture_overrides,
+    )
+    records = {
+        record["evidence_id"]: record
+        for record in json.loads(
+            (run_dir / "evidence" / "evidence_index.json").read_text(
+                encoding="utf-8"
+            )
+        )
+    }
+
+    updated, invalidated = invalidate_unverified_successful_steps(
+        run_dir=run_dir,
+        resume_state={"per_step_records": [checkpoint], "findings": []},
+        records=records,
+    )
+
+    assert invalidated == {
+        "01_cohort_definition": (
+            "successful host cohort materializer checkpoint lacks migrated "
+            "cohort authority"
+        )
+    }
+    assert updated["per_step_records"][-1]["status"] == "resume_evidence_invalid"
+
+
+def test_resume_does_not_generalize_script_free_authority_to_other_deterministic_modes(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "unrecognized_deterministic_mode"
+    run_dir.mkdir()
+    source_path = run_dir / "other_deterministic_table.csv"
+    source_path.write_text("group,n\na,2\n", encoding="utf-8")
+    evidence = EvidenceStore(run_dir)
+    table = evidence.register_file(
+        kind="table",
+        description="Unrecognized deterministic output.",
+        source_path=source_path,
+        evidence_id="other_deterministic_table",
+        produced_by_step="01_other",
+        producer="pipeline",
+        generation_mode="deterministic_other",
+    )
+    checkpoint = {
+        "step_id": "01_other",
+        "status": "ok",
+        "generation_mode": "deterministic_other",
+        "evidence_ids": [table.evidence_id],
+    }
+    records = {
+        record["evidence_id"]: record
+        for record in json.loads(
+            (run_dir / "evidence" / "evidence_index.json").read_text(
+                encoding="utf-8"
+            )
+        )
+    }
+
+    updated, invalidated = invalidate_unverified_successful_steps(
+        run_dir=run_dir,
+        resume_state={"per_step_records": [checkpoint], "findings": []},
+        records=records,
+    )
+
+    assert invalidated == {
+        "01_other": (
+            "successful checkpoint is missing required step_summary_evidence_id"
+        )
+    }
+    assert updated["per_step_records"][-1]["status"] == "resume_evidence_invalid"
+
+
+def test_resume_cohort_materializer_rejects_tampered_authority(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "tampered_host_cohort_materializer"
+    run_dir.mkdir()
+    evidence = EvidenceStore(run_dir)
+    checkpoint, cohort = _register_legacy_host_cohort_materializer_authority(
+        run_dir=run_dir,
+        evidence=evidence,
+    )
+    records = {
+        record["evidence_id"]: record
+        for record in json.loads(
+            (run_dir / "evidence" / "evidence_index.json").read_text(
+                encoding="utf-8"
+            )
+        )
+    }
+    migrated_state, invalidated = invalidate_unverified_successful_steps(
+        run_dir=run_dir,
+        resume_state={"per_step_records": [checkpoint], "findings": []},
+        records=records,
+    )
+    assert invalidated == {}
+    Path(verified_run_evidence_path(run_dir, cohort)).write_bytes(b"tampered")
+
+    updated, invalidated = invalidate_unverified_successful_steps(
+        run_dir=run_dir,
+        resume_state=migrated_state,
+        records=records,
+    )
+
+    assert invalidated == {
+        "01_cohort_definition": (
+            "evidence analysis_cohort_execute_repair failed path/digest "
+            "verification"
+        )
+    }
+    assert updated["per_step_records"][-1]["status"] == "resume_evidence_invalid"
+
+
+def test_resume_cohort_materializer_rejects_checkpoint_count_mismatch(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "count_mismatch_host_cohort_materializer"
+    run_dir.mkdir()
+    evidence = EvidenceStore(run_dir)
+    checkpoint, _ = _register_legacy_host_cohort_materializer_authority(
+        run_dir=run_dir,
+        evidence=evidence,
+    )
+    records = {
+        record["evidence_id"]: record
+        for record in json.loads(
+            (run_dir / "evidence" / "evidence_index.json").read_text(
+                encoding="utf-8"
+            )
+        )
+    }
+    migrated_state, invalidated = invalidate_unverified_successful_steps(
+        run_dir=run_dir,
+        resume_state={"per_step_records": [checkpoint], "findings": []},
+        records=records,
+    )
+    assert invalidated == {}
+    migrated = json.loads(json.dumps(migrated_state["per_step_records"][-1]))
+    migrated["step_summary"]["n_analysis_cohort"] = 1
+
+    updated, invalidated = invalidate_unverified_successful_steps(
+        run_dir=run_dir,
+        resume_state={"per_step_records": [migrated], "findings": []},
+        records=records,
+    )
+
+    assert invalidated == {
+        "01_cohort_definition": (
+            "successful host cohort materializer canonical cohort row count 2 "
+            "does not match checkpoint 1"
+        )
+    }
+    assert updated["per_step_records"][-1]["status"] == "resume_evidence_invalid"
+
+
+def test_resume_cohort_materializer_rejects_canonical_cohort_drift(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "canonical_drift_host_cohort_materializer"
+    run_dir.mkdir()
+    evidence = EvidenceStore(run_dir)
+    checkpoint, _ = _register_legacy_host_cohort_materializer_authority(
+        run_dir=run_dir,
+        evidence=evidence,
+    )
+    records = {
+        record["evidence_id"]: record
+        for record in json.loads(
+            (run_dir / "evidence" / "evidence_index.json").read_text(
+                encoding="utf-8"
+            )
+        )
+    }
+    migrated_state, invalidated = invalidate_unverified_successful_steps(
+        run_dir=run_dir,
+        resume_state={"per_step_records": [checkpoint], "findings": []},
+        records=records,
+    )
+    assert invalidated == {}
+    (run_dir / "cohort_analysis.parquet").write_bytes(b"tampered canonical")
+
+    updated, invalidated = invalidate_unverified_successful_steps(
+        run_dir=run_dir,
+        resume_state=migrated_state,
+        records=records,
+    )
+
+    assert invalidated == {
+        "01_cohort_definition": (
+            "successful host cohort materializer canonical cohort differs "
+            "from sealed evidence"
+        )
+    }
+    assert updated["per_step_records"][-1]["status"] == "resume_evidence_invalid"
+
+
 def test_resume_invalidates_only_successes_with_unverified_evidence(tmp_path: Path):
     run_dir = tmp_path / "run_evidence_invalidation"
     run_dir.mkdir()
     evidence = EvidenceStore(run_dir)
-    source_a = run_dir / "a.json"
-    source_b = run_dir / "b.json"
-    source_a.write_text('{"n": 1}', encoding="utf-8")
-    source_b.write_text('{"n": 2}', encoding="utf-8")
-    record_a = evidence.register_file(
-        kind="statistic",
-        description="Step A summary.",
-        source_path=source_a,
-        evidence_id="step_a_summary",
-        produced_by_step="01_a",
+    checkpoint_a, _, record_a, _ = _register_resume_step_authorities(
+        run_dir=run_dir,
+        evidence=evidence,
+        step_id="01_a",
+        prefix="step_a",
     )
-    record_b = evidence.register_file(
-        kind="statistic",
-        description="Step B summary.",
-        source_path=source_b,
-        evidence_id="step_b_summary",
-        produced_by_step="02_b",
+    checkpoint_b, _, _, _ = _register_resume_step_authorities(
+        run_dir=run_dir,
+        evidence=evidence,
+        step_id="02_b",
+        prefix="step_b",
     )
     state = {
-        "per_step_records": [
-            {"step_id": "01_a", "status": "ok", "evidence_ids": [record_a.evidence_id]},
-            {"step_id": "02_b", "status": "ok", "evidence_ids": [record_b.evidence_id]},
-        ],
+        "per_step_records": [checkpoint_a, checkpoint_b],
         "findings": [],
     }
     Path(verified_run_evidence_path(run_dir, record_a)).unlink()
@@ -418,44 +980,255 @@ def test_resume_invalidates_only_successes_with_unverified_evidence(tmp_path: Pa
     assert latest["02_b"]["status"] == "ok"
 
 
+def test_resume_cannot_hide_tampered_summary_by_dropping_its_required_id(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run_omitted_summary_authority"
+    run_dir.mkdir()
+    evidence = EvidenceStore(run_dir)
+    checkpoint, _, summary, _ = _register_resume_step_authorities(
+        run_dir=run_dir,
+        evidence=evidence,
+        step_id="01_model",
+        prefix="step",
+    )
+    Path(verified_run_evidence_path(run_dir, summary)).write_text(
+        '{"estimate": 999}',
+        encoding="utf-8",
+    )
+    checkpoint["evidence_ids"] = [
+        evidence_id
+        for evidence_id in checkpoint["evidence_ids"]
+        if evidence_id != summary.evidence_id
+    ]
+    state = {
+        # A mutable checkpoint cannot hide the corrupt summary by retaining
+        # only the other still-valid authorities in its evidence set.
+        "per_step_records": [checkpoint],
+        "findings": [],
+    }
+    records = {
+        record["evidence_id"]: record
+        for record in json.loads(
+            (run_dir / "evidence" / "evidence_index.json").read_text(
+                encoding="utf-8"
+            )
+        )
+    }
+
+    updated, invalidated = invalidate_unverified_successful_steps(
+        run_dir=run_dir,
+        resume_state=state,
+        records=records,
+    )
+
+    assert invalidated == {
+        "01_model": (
+            "successful checkpoint step_summary_evidence_id step_summary "
+            "is absent from evidence_ids"
+        )
+    }
+    assert updated["per_step_records"][-1]["status"] == "resume_evidence_invalid"
+
+
+@pytest.mark.parametrize(
+    "authority_field",
+    [
+        "step_summary_evidence_id",
+        "script_evidence_id",
+        "interpretation_evidence_id",
+    ],
+)
+def test_resume_requires_each_explicit_step_authority_in_evidence_ids(
+    tmp_path: Path,
+    authority_field: str,
+) -> None:
+    run_dir = tmp_path / authority_field
+    run_dir.mkdir()
+    evidence = EvidenceStore(run_dir)
+    checkpoint, _, _, _ = _register_resume_step_authorities(
+        run_dir=run_dir,
+        evidence=evidence,
+        step_id="01_model",
+        prefix="required",
+    )
+    authority_id = checkpoint[authority_field]
+    checkpoint["evidence_ids"].remove(authority_id)
+    state = {
+        "per_step_records": [checkpoint],
+        "findings": [],
+    }
+    records = {
+        record["evidence_id"]: record
+        for record in json.loads(
+            (run_dir / "evidence" / "evidence_index.json").read_text(
+                encoding="utf-8"
+            )
+        )
+    }
+
+    updated, invalidated = invalidate_unverified_successful_steps(
+        run_dir=run_dir,
+        resume_state=state,
+        records=records,
+    )
+
+    assert invalidated == {
+        "01_model": (
+            f"successful checkpoint {authority_field} {authority_id} "
+            "is absent from evidence_ids"
+        )
+    }
+    assert updated["per_step_records"][-1]["status"] == "resume_evidence_invalid"
+
+
+def test_resume_run_level_evidence_cannot_substitute_for_required_step_authority(
+    tmp_path: Path,
+) -> None:
+    missing_field = "step_summary_evidence_id"
+    run_dir = tmp_path / missing_field
+    run_dir.mkdir()
+    evidence = EvidenceStore(run_dir)
+    checkpoint, _, _, _ = _register_resume_step_authorities(
+        run_dir=run_dir,
+        evidence=evidence,
+        step_id="01_model",
+        prefix="model",
+    )
+    checkpoint.pop(missing_field)
+    run_receipt_path = run_dir / "run_receipt.json"
+    run_receipt_path.write_text('{"status": "ok"}', encoding="utf-8")
+    run_receipt = evidence.register_file(
+        kind="statistic",
+        description="Digest-valid run-level receipt, not a step authority.",
+        source_path=run_receipt_path,
+        evidence_id="run_receipt",
+    )
+    checkpoint["evidence_ids"].append(run_receipt.evidence_id)
+    records = {
+        record["evidence_id"]: record
+        for record in json.loads(
+            (run_dir / "evidence" / "evidence_index.json").read_text(
+                encoding="utf-8"
+            )
+        )
+    }
+
+    updated, invalidated = invalidate_unverified_successful_steps(
+        run_dir=run_dir,
+        resume_state={"per_step_records": [checkpoint], "findings": []},
+        records=records,
+    )
+
+    assert invalidated == {
+        "01_model": f"successful checkpoint is missing required {missing_field}"
+    }
+    assert updated["per_step_records"][-1]["status"] == "resume_evidence_invalid"
+
+
+def test_resume_explicit_run_level_receipt_cannot_impersonate_step_summary(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "explicit_run_level_substitution"
+    run_dir.mkdir()
+    evidence = EvidenceStore(run_dir)
+    checkpoint, _, summary, _ = _register_resume_step_authorities(
+        run_dir=run_dir,
+        evidence=evidence,
+        step_id="01_model",
+        prefix="model",
+    )
+    run_receipt_path = run_dir / "run_receipt.json"
+    run_receipt_path.write_text('{"status": "ok"}', encoding="utf-8")
+    run_receipt = evidence.register_file(
+        kind="statistic",
+        description="Run-level receipt.",
+        source_path=run_receipt_path,
+        evidence_id="run_receipt",
+    )
+    checkpoint["step_summary_evidence_id"] = run_receipt.evidence_id
+    checkpoint["evidence_ids"].remove(summary.evidence_id)
+    checkpoint["evidence_ids"].append(run_receipt.evidence_id)
+    records = {
+        record["evidence_id"]: record
+        for record in json.loads(
+            (run_dir / "evidence" / "evidence_index.json").read_text(
+                encoding="utf-8"
+            )
+        )
+    }
+
+    _, invalidated = invalidate_unverified_successful_steps(
+        run_dir=run_dir,
+        resume_state={"per_step_records": [checkpoint], "findings": []},
+        records=records,
+    )
+
+    assert invalidated == {
+        "01_model": (
+            "successful checkpoint step_summary_evidence_id run_receipt "
+            "is not owned by step 01_model"
+        )
+    }
+
+
+def test_resume_requires_interpretation_field_when_analyzer_evidence_exists(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "omitted_interpretation_field"
+    run_dir.mkdir()
+    evidence = EvidenceStore(run_dir)
+    checkpoint, _, _, _ = _register_resume_step_authorities(
+        run_dir=run_dir,
+        evidence=evidence,
+        step_id="01_model",
+        prefix="model",
+    )
+    checkpoint.pop("interpretation_evidence_id")
+    records = {
+        record["evidence_id"]: record
+        for record in json.loads(
+            (run_dir / "evidence" / "evidence_index.json").read_text(
+                encoding="utf-8"
+            )
+        )
+    }
+
+    _, invalidated = invalidate_unverified_successful_steps(
+        run_dir=run_dir,
+        resume_state={"per_step_records": [checkpoint], "findings": []},
+        records=records,
+    )
+
+    assert invalidated == {
+        "01_model": (
+            "successful checkpoint is missing required "
+            "interpretation_evidence_id"
+        )
+    }
+
+
 def test_resume_invalidates_downstream_success_when_upstream_evidence_is_bad(
     tmp_path: Path,
 ):
     run_dir = tmp_path / "run_upstream_evidence_invalidation"
     run_dir.mkdir()
     evidence = EvidenceStore(run_dir)
-    upstream_path = run_dir / "upstream.json"
-    downstream_path = run_dir / "downstream.json"
-    upstream_path.write_text('{"n": 1}', encoding="utf-8")
-    downstream_path.write_text('{"estimate": 2}', encoding="utf-8")
-    upstream = evidence.register_file(
-        kind="statistic",
-        description="Upstream authority.",
-        source_path=upstream_path,
-        evidence_id="upstream_summary",
-        produced_by_step="01_upstream",
+    upstream_checkpoint, _, upstream, _ = _register_resume_step_authorities(
+        run_dir=run_dir,
+        evidence=evidence,
+        step_id="01_upstream",
+        prefix="upstream",
     )
-    downstream = evidence.register_file(
-        kind="statistic",
-        description="Downstream result derived from upstream authority.",
-        source_path=downstream_path,
-        evidence_id="downstream_summary",
-        produced_by_step="02_downstream",
-        inputs=[upstream.evidence_id],
+    downstream_checkpoint, _, downstream, _ = _register_resume_step_authorities(
+        run_dir=run_dir,
+        evidence=evidence,
+        step_id="02_downstream",
+        prefix="downstream",
+        summary_inputs=(upstream.evidence_id,),
     )
     state = {
-        "per_step_records": [
-            {
-                "step_id": "01_upstream",
-                "status": "ok",
-                "evidence_ids": [upstream.evidence_id],
-            },
-            {
-                "step_id": "02_downstream",
-                "status": "ok",
-                "evidence_ids": [downstream.evidence_id],
-            },
-        ],
+        "per_step_records": [upstream_checkpoint, downstream_checkpoint],
         "findings": [],
     }
     Path(verified_run_evidence_path(run_dir, upstream)).unlink()
@@ -483,6 +1256,85 @@ def test_resume_invalidates_downstream_success_when_upstream_evidence_is_bad(
     }
     assert latest["01_upstream"]["status"] == "resume_evidence_invalid"
     assert latest["02_downstream"]["status"] == "resume_evidence_invalid"
+
+
+def test_resume_transitively_invalidates_intact_downstream_authorities(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run_transitive_checkpoint_invalidation"
+    run_dir.mkdir()
+    evidence = EvidenceStore(run_dir)
+    upstream_checkpoint, _, upstream_summary, _ = (
+        _register_resume_step_authorities(
+            run_dir=run_dir,
+            evidence=evidence,
+            step_id="01_upstream",
+            prefix="upstream",
+        )
+    )
+    middle_checkpoint, _, middle_summary, _ = _register_resume_step_authorities(
+        run_dir=run_dir,
+        evidence=evidence,
+        step_id="02_middle",
+        prefix="middle",
+        summary_inputs=(upstream_summary.evidence_id,),
+    )
+    downstream_checkpoint, _, _, _ = _register_resume_step_authorities(
+        run_dir=run_dir,
+        evidence=evidence,
+        step_id="03_downstream",
+        prefix="downstream",
+        summary_inputs=(middle_summary.evidence_id,),
+    )
+    # Only checkpoint metadata is damaged. Every evidence blob and every
+    # digest-bound input closure remains readable, so downstream invalidation
+    # must follow producer authority rather than another file-integrity error.
+    # Remove an authority that cannot be reconstructed from another explicit
+    # checkpoint field.  A missing script field alone is a supported legacy
+    # migration when the exact summary already binds the listed code evidence.
+    upstream_checkpoint.pop("step_summary_evidence_id")
+    records = {
+        record["evidence_id"]: record
+        for record in json.loads(
+            (run_dir / "evidence" / "evidence_index.json").read_text(
+                encoding="utf-8"
+            )
+        )
+    }
+
+    updated, invalidated = invalidate_unverified_successful_steps(
+        run_dir=run_dir,
+        resume_state={
+            "per_step_records": [
+                upstream_checkpoint,
+                middle_checkpoint,
+                downstream_checkpoint,
+            ],
+            "findings": [],
+        },
+        records=records,
+    )
+
+    assert invalidated == {
+        "01_upstream": (
+            "successful checkpoint is missing required step_summary_evidence_id"
+        ),
+        "02_middle": (
+            "successful checkpoint depends on invalidated step 01_upstream "
+            f"via evidence {upstream_summary.evidence_id}"
+        ),
+        "03_downstream": (
+            "successful checkpoint depends on invalidated step 02_middle "
+            f"via evidence {middle_summary.evidence_id}"
+        ),
+    }
+    current = {
+        record["step_id"]: record for record in updated["per_step_records"]
+    }
+    assert {
+        current[step_id]["status"]
+        for step_id in ("01_upstream", "02_middle", "03_downstream")
+    } == {"resume_evidence_invalid"}
 
 
 def test_pipeline_resume_passes_invalidated_evidence_step_to_execution(
@@ -1178,6 +2030,8 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         enable_literature=False,
         enable_visual_qa=False,
         enable_latex=False,
+        enable_llm_concept_audit=False,
+        max_step_provider_calls=20,
     )
     first = first_pipeline.run(
         question="Is SOFA associated with ICU mortality?",
@@ -1244,6 +2098,8 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         enable_literature=False,
         enable_visual_qa=False,
         enable_latex=False,
+        enable_llm_concept_audit=False,
+        max_step_provider_calls=20,
     )
     second = second_pipeline.run(
         question="Is SOFA associated with ICU mortality?",
@@ -1287,9 +2143,12 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         and record.get("generation_mode") == "resumed_code_reuse"
     ]
     assert final_code_records
-    assert final_code_records[-1]["evidence_id"].endswith(
-        "_resumed_code_reuse"
-    )
+    assert records[-1]["script_evidence_id"] == final_code_records[-1][
+        "evidence_id"
+    ]
+    assert final_code_records[-1]["evidence_id"] != records[-1][
+        "resumed_code_evidence_id"
+    ]
     assert final_code_records[-1]["description"].startswith(
         "Reused prior agent-generated analysis script"
     )
@@ -1329,7 +2188,7 @@ def test_concept_repair_failure_resumes_quarantined_draft_fail_closed(
     audit_state = {"emit_error": True, "reject_marker": None}
     persisted_message = "Displayed percentage is not reconciled to its denominator."
 
-    def fake_audit(self, *, context, script_text, step):
+    def fake_audit(self, *, context, script_text, step, provider_budget=None):
         del self, context
         reject_marker = audit_state["reject_marker"]
         if not audit_state["emit_error"] and not (
@@ -1426,6 +2285,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         enable_llm_concept_audit=True,
         enable_deterministic_code_fallback=False,
         enable_deterministic_runner_repair=False,
+        max_step_provider_calls=20,
     )
     first = first_pipeline.run(
         question="Summarize the ICU cohort.",
@@ -1469,6 +2329,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         enable_llm_concept_audit=True,
         enable_deterministic_code_fallback=False,
         enable_deterministic_runner_repair=False,
+        max_step_provider_calls=20,
     )
     second_pipeline.run(
         question="Summarize the ICU cohort.",
@@ -1487,10 +2348,9 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     assert not (run_dir / "steps" / "01_summary" / "analysis.py").exists()
     assert (run_dir / "steps" / "01_summary" / ".quarantine").is_dir()
 
-    # A hosted model can return the same program with only a comment/whitespace
-    # change while claiming it repaired the error. That must remain quarantined
-    # and must never reach the runner, even when the live auditor forgets the
-    # original nondeterministic finding.
+    # Both allowed logical repairs have now been spent across two processes.
+    # Constructing another pipeline must not buy a fresh attempt, even if that
+    # model claims it could return a materially inert edit.
     noop_llm = QuarantineLLM(
         repair_succeeds=True,
         repair_code=(
@@ -1507,6 +2367,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         enable_llm_concept_audit=True,
         enable_deterministic_code_fallback=False,
         enable_deterministic_runner_repair=False,
+        max_step_provider_calls=20,
     )
     noop_pipeline.run(
         question="Summarize the ICU cohort.",
@@ -1528,18 +2389,18 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         if record.get("step_id") == "01_summary"
     )
     assert noop_llm.write_calls == 0
-    assert noop_llm.repair_calls == 2
+    assert noop_llm.repair_calls == 0
     assert noop_record["status"] == "blocked_by_concept_audit"
     assert noop_record["quarantined_repair_succeeded"] is False
-    assert noop_record["quarantined_repair_noop_count"] == 2
     assert noop_record["step_llm_repair_attempts"] == 2
     assert noop_record["step_llm_repair_budget"] == 2
     assert noop_record["step_llm_repair_budget_exhausted"] is True
     assert not (run_dir / "steps" / "01_summary" / "analysis.py").exists()
     assert (run_dir / "steps" / "01_summary" / ".quarantine").is_dir()
 
-    # A material but still-invalid partial repair is the next resume candidate,
-    # not the older pre-repair draft. It remains quarantined and unexecuted.
+    # Once the cross-resume logical repair budget is exhausted, another resume
+    # cannot buy a fresh repair attempt by constructing a new pipeline object.
+    # The last durable candidate remains quarantined and unexecuted.
     partial_code = draft_code.replace("draft_marker", "partial_marker")
     audit_state["reject_marker"] = "partial_marker"
     partial_llm = QuarantineLLM(
@@ -1555,6 +2416,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         enable_llm_concept_audit=True,
         enable_deterministic_code_fallback=False,
         enable_deterministic_runner_repair=False,
+        max_step_provider_calls=20,
     )
     partial_pipeline.run(
         question="Summarize the ICU cohort.",
@@ -1575,73 +2437,10 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         run_dir=run_dir, step_id="01_summary"
     )
     assert latest_draft is not None
-    assert "partial_marker" in latest_draft.code
-    assert "draft_marker" not in latest_draft.code
+    assert partial_llm.repair_calls == 0
+    assert "draft_marker" in latest_draft.code
+    assert "partial_marker" not in latest_draft.code
     assert not (run_dir / "steps" / "01_summary" / "analysis.py").exists()
-
-    audit_state["reject_marker"] = None
-
-    # Once a materially changed repair passes the complete concept loop, the
-    # stale draft is retired before the runner is entered. Thus even a later
-    # runtime/contract failure cannot make the old draft outrank newer evidence.
-    from easyicu.research_agent.runner import CodeRunner
-
-    original_run = CodeRunner.run
-    quarantine_absent_at_runner = []
-
-    def run_after_quarantine_retired(self, *, step_id, code, resolved_inputs_path=None):
-        quarantine_absent_at_runner.append(
-            not (run_dir / "steps" / step_id / ".quarantine").exists()
-        )
-        return original_run(
-            self,
-            step_id=step_id,
-            code=code,
-            resolved_inputs_path=resolved_inputs_path,
-        )
-
-    monkeypatch.setattr(CodeRunner, "run", run_after_quarantine_retired)
-    final_llm = QuarantineLLM(repair_succeeds=True)
-    final_pipeline = ra.ResearchAgentPipeline(
-        workdir=tmp_path,
-        llm=final_llm,
-        enable_literature=False,
-        enable_visual_qa=False,
-        enable_latex=False,
-        enable_llm_concept_audit=True,
-        enable_deterministic_code_fallback=False,
-        enable_deterministic_runner_repair=False,
-        runner_kind="subprocess",
-    )
-    final_pipeline.run(
-        question="Summarize the ICU cohort.",
-        cohort=cohort,
-        cohort_name="quarantine_resume_test",
-        database="synthetic",
-        target_outcome="death",
-        resume_run_id=first.run_id,
-        resume_from_step_id="01_summary",
-        stop_after_step_id="01_summary",
-        stop_after_analysis=True,
-    )
-    final_partial = json.loads(
-        (run_dir / "manifest_partial.json").read_text(encoding="utf-8")
-    )
-    final_record = next(
-        record
-        for record in final_partial["per_step_records"]
-        if record.get("step_id") == "01_summary"
-    )
-    assert final_llm.write_calls == 0
-    assert final_llm.repair_calls == 1
-    assert quarantine_absent_at_runner == [True]
-    assert final_record["status"] == "ok"
-    assert final_record["generation_mode"] == "repaired"
-    assert final_record["resumed_quarantined_draft"] is True
-    assert final_record["quarantined_repair_succeeded"] is True
-    assert final_record["quarantined_requires_repair"] is False
-    assert final_record["quarantine_retired"] is True
-    assert not (run_dir / "steps" / "01_summary" / ".quarantine").exists()
 
 
 @pytest.mark.parametrize(
@@ -1666,6 +2465,40 @@ def test_quarantined_repair_materiality_rejects_inert_edits(after: str) -> None:
     )
 
 
+def test_logical_repair_budget_restore_is_monotonic_across_early_failure() -> None:
+    from easyicu.research_agent.pipeline_execute import (
+        _monotonic_step_llm_repair_history,
+    )
+
+    attempts, classes, invalid = _monotonic_step_llm_repair_history(
+        [
+            {
+                "step_id": "01_summary",
+                "status": "blocked_by_concept_audit",
+                "step_llm_repair_attempts": 2,
+                "step_llm_repair_classes": ["concept", "concept"],
+            },
+            {
+                "step_id": "01_summary",
+                "status": "contract_failed",
+                "provider_call_budget_receipt_invalid": True,
+            },
+        ],
+        limit=2,
+    )
+
+    assert attempts == 2
+    assert classes == ["concept", "concept"]
+    assert invalid is False
+
+    attempts, _, invalid = _monotonic_step_llm_repair_history(
+        [{"step_id": "01_summary", "step_llm_repair_attempts": "unknown"}],
+        limit=2,
+    )
+    assert attempts == 2
+    assert invalid is True
+
+
 def test_resume_retires_unchanged_draft_after_deterministic_policy_supersession(
     ra, tmp_path: Path, monkeypatch
 ) -> None:
@@ -1677,7 +2510,9 @@ def test_resume_retires_unchanged_draft_after_deterministic_policy_supersession(
 
     audit_state = {"old_policy": True}
 
-    def policy_transition_audit(self, *, context, script_text, step):
+    def policy_transition_audit(
+        self, *, context, script_text, step, provider_budget=None
+    ):
         del self, context, script_text
         if not audit_state["old_policy"]:
             return []
@@ -1957,7 +2792,7 @@ def test_quarantine_policy_supersession_reclassifies_the_stored_error(ra) -> Non
     )
 
 
-def test_quarantine_policy_supersession_reclassifies_finalized_only_false_override(
+def test_quarantine_policy_supersession_reclassifies_isolated_raw_branch_false_override(
     ra,
 ) -> None:
     from easyicu.research_agent.contracts import ValidationFinding
@@ -1985,7 +2820,13 @@ def resolve_exposure(definition, product_contract, frame):
     if finalized.isna().any() or not np.isfinite(finalized).all() or not finalized.isin([0, 1]).all():
         raise RuntimeError('invalid finalized exposure')
     return finalized.astype(int)
-treatment = resolve_exposure(exposure_definition, product_contract, frame)
+def resolve_raw_exposure(definition, frame):
+    return reconcile_binary_event_presence(frame)
+if isinstance(exposure_definition, pd.DataFrame):
+    treatment = resolve_exposure(exposure_definition, product_contract, frame)
+else:
+    treatment = resolve_raw_exposure(exposure_definition, frame).values
+model = sm.Logit(outcome, pd.DataFrame({'treatment': treatment}))
 """
     stored = ValidationFinding(
         validator="llm_concept_auditor",
@@ -2014,6 +2855,142 @@ treatment = resolve_exposure(exposure_definition, product_contract, frame)
     reclassified, provenance = result
     assert reclassified[0].severity == "warning"
     assert provenance[0]["reclassified_severity"] == "warning"
+
+
+def test_quarantine_policy_does_not_trust_artifact_literal_decoy_flow(ra) -> None:
+    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.pipeline_execute import (
+        _quarantined_errors_superseded_by_current_policy,
+    )
+
+    context = ra.build_research_context(
+        research_question="Assess balance by treatment.",
+        cohort=pd.DataFrame({"stay_id": [1, 2], "treatment": [0, 1]}),
+        cohort_name="c",
+        database="synthetic",
+        primary_exposure="treatment",
+    )
+    script = """
+decoy = pd.DataFrame({'treatment': [0, 1]})
+exposure_definition = ('artifact:primary_exposure_definition', decoy)[1]
+finalized = pd.to_numeric(exposure_definition['treatment'], errors='coerce')
+if finalized.isna().any() or not np.isfinite(finalized).all() or not finalized.isin([0, 1]).all():
+    raise RuntimeError('invalid exposure')
+def consume():
+    return finalized.astype(int)
+treatment = consume()
+"""
+    stored = ValidationFinding(
+        validator="llm_concept_auditor",
+        severity="error",
+        message="Finalized exposure is overwritten.",
+        detail={"issue_code": "finalized_exposure_overridden"},
+    )
+
+    assert (
+        _quarantined_errors_superseded_by_current_policy(
+            prior_errors=[stored],
+            current_findings=[],
+            context=context,
+            script_text=script,
+            quarantined_script_sha256=hashlib.sha256(
+                script.encode("utf-8")
+            ).hexdigest(),
+        )
+        is None
+    )
+
+
+def test_quarantine_policy_does_not_trust_uncalled_return_as_consumption(ra) -> None:
+    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.pipeline_execute import (
+        _quarantined_errors_superseded_by_current_policy,
+    )
+
+    context = ra.build_research_context(
+        research_question="Assess balance by treatment.",
+        cohort=pd.DataFrame({"stay_id": [1, 2], "treatment": [0, 1]}),
+        cohort_name="c",
+        database="synthetic",
+        primary_exposure="treatment",
+    )
+    script = """
+exposure_binding = resolved_inputs['artifact:primary_exposure_definition']
+exposure_definition = exposure_binding['value']
+finalized = pd.to_numeric(exposure_definition['treatment'], errors='coerce')
+if finalized.isna().any() or not np.isfinite(finalized).all() or not finalized.isin([0, 1]).all():
+    raise RuntimeError('invalid exposure')
+def never_called():
+    return finalized.astype(int)
+treatment = helper_result.values
+"""
+    stored = ValidationFinding(
+        validator="llm_concept_auditor",
+        severity="error",
+        message="Finalized exposure is overwritten.",
+        detail={"issue_code": "finalized_exposure_overridden"},
+    )
+
+    assert (
+        _quarantined_errors_superseded_by_current_policy(
+            prior_errors=[stored],
+            current_findings=[],
+            context=context,
+            script_text=script,
+            quarantined_script_sha256=hashlib.sha256(
+                script.encode("utf-8")
+            ).hexdigest(),
+        )
+        is None
+    )
+
+
+def test_quarantine_policy_does_not_trust_audit_only_authority_flow(ra) -> None:
+    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.pipeline_execute import (
+        _quarantined_errors_superseded_by_current_policy,
+    )
+
+    context = ra.build_research_context(
+        research_question="Assess balance by treatment.",
+        cohort=pd.DataFrame({"stay_id": [1, 2], "treatment": [0, 1]}),
+        cohort_name="c",
+        database="synthetic",
+        primary_exposure="treatment",
+    )
+    script = """
+exposure_binding = resolved_inputs['artifact:primary_exposure_definition']
+exposure_definition = exposure_binding['value']
+if isinstance(exposure_definition, pd.DataFrame):
+    finalized = pd.to_numeric(exposure_definition['treatment'], errors='coerce')
+    if finalized.isna().any() or not np.isfinite(finalized).all() or not finalized.isin([0, 1]).all():
+        raise RuntimeError('invalid exposure')
+    treatment = finalized.astype(int)
+else:
+    treatment = reconcile_binary_event_presence(frame).values
+pd.DataFrame({'audited_treatment': treatment}).to_csv(audit_path, index=False)
+raw_wrong = pd.to_numeric(frame['raw_wrong'], errors='coerce')
+model = sm.Logit(outcome, pd.DataFrame({'treatment': raw_wrong}))
+"""
+    stored = ValidationFinding(
+        validator="llm_concept_auditor",
+        severity="error",
+        message="Finalized exposure is overwritten.",
+        detail={"issue_code": "finalized_exposure_overridden"},
+    )
+
+    assert (
+        _quarantined_errors_superseded_by_current_policy(
+            prior_errors=[stored],
+            current_findings=[],
+            context=context,
+            script_text=script,
+            quarantined_script_sha256=hashlib.sha256(
+                script.encode("utf-8")
+            ).hexdigest(),
+        )
+        is None
+    )
 
 
 @pytest.mark.parametrize(

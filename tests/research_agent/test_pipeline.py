@@ -3876,7 +3876,7 @@ def test_step_contract_findings_does_not_treat_association_calibration_as_predic
     assert findings == []
 
 
-def test_render_writer_evidence_digest_prefers_machine_scalars(ra):
+def test_render_writer_evidence_digest_hides_failed_step_scalars(ra):
     from easyicu.research_agent.pipeline import _render_writer_evidence_digest
 
     digest = _render_writer_evidence_digest(
@@ -3898,9 +3898,10 @@ def test_render_writer_evidence_digest_prefers_machine_scalars(ra):
         ]
     )
     assert "- 03_primary_association_model [contract_failed]" in digest
-    assert '"sample_size": 785' in digest
-    assert '"primary_predictor": "lactate_max_24h"' in digest
-    assert '"skipped": "No valid lactate_max_24h data"' in digest
+    assert "  {}" in digest
+    assert '"sample_size": 785' not in digest
+    assert '"primary_predictor": "lactate_max_24h"' not in digest
+    assert '"skipped": "No valid lactate_max_24h data"' not in digest
     assert "missingness" not in digest
 
 

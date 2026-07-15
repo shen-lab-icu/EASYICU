@@ -651,12 +651,244 @@ def test_figure_repair_precedes_output_evidence_and_numeric_claim_seal():
     numeric_registration = source.index(
         "evidence.register_step_summary_numerics(", artifact_registration
     )
+    status_resolution = source.index(
+        'step_record["status"] = _step_status_from_contract_findings('
+    )
+    numeric_authority_publish = source.rindex(
+        "_register_current_step_numeric_claims()"
+    )
+    result_authority_publish = source.rindex(
+        "evidence.publish_step_success_aliases("
+    )
     final_repair = source.rindex("_repair_publication_figure_in_staging(")
 
     assert final_repair < seal < artifact_registration < numeric_registration
+    assert (
+        numeric_registration
+        < status_resolution
+        < result_authority_publish
+        < numeric_authority_publish
+    )
+    assert "publish_aliases=False" in source[
+        artifact_registration:status_resolution
+    ]
     assert "_repair_publication_figure_in_staging(" not in source[
         artifact_registration:
     ]
+
+
+def test_execute_phase_deterministically_requires_typed_exposure_consumption():
+    from easyicu.research_agent import pipeline_execute
+
+    shared_source = inspect.getsource(
+        pipeline_execute._deterministic_code_gate_findings
+    )
+    execute_source = inspect.getsource(pipeline_execute.run_execute_phase)
+    replay_source = inspect.getsource(
+        pipeline_execute._selectively_revalidate_resume_successes
+    )
+
+    assert "requires_primary_exposure_artifact" in shared_source
+    assert "_verified_authoritative_exposure_flow(" in shared_source
+    assert 'validator="typed_input_authority_flow"' in shared_source
+    assert '"typed_primary_exposure_not_consumed"' in shared_source
+    assert "_deterministic_code_gate_findings(" in execute_source
+    assert "_deterministic_code_gate_findings(" in replay_source
+
+
+def test_fresh_execution_uses_the_authoritative_final_gate_evaluator_once():
+    import ast
+
+    from easyicu.research_agent import pipeline_execute
+
+    source = inspect.getsource(pipeline_execute.run_execute_phase)
+    tree = ast.parse(source)
+    evaluator_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_evaluate_final_deterministic_gates"
+    ]
+
+    assert len(evaluator_calls) == 1
+    assert "stat_validator.audit(" not in source
+    assert "clinical_validator.audit(" not in source
+    assert "statistical_guard.audit(" not in source
+    for group in (
+        "stat_findings",
+        "clinical_findings",
+        "guard_findings",
+        "contract_findings",
+        "figure_source_findings",
+    ):
+        assert f"final_gate_findings.{group}" in source
+
+
+def test_final_gate_evaluator_preserves_group_order_and_attempt_binding(
+    monkeypatch,
+    tmp_path,
+):
+    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.schema import AnalysisStep
+
+    calls = []
+
+    def finding(name):
+        return ValidationFinding(
+            validator=name,
+            severity="warning",
+            message=name,
+            detail={"origin": name},
+        )
+
+    class StubValidator:
+        def __init__(self, name):
+            self.name = name
+
+        def audit(self, **_kwargs):
+            calls.append(self.name)
+            return [finding(self.name)]
+
+    def stub_function(name):
+        def _stub(**_kwargs):
+            calls.append(name)
+            return [finding(name)]
+
+        return _stub
+
+    monkeypatch.setattr(
+        pipeline_execute,
+        "_step_contract_findings",
+        stub_function("step_contract"),
+    )
+    monkeypatch.setattr(
+        pipeline_execute,
+        "_cohort_definition_sensitivity_contract_findings",
+        stub_function("cohort_sensitivity"),
+    )
+    monkeypatch.setattr(
+        pipeline_execute,
+        "_primary_exposure_contract_findings",
+        stub_function("primary_exposure"),
+    )
+    monkeypatch.setattr(
+        pipeline_execute,
+        "_primary_exposure_measurement_filter_findings",
+        stub_function("exposure_measurement"),
+    )
+    monkeypatch.setattr(
+        pipeline_execute,
+        "_primary_exposure_overadjustment_findings",
+        stub_function("overadjustment"),
+    )
+    monkeypatch.setattr(
+        pipeline_execute,
+        "_primary_model_leakage_findings",
+        stub_function("model_leakage"),
+    )
+
+    def preserve_demotions(name):
+        def _demote(*args):
+            calls.append(name)
+            return list(args[-1])
+
+        return _demote
+
+    monkeypatch.setattr(
+        pipeline_execute,
+        "_demote_step_contract_for_primary_runner",
+        preserve_demotions("primary_runner_demotion"),
+    )
+    monkeypatch.setattr(
+        pipeline_execute,
+        "_demote_result_figure_shape_for_family_renderer",
+        preserve_demotions("figure_shape_demotion"),
+    )
+
+    validator_names = {
+        "stat_validator": "statistical",
+        "clinical_validator": "clinical",
+        "statistical_guard": "statistical_guard",
+        "cross_step_cohort_lock_validator": "cross_step_cohort_lock",
+        "cross_step_registered_output_validator": "cross_step_registered_output",
+        "cross_step_reconciliation_trace_validator": "cross_step_reconciliation",
+        "step_summary_integrity_validator": "step_summary_integrity",
+        "step_summary_fraction_validator": "step_summary_fraction",
+        "cross_step_source_status_validator": "cross_step_source_status",
+        "primary_model_contract_validator": "primary_model_contract",
+        "figure_contract_validator": "figure_contract",
+        "figure_source_validator": "figure_source",
+    }
+    groups = pipeline_execute._evaluate_final_deterministic_gates(
+        context=object(),
+        cohort_path=tmp_path / "cohort.parquet",
+        universe_path=tmp_path / "universe.parquet",
+        run_dir=tmp_path,
+        out_dir=tmp_path / "outputs",
+        step=AnalysisStep(step_id="07_review", intent="Review sealed outputs."),
+        step_summary={},
+        step_record={},
+        completed_step_records=({"step_id": "06_parent", "status": "ok"},),
+        resolved_input_bindings={},
+        attempt_id="attempt-2",
+        checkpoint_id="checkpoint-9",
+        **{argument: StubValidator(name) for argument, name in validator_names.items()},
+    )
+
+    assert calls == [
+        "statistical",
+        "clinical",
+        "statistical_guard",
+        "step_contract",
+        "cohort_sensitivity",
+        "cross_step_cohort_lock",
+        "cross_step_registered_output",
+        "cross_step_reconciliation",
+        "step_summary_integrity",
+        "step_summary_fraction",
+        "cross_step_source_status",
+        "primary_model_contract",
+        "primary_exposure",
+        "exposure_measurement",
+        "overadjustment",
+        "model_leakage",
+        "figure_contract",
+        "primary_runner_demotion",
+        "figure_shape_demotion",
+        "figure_source",
+    ]
+    assert [finding.validator for finding in groups.contract_findings] == [
+        "step_contract",
+        "cohort_sensitivity",
+        "cross_step_cohort_lock",
+        "cross_step_registered_output",
+        "cross_step_reconciliation",
+        "step_summary_integrity",
+        "step_summary_fraction",
+        "cross_step_source_status",
+        "primary_model_contract",
+        "primary_exposure",
+        "exposure_measurement",
+        "overadjustment",
+        "model_leakage",
+        "figure_contract",
+    ]
+    assert [finding.validator for finding in groups.all_findings()] == [
+        "statistical",
+        "clinical",
+        "statistical_guard",
+        *[finding.validator for finding in groups.contract_findings],
+        "figure_source",
+    ]
+    for gate_finding in groups.all_findings():
+        assert gate_finding.detail == {
+            "origin": gate_finding.validator,
+            "step_id": "07_review",
+            "attempt_id": "attempt-2",
+            "checkpoint_id": "checkpoint-9",
+        }
 
 
 def test_execute_phase_host_verifies_measurement_provenance_at_every_contract_gate():
@@ -664,10 +896,22 @@ def test_execute_phase_host_verifies_measurement_provenance_at_every_contract_ga
 
     from easyicu.research_agent import pipeline_execute
 
-    tree = ast.parse(inspect.getsource(pipeline_execute.run_execute_phase))
-    calls = [
+    execute_tree = ast.parse(inspect.getsource(pipeline_execute.run_execute_phase))
+    direct_calls = [
         node
-        for node in ast.walk(tree)
+        for node in ast.walk(execute_tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "audit"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "step_summary_integrity_validator"
+    ]
+    evaluator_tree = ast.parse(
+        inspect.getsource(pipeline_execute._evaluate_final_deterministic_gates)
+    )
+    evaluator_calls = [
+        node
+        for node in ast.walk(evaluator_tree)
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "audit"
@@ -675,11 +919,11 @@ def test_execute_phase_host_verifies_measurement_provenance_at_every_contract_ga
         and node.func.value.id == "step_summary_integrity_validator"
     ]
 
-    # Early repair screening and the final read-only contract review both
-    # replay locked measurement provenance.  The former third call belonged to
-    # the retired post-registration figure-repair branch.
-    assert len(calls) == 2
-    for call in calls:
+    # Early repair screening remains in the orchestration loop; the final
+    # read-only review is owned by the reusable deterministic gate evaluator.
+    assert len(direct_calls) == 1
+    assert len(evaluator_calls) == 1
+    for call in [*direct_calls, *evaluator_calls]:
         keywords = {keyword.arg: keyword.value for keyword in call.keywords}
         assert isinstance(keywords.get("cohort_path"), ast.Name)
         assert keywords["cohort_path"].id == "cohort_path"
@@ -890,3 +1134,139 @@ def test_scope_findings_step_global_error_stays_fail_closed():
         severity, messages = scoped[eid]
         assert severity == "error"
         assert messages == ["Step analysis crashed before producing a result."]
+
+
+def test_success_alias_filter_preserves_parent_role_but_allows_same_step_retry():
+    from easyicu.research_agent.pipeline_execute import (
+        _filter_success_alias_bindings,
+    )
+
+    filtered, retained, suppressed = _filter_success_alias_bindings(
+        {
+            "figure_new": ["primary_association", "association_figure"],
+            "summary_new": ["step_summary"],
+        },
+        existing_aliases={
+            "primary_association": "parent_result",
+            "step_summary": "summary_old",
+        },
+        owners_by_evidence_id={
+            "parent_result": "04_primary_association",
+            "summary_old": "04_primary_association_figure",
+        },
+        step_id="04_primary_association_figure",
+    )
+
+    assert filtered == {
+        "figure_new": ["association_figure"],
+        "summary_new": ["step_summary"],
+    }
+    assert retained == {"primary_association": "parent_result"}
+    assert suppressed == set()
+
+
+@pytest.mark.parametrize(
+    ("product_id", "kind", "filename"),
+    [
+        ("table_result", "table", "primary_result.csv"),
+        ("figure_result", "figure", "primary_result.svg"),
+    ],
+)
+def test_success_alias_filter_assigns_product_role_to_real_product_not_summary(
+    product_id,
+    kind,
+    filename,
+):
+    from easyicu.research_agent.pipeline_execute import (
+        _filter_success_alias_bindings,
+    )
+
+    filtered, _, suppressed = _filter_success_alias_bindings(
+        {
+            "summary": ["primary_result", "01_model"],
+            product_id: ["primary_result"],
+        },
+        existing_aliases={},
+        owners_by_evidence_id={},
+        step_id="01_model",
+        records_by_evidence_id={
+            "summary": {
+                "evidence_id": "summary",
+                "kind": "statistic",
+                "relative_path": "evidence/summary__step_summary.json",
+            },
+            product_id: {
+                "evidence_id": product_id,
+                "kind": kind,
+                "relative_path": f"evidence/{product_id}__{filename}",
+            },
+        },
+    )
+
+    assert filtered[product_id] == ["primary_result"]
+    assert filtered["summary"] == ["01_model"]
+    assert suppressed == set()
+
+
+def test_success_alias_filter_keeps_distinct_real_product_collision_fail_closed():
+    from easyicu.research_agent.pipeline_execute import (
+        _filter_success_alias_bindings,
+    )
+
+    filtered, _, suppressed = _filter_success_alias_bindings(
+        {
+            "table_a": ["primary_result"],
+            "table_b": ["primary_result"],
+        },
+        existing_aliases={},
+        owners_by_evidence_id={},
+        step_id="01_model",
+        records_by_evidence_id={
+            "table_a": {
+                "evidence_id": "table_a",
+                "kind": "table",
+                "relative_path": "evidence/table_a__effect.csv",
+            },
+            "table_b": {
+                "evidence_id": "table_b",
+                "kind": "table",
+                "relative_path": "evidence/table_b__different_effect.csv",
+            },
+        },
+    )
+
+    assert filtered["table_a"] == ["primary_result"]
+    assert filtered["table_b"] == ["primary_result"]
+    assert suppressed == set()
+
+
+def test_success_alias_filter_prefers_vector_export_for_one_logical_figure():
+    from easyicu.research_agent.pipeline_execute import (
+        _filter_success_alias_bindings,
+    )
+
+    filtered, _, suppressed = _filter_success_alias_bindings(
+        {
+            "png": ["missingness_heatmap"],
+            "svg": ["missingness_heatmap"],
+        },
+        existing_aliases={},
+        owners_by_evidence_id={},
+        step_id="03_missingness_audit_figure",
+        records_by_evidence_id={
+            "png": {
+                "evidence_id": "png",
+                "kind": "figure",
+                "relative_path": "evidence/png__missingness_heatmap.png",
+            },
+            "svg": {
+                "evidence_id": "svg",
+                "kind": "figure",
+                "relative_path": "evidence/svg__missingness_heatmap.svg",
+            },
+        },
+    )
+
+    assert filtered["png"] == []
+    assert filtered["svg"] == ["missingness_heatmap"]
+    assert suppressed == {"png"}
