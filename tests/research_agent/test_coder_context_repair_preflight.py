@@ -354,6 +354,51 @@ def render(frame):
 @pytest.mark.parametrize(
     "guard",
     [
+        "if valid_rows.sum() != len(unrelated):\n        raise ValueError('invalid')",
+        "assert valid_rows.sum() == len(unrelated), 'invalid'",
+    ],
+)
+def test_mechanical_preflight_rejects_accounting_guard_against_unrelated_frame(
+    ra, guard
+):
+    code = f"""
+def render(frame, unrelated):
+    valid_rows = frame['n'].notna()
+    {guard}
+    plotted = frame.loc[valid_rows].copy()
+    return plotted
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "structural_accounting_filter"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_allows_accounting_guard_against_frame_alias(ra):
+    code = """
+def render(frame):
+    accounting = frame
+    valid_rows = accounting['n'].notna()
+    if valid_rows.sum() != len(frame):
+        raise ValueError('invalid')
+    plotted = accounting.loc[valid_rows].copy()
+    return plotted
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "structural_accounting_filter"
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize(
+    "guard",
+    [
         "if (~valid_rows).any():\n        raise ValueError('invalid')",
         "if valid_rows.sum() != len(frame):\n        return None",
         "if valid_rows.all() == False:\n        raise ValueError('invalid')",  # noqa: E712
