@@ -181,3 +181,47 @@ def test_run_level_robustness_finding_is_never_inferred_as_step_owned() -> None:
 
     assert active == [finding]
     assert superseded == []
+
+
+def test_current_attempt_error_cannot_be_hidden_by_inconsistent_ok_record() -> None:
+    finding = ValidationFinding(
+        validator="statistical_sanity",
+        severity="error",
+        message="Current deterministic review failed.",
+        detail={"step_id": "01_model", "attempt_id": "run:01_model:2"},
+    )
+
+    active, superseded = _partition_findings_by_supersession(
+        [finding],
+        success_step_ids={"01_model"},
+        latest_attempt_ids={"01_model": "run:01_model:2"},
+        known_attempt_ids={
+            "01_model": {"run:01_model:1", "run:01_model:2"}
+        },
+        known_step_ids={"01_model"},
+    )
+
+    assert active == [finding]
+    assert superseded == []
+
+
+def test_only_known_older_attempt_error_is_superseded() -> None:
+    finding = ValidationFinding(
+        validator="statistical_sanity",
+        severity="error",
+        message="Older deterministic review failed.",
+        detail={"step_id": "01_model", "attempt_id": "run:01_model:1"},
+    )
+
+    active, superseded = _partition_findings_by_supersession(
+        [finding],
+        success_step_ids={"01_model"},
+        latest_attempt_ids={"01_model": "run:01_model:2"},
+        known_attempt_ids={
+            "01_model": {"run:01_model:1", "run:01_model:2"}
+        },
+        known_step_ids={"01_model"},
+    )
+
+    assert active == []
+    assert superseded == [finding]

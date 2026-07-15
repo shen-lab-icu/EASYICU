@@ -1493,11 +1493,7 @@ def _step_status_from_contract_findings(
         for finding in (
             list(contract_findings)
             + list(figure_source_findings)
-            + [
-                finding
-                for finding in stat_findings
-                if finding.validator == "ordered_stratified_contract"
-            ]
+            + list(stat_findings)
         )
     )
     if has_contract_error:
@@ -1508,6 +1504,35 @@ def _step_status_from_contract_findings(
     }:
         return "critic_failed"
     return "ok"
+
+
+def _bind_findings_to_step_attempt(
+    findings: Sequence[ValidationFinding],
+    *,
+    step_id: str,
+    attempt_id: str,
+    checkpoint_id: str,
+) -> List[ValidationFinding]:
+    """Attach host-owned execution identity to deterministic findings.
+
+    Validator payloads are intentionally reusable and therefore do not know
+    which resume attempt invoked them.  Supersession must never infer that
+    identity from a message string: the orchestrator binds it at the review
+    checkpoint before persisting either the finding or the outer step record.
+    """
+
+    bound: List[ValidationFinding] = []
+    for finding in findings:
+        detail = dict(finding.detail or {})
+        detail.update(
+            {
+                "step_id": step_id,
+                "attempt_id": attempt_id,
+                "checkpoint_id": checkpoint_id,
+            }
+        )
+        bound.append(finding.model_copy(update={"detail": detail}))
+    return bound
 
 
 _LOCKED_MEASUREMENT_DATA_QUALITY_ISSUES = frozenset(
@@ -4795,6 +4820,12 @@ def run_execute_phase(
     def _execute_one_step(step: AnalysisStep) -> Dict[str, Any]:
         nonlocal runtime_state
         with shared_lock:
+            prior_attempt_records = [
+                record
+                for record in per_step_records
+                if isinstance(record, Mapping)
+                and str(record.get("step_id") or "") == step.step_id
+            ]
             prior_step_record = next(
                 (
                     record
@@ -4803,9 +4834,23 @@ def run_execute_phase(
                 ),
                 None,
             )
+        prior_attempt_sequences = [
+            int(record.get("attempt_sequence"))
+            for record in prior_attempt_records
+            if isinstance(record.get("attempt_sequence"), int)
+            and int(record.get("attempt_sequence")) >= 1
+        ]
+        attempt_sequence = (
+            max(prior_attempt_sequences, default=len(prior_attempt_records)) + 1
+        )
+        attempt_id = f"{run_id}:{step.step_id}:{attempt_sequence}"
+        review_checkpoint_id = f"{attempt_id}:deterministic_review"
         step_record: Dict[str, Any] = {
             "step_id": step.step_id,
             "intent": step.intent,
+            "attempt_id": attempt_id,
+            "attempt_sequence": attempt_sequence,
+            "review_checkpoint_id": review_checkpoint_id,
             "plan_scientific_signature": (
                 _serializable_plan_scientific_scope_signature(plan)
             ),
@@ -9492,6 +9537,36 @@ else:
                     completed_step_records=completed_records_snapshot,
                     resolved_input_bindings=resolved_input_bindings,
                 )
+        stat_findings = _bind_findings_to_step_attempt(
+            stat_findings,
+            step_id=step.step_id,
+            attempt_id=attempt_id,
+            checkpoint_id=review_checkpoint_id,
+        )
+        clinical_findings = _bind_findings_to_step_attempt(
+            clinical_findings,
+            step_id=step.step_id,
+            attempt_id=attempt_id,
+            checkpoint_id=review_checkpoint_id,
+        )
+        guard_findings = _bind_findings_to_step_attempt(
+            guard_findings,
+            step_id=step.step_id,
+            attempt_id=attempt_id,
+            checkpoint_id=review_checkpoint_id,
+        )
+        contract_findings = _bind_findings_to_step_attempt(
+            contract_findings,
+            step_id=step.step_id,
+            attempt_id=attempt_id,
+            checkpoint_id=review_checkpoint_id,
+        )
+        figure_source_findings = _bind_findings_to_step_attempt(
+            figure_source_findings,
+            step_id=step.step_id,
+            attempt_id=attempt_id,
+            checkpoint_id=review_checkpoint_id,
+        )
         with shared_lock:
             findings.extend(stat_findings)
             findings.extend(clinical_findings)
