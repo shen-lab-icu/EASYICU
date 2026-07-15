@@ -599,9 +599,9 @@ def test_execute_phase_preserves_repair_provenance_across_concept_and_runtime():
 
     source = inspect.getsource(pipeline_execute.run_execute_phase)
 
-    # Concept, visual, contract, and runtime repairs each mark the same lineage
-    # flag immediately after a successful coder.repair call.
-    assert source.count("llm_repair_used = True") == 4
+    # Initial concept, post-mutation concept, visual, contract, and runtime
+    # repairs each mark the same lineage flag after a successful coder call.
+    assert source.count("llm_repair_used = True") == 5
     assert "concept_repair_used=concept_repair_used" in source
     assert "llm_repair_used=llm_repair_used" in source
     # A repaired resumed script must receive a fresh analyzer interpretation;
