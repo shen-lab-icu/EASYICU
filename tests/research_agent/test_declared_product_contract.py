@@ -113,6 +113,48 @@ def test_declared_diagnostic_rejects_not_computable_placeholder():
     )
     assert finding.detail["diagnostic_status"] == "not_computable"
     assert finding.detail["skipped_reason"] == "required model binding is ambiguous"
+
+
+def test_primary_exposure_binding_contract_canonicalizes_one_declared_column(
+    tmp_path,
+):
+    artifact = tmp_path / "primary_exposure.parquet"
+    contract = typed_product_binding_contract(
+        product_name="primary_exposure_definition",
+        step_summary={
+            "primary_exposure_definition": {
+                "column": "treatment",
+                "window": "baseline",
+            }
+        },
+        artifact_path=artifact,
+    )
+
+    assert contract is not None
+    assert contract["column"] == "treatment"
+    assert contract["executable_column"] == "treatment"
+    assert contract["exposure_column"] == "treatment"
+
+
+def test_primary_exposure_binding_contract_does_not_resolve_conflicting_columns(
+    tmp_path,
+):
+    artifact = tmp_path / "primary_exposure.parquet"
+    contract = typed_product_binding_contract(
+        product_name="primary_exposure_definition",
+        step_summary={
+            "primary_exposure_definition": {
+                "column": "treatment_a",
+                "executable_column": "treatment_b",
+            }
+        },
+        artifact_path=artifact,
+    )
+
+    assert contract is not None
+    assert contract["column"] == "treatment_a"
+    assert contract["executable_column"] == "treatment_b"
+    assert "exposure_column" not in contract
 SEALED_ABSOLUTE_RISK_REPAIR = "absolute_risk_incidence_prevalence_publication_bundle_v1"
 SEALED_IMPLEMENTATION_DIGEST = "a" * 64
 SEALED_PARENT_DIGESTS = {
