@@ -41,7 +41,6 @@ import re
 import shutil
 import textwrap
 import threading
-import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
@@ -349,6 +348,7 @@ from .run_input_capsule import (
     prepare_existing_resume_input,
     seal_run_input_capsule,
 )
+from .run_lock import current_locked_run_id, exclusive_run_execution
 from .audits.validators import (
     ClinicalConstraintValidator,
     CohortAuditor,
@@ -3612,6 +3612,7 @@ class ResearchAgentPipeline:
     # Public API
     # ------------------------------------------------------------------
 
+    @exclusive_run_execution
     def run(
         self,
         *,
@@ -3751,8 +3752,8 @@ class ResearchAgentPipeline:
         resume_context_evidence_path: Optional[Path] = None
         resume_input_verified = False
         experiment_spec_path: Optional[Path] = None
+        run_id = current_locked_run_id()
         if resume_run_id:
-            run_id = resume_run_id
             run_dir = self.workdir / run_id
             if run_dir.exists():
                 resume_state = _load_resume_state(run_dir)
@@ -3783,12 +3784,6 @@ class ResearchAgentPipeline:
                         cohort_path = prepared_resume.cohort_path
             run_dir.mkdir(parents=True, exist_ok=True)
         else:
-            run_id = (
-                "run_"
-                + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-                + "_"
-                + uuid.uuid4().hex[:6]
-            )
             run_dir = self.workdir / run_id
             run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -3827,6 +3822,7 @@ class ResearchAgentPipeline:
                 stop_after_analysis=stop_after_analysis,
                 manuscript_language=run_language,
                 flags=self._cache_flag_payload(),
+                science_inputs=run_scientific_identity,
             )
             cached = self._cache.lookup(cache_key)
             if cached is not None:
