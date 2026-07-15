@@ -1246,6 +1246,45 @@ def _assignment_model_completion_findings(
     ]
 
 
+def _declared_diagnostic_completion_findings(
+    *,
+    step: AnalysisStep,
+    step_summary: Mapping[str, Any],
+    declared: set[tuple[str, str]],
+) -> list[ValidationFinding]:
+    """Do not let a placeholder diagnostic artifact satisfy a planned result."""
+
+    if not any("diagnostic" in name for _kind, name in declared):
+        return []
+    diagnostic_status = _normalise(step_summary.get("diagnostic_status"))
+    skipped_reason = str(step_summary.get("skipped_reason") or "").strip()
+    incomplete_statuses = {
+        *_FAILED_STATUSES,
+        "not_computable",
+        "not_computed",
+        "unavailable",
+    }
+    if diagnostic_status not in incomplete_statuses and not skipped_reason:
+        return []
+    return [
+        ValidationFinding(
+            validator="declared_product_contract",
+            severity="error",
+            message=(
+                f"Step {step.step_id} declared a diagnostic result but registered "
+                "only a not-computed, unavailable, failed, or skipped placeholder. "
+                "A file's presence does not complete the planned diagnostic."
+            ),
+            detail={
+                "kind": "declared_diagnostic_not_completed",
+                "step_id": step.step_id,
+                "diagnostic_status": diagnostic_status or None,
+                "skipped_reason": skipped_reason or None,
+            },
+        )
+    ]
+
+
 def declared_product_contract_findings(
     *,
     step: AnalysisStep,
@@ -1281,6 +1320,13 @@ def declared_product_contract_findings(
     )
     findings.extend(
         _assignment_model_completion_findings(
+            step=step,
+            step_summary=step_summary,
+            declared=declared,
+        )
+    )
+    findings.extend(
+        _declared_diagnostic_completion_findings(
             step=step,
             step_summary=step_summary,
             declared=declared,
