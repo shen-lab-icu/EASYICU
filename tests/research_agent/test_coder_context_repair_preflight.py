@@ -660,6 +660,31 @@ def run(frame):
     )
 
 
+def test_mechanical_preflight_blocks_failed_status_then_product_registration(ra):
+    code = """
+def run(frame):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    audit = {
+        'role': 'audit_only',
+        'invalid_pair_n': invalid_pair_n,
+        'discordant_n': discordant_n,
+    }
+    if invalid_pair_n > 0 or discordant_n > 0:
+        final_mask = False
+        summary['status'] = 'failed_provenance_audit'
+    write_analysis_cohort(frame[final_mask])
+    summary['registered_outputs'] = {'artifact:analysis_cohort': 'cohort.parquet'}
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
 def test_mechanical_preflight_blocks_conditionally_nested_provenance_return(ra):
     code = """
 def run(frame, should_stop):

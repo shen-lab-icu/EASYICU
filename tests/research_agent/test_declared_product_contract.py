@@ -2429,7 +2429,15 @@ def test_digest_bound_snapshot_parses_the_verified_bytes_after_path_mutation(tmp
         )
 
 
-@pytest.mark.parametrize("reported_status", ["fail_closed", "failed_closed"])
+@pytest.mark.parametrize(
+    "reported_status",
+    [
+        "fail_closed",
+        "failed_closed",
+        "fail_measurement_audit",
+        "failed_provenance_audit",
+    ],
+)
 def test_reported_fail_closed_status_fails_outer_step_contract(reported_status):
     from easyicu.research_agent.pipeline_execute import (
         _step_status_from_contract_findings,

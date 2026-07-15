@@ -398,6 +398,207 @@ def _simple_call_name(node: ast.AST) -> str:
     return ""
 
 
+def _provenance_count_key(node: ast.AST) -> Optional[str]:
+    """Return a standard provenance failure-count key for a direct access."""
+
+    if isinstance(node, ast.Name) and node.id in _PROVENANCE_FAILURE_KEYS:
+        return node.id
+    key_node: Optional[ast.AST] = None
+    if isinstance(node, ast.Subscript):
+        key_node = node.slice
+    elif (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "get"
+        and node.args
+    ):
+        key_node = node.args[0]
+    if (
+        isinstance(key_node, ast.Constant)
+        and isinstance(key_node.value, str)
+        and key_node.value in _PROVENANCE_FAILURE_KEYS
+    ):
+        return key_node.value
+    return None
+
+
+def _is_literal_numeric_zero(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Constant)
+        and not isinstance(node.value, bool)
+        and node.value == 0
+    )
+
+
+def _inline_provenance_failure_coverage(
+    node: ast.AST,
+    *,
+    assignments: dict[str, ast.AST],
+    seen_names: Optional[set[str]] = None,
+) -> Optional[frozenset[str]]:
+    """Prove a raw-count predicate means either standard failure count is nonzero.
+
+    This intentionally recognises only the closed host-owned provenance schema.
+    Unknown riders, conjunctions, success-polarity tests, and partial checks are
+    rejected so a deterministic repair cannot invent a failure policy.
+    """
+
+    direct_key = _provenance_count_key(node)
+    if direct_key is not None:
+        return frozenset({direct_key})
+
+    seen_names = set(seen_names or set())
+    if isinstance(node, ast.Name) and node.id in assignments:
+        if node.id in seen_names:
+            return None
+        seen_names.add(node.id)
+        return _inline_provenance_failure_coverage(
+            assignments[node.id],
+            assignments=assignments,
+            seen_names=seen_names,
+        )
+
+    if isinstance(node, ast.BoolOp):
+        if not isinstance(node.op, ast.Or):
+            return None
+        parts = [
+            _inline_provenance_failure_coverage(
+                value,
+                assignments=assignments,
+                seen_names=seen_names,
+            )
+            for value in node.values
+        ]
+        if not parts or any(part is None for part in parts):
+            return None
+        return frozenset().union(*(part for part in parts if part is not None))
+
+    if not isinstance(node, ast.Compare) or len(node.ops) != 1:
+        return None
+    left_key = _provenance_count_key(node.left)
+    right_key = _provenance_count_key(node.comparators[0])
+    operator = node.ops[0]
+    if left_key is not None and _is_literal_numeric_zero(node.comparators[0]):
+        if isinstance(operator, (ast.Gt, ast.NotEq, ast.IsNot)):
+            return frozenset({left_key})
+    if right_key is not None and _is_literal_numeric_zero(node.left):
+        if isinstance(operator, (ast.Lt, ast.NotEq, ast.IsNot)):
+            return frozenset({right_key})
+    return None
+
+
+def _patch_inline_provenance_failure_guard(code: str) -> str:
+    """Terminate an authored full raw-count failure branch before outputs.
+
+    The concept preflight has already proved that the script implements the
+    standard ``invalid_pair_n``/``discordant_n`` audit but lets its failure
+    branch fall through.  This repair only handles an exact top-level OR of
+    those two host-owned failure counts, before any scientific result sink.
+    """
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    if not (_PROVENANCE_FAILURE_KEYS | {"audit_only"}) <= _string_literals(tree):
+        return code
+
+    parents = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+    assignments: dict[str, ast.AST] = {}
+    for candidate in ast.walk(tree):
+        if not isinstance(candidate, (ast.Assign, ast.AnnAssign)):
+            continue
+        value = candidate.value
+        targets = (
+            candidate.targets
+            if isinstance(candidate, ast.Assign)
+            else [candidate.target]
+        )
+        for target in targets:
+            if isinstance(target, ast.Name):
+                assignments.setdefault(target.id, value)
+
+    result_sink_methods = {"fit", "fit_regularized", "predict", "savefig"}
+    for guard in sorted(
+        (node for node in ast.walk(tree) if isinstance(node, ast.If)),
+        key=lambda node: int(getattr(node, "lineno", 0) or 0),
+    ):
+        coverage = _inline_provenance_failure_coverage(
+            guard.test,
+            assignments=assignments,
+        )
+        if coverage != _PROVENANCE_FAILURE_KEYS:
+            continue
+
+        scope: ast.AST = guard
+        current = parents.get(guard)
+        unsafe_ancestor = False
+        while current is not None and not isinstance(
+            current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module)
+        ):
+            if isinstance(
+                current,
+                (
+                    ast.If,
+                    ast.For,
+                    ast.AsyncFor,
+                    ast.While,
+                    ast.Try,
+                    ast.TryStar,
+                    ast.With,
+                    ast.AsyncWith,
+                    ast.Match,
+                ),
+            ):
+                unsafe_ancestor = True
+                break
+            current = parents.get(current)
+        if unsafe_ancestor:
+            continue
+        if current is not None:
+            scope = current
+
+        guard_line = int(getattr(guard, "lineno", 0) or 0)
+        result_precedes_guard = False
+        for candidate in ast.walk(scope):
+            if not isinstance(candidate, ast.Call):
+                continue
+            line = int(getattr(candidate, "lineno", 0) or 0)
+            if not line or line >= guard_line:
+                continue
+            method = _simple_call_name(candidate.func).lower().rsplit(".", 1)[-1]
+            if (
+                method in result_sink_methods
+                or "write_success" in method
+                or method.startswith("publish_")
+            ):
+                result_precedes_guard = True
+                break
+        if result_precedes_guard or not guard.body:
+            continue
+
+        lines = code.splitlines(keepends=True)
+        first_body_line = int(getattr(guard.body[0], "lineno", 0) or 0)
+        if first_body_line <= 0 or first_body_line > len(lines):
+            continue
+        source_line = lines[first_body_line - 1]
+        indent = source_line[: len(source_line) - len(source_line.lstrip())]
+        termination = (
+            f"{indent}# {_PROVENANCE_GUARD_SENTINEL}\n"
+            f"{indent}raise RuntimeError(\n"
+            f'{indent}    "Measurement provenance audit failed; "\n'
+            f'{indent}    "scientific outputs were not published."\n'
+            f"{indent})\n"
+        )
+        lines.insert(first_body_line - 1, termination)
+        return "".join(lines)
+    return code
+
+
 def _patch_provenance_fail_closed_guard(code: str) -> str:
     """Insert a terminating guard after an explicit provenance-audit call.
 
@@ -424,9 +625,6 @@ def _patch_provenance_fail_closed_guard(code: str) -> str:
         decision_keys = tuple(key for key in _PROVENANCE_DECISION_KEYS if key in tokens)
         if decision_keys:
             marker_functions[node.name] = decision_keys
-    if not marker_functions:
-        return code
-
     lines = code.splitlines(keepends=True)
     insertions: list[tuple[int, str]] = []
     for node in ast.walk(tree):
@@ -468,11 +666,11 @@ def _patch_provenance_fail_closed_guard(code: str) -> str:
         )
         insertions.append((getattr(node, "end_lineno", node.lineno), guard))
 
-    if not insertions:
-        return code
-    for line_number, guard in sorted(insertions, reverse=True):
-        lines.insert(line_number, guard)
-    return "".join(lines)
+    if insertions:
+        for line_number, guard in sorted(insertions, reverse=True):
+            lines.insert(line_number, guard)
+        return "".join(lines)
+    return _patch_inline_provenance_failure_guard(code)
 
 
 def _patch_provenance_bidirectional_pair_scan(code: str) -> str:

@@ -68,6 +68,20 @@ _KNOWN_FILE_SUFFIXES = frozenset(
         ".npz",
     }
 )
+
+
+def is_failed_step_status(value: Any) -> bool:
+    """Return whether a generated summary explicitly reports failure.
+
+    Generated code sometimes emits a more specific status such as
+    ``failed_provenance_audit``.  Treat the host-owned failure prefixes as
+    fail-closed instead of relying only on a finite spelling allowlist.
+    """
+
+    status = _normalise(value)
+    return status in _FAILED_STATUSES or status.startswith(("fail_", "failed_"))
+
+
 _EFFECT_PRODUCT_BASES = frozenset(
     {
         "adjusted_effect",
@@ -1624,7 +1638,7 @@ def declared_product_contract_findings(
     """Validate declared-product realization and scientific output scope."""
 
     reported_status = _normalise(step_summary.get("status"))
-    if reported_status in _FAILED_STATUSES:
+    if is_failed_step_status(reported_status):
         return []
 
     declared = {
