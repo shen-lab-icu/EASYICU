@@ -454,9 +454,16 @@ def _binding_metadata_findings(tree: ast.Module) -> list[ValidationFinding]:
 
 
 _PROVENANCE_FAILURE_KEYS = frozenset({"invalid_pair_n", "discordant_n"})
-_PROVENANCE_DECISION_KEYS = frozenset(
-    {"fail_closed", "completed_step_allowed", "provenance_valid"}
+_PROVENANCE_FAILURE_DECISION_KEYS = frozenset({"fail_closed"})
+_PROVENANCE_SUCCESS_DECISION_KEYS = frozenset(
+    {"completed_step_allowed", "provenance_valid"}
 )
+_PROVENANCE_FULL_COVERAGE = frozenset(_PROVENANCE_FAILURE_KEYS)
+_PROVENANCE_FAILURE = "failure"
+_PROVENANCE_SUCCESS = "success"
+_FLOW_FALLTHROUGH = "fallthrough"
+_FLOW_FUNCTION_EXIT = "function_exit"
+_FLOW_LOOP_ESCAPE = "loop_escape"
 
 
 def _literal_string_tokens(node: ast.AST) -> set[str]:
@@ -473,8 +480,327 @@ def _referenced_names(node: ast.AST) -> set[str]:
     }
 
 
-def _directly_raises(statements: list[ast.stmt]) -> bool:
-    return any(isinstance(statement, ast.Raise) for statement in statements)
+def _target_names(node: ast.AST) -> set[str]:
+    if isinstance(node, ast.Name):
+        return {node.id}
+    if isinstance(node, (ast.Tuple, ast.List)):
+        return {name for item in node.elts for name in _target_names(item)}
+    return set()
+
+
+def _expression_identity(node: ast.AST) -> str:
+    return ast.dump(node, annotate_fields=True, include_attributes=False)
+
+
+def _mapping_access_key(node: ast.AST) -> Optional[str]:
+    if isinstance(node, ast.Subscript):
+        return _subscript_key(node.slice)
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "get"
+        and node.args
+    ):
+        return _subscript_key(node.args[0])
+    return None
+
+
+def _mapping_root_name(node: ast.AST) -> Optional[str]:
+    current = node
+    if isinstance(current, ast.Call) and isinstance(current.func, ast.Attribute):
+        current = current.func.value
+    while isinstance(current, (ast.Subscript, ast.Attribute)):
+        current = current.value
+    return current.id if isinstance(current, ast.Name) else None
+
+
+def _literal_zero(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Constant)
+        and not isinstance(node.value, bool)
+        and node.value == 0
+    )
+
+
+def _literal_bool(node: ast.AST) -> Optional[bool]:
+    if isinstance(node, ast.Constant) and isinstance(node.value, bool):
+        return node.value
+    return None
+
+
+def _swap_provenance_meaning(
+    meaning: Optional[tuple[str, frozenset[str]]],
+) -> Optional[tuple[str, frozenset[str]]]:
+    if meaning is None:
+        return None
+    kind, coverage = meaning
+    inverse = (
+        _PROVENANCE_SUCCESS if kind == _PROVENANCE_FAILURE else _PROVENANCE_FAILURE
+    )
+    return inverse, coverage
+
+
+def _provenance_predicate_meaning(
+    node: ast.AST,
+    *,
+    expression_roles: dict[str, frozenset[str]],
+    signal_meanings: dict[str, tuple[str, frozenset[str]]],
+    assignments: dict[str, ast.AST],
+    audit_containers: set[str],
+    seen_names: Optional[set[str]] = None,
+) -> Optional[tuple[str, frozenset[str]]]:
+    """Classify provenance failure/success polarity without name heuristics."""
+
+    seen_names = set(seen_names or set())
+    expression_coverage = expression_roles.get(_expression_identity(node))
+    if expression_coverage:
+        return _PROVENANCE_FAILURE, expression_coverage
+
+    if isinstance(node, ast.Name):
+        if node.id in seen_names or node.id not in assignments:
+            return None
+        seen_names.add(node.id)
+        return _provenance_predicate_meaning(
+            assignments[node.id],
+            expression_roles=expression_roles,
+            signal_meanings=signal_meanings,
+            assignments=assignments,
+            audit_containers=audit_containers,
+            seen_names=seen_names,
+        )
+
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.Not, ast.Invert)):
+        return _swap_provenance_meaning(
+            _provenance_predicate_meaning(
+                node.operand,
+                expression_roles=expression_roles,
+                signal_meanings=signal_meanings,
+                assignments=assignments,
+                audit_containers=audit_containers,
+                seen_names=seen_names,
+            )
+        )
+
+    access_key = _mapping_access_key(node)
+    access_root = _mapping_root_name(node)
+    if access_root in audit_containers:
+        if access_key in _PROVENANCE_FAILURE_KEYS:
+            return _PROVENANCE_FAILURE, frozenset({access_key})
+        if access_key in _PROVENANCE_FAILURE_DECISION_KEYS:
+            return _PROVENANCE_FAILURE, _PROVENANCE_FULL_COVERAGE
+        if access_key in _PROVENANCE_SUCCESS_DECISION_KEYS:
+            return _PROVENANCE_SUCCESS, _PROVENANCE_FULL_COVERAGE
+
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+        method = node.func.attr
+        base = node.func.value
+        inverted = isinstance(base, ast.UnaryOp) and isinstance(
+            base.op, (ast.Not, ast.Invert)
+        )
+        if inverted:
+            base = base.operand
+        if isinstance(base, ast.Name) and base.id in signal_meanings:
+            meaning = signal_meanings[base.id]
+            if inverted:
+                meaning = _swap_provenance_meaning(meaning)
+            if method == "all" and meaning and meaning[0] == _PROVENANCE_SUCCESS:
+                return meaning
+            if (
+                method in {"any", "sum"}
+                and meaning
+                and meaning[0] == _PROVENANCE_FAILURE
+            ):
+                return meaning
+
+    if isinstance(node, ast.BoolOp):
+        meanings = [
+            _provenance_predicate_meaning(
+                value,
+                expression_roles=expression_roles,
+                signal_meanings=signal_meanings,
+                assignments=assignments,
+                audit_containers=audit_containers,
+                seen_names=seen_names,
+            )
+            for value in node.values
+        ]
+        wanted = (
+            _PROVENANCE_FAILURE
+            if isinstance(node.op, ast.Or)
+            else _PROVENANCE_SUCCESS if isinstance(node.op, ast.And) else None
+        )
+        selected = [item for item in meanings if item and item[0] == wanted]
+        if wanted and selected:
+            coverage = frozenset().union(*(item[1] for item in selected))
+            return wanted, coverage
+        return None
+
+    if not isinstance(node, ast.Compare) or len(node.ops) != 1:
+        return None
+    left = node.left
+    right = node.comparators[0]
+    operator = node.ops[0]
+
+    left_key = _mapping_access_key(left)
+    left_root = _mapping_root_name(left)
+    if (
+        left_root in audit_containers
+        and left_key == "status"
+        and isinstance(right, ast.Constant)
+        and str(right.value).strip().lower() == "checked"
+    ):
+        if isinstance(operator, (ast.NotEq, ast.IsNot)):
+            return _PROVENANCE_FAILURE, _PROVENANCE_FULL_COVERAGE
+        if isinstance(operator, (ast.Eq, ast.Is)):
+            return _PROVENANCE_SUCCESS, _PROVENANCE_FULL_COVERAGE
+
+    left_meaning = _provenance_predicate_meaning(
+        left,
+        expression_roles=expression_roles,
+        signal_meanings=signal_meanings,
+        assignments=assignments,
+        audit_containers=audit_containers,
+        seen_names=seen_names,
+    )
+    right_meaning = _provenance_predicate_meaning(
+        right,
+        expression_roles=expression_roles,
+        signal_meanings=signal_meanings,
+        assignments=assignments,
+        audit_containers=audit_containers,
+        seen_names=seen_names,
+    )
+
+    if left_meaning and _literal_zero(right):
+        kind, coverage = left_meaning
+        if kind != _PROVENANCE_FAILURE:
+            return None
+        if isinstance(operator, (ast.Eq, ast.Is, ast.LtE)):
+            return _PROVENANCE_SUCCESS, coverage
+        if isinstance(operator, (ast.NotEq, ast.IsNot, ast.Gt, ast.GtE)):
+            return _PROVENANCE_FAILURE, coverage
+    if right_meaning and _literal_zero(left):
+        kind, coverage = right_meaning
+        if kind != _PROVENANCE_FAILURE:
+            return None
+        if isinstance(operator, (ast.Eq, ast.Is, ast.GtE)):
+            return _PROVENANCE_SUCCESS, coverage
+        if isinstance(operator, (ast.NotEq, ast.IsNot, ast.Lt, ast.LtE)):
+            return _PROVENANCE_FAILURE, coverage
+
+    bool_value = _literal_bool(right)
+    if (
+        left_meaning
+        and bool_value is not None
+        and isinstance(operator, (ast.Eq, ast.Is, ast.NotEq, ast.IsNot))
+    ):
+        same = isinstance(operator, (ast.Eq, ast.Is)) == bool_value
+        return left_meaning if same else _swap_provenance_meaning(left_meaning)
+    return None
+
+
+def _statement_flow_outcomes(statement: ast.stmt) -> set[str]:
+    if isinstance(statement, (ast.Raise, ast.Return)):
+        return {_FLOW_FUNCTION_EXIT}
+    if isinstance(statement, (ast.Break, ast.Continue)):
+        return {_FLOW_LOOP_ESCAPE}
+    if isinstance(statement, ast.If):
+        body = _block_flow_outcomes(statement.body)
+        orelse = (
+            _block_flow_outcomes(statement.orelse)
+            if statement.orelse
+            else {_FLOW_FALLTHROUGH}
+        )
+        return body | orelse
+    if isinstance(
+        statement,
+        (ast.For, ast.AsyncFor, ast.While, ast.Try, ast.TryStar, ast.Match),
+    ):
+        return {_FLOW_FALLTHROUGH, _FLOW_LOOP_ESCAPE}
+    return {_FLOW_FALLTHROUGH}
+
+
+def _block_flow_outcomes(statements: list[ast.stmt]) -> set[str]:
+    outcomes = {_FLOW_FALLTHROUGH}
+    for statement in statements:
+        if _FLOW_FALLTHROUGH not in outcomes:
+            break
+        outcomes.remove(_FLOW_FALLTHROUGH)
+        outcomes.update(_statement_flow_outcomes(statement))
+    return outcomes
+
+
+def _branch_all_paths_exit(statements: list[ast.stmt]) -> bool:
+    return _block_flow_outcomes(statements) == {_FLOW_FUNCTION_EXIT}
+
+
+def _has_unrelated_control_ancestor(
+    node: ast.AST, parents: dict[ast.AST, ast.AST]
+) -> bool:
+    current = parents.get(node)
+    while current is not None and not isinstance(
+        current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module)
+    ):
+        if isinstance(current, (ast.If, ast.For, ast.AsyncFor, ast.While)):
+            return True
+        current = parents.get(current)
+    return False
+
+
+_PROVENANCE_RESULT_SINK_METHODS = frozenset(
+    {"fit", "fit_regularized", "predict", "savefig"}
+)
+
+
+def _result_sink_precedes_guard(guard: ast.If, parents: dict[ast.AST, ast.AST]) -> bool:
+    scope: ast.AST = guard
+    while scope in parents and not isinstance(
+        scope, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module)
+    ):
+        scope = parents[scope]
+    guard_line = int(getattr(guard, "lineno", 0) or 0)
+    for candidate in ast.walk(scope):
+        if not isinstance(candidate, ast.Call):
+            continue
+        line = int(getattr(candidate, "lineno", 0) or 0)
+        if not line or line >= guard_line:
+            continue
+        call_name = _call_name(candidate.func).lower()
+        method = call_name.rsplit(".", 1)[-1]
+        if method in _PROVENANCE_RESULT_SINK_METHODS:
+            return True
+        if "write_success" in method or method.startswith("publish_"):
+            return True
+    return False
+
+
+def _provenance_signal_source(value: ast.AST) -> Optional[tuple[str, str]]:
+    current = value
+    if (
+        isinstance(current, ast.Call)
+        and isinstance(current.func, ast.Name)
+        and current.func.id in {"bool", "float", "int"}
+        and len(current.args) == 1
+    ):
+        current = current.args[0]
+    if isinstance(current, ast.Name):
+        return current.id, _PROVENANCE_FAILURE
+    if not (
+        isinstance(current, ast.Call)
+        and isinstance(current.func, ast.Attribute)
+        and current.func.attr in {"any", "sum"}
+    ):
+        return None
+    base = current.func.value
+    if isinstance(base, ast.Name):
+        return base.id, _PROVENANCE_FAILURE
+    if (
+        isinstance(base, ast.UnaryOp)
+        and isinstance(base.op, (ast.Not, ast.Invert))
+        and isinstance(base.operand, ast.Name)
+    ):
+        return base.operand.id, _PROVENANCE_SUCCESS
+    return None
 
 
 def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding]:
@@ -490,23 +816,60 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
     if not marker_functions:
         return []
 
-    derived_names: set[str] = set()
-    result_names: set[str] = set()
-    assignments: list[tuple[set[str], ast.AST]] = []
+    parents = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+    expression_roles: dict[str, frozenset[str]] = {}
+    signal_meanings: dict[str, tuple[str, frozenset[str]]] = {}
+    audit_containers: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Dict):
+            continue
+        for key_node, value_node in zip(node.keys, node.values):
+            key = _subscript_key(key_node)
+            if key not in _PROVENANCE_FAILURE_KEYS or isinstance(
+                value_node, ast.Constant
+            ):
+                continue
+            identity = _expression_identity(value_node)
+            expression_roles[identity] = frozenset(
+                set(expression_roles.get(identity, frozenset())) | {key}
+            )
+            signal_source = _provenance_signal_source(value_node)
+            if signal_source is not None:
+                signal_name, signal_kind = signal_source
+                existing = signal_meanings.get(signal_name)
+                if existing is None or existing[0] == signal_kind:
+                    coverage = set(existing[1] if existing else frozenset()) | {key}
+                    signal_meanings[signal_name] = signal_kind, frozenset(coverage)
+        if not (_PROVENANCE_FAILURE_KEYS & set(_literal_string_tokens(node))):
+            continue
+        parent = parents.get(node)
+        if isinstance(parent, (ast.Assign, ast.AnnAssign)) and parent.value is node:
+            targets = (
+                parent.targets if isinstance(parent, ast.Assign) else [parent.target]
+            )
+            audit_containers.update(
+                name for target in targets for name in _target_names(target)
+            )
+
+    assignments: dict[str, ast.AST] = {}
     for node in ast.walk(tree):
         if not isinstance(node, (ast.Assign, ast.AnnAssign)) or node.value is None:
             continue
         targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-        target_names = {target.id for target in targets if isinstance(target, ast.Name)}
-        if not target_names:
-            continue
-        assignments.append((target_names, node.value))
+        target_names = {name for target in targets for name in _target_names(target)}
+        for name in target_names:
+            assignments.setdefault(name, node.value)
         if (
             isinstance(node.value, ast.Call)
             and _call_name(node.value.func) in marker_functions
         ):
-            result_names.update(target_names)
+            audit_containers.update(target_names)
 
+    failure_collections: set[str] = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.If):
             continue
@@ -521,33 +884,27 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
                 if candidate.func.attr not in {"add", "append", "extend"}:
                     continue
                 if isinstance(candidate.func.value, ast.Name):
-                    derived_names.add(candidate.func.value.id)
+                    failure_collections.add(candidate.func.value.id)
+    for name in failure_collections:
+        expression_roles[_expression_identity(ast.Name(id=name, ctx=ast.Load()))] = (
+            _PROVENANCE_FULL_COVERAGE
+        )
 
-    changed = True
-    while changed:
-        changed = False
-        for target_names, value in assignments:
-            value_tokens = _literal_string_tokens(value)
-            value_names = _referenced_names(value)
-            if not (
-                value_tokens & (_PROVENANCE_FAILURE_KEYS | _PROVENANCE_DECISION_KEYS)
-                or value_names & derived_names
-            ):
-                continue
-            new_names = target_names - derived_names
-            if new_names:
-                derived_names.update(new_names)
-                changed = True
-
-    guard_names = derived_names | result_names
     for node in ast.walk(tree):
-        if not isinstance(node, ast.If) or not _directly_raises(node.body):
+        if not isinstance(node, ast.If) or not _branch_all_paths_exit(node.body):
             continue
-        test_tokens = _literal_string_tokens(node.test)
-        test_names = _referenced_names(node.test)
-        if test_names & guard_names and (
-            test_names & derived_names or test_tokens & _PROVENANCE_DECISION_KEYS
-        ):
+        if _has_unrelated_control_ancestor(node, parents):
+            continue
+        if _result_sink_precedes_guard(node, parents):
+            continue
+        meaning = _provenance_predicate_meaning(
+            node.test,
+            expression_roles=expression_roles,
+            signal_meanings=signal_meanings,
+            assignments=assignments,
+            audit_containers=audit_containers,
+        )
+        if meaning == (_PROVENANCE_FAILURE, _PROVENANCE_FULL_COVERAGE):
             return []
 
     return [
@@ -1621,6 +1978,109 @@ def _branch_local_unbound_findings(tree: ast.Module) -> list[ValidationFinding]:
     return findings
 
 
+def _local_read_before_assignment_findings(
+    tree: ast.Module,
+) -> list[ValidationFinding]:
+    """Find a provable local read that lexically precedes its first assignment."""
+
+    scopes: list[tuple[str, list[ast.stmt], set[str]]] = [
+        ("<module>", tree.body, set())
+    ]
+    for function in ast.walk(tree):
+        if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        arguments = {
+            argument.arg
+            for argument in [
+                *function.args.posonlyargs,
+                *function.args.args,
+                *function.args.kwonlyargs,
+            ]
+        }
+        if function.args.vararg is not None:
+            arguments.add(function.args.vararg.arg)
+        if function.args.kwarg is not None:
+            arguments.add(function.args.kwarg.arg)
+        scopes.append((function.name, function.body, arguments))
+
+    findings: list[ValidationFinding] = []
+    for scope_name, scope_body, arguments in scopes:
+        wrapper = ast.Module(body=scope_body, type_ignores=[])
+        occurrences: list[ast.Name] = []
+        excluded_names: set[str] = set()
+
+        class _ScopeVisitor(ast.NodeVisitor):
+            def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+                return None
+
+            def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+                return None
+
+            def visit_Lambda(self, node: ast.Lambda) -> None:
+                return None
+
+            def visit_ListComp(self, node: ast.ListComp) -> None:
+                return None
+
+            def visit_SetComp(self, node: ast.SetComp) -> None:
+                return None
+
+            def visit_DictComp(self, node: ast.DictComp) -> None:
+                return None
+
+            def visit_GeneratorExp(self, node: ast.GeneratorExp) -> None:
+                return None
+
+            def visit_Global(self, node: ast.Global) -> None:
+                excluded_names.update(node.names)
+
+            def visit_Nonlocal(self, node: ast.Nonlocal) -> None:
+                excluded_names.update(node.names)
+
+            def visit_Name(self, node: ast.Name) -> None:
+                occurrences.append(node)
+
+        _ScopeVisitor().visit(wrapper)
+
+        local_names = (
+            {node.id for node in occurrences if isinstance(node.ctx, ast.Store)}
+            - arguments
+            - excluded_names
+        )
+        for name in sorted(local_names):
+            store_lines = [
+                int(node.lineno)
+                for node in occurrences
+                if node.id == name and isinstance(node.ctx, ast.Store)
+            ]
+            load_lines = [
+                int(node.lineno)
+                for node in occurrences
+                if node.id == name and isinstance(node.ctx, ast.Load)
+            ]
+            if not store_lines or not load_lines or min(load_lines) >= min(store_lines):
+                continue
+            findings.append(
+                ValidationFinding(
+                    validator="mechanical_code_preflight",
+                    severity="error",
+                    message=(
+                        "A scope-local variable is read before its first "
+                        "assignment and can raise NameError or UnboundLocalError "
+                        "before the intended fail-closed branch completes."
+                    ),
+                    detail={
+                        "reason": "local_read_before_assignment",
+                        "function": scope_name,
+                        "name": name,
+                        "first_use_line": min(load_lines),
+                        "first_assignment_line": min(store_lines),
+                    },
+                )
+            )
+    return findings
+
+
 def _ordinal_rounding_findings(tree: ast.Module) -> list[ValidationFinding]:
     """Reject lossy round-to-integer coercion inside explicit ordinal branches."""
 
@@ -1853,6 +2313,7 @@ def audit_mechanical_code_contracts(
     findings.extend(_typed_dataframe_erasure_findings(tree, step))
     findings.extend(_undefined_direct_call_findings(tree))
     findings.extend(_local_call_signature_findings(tree))
+    findings.extend(_local_read_before_assignment_findings(tree))
     findings.extend(_branch_local_unbound_findings(tree))
     findings.extend(_ordinal_rounding_findings(tree))
     findings.extend(_first_time_companion_findings(tree))
