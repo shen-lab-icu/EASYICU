@@ -69,6 +69,112 @@ def test_cohort_typed_product_is_realised_by_its_tabular_dataset(tmp_path):
     ]
 
 
+@pytest.mark.parametrize(
+    ("filename", "payload"),
+    [
+        ("input_universe_reconciliation.csv", "observed_n,expected_n\n94458,94458\n"),
+        ("input_universe_reconciliation.json", '{"observed_n":94458,"expected_n":94458}'),
+    ],
+)
+def test_explicit_audit_product_is_realised_by_compatible_file(
+    tmp_path, filename, payload
+):
+    out_dir = tmp_path / "outputs"
+    out_dir.mkdir()
+    (out_dir / filename).write_text(payload, encoding="utf-8")
+    step = AnalysisStep(
+        step_id="cohort_flow",
+        intent="Reconcile the locked input universe.",
+        expected_outputs=["audit:input_universe_reconciliation"],
+    )
+
+    findings = declared_product_contract_findings(
+        step=step,
+        step_summary={
+            "status": "completed",
+            "output_files": [
+                {
+                    "kind": "audit",
+                    "name": "audit:input_universe_reconciliation",
+                    "path": filename,
+                }
+            ],
+        },
+        effect_method_authorized=False,
+        out_dir=out_dir,
+    )
+
+    assert "declared_product_missing" not in _kinds(findings)
+
+
+@pytest.mark.parametrize("filename", ["input_universe_reconciliation.pkl", "plot.png"])
+def test_audit_product_rejects_incompatible_physical_file(tmp_path, filename):
+    out_dir = tmp_path / "outputs"
+    out_dir.mkdir()
+    (out_dir / filename).write_bytes(b"not-an-audit-table-or-log")
+    step = AnalysisStep(
+        step_id="cohort_flow",
+        intent="Reconcile the locked input universe.",
+        expected_outputs=["audit:input_universe_reconciliation"],
+    )
+
+    findings = declared_product_contract_findings(
+        step=step,
+        step_summary={
+            "status": "completed",
+            "output_files": [
+                {
+                    "kind": "audit",
+                    "name": "audit:input_universe_reconciliation",
+                    "path": filename,
+                }
+            ],
+        },
+        effect_method_authorized=False,
+        out_dir=out_dir,
+    )
+
+    assert "declared_product_missing" in _kinds(findings)
+
+
+@pytest.mark.parametrize(
+    "output_files",
+    [
+        ["input_universe_reconciliation.csv"],
+        [
+            {
+                "kind": "table",
+                "name": "audit:input_universe_reconciliation",
+                "path": "input_universe_reconciliation.csv",
+            }
+        ],
+    ],
+)
+def test_audit_product_requires_exact_structured_audit_descriptor(
+    tmp_path, output_files
+):
+    out_dir = tmp_path / "outputs"
+    out_dir.mkdir()
+    (out_dir / "input_universe_reconciliation.csv").write_text(
+        "observed_n,expected_n\n94458,94458\n",
+        encoding="utf-8",
+    )
+    step = AnalysisStep(
+        step_id="cohort_flow",
+        intent="Reconcile the locked input universe.",
+        expected_outputs=["audit:input_universe_reconciliation"],
+    )
+
+    findings = declared_product_contract_findings(
+        step=step,
+        step_summary={"status": "completed", "output_files": output_files},
+        effect_method_authorized=False,
+        out_dir=out_dir,
+    )
+
+    assert "declared_product_missing" in _kinds(findings)
+
+
 def _assignment_cohort(tmp_path, *, stay_ids=(101,)):
     path = tmp_path / "cohort.csv"
     path.write_text(
