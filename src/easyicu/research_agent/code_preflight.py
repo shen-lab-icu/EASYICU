@@ -98,6 +98,20 @@ def _mask_name_from_slice(node: ast.AST) -> Optional[str]:
     return None
 
 
+def _subscript_frame_name(node: ast.AST) -> str:
+    """Return the DataFrame name addressed by ``frame[mask]`` or ``frame.loc``."""
+
+    if isinstance(node, ast.Name):
+        return node.id
+    if (
+        isinstance(node, ast.Attribute)
+        and node.attr in {"loc", "iloc"}
+        and isinstance(node.value, ast.Name)
+    ):
+        return node.value.id
+    return ""
+
+
 def _is_mask_method_call(node: ast.AST, mask_name: str, method: str) -> bool:
     return (
         isinstance(node, ast.Call)
@@ -110,17 +124,25 @@ def _is_mask_method_call(node: ast.AST, mask_name: str, method: str) -> bool:
     )
 
 
-def _is_len_call(node: ast.AST) -> bool:
+def _is_len_call(node: ast.AST, frame_names: set[str]) -> bool:
+    """Return whether ``len`` measures the same frame that will be filtered."""
+
     return (
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
         and node.func.id == "len"
         and len(node.args) == 1
         and not node.keywords
+        and isinstance(node.args[0], ast.Name)
+        and node.args[0].id in frame_names
     )
 
 
-def _mask_incomplete_test(test: ast.AST, mask_name: str) -> bool:
+def _mask_incomplete_test(
+    test: ast.AST,
+    mask_name: str,
+    frame_names: set[str],
+) -> bool:
     if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
         return _is_mask_method_call(test.operand, mask_name, "all")
     if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Invert):
@@ -172,12 +194,20 @@ def _mask_incomplete_test(test: ast.AST, mask_name: str) -> bool:
         )
     if isinstance(operator, (ast.NotEq, ast.IsNot)):
         return (
-            _is_mask_method_call(left, mask_name, "sum") and _is_len_call(right)
-        ) or (_is_mask_method_call(right, mask_name, "sum") and _is_len_call(left))
+            _is_mask_method_call(left, mask_name, "sum")
+            and _is_len_call(right, frame_names)
+        ) or (
+            _is_mask_method_call(right, mask_name, "sum")
+            and _is_len_call(left, frame_names)
+        )
     return False
 
 
-def _mask_complete_test(test: ast.AST, mask_name: str) -> bool:
+def _mask_complete_test(
+    test: ast.AST,
+    mask_name: str,
+    frame_names: set[str],
+) -> bool:
     if _is_mask_method_call(test, mask_name, "all"):
         return True
     if not isinstance(test, ast.Compare) or len(test.ops) != 1:
@@ -186,19 +216,27 @@ def _mask_complete_test(test: ast.AST, mask_name: str) -> bool:
     right = test.comparators[0]
     if not isinstance(test.ops[0], (ast.Eq, ast.Is)):
         return False
-    return (_is_mask_method_call(left, mask_name, "sum") and _is_len_call(right)) or (
-        _is_mask_method_call(right, mask_name, "sum") and _is_len_call(left)
+    return (
+        _is_mask_method_call(left, mask_name, "sum")
+        and _is_len_call(right, frame_names)
+    ) or (
+        _is_mask_method_call(right, mask_name, "sum")
+        and _is_len_call(left, frame_names)
     )
 
 
-def _is_raise_only_guard(statement: ast.stmt, mask_name: str) -> bool:
+def _is_raise_only_guard(
+    statement: ast.stmt,
+    mask_name: str,
+    frame_names: set[str],
+) -> bool:
     if isinstance(statement, ast.Assert):
-        return _mask_complete_test(statement.test, mask_name)
+        return _mask_complete_test(statement.test, mask_name, frame_names)
     if not isinstance(statement, ast.If) or not statement.body:
         return False
     if not all(isinstance(item, (ast.Raise, ast.Return)) for item in statement.body):
         return False
-    return _mask_incomplete_test(statement.test, mask_name)
+    return _mask_incomplete_test(statement.test, mask_name, frame_names)
 
 
 def _is_boolean_mask_expression(node: ast.AST) -> bool:
@@ -236,7 +274,7 @@ def _structural_filter_findings(
     findings = []
     for owner in [node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)]:
         body = getattr(owner, "body", [])
-        prior_guards: set[str] = set()
+        prior_guards: dict[str, list[ast.stmt]] = {}
         mask_names: set[str] = set()
         mask_sources: dict[str, set[str]] = {}
         frame_aliases: dict[str, set[str]] = {}
@@ -273,21 +311,24 @@ def _structural_filter_findings(
                             continue
                         mask_names.add(target.id)
                         mask_sources[target.id] = _referenced_names(value)
-            for possible_mask in {
-                node.id for node in ast.walk(statement) if isinstance(node, ast.Name)
-            }:
-                if _is_raise_only_guard(statement, possible_mask):
-                    prior_guards.add(possible_mask)
             for node in ast.walk(statement):
                 if not isinstance(node, ast.Subscript):
                     continue
                 mask_name = _mask_name_from_slice(node.slice)
                 value_name = _call_name(node.value)
                 source_names = mask_sources.get(mask_name or "", set())
-                direct_name = node.value.id if isinstance(node.value, ast.Name) else ""
+                direct_name = _subscript_frame_name(node.value)
                 direct_sources = {
                     direct_name,
                     *frame_aliases.get(direct_name, set()),
+                }
+                equivalent_frame_names = {
+                    *direct_sources,
+                    *{
+                        alias
+                        for alias, sources in frame_aliases.items()
+                        if direct_name in sources
+                    },
                 }
                 is_row_filter = bool(
                     mask_name
@@ -301,7 +342,14 @@ def _structural_filter_findings(
                 if (
                     not mask_name
                     or mask_name not in mask_names
-                    or mask_name in prior_guards
+                    or any(
+                        _is_raise_only_guard(
+                            guard,
+                            mask_name,
+                            equivalent_frame_names,
+                        )
+                        for guard in prior_guards.get(mask_name, [])
+                    )
                 ):
                     continue
                 findings.append(
@@ -321,6 +369,11 @@ def _structural_filter_findings(
                         },
                     )
                 )
+            for possible_mask in {
+                node.id for node in ast.walk(statement) if isinstance(node, ast.Name)
+            }:
+                if isinstance(statement, (ast.Assert, ast.If)):
+                    prior_guards.setdefault(possible_mask, []).append(statement)
     return findings
 
 
