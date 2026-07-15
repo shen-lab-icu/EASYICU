@@ -1692,6 +1692,112 @@ def test_resume_plan_compatibility_uses_latest_step_status(tmp_path: Path):
     assert selected_path == verified_run_evidence_path(run_dir, record)
 
 
+def test_implicit_resume_offers_only_latest_contract_failed_code_once(
+    tmp_path: Path,
+) -> None:
+    """Normal resume may replay one exact failed-contract script, not history."""
+
+    from easyicu.research_agent.pipeline_execute import (
+        _failed_contract_code_can_be_reused_before_coder,
+        _serializable_plan_scientific_scope_signature,
+    )
+    from easyicu.research_agent.pipeline_resume import ResumeController
+
+    step = AnalysisStep(
+        step_id="01_summary",
+        intent="Summarize the declared cohort.",
+        inputs=["stay_id"],
+        expected_outputs=["table:summary"],
+        method="descriptive_summary",
+    )
+    plan = AnalysisPlan(
+        research_question="Summarize this ICU cohort.",
+        steps=[step],
+    )
+    run_dir = tmp_path / "run_implicit_contract_reuse"
+    run_dir.mkdir()
+    source_path = tmp_path / "implicit_contract_candidate.py"
+    code = "import pandas as pd\nprint(pd.__version__)\n"
+    source_path.write_text(code, encoding="utf-8")
+    evidence_record = EvidenceStore(run_dir).register_file(
+        kind="code",
+        description="Agent-generated candidate for implicit resume.",
+        source_path=source_path,
+        evidence_id="code_01_summary",
+        produced_by_step=step.step_id,
+        producer="coder",
+        generation_mode="llm",
+    )
+    evidence_payload = evidence_record.model_dump(mode="json")
+    digest = hashlib.sha256(code.encode("utf-8")).hexdigest()
+    resolved_inputs_sha256 = "a" * 64
+    run_input_capsule_sha256 = "b" * 64
+    failed_record = {
+        "step_id": step.step_id,
+        "status": "contract_failed",
+        "returncode": 0,
+        "timed_out": False,
+        "outputs_safe_to_collect": True,
+        "executed_code_sha256": digest,
+        "concept_approved_code_sha256": digest,
+        "script_evidence_id": evidence_record.evidence_id,
+        "resolved_inputs_sha256": resolved_inputs_sha256,
+        "run_input_capsule_sha256": run_input_capsule_sha256,
+        "plan_scientific_signature": (
+            _serializable_plan_scientific_scope_signature(plan)
+        ),
+        "analysis_request": {"step": step.model_dump(mode="json")},
+    }
+
+    def controller(records):
+        return ResumeController(
+            plan=plan,
+            run_dir=run_dir,
+            resume_state={
+                "per_step_records": records,
+                "evidence": [evidence_payload],
+            },
+        )
+
+    candidate = controller([failed_record]).prior_code_for_step(step.step_id)
+    assert candidate is not None
+    assert candidate[0] == code
+    assert _failed_contract_code_can_be_reused_before_coder(
+        prior_step_record=failed_record,
+        resumed_code=candidate,
+        step=step,
+        plan=plan,
+        resolved_inputs_sha256=resolved_inputs_sha256,
+        run_input_capsule_sha256=run_input_capsule_sha256,
+    )
+
+    replayed_record = dict(
+        failed_record,
+        resumed_failed_contract_code_preflight=True,
+    )
+    assert not _failed_contract_code_can_be_reused_before_coder(
+        prior_step_record=replayed_record,
+        resumed_code=candidate,
+        step=step,
+        plan=plan,
+        resolved_inputs_sha256=resolved_inputs_sha256,
+        run_input_capsule_sha256=run_input_capsule_sha256,
+    )
+
+    assert (
+        controller(
+            [failed_record, {"step_id": step.step_id, "status": "coder_failed"}]
+        ).prior_code_for_step(step.step_id)
+        is None
+    )
+    assert (
+        controller([{"step_id": step.step_id, "status": "ok"}]).prior_code_for_step(
+            step.step_id
+        )
+        is None
+    )
+
+
 def test_partial_manifest_is_written_after_run(ra, synthetic_cohort, tmp_path: Path):
     result = _run_full(ra, synthetic_cohort, tmp_path)
     run_dir = Path(result.workdir)
@@ -1894,11 +2000,17 @@ def test_resume_from_completed_step_can_stop_after_that_step(
 
 
 @pytest.mark.parametrize(
-    ("reuse_step_code", "mark_prior_contract_failed", "expected_coder_calls"),
+    (
+        "reuse_step_code",
+        "mark_prior_contract_failed",
+        "explicit_resume",
+        "expected_coder_calls",
+    ),
     [
-        (False, False, 1),
-        (True, False, 0),
-        (False, True, 0),
+        (False, False, True, 1),
+        (True, False, True, 0),
+        (False, True, True, 0),
+        (False, True, False, 0),
     ],
 )
 def test_resume_from_step_reuses_prior_code(
@@ -1907,6 +2019,7 @@ def test_resume_from_step_reuses_prior_code(
     monkeypatch,
     reuse_step_code: bool,
     mark_prior_contract_failed: bool,
+    explicit_resume: bool,
     expected_coder_calls: int,
 ):
     """Resume reuses valid prior code only on failure or explicit opt-in."""
@@ -2081,7 +2194,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         database="synthetic",
         target_outcome="death",
         resume_run_id=first.run_id,
-        resume_from_step_id="04_primary_association",
+        resume_from_step_id=("04_primary_association" if explicit_resume else None),
         stop_after_step_id="04_primary_association",
         stop_after_analysis=True,
     )
@@ -2129,10 +2242,11 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         final_code_records[-1]["metadata"]["resumed_from_generation_mode"]
         == source_code_record["generation_mode"]
     )
-    assert not any(
-        "stale pre-resume" in finding.get("message", "")
-        for finding in partial["findings"]
-    )
+    if explicit_resume:
+        assert not any(
+            "stale pre-resume" in finding.get("message", "")
+            for finding in partial["findings"]
+        )
     assert any(
         finding.get("validator") == "coder"
         and "reused prior agent-generated code" in finding.get("message", "")
