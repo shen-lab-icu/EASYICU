@@ -1440,6 +1440,12 @@ def _typed_input_scope_contract(step: AnalysisStep) -> str:
         "- Look up each typed input by its exact kind:name key in manifest['inputs']. "
         "Read its exact file as Path(os.environ['EASYICU_RUN_DIR']) / "
         "binding['relative_path']; the manifest also supplies evidence_id and sha256.\n"
+        "- A binding may include product_contract copied from the successful "
+        "producer's step summary. Treat those declared semantic coordinates "
+        "(for example an executable column, role, window, or model variant) as "
+        "authoritative for that product. Validate them against the bound file and "
+        "fail closed if they are absent or incompatible; do not recover them from "
+        "DataFrame.attrs, globals, candidate-name scans, dtype scans, or frame order.\n"
         "- Do not glob EASYICU_EVIDENCE_DIR, choose a file by mtime or basename, "
         "follow a legacy alias, or reconstruct a declared upstream product from "
         "COHORT_PARQUET. COHORT_PARQUET remains the source only for untyped raw "
@@ -1864,6 +1870,8 @@ def _repair_specialization(
         "finalized primary exposure artifact is discarded before exposure resolution",
         "typed dataframe artifact is replaced by an empty fallback",
         "typed_dataframe_artifact_erased",
+        "finalized exposure resolution can bypass",
+        "planner-selected artifact column binding",
     )
     if any(signal in normalized for signal in tabular_exposure_product_signals):
         selected_exposure = json.dumps(

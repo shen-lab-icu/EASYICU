@@ -589,10 +589,27 @@ def test_typed_table_uses_current_resume_authority_and_writes_exact_manifest(
         evidence_ref=ref,
         evidence_records=store.records(),
         run_dir=tmp_path,
+        producer_step_records=[
+            {
+                "step_id": "producer",
+                "status": "ok",
+                "evidence_ids": [current.evidence_id],
+                "step_summary": {
+                    "scaling_summary": {
+                        "value_column": "x",
+                        "scale": "standardized",
+                    }
+                },
+            }
+        ],
     )
     assert binding is not None
     assert binding["evidence_id"] == current.evidence_id
     assert binding["sha256"] == current.sha256
+    assert binding["product_contract"] == {
+        "value_column": "x",
+        "scale": "standardized",
+    }
     assert Path(binding["absolute_path"]).read_text(encoding="utf-8").endswith("x,1\n")
 
     manifest_path = _write_resolved_inputs_manifest(
@@ -603,6 +620,7 @@ def test_typed_table_uses_current_resume_authority_and_writes_exact_manifest(
     payload = __import__("json").loads(manifest_path.read_text(encoding="utf-8"))
     manifest_binding = payload["inputs"]["table:scaling_summary"]
     assert manifest_binding["evidence_id"] == current.evidence_id
+    assert manifest_binding["product_contract"]["value_column"] == "x"
     assert tmp_path / manifest_binding["relative_path"] == Path(
         manifest_binding["absolute_path"]
     )
