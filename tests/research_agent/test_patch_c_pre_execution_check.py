@@ -32,6 +32,10 @@ from easyicu.research_agent.method_compatibility import (
     detect_forbidden_pattern_usage,
     format_violation_message,
 )
+from easyicu.research_agent.provider_budget import (
+    ProviderCallBudgetExhausted,
+    StepProviderCallBudget,
+)
 from easyicu.research_agent.schema import (
     AnalysisStep,
     CohortDescriptor,
@@ -284,6 +288,26 @@ def test_coderagent_run_gives_up_after_max_repairs_and_returns_last_attempt():
     assert agent.last_compatibility_repair_attempts == _MAX_PRE_EXEC_COMPATIBILITY_REPAIRS
     # Violations are still recorded for the final state.
     assert len(agent.last_compatibility_violations) >= 1
+
+
+def test_coderagent_compatibility_repairs_share_provider_budget():
+    llm = _ScriptedLLM([_BAD_SCRIPT, _BAD_SCRIPT, _CLEAN_SCRIPT])
+    agent = CoderAgent(llm)
+    budget = StepProviderCallBudget(2, step_id="01_test")
+
+    with pytest.raises(ProviderCallBudgetExhausted) as exc_info:
+        agent.run(
+            context=_ordinal_context(),
+            step=_step(),
+            provider_budget=budget,
+        )
+
+    assert exc_info.value.category == "compatibility_repair_patch"
+    assert len(llm.calls) == 2
+    assert budget.categories == (
+        "initial_generation",
+        "compatibility_repair_patch",
+    )
 
 
 def test_coderagent_run_does_not_loop_on_context_without_constrained_variables():

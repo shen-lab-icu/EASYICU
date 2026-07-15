@@ -603,6 +603,7 @@ def _provenance_pair_scan_findings(tree: ast.Module) -> list[ValidationFinding]:
 _RECONCILIATION_FAILURE_EXCEPTIONS = frozenset(
     {"BaseException", "Exception", "TypeError", "ValueError"}
 )
+_RECONCILIATION_HELPER_NAME = "reconcile_binary_event_presence"
 
 
 def _caught_exception_names(node: ast.AST) -> set[str]:
@@ -630,6 +631,184 @@ def _handler_immediately_raises(handler: ast.ExceptHandler) -> bool:
     return bool(handler.body) and isinstance(handler.body[0], ast.Raise)
 
 
+def _reconciliation_helper_call_names(
+    *,
+    target: ast.Try,
+    parents: dict[int, ast.AST],
+) -> set[str]:
+    """Return helper aliases visible from *target*'s lexical scopes.
+
+    ``from ... import reconcile_binary_event_presence as reconcile`` retains
+    the helper's semantics even though the call-site identifier changes.  The
+    imported symbol, rather than a loose name substring, is the authority for
+    adding an alias to the closed call-name set. Simple name assignments are
+    also followed, but definitions nested below the target's scopes are not
+    borrowed into the current execution path.
+    """
+
+    names = {_RECONCILIATION_HELPER_NAME}
+    alias_pairs: list[tuple[str, str]] = []
+
+    class _AliasVisitor(ast.NodeVisitor):
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            return
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            return
+
+        def visit_Lambda(self, node: ast.Lambda) -> None:
+            return
+
+        def visit_ClassDef(self, node: ast.ClassDef) -> None:
+            return
+
+        def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+            for imported in node.names:
+                if imported.name == _RECONCILIATION_HELPER_NAME:
+                    names.add(imported.asname or imported.name)
+
+        def visit_Assign(self, node: ast.Assign) -> None:
+            source_name = _call_name(node.value).split(".")[-1]
+            for assignment_target in node.targets:
+                if isinstance(assignment_target, ast.Name) and source_name:
+                    alias_pairs.append((assignment_target.id, source_name))
+
+        def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+            if node.value is None:
+                return
+            source_name = _call_name(node.value).split(".")[-1]
+            if isinstance(node.target, ast.Name) and source_name:
+                alias_pairs.append((node.target.id, source_name))
+
+    scopes: list[ast.AST] = []
+    current: ast.AST | None = target
+    while current is not None:
+        current = parents.get(id(current))
+        if isinstance(current, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef)):
+            scopes.append(current)
+    for scope in reversed(scopes):
+        visitor = _AliasVisitor()
+        for statement in getattr(scope, "body", []):
+            visitor.visit(statement)
+
+    changed = True
+    while changed:
+        changed = False
+        for alias, source_name in alias_pairs:
+            if source_name in names and alias not in names:
+                names.add(alias)
+                changed = True
+    return names
+
+
+def _statements_call_reconciliation(
+    statements: list[ast.stmt],
+    *,
+    helper_call_names: set[str],
+) -> bool:
+    """Detect helper calls executed in one lexical scope.
+
+    Function and lambda bodies are deferred code, so merely defining one inside
+    a ``try`` must not make that ``try`` look as though it called the helper.
+    Simple aliases assigned inside the inspected statements are followed in
+    source order as well as by the visible-scope fixed-point alias scan above.
+    """
+
+    aliases = set(helper_call_names)
+    called = False
+
+    class _CallVisitor(ast.NodeVisitor):
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            return
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            return
+
+        def visit_Lambda(self, node: ast.Lambda) -> None:
+            return
+
+        def visit_Assign(self, node: ast.Assign) -> None:
+            source_name = _call_name(node.value).split(".")[-1]
+            if source_name in aliases:
+                aliases.update(
+                    target.id for target in node.targets if isinstance(target, ast.Name)
+                )
+            self.visit(node.value)
+
+        def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+            if node.value is None:
+                return
+            source_name = _call_name(node.value).split(".")[-1]
+            if source_name in aliases and isinstance(node.target, ast.Name):
+                aliases.add(node.target.id)
+            self.visit(node.value)
+
+        def visit_Call(self, node: ast.Call) -> None:
+            nonlocal called
+            if _call_name(node.func).split(".")[-1] in aliases:
+                called = True
+            self.generic_visit(node)
+
+    visitor = _CallVisitor()
+    for statement in statements:
+        visitor.visit(statement)
+    return called
+
+
+def _finally_exception_suppressor(finalbody: list[ast.stmt]) -> ast.AST | None:
+    """Return control flow that can suppress an active ``try`` exception.
+
+    A ``return`` anywhere in the current lexical scope suppresses an exception
+    raised by the corresponding ``try``.  A ``break`` or ``continue`` does the
+    same only when it targets a loop outside that ``try``; control transfers
+    inside a loop created by the ``finally`` suite do not escape the suite and
+    therefore do not suppress the exception.
+    """
+
+    suppressor: ast.AST | None = None
+
+    class _FinallyVisitor(ast.NodeVisitor):
+        def __init__(self) -> None:
+            self.loop_depth = 0
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            return
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            return
+
+        def visit_Lambda(self, node: ast.Lambda) -> None:
+            return
+
+        def visit_Return(self, node: ast.Return) -> None:
+            nonlocal suppressor
+            suppressor = suppressor or node
+
+        def visit_Break(self, node: ast.Break) -> None:
+            nonlocal suppressor
+            if self.loop_depth == 0:
+                suppressor = suppressor or node
+
+        def visit_Continue(self, node: ast.Continue) -> None:
+            nonlocal suppressor
+            if self.loop_depth == 0:
+                suppressor = suppressor or node
+
+        def _visit_loop(self, node: ast.AST) -> None:
+            self.loop_depth += 1
+            self.generic_visit(node)
+            self.loop_depth -= 1
+
+        visit_For = _visit_loop
+        visit_AsyncFor = _visit_loop
+        visit_While = _visit_loop
+
+    visitor = _FinallyVisitor()
+    for statement in finalbody:
+        visitor.visit(statement)
+    return suppressor
+
+
 def _swallowed_reconciliation_error_findings(
     tree: ast.Module,
 ) -> list[ValidationFinding]:
@@ -643,16 +822,48 @@ def _swallowed_reconciliation_error_findings(
     """
 
     findings: list[ValidationFinding] = []
+    parents = {
+        id(child): parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
     for node in ast.walk(tree):
         if not isinstance(node, ast.Try):
             continue
-        calls_reconciliation = any(
-            isinstance(candidate, ast.Call)
-            and _call_name(candidate.func).split(".")[-1]
-            == "reconcile_binary_event_presence"
-            for statement in node.body
-            for candidate in ast.walk(statement)
+        helper_call_names = _reconciliation_helper_call_names(
+            target=node,
+            parents=parents,
         )
+        calls_reconciliation = _statements_call_reconciliation(
+            node.body,
+            helper_call_names=helper_call_names,
+        )
+        calls_before_finally = _statements_call_reconciliation(
+            [
+                *node.body,
+                *node.orelse,
+                *(statement for handler in node.handlers for statement in handler.body),
+            ],
+            helper_call_names=helper_call_names,
+        )
+        finally_suppressor = _finally_exception_suppressor(node.finalbody)
+        if calls_before_finally and finally_suppressor is not None:
+            findings.append(
+                ValidationFinding(
+                    validator="mechanical_code_preflight",
+                    severity="error",
+                    message=(
+                        "Errors from reconcile_binary_event_presence can be "
+                        "suppressed by control flow in the finally suite, so "
+                        "an invalid declared provenance triad could continue."
+                    ),
+                    detail={
+                        "reason": "provenance_helper_error_swallowed",
+                        "line": getattr(finally_suppressor, "lineno", node.lineno),
+                    },
+                )
+            )
+            continue
         if not calls_reconciliation:
             continue
         for handler in node.handlers:
@@ -665,10 +876,10 @@ def _swallowed_reconciliation_error_findings(
                     validator="mechanical_code_preflight",
                     severity="error",
                     message=(
-                        "Errors from reconcile_binary_event_presence are caught "
-                        "without re-raising, so an invalid declared provenance "
-                        "triad could be recorded as unavailable and execution "
-                        "could continue."
+                        "Errors from reconcile_binary_event_presence enter "
+                        "control flow that can continue without propagating the "
+                        "failure, so an invalid declared provenance triad could "
+                        "be recorded as unavailable."
                     ),
                     detail={
                         "reason": "provenance_helper_error_swallowed",

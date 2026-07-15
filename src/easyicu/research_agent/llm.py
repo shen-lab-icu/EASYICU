@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import mimetypes
 import os
 import re
@@ -32,6 +33,10 @@ from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Protocol, Sequence
 
 from .analysis_types import infer_analysis_type
+from .provider_budget import (
+    active_provider_retry_available,
+    consume_active_transport_attempt,
+)
 from .skills import build_dynamic_core_plan_steps
 from .schema import (
     AnalysisPlan,
@@ -88,7 +93,9 @@ def _extract_retry_after(exc: Exception) -> Optional[float]:
             hdr = getattr(resp, "headers", None) or {}
             ra = hdr.get("Retry-After") or hdr.get("retry-after")
             if ra is not None:
-                return float(ra)
+                seconds = float(ra)
+                if math.isfinite(seconds) and seconds >= 0:
+                    return seconds
     except Exception:
         pass
     # Fallback: parse out of the str(exc) which usually includes the JSON.
@@ -96,16 +103,114 @@ def _extract_retry_after(exc: Exception) -> Optional[float]:
     m = re.search(r"retry_after_seconds['\"]?\s*[:=]\s*([0-9.]+)", s)
     if m:
         try:
-            return float(m.group(1))
+            seconds = float(m.group(1))
+            if math.isfinite(seconds) and seconds >= 0:
+                return seconds
         except Exception:
             pass
     m = re.search(r"Retry-After['\"]?\s*[:=]?\s*['\"]?([0-9.]+)", s)
     if m:
         try:
-            return float(m.group(1))
+            seconds = float(m.group(1))
+            if math.isfinite(seconds) and seconds >= 0:
+                return seconds
         except Exception:
             pass
     return None
+
+
+_TRANSIENT_HTTP_STATUS_CODES = frozenset({408, 409, 429, 500, 502, 503, 504})
+
+
+def _provider_http_status_code(exc: Exception) -> Optional[int]:
+    """Return a provider HTTP status without depending on one SDK class."""
+
+    for candidate in (exc, getattr(exc, "response", None)):
+        if candidate is None:
+            continue
+        value = getattr(candidate, "status_code", None)
+        try:
+            if value is not None:
+                return int(value)
+        except (TypeError, ValueError):
+            pass
+    match = re.search(
+        r"\b(?:http(?:\s+status)?|status(?:\s+code)?|error\s+code)"
+        r"\s*[:=]?\s*(408|409|429|500|502|503|504)\b",
+        f"{type(exc).__name__}: {exc}",
+        flags=re.I,
+    )
+    return int(match.group(1)) if match else None
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return _provider_http_status_code(exc) == 429 or any(
+        token in text
+        for token in (
+            "ratelimit",
+            "rate limit",
+            "rate-limit",
+            "rate limited",
+            "rate-limited",
+            "too many requests",
+        )
+    )
+
+
+def _is_transient_connection_error(exc: Exception) -> bool:
+    """Recognise connection/timeout failures across OpenAI and HTTP clients."""
+
+    if isinstance(exc, (ConnectionError, TimeoutError)):
+        return True
+    name = type(exc).__name__.lower()
+    if any(
+        token in name
+        for token in (
+            "apiconnectionerror",
+            "connecterror",
+            "connectionerror",
+            "connecttimeout",
+            "readtimeout",
+            "pooltimeout",
+            "remoteprotocolerror",
+        )
+    ):
+        return True
+    text = str(exc).lower()
+    return any(
+        token in text
+        for token in (
+            "connection error",
+            "connection aborted",
+            "connection refused",
+            "connection reset",
+            "connection timed out",
+            "server disconnected",
+            "remote protocol error",
+        )
+    )
+
+
+def _is_retryable_transport_error(exc: Exception) -> bool:
+    status_code = _provider_http_status_code(exc)
+    if status_code in _TRANSIENT_HTTP_STATUS_CODES:
+        return True
+    if _is_rate_limit_error(exc) or _is_transient_connection_error(exc):
+        return True
+    text = str(exc).lower()
+    return any(
+        token in text
+        for token in (
+            "internal server error",
+            "bad gateway",
+            "service unavailable",
+            "gateway timeout",
+            "request timeout",
+            "temporarily unavailable",
+            "overloaded",
+        )
+    )
 
 
 def _is_local_openai_compatible_base_url(base_url: Optional[str]) -> bool:
@@ -237,6 +342,7 @@ class OpenAIClient:
     """
 
     name = "openai"
+    provider_attempt_budget_aware = True
 
     def __init__(
         self,
@@ -308,9 +414,10 @@ class OpenAIClient:
                 # client picks them up.
                 os.environ.setdefault("NO_PROXY", "localhost,127.0.0.1,0.0.0.0")
                 os.environ.setdefault("no_proxy", "localhost,127.0.0.1,0.0.0.0")
-        # Bump retries: local vLLM under load returns 503 frequently.
-        # Default OpenAI SDK is 2; we let the user override via kwarg.
-        kwargs["max_retries"] = int(max_retries)
+        # The explicit recovery loop in ``complete`` is the sole retry owner.
+        # Leaving the OpenAI SDK's internal retries enabled multiplies every
+        # outer attempt and makes a bounded repair look arbitrarily slow.
+        kwargs["max_retries"] = 0
         # OpenRouter recommends — and some providers require — a
         # ``HTTP-Referer`` / ``X-Title`` header for analytics. Pass them
         # to the SDK as default headers when supplied.
@@ -464,16 +571,15 @@ class OpenAIClient:
             create_kwargs["top_p"] = float(top_p)
         if self._extra_body:
             create_kwargs["extra_body"] = self._extra_body
-        # Manual back-off for 503 / overloaded errors. The SDK retries
-        # quickly (1-2s) which is too aggressive for a busy local vLLM
-        # whose KV cache needs ~5-10 s to drain. We layer a longer wait
-        # on top of the SDK's retries.
+        # Manual back-off for 503 / overloaded errors. SDK retries are disabled
+        # in the constructor, so this is the single transport retry owner.
         import time as _time
 
         last_exc: Optional[Exception] = None
         import json as _json
 
         def _do_call():
+            consume_active_transport_attempt()
             if getattr(self, "_local_noauth_mode", False):
                 if self._local_http_client is None:
                     raise RuntimeError("Local no-auth HTTP client was not initialized.")
@@ -540,6 +646,14 @@ class OpenAIClient:
         # must issue the initial request once; it simply disables another
         # manual attempt after a transient failure.
         manual_attempts = max(1, int(getattr(self, "_max_retries", 8)))
+
+        def _sleep_before_retry(seconds: float, attempt_index: int) -> None:
+            if (
+                attempt_index + 1 < manual_attempts
+                and active_provider_retry_available()
+            ):
+                _time.sleep(seconds)
+
         for attempt in range(manual_attempts):
             try:
                 resp = _do_call()
@@ -552,18 +666,21 @@ class OpenAIClient:
                 # run_20260516T123840_cc32d5 lost step 08_model_validation to
                 # exactly this.
                 last_exc = exc
-                _time.sleep(2.0 * (attempt + 1))
+                _sleep_before_retry(2.0 * (attempt + 1), attempt)
                 continue
             except Exception as exc:  # noqa: BLE001
                 msg = str(exc).lower()
-                if (
-                    "503" in msg
-                    or "service unavailable" in msg
-                    or "overload" in msg
-                    or "429" in msg
-                    or "rate" in msg
-                ):
+                transient_proxy_auth = "invalid proxy api key" in msg or (
+                    "401" in msg and "proxy" in msg
+                )
+                transient_connection = _is_transient_connection_error(exc)
+                if _is_retryable_transport_error(exc) or transient_proxy_auth:
                     last_exc = exc
+                    if transient_connection or transient_proxy_auth:
+                        # A fresh connection pool is required when the local
+                        # proxy rotates its upstream key or drops a pooled
+                        # connection. The SDK itself owns no retries.
+                        self._rebuild_openai_client()
                     # Respect provider-supplied Retry-After (e.g. Venice's
                     # ~30 s for llama-3.3-70b:free). Fall back to a quadratic
                     # backoff so consecutive failures don't hammer the
@@ -573,7 +690,7 @@ class OpenAIClient:
                         backoff = float(_retry_after) + 2.0
                     else:
                         backoff = 5.0 * (attempt + 1) ** 2
-                    _time.sleep(min(backoff, 120.0))
+                    _sleep_before_retry(min(backoff, 120.0), attempt)
                     continue
                 # JSON parse errors sometimes surface wrapped in other
                 # exception classes (e.g. APIError). Catch by message text
@@ -581,7 +698,7 @@ class OpenAIClient:
                 msg = str(exc).lower()
                 if "expecting value" in msg or "json" in msg and "decode" in msg:
                     last_exc = exc
-                    _time.sleep(2.0 * (attempt + 1))
+                    _sleep_before_retry(2.0 * (attempt + 1), attempt)
                     continue
                 # Our own LLM_TRANSIENT_* envelope failures from _do_call
                 # (null choices / null message) are retryable too.
@@ -590,32 +707,7 @@ class OpenAIClient:
                     or "llm_transient_no_message" in msg
                 ):
                     last_exc = exc
-                    _time.sleep(2.0 * (attempt + 1))
-                    continue
-                # 🔧 2026-07-10: the SHARED local proxy (cli-proxy-api / Codex
-                # Tools) intermittently rotates its key or briefly drops the
-                # connection, surfacing as a TRANSIENT 401 "invalid proxy api
-                # key" or an APIConnectionError. These are NOT real auth failures
-                # (small probes succeed seconds later) and the OpenAI SDK does not
-                # retry 401/connection by default, so a full bench died at the
-                # plan phase on a momentary blip. Retry them with a longer backoff
-                # instead of aborting the whole run.
-                if (
-                    "invalid proxy api key" in msg
-                    or "apiconnectionerror" in msg
-                    or "connection error" in msg
-                    or "connection aborted" in msg
-                    or "connection reset" in msg
-                    or "server disconnected" in msg
-                    or ("401" in msg and "proxy" in msg)
-                ):
-                    last_exc = exc
-                    # Recreate the client so the retry uses a FRESH connection
-                    # pool: the shared proxy rotates its upstream key and a pooled
-                    # connection stays bound to the stale upstream -> 401 forever,
-                    # while a fresh connection binds to the current upstream -> 200.
-                    self._rebuild_openai_client()
-                    _time.sleep(min(5.0 * (attempt + 1), 60.0))
+                    _sleep_before_retry(2.0 * (attempt + 1), attempt)
                     continue
                 raise
         else:
@@ -848,24 +940,30 @@ def openrouter_reasoning_extra_body(model: str) -> Optional[Dict[str, Any]]:
 
 
 def _retryable_provider_error(exc: Exception) -> bool:
+    if _is_retryable_transport_error(exc):
+        return True
     text = f"{type(exc).__name__}: {exc}".lower()
     return any(
         token in text
         for token in (
-            " 429",
-            "429 ",
-            "rate limit",
-            "rate-limited",
             "temporarily",
-            "overloaded",
             "provider returned error",
             "retry after",
-            " 500",
-            " 502",
-            " 503",
-            " 504",
         )
     )
+
+
+def _client_counts_transport_attempts(client: Any) -> bool:
+    """Detect transport-aware clients through common transparent wrappers."""
+
+    seen: set[int] = set()
+    current = client
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if bool(getattr(current, "provider_attempt_budget_aware", False)):
+            return True
+        current = getattr(current, "_inner", None)
+    return False
 
 
 class FallbackLLMClient:
@@ -875,6 +973,8 @@ class FallbackLLMClient:
     single upstream model might be temporarily rate-limited even though
     alternative free models remain available.
     """
+
+    provider_attempt_budget_aware = True
 
     def __init__(
         self,
@@ -912,6 +1012,8 @@ class FallbackLLMClient:
         last_exc: Optional[Exception] = None
         for client in self._clients:
             try:
+                if not _client_counts_transport_attempts(client):
+                    consume_active_transport_attempt()
                 # Forward top_p only to clients that accept it (OpenAI-
                 # compatible); legacy clients keep their previous
                 # 3-kwarg signature.
