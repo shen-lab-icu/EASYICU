@@ -192,6 +192,123 @@ def test_step_provider_call_budget_reservation_is_atomic():
     assert len(budget.categories) == 17
 
 
+def test_final_concept_audit_slot_cannot_be_spent_by_generation_or_repair():
+    budget = StepProviderCallBudget(
+        3,
+        step_id="01_model",
+        reserved_final_category="concept_audit",
+    )
+
+    budget.consume("initial_generation")
+    budget.consume("contract_repair_patch")
+    with pytest.raises(ProviderCallBudgetExhausted) as exc_info:
+        budget.consume("contract_repair_full_rewrite")
+
+    assert exc_info.value.reserved_for == "concept_audit"
+    assert budget.remaining == 1
+    assert budget.categories == (
+        "initial_generation",
+        "contract_repair_patch",
+    )
+    budget.consume("concept_audit")
+    assert budget.remaining == 0
+
+
+def test_exact_final_audit_token_releases_reserved_slot_for_analyzer():
+    budget = StepProviderCallBudget(
+        2,
+        step_id="01_model",
+        reserved_final_category="concept_audit",
+    )
+    budget.consume("initial_generation")
+    budget.bind_reserved_category("concept_audit", token="audit-A-authority-1")
+    budget.complete_reserved_category("concept_audit", token="audit-A-authority-1")
+
+    assert budget.can_consume("analyzer") is False
+    with pytest.raises(ValueError, match="completed"):
+        budget.release_reserved_category(
+            "concept_audit",
+            token="audit-B-authority-1",
+        )
+    budget.release_reserved_category(
+        "concept_audit",
+        token="audit-A-authority-1",
+    )
+    assert budget.can_consume("analyzer") is True
+    budget.consume("analyzer")
+    assert budget.categories == ("initial_generation", "analyzer")
+
+
+def test_repair_from_cached_code_a_to_code_b_rearms_final_audit_slot():
+    budget = StepProviderCallBudget(
+        3,
+        step_id="01_model",
+        reserved_final_category="concept_audit",
+    )
+    budget.consume("initial_generation")
+    budget.bind_reserved_category("concept_audit", token="audit-A-authority-1")
+    budget.complete_reserved_category("concept_audit", token="audit-A-authority-1")
+
+    # A cache hit is not the final boundary: a repair may still create B.
+    budget.consume("post_mutation_concept_repair")
+    budget.bind_reserved_category("concept_audit", token="audit-B-authority-1")
+
+    assert budget.can_consume("analyzer") is False
+    with pytest.raises(ProviderCallBudgetExhausted) as exc_info:
+        budget.consume("analyzer")
+    assert exc_info.value.reserved_for == "concept_audit"
+    budget.consume("concept_audit")
+    assert budget.categories[-1] == "concept_audit"
+
+
+def test_resume_history_with_old_audit_does_not_release_slot_for_new_code(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="01_model")
+    first = StepProviderCallBudget(
+        3,
+        step_id="01_model",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    first.consume("initial_generation")
+    first.bind_reserved_category("concept_audit", token="audit-A-authority-1")
+    first.consume("concept_audit")
+
+    stored_limit, stored_categories = load_provider_call_budget_receipt(
+        path,
+        step_id="01_model",
+        expected_reserved_final_category="concept_audit",
+    )
+    resumed = StepProviderCallBudget(
+        stored_limit,
+        step_id="01_model",
+        consumed_categories=stored_categories,
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    resumed.bind_reserved_category("concept_audit", token="audit-B-authority-1")
+
+    assert resumed.can_consume("analyzer") is False
+    assert resumed.can_consume("concept_audit") is True
+
+
+def test_receipt_rejects_final_audit_policy_drift(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="01_model")
+    budget = StepProviderCallBudget(
+        2,
+        step_id="01_model",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    budget.consume("initial_generation")
+
+    with pytest.raises(ProviderCallBudgetReceiptError, match="policy changed"):
+        load_provider_call_budget_receipt(
+            path,
+            step_id="01_model",
+            expected_reserved_final_category=None,
+        )
+
+
 def test_llm_concept_auditor_charges_shared_budget_and_fails_closed_when_empty():
     llm = _AuditLLM()
     auditor = LLMConceptAuditor(llm)

@@ -305,6 +305,7 @@ def _extract_cohort_definition_with_provider_budget(
     universe_columns: Sequence[str],
     llm: Any,
     name: str,
+    reserved_final_category: Optional[str] = None,
 ) -> Tuple[Optional[CohortDefinition], Dict[str, Any]]:
     """Run cohort-prose translation under a crash-safe provider receipt.
 
@@ -325,6 +326,7 @@ def _extract_cohort_definition_with_provider_budget(
         receipt_limit, consumed_categories = load_provider_call_budget_receipt(
             receipt_path,
             step_id=budget_owner_step_id,
+            expected_reserved_final_category=reserved_final_category,
         )
         effective_limit = min(effective_limit, receipt_limit)
     budget = StepProviderCallBudget(
@@ -332,6 +334,7 @@ def _extract_cohort_definition_with_provider_budget(
         step_id=budget_owner_step_id,
         consumed_categories=consumed_categories,
         receipt_path=receipt_path,
+        reserved_final_category=reserved_final_category,
     )
     definition = complete_with_provider_budget(
         budget=budget,
@@ -700,8 +703,7 @@ def _declared_typed_product_paths(
                     (
                         item.get(key)
                         for key in ("path", "relative_path", "filename")
-                        if isinstance(item.get(key), str)
-                        and str(item.get(key)).strip()
+                        if isinstance(item.get(key), str) and str(item.get(key)).strip()
                     ),
                     None,
                 )
@@ -878,6 +880,95 @@ def _serializable_plan_scientific_scope_signature(
     """Return the plan-level signature in manifest-safe form."""
 
     return list(_plan_scientific_scope_signature(plan))
+
+
+def _failed_contract_code_can_be_reused_before_coder(
+    *,
+    prior_step_record: Optional[Mapping[str, Any]],
+    resumed_code: Optional[Tuple[str, Mapping[str, Any]]],
+    step: AnalysisStep,
+    plan: AnalysisPlan,
+    resolved_inputs_sha256: Optional[str],
+    run_input_capsule_sha256: Optional[str],
+) -> bool:
+    """Allow a failed deterministic-contract attempt one exact-code replay.
+
+    An explicit step resume normally asks Coder for a fresh script.  That is
+    wasteful when the previous script executed successfully and only a
+    host-owned output contract failed (for example, after the contract parser
+    itself is fixed).  Reuse is safe only when the checkpoint binds the exact
+    code digest, step specification, and plan-wide scientific scope.  The code
+    still passes every current preflight, execution, contract, concept, and
+    Critic gate; this helper merely avoids paying for a replacement draft
+    before those gates are rerun.
+
+    Older or incomplete checkpoints deliberately fail closed to the normal
+    Coder path rather than gaining implicit reuse authority.
+    """
+
+    if not isinstance(prior_step_record, Mapping) or resumed_code is None:
+        return False
+    if str(prior_step_record.get("status") or "").lower() != "contract_failed":
+        return False
+    if (
+        prior_step_record.get("provider_call_budget_receipt_invalid") is True
+        or prior_step_record.get("quarantined_requires_repair") is True
+        or prior_step_record.get("returncode") != 0
+        or prior_step_record.get("timed_out") is not False
+        or prior_step_record.get("outputs_safe_to_collect") is not True
+    ):
+        return False
+
+    code, evidence_record = resumed_code
+    if not isinstance(code, str) or not isinstance(evidence_record, Mapping):
+        return False
+    code_sha256 = hashlib.sha256(code.encode("utf-8")).hexdigest()
+    if str(prior_step_record.get("executed_code_sha256") or "") != code_sha256:
+        return False
+    if str(prior_step_record.get("concept_approved_code_sha256") or "") != code_sha256:
+        return False
+    if str(evidence_record.get("sha256") or "") != code_sha256:
+        return False
+    evidence_id = str(evidence_record.get("evidence_id") or "")
+    if (
+        not evidence_id
+        or str(prior_step_record.get("script_evidence_id") or "") != evidence_id
+    ):
+        return False
+
+    def _valid_sha256(value: Any) -> bool:
+        return (
+            isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+        )
+
+    for field, current_digest in (
+        ("resolved_inputs_sha256", resolved_inputs_sha256),
+        ("run_input_capsule_sha256", run_input_capsule_sha256),
+    ):
+        recorded_digest = prior_step_record.get(field)
+        if (
+            not _valid_sha256(recorded_digest)
+            or not _valid_sha256(current_digest)
+            or recorded_digest != current_digest
+        ):
+            return False
+
+    recorded_scope = prior_step_record.get("plan_scientific_signature")
+    if not isinstance(recorded_scope, (list, tuple)) or list(recorded_scope) != (
+        _serializable_plan_scientific_scope_signature(plan)
+    ):
+        return False
+    analysis_request = prior_step_record.get("analysis_request")
+    executed_step_payload = (
+        analysis_request.get("step") if isinstance(analysis_request, Mapping) else None
+    )
+    if not isinstance(executed_step_payload, Mapping):
+        return False
+    try:
+        executed_step = AnalysisStep.model_validate(executed_step_payload)
+    except (TypeError, ValueError):
+        return False
+    return _step_scientific_signature(executed_step) == _step_scientific_signature(step)
 
 
 def _preserve_completed_step_snapshots_after_replan(
@@ -5841,6 +5932,9 @@ def run_execute_phase(
                         "primary",
                     )
                     or "primary",
+                    reserved_final_category=(
+                        "concept_audit" if pipeline._enable_llm_concept_audit else None
+                    ),
                 )
             )
         except ProviderCallBudgetError as exc:
@@ -6800,6 +6894,9 @@ def run_execute_phase(
             step_record["step_llm_repair_budget_exhausted"] = True
         configured_provider_limit = pipeline._max_step_provider_calls
         effective_provider_limit = configured_provider_limit
+        reserved_final_category = (
+            "concept_audit" if pipeline._enable_llm_concept_audit else None
+        )
         provider_receipt_path = provider_call_budget_receipt_path(
             run_dir,
             step_id=step.step_id,
@@ -6859,6 +6956,7 @@ def run_execute_phase(
                 receipt_limit, receipt_categories = load_provider_call_budget_receipt(
                     provider_receipt_path,
                     step_id=step.step_id,
+                    expected_reserved_final_category=reserved_final_category,
                 )
                 effective_provider_limit = min(
                     effective_provider_limit,
@@ -6892,6 +6990,7 @@ def run_execute_phase(
             step_id=step.step_id,
             consumed_categories=prior_provider_categories,
             receipt_path=provider_receipt_path,
+            reserved_final_category=reserved_final_category,
         )
 
         def _sync_provider_budget() -> None:
@@ -6904,6 +7003,12 @@ def run_execute_phase(
             step_record["step_provider_call_remaining"] = snapshot["remaining"]
             step_record["step_provider_call_budget_exhausted"] = snapshot["exhausted"]
             step_record["step_provider_call_categories"] = snapshot["categories"]
+            step_record["step_provider_call_reserved_category"] = snapshot[
+                "reserved_final_category"
+            ]
+            step_record["step_provider_call_reservation_released"] = snapshot[
+                "reservation_released"
+            ]
             step_record["step_provider_call_receipt_version"] = 1
             step_record["step_provider_call_receipt"] = (
                 provider_receipt_relative_path if snapshot["used"] else None
@@ -7147,6 +7252,16 @@ def run_execute_phase(
         step_record["resolved_inputs_path"] = str(
             resolved_inputs_path.relative_to(run_dir)
         )
+        resolved_inputs_sha256 = sha256_of_file(resolved_inputs_path)
+        step_record["resolved_inputs_sha256"] = resolved_inputs_sha256
+        run_input_capsule_path = run_dir / "run_input_capsule.json"
+        run_input_capsule_sha256 = (
+            sha256_of_file(run_input_capsule_path)
+            if run_input_capsule_path.is_file()
+            else None
+        )
+        if run_input_capsule_sha256 is not None:
+            step_record["run_input_capsule_sha256"] = run_input_capsule_sha256
         step_record["resolved_input_evidence_ids"] = list(resolved_input_evidence_ids)
         local_runtime_state = supervisor.prepare_step_state(
             state=runtime_state,
@@ -7888,11 +8003,11 @@ else:
             return trajectory_stability_executor_code(step, plan=plan)
 
         # ``--resume-from-step-id`` means the selected step is intentionally
-        # rerun. Completed predecessors stay checkpointed, but the selected
-        # step does not reuse its old script before the current coder/
-        # deterministic-standard path unless the operator explicitly enables
-        # the diagnostic fast path. Reused code still runs through every
-        # current execution audit and repair gate.
+        # rerun. Completed predecessors stay checkpointed. A previously
+        # successful step gets a fresh Coder draft unless the operator opts in
+        # to reuse; a prior deterministic ``contract_failed`` attempt may reuse
+        # only its exact evidence-bound code and scientific signature. Reused
+        # code still runs through every current execution audit and repair gate.
         preflight_trajectory_stability_code = _deterministic_trajectory_stability_code(
             "trajectory_stability_spec_preflight", preflight=True
         )
@@ -7931,18 +8046,27 @@ else:
             else _resume_summary_repair_code()
         )
         preflight_resumed_code = None
+        failed_contract_code_preflight_reuse = False
         if (
             preflight_trajectory_stability_code is None
             and preflight_figure_code is None
             and quarantined_resume_draft is None
             and resume_summary_repair_code is None
             and resume_critic_repair_code is None
-            and (
-                requested_resume_from_step_id != step.step_id
-                or reuse_selected_step_code_opt_in
-            )
         ):
-            preflight_resumed_code = resume_controller.prior_code_for_step(step.step_id)
+            resumed_code_candidate = resume_controller.prior_code_for_step(step.step_id)
+            failed_contract_code_preflight_reuse = (
+                _failed_contract_code_can_be_reused_before_coder(
+                    prior_step_record=prior_step_record,
+                    resumed_code=resumed_code_candidate,
+                    step=step,
+                    plan=plan,
+                    resolved_inputs_sha256=resolved_inputs_sha256,
+                    run_input_capsule_sha256=run_input_capsule_sha256,
+                )
+            )
+            if reuse_selected_step_code_opt_in or failed_contract_code_preflight_reuse:
+                preflight_resumed_code = resumed_code_candidate
         if preflight_trajectory_stability_code is not None:
             code = preflight_trajectory_stability_code
             with shared_lock:
@@ -7980,6 +8104,8 @@ else:
         elif resume_summary_repair_code is not None:
             code = resume_summary_repair_code
         elif preflight_resumed_code is not None:
+            if failed_contract_code_preflight_reuse:
+                step_record["resumed_failed_contract_code_preflight"] = True
             code = _use_resumed_code(preflight_resumed_code)
         # Primary estimands and cohort selection stay agent-owned.  Deterministic
         # preflight below is limited to standard auxiliary products (descriptive
@@ -8155,6 +8281,7 @@ else:
             return fallback_coder.run(context=coder_context, step=step)
 
         llm_concept_audit_completed_digests: set[str] = set()
+        llm_concept_audit_tokens_by_digest: Dict[str, str] = {}
 
         def _concept_findings_for_code(
             script_text: str,
@@ -8345,6 +8472,16 @@ else:
                                 llm_concept_auditor_implementation_sha256
                             ),
                         )
+                        audited_code_digest = sha256_of_bytes(
+                            script_text.encode("utf-8")
+                        )
+                        provider_budget.bind_reserved_category(
+                            "concept_audit",
+                            token=audit_key,
+                        )
+                        llm_concept_audit_tokens_by_digest[audited_code_digest] = (
+                            audit_key
+                        )
                         cached_findings = llm_concept_audit_cache.get(audit_key)
                         if cached_findings is not None:
                             # Cache entries preserve the original audit output,
@@ -8358,9 +8495,7 @@ else:
                                 script_text=script_text,
                             )
                             code_findings.extend(cached_findings)
-                            llm_concept_audit_completed_digests.add(
-                                sha256_of_bytes(script_text.encode("utf-8"))
-                            )
+                            llm_concept_audit_completed_digests.add(audited_code_digest)
                             step_record["llm_concept_audit_cache_hits"] = (
                                 int(
                                     step_record.get("llm_concept_audit_cache_hits") or 0
@@ -8377,9 +8512,7 @@ else:
                             _sync_provider_budget()
                             llm_concept_audit_cache.put(audit_key, llm_findings)
                             code_findings.extend(llm_findings)
-                            llm_concept_audit_completed_digests.add(
-                                sha256_of_bytes(script_text.encode("utf-8"))
-                            )
+                            llm_concept_audit_completed_digests.add(audited_code_digest)
             except ProviderCallBudgetError as exc:
                 _sync_provider_budget()
                 receipt_error = isinstance(exc, ProviderCallBudgetReceiptError)
@@ -9453,6 +9586,14 @@ else:
                         final_concept_gate_approved_code_digest
                     )
                     if candidate_code_digest in llm_concept_audit_completed_digests:
+                        final_audit_token = llm_concept_audit_tokens_by_digest.get(
+                            candidate_code_digest
+                        )
+                        if final_audit_token is not None:
+                            provider_budget.complete_reserved_category(
+                                "concept_audit",
+                                token=final_audit_token,
+                            )
                         step_record["llm_concept_audit_status"] = "completed"
                         step_record["llm_concept_approved_code_sha256"] = (
                             candidate_code_digest
@@ -11872,6 +12013,24 @@ else:
                 else "deterministic_fallback"
             )
         else:
+            final_code_digest = sha256_of_bytes(code.encode("utf-8"))
+            final_audit_token = llm_concept_audit_tokens_by_digest.get(
+                final_code_digest
+            )
+            if (
+                pipeline._enable_llm_concept_audit
+                and final_audit_token is not None
+                and final_concept_gate_approved_code_digest == final_code_digest
+                and concept_approved_code_digest == final_code_digest
+                and executed_code_digest == final_code_digest
+                and step_record.get("llm_concept_approved_code_sha256")
+                == final_code_digest
+            ):
+                provider_budget.release_reserved_category(
+                    "concept_audit",
+                    token=final_audit_token,
+                )
+                _sync_provider_budget()
             try:
                 interpretation = analyzer.run(
                     context=agent_context,
