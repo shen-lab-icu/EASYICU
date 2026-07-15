@@ -2670,6 +2670,174 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     assert not (run_dir / "steps" / "01_summary" / ".quarantine").exists()
 
 
+def test_resume_reaudits_material_deterministic_quarantine_repair(
+    ra, tmp_path: Path, monkeypatch
+) -> None:
+    """A deterministic code mutation retires stale findings, not the gate."""
+
+    import easyicu.research_agent.pipeline_execute as execute_module
+
+    real_repair = execute_module.deterministic_concept_audit_repair
+    repair_enabled = {"value": False}
+
+    def gated_repair(code, messages):
+        if not repair_enabled["value"]:
+            return code, []
+        return real_repair(code, messages)
+
+    monkeypatch.setattr(
+        execute_module,
+        "deterministic_concept_audit_repair",
+        gated_repair,
+    )
+
+    draft_code = '''
+import json
+import os
+from pathlib import Path
+import pandas as pd
+
+def main():
+    frame = pd.read_parquet(os.environ["COHORT_PARQUET"])
+    out = Path(os.environ["STEP_OUT_DIR"])
+    invalid_pair_n = int(frame["stay_id"].isna().sum())
+    discordant_n = int((frame["stay_id"] < 0).sum())
+    audit = {
+        "role": "audit_only",
+        "invalid_pair_n": invalid_pair_n,
+        "discordant_n": discordant_n,
+    }
+    summary = {
+        "status": "ok",
+        "measurement_provenance_audit": audit,
+        "registered_outputs": {
+            "table:cohort_summary": "cohort_summary.csv",
+        },
+        "output_files": ["cohort_summary.csv", "step_summary.json"],
+    }
+    if invalid_pair_n > 0 or discordant_n > 0:
+        summary["status"] = "failed_provenance_audit"
+    pd.DataFrame([{"n": int(len(frame))}]).to_csv(
+        out / "cohort_summary.csv", index=False
+    )
+    with open(out / "step_summary.json", "w", encoding="utf-8") as handle:
+        json.dump(summary, handle)
+
+if __name__ == "__main__":
+    main()
+'''
+
+    class DeterministicResumeLLM:
+        name = "deterministic-quarantine-resume"
+
+        def __init__(self):
+            self.write_calls = 0
+            self.repair_calls = 0
+
+        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
+            del max_tokens, temperature
+            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
+            upper = user.upper()
+            if "ICU-AWARE RESEARCH PLAN" in upper:
+                return json.dumps(
+                    {
+                        "research_question": "Summarize the ICU cohort.",
+                        "steps": [
+                            {
+                                "step_id": "01_summary",
+                                "intent": "Produce a descriptive cohort summary.",
+                                "inputs": ["stay_id"],
+                                "expected_outputs": ["table:cohort_summary"],
+                                "method": "descriptive_summary",
+                                "icu_rule_refs": [],
+                            }
+                        ],
+                        "rationale": "single-step deterministic resume test",
+                    }
+                )
+            if "REPAIR THE PYTHON CODE" in upper:
+                self.repair_calls += 1
+                raise RuntimeError("simulated first-pass repair outage")
+            if "WRITE THE PYTHON CODE" in upper:
+                self.write_calls += 1
+                return draft_code
+            if "INTERPRET THE RESULTS" in upper:
+                return "The cohort summary is available {evidence:cohort_summary}."
+            if "MANUSCRIPT SCAFFOLD" in upper:
+                return "# Title\n\n## Results\n\nSummary {evidence:cohort_summary}."
+            return "{}"
+
+    cohort = pd.DataFrame({"stay_id": [1, 2, 3], "death": [0, 1, 0]})
+    first_llm = DeterministicResumeLLM()
+    first_pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=first_llm,
+        enable_literature=False,
+        enable_visual_qa=False,
+        enable_latex=False,
+        enable_llm_concept_audit=False,
+        enable_deterministic_code_fallback=False,
+        max_step_provider_calls=20,
+        runner_kind="subprocess",
+    )
+    first = first_pipeline.run(
+        question="Summarize the ICU cohort.",
+        cohort=cohort,
+        cohort_name="deterministic_quarantine_resume",
+        database="synthetic",
+        target_outcome="death",
+        stop_after_step_id="01_summary",
+        stop_after_analysis=True,
+    )
+    run_dir = Path(first.workdir)
+    assert first_llm.write_calls == 1
+    assert first_llm.repair_calls == 1
+    assert (run_dir / "steps" / "01_summary" / ".quarantine").is_dir()
+
+    repair_enabled["value"] = True
+    resumed_llm = DeterministicResumeLLM()
+    resumed_pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=resumed_llm,
+        enable_literature=False,
+        enable_visual_qa=False,
+        enable_latex=False,
+        enable_llm_concept_audit=False,
+        enable_deterministic_code_fallback=False,
+        max_step_provider_calls=20,
+        runner_kind="subprocess",
+    )
+    resumed_pipeline.run(
+        question="Summarize the ICU cohort.",
+        cohort=cohort,
+        cohort_name="deterministic_quarantine_resume",
+        database="synthetic",
+        target_outcome="death",
+        resume_run_id=first.run_id,
+        resume_from_step_id="01_summary",
+        stop_after_step_id="01_summary",
+        stop_after_analysis=True,
+    )
+
+    partial = json.loads(
+        (run_dir / "manifest_partial.json").read_text(encoding="utf-8")
+    )
+    record = next(
+        item
+        for item in partial["per_step_records"]
+        if item.get("step_id") == "01_summary"
+    )
+    assert resumed_llm.write_calls == 0
+    assert resumed_llm.repair_calls == 0
+    assert record["status"] == "ok"
+    assert record["deterministic_concept_repairs"] == 1
+    assert record["quarantined_repair_materially_changed"] is True
+    assert record["quarantined_repair_succeeded"] is True
+    assert record["quarantine_retired"] is True
+    assert not record.get("monotonic_concept_constraints")
+    assert not (run_dir / "steps" / "01_summary" / ".quarantine").exists()
+
+
 def _policy_supersession_context_and_script(ra):
     context = ra.build_research_context(
         research_question=(
