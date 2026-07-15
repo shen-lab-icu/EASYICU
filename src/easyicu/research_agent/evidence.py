@@ -51,7 +51,7 @@ import threading
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .schema import EvidenceRecord
 
@@ -911,6 +911,7 @@ class EvidenceStore:
         generation_mode: Optional[str],
         prompt_pack_version: Optional[str],
         metadata: Optional[Dict[str, Any]],
+        publish_aliases: bool,
         on_sha_change: str = "raise",
     ) -> EvidenceRecord:
         """Register an evidence record on disk.
@@ -949,8 +950,17 @@ class EvidenceStore:
         if existing is not None:
             if existing.sha256 != sha256:
                 if on_sha_change == "keep_existing":
-                    for alias in aliases or []:
-                        self._add_alias(alias, evidence_id)
+                    if publish_aliases:
+                        for alias in aliases or []:
+                            self._add_alias(alias, evidence_id)
+                        self._add_alias(
+                            _target_basename_stem(target, evidence_id), evidence_id
+                        )
+                        self._add_alias(evidence_id, evidence_id)
+                        existing.metadata = {
+                            **dict(existing.metadata or {}),
+                            "aliases_published": True,
+                        }
                     self._save()
                     return existing
                 if on_sha_change == "new_id":
@@ -984,17 +994,26 @@ class EvidenceStore:
                     # the original evidence_id alias keeps pointing at
                     # the original record (it is the canonical citation
                     # target for the run).
-                    self._add_alias(_target_basename_stem(target, new_id), new_id)
-                    self._add_alias(new_id, new_id)
+                    if publish_aliases:
+                        for alias in aliases or []:
+                            self._add_alias(alias, new_id)
+                        self._add_alias(_target_basename_stem(target, new_id), new_id)
+                        self._add_alias(new_id, new_id)
                     self._save()
                     return record
                 raise ValueError(
                     f"Evidence id collision for {evidence_id}: "
                     f"existing sha256={existing.sha256[:8]} new sha256={sha256[:8]}"
                 )
-            for alias in aliases or []:
-                self._add_alias(alias, evidence_id)
-            self._add_alias(_target_basename_stem(target, evidence_id), evidence_id)
+            if publish_aliases:
+                for alias in aliases or []:
+                    self._add_alias(alias, evidence_id)
+                self._add_alias(_target_basename_stem(target, evidence_id), evidence_id)
+                self._add_alias(evidence_id, evidence_id)
+                existing.metadata = {
+                    **dict(existing.metadata or {}),
+                    "aliases_published": True,
+                }
             self._save()
             return existing
 
@@ -1015,10 +1034,11 @@ class EvidenceStore:
         )
         self._records.append(record)
 
-        for alias in aliases or []:
-            self._add_alias(alias, evidence_id)
-        self._add_alias(_target_basename_stem(target, evidence_id), evidence_id)
-        self._add_alias(evidence_id, evidence_id)
+        if publish_aliases:
+            for alias in aliases or []:
+                self._add_alias(alias, evidence_id)
+            self._add_alias(_target_basename_stem(target, evidence_id), evidence_id)
+            self._add_alias(evidence_id, evidence_id)
 
         self._save()
         return record
@@ -1038,6 +1058,7 @@ class EvidenceStore:
         generation_mode: Optional[str] = None,
         prompt_pack_version: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        publish_aliases: bool = True,
         on_sha_change: str = "raise",
     ) -> EvidenceRecord:
         if not source_path.exists():
@@ -1053,6 +1074,7 @@ class EvidenceStore:
             )
             target_eid = eid
             target_metadata = dict(metadata or {})
+            target_metadata["aliases_published"] = bool(publish_aliases)
             target_on_sha_change = on_sha_change
             existing = self._record_by_id(eid)
             if (
@@ -1084,6 +1106,7 @@ class EvidenceStore:
                 generation_mode=generation_mode,
                 prompt_pack_version=prompt_pack_version,
                 metadata=target_metadata,
+                publish_aliases=publish_aliases,
                 on_sha_change=target_on_sha_change,
             )
 
@@ -1103,6 +1126,7 @@ class EvidenceStore:
         generation_mode: Optional[str] = None,
         prompt_pack_version: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        publish_aliases: bool = True,
         on_sha_change: str = "raise",
     ) -> EvidenceRecord:
         payload = text.encode("utf-8")
@@ -1113,6 +1137,7 @@ class EvidenceStore:
         with self._lock:
             target_eid = eid
             target_metadata = dict(metadata or {})
+            target_metadata["aliases_published"] = bool(publish_aliases)
             target_on_sha_change = on_sha_change
             existing = self._record_by_id(eid)
             if (
@@ -1142,6 +1167,7 @@ class EvidenceStore:
                 generation_mode=generation_mode,
                 prompt_pack_version=prompt_pack_version,
                 metadata=target_metadata,
+                publish_aliases=publish_aliases,
                 on_sha_change=target_on_sha_change,
             )
 
@@ -1160,6 +1186,7 @@ class EvidenceStore:
         generation_mode: Optional[str] = None,
         prompt_pack_version: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        publish_aliases: bool = True,
         on_sha_change: str = "raise",
     ) -> EvidenceRecord:
         text = json.dumps(payload, indent=2, ensure_ascii=False, default=str)
@@ -1176,6 +1203,7 @@ class EvidenceStore:
             generation_mode=generation_mode,
             prompt_pack_version=prompt_pack_version,
             metadata=metadata,
+            publish_aliases=publish_aliases,
             on_sha_change=on_sha_change,
         )
 
@@ -1211,6 +1239,317 @@ class EvidenceStore:
             self._save()
             return record
 
+    def publish_success_aliases(
+        self,
+        evidence_id: str,
+        *,
+        aliases: Optional[Sequence[str]] = None,
+    ) -> Dict[str, str]:
+        """Publish aliases after a step has passed every success gate.
+
+        Callers can register draft/repair candidates with
+        ``publish_aliases=False`` so no explicit alias, basename alias, or id
+        alias becomes visible before validation and sealing. Once the owning
+        step succeeds, this method publishes that complete alias surface.
+
+        An existing alias may move only between records owned by the exact same
+        non-empty ``produced_by_step``. Cross-step and run-level collisions
+        retain their prior binding; the returned mapping contains only aliases
+        that now resolve to ``evidence_id``.
+        """
+
+        from .runtime_artifacts import verified_run_evidence_path
+
+        with self._lock:
+            record = self._record_by_id(evidence_id)
+            if record is None:
+                raise KeyError(f"Unknown evidence id: {evidence_id}")
+            owner = str(record.produced_by_step or "").strip()
+            if not owner:
+                raise ValueError(
+                    "success-only alias publication requires produced_by_step"
+                )
+            if verified_run_evidence_path(self.root, record) is None:
+                raise ValueError(
+                    f"cannot publish aliases for unverified evidence: {evidence_id}"
+                )
+
+            target = self.root / record.relative_path
+            requested = [
+                *(str(alias).strip() for alias in aliases or []),
+                _target_basename_stem(target, record.evidence_id),
+                record.evidence_id,
+            ]
+            published: Dict[str, str] = {}
+            for alias in requested:
+                if not alias:
+                    continue
+                existing_id = self._aliases.get(alias)
+                if existing_id not in {None, record.evidence_id}:
+                    prior_record = self._record_by_id(existing_id)
+                    prior_owner = str(
+                        getattr(prior_record, "produced_by_step", None) or ""
+                    ).strip()
+                    if prior_owner != owner:
+                        continue
+                self._aliases[alias] = record.evidence_id
+                published[alias] = record.evidence_id
+            record.metadata = {
+                **dict(record.metadata or {}),
+                "aliases_published": True,
+            }
+            self._save()
+            return published
+
+    def publish_step_success_aliases(
+        self,
+        bindings: Mapping[str, Sequence[str]],
+        *,
+        step_id: str,
+        suppressed_basename_evidence_ids: Sequence[str] = (),
+    ) -> Dict[str, Dict[str, str]]:
+        """Atomically promote one successful step's deferred alias surface.
+
+        Unlike :meth:`publish_success_aliases`, this strict pipeline boundary
+        rejects a stale alias owned by another step instead of silently
+        retaining it. Every record and alias is validated before any in-memory
+        authority is changed, so a failed attempt cannot publish only part of
+        its result bundle.
+        """
+
+        from .runtime_artifacts import verified_run_evidence_path
+
+        with self._lock:
+            expected_owner = str(step_id or "").strip()
+            if not expected_owner:
+                raise ValueError("success promotion requires a non-empty step_id")
+            prepared: List[Tuple[EvidenceRecord, List[str]]] = []
+            suppressed_basename_ids = {
+                str(evidence_id).strip()
+                for evidence_id in suppressed_basename_evidence_ids
+                if str(evidence_id).strip()
+            }
+            unknown_suppressions = suppressed_basename_ids.difference(
+                str(evidence_id) for evidence_id in bindings
+            )
+            if unknown_suppressions:
+                raise ValueError(
+                    "basename suppression references evidence outside the success "
+                    f"batch: {sorted(unknown_suppressions)}"
+                )
+            owners: set[str] = set()
+            batch_alias_owners: Dict[str, str] = {}
+
+            def _claim_batch_alias(alias: str, evidence_id: str) -> None:
+                """Prove one alias has exactly one owner before any mutation."""
+
+                if not alias:
+                    return
+                prior_evidence_id = batch_alias_owners.get(alias)
+                if (
+                    prior_evidence_id is not None
+                    and prior_evidence_id != evidence_id
+                ):
+                    raise ValueError(
+                        f"success promotion batch alias {alias!r} is claimed by "
+                        f"both {prior_evidence_id!r} and {evidence_id!r}"
+                    )
+                batch_alias_owners[alias] = evidence_id
+
+            for evidence_id, aliases in bindings.items():
+                record = self._record_by_id(str(evidence_id))
+                if record is None:
+                    raise KeyError(f"Unknown evidence id: {evidence_id}")
+                owner = str(record.produced_by_step or "").strip()
+                if not owner:
+                    raise ValueError(
+                        "success-only alias publication requires produced_by_step"
+                    )
+                if owner != expected_owner:
+                    raise ValueError(
+                        f"evidence {evidence_id!r} is owned by step {owner!r}, "
+                        f"not the successful step {expected_owner!r}"
+                    )
+                owners.add(owner)
+                if verified_run_evidence_path(self.root, record) is None:
+                    raise ValueError(
+                        "cannot publish aliases for unverified evidence: "
+                        f"{evidence_id}"
+                    )
+                target = self.root / record.relative_path
+                explicit_aliases = list(
+                    dict.fromkeys(str(alias).strip() for alias in aliases)
+                )
+                strict_aliases = list(
+                    dict.fromkeys([*explicit_aliases, record.evidence_id])
+                )
+                for alias in strict_aliases:
+                    if not alias:
+                        continue
+                    _claim_batch_alias(alias, record.evidence_id)
+                    existing_id = self._aliases.get(alias)
+                    if existing_id in {None, record.evidence_id}:
+                        continue
+                    prior_record = self._record_by_id(existing_id)
+                    prior_owner = str(
+                        getattr(prior_record, "produced_by_step", None) or ""
+                    ).strip()
+                    if prior_owner != owner:
+                        raise ValueError(
+                            f"success authority alias {alias!r} is already owned "
+                            f"by step {prior_owner or '<run-level>'!r}"
+                        )
+                requested = list(strict_aliases)
+                basename_alias = _target_basename_stem(target, record.evidence_id)
+                if record.evidence_id not in suppressed_basename_ids:
+                    _claim_batch_alias(basename_alias, record.evidence_id)
+                    basename_owner_id = self._aliases.get(basename_alias)
+                    if basename_owner_id not in {None, record.evidence_id}:
+                        basename_record = self._record_by_id(basename_owner_id)
+                        basename_owner = str(
+                            getattr(basename_record, "produced_by_step", None) or ""
+                        ).strip()
+                        # Generic runner filenames such as ``step_summary`` and
+                        # ``critique_report`` legitimately repeat across steps.
+                        # Keep those ambiguous basename aliases first-write-only;
+                        # explicit semantic aliases above remain strict.
+                        if basename_owner == owner:
+                            requested.append(basename_alias)
+                    else:
+                        requested.append(basename_alias)
+                requested = list(dict.fromkeys(requested))
+                prepared.append((record, requested))
+
+            if len(owners) > 1:
+                raise ValueError(
+                    "one success promotion batch cannot mix evidence from "
+                    f"multiple steps: {sorted(owners)}"
+                )
+
+            previous_aliases = dict(self._aliases)
+            previous_metadata = {
+                record.evidence_id: dict(record.metadata or {})
+                for record, _ in prepared
+            }
+            published: Dict[str, Dict[str, str]] = {}
+            try:
+                for record, requested in prepared:
+                    record_published: Dict[str, str] = {}
+                    for alias in requested:
+                        if not alias:
+                            continue
+                        self._aliases[alias] = record.evidence_id
+                        record_published[alias] = record.evidence_id
+                    record.metadata = {
+                        **dict(record.metadata or {}),
+                        "aliases_published": True,
+                    }
+                    published[record.evidence_id] = record_published
+                self._save()
+            except BaseException:
+                self._aliases = previous_aliases
+                for record, _ in prepared:
+                    record.metadata = previous_metadata[record.evidence_id]
+                raise
+            return published
+
+    def retire_step_current_aliases(
+        self,
+        evidence_ids: Sequence[str],
+        *,
+        step_id: str,
+    ) -> Dict[str, str]:
+        """Atomically retire current aliases after a step fails revalidation.
+
+        Retirement is deliberately narrower than deleting a step's historical
+        evidence.  The caller must name every candidate evidence id and prove
+        the exact non-empty producing step.  Only aliases that *currently*
+        target one of those indexed records are removed; aliases owned by a
+        different step or by the run remain untouched.
+
+        All records are validated before mutation.  If persistence fails, the
+        in-memory alias table and record metadata are restored to their prior
+        state so callers cannot observe a partially retired authority bundle.
+        """
+
+        return self.retire_steps_current_aliases({step_id: evidence_ids}).get(
+            str(step_id), {}
+        )
+
+    def retire_steps_current_aliases(
+        self,
+        evidence_ids_by_step: Mapping[str, Sequence[str]],
+    ) -> Dict[str, Dict[str, str]]:
+        """Atomically retire the current alias surfaces of several steps.
+
+        Cross-step deterministic revalidation is one authority transition.  A
+        separate save per step could retire the first invalid step and fail on
+        the second, splitting the alias ledger.  This batch validates every
+        indexed owner before one mutation and one durable save.
+        """
+
+        with self._lock:
+            requested_by_step: Dict[str, set[str]] = {}
+            prepared: Dict[str, EvidenceRecord] = {}
+            for raw_step_id, evidence_ids in evidence_ids_by_step.items():
+                step_id = str(raw_step_id or "").strip()
+                if not step_id:
+                    raise ValueError("alias retirement requires a non-empty step_id")
+                requested: set[str] = set()
+                for raw_evidence_id in evidence_ids:
+                    evidence_id = str(raw_evidence_id or "").strip()
+                    if not evidence_id:
+                        raise ValueError(
+                            "alias retirement requires non-empty evidence ids"
+                        )
+                    record = self._record_by_id(evidence_id)
+                    if record is None:
+                        raise KeyError(f"Unknown evidence id: {evidence_id}")
+                    owner = str(record.produced_by_step or "")
+                    if owner != step_id:
+                        raise ValueError(
+                            f"evidence {evidence_id!r} is owned by step "
+                            f"{owner or '<run-level>'!r}, not the revalidated "
+                            f"step {step_id!r}"
+                        )
+                    requested.add(evidence_id)
+                    prepared[evidence_id] = record
+                if requested:
+                    requested_by_step[step_id] = requested
+
+            retired_by_step: Dict[str, Dict[str, str]] = {
+                step_id: {
+                    alias: evidence_id
+                    for alias, evidence_id in self._aliases.items()
+                    if evidence_id in requested
+                }
+                for step_id, requested in requested_by_step.items()
+            }
+            if not prepared:
+                return retired_by_step
+
+            previous_aliases = dict(self._aliases)
+            previous_metadata = {
+                evidence_id: dict(record.metadata or {})
+                for evidence_id, record in prepared.items()
+            }
+            try:
+                for retired in retired_by_step.values():
+                    for alias in retired:
+                        self._aliases.pop(alias, None)
+                for record in prepared.values():
+                    record.metadata = {
+                        **dict(record.metadata or {}),
+                        "aliases_published": False,
+                    }
+                self._save()
+            except BaseException:
+                self._aliases = previous_aliases
+                for evidence_id, record in prepared.items():
+                    record.metadata = previous_metadata[evidence_id]
+                raise
+            return retired_by_step
+
     # ------------------------------------------------------------------
     # Numeric claim registry (value-level provenance)
     # ------------------------------------------------------------------
@@ -1227,14 +1566,16 @@ class EvidenceStore:
     ) -> NumericClaim:
         """Register a single numeric leaf for later manuscript binding.
 
-        Idempotent on ``(step_id, source_field, canonical)`` — re-running
-        a step does not duplicate claims. The literal ``value`` is
-        preserved with the most precise form seen so far.
+        Idempotent on ``(evidence_id, step_id, source_field, canonical)`` —
+        replaying the exact sealed evidence does not duplicate claims, while a
+        later successful attempt receives its own digest-bound authority. The
+        literal ``value`` is preserved with the most precise form seen so far.
         """
         with self._lock:
             for claim in self._numeric_claims:
                 if (
-                    claim.step_id == step_id
+                    claim.evidence_id == evidence_id
+                    and claim.step_id == step_id
                     and claim.source_field == source_field
                     and abs(claim.canonical - canonical) <= claim.tolerance
                 ):
@@ -1638,7 +1979,10 @@ class EvidenceStore:
             # prefix is unique so we do not silently bind an ambiguous claim.
             prefix = f"{evidence_id_or_alias}_"
             candidate_ids = {
-                r.evidence_id for r in self._records if r.evidence_id.startswith(prefix)
+                r.evidence_id
+                for r in self._records
+                if r.evidence_id.startswith(prefix)
+                and bool((r.metadata or {}).get("aliases_published", True))
             }
             candidate_ids.update(
                 eid for alias, eid in self._aliases.items() if alias.startswith(prefix)
@@ -1657,6 +2001,121 @@ class EvidenceStore:
                 set(r.evidence_id for r in self._records) | set(self._aliases)
             )
 
+    def current_verified_records(
+        self,
+        per_step_records: Optional[Sequence[Mapping[str, Any]]],
+    ) -> List[EvidenceRecord]:
+        """Return current evidence whose content still matches its digest.
+
+        The append-only store retains historical records across resume.  A
+        manuscript reader must therefore apply both the latest-step authority
+        ledger and the on-disk digest check instead of trusting the first-write
+        alias table or the evidence index by itself.
+
+        ``None`` preserves the legacy reader contract for callers that do not
+        have a step ledger.  Production manuscript paths always pass the
+        ledger and therefore receive the strict current/digest-verified view.
+        """
+
+        records = self.records()
+        if per_step_records is None:
+            return records
+
+        # Local import keeps EvidenceStore usable by the low-level runtime
+        # artifact module without introducing a module-import cycle.
+        from .runtime_artifacts import (
+            current_evidence_records,
+            verified_run_evidence_path,
+        )
+
+        return [
+            record
+            for record in current_evidence_records(records, per_step_records)
+            if verified_run_evidence_path(self.root, record) is not None
+        ]
+
+    def current_resolvable_names(
+        self,
+        per_step_records: Optional[Sequence[Mapping[str, Any]]],
+    ) -> List[str]:
+        """Names resolving to current, digest-verified evidence only."""
+
+        if per_step_records is None:
+            return self.resolvable_names()
+        current_ids = {
+            record.evidence_id
+            for record in self.current_verified_records(per_step_records)
+        }
+        with self._lock:
+            current_aliases = {
+                alias
+                for alias, evidence_id in self._aliases.items()
+                if evidence_id in current_ids
+            }
+        return sorted(current_ids | current_aliases)
+
+    def authoritative_numeric_claims(
+        self,
+        per_step_records: Optional[Sequence[Mapping[str, Any]]],
+    ) -> List[NumericClaim]:
+        """Numeric claims bound to current evidence owner and file digest.
+
+        A flat active-evidence-id set is not sufficient: a claim from one step
+        could borrow an id owned by another step, and a deleted or modified
+        evidence blob would still look registered.  Step claims must therefore
+        match the exact producing step and its current evidence ids.  The two
+        host-owned run-level numeric families have explicit kind/producer
+        contracts and remain citable without an analysis-step record.
+        """
+
+        claims = self.numeric_claims()
+        if per_step_records is None:
+            return claims
+
+        from .runtime_artifacts import (
+            active_step_evidence_ids_by_step,
+            run_level_evidence_matches_claim_owner,
+        )
+
+        records_by_id = {
+            record.evidence_id: record
+            for record in self.current_verified_records(per_step_records)
+        }
+        active_ids_by_step = active_step_evidence_ids_by_step(per_step_records)
+        run_level_contracts = {
+            "research_context": ("log", "pipeline"),
+            "robustness_panel": ("statistic", "pipeline"),
+        }
+        authoritative: List[NumericClaim] = []
+        for claim in claims:
+            record = records_by_id.get(claim.evidence_id)
+            if record is None:
+                continue
+            claim_step = str(claim.step_id or "").strip()
+            record_step = str(record.produced_by_step or "").strip()
+            if record_step:
+                if (
+                    record_step == claim_step
+                    and claim.evidence_id in active_ids_by_step.get(record_step, set())
+                ):
+                    authoritative.append(claim)
+                continue
+
+            contract = run_level_contracts.get(claim_step)
+            if contract is None:
+                continue
+            expected_kind, expected_producer = contract
+            if (
+                record.kind == expected_kind
+                and str(record.producer or "").strip() == expected_producer
+                and run_level_evidence_matches_claim_owner(
+                    claim_step_id=claim_step,
+                    evidence_id=claim.evidence_id,
+                )
+            ):
+                authoritative.append(claim)
+        return authoritative
+
     # ------------------------------------------------------------------
     # Manuscript binding
     # ------------------------------------------------------------------
@@ -1666,9 +2125,10 @@ class EvidenceStore:
 
         The writer is allowed to draft prose freely, but anything that looks like
         a numerical result or analytical claim must cite ``{evidence:<id>}``
-        before it can enter the final manuscript. We keep headings, list items,
-        and non-result narrative intact, and return the filtered scaffold plus a
-        list of sentences that were removed.
+        before it can enter the final manuscript. We keep headings, structural
+        Markdown, and non-result narrative intact, but list/blockquote markers
+        do not exempt the claim that follows them. The filtered scaffold and a
+        list of sentences that were removed are returned.
 
         In ``STRICT`` mode, raises :class:`EvidenceEnforcementError` when any
         sentence would have been dropped, so a CI / submission run fails loudly
@@ -1679,13 +2139,25 @@ class EvidenceStore:
         for raw_line in scaffold.splitlines():
             line = raw_line.rstrip()
             stripped = line.strip()
-            if not stripped or re.match(
-                r"^(?:#{1,6}\s+|```|(?:-|\*)\s+|>\s+)",
-                stripped,
-            ):
+            if stripped.startswith(("```", "~~~")):
                 filtered_lines.append(line)
                 continue
-            sentences = _split_sentences(line)
+            if not stripped:
+                filtered_lines.append(line)
+                continue
+            structure_prefix, content = _split_markdown_structure_prefix(line)
+            heading_prefix, heading_content = _split_markdown_heading_prefix(content)
+            if heading_prefix:
+                if not _heading_requires_evidence(heading_content):
+                    filtered_lines.append(line)
+                    continue
+                structure_prefix += heading_prefix
+                content = heading_content
+            content_stripped = content.strip()
+            if not content_stripped:
+                filtered_lines.append(line)
+                continue
+            sentences = _split_sentences(content)
             if len(sentences) == 1 and not _looks_result_like_sentence(sentences[0]):
                 filtered_lines.append(line)
                 continue
@@ -1698,7 +2170,10 @@ class EvidenceStore:
                     removed.append(sentence.strip())
                     continue
                 kept.append(sentence.strip())
-            filtered_lines.append(" ".join(part for part in kept if part).strip())
+            kept_content = " ".join(part for part in kept if part).strip()
+            filtered_lines.append(
+                f"{structure_prefix}{kept_content}".rstrip() if kept_content else ""
+            )
         if removed and self.enforcement_mode is EvidenceEnforcementMode.STRICT:
             raise EvidenceEnforcementError(
                 f"STRICT evidence mode: {len(removed)} result-like sentence(s) "
@@ -1708,7 +2183,13 @@ class EvidenceStore:
             )
         return "\n".join(filtered_lines).strip() + "\n", removed
 
-    def bind_manuscript(self, scaffold: str, *, verbose: bool = False) -> str:
+    def bind_manuscript(
+        self,
+        scaffold: str,
+        *,
+        verbose: bool = False,
+        per_step_records: Optional[Sequence[Mapping[str, Any]]] = None,
+    ) -> str:
         """Replace ``{evidence:<id>}`` placeholders with provenance links.
 
         Default mode emits a compact markdown link
@@ -1726,6 +2207,14 @@ class EvidenceStore:
         manuscript containing ``[evidence missing: …]`` markers can be
         written out.
         """
+        current_ids = (
+            {
+                record.evidence_id
+                for record in self.current_verified_records(per_step_records)
+            }
+            if per_step_records is not None
+            else None
+        )
         out: List[str] = []
         all_missing: List[str] = []
         i = 0
@@ -1758,7 +2247,9 @@ class EvidenceStore:
             missing: List[str] = []
             for requested_id in requested_ids:
                 rec = self.get(requested_id)
-                if rec is None:
+                if rec is None or (
+                    current_ids is not None and rec.evidence_id not in current_ids
+                ):
                     missing.append(requested_id)
                     continue
                 if verbose:
@@ -1883,6 +2374,64 @@ def _split_sentences(text: str) -> List[str]:
         if part.strip()
     ]
     return parts or ([text.strip()] if text.strip() else [])
+
+
+def _split_markdown_structure_prefix(line: str) -> tuple[str, str]:
+    """Separate list/blockquote syntax from the prose it cannot exempt."""
+
+    cursor = len(line) - len(line.lstrip())
+    marker_re = re.compile(r"(?:>\s*|[-+*]\s+|\d+[.)]\s+)")
+    while match := marker_re.match(line, cursor):
+        cursor = match.end()
+    return line[:cursor], line[cursor:]
+
+
+def _split_markdown_heading_prefix(content: str) -> tuple[str, str]:
+    """Separate an ATX heading marker from its potentially assertive text."""
+
+    match = re.match(r"^(\s*#{1,6}(?:\s+|$))", content)
+    if match is None:
+        return "", content
+    return match.group(1), content[match.end() :]
+
+
+_HEADING_RESULT_ASSERTION_RE = re.compile(
+    r"\b(?:higher|lower|greater|less|increas(?:e|ed|es|ing)|"
+    r"decreas(?:e|ed|es|ing)|reduc(?:e|ed|es|ing)|elevated|"
+    r"declin(?:e|ed|es|ing)|improv(?:e|ed|es|ing)|worsen(?:ed|s|ing)?|"
+    r"associated|correlated|predicted|significant(?:ly)?|unchanged|similar)\b",
+    re.I,
+)
+_HEADING_RESULT_CONTEXT_RE = re.compile(
+    r"\b(?:OR|HR|RR|AUC|AUROC|Brier|calibration|discrimination|"
+    r"median|mean|incidence|mortality|hazard|confidence interval|CI|p)\b",
+    re.I,
+)
+_HEADING_NUMERIC_RE = re.compile(r"(?:\d|%|\bp\s*[<=>])", re.I)
+_HEADING_RESULT_VERB_RE = re.compile(
+    r"\b(?:was|were|had|showed|demonstrated|differ(?:ed|s)?|varied)\b",
+    re.I,
+)
+
+
+def _heading_requires_evidence(content: str) -> bool:
+    """Return whether a heading states a result rather than naming a section."""
+
+    stripped = content.strip()
+    if not stripped:
+        return False
+    # A leading outline number is structural (``2. Results``), not a result.
+    semantic = re.sub(r"^\d+(?:\.\d+)*[.)]?\s+", "", stripped, count=1)
+    if _HEADING_RESULT_ASSERTION_RE.search(semantic):
+        return True
+    if _HEADING_RESULT_CONTEXT_RE.search(semantic) and _HEADING_RESULT_VERB_RE.search(
+        semantic
+    ):
+        return True
+    return bool(
+        _HEADING_NUMERIC_RE.search(semantic)
+        and _HEADING_RESULT_CONTEXT_RE.search(semantic)
+    )
 
 
 def _looks_result_like_sentence(sentence: str) -> bool:

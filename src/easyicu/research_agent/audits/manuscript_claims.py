@@ -25,6 +25,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional, Sequence
 
+from ..runtime_artifacts import current_successful_step_records
 from ..schema import ValidationFinding
 
 
@@ -41,9 +42,10 @@ def audit_manuscript_numeric_claims(
     confidence interval. This audit catches the high-risk prediction metrics
     before a run can be treated as manuscript-ready.
     """
+    current_records = current_successful_step_records(per_step_records or [])
     summaries = [
         item.get("step_summary")
-        for item in (per_step_records or [])
+        for item in current_records
         if isinstance(item.get("step_summary"), dict)
     ]
     if not summaries:

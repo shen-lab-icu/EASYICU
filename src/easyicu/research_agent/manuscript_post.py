@@ -20,7 +20,7 @@ pure functions with no pipeline state, so isolating them here cuts
 from __future__ import annotations
 
 import re
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .evidence import (
     EvidenceEnforcementError,
@@ -129,6 +129,7 @@ def _repair_common_writer_placeholders(
     *,
     context: ResearchContext,
     evidence: EvidenceStore,
+    allowed_evidence_names: Optional[Sequence[str]] = None,
 ) -> tuple[str, List[tuple[str, str]]]:
     """Map common writer aliases to existing evidence for prediction tasks.
 
@@ -140,7 +141,11 @@ def _repair_common_writer_placeholders(
     """
     text = scaffold
     repairs: List[tuple[str, str]] = []
-    resolvable = set(evidence.resolvable_names())
+    resolvable = set(
+        evidence.resolvable_names()
+        if allowed_evidence_names is None
+        else allowed_evidence_names
+    )
     question = (context.research_question or "").lower()
     is_prediction = any(
         token in question
@@ -315,6 +320,7 @@ def _repair_common_writer_citation_omissions(
     scaffold: str,
     *,
     evidence: EvidenceStore,
+    allowed_evidence_names: Optional[Sequence[str]] = None,
 ) -> tuple[str, List[Dict[str, str]]]:
     """Append evidence citations to common uncited Methods-style sentences.
 
@@ -324,7 +330,11 @@ def _repair_common_writer_citation_omissions(
     not invent citations for free-form conclusions; if no matching registered
     evidence id is available, the strict evidence gate still blocks the draft.
     """
-    resolvable = set(evidence.resolvable_names())
+    resolvable = set(
+        evidence.resolvable_names()
+        if allowed_evidence_names is None
+        else allowed_evidence_names
+    )
     repairs: List[Dict[str, str]] = []
     out_lines: List[str] = []
     in_metadata_section = False
@@ -668,9 +678,16 @@ def _claim_numeric_distance(
 def _candidate_claims_for_value(
     evidence: EvidenceStore,
     value_str: str,
+    *,
+    authoritative_claims: Optional[Sequence[NumericClaim]] = None,
 ) -> List[tuple[NumericClaim, float]]:
     candidates: List[tuple[NumericClaim, float]] = []
-    for claim in evidence.numeric_claims():
+    claims = (
+        evidence.numeric_claims()
+        if authoritative_claims is None
+        else authoritative_claims
+    )
+    for claim in claims:
         if claim.source_field == "__easyicu_numeric_claim_overflow__":
             continue
         distance = _claim_numeric_distance(claim, value_str)
@@ -1025,6 +1042,7 @@ def bind_numeric_values(
     evidence: EvidenceStore,
     enforcement_mode: Optional[EvidenceEnforcementMode] = None,
     footnote_prefix: str = "claim",
+    per_step_records: Optional[Sequence[Mapping[str, Any]]] = None,
 ) -> Tuple[str, Dict[str, NumericClaim], List[str]]:
     """Bind every numeric value in ``manuscript`` to a registered claim.
 
@@ -1063,6 +1081,11 @@ def bind_numeric_values(
     if not manuscript:
         return manuscript, {}, []
     mode = enforcement_mode or evidence.enforcement_mode
+    authoritative_claims = (
+        evidence.authoritative_numeric_claims(per_step_records)
+        if per_step_records is not None
+        else None
+    )
 
     skip_spans = _spans_to_skip(manuscript)
     binding_map: Dict[str, NumericClaim] = {}
@@ -1107,7 +1130,11 @@ def bind_numeric_values(
         context_start = max(0, start - 80)
         context_end = min(len(manuscript), end + 80)
         context = manuscript[context_start:context_end]
-        candidates = _candidate_claims_for_value(evidence, lookup_value)
+        candidates = _candidate_claims_for_value(
+            evidence,
+            lookup_value,
+            authoritative_claims=authoritative_claims,
+        )
         claim, ambiguous = _select_numeric_claim(
             candidates=candidates,
             context=context,

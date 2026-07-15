@@ -222,6 +222,27 @@ def test_integrity_rejects_empty_receipts_for_resolved_inputs(tmp_path: Path) ->
     assert "input_binding_coverage_incomplete" in issues
 
 
+def test_integrity_rejects_resolved_input_reported_as_not_loaded(
+    tmp_path: Path,
+) -> None:
+    summary = _truthful_summary()
+    summary["input_bindings"][1].update({"loaded": False, "row_count": 0})
+    summary.pop("subset_input")
+    summary.pop("subset_reconciliation")
+
+    findings = StepSummaryIntegrityValidator().audit(
+        step=_step(),
+        step_summary=summary,
+        resolved_input_bindings=_resolved_bindings(tmp_path),
+    )
+
+    assert any(
+        finding.detail["issue"] == "input_binding_not_loaded"
+        and finding.detail["input_key"] == SUBSET_KEY
+        for finding in findings
+    )
+
+
 def test_integrity_requires_digest_identity_in_each_receipt(tmp_path: Path) -> None:
     summary = _truthful_summary()
     summary["input_bindings"][0].pop("sha256")

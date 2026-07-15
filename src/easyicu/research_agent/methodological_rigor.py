@@ -25,10 +25,10 @@ The audit runs in two stages so the decision logic is trivially testable:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 from .evidence import EvidenceStore
-from .schema import ResearchContext, ValidationFinding
+from .schema import EvidenceRecord, ResearchContext, ValidationFinding
 from .study_design import infer_study_design_family
 
 _VALIDATOR = "methodological_rigor"
@@ -195,16 +195,50 @@ def audit_method_appropriateness(signals: MethodSignals) -> List[ValidationFindi
     return findings
 
 
-def _any_record(evidence: EvidenceStore, *names: str) -> bool:
+def _record_by_current_name(
+    evidence: EvidenceStore,
+    name: str,
+    *,
+    evidence_records: Optional[Sequence[EvidenceRecord]] = None,
+) -> Optional[EvidenceRecord]:
+    """Resolve ``name`` only inside an explicitly authorised record view."""
+
+    if evidence_records is None:
+        return evidence.get(name)
+    records_by_id = {record.evidence_id: record for record in evidence_records}
+    direct = records_by_id.get(name)
+    if direct is not None:
+        return direct
+    evidence_id = evidence.aliases().get(name)
+    return records_by_id.get(evidence_id) if evidence_id is not None else None
+
+
+def _any_record(
+    evidence: EvidenceStore,
+    *names: str,
+    evidence_records: Optional[Sequence[EvidenceRecord]] = None,
+) -> bool:
     for name in names:
-        if evidence.get(name) is not None:
+        if (
+            _record_by_current_name(
+                evidence,
+                name,
+                evidence_records=evidence_records,
+            )
+            is not None
+        ):
             return True
     return False
 
 
-def _text_signal(evidence: EvidenceStore, *tokens: str) -> bool:
+def _text_signal(
+    evidence: EvidenceStore,
+    *tokens: str,
+    evidence_records: Optional[Sequence[EvidenceRecord]] = None,
+) -> bool:
     lowered = tuple(t.lower() for t in tokens)
-    for record in evidence.records():
+    records = evidence.records() if evidence_records is None else evidence_records
+    for record in records:
         haystack = " ".join(
             [
                 str(record.evidence_id or ""),
@@ -217,7 +251,12 @@ def _text_signal(evidence: EvidenceStore, *tokens: str) -> bool:
     return False
 
 
-def _plan_landmark_defined(context: ResearchContext, evidence: EvidenceStore) -> bool:
+def _plan_landmark_defined(
+    context: ResearchContext,
+    evidence: EvidenceStore,
+    *,
+    evidence_records: Optional[Sequence[EvidenceRecord]] = None,
+) -> bool:
     tokens = (
         "landmark",
         "time zero",
@@ -238,10 +277,14 @@ def _plan_landmark_defined(context: ResearchContext, evidence: EvidenceStore) ->
     ).lower()
     if any(tok in haystack for tok in tokens):
         return True
-    return _text_signal(evidence, *tokens)
+    return _text_signal(evidence, *tokens, evidence_records=evidence_records)
 
 
-def _missing_fraction(evidence: EvidenceStore) -> Optional[float]:
+def _missing_fraction(
+    evidence: EvidenceStore,
+    *,
+    evidence_records: Optional[Sequence[EvidenceRecord]] = None,
+) -> Optional[float]:
     import pandas as pd
 
     for name in (
@@ -251,7 +294,11 @@ def _missing_fraction(evidence: EvidenceStore) -> Optional[float]:
         "cohort_missingness_audit",
         "missingness_measurement_audit",
     ):
-        record = evidence.get(name)
+        record = _record_by_current_name(
+            evidence,
+            name,
+            evidence_records=evidence_records,
+        )
         if record is None:
             continue
         try:
@@ -278,36 +325,97 @@ def _missing_fraction(evidence: EvidenceStore) -> Optional[float]:
 def extract_method_signals(
     context: ResearchContext,
     evidence: EvidenceStore,
+    *,
+    evidence_records: Optional[Sequence[EvidenceRecord]] = None,
 ) -> MethodSignals:
-    """Read the run's evidence into a :class:`MethodSignals` bag (best-effort)."""
+    """Read an authorised evidence view into a :class:`MethodSignals` bag.
+
+    ``evidence_records`` is the digest-verified current-authority snapshot used
+    by production writers. ``None`` retains the legacy whole-store behaviour
+    for standalone callers that have no execution ledger.
+    """
 
     family = str(infer_study_design_family(context))
     return MethodSignals(
         family=family,
         has_hazard_ratio=_any_record(
-            evidence, "cox_summary", "hazard_ratio", "hazard_ratios", "cox_model"
+            evidence,
+            "cox_summary",
+            "hazard_ratio",
+            "hazard_ratios",
+            "cox_model",
+            evidence_records=evidence_records,
         )
-        or _text_signal(evidence, "hazard ratio", "cox proportional"),
+        or _text_signal(
+            evidence,
+            "hazard ratio",
+            "cox proportional",
+            evidence_records=evidence_records,
+        ),
         has_survival_curve=_any_record(
             evidence,
             "km_curve",
             "kaplan_meier",
             "survival_curve",
             "survival_curve_points",
+            evidence_records=evidence_records,
         )
         or _text_signal(
-            evidence, "kaplan-meier", "kaplan meier", "cumulative incidence"
+            evidence,
+            "kaplan-meier",
+            "kaplan meier",
+            "cumulative incidence",
+            evidence_records=evidence_records,
         ),
-        landmark_or_timezero_defined=_plan_landmark_defined(context, evidence),
+        landmark_or_timezero_defined=_plan_landmark_defined(
+            context,
+            evidence,
+            evidence_records=evidence_records,
+        ),
         has_odds_ratio=_any_record(
-            evidence, "primary_association", "adjusted_association", "primary_or"
+            evidence,
+            "primary_association",
+            "adjusted_association",
+            "primary_or",
+            evidence_records=evidence_records,
         )
-        or _text_signal(evidence, "odds ratio", "logistic regression"),
-        has_auroc=_any_record(evidence, "auroc", "model_performance", "roc_curve")
-        or _text_signal(evidence, "auroc", "auc", "discrimination"),
-        has_calibration=_any_record(evidence, "calibration_curve", "calibration")
-        or _text_signal(evidence, "calibration", "brier"),
-        held_out_reported=_any_record(evidence, "split_strategy")
+        or _text_signal(
+            evidence,
+            "odds ratio",
+            "logistic regression",
+            evidence_records=evidence_records,
+        ),
+        has_auroc=_any_record(
+            evidence,
+            "auroc",
+            "model_performance",
+            "roc_curve",
+            evidence_records=evidence_records,
+        )
+        or _text_signal(
+            evidence,
+            "auroc",
+            "auc",
+            "discrimination",
+            evidence_records=evidence_records,
+        ),
+        has_calibration=_any_record(
+            evidence,
+            "calibration_curve",
+            "calibration",
+            evidence_records=evidence_records,
+        )
+        or _text_signal(
+            evidence,
+            "calibration",
+            "brier",
+            evidence_records=evidence_records,
+        ),
+        held_out_reported=_any_record(
+            evidence,
+            "split_strategy",
+            evidence_records=evidence_records,
+        )
         or _text_signal(
             evidence,
             "held-out",
@@ -315,26 +423,59 @@ def extract_method_signals(
             "test set",
             "external validation",
             "train/test",
+            evidence_records=evidence_records,
         ),
         has_covariate_balance=_any_record(
-            evidence, "covariate_balance", "balance_table"
+            evidence,
+            "covariate_balance",
+            "balance_table",
+            evidence_records=evidence_records,
         )
         or _text_signal(
-            evidence, "covariate balance", "standardized mean difference", "love plot"
+            evidence,
+            "covariate balance",
+            "standardized mean difference",
+            "love plot",
+            evidence_records=evidence_records,
         ),
         has_cluster_assignment=_any_record(
-            evidence, "cluster_characteristics", "cluster_mortality", "cluster_profiles"
-        )
-        or _text_signal(evidence, "cluster", "phenotype", "subphenotype"),
-        has_cluster_stability=_any_record(
-            evidence, "silhouette_score", "clustering_metrics", "cluster_metrics"
+            evidence,
+            "cluster_characteristics",
+            "cluster_mortality",
+            "cluster_profiles",
+            evidence_records=evidence_records,
         )
         or _text_signal(
-            evidence, "silhouette", "bootstrap stability", "consensus matrix"
+            evidence,
+            "cluster",
+            "phenotype",
+            "subphenotype",
+            evidence_records=evidence_records,
         ),
-        missing_fraction=_missing_fraction(evidence),
+        has_cluster_stability=_any_record(
+            evidence,
+            "silhouette_score",
+            "clustering_metrics",
+            "cluster_metrics",
+            evidence_records=evidence_records,
+        )
+        or _text_signal(
+            evidence,
+            "silhouette",
+            "bootstrap stability",
+            "consensus matrix",
+            evidence_records=evidence_records,
+        ),
+        missing_fraction=_missing_fraction(
+            evidence,
+            evidence_records=evidence_records,
+        ),
         complete_case_used=_text_signal(
-            evidence, "complete-case", "complete case", "complete_case"
+            evidence,
+            "complete-case",
+            "complete case",
+            "complete_case",
+            evidence_records=evidence_records,
         ),
     )
 
@@ -349,8 +490,13 @@ class MethodologicalRigorAuditor:
         *,
         context: ResearchContext,
         evidence: EvidenceStore,
+        evidence_records: Optional[Sequence[EvidenceRecord]] = None,
     ) -> List[ValidationFinding]:
-        signals = extract_method_signals(context, evidence)
+        signals = extract_method_signals(
+            context,
+            evidence,
+            evidence_records=evidence_records,
+        )
         return audit_method_appropriateness(signals)
 
 

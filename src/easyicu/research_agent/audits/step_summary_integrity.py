@@ -1164,6 +1164,25 @@ class StepSummaryIntegrityValidator:
                             },
                         )
                     )
+                if loaded is False:
+                    findings.append(
+                        ValidationFinding(
+                            validator=self.name,
+                            severity="error",
+                            message=(
+                                f"Host-resolved typed input {input_key!r} was not "
+                                f"loaded by step {step.step_id}. A declared input "
+                                "cannot satisfy its contract by reporting an "
+                                "unused receipt."
+                            ),
+                            detail={
+                                "issue": "input_binding_not_loaded",
+                                "step_id": step.step_id,
+                                "summary_path": path,
+                                "input_key": input_key,
+                            },
+                        )
+                    )
                 if tabular_binding and loaded is True and row_count is not None:
                     try:
                         host_count = self._table_row_count(

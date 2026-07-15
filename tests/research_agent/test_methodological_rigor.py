@@ -168,3 +168,81 @@ def test_extract_method_signals_reads_survival_evidence(ra, tmp_path: Path):
     assert signals.landmark_or_timezero_defined is True
     # A correct survival run raises no methodological-rigor finding.
     assert MethodologicalRigorAuditor().audit(context=context, evidence=evidence) == []
+
+
+def test_method_signals_ignore_retired_evidence_in_current_authority_snapshot(
+    ra,
+    tmp_path: Path,
+):
+    evidence = ra.EvidenceStore(tmp_path)
+    retired_path = tmp_path / "retired_cox.csv"
+    retired_path.write_text("term,hr\nexposure,9.9\n", encoding="utf-8")
+    retired = evidence.register_file(
+        kind="table",
+        description="Retired Cox proportional-hazards summary",
+        source_path=retired_path,
+        evidence_id="retired_cox",
+        aliases=["cox_summary"],
+        produced_by_step="03_model",
+        producer="coder",
+    )
+    current_path = tmp_path / "current_descriptive.csv"
+    current_path.write_text("group,n\nall,100\n", encoding="utf-8")
+    current = evidence.register_file(
+        kind="table",
+        description="Current descriptive output",
+        source_path=current_path,
+        evidence_id="current_descriptive",
+        produced_by_step="04_current",
+        producer="coder",
+    )
+    step_records = [
+        {
+            "step_id": "03_model",
+            "status": "ok",
+            "evidence_ids": [retired.evidence_id],
+        },
+        {
+            "step_id": "03_model",
+            "status": "contract_failed",
+            "evidence_ids": [],
+        },
+        {
+            "step_id": "04_current",
+            "status": "ok",
+            "evidence_ids": [current.evidence_id],
+        },
+    ]
+    current_records = evidence.current_verified_records(step_records)
+    context = ra.ResearchContext(
+        research_question=(
+            "Estimate time-to-event mortality after exposure with a landmark "
+            "at ICU admission."
+        ),
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_patients=100,
+            n_stays=100,
+        ),
+        variables=[],
+        primary_exposure="exposure",
+        target_outcome="death",
+    )
+
+    # The append-only legacy view can still see the retired semantic alias.
+    assert extract_method_signals(context, evidence).has_hazard_ratio is True
+
+    signals = extract_method_signals(
+        context,
+        evidence,
+        evidence_records=current_records,
+    )
+    findings = MethodologicalRigorAuditor().audit(
+        context=context,
+        evidence=evidence,
+        evidence_records=current_records,
+    )
+
+    assert signals.has_hazard_ratio is False
+    assert "error" in _severities(findings)
