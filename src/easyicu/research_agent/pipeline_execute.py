@@ -5577,6 +5577,47 @@ def _selectively_revalidate_resume_successes(
     )
 
 
+def _execution_input_authority_integrity_finding(
+    *,
+    step_id: str,
+    universe_path: Path,
+    cohort_path: Path,
+    expected_universe_sha256: Optional[str],
+    expected_analysis_cohort_sha256: Optional[str],
+) -> Optional[ValidationFinding]:
+    """Return a blocking finding when execution mutated host-owned inputs."""
+    try:
+        current_universe_sha256 = sha256_of_file(universe_path)
+        current_cohort_sha256 = sha256_of_file(cohort_path)
+    except Exception as exc:
+        current_universe_sha256 = None
+        current_cohort_sha256 = None
+        authority_error = f"{type(exc).__name__}: {exc}"[:300]
+    else:
+        authority_error = None
+    if (
+        current_universe_sha256 == expected_universe_sha256
+        and current_cohort_sha256 == expected_analysis_cohort_sha256
+    ):
+        return None
+    return ValidationFinding(
+        validator="execution_input_authority_integrity",
+        severity="error",
+        message=(
+            "The raw universe or authoritative analysis cohort changed while "
+            f"step {step_id} executed; all outputs from this attempt were rejected."
+        ),
+        detail={
+            "step_id": step_id,
+            "expected_universe_sha256": expected_universe_sha256,
+            "observed_universe_sha256": current_universe_sha256,
+            "expected_analysis_cohort_sha256": expected_analysis_cohort_sha256,
+            "observed_analysis_cohort_sha256": current_cohort_sha256,
+            "error": authority_error,
+        },
+    )
+
+
 def run_execute_phase(
     pipeline: "ResearchAgentPipeline",
     *,
@@ -9760,6 +9801,44 @@ else:
             step_record["outputs_safe_to_collect"] = bool(
                 run_result.outputs_safe_to_collect
             )
+            if primary_cohort_uses_universe:
+                authority_finding = _execution_input_authority_integrity_finding(
+                    step_id=step.step_id,
+                    universe_path=universe_path,
+                    cohort_path=cohort_path,
+                    expected_universe_sha256=step_record.get("execution_cohort_sha256"),
+                    expected_analysis_cohort_sha256=step_record.get(
+                        "authoritative_analysis_cohort_sha256"
+                    ),
+                )
+                if authority_finding is not None:
+                    if run_result.outputs_safe_to_collect:
+                        _clear_output_dir(run_result.out_dir)
+                    step_record.update(
+                        {
+                            "status": "blocked_input_authority_mutation",
+                            "input_authority_findings": [
+                                authority_finding.model_dump()
+                            ],
+                        }
+                    )
+                    with shared_lock:
+                        run_input_authority_state.update(
+                            {"corrupted": True, "step_id": step.step_id}
+                        )
+                        findings.append(authority_finding)
+                        per_step_records.append(step_record)
+                        _flush_partial_manifest()
+                    emit_progress(
+                        "audit",
+                        f"Rejected mutated execution authority for {step.step_id}.",
+                        status="error",
+                        run_id=run_id,
+                        step_id=step.step_id,
+                        current_step=step_current,
+                        total_steps=total_steps,
+                    )
+                    return step_record
             if not run_result.outputs_safe_to_collect:
                 # The backend could not prove that a process/container with a
                 # writable output mount was stopped.  Those outputs remain
@@ -9823,68 +9902,6 @@ else:
                     total_steps=total_steps,
                 )
                 return step_record
-            if primary_cohort_uses_universe:
-                try:
-                    current_universe_sha256 = sha256_of_file(universe_path)
-                    current_cohort_sha256 = sha256_of_file(cohort_path)
-                except Exception as exc:
-                    current_universe_sha256 = None
-                    current_cohort_sha256 = None
-                    authority_error = f"{type(exc).__name__}: {exc}"[:300]
-                else:
-                    authority_error = None
-                if current_universe_sha256 != step_record.get(
-                    "execution_cohort_sha256"
-                ) or current_cohort_sha256 != step_record.get(
-                    "authoritative_analysis_cohort_sha256"
-                ):
-                    authority_finding = ValidationFinding(
-                        validator="execution_input_authority_integrity",
-                        severity="error",
-                        message=(
-                            "The raw universe or authoritative analysis cohort "
-                            f"changed while step {step.step_id} executed; all "
-                            "outputs from this attempt were rejected."
-                        ),
-                        detail={
-                            "step_id": step.step_id,
-                            "expected_universe_sha256": step_record.get(
-                                "execution_cohort_sha256"
-                            ),
-                            "observed_universe_sha256": current_universe_sha256,
-                            "expected_analysis_cohort_sha256": step_record.get(
-                                "authoritative_analysis_cohort_sha256"
-                            ),
-                            "observed_analysis_cohort_sha256": current_cohort_sha256,
-                            "error": authority_error,
-                        },
-                    )
-                    _clear_output_dir(run_result.out_dir)
-                    step_record.update(
-                        {
-                            "status": "blocked_input_authority_mutation",
-                            "input_authority_findings": [
-                                authority_finding.model_dump()
-                            ],
-                        }
-                    )
-                    with shared_lock:
-                        run_input_authority_state.update(
-                            {"corrupted": True, "step_id": step.step_id}
-                        )
-                        findings.append(authority_finding)
-                        per_step_records.append(step_record)
-                        _flush_partial_manifest()
-                    emit_progress(
-                        "audit",
-                        f"Rejected mutated execution authority for {step.step_id}.",
-                        status="error",
-                        run_id=run_id,
-                        step_id=step.step_id,
-                        current_step=step_current,
-                        total_steps=total_steps,
-                    )
-                    return step_record
             executed_code_digest = sha256_of_file(run_result.script_path)
             step_record["executed_code_sha256"] = executed_code_digest
             if sealed_renderer_authorized_code_sha256 is not None:

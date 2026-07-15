@@ -1053,6 +1053,9 @@ def test_primary_cohort_raw_runner_is_scoped_and_authority_hashes_are_rechecked(
     from easyicu.research_agent import pipeline_execute
 
     source = inspect.getsource(pipeline_execute.run_execute_phase)
+    authority_source = inspect.getsource(
+        pipeline_execute._execution_input_authority_integrity_finding
+    )
 
     assert "step_execution_cohort_path = (" in source
     assert "universe_path if primary_cohort_uses_universe else cohort_path" in source
@@ -1061,12 +1064,62 @@ def test_primary_cohort_raw_runner_is_scoped_and_authority_hashes_are_rechecked(
     assert (
         '"authoritative_analysis_cohort_sha256": sha256_of_file(cohort_path)' in source
     )
-    assert "current_universe_sha256 = sha256_of_file(universe_path)" in source
-    assert "current_cohort_sha256 = sha256_of_file(cohort_path)" in source
+    assert "current_universe_sha256 = sha256_of_file(universe_path)" in authority_source
+    assert "current_cohort_sha256 = sha256_of_file(cohort_path)" in authority_source
     assert '"status": "blocked_input_authority_mutation"' in source
     assert "or has_primary_cohort_universe_producer" in source
     assert source.count('if run_input_authority_state["corrupted"]:') == 2
     assert '"remaining_steps_suppressed": True' in source
+
+    runner_call = source.index("run_result = execution_runner.run(")
+    authority_check = source.index(
+        "authority_finding = _execution_input_authority_integrity_finding(",
+        runner_call,
+    )
+    unsafe_output_exit = source.index(
+        "if not run_result.outputs_safe_to_collect:", runner_call
+    )
+    authority_latch = source.index("run_input_authority_state.update(", authority_check)
+    assert runner_call < authority_check < authority_latch < unsafe_output_exit
+    assert (
+        "if run_result.outputs_safe_to_collect:"
+        in source[authority_check:unsafe_output_exit]
+    )
+
+
+def test_execution_input_authority_check_detects_unsafe_runner_mutation(tmp_path):
+    from easyicu.research_agent.evidence import sha256_of_file
+    from easyicu.research_agent.pipeline_execute import (
+        _execution_input_authority_integrity_finding,
+    )
+
+    universe_path = tmp_path / "universe.parquet"
+    cohort_path = tmp_path / "cohort_analysis.parquet"
+    universe_path.write_bytes(b"raw-universe")
+    cohort_path.write_bytes(b"filtered-cohort")
+    expected_universe_sha256 = sha256_of_file(universe_path)
+    expected_cohort_sha256 = sha256_of_file(cohort_path)
+
+    class UnsafeMutatingRunner:
+        def run(self):
+            universe_path.write_bytes(b"mutated-by-runner")
+            return type("UnsafeResult", (), {"outputs_safe_to_collect": False})()
+
+    result = UnsafeMutatingRunner().run()
+    finding = _execution_input_authority_integrity_finding(
+        step_id="01_cohort_flow",
+        universe_path=universe_path,
+        cohort_path=cohort_path,
+        expected_universe_sha256=expected_universe_sha256,
+        expected_analysis_cohort_sha256=expected_cohort_sha256,
+    )
+
+    assert result.outputs_safe_to_collect is False
+    assert finding is not None
+    assert finding.validator == "execution_input_authority_integrity"
+    assert finding.severity == "error"
+    assert finding.detail["observed_universe_sha256"] != expected_universe_sha256
+    assert finding.detail["observed_analysis_cohort_sha256"] == expected_cohort_sha256
 
 
 def test_plan_and_execute_result_dataclass_shapes_match_contracts_module():
