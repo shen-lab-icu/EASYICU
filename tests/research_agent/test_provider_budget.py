@@ -24,6 +24,7 @@ from easyicu.research_agent.pipeline_execute import (
     _cohort_translation_budget_owner_step_id,
     _extract_cohort_definition_with_provider_budget,
 )
+from easyicu.research_agent.pipeline_config import PipelineConfig
 from easyicu.research_agent.schema import (
     AnalysisStep,
     CohortDescriptor,
@@ -220,6 +221,49 @@ def test_final_concept_audit_slot_cannot_be_spent_by_generation_or_repair():
     )
     budget.consume("concept_audit")
     assert budget.remaining == 0
+
+
+def test_default_budget_fits_two_semantic_repairs_final_audit_and_analyzer(
+    tmp_path,
+):
+    limit = PipelineConfig(workdir=tmp_path).max_step_provider_calls
+    assert limit == 7
+    budget = StepProviderCallBudget(
+        limit,
+        step_id="01_model",
+        reserved_final_category="concept_audit",
+    )
+
+    for category in (
+        "initial_generation",
+        "concept_audit",
+        "post_mutation_concept_repair_patch",
+        "concept_audit",
+        "post_mutation_concept_repair_patch",
+    ):
+        budget.consume(category)
+    budget.bind_reserved_category("concept_audit", token="final-digest-authority")
+    budget.consume("concept_audit")
+    budget.complete_reserved_category(
+        "concept_audit",
+        token="final-digest-authority",
+    )
+    budget.release_reserved_category(
+        "concept_audit",
+        token="final-digest-authority",
+    )
+    budget.consume("analyzer")
+
+    assert budget.used == 7
+    assert budget.categories == (
+        "initial_generation",
+        "concept_audit",
+        "post_mutation_concept_repair_patch",
+        "concept_audit",
+        "post_mutation_concept_repair_patch",
+        "concept_audit",
+        "analyzer",
+    )
 
 
 def test_exact_final_audit_token_releases_reserved_slot_for_analyzer():
@@ -751,6 +795,157 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
         "initial_generation",
         "concept_audit",
     ]
+    assert latest.get("step_llm_repair_attempts", 0) == 0
+    assert latest["step_provider_call_repair_unavailable"] is True
     assert resumed_llm.write_calls == 0
     assert resumed_llm.audit_calls == 0
     assert resumed_llm.repair_calls == 0
+
+
+def test_pipeline_default_budget_executes_two_semantic_repairs_and_final_audit(
+    ra,
+    tmp_path: Path,
+):
+    def script(marker: str) -> str:
+        return f'''\
+import json
+import os
+import pandas as pd
+
+# {marker}
+df = pd.read_parquet(os.environ["COHORT_PARQUET"])
+out = os.environ["STEP_OUT_DIR"]
+summary = {{
+    "n": int(len(df)),
+    "output_files": [
+        {{"kind": "table", "name": "cohort_summary", "path": "cohort_summary.csv"}}
+    ],
+}}
+pd.DataFrame([summary]).to_csv(os.path.join(out, "cohort_summary.csv"), index=False)
+with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as handle:
+    json.dump(summary, handle)
+'''
+
+    class _TwoRepairLLM:
+        name = "two-semantic-repair-budget-test"
+
+        def __init__(self) -> None:
+            self.audit_calls = 0
+            self.repair_calls = 0
+
+        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
+            del max_tokens, temperature
+            system = "\n".join(
+                str(message.content or "")
+                for message in messages
+                if message.role == "system"
+            )
+            user = next(
+                (
+                    str(message.content or "")
+                    for message in reversed(messages)
+                    if message.role == "user"
+                ),
+                "",
+            )
+            upper = user.upper()
+            if "ICU-AWARE RESEARCH PLAN" in upper:
+                return json.dumps(
+                    {
+                        "research_question": "Summarize the ICU cohort.",
+                        "steps": [
+                            {
+                                "step_id": "01_summary",
+                                "intent": "Produce a descriptive cohort summary.",
+                                "inputs": ["stay_id"],
+                                "expected_outputs": ["table:cohort_summary"],
+                                "method": "descriptive_summary",
+                                "icu_rule_refs": [],
+                            }
+                        ],
+                        "rationale": "two semantic repair budget regression",
+                    }
+                )
+            if "WRITE THE PYTHON CODE" in upper:
+                return script("SEMANTIC_REPAIR_ROUND_1")
+            if "CONSERVATIVE ICU CONCEPT-USE AUDITOR" in system.upper():
+                self.audit_calls += 1
+                marker = next(
+                    (
+                        value
+                        for value in (
+                            "SEMANTIC_REPAIR_ROUND_1",
+                            "SEMANTIC_REPAIR_ROUND_2",
+                        )
+                        if value in user
+                    ),
+                    None,
+                )
+                return json.dumps(
+                    {
+                        "findings": (
+                            [
+                                {
+                                    "severity": "error",
+                                    "message": f"{marker} requires one repair.",
+                                    "detail": {"issue_code": "other"},
+                                }
+                            ]
+                            if marker
+                            else []
+                        )
+                    }
+                )
+            if "REPAIR THE PYTHON CODE" in upper:
+                self.repair_calls += 1
+                return script(
+                    "SEMANTIC_REPAIR_ROUND_2"
+                    if self.repair_calls == 1
+                    else "SEMANTIC_AUDIT_SAFE"
+                )
+            if "INTERPRET THE RESULTS" in upper:
+                return "Cohort summary completed {evidence:cohort_summary}."
+            return "{}"
+
+    llm = _TwoRepairLLM()
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=llm,
+        enable_literature=False,
+        enable_visual_qa=False,
+        enable_latex=False,
+        enable_llm_concept_audit=True,
+        enable_deterministic_code_fallback=False,
+        enable_deterministic_runner_repair=False,
+    )
+    result = pipeline.run(
+        question="Summarize the ICU cohort.",
+        cohort=pd.DataFrame({"stay_id": [1, 2, 3], "death": [0, 1, 0]}),
+        cohort_name="two_semantic_repair_budget_test",
+        database="synthetic",
+        target_outcome="death",
+        stop_after_step_id="01_summary",
+        stop_after_analysis=True,
+    )
+    partial = json.loads(
+        (Path(result.workdir) / "manifest_partial.json").read_text(encoding="utf-8")
+    )
+    record = [
+        item
+        for item in partial["per_step_records"]
+        if item.get("step_id") == "01_summary"
+    ][-1]
+
+    assert record["status"] == "ok"
+    assert llm.repair_calls == 2
+    assert llm.audit_calls == 3
+    assert record["step_llm_repair_attempts"] == 2
+    assert record["step_provider_call_categories"] == [
+        "initial_generation",
+        "concept_audit",
+        "post_mutation_concept_repair_patch",
+        "concept_audit",
+        "post_mutation_concept_repair_patch",
+        "concept_audit",
+        "analyzer",
+    ]

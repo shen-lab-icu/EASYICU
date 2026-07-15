@@ -1790,7 +1790,7 @@ class ResearchAgentPipeline:
         context_top_k: Optional[int] = None,
         max_code_repair_attempts: int = 3,
         max_step_llm_repair_attempts: int = 2,
-        max_step_provider_calls: int = 5,
+        max_step_provider_calls: int = 7,
         enable_deterministic_code_fallback: bool = False,
         enable_deterministic_planner_fallback: bool = False,
         enable_deterministic_runner_repair: bool = True,

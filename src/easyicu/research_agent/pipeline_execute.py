@@ -7185,16 +7185,35 @@ def run_execute_phase(
         quarantine_deterministic_revalidated = False
         pending_quarantined_errors: List[ValidationFinding] = []
 
-        def _llm_repair_budget_available() -> bool:
+        def _logical_llm_repair_budget_available() -> bool:
             return step_llm_repair_attempts < pipeline._max_step_llm_repair_attempts
+
+        def _provider_repair_call_available() -> bool:
+            # Every Coder repair starts with a non-audit patch reservation.  The
+            # exact category name does not affect the reserved-final-audit rule,
+            # so a neutral probe prevents a refused reservation from being
+            # misrecorded as a real logical repair attempt.
+            available = provider_budget.can_consume("llm_repair_budget_probe")
+            if not available:
+                step_record["step_provider_call_repair_unavailable"] = True
+                _sync_provider_budget()
+            return available
+
+        def _llm_repair_budget_available() -> bool:
+            return (
+                _logical_llm_repair_budget_available()
+                and _provider_repair_call_available()
+            )
 
         def _consume_llm_repair_budget(repair_class: str) -> bool:
             nonlocal step_llm_repair_attempts
-            if not _llm_repair_budget_available():
+            if not _logical_llm_repair_budget_available():
                 step_record["step_llm_repair_budget_exhausted"] = True
                 step_record["step_llm_repair_budget"] = (
                     pipeline._max_step_llm_repair_attempts
                 )
+                return False
+            if not _provider_repair_call_available():
                 return False
             step_llm_repair_attempts += 1
             step_record["step_llm_repair_attempts"] = step_llm_repair_attempts
@@ -8931,7 +8950,7 @@ else:
                 or not _llm_repair_budget_available()
                 or provider_budget.exhausted
             ):
-                if not _llm_repair_budget_available():
+                if not _logical_llm_repair_budget_available():
                     step_record["step_llm_repair_budget_exhausted"] = True
                     step_record["step_llm_repair_budget"] = (
                         pipeline._max_step_llm_repair_attempts
@@ -9633,7 +9652,7 @@ else:
                             )
                             return step_record
 
-                    if not _llm_repair_budget_available():
+                    if not _logical_llm_repair_budget_available():
                         step_record["step_llm_repair_budget_exhausted"] = True
                         step_record["step_llm_repair_budget"] = (
                             pipeline._max_step_llm_repair_attempts

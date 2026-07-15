@@ -101,10 +101,12 @@ class PipelineConfig:
     max_step_llm_repair_attempts: int = 2
     # Real coder/concept-audit provider attempts share one crash-safe budget,
     # including initial generation, transport/fallback retries, compatibility
-    # repair, patch, and full-rewrite fallback. Five supports the worst-case
-    # verifiable cycle generation -> audit -> patch -> rewrite -> re-audit;
-    # the normal minimal-patch path uses four.
-    max_step_provider_calls: int = 5
+    # repair, patch, and full-rewrite fallback. Seven supports the normal
+    # fail-closed semantic path: generation + three digest-bound audits + two
+    # minimal patches + one Analyzer call. Successful first-pass steps do not
+    # spend the additional headroom. Full rewrites and transport retries still
+    # consume the same monotonic stop-loss rather than receiving a hidden budget.
+    max_step_provider_calls: int = 7
     enable_deterministic_code_fallback: bool = False
     enable_deterministic_planner_fallback: bool = False
     enable_deterministic_runner_repair: bool = True
