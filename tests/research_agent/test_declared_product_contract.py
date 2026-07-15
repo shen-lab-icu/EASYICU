@@ -13,6 +13,7 @@ from easyicu.research_agent.declared_product_contract import (
     effect_measure_family,
     read_digest_bound_artifact_snapshot,
     typed_product,
+    typed_product_binding_contract,
 )
 from easyicu.research_agent.plan_utils import (
     _effect_figure_source_authorized,
@@ -24,6 +25,64 @@ from easyicu.research_agent.schema import AnalysisStep
 SEALED_DISTRIBUTION_REPAIR = (
     "distribution_availability_publication_bundle_from_parent_outputs_v1"
 )
+
+
+def test_assignment_binding_contract_maps_each_declared_model_to_exact_column(
+    tmp_path,
+):
+    artifact = tmp_path / "assignment_model.csv"
+    artifact.write_text(
+        "row_index,propensity_source_aware,propensity_complete_case,other_numeric\n"
+        "0,0.2,0.3,9\n",
+        encoding="utf-8",
+    )
+    contract = typed_product_binding_contract(
+        product_name="assignment_model",
+        step_summary={
+            "assignment_models": [
+                {
+                    "model_id": "assignment_source_aware",
+                    "analysis_set": "source_aware",
+                    "fit_status": "fitted",
+                },
+                {
+                    "model_id": "assignment_complete_case",
+                    "analysis_set": "complete_case",
+                    "fit_status": "fitted",
+                },
+            ]
+        },
+        artifact_path=artifact,
+    )
+
+    assert contract is not None
+    assert [model["propensity_score_column"] for model in contract["models"]] == [
+        "propensity_source_aware",
+        "propensity_complete_case",
+    ]
+
+
+def test_assignment_binding_contract_does_not_fallback_to_arbitrary_numeric_column(
+    tmp_path,
+):
+    artifact = tmp_path / "assignment_model.csv"
+    artifact.write_text("row_index,estimate,score\n0,0.2,0.3\n", encoding="utf-8")
+    contract = typed_product_binding_contract(
+        product_name="assignment_model",
+        step_summary={
+            "assignment_models": [
+                {
+                    "model_id": "assignment_source_aware",
+                    "analysis_set": "source_aware",
+                    "fit_status": "fitted",
+                }
+            ]
+        },
+        artifact_path=artifact,
+    )
+
+    assert contract is not None
+    assert "propensity_score_column" not in contract["models"][0]
 SEALED_ABSOLUTE_RISK_REPAIR = "absolute_risk_incidence_prevalence_publication_bundle_v1"
 SEALED_IMPLEMENTATION_DIGEST = "a" * 64
 SEALED_PARENT_DIGESTS = {

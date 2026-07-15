@@ -1925,6 +1925,24 @@ def _repair_specialization(
             "covariate set, model family, or estimand.\n"
         )
 
+    assignment_binding_signals = (
+        "registered propensity score column is unavailable",
+        "no registered propensity score column",
+    )
+    if any(signal in normalized for signal in assignment_binding_signals):
+        guidance.append(
+            "- DIAGNOSED ASSIGNMENT-PRODUCT BINDING REPAIR: consume the exact "
+            "typed `artifact:assignment_model` binding. Its product_contract "
+            "lists every producer-fitted model and, when uniquely bound, that "
+            "model's exact propensity_score_column. Validate the declared column "
+            "against the bound table and use only its associated analysis set; "
+            "do not scan arbitrary numeric columns, guess aliases, refit an "
+            "assignment model, or silently choose among multiple fitted variants. "
+            "The Agent retains ownership of which declared variant(s) the planned "
+            "diagnostic evaluates; fail closed when the contract is absent, "
+            "ambiguous, or incompatible.\n"
+        )
+
     if "undefined helper call" in normalized:
         guidance.append(
             "- DIAGNOSED UNDEFINED-HELPER REPAIR: every directly called helper "

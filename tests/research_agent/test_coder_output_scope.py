@@ -474,6 +474,31 @@ def test_coder_repair_completes_declared_assignment_product(ra):
     assert "DIAGNOSED TABULAR AUTHORITATIVE-EXPOSURE REPAIR" in prompt
 
 
+def test_coder_repair_consumes_registered_assignment_product_columns(ra):
+    llm = _RecordingLLM()
+    step = ra.AnalysisStep(
+        step_id="balance",
+        intent="Diagnose positivity for the Planner-owned assignment models.",
+        inputs=["artifact:assignment_model"],
+        expected_outputs=["table:balance"],
+        method="positivity_and_balance_diagnostics",
+    )
+
+    CoderAgent(llm).repair(
+        context=_context(ra),
+        step=step,
+        code="raise RuntimeError('missing propensity')\n",
+        run_log="Registered propensity-score column is unavailable",
+    )
+
+    prompt = llm.messages[-1].content
+    assert "DIAGNOSED ASSIGNMENT-PRODUCT BINDING REPAIR" in prompt
+    assert "product_contract" in prompt
+    assert "exact propensity_score_column" in prompt
+    assert "do not scan arbitrary numeric columns" in prompt
+    assert "do not" in prompt and "refit an assignment model" in prompt
+
+
 def test_coder_repair_preserves_typed_dataframe_artifact(ra):
     llm = _RecordingLLM()
     context = _context(ra).model_copy(update={"primary_exposure": "selected_first"})
