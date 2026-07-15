@@ -1398,7 +1398,8 @@ def _downgrade_finalized_exposure_reconciliation_findings(
     primary_exposure = str(context.primary_exposure or "").strip()
     script = str(script_text or "")
     normalized_script = re.sub(r"\s+", "", script.lower())
-    direct_binding = bool(
+    reconciliation_isolated = _finalized_branch_isolates_reconciliation(script)
+    literal_direct_binding = bool(
         primary_exposure
         and "artifact:primary_exposure_definition" in script
         and "dataframe" in script.lower()
@@ -1409,9 +1410,19 @@ def _downgrade_finalized_exposure_reconciliation_findings(
         and ".isin([0,1])" in normalized_script
         and ("isfinite(" in normalized_script or ".notna()" in normalized_script)
     )
+    contracted_direct_binding = bool(
+        reconciliation_isolated
+        and "artifact:primary_exposure_definition" in script
+        and "dataframe" in script.lower()
+        and "product_contract" in script
+        and "executable_column" in script
+        and "resolve_finalized_exposure" in script
+        and ".isin([0,1])" in normalized_script
+        and ("isfinite(" in normalized_script or ".notna()" in normalized_script)
+    )
+    direct_binding = literal_direct_binding or contracted_direct_binding
     if not direct_binding:
         return list(findings)
-    reconciliation_isolated = _finalized_branch_isolates_reconciliation(script)
 
     missing_reconciliation_signals = (
         "bypasses the required binary-event triad reconciliation",
