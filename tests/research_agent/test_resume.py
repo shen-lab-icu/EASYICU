@@ -1348,6 +1348,61 @@ def test_quarantine_policy_supersession_reclassifies_the_stored_error(ra) -> Non
     )
 
 
+def test_quarantine_policy_supersession_reclassifies_finalized_only_false_override(
+    ra,
+) -> None:
+    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.pipeline_execute import (
+        _quarantined_errors_superseded_by_current_policy,
+    )
+
+    context = ra.build_research_context(
+        research_question="Assess balance by treatment.",
+        cohort=pd.DataFrame({"stay_id": [1, 2], "treatment": [0, 1]}),
+        cohort_name="c",
+        database="synthetic",
+        primary_exposure="treatment",
+    )
+    script = """
+REQUESTED_INPUTS = ['artifact:primary_exposure_definition']
+def resolve_exposure(definition, product_contract, frame):
+    if not isinstance(definition, pd.DataFrame):
+        raise RuntimeError('finalized table required')
+    executable = product_contract['executable_column']
+    finalized = pd.to_numeric(definition[executable], errors='coerce')
+    if finalized.isna().any() or not np.isfinite(finalized).all() or not finalized.isin([0, 1]).all():
+        raise RuntimeError('invalid finalized exposure')
+    return finalized.astype(int)
+treatment = resolve_exposure(exposure_definition, product_contract, frame)
+"""
+    stored = ValidationFinding(
+        validator="llm_concept_auditor",
+        severity="error",
+        message="Finalized exposure is overwritten.",
+        detail={
+            "context": (
+                "The script replaces treatment with "
+                "reconcile_binary_event_presence values."
+            )
+        },
+    )
+
+    result = _quarantined_errors_superseded_by_current_policy(
+        prior_errors=[stored],
+        current_findings=[],
+        context=context,
+        script_text=script,
+        quarantined_script_sha256=hashlib.sha256(
+            script.encode("utf-8")
+        ).hexdigest(),
+    )
+
+    assert result is not None
+    reclassified, provenance = result
+    assert reclassified[0].severity == "warning"
+    assert provenance[0]["reclassified_severity"] == "warning"
+
+
 @pytest.mark.parametrize(
     "current_findings",
     [

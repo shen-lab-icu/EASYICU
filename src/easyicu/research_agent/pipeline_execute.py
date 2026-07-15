@@ -83,6 +83,7 @@ from .audits.validators import (
     StatisticalGuard,
     StatisticalValidator,
     StepSummaryFractionValidator,
+    _downgrade_finalized_exposure_reconciliation_findings,
     _downgrade_metadata_supported_outcome_findings,
 )
 from .audits.step_summary_integrity import StepSummaryIntegrityValidator
@@ -1252,6 +1253,11 @@ def _quarantined_errors_superseded_by_current_policy(
         return None
     reclassified = _downgrade_metadata_supported_outcome_findings(
         findings=prior_errors,
+        context=context,
+        script_text=script_text,
+    )
+    reclassified = _downgrade_finalized_exposure_reconciliation_findings(
+        findings=reclassified,
         context=context,
         script_text=script_text,
     )
