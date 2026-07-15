@@ -8532,6 +8532,7 @@ else:
                     source="deterministic_concept_audit_repair",
                 )
                 if _det_names and _det_code != code:
+                    _det_before_code = code
                     deterministic_concept_repairs += 1
                     applied_concept_repair_names.extend(_det_names)
                     step_record["deterministic_concept_repairs"] = (
@@ -8570,6 +8571,21 @@ else:
                         total_steps=total_steps,
                     )
                     code = _det_code
+                    if (
+                        quarantined_draft_active
+                        and _python_repair_is_materially_changed(
+                            _det_before_code,
+                            code,
+                        )
+                    ):
+                        # The stored errors remain useful regression constraints,
+                        # but they are not findings on a new, materially repaired
+                        # digest.  Re-audit that digest from scratch just as the
+                        # LLM-repair path below does.
+                        quarantined_draft_active = False
+                        quarantined_repair_materially_changed = True
+                        pending_quarantined_errors = []
+                        step_record["quarantined_repair_materially_changed"] = True
                     continue
 
             if (
