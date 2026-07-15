@@ -22,14 +22,37 @@ from easyicu.research_agent.pipeline import (
     _distribution_availability_parent_digest_seal,
     _distribution_availability_figure_step_matches_parent,
     _render_publication_bundle_from_prior_outputs_for_step,
+    _step_contract_findings,
     deterministic_figure_repair_id_for_upstream,
 )
 from easyicu.research_agent.schema import AnalysisStep
+from easyicu.research_agent.schema import ResearchContext
 from easyicu.research_agent.schema import ValidationFinding
 
 
 PARENT_STEP = "02_marker_audit"
 FIGURE_STEP = f"{PARENT_STEP}_figure"
+
+
+def _research_context() -> ResearchContext:
+    return ResearchContext(
+        research_question="Describe a planner-selected marker audit.",
+        cohort={
+            "cohort_name": "synthetic",
+            "database": "synthetic",
+            "n_patients": 10,
+            "n_stays": 10,
+        },
+        variables=[
+            {
+                "name": "marker_value",
+                "role": "lab",
+                "dtype": "float64",
+                "unit": "units",
+            }
+        ],
+        primary_exposure="marker_value",
+    )
 
 
 def _write_parent(
@@ -43,6 +66,8 @@ def _write_parent(
     extra_active_tables: bool = False,
     planner_method: str = "exposure_distribution_and_missingness_audit",
     planner_outputs: list[str] | None = None,
+    distribution_table_name: str = "descriptive_distribution.csv",
+    measurement_table_name: str = "source_availability.csv",
 ) -> Path:
     parent = run_dir / "steps" / PARENT_STEP / "outputs"
     parent.mkdir(parents=True, exist_ok=True)
@@ -155,7 +180,7 @@ def _write_parent(
         distribution.loc[0, "unit"] = "units"
     elif distribution_mutation == "percentage_mismatch":
         distribution.loc[0, "percentage"] = 81.0
-    distribution.to_csv(parent / "descriptive_distribution.csv", index=False)
+    distribution.to_csv(parent / distribution_table_name, index=False)
 
     observed_status_n = 7 if measurement_mutation == "observed_count_mismatch" else 8
     statuses = (
@@ -226,7 +251,7 @@ def _write_parent(
     elif measurement_mutation == "nonzero_rates_missing":
         nonzero = measurement["source_status"].eq("no source")
         measurement.loc[nonzero, ["percentage", "fraction"]] = None
-    measurement.to_csv(parent / "source_availability.csv", index=False)
+    measurement.to_csv(parent / measurement_table_name, index=False)
 
     schema = [status for status, _count in statuses]
     summary_median_name = (
@@ -251,7 +276,7 @@ def _write_parent(
             ),
         },
         "distribution": {
-            "table": "descriptive_distribution.csv",
+            "table": distribution_table_name,
             "observed_n": 8,
             summary_median_name: 2.5,
             "q25_units": 1.5,
@@ -260,7 +285,7 @@ def _write_parent(
             "max_units": 8.0,
         },
         "measurement_audit": {
-            "table": "source_availability.csv",
+            "table": measurement_table_name,
             "source_status_schema": schema,
             "source_status_counts": dict(statuses),
             "status_assignment_n": 10,
@@ -275,7 +300,7 @@ def _write_parent(
         summary["primary_exposure"].pop("unit")
         summary["primary_exposure"].pop("time_window")
         summary["distribution"] = {
-            "table": "descriptive_distribution.csv",
+            "table": distribution_table_name,
             "observed_n": 8,
             "median": 2.5,
             "q25": 1.5,
@@ -290,7 +315,7 @@ def _write_parent(
         evidence.register_file(
             kind="table",
             description="Planned descriptive distribution.",
-            source_path=parent / "descriptive_distribution.csv",
+            source_path=parent / distribution_table_name,
             evidence_id="descriptive_distribution_table",
             produced_by_step=PARENT_STEP,
             producer="coder",
@@ -302,7 +327,7 @@ def _write_parent(
             evidence.register_file(
                 kind="table",
                 description="Planned source availability audit.",
-                source_path=parent / "source_availability.csv",
+                source_path=parent / measurement_table_name,
                 evidence_id="source_availability_table",
                 produced_by_step=PARENT_STEP,
                 producer="coder",
@@ -364,8 +389,8 @@ def _write_parent(
                                 "inputs": ["marker_value"],
                                 "expected_outputs": planner_outputs
                                 or [
-                                    "table:descriptive_distribution",
-                                    "table:source_availability",
+                                    f"table:{Path(distribution_table_name).stem}",
+                                    f"table:{Path(measurement_table_name).stem}",
                                 ],
                             }
                         },
@@ -459,6 +484,261 @@ def test_verified_parent_contract_renders_without_outcome_products(
             finding.detail.get("reason") == "figure_contract_export_mismatch"
             for finding in malformed_findings
         )
+
+
+def test_controlled_parent_contract_accepts_closed_renderer_inputs(
+    tmp_path: Path,
+) -> None:
+    parent_out = _write_parent(tmp_path)
+    summary = json.loads((parent_out / "step_summary.json").read_text("utf-8"))
+    step = AnalysisStep(
+        step_id=PARENT_STEP,
+        intent="Audit a planner-selected exposure distribution and availability.",
+        inputs=["marker_value"],
+        expected_outputs=[
+            "table:descriptive_distribution",
+            "table:source_availability",
+        ],
+        method="exposure_distribution_and_missingness_audit",
+    )
+
+    findings = _step_contract_findings(
+        step=step,
+        step_summary=summary,
+        context=_research_context(),
+        out_dir=parent_out,
+    )
+
+    assert not any(
+        finding.validator == "distribution_availability_parent_contract"
+        for finding in findings
+    )
+
+
+def test_controlled_parent_contract_blocks_unrenderable_summary_before_sealing(
+    tmp_path: Path,
+) -> None:
+    parent_out = _write_parent(tmp_path)
+    summary = json.loads((parent_out / "step_summary.json").read_text("utf-8"))
+    summary["distribution"] = {
+        "observed_n": summary["distribution"]["observed_n"],
+        "median_units": 999.0,
+    }
+    step = AnalysisStep(
+        step_id=PARENT_STEP,
+        intent="Audit a planner-selected exposure distribution and availability.",
+        inputs=["marker_value"],
+        expected_outputs=[
+            "table:descriptive_distribution",
+            "table:source_availability",
+        ],
+        method="exposure_distribution_and_missingness_audit",
+    )
+
+    findings = _step_contract_findings(
+        step=step,
+        step_summary=summary,
+        context=_research_context(),
+        out_dir=parent_out,
+    )
+
+    parent_findings = [
+        finding
+        for finding in findings
+        if finding.validator == "distribution_availability_parent_contract"
+    ]
+    assert len(parent_findings) == 1
+    assert parent_findings[0].severity == "error"
+    assert parent_findings[0].detail["reason"] == (
+        "distribution_availability_parent_contract_invalid"
+    )
+    assert parent_findings[0].detail["kind"] == (
+        "controlled_renderer_parent_contract_invalid"
+    )
+    assert parent_findings[0].detail["contract_issue"] == (
+        "summary_table_roles_invalid"
+    )
+    assert parent_findings[0].detail["required_schema"]["primary_exposure"] == [
+        "column",
+        "authoritative=true",
+        "role=authoritative_primary_exposure",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_issue"),
+    (
+        ("wrong_exposure", "summary_primary_exposure_mismatch"),
+        ("wrong_unit", "summary_primary_exposure_unit_mismatch"),
+        ("missing_planner_input", "host_primary_exposure_not_planner_input"),
+        ("missing_assignment_n", "closed_schema_rejected"),
+    ),
+)
+def test_controlled_parent_contract_binds_host_exposure_and_accounting(
+    tmp_path: Path,
+    mutation: str,
+    expected_issue: str,
+) -> None:
+    parent_out = _write_parent(tmp_path)
+    summary = json.loads((parent_out / "step_summary.json").read_text("utf-8"))
+    step_inputs = ["marker_value"]
+    if mutation == "wrong_exposure":
+        summary["primary_exposure"]["column"] = "alternate_marker"
+    elif mutation == "wrong_unit":
+        summary["primary_exposure"]["unit"] = "other units"
+    elif mutation == "missing_planner_input":
+        step_inputs = ["alternate_marker"]
+    elif mutation == "missing_assignment_n":
+        summary["measurement_audit"].pop("status_assignment_n")
+    step = AnalysisStep(
+        step_id=PARENT_STEP,
+        intent="Audit a planner-selected exposure distribution and availability.",
+        inputs=step_inputs,
+        expected_outputs=[
+            "table:descriptive_distribution",
+            "table:source_availability",
+        ],
+        method="exposure_distribution_and_missingness_audit",
+    )
+
+    findings = _step_contract_findings(
+        step=step,
+        step_summary=summary,
+        context=_research_context(),
+        out_dir=parent_out,
+    )
+
+    parent_finding = next(
+        finding
+        for finding in findings
+        if finding.validator == "distribution_availability_parent_contract"
+    )
+    assert parent_finding.severity == "error"
+    assert parent_finding.detail["contract_issue"] == expected_issue
+
+
+def test_controlled_parent_contract_does_not_claim_unrelated_method_or_no_outputs(
+    tmp_path: Path,
+) -> None:
+    parent_out = _write_parent(tmp_path)
+    summary = json.loads((parent_out / "step_summary.json").read_text("utf-8"))
+    summary.pop("distribution")
+    unrelated_step = AnalysisStep(
+        step_id=PARENT_STEP,
+        intent="Fit a separate adjusted model.",
+        inputs=["marker_value"],
+        expected_outputs=[
+            "table:descriptive_distribution",
+            "table:source_availability",
+        ],
+        method="mixed_effects_regression",
+    )
+    controlled_step = unrelated_step.model_copy(
+        update={"method": "exposure_distribution_and_missingness_audit"}
+    )
+
+    unrelated_findings = _step_contract_findings(
+        step=unrelated_step,
+        step_summary=summary,
+        context=_research_context(),
+        out_dir=parent_out,
+    )
+    compatibility_findings = _step_contract_findings(
+        step=controlled_step,
+        step_summary=summary,
+        context=_research_context(),
+        out_dir=None,
+    )
+
+    assert not any(
+        finding.validator == "distribution_availability_parent_contract"
+        for finding in (*unrelated_findings, *compatibility_findings)
+    )
+
+
+def test_missingness_named_parent_routes_only_with_closed_schema_and_typed_edge(
+    tmp_path: Path,
+) -> None:
+    _write_parent(
+        tmp_path,
+        distribution_table_name="marker_distribution.csv",
+        measurement_table_name="marker_missingness.csv",
+    )
+    child = AnalysisStep(
+        step_id=FIGURE_STEP,
+        intent="Render the two direct-parent products.",
+        inputs=["table:marker_distribution", "table:marker_missingness"],
+        expected_outputs=["figure:publication_figure"],
+        method="publication_figure_generation",
+    )
+
+    assert deterministic_figure_repair_id_for_upstream(tmp_path, FIGURE_STEP) == (
+        REPAIR_ID
+    )
+    assert _distribution_availability_figure_step_matches_parent(tmp_path, child)
+    assert set(
+        _distribution_availability_parent_digest_seal(tmp_path, FIGURE_STEP) or {}
+    ) == {
+        "step_summary.json",
+        "marker_distribution.csv",
+        "marker_missingness.csv",
+    }
+
+
+@pytest.mark.parametrize(
+    ("planner_outputs", "role_detail", "expected_role_products"),
+    (
+        (
+            [
+                "table:descriptive_distribution",
+                "table:alternate_distribution",
+                "table:source_availability",
+            ],
+            "distribution_role_products",
+            ["alternate_distribution", "descriptive_distribution"],
+        ),
+        (
+            [
+                "table:descriptive_distribution",
+                "table:source_availability",
+                "table:secondary_missingness",
+            ],
+            "availability_role_products",
+            ["secondary_missingness", "source_availability"],
+        ),
+    ),
+)
+def test_duplicate_parent_role_fails_closed_before_renderer_routing(
+    tmp_path: Path,
+    planner_outputs: list[str],
+    role_detail: str,
+    expected_role_products: list[str],
+) -> None:
+    parent_out = _write_parent(tmp_path, planner_outputs=planner_outputs)
+    summary = json.loads((parent_out / "step_summary.json").read_text("utf-8"))
+    step = AnalysisStep(
+        step_id=PARENT_STEP,
+        intent="Audit a planner-selected exposure distribution and availability.",
+        inputs=["marker_value"],
+        expected_outputs=planner_outputs,
+        method="exposure_distribution_and_missingness_audit",
+    )
+
+    findings = _step_contract_findings(
+        step=step,
+        step_summary=summary,
+        context=_research_context(),
+        out_dir=parent_out,
+    )
+
+    parent_finding = next(
+        finding
+        for finding in findings
+        if finding.validator == "distribution_availability_parent_contract"
+    )
+    assert parent_finding.detail["contract_issue"] == "planner_table_roles_ambiguous"
+    assert parent_finding.detail[role_detail] == expected_role_products
+    assert deterministic_figure_repair_id_for_upstream(tmp_path, FIGURE_STEP) is None
 
 
 def test_windowed_schema_equal_aliases_and_zero_count_blanks_renders(
@@ -571,7 +851,33 @@ def test_ambiguous_inconsistent_or_unverified_inputs_fail_closed(
 
 
 def test_digest_seal_contains_only_summary_selected_inputs(tmp_path: Path) -> None:
-    _write_parent(tmp_path, extra_active_tables=True)
+    planner_outputs = [
+        "table:descriptive_distribution",
+        "table:source_availability",
+        "table:context_table",
+    ]
+    parent_out = _write_parent(
+        tmp_path,
+        extra_active_tables=True,
+        planner_outputs=planner_outputs,
+    )
+    summary = json.loads((parent_out / "step_summary.json").read_text("utf-8"))
+    findings = _step_contract_findings(
+        step=AnalysisStep(
+            step_id=PARENT_STEP,
+            intent="Audit a planner-selected exposure distribution and availability.",
+            inputs=["marker_value"],
+            expected_outputs=planner_outputs,
+            method="exposure_distribution_and_missingness_audit",
+        ),
+        step_summary=summary,
+        context=_research_context(),
+        out_dir=parent_out,
+    )
+    assert not any(
+        finding.validator == "distribution_availability_parent_contract"
+        for finding in findings
+    )
     seal = _distribution_availability_parent_digest_seal(tmp_path, FIGURE_STEP)
     assert seal is not None
     assert set(seal) == {
@@ -701,25 +1007,37 @@ def test_execution_parses_the_same_bytes_that_crossed_the_digest_seal(
     [
         (
             "cosmetic_visual",
-            ["figure:marker_distribution", "figure:marker_availability"],
+            [
+                "figure:marker_distribution",
+                "figure:marker_measurement_availability",
+            ],
             "Overlapping text elements detected; adjust spacing between annotations.",
             "ok",
         ),
         (
             "hard_visual",
-            ["figure:marker_distribution", "figure:marker_availability"],
+            [
+                "figure:marker_distribution",
+                "figure:marker_measurement_availability",
+            ],
             "Rendered numeric annotations disagree with the expected source values.",
             "execution_failed",
         ),
         (
             "contract",
-            ["figure:marker_distribution", "figure:marker_availability"],
+            [
+                "figure:marker_distribution",
+                "figure:marker_measurement_availability",
+            ],
             None,
             "contract_failed",
         ),
         (
             "parent_receipt",
-            ["figure:marker_distribution", "figure:marker_availability"],
+            [
+                "figure:marker_distribution",
+                "figure:marker_measurement_availability",
+            ],
             None,
             "contract_failed",
         ),
@@ -727,7 +1045,7 @@ def test_execution_parses_the_same_bytes_that_crossed_the_digest_seal(
             "host_slot_denial",
             [
                 "figure:marker_distribution",
-                "figure:marker_availability",
+                "figure:marker_measurement_availability",
                 "figure:marker_third_role",
             ],
             None,
@@ -773,7 +1091,7 @@ def test_sealed_renderer_authority_and_failure_policy(
                                 "inputs": ["marker_value"],
                                 "expected_outputs": [
                                     "table:descriptive_distribution",
-                                    "table:source_availability",
+                                    "table:marker_missingness",
                                 ],
                                 "method": "exposure_distribution_and_missingness_audit",
                                 "icu_rule_refs": [],
@@ -783,7 +1101,7 @@ def test_sealed_renderer_authority_and_failure_policy(
                                 "intent": "Render the direct parent's planned descriptive audit.",
                                 "inputs": [
                                     "table:descriptive_distribution",
-                                    "table:source_availability",
+                                    "table:marker_missingness",
                                 ],
                                 "expected_outputs": figure_outputs,
                                 "method": "publication_figure_generation",
@@ -843,7 +1161,7 @@ availability = pd.DataFrame([{
     "percentage": 100.0 * counts[status] / n_total,
     "fraction": counts[status] / n_total,
 } for status in schema])
-availability.to_csv(os.path.join(out, "source_availability.csv"), index=False)
+availability.to_csv(os.path.join(out, "marker_missingness.csv"), index=False)
 summary = {
     "method": "exposure_distribution_and_missingness_audit",
     "analysis_family": "association_study",
@@ -864,14 +1182,14 @@ summary = {
         "max_units": float(observed.max()),
     },
     "measurement_audit": {
-        "table": "source_availability.csv",
+        "table": "marker_missingness.csv",
         "source_status_schema": schema,
         "source_status_counts": counts,
         "status_assignment_n": n_total,
     },
     "output_files": {
         "table:descriptive_distribution": "descriptive_distribution.csv",
-        "table:source_availability": "source_availability.csv",
+        "table:marker_missingness": "marker_missingness.csv",
     },
 }
 with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as handle:
@@ -1020,23 +1338,21 @@ print(json.dumps(summary))
     assert figure_record["generation_mode"] == "fallback"
     assert figure_record["llm_repair_used"] is False
     assert figure_record["sealed_renderer_executed_code_matches_authority"] is True
-    assert (
-        figure_record["executed_code_sha256"]
-        == (figure_record["sealed_renderer_authorized_code_sha256"])
+    assert figure_record["executed_code_sha256"] == (
+        figure_record["sealed_renderer_authorized_code_sha256"]
     )
     assert len(figure_record["sealed_renderer_implementation_sha256"]) == 64
-    assert (
-        "easyicu.research_agent.repair_registry"
-        in (figure_record["sealed_renderer_source_digests"])
+    assert "easyicu.research_agent.repair_registry" in (
+        figure_record["sealed_renderer_source_digests"]
     )
     assert set(figure_record["sealed_renderer_parent_digests"]) == {
         "step_summary.json",
         "descriptive_distribution.csv",
-        "source_availability.csv",
+        "marker_missingness.csv",
     }
     assert figure_record["sealed_renderer_authorized_product_slots"] == {
         "figure:marker_distribution": "distribution",
-        "figure:marker_availability": "availability",
+        "figure:marker_measurement_availability": "availability",
     }
     assert "repair_target_step_id" not in figure_record
     if sealed_case == "cosmetic_visual":
@@ -1046,7 +1362,7 @@ print(json.dumps(summary))
         assert summary["output_files"]["figure:marker_distribution"] == (
             "distribution_availability.png"
         )
-        assert summary["output_files"]["figure:marker_availability"] == (
+        assert summary["output_files"]["figure:marker_measurement_availability"] == (
             "distribution_availability.png"
         )
         assert summary["planner_product_slot_bindings"] == {
@@ -1054,18 +1370,16 @@ print(json.dumps(summary))
                 "slot": "distribution",
                 "panel_ids": ["A"],
             },
-            "figure:marker_availability": {
+            "figure:marker_measurement_availability": {
                 "slot": "availability",
                 "panel_ids": ["B"],
             },
         }
-        assert (
-            summary["sealed_renderer_implementation_sha256"]
-            == (figure_record["sealed_renderer_implementation_sha256"])
+        assert summary["sealed_renderer_implementation_sha256"] == (
+            figure_record["sealed_renderer_implementation_sha256"]
         )
-        assert (
-            summary["sealed_renderer_parent_digests"]
-            == (figure_record["sealed_renderer_parent_digests"])
+        assert summary["sealed_renderer_parent_digests"] == (
+            figure_record["sealed_renderer_parent_digests"]
         )
         assert figure_record["sealed_renderer_parent_receipt_verified"] is True
     elif sealed_case == "hard_visual":

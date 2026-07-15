@@ -73,7 +73,10 @@ def test_cohort_typed_product_is_realised_by_its_tabular_dataset(tmp_path):
     ("filename", "payload"),
     [
         ("input_universe_reconciliation.csv", "observed_n,expected_n\n94458,94458\n"),
-        ("input_universe_reconciliation.json", '{"observed_n":94458,"expected_n":94458}'),
+        (
+            "input_universe_reconciliation.json",
+            '{"observed_n":94458,"expected_n":94458}',
+        ),
     ],
 )
 def test_explicit_audit_product_is_realised_by_compatible_file(
@@ -264,9 +267,7 @@ def test_assignment_binding_contract_does_not_trust_same_name_summary_mapping(
 
 
 @pytest.mark.parametrize("score", ["nan", "inf", "-0.01", "1.01"])
-def test_assignment_binding_contract_rejects_invalid_propensity_values(
-    tmp_path, score
-):
+def test_assignment_binding_contract_rejects_invalid_propensity_values(tmp_path, score):
     artifact = tmp_path / "assignment_model.csv"
     artifact.write_text(
         f"row_index,propensity_source_aware\n0,{score}\n",
@@ -312,9 +313,7 @@ def test_assignment_binding_contract_checks_row_identity_and_declared_n(tmp_path
             ]
         },
         artifact_path=artifact,
-        authoritative_cohort_path=_assignment_cohort(
-            tmp_path, stay_ids=(101, 102)
-        ),
+        authoritative_cohort_path=_assignment_cohort(tmp_path, stay_ids=(101, 102)),
     )
 
     assert contract is None
@@ -342,9 +341,7 @@ def test_assignment_binding_contract_rejects_identity_rows_from_another_cohort(
             ]
         },
         artifact_path=artifact,
-        authoritative_cohort_path=_assignment_cohort(
-            tmp_path, stay_ids=(101, 102)
-        ),
+        authoritative_cohort_path=_assignment_cohort(tmp_path, stay_ids=(101, 102)),
     )
 
     assert contract is None
@@ -372,9 +369,7 @@ def test_assignment_binding_contract_accepts_exact_cohort_identity_and_order(
             ]
         },
         artifact_path=artifact,
-        authoritative_cohort_path=_assignment_cohort(
-            tmp_path, stay_ids=(101, 102)
-        ),
+        authoritative_cohort_path=_assignment_cohort(tmp_path, stay_ids=(101, 102)),
     )
 
     assert contract is not None
@@ -534,13 +529,13 @@ def test_confounder_binding_contract_does_not_trust_same_name_summary_mapping(
 
     contract = typed_product_binding_contract(
         product_name="prespecified_confounder_set",
-        step_summary={
-            "prespecified_confounder_set": {"covariates": ["age"]}
-        },
+        step_summary={"prespecified_confounder_set": {"covariates": ["age"]}},
         artifact_path=artifact,
     )
 
     assert contract is None
+
+
 SEALED_ABSOLUTE_RISK_REPAIR = "absolute_risk_incidence_prevalence_publication_bundle_v1"
 SEALED_IMPLEMENTATION_DIGEST = "a" * 64
 SEALED_PARENT_DIGESTS = {
@@ -2430,6 +2425,33 @@ def test_host_slot_authorization_accepts_parent_anchored_subject():
         "figure:planned_distribution": "distribution",
         "figure:planned_availability": "availability",
     }
+
+
+def test_host_slot_authorization_treats_measurement_availability_as_one_role():
+    assert authorize_declared_figure_product_slots(
+        declared_products=[
+            "figure:planned_distribution",
+            "figure:planned_measurement_availability",
+        ],
+        renderer_repair_id=SEALED_DISTRIBUTION_REPAIR,
+        planner_parent_anchors=[
+            "table:planned_distribution",
+            "table:planned_missingness",
+            "planned_measured",
+        ],
+    ) == {
+        "figure:planned_distribution": "distribution",
+        "figure:planned_measurement_availability": "availability",
+    }
+
+
+def test_host_slot_authorization_rejects_unanchored_measurement_availability():
+    with pytest.raises(ValueError, match="not anchored to a verified"):
+        authorize_declared_figure_product_slots(
+            declared_products=["figure:unplanned_measurement_availability"],
+            renderer_repair_id=SEALED_DISTRIBUTION_REPAIR,
+            planner_parent_anchors=["table:planned_distribution"],
+        )
 
 
 def test_host_slot_authorization_preserves_role_by_exposure_subject():

@@ -9583,6 +9583,7 @@ def _distribution_availability_parent_digest_seal(
         return None
     from .figures.distribution_availability import (
         CONTROLLED_METHOD,
+        distribution_availability_planner_table_roles,
         prepare_distribution_availability_inputs,
     )
 
@@ -9634,18 +9635,21 @@ def _distribution_availability_parent_digest_seal(
     )
     if prepared is None:
         return None
-    from .declared_product_contract import typed_product
-
-    declared_tables = {
-        parsed[1]
-        for raw in (request_step.get("expected_outputs") or [])
-        if (parsed := typed_product(raw)) is not None and parsed[0] == "table"
-    }
+    declared_tables, distribution_roles, availability_roles = (
+        distribution_availability_planner_table_roles(
+            request_step.get("expected_outputs") or []
+        )
+    )
+    if len(distribution_roles) != 1 or len(availability_roles) != 1:
+        return None
     required_table_products = {
         prepared.distribution_path.stem,
         prepared.measurement_path.stem,
     }
-    if not required_table_products <= declared_tables:
+    if (
+        required_table_products != distribution_roles | availability_roles
+        or not required_table_products <= declared_tables
+    ):
         return None
     required_names = {
         "step_summary.json",
