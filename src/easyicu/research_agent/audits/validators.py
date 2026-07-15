@@ -1260,6 +1260,126 @@ def _downgrade_audit_only_companion_gating_findings(
     return downgraded
 
 
+def _call_name(node: ast.Call) -> str:
+    func = node.func
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return ""
+
+
+def _finalized_branch_isolates_reconciliation(script_text: str) -> bool:
+    """Prove that raw-event reconciliation is unreachable on a DataFrame path.
+
+    Generated consumers may support two typed forms: a finalized row-aligned
+    DataFrame and a raw definition mapping.  Merely defining a raw resolver that
+    calls ``reconcile_binary_event_presence`` does not overwrite the finalized
+    values.  This helper returns true only when an ``isinstance(...,
+    DataFrame)`` branch keeps every reconciliation call (including a one-hop
+    local resolver) in the opposite branch and makes no such call afterwards.
+    Ambiguous control flow remains fail-closed.
+    """
+
+    try:
+        tree = ast.parse(str(script_text or ""))
+    except SyntaxError:
+        return False
+
+    reconciliation_name = "reconcile_binary_event_presence"
+    wrapper_names: Set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if any(
+            isinstance(child, ast.Call)
+            and _call_name(child) == reconciliation_name
+            for child in ast.walk(node)
+        ):
+            wrapper_names.add(node.name)
+
+    guarded_call_names = wrapper_names | {reconciliation_name}
+
+    class _ExecutableCallVisitor(ast.NodeVisitor):
+        def __init__(self, *, skip: ast.AST | None = None) -> None:
+            self.skip = skip
+            self.calls: List[str] = []
+
+        def visit(self, node: ast.AST) -> Any:
+            if node is self.skip:
+                return None
+            return super().visit(node)
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            return None
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            return None
+
+        def visit_Lambda(self, node: ast.Lambda) -> None:
+            return None
+
+        def visit_ClassDef(self, node: ast.ClassDef) -> None:
+            return None
+
+        def visit_Call(self, node: ast.Call) -> None:
+            name = _call_name(node)
+            if name in guarded_call_names:
+                self.calls.append(name)
+            self.generic_visit(node)
+
+    def _calls_in(nodes: Sequence[ast.stmt]) -> List[str]:
+        visitor = _ExecutableCallVisitor()
+        for item in nodes:
+            visitor.visit(item)
+        return visitor.calls
+
+    parent: Dict[ast.AST, ast.AST] = {}
+    for container in ast.walk(tree):
+        for child in ast.iter_child_nodes(container):
+            parent[child] = container
+
+    for candidate in ast.walk(tree):
+        if not isinstance(candidate, ast.If):
+            continue
+        test = candidate.test
+        finalized_body = candidate.body
+        raw_body = candidate.orelse
+        if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+            test = test.operand
+            finalized_body, raw_body = raw_body, finalized_body
+        if not (
+            isinstance(test, ast.Call)
+            and isinstance(test.func, ast.Name)
+            and test.func.id == "isinstance"
+            and len(test.args) >= 2
+            and (
+                (isinstance(test.args[1], ast.Name) and test.args[1].id == "DataFrame")
+                or (
+                    isinstance(test.args[1], ast.Attribute)
+                    and test.args[1].attr == "DataFrame"
+                )
+            )
+        ):
+            continue
+        if _calls_in(finalized_body) or not _calls_in(raw_body):
+            continue
+
+        scope: ast.AST = tree
+        cursor: ast.AST | None = candidate
+        while cursor is not None:
+            if isinstance(cursor, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                scope = cursor
+                break
+            cursor = parent.get(cursor)
+        outside = _ExecutableCallVisitor(skip=candidate)
+        for statement in getattr(scope, "body", []):
+            outside.visit(statement)
+        if not outside.calls:
+            return True
+    return False
+
+
 def _downgrade_finalized_exposure_reconciliation_findings(
     *,
     findings: Sequence[ValidationFinding],
@@ -1291,6 +1411,7 @@ def _downgrade_finalized_exposure_reconciliation_findings(
     )
     if not direct_binding:
         return list(findings)
+    reconciliation_isolated = _finalized_branch_isolates_reconciliation(script)
 
     missing_reconciliation_signals = (
         "bypasses the required binary-event triad reconciliation",
@@ -1304,8 +1425,11 @@ def _downgrade_finalized_exposure_reconciliation_findings(
         "ignores its values",
         "ignores the finalized",
         "overwrites",
+        "overwritten",
         "discards",
         "replaces the finalized",
+        "replaces treatment",
+        "replaces exposure",
         "instead of the finalized",
         "raw companions determine",
     )
@@ -1321,14 +1445,28 @@ def _downgrade_finalized_exposure_reconciliation_findings(
             complains_only_about_reconciliation = any(
                 signal in text for signal in missing_reconciliation_signals
             ) and not any(signal in text for signal in finalized_override_signals)
-            if complains_only_about_reconciliation:
+            false_override_claim = (
+                reconciliation_isolated
+                and "reconcile_binary_event_presence" in text
+                and any(signal in text for signal in finalized_override_signals)
+            )
+            if complains_only_about_reconciliation or false_override_claim:
                 detail = dict(finding.detail or {})
                 detail.setdefault(
                     "downgraded_reason",
-                    "The script directly binds and validates the exact binary "
-                    "column from the finalized row-aligned exposure artifact. "
-                    "Downstream raw-event reconciliation may audit provenance "
-                    "but must not redefine that authoritative exposure.",
+                    (
+                        "AST control-flow verification shows raw-event "
+                        "reconciliation is isolated to the non-DataFrame branch; "
+                        "the finalized branch directly binds and validates the "
+                        "exact binary column from the row-aligned exposure "
+                        "artifact."
+                        if false_override_claim
+                        else "The script directly binds and validates the exact "
+                        "binary column from the finalized row-aligned exposure "
+                        "artifact. Downstream raw-event reconciliation may audit "
+                        "provenance but must not redefine that authoritative "
+                        "exposure."
+                    ),
                 )
                 downgraded.append(
                     finding.model_copy(
