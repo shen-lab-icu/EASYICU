@@ -827,6 +827,9 @@ def test_coder_prompt_binds_typed_inputs_to_resolved_manifest(ra):
     for prompt in prompts:
         assert "TYPED INPUT BINDING (binding)" in prompt
         assert "EASYICU_RESOLVED_INPUTS_JSON" in prompt
+        assert "manifest['context']" in prompt
+        assert "immutable Agent-produced ResearchContext" in prompt
+        assert "do not copy prompt literals" in prompt
         assert "product_contract" in prompt
         assert "successful producer's step summary" in prompt
         assert "do not recover them from DataFrame.attrs" in prompt

@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from easyicu.research_agent.cohort_schema import CohortDefinition
-from easyicu.research_agent.evidence import EvidenceStore
+from easyicu.research_agent.evidence import EvidenceStore, sha256_of_file
 from easyicu.research_agent.pipeline_execute import (
     _plan_scientific_scope_signature,
     _plan_signature,
@@ -612,18 +612,39 @@ def test_typed_table_uses_current_resume_authority_and_writes_exact_manifest(
     }
     assert Path(binding["absolute_path"]).read_text(encoding="utf-8").endswith("x,1\n")
 
+    context_path = tmp_path / "research_context.json"
+    context_path.write_text('{"primary_exposure":"x"}\n', encoding="utf-8")
     manifest_path = _write_resolved_inputs_manifest(
         run_dir=tmp_path,
         step_id="consumer",
         bindings={"table:scaling_summary": binding},
+        context_path=context_path,
     )
     payload = __import__("json").loads(manifest_path.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == "2.0"
+    assert payload["context"]["relative_path"] == "research_context.json"
+    assert payload["context"]["sha256"] == sha256_of_file(context_path)
     manifest_binding = payload["inputs"]["table:scaling_summary"]
     assert manifest_binding["evidence_id"] == current.evidence_id
     assert manifest_binding["product_contract"]["value_column"] == "x"
     assert tmp_path / manifest_binding["relative_path"] == Path(
         manifest_binding["absolute_path"]
     )
+
+
+def test_resolved_inputs_manifest_rejects_context_outside_run(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    outside = tmp_path / "outside_context.json"
+    outside.write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="contained by run_dir"):
+        _write_resolved_inputs_manifest(
+            run_dir=run_dir,
+            step_id="consumer",
+            bindings={},
+            context_path=outside,
+        )
 
 
 def test_typed_statistic_binds_current_verified_step_summary(tmp_path: Path) -> None:
