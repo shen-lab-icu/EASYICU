@@ -612,17 +612,23 @@ def test_materialize_resolves_kdigo_alias_to_aki_stage_column(tmp_path: Path) ->
     assert result["n_cohort"] == 2
 
 
-def _synthetic_source_predicate():
+def _synthetic_source_predicate(
+    *,
+    aggregation="any",
+    anchor="icu_admit",
+    start_offset_hours=0.0,
+    end_offset_hours=24.0,
+):
     from easyicu.research_agent.cohort_schema import ConceptPredicate, TimeWindow
 
     return ConceptPredicate(
         concept_id="canonical_signal",
         time_window=TimeWindow(
-            anchor="icu_admit",
-            start_offset_hours=0.0,
-            end_offset_hours=24.0,
+            anchor=anchor,
+            start_offset_hours=start_offset_hours,
+            end_offset_hours=end_offset_hours,
         ),
-        aggregation="any",
+        aggregation=aggregation,
         op="not_missing",
         value=None,
     )
@@ -645,13 +651,30 @@ def _synthetic_binding_plan(definition, inputs):
 
 def _synthetic_binding_context(
     *descriptors,
-    primary_exposure="exported_signal_max",
+    primary_exposure="exported_signal_any",
     target_outcome=None,
 ):
     return SimpleNamespace(
         variables=list(descriptors),
         primary_exposure=primary_exposure,
         target_outcome=target_outcome,
+    )
+
+
+def test_descriptor_window_match_requires_explicit_matching_anchor() -> None:
+    from easyicu.research_agent import cohort_schema
+
+    window = cohort_schema.TimeWindow("hospital_admit", 0, 24)
+
+    assert cohort_schema._descriptor_window_matches_predicate(
+        "hospital_admit_0_24h", window
+    )
+    assert not cohort_schema._descriptor_window_matches_predicate("0_24h", window)
+    assert not cohort_schema._descriptor_window_matches_predicate(
+        "icu_admit_0_24h", window
+    )
+    assert not cohort_schema._descriptor_window_matches_predicate(
+        "first_24h", cohort_schema.TimeWindow("icu_admit", 0, 24)
     )
 
 
@@ -674,16 +697,17 @@ def test_materialize_binds_unique_planner_input_by_source_concept(
     pd.DataFrame(
         {
             "stay_id": [1, 2, 3],
-            "exported_signal_max": [0.0, None, 2.0],
+            "exported_signal_any": [0.0, None, 2.0],
             "exported_signal_measured": [1, 0, 1],
             "exported_signal_n": [2, 0, 3],
         }
     ).to_parquet(universe_path, index=False)
     context = _synthetic_binding_context(
         SimpleNamespace(
-            name="exported_signal_max",
+            name="exported_signal_any",
             source_concept="canonical_signal",
             role="other",
+            analysis_window="icu_admit_0_24h",
         ),
         SimpleNamespace(
             name="exported_signal_measured",
@@ -703,7 +727,7 @@ def test_materialize_binds_unique_planner_input_by_source_concept(
             definition,
             [
                 "stay_id",
-                "exported_signal_max",
+                "exported_signal_any",
                 "exported_signal_measured",
                 "exported_signal_n",
             ],
@@ -720,8 +744,18 @@ def test_materialize_binds_unique_planner_input_by_source_concept(
     assert provenance["predicate_column_bindings"] == [
         {
             "concept_id": "canonical_signal",
-            "column": "exported_signal_max",
+            "column": "exported_signal_any",
             "basis": "planner_declared_operational_output_source_concept",
+            "predicate_contracts": [
+                {
+                    "aggregation": "any",
+                    "time_window": {
+                        "anchor": "icu_admit",
+                        "start_offset_hours": 0,
+                        "end_offset_hours": 24,
+                    },
+                }
+            ],
         }
     ]
 
@@ -756,7 +790,9 @@ def test_materialize_exact_column_precedes_context_binding(
             name="exported_signal_max",
             source_concept="canonical_signal",
             role="other",
-        )
+            analysis_window="icu_admit_0_24h",
+        ),
+        primary_exposure="exported_signal_max",
     )
 
     result = cohort_schema.materialize_locked_analysis_cohort(
@@ -779,6 +815,97 @@ def test_materialize_exact_column_precedes_context_binding(
     assert provenance["predicate_column_bindings"] == []
 
 
+def test_materialize_rejects_cross_name_aggregation_or_window_drift(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from easyicu.research_agent import cohort_schema
+
+    monkeypatch.setattr(
+        cohort_schema,
+        "_EXTRA_COHORT_CONCEPT_IDS",
+        {"canonical_signal"},
+    )
+    definition = cohort_schema.CohortDefinition(
+        name="primary",
+        inclusion=(
+            _synthetic_source_predicate(
+                aggregation="first",
+                start_offset_hours=0.0,
+                end_offset_hours=6.0,
+            ),
+        ),
+    )
+    universe_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"exported_signal_max": [0.0, 1.0]}).to_parquet(
+        universe_path,
+        index=False,
+    )
+    context = _synthetic_binding_context(
+        SimpleNamespace(
+            name="exported_signal_max",
+            source_concept="canonical_signal",
+            role="other",
+            analysis_window="entire_stay",
+        ),
+        primary_exposure="exported_signal_max",
+    )
+
+    result = cohort_schema.materialize_locked_analysis_cohort(
+        run_dir=tmp_path,
+        plan=_synthetic_binding_plan(definition, ["exported_signal_max"]),
+        universe_path=universe_path,
+        context=context,
+    )
+
+    assert result["status"] == "error"
+    assert "proven matching aggregation and time window" in result["error"]
+    assert not (tmp_path / "cohort_analysis.parquet").exists()
+
+
+def test_materialize_rejects_cross_name_window_without_anchor(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from easyicu.research_agent import cohort_schema
+
+    monkeypatch.setattr(
+        cohort_schema,
+        "_EXTRA_COHORT_CONCEPT_IDS",
+        {"canonical_signal"},
+    )
+    definition = cohort_schema.CohortDefinition(
+        name="primary",
+        inclusion=(
+            _synthetic_source_predicate(anchor="hospital_admit"),
+        ),
+    )
+    universe_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"exported_signal_any": [0.0, 1.0]}).to_parquet(
+        universe_path,
+        index=False,
+    )
+    context = _synthetic_binding_context(
+        SimpleNamespace(
+            name="exported_signal_any",
+            source_concept="canonical_signal",
+            role="other",
+            analysis_window="0_24h",
+        ),
+    )
+
+    result = cohort_schema.materialize_locked_analysis_cohort(
+        run_dir=tmp_path,
+        plan=_synthetic_binding_plan(definition, ["exported_signal_any"]),
+        universe_path=universe_path,
+        context=context,
+    )
+
+    assert result["status"] == "error"
+    assert "proven matching aggregation and time window" in result["error"]
+    assert not (tmp_path / "cohort_analysis.parquet").exists()
+
+
 def test_materialize_rejects_ambiguous_source_concept_bindings(
     tmp_path: Path,
     monkeypatch,
@@ -797,29 +924,31 @@ def test_materialize_rejects_ambiguous_source_concept_bindings(
     universe_path = tmp_path / "cohort.parquet"
     pd.DataFrame(
         {
-            "exported_signal_max": [0.0, 1.0],
-            "exported_signal_first": [0.0, 1.0],
+            "exported_signal_any": [0.0, 1.0],
+            "other_signal_any": [0.0, 1.0],
         }
     ).to_parquet(universe_path, index=False)
     context = _synthetic_binding_context(
         SimpleNamespace(
-            name="exported_signal_max",
+            name="exported_signal_any",
             source_concept="canonical_signal",
             role="other",
+            analysis_window="icu_admit_0_24h",
         ),
         SimpleNamespace(
-            name="exported_signal_first",
+            name="other_signal_any",
             source_concept="canonical_signal",
             role="outcome",
+            analysis_window="icu_admit_0_24h",
         ),
-        target_outcome="exported_signal_first",
+        target_outcome="other_signal_any",
     )
 
     result = cohort_schema.materialize_locked_analysis_cohort(
         run_dir=tmp_path,
         plan=_synthetic_binding_plan(
             definition,
-            ["exported_signal_max", "exported_signal_first"],
+            ["exported_signal_any", "other_signal_any"],
         ),
         universe_path=universe_path,
         context=context,
@@ -863,6 +992,7 @@ def test_materialize_does_not_bind_non_operational_loader_sibling(
             source_concept="canonical_signal",
             role="other",
         ),
+        primary_exposure="exported_signal_max",
     )
 
     result = cohort_schema.materialize_locked_analysis_cohort(

@@ -85,6 +85,7 @@ def test_composite_wide_output_inherits_catalog_source_concept(ra, monkeypatch):
             {
                 "name": "canonical_signal",
                 "description": "Catalog-owned composite source.",
+                "analysis_window": "icu_admit_0_6h",
             }
             if name == "canonical_signal"
             else None
@@ -109,6 +110,10 @@ def test_composite_wide_output_inherits_catalog_source_concept(ra, monkeypatch):
     )
     assert context.variable("derived_signal_measured").source_concept == (
         "canonical_signal"
+    )
+    assert context.variable("derived_signal_max").analysis_window == "icu_admit_0_6h"
+    assert context.variable("derived_signal_measured").analysis_window == (
+        "icu_admit_0_6h"
     )
 
 

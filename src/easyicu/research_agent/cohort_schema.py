@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from functools import lru_cache
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
@@ -575,6 +576,41 @@ def _declares_analysis_cohort(step: Any) -> bool:
     return False
 
 
+def _column_aggregation_matches(name: str, aggregation: str) -> bool:
+    """Return whether a cross-name wide column declares the exact CTAS summary."""
+
+    normalized_name = str(name or "").strip().casefold()
+    normalized_aggregation = str(aggregation or "").strip().casefold()
+    return bool(
+        normalized_aggregation in ALLOWED_CTAS_AGGREGATIONS
+        and normalized_name.endswith(f"_{normalized_aggregation}")
+    )
+
+
+def _descriptor_window_matches_predicate(value: Any, window: TimeWindow) -> bool:
+    """Match a named descriptor window to one exact predicate window.
+
+    Cross-name binding is an execution convenience, not permission to infer a
+    temporal contract.  Accept only explicit canonical names; missing or broad
+    labels such as ``entire_stay`` fail closed.
+    """
+
+    normalized = re.sub(
+        r"[^a-z0-9.]+", "_", str(value or "").casefold()
+    ).strip("_")
+    if not normalized:
+        return False
+
+    def _number(raw: float) -> str:
+        number = float(raw)
+        return str(int(number)) if number.is_integer() else f"{number:g}"
+
+    anchor = re.sub(r"[^a-z0-9]+", "_", str(window.anchor).casefold()).strip("_")
+    start = _number(window.start_offset_hours)
+    end = _number(window.end_offset_hours)
+    return normalized == f"{anchor}_{start}_{end}h"
+
+
 def _planner_declared_context_column_bindings(
     *,
     definition: CohortDefinition,
@@ -588,10 +624,11 @@ def _planner_declared_context_column_bindings(
     canonical ``concept_id`` to a materialised output column when all authority
     signals agree: exactly one analysis-cohort producer declares the column as
     an input, the ResearchContext names it as the operational exposure or
-    outcome, and its descriptor binds it to the same ``source_concept``.  This
-    prevents a sibling output from the same composite loader from masquerading
-    as the selected analysis variable.  Ambiguity fails closed; no dtype,
-    token, or frame-order fallback is allowed.
+    outcome, and its descriptor binds it to the same ``source_concept``, exact
+    aggregation, and exact time window.  This prevents a sibling output from
+    the same composite loader from masquerading as the selected analysis
+    variable or silently changing Planner-owned temporal/aggregation semantics.
+    Ambiguity fails closed; no dtype, token, or frame-order fallback is allowed.
     """
 
     if context is None:
@@ -619,7 +656,7 @@ def _planner_declared_context_column_bindings(
     if not declared_inputs:
         return {}
 
-    descriptors_by_source: Dict[str, set[str]] = {}
+    descriptors_by_source: Dict[str, list[Any]] = {}
     for descriptor in getattr(context, "variables", ()) or ():
         name = str(getattr(descriptor, "name", "") or "").strip()
         source_concept = str(
@@ -635,7 +672,7 @@ def _planner_declared_context_column_bindings(
             or role_value in {"id", "meta", "time"}
         ):
             continue
-        descriptors_by_source.setdefault(source_concept, set()).add(name)
+        descriptors_by_source.setdefault(source_concept, []).append(descriptor)
 
     bindings: Dict[str, str] = {}
     predicate_concepts = {
@@ -649,7 +686,33 @@ def _planner_declared_context_column_bindings(
         is None
     }
     for concept_id in sorted(predicate_concepts):
-        candidates = sorted(descriptors_by_source.get(concept_id, ()))
+        predicates = [
+            predicate
+            for predicate in (*definition.inclusion, *definition.exclusion)
+            if predicate.concept_id == concept_id
+        ]
+        source_descriptors = descriptors_by_source.get(concept_id, ())
+        candidates = sorted(
+            str(getattr(descriptor, "name", "") or "").strip()
+            for descriptor in source_descriptors
+            if all(
+                _column_aggregation_matches(
+                    str(getattr(descriptor, "name", "") or ""),
+                    predicate.aggregation,
+                )
+                and _descriptor_window_matches_predicate(
+                    getattr(descriptor, "analysis_window", None),
+                    predicate.time_window,
+                )
+                for predicate in predicates
+            )
+        )
+        if source_descriptors and not candidates:
+            raise CohortDataError(
+                "cohort predicate column binding has no Planner-declared "
+                "operational column with proven matching aggregation and time "
+                f"window for concept {concept_id!r}"
+            )
         if len(candidates) > 1:
             raise CohortDataError(
                 "cohort predicate column binding is ambiguous for concept "
@@ -778,6 +841,14 @@ def materialize_locked_analysis_cohort(
                 "concept_id": concept_id,
                 "column": column,
                 "basis": "planner_declared_operational_output_source_concept",
+                "predicate_contracts": [
+                    {
+                        "aggregation": predicate.aggregation,
+                        "time_window": predicate.time_window.to_dict(),
+                    }
+                    for predicate in (*definition.inclusion, *definition.exclusion)
+                    if predicate.concept_id == concept_id
+                ],
             }
             for concept_id, column in sorted(column_bindings.items())
         ],
