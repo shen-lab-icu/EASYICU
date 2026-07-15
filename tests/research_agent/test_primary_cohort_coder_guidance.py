@@ -8,6 +8,7 @@ import pytest
 
 from easyicu.research_agent.agents import (
     CoderAgent,
+    _cohort_predicate_partition_safety_contract,
     _primary_analysis_cohort_output_contract,
 )
 from easyicu.research_agent.plan_utils import _step_contract_repair_guidance
@@ -70,6 +71,17 @@ def _assert_canonical_schema_guidance(text: str) -> None:
     assert "Do not split a predicate" in text
 
 
+def _assert_partition_safety_guidance(text: str) -> None:
+    assert "COHORT-PREDICATE PARTITION SAFETY" in text or (
+        "build a finite-value mask" in text
+    )
+    assert "positive or negative infinity" in text
+    assert "Never allow a missing, unparseable, or non-finite value" in text
+    assert "mutually exclusive and exhaustive" in text
+    assert "n_at_start_rows = n_remaining_rows + n_excluded_rows" in text
+    assert "fail the cohort step closed" in text
+
+
 def test_initial_coder_prompt_receives_primary_cohort_canonical_schema() -> None:
     llm = _CaptureLLM(["import os\nresult = 1\n"])
 
@@ -77,6 +89,7 @@ def test_initial_coder_prompt_receives_primary_cohort_canonical_schema() -> None
 
     assert len(llm.calls) == 1
     _assert_canonical_schema_guidance(llm.calls[0][0][-1].content)
+    _assert_partition_safety_guidance(llm.calls[0][0][-1].content)
 
 
 def test_repair_prompt_and_contract_guidance_share_primary_cohort_schema() -> None:
@@ -110,6 +123,8 @@ def test_repair_prompt_and_contract_guidance_share_primary_cohort_schema() -> No
     assert repaired.strip().endswith("result = 2")
     _assert_canonical_schema_guidance(repair_guidance)
     _assert_canonical_schema_guidance(llm.calls[0][0][-1].content)
+    _assert_partition_safety_guidance(repair_guidance)
+    _assert_partition_safety_guidance(llm.calls[0][0][-1].content)
 
 
 def test_primary_cohort_schema_guidance_tracks_host_product_aliases() -> None:
@@ -133,6 +148,60 @@ def test_primary_cohort_schema_guidance_requires_host_method_family() -> None:
     )
 
     assert _primary_analysis_cohort_output_contract(step) == ""
+
+
+def test_generic_cohort_flow_contract_prevents_nonfinite_threshold_admission() -> None:
+    step = AnalysisStep(
+        step_id="01_eligibility",
+        intent="Apply the declared eligibility rule and account for every row.",
+        inputs=["eligibility_value"],
+        expected_outputs=["cohort:eligible_records", "table:cohort_flow"],
+        method="cohort_definition_and_attrition",
+    )
+    llm = _CaptureLLM(["import os\nresult = 1\n"])
+
+    direct_contract = _cohort_predicate_partition_safety_contract(step)
+    repair_guidance = _step_contract_repair_guidance(
+        step=step,
+        step_summary={"status": "contract_failed"},
+        code="import os\nresult = 1\n",
+    )
+    CoderAgent(llm).run(context=_context(), step=step)
+
+    _assert_partition_safety_guidance(direct_contract)
+    _assert_partition_safety_guidance(repair_guidance)
+    _assert_partition_safety_guidance(llm.calls[0][0][-1].content)
+    combined = "\n".join((direct_contract, repair_guidance, llm.calls[0][0][-1].content))
+    for case_term in ("lactate", "kdigo", "mimic", "e2_lactate"):
+        assert case_term not in combined.lower()
+
+
+@pytest.mark.parametrize(
+    ("method", "outputs"),
+    [
+        ("mixed_effects_regression", ["cohort:eligible_records", "table:cohort_flow"]),
+        ("cohort_definition_and_attrition", ["cohort:eligible_records"]),
+        ("cohort_definition_and_attrition", ["table:ordinary_summary"]),
+    ],
+)
+def test_cohort_partition_safety_requires_method_and_structured_flow_product(
+    method: str,
+    outputs: list[str],
+) -> None:
+    step = AnalysisStep(
+        step_id="cohort_words_are_only_prose",
+        intent="Mention cohort flow and attrition in prose.",
+        expected_outputs=outputs,
+        method=method,
+    )
+
+    assert _cohort_predicate_partition_safety_contract(step) == ""
+    guidance = _step_contract_repair_guidance(
+        step=step,
+        step_summary={"status": "contract_failed"},
+        code="",
+    )
+    assert "finite-value mask" not in guidance
 
 
 @pytest.mark.parametrize(
