@@ -120,6 +120,7 @@ from .declared_product_contract import (
     primary_analysis_cohort_producer_uses_universe,
     read_digest_bound_artifact_snapshot,
     typed_product_binding_contract,
+    typed_product_schema_receipt,
     typed_product as _canonical_typed_product,
 )
 from .estimators import fit_robustness_rows_from_records
@@ -259,6 +260,9 @@ _STANDARD_EXECUTOR_INTERNAL_PENDING_ARTIFACTS = frozenset(
 )
 _FIGURE_CONTRACT_SOURCE_DATA_SCHEMA_REPAIR_ID = "figure_contract_source_data_schema_v1"
 _DETERMINISTIC_GATE_SCHEMA_VERSION = "easyicu.deterministic_step_gate/1"
+_RESUME_TYPED_INPUT_BINDING_FINGERPRINT_SCHEMA_VERSION = (
+    "easyicu.resume_typed_input_bindings/1"
+)
 _DETERMINISTIC_CODE_GATE_VALIDATORS = frozenset(
     {
         "analysis_pattern_auditor",
@@ -1665,15 +1669,161 @@ def _resolved_typed_input_binding(
         "produced_by_step": binding["produced_by_step"],
     }
     host_contract = dict(producer_contract or {})
+    if declared_kind == "table":
+        # Table schema v2 is deliberately schema-only. Arbitrary
+        # producer-authored role prose must not become a second source of
+        # scientific authority.
+        host_contract.pop("semantic_roles", None)
+        host_contract.pop("semantic_roles_scope", None)
+        schema_receipt = typed_product_schema_receipt(
+            artifact_path=verified_path,
+            expected_sha256=binding["sha256"],
+        )
+        if schema_receipt is None:
+            return None
+        # Physical columns are host-observed and therefore replace any
+        # producer-authored ``columns`` claim. No scientific column roles are
+        # installed by the host.
+        host_contract.update(schema_receipt)
+        contract_schema_version = "easyicu.host_typed_product.v2"
+    else:
+        # Non-table typed products retain their pre-existing contract and
+        # version. This patch adds physical table schema facts only.
+        contract_schema_version = "easyicu.host_typed_product.v1"
     host_contract.update(
         {
-            "schema_version": "easyicu.host_typed_product.v1",
+            "schema_version": contract_schema_version,
             "identity_row": identity_row,
         }
     )
+    try:
+        host_contract_size = len(
+            json.dumps(
+                host_contract,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+    except (TypeError, ValueError):
+        return None
+    if host_contract_size > 128 * 1024:
+        return None
     binding["identity_row"] = identity_row
     binding["product_contract"] = host_contract
     return binding
+
+
+_CODER_PARENT_SCHEMA_PROMPT_COLUMN_LIMIT = 32
+_CODER_PARENT_SCHEMA_CONTEXT_BYTE_LIMIT = 16 * 1024
+
+
+def _typed_parent_schema_context_block(
+    bindings: Mapping[str, Mapping[str, Any]],
+) -> str:
+    """Render bounded host facts about typed parent table schemas for Coder."""
+
+    def render(selected: Mapping[str, Mapping[str, Any]], omitted_n: int) -> str:
+        payload: dict[str, Any] = {"receipts": dict(selected)}
+        if omitted_n:
+            payload.update(
+                {
+                    "omitted_typed_parent_receipt_n": omitted_n,
+                    "full_receipts_location": (
+                        "EASYICU_RESOLVED_INPUTS_JSON inputs.*.product_contract"
+                    ),
+                }
+            )
+        return (
+            "HOST-VERIFIED TYPED PARENT TABLE SCHEMAS (binding facts only):\n"
+            + json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\nColumn order and names are physical schema facts, not scientific "
+            "role assignments. Choose columns only inside the Planner-declared typed "
+            "product using the Planner-owned method and scientific context. Do not "
+            "use first-numeric, dtype-order, or nonexistent-column fallbacks; fail "
+            "closed when the schema cannot support the declared product."
+        )
+
+    receipts: dict[str, dict[str, Any]] = {}
+    omitted_n = 0
+    for input_key in sorted(bindings):
+        binding = bindings[input_key]
+        contract = binding.get("product_contract")
+        if not isinstance(contract, Mapping):
+            continue
+        columns = contract.get("columns")
+        column_count = contract.get("column_count")
+        tabular_format = contract.get("tabular_format")
+        if not isinstance(columns, list) or any(
+            not isinstance(value, str) for value in columns
+        ):
+            continue
+        if (
+            isinstance(column_count, bool)
+            or not isinstance(column_count, int)
+            or column_count != len(columns)
+            or not isinstance(tabular_format, str)
+            or not tabular_format.strip()
+        ):
+            continue
+        prompt_columns = list(columns[:_CODER_PARENT_SCHEMA_PROMPT_COLUMN_LIMIT])
+        receipt: dict[str, Any] = {
+            "tabular_format": tabular_format,
+            "column_count": column_count,
+            "columns": prompt_columns,
+        }
+        if len(prompt_columns) != len(columns):
+            receipt["columns_omitted_from_prompt_n"] = len(columns) - len(
+                prompt_columns
+            )
+            receipt["full_schema_location"] = (
+                "EASYICU_RESOLVED_INPUTS_JSON product_contract.columns"
+            )
+        candidate = {**receipts, input_key: receipt}
+        if (
+            len(render(candidate, omitted_n).encode("utf-8"))
+            > _CODER_PARENT_SCHEMA_CONTEXT_BYTE_LIMIT
+        ):
+            omitted_n += 1
+            continue
+        receipts[input_key] = receipt
+    if not receipts and not omitted_n:
+        return ""
+    block = render(receipts, omitted_n)
+    while (
+        len(block.encode("utf-8")) > _CODER_PARENT_SCHEMA_CONTEXT_BYTE_LIMIT
+        and receipts
+    ):
+        receipts.popitem()
+        omitted_n += 1
+        block = render(receipts, omitted_n)
+    if len(block.encode("utf-8")) > _CODER_PARENT_SCHEMA_CONTEXT_BYTE_LIMIT:
+        return (
+            "HOST-VERIFIED TYPED PARENT TABLE SCHEMAS: prompt receipt omitted "
+            "because it exceeded the transport limit. Load exact product contracts "
+            "from EASYICU_RESOLVED_INPUTS_JSON; do not guess columns."
+        )
+    return block
+
+
+def _coder_context_with_typed_parent_schema_receipts(
+    *,
+    context: ResearchContext,
+    bindings: Mapping[str, Mapping[str, Any]],
+) -> ResearchContext:
+    """Attach a bounded view of exact typed-parent schemas to one Coder call."""
+
+    attachment = _typed_parent_schema_context_block(bindings)
+    if not attachment:
+        return context
+    prior_notes = str(context.notes or "").strip()
+    enriched_notes = f"{prior_notes}\n\n{attachment}" if prior_notes else attachment
+    return context.model_copy(update={"notes": enriched_notes})
 
 
 def _write_resolved_inputs_manifest(
@@ -4643,6 +4793,22 @@ def _verify_resume_step_script_lineage(
             )
 
 
+_STALE_RESOLVED_INPUT_RECEIPT_FIELDS = (
+    "resolved_inputs",
+    "resolved_input_bindings",
+    "resolved_inputs_path",
+    "resolved_inputs_sha256",
+    "revalidated_input_bindings_fingerprint",
+)
+
+
+def _discard_stale_resolved_input_receipts(record: Dict[str, Any]) -> None:
+    """Remove mutable or superseded resolved-input receipts in place."""
+
+    for field in _STALE_RESOLVED_INPUT_RECEIPT_FIELDS:
+        record.pop(field, None)
+
+
 def _trusted_resume_success_records(
     *,
     records: Sequence[Mapping[str, Any]],
@@ -4664,9 +4830,7 @@ def _trusted_resume_success_records(
             == _HOST_COHORT_MATERIALIZER_AUTHORITY_KIND
         ):
             copy = dict(record)
-            copy.pop("resolved_inputs", None)
-            copy.pop("resolved_input_bindings", None)
-            copy.pop("resolved_inputs_path", None)
+            _discard_stale_resolved_input_receipts(copy)
             trusted.append(copy)
             continue
         try:
@@ -4681,9 +4845,7 @@ def _trusted_resume_success_records(
         copy = dict(record)
         copy["step_summary"] = summary
         # These mutable convenience receipts are never replay authority.
-        copy.pop("resolved_inputs", None)
-        copy.pop("resolved_input_bindings", None)
-        copy.pop("resolved_inputs_path", None)
+        _discard_stale_resolved_input_receipts(copy)
         trusted.append(copy)
     return trusted, errors
 
@@ -4783,6 +4945,41 @@ def _resume_typed_input_bindings(
         bindings[input_name] = binding
         evidence_ids.append(ref.evidence_id)
     return bindings, list(dict.fromkeys(evidence_ids))
+
+
+def _resume_typed_input_bindings_fingerprint(
+    bindings: Mapping[str, Mapping[str, Any]],
+) -> str:
+    """Identify bindings rebuilt from sealed evidence during revalidation.
+
+    This is deliberately not named ``resolved_inputs_sha256``: resume does not
+    recreate the original manifest file, so retaining or synthesizing that
+    digest would misrepresent its authority. Paths are omitted because the
+    evidence digest, host contract, and identity row carry the durable facts.
+    """
+
+    durable_bindings: Dict[str, Dict[str, Any]] = {}
+    for input_key, raw_binding in sorted(bindings.items()):
+        binding = dict(raw_binding)
+        durable_bindings[str(input_key)] = {
+            field: binding[field]
+            for field in (
+                "declared_kind",
+                "product",
+                "evidence_id",
+                "sha256",
+                "produced_by_step",
+                "identity_row",
+                "product_contract",
+            )
+            if field in binding
+        }
+    return canonical_sha256(
+        {
+            "schema_version": (_RESUME_TYPED_INPUT_BINDING_FINGERPRINT_SCHEMA_VERSION),
+            "bindings": durable_bindings,
+        }
+    )
 
 
 def _resume_success_dependencies(
@@ -5337,6 +5534,7 @@ def _selectively_revalidate_resume_successes(
                 "review_checkpoint_id": checkpoint_id,
                 **stamp,
             }
+            _discard_stale_resolved_input_receipts(replayed)
             history.append(replayed)
             trusted_by_step[step_id] = replayed
             revalidated.append(step_id)
@@ -5377,6 +5575,7 @@ def _selectively_revalidate_resume_successes(
                 "review_checkpoint_id": checkpoint_id,
                 **stamp,
             }
+            _discard_stale_resolved_input_receipts(replayed)
             history.append(replayed)
             trusted_by_step[step_id] = replayed
             revalidated.append(step_id)
@@ -5588,9 +5787,10 @@ def _selectively_revalidate_resume_successes(
             "review_checkpoint_id": checkpoint_id,
             **stamp,
         }
-        replayed.pop("resolved_inputs", None)
-        replayed.pop("resolved_input_bindings", None)
-        replayed.pop("resolved_inputs_path", None)
+        _discard_stale_resolved_input_receipts(replayed)
+        replayed["revalidated_input_bindings_fingerprint"] = (
+            _resume_typed_input_bindings_fingerprint(resolved_bindings)
+        )
         history.append(replayed)
         trusted_by_step[step_id] = replayed
         revalidated.append(step_id)
@@ -7514,6 +7714,10 @@ def run_execute_phase(
             planner_declared_inputs=step.inputs,
             bindings=resolved_input_bindings,
             context_path=plan_result.context_path,
+        )
+        coder_context = _coder_context_with_typed_parent_schema_receipts(
+            context=coder_context,
+            bindings=resolved_input_bindings,
         )
         step_record["resolved_inputs_path"] = str(
             resolved_inputs_path.relative_to(run_dir)

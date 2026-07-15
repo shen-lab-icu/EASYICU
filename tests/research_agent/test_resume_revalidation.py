@@ -156,7 +156,7 @@ def test_current_fingerprint_is_a_true_zero_work_fast_path(monkeypatch, tmp_path
     assert result.invalidated_step_ids == ()
 
 
-def test_legacy_success_revalidates_once_without_execution(
+def test_legacy_success_revalidates_once_and_retires_stale_input_receipt(
     replay_environment,
     monkeypatch,
 ):
@@ -167,6 +167,15 @@ def test_legacy_success_revalidates_once_without_execution(
         run_dir=run_dir,
         evidence=evidence,
         step=step,
+    )
+    record.update(
+        {
+            "resolved_inputs": {"stale": True},
+            "resolved_input_bindings": {"stale": True},
+            "resolved_inputs_path": "steps/01_model/resolved_inputs.json",
+            "resolved_inputs_sha256": "0" * 64,
+            "revalidated_input_bindings_fingerprint": "1" * 64,
+        }
     )
     calls = []
     monkeypatch.setattr(
@@ -191,6 +200,13 @@ def test_legacy_success_revalidates_once_without_execution(
     assert latest["step_summary"] == {"status": "ok", "outputs": []}
     assert latest["deterministic_gate_fingerprint"]
     assert latest["attempt_id"].startswith(f"{step.step_id}:resume_revalidation:")
+    assert "resolved_inputs" not in latest
+    assert "resolved_input_bindings" not in latest
+    assert "resolved_inputs_path" not in latest
+    assert "resolved_inputs_sha256" not in latest
+    assert latest["revalidated_input_bindings_fingerprint"] == (
+        pipeline_execute._resume_typed_input_bindings_fingerprint({})
+    )
 
     second = _revalidate(
         pipeline_execute,

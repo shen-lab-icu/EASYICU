@@ -3,6 +3,10 @@ from __future__ import annotations
 from easyicu.research_agent.agentic_coder import AgenticCoderAgent
 from easyicu.research_agent.agents import CoderAgent
 from easyicu.research_agent.llm import LLMMessage
+from easyicu.research_agent.pipeline_execute import (
+    _coder_context_with_typed_parent_schema_receipts,
+    _typed_parent_schema_context_block,
+)
 from easyicu.research_agent.plan_utils import effect_output_authorized
 from easyicu.research_agent.schema import PlannedModelRequirement
 
@@ -59,6 +63,53 @@ def test_coder_prompt_allows_only_declared_figure_products(ra):
     prompt = llm.messages[-1].content
     assert "Figure rendering is allowed only for the explicitly declared" in prompt
     assert "declares no figure product" not in prompt
+
+
+def test_initial_and_repair_coder_receive_the_same_typed_parent_schema(ra):
+    bindings = {
+        "table:display_summary": {
+            "product_contract": {
+                "schema_version": "easyicu.host_typed_product.v2",
+                "tabular_format": "csv",
+                "column_count": 4,
+                "columns": ["band", "point", "lower", "upper"],
+            }
+        }
+    }
+    schema_block = _typed_parent_schema_context_block(bindings)
+    context = _coder_context_with_typed_parent_schema_receipts(
+        context=_context(ra),
+        bindings=bindings,
+    )
+    step = ra.AnalysisStep(
+        step_id="render",
+        intent="Render the declared typed table product.",
+        inputs=["table:display_summary"],
+        expected_outputs=["figure:display_summary"],
+        method="visualization",
+    )
+    llm = _RecordingLLM()
+    coder = CoderAgent(llm)
+
+    coder.run(context=context, step=step)
+    initial_prompt = llm.messages[-1].content
+    coder.repair(
+        context=context,
+        step=step,
+        code="import os\n",
+        run_log="A requested column is absent from the bound parent table.",
+    )
+    repair_prompt = llm.messages[-1].content
+
+    assert schema_block in initial_prompt
+    assert schema_block in repair_prompt
+    assert '"columns":["band","point","lower","upper"]' in initial_prompt
+    assert '"column_count":4' in initial_prompt
+    assert '"tabular_format":"csv"' in initial_prompt
+    assert '"column_count":4' in repair_prompt
+    assert '"tabular_format":"csv"' in repair_prompt
+    assert "first-numeric" in initial_prompt
+    assert "first-numeric" in repair_prompt
 
 
 def test_coder_context_exposes_registered_source_concept_metadata(ra):
