@@ -114,6 +114,8 @@ from .deterministic_robustness import (
 )
 from .declared_product_contract import (
     authorize_declared_figure_product_slots,
+    primary_analysis_cohort_integrity_findings,
+    primary_analysis_cohort_producer_uses_universe,
     read_digest_bound_artifact_snapshot,
     typed_product_binding_contract,
     typed_product as _canonical_typed_product,
@@ -4716,6 +4718,7 @@ def _resume_success_dependencies(
 def _evaluate_final_deterministic_gates(
     *,
     context: ResearchContext,
+    plan: AnalysisPlan,
     cohort_path: Path,
     universe_path: Path,
     run_dir: Path,
@@ -4749,9 +4752,15 @@ def _evaluate_final_deterministic_gates(
     one reusable authority.
     """
 
+    execution_cohort_path = (
+        universe_path
+        if primary_analysis_cohort_producer_uses_universe(step=step, plan=plan)
+        else cohort_path
+    )
+
     stat_findings = stat_validator.audit(
         context=context,
-        cohort_path=cohort_path,
+        cohort_path=execution_cohort_path,
         step=step,
         out_dir=out_dir,
         step_summary=step_summary,
@@ -4764,7 +4773,7 @@ def _evaluate_final_deterministic_gates(
     )
     guard_findings = statistical_guard.audit(
         context=context,
-        cohort_path=cohort_path,
+        cohort_path=execution_cohort_path,
         step=step,
         out_dir=out_dir,
         step_summary=step_summary,
@@ -4786,6 +4795,16 @@ def _evaluate_final_deterministic_gates(
             cohort_path=cohort_path,
             context=context,
             completed_step_records=completed_step_records,
+        )
+    )
+    contract_findings.extend(
+        primary_analysis_cohort_integrity_findings(
+            step=step,
+            plan=plan,
+            step_summary=step_summary,
+            out_dir=out_dir,
+            universe_path=universe_path,
+            authoritative_cohort_path=cohort_path,
         )
     )
     contract_findings.extend(
@@ -4814,7 +4833,7 @@ def _evaluate_final_deterministic_gates(
             step=step,
             step_summary=step_summary,
             resolved_input_bindings=resolved_input_bindings,
-            cohort_path=cohort_path,
+            cohort_path=execution_cohort_path,
         )
     )
     contract_findings.extend(
@@ -4837,7 +4856,7 @@ def _evaluate_final_deterministic_gates(
             context=context,
             completed_step_records=completed_step_records,
             out_dir=out_dir,
-            cohort_path=cohort_path,
+            cohort_path=execution_cohort_path,
         )
     )
     contract_findings.extend(
@@ -5315,6 +5334,7 @@ def _selectively_revalidate_resume_successes(
                 ]
                 gate_findings = _evaluate_final_deterministic_gates(
                     context=context,
+                    plan=plan,
                     cohort_path=cohort_path,
                     universe_path=universe_path,
                     run_dir=run_dir,
@@ -6562,6 +6582,10 @@ def run_execute_phase(
         )
 
     shared_lock = threading.Lock()
+    run_input_authority_state: Dict[str, Any] = {
+        "corrupted": False,
+        "step_id": None,
+    }
     step_order = {s.step_id: i for i, s in enumerate(plan.steps)}
     total_steps = len(plan.steps)
 
@@ -6892,6 +6916,22 @@ def run_execute_phase(
                 _serializable_plan_scientific_scope_signature(plan)
             ),
         }
+        primary_cohort_uses_universe = primary_analysis_cohort_producer_uses_universe(
+            step=step, plan=plan
+        )
+        step_execution_cohort_path = (
+            universe_path if primary_cohort_uses_universe else cohort_path
+        )
+        if primary_cohort_uses_universe:
+            step_record.update(
+                {
+                    "execution_cohort_role": (
+                        "raw_universe_for_primary_analysis_cohort_producer"
+                    ),
+                    "execution_cohort_sha256": sha256_of_file(universe_path),
+                    "authoritative_analysis_cohort_sha256": sha256_of_file(cohort_path),
+                }
+            )
         (
             step_llm_repair_attempts,
             prior_repair_classes,
@@ -7079,6 +7119,24 @@ def run_execute_phase(
             step=step,
             run_dir=run_dir,
         )
+        if primary_cohort_uses_universe:
+            role_note = (
+                "CURRENT STEP INPUT ROLE (host-owned execution contract): this "
+                "is the plan's unique primary analysis_cohort + attrition "
+                "producer, so COHORT_PARQUET is the raw study universe for this "
+                "step only. Apply exactly the Planner-locked cohort definition, "
+                "report truthful universe-to-final attrition, and emit an "
+                "analysis_cohort whose ordered row identity matches the locked "
+                "host cohort. Downstream steps receive the filtered cohort."
+            )
+            prior_notes = str(coder_context.notes or "").strip()
+            coder_context = coder_context.model_copy(
+                update={
+                    "notes": (
+                        f"{prior_notes}\n\n{role_note}" if prior_notes else role_note
+                    )
+                }
+            )
         resumed_code_reuse_used = False
         critic_resume_repair_used = False
         resumed_quarantined_draft_used = False
@@ -9665,7 +9723,15 @@ else:
             )
             execution_runner = runner
             execution_timeout_seconds = pipeline._timeout_seconds
-            if deterministic_standard_executor_used:
+            if primary_cohort_uses_universe:
+                execution_runner = pipeline._build_runner(
+                    run_dir=run_dir,
+                    cohort_path=step_execution_cohort_path,
+                    target_outcome=context.target_outcome,
+                    universe_path=universe_path,
+                    timeout_seconds=execution_timeout_seconds,
+                )
+            elif deterministic_standard_executor_used:
                 # A registered standard executes the exact typed workload the
                 # planner froze. Give it a distinct bounded runner rather than
                 # widening the shared generated-code runner's timeout. This is
@@ -9757,6 +9823,68 @@ else:
                     total_steps=total_steps,
                 )
                 return step_record
+            if primary_cohort_uses_universe:
+                try:
+                    current_universe_sha256 = sha256_of_file(universe_path)
+                    current_cohort_sha256 = sha256_of_file(cohort_path)
+                except Exception as exc:
+                    current_universe_sha256 = None
+                    current_cohort_sha256 = None
+                    authority_error = f"{type(exc).__name__}: {exc}"[:300]
+                else:
+                    authority_error = None
+                if current_universe_sha256 != step_record.get(
+                    "execution_cohort_sha256"
+                ) or current_cohort_sha256 != step_record.get(
+                    "authoritative_analysis_cohort_sha256"
+                ):
+                    authority_finding = ValidationFinding(
+                        validator="execution_input_authority_integrity",
+                        severity="error",
+                        message=(
+                            "The raw universe or authoritative analysis cohort "
+                            f"changed while step {step.step_id} executed; all "
+                            "outputs from this attempt were rejected."
+                        ),
+                        detail={
+                            "step_id": step.step_id,
+                            "expected_universe_sha256": step_record.get(
+                                "execution_cohort_sha256"
+                            ),
+                            "observed_universe_sha256": current_universe_sha256,
+                            "expected_analysis_cohort_sha256": step_record.get(
+                                "authoritative_analysis_cohort_sha256"
+                            ),
+                            "observed_analysis_cohort_sha256": current_cohort_sha256,
+                            "error": authority_error,
+                        },
+                    )
+                    _clear_output_dir(run_result.out_dir)
+                    step_record.update(
+                        {
+                            "status": "blocked_input_authority_mutation",
+                            "input_authority_findings": [
+                                authority_finding.model_dump()
+                            ],
+                        }
+                    )
+                    with shared_lock:
+                        run_input_authority_state.update(
+                            {"corrupted": True, "step_id": step.step_id}
+                        )
+                        findings.append(authority_finding)
+                        per_step_records.append(step_record)
+                        _flush_partial_manifest()
+                    emit_progress(
+                        "audit",
+                        f"Rejected mutated execution authority for {step.step_id}.",
+                        status="error",
+                        run_id=run_id,
+                        step_id=step.step_id,
+                        current_step=step_current,
+                        total_steps=total_steps,
+                    )
+                    return step_record
             executed_code_digest = sha256_of_file(run_result.script_path)
             step_record["executed_code_sha256"] = executed_code_digest
             if sealed_renderer_authorized_code_sha256 is not None:
@@ -10284,6 +10412,14 @@ else:
                         completed_step_records=completed_records_snapshot,
                     )
                 )
+                early_contract_findings += primary_analysis_cohort_integrity_findings(
+                    step=step,
+                    plan=plan,
+                    step_summary=visual_step_summary,
+                    out_dir=run_result.out_dir,
+                    universe_path=universe_path,
+                    authoritative_cohort_path=cohort_path,
+                )
                 early_contract_findings += cross_step_cohort_lock_validator.audit(
                     step=step,
                     step_summary=visual_step_summary,
@@ -10305,7 +10441,7 @@ else:
                     step=step,
                     step_summary=visual_step_summary,
                     resolved_input_bindings=resolved_input_bindings,
-                    cohort_path=cohort_path,
+                    cohort_path=step_execution_cohort_path,
                 )
                 early_contract_findings += step_summary_fraction_validator.audit(
                     step=step,
@@ -10322,7 +10458,7 @@ else:
                     context=context,
                     completed_step_records=completed_records_snapshot,
                     out_dir=run_result.out_dir,
-                    cohort_path=cohort_path,
+                    cohort_path=step_execution_cohort_path,
                 )
                 # Exposure-contract audit: if the question names a required
                 # primary exposure and this primary model estimated a clearly
@@ -10432,7 +10568,7 @@ else:
                 # registration. Numeric/method errors therefore return to the
                 # existing coder repair loop instead of becoming a late warning.
                 early_contract_findings += ordered_stratified_numeric_findings(
-                    cohort_path=cohort_path,
+                    cohort_path=step_execution_cohort_path,
                     step=step,
                     out_dir=run_result.out_dir,
                     step_summary=visual_step_summary,
@@ -11870,6 +12006,7 @@ else:
             completed_records_snapshot = list(per_step_records)
         final_gate_findings = _evaluate_final_deterministic_gates(
             context=context,
+            plan=plan,
             cohort_path=cohort_path,
             universe_path=universe_path,
             run_dir=run_dir,
@@ -12286,6 +12423,10 @@ else:
         for step in steps_to_run
         for input_name in (step.inputs or [])
     )
+    has_primary_cohort_universe_producer = any(
+        primary_analysis_cohort_producer_uses_universe(step=step, plan=plan)
+        for step in steps_to_run
+    )
     for skipped_step_id in sorted(resumed_step_ids):
         emit_progress(
             "resume",
@@ -12324,12 +12465,24 @@ else:
                 ),
             )
         )
+    elif has_primary_cohort_universe_producer and pipeline._max_concurrent_steps > 1:
+        findings.append(
+            ValidationFinding(
+                validator="execution_input_authority_integrity",
+                severity="info",
+                message=(
+                    "A primary analysis-cohort producer requires raw-universe "
+                    "authority, so step execution was forced to plan order."
+                ),
+            )
+        )
 
     if (
         pipeline._max_concurrent_steps <= 1
         or len(steps_to_run) <= 1
         or pipeline._enable_replanning
         or has_typed_input_dependencies
+        or has_primary_cohort_universe_producer
         or requested_stop_after_step_id is not None
     ):
 
@@ -12409,6 +12562,16 @@ else:
             step = remaining_steps.pop(0)
             record = _execute_one_step(step)
             executed_step_ids.add(step.step_id)
+            if run_input_authority_state["corrupted"]:
+                emit_progress(
+                    "audit",
+                    "Stopped the run after execution input authority corruption.",
+                    status="error",
+                    run_id=run_id,
+                    step_id=str(run_input_authority_state.get("step_id") or ""),
+                )
+                remaining_steps.clear()
+                break
             if step.step_id == requested_stop_after_step_id:
                 emit_progress(
                     "pause",
@@ -12469,6 +12632,26 @@ else:
                                 message=f"Worker raised an unhandled exception: {exc!r}",
                             )
                         )
+
+    if run_input_authority_state["corrupted"]:
+        _flush_partial_manifest(
+            {
+                "run_input_authority_corrupted": True,
+                "run_input_authority_corrupted_step_id": (
+                    run_input_authority_state.get("step_id")
+                ),
+                "remaining_steps_suppressed": True,
+            }
+        )
+        plan_result.plan = plan
+        plan_result.plan_path = plan_path
+        return _ExecutePhaseResult(
+            plan=plan,
+            per_step_records=per_step_records,
+            probe_summary=probe_summary,
+            runtime_state=runtime_state,
+            flush_partial_manifest=_flush_partial_manifest,
+        )
 
     if (
         not trajectory_plan_blocked

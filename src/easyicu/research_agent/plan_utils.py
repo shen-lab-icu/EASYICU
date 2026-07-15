@@ -318,6 +318,7 @@ _PRIMARY_COHORT_OWNER_METHODS = frozenset(
     {
         "cohort_construction",
         "cohort_definition",
+        "cohort_definition_and_attrition",
         "eligibility_definition",
         "primary_cohort_definition",
     }
@@ -849,6 +850,7 @@ def _has_closed_effect_contract_product(outputs: Sequence[str] | str) -> bool:
         for name in _normalised_structured_output_names(outputs)
     )
 
+
 _PREDICTION_CONTRACT_METHODS = frozenset(
     {
         *_PLAN_FAMILY_METHODS["prediction_model"],
@@ -901,6 +903,7 @@ _PREDICTION_CONTRACT_PRODUCT_PREFIXES = (
 _COHORT_CHANGE_OWNER_METHODS = frozenset(
     {
         "cohort_definition",
+        "cohort_definition_and_attrition",
         "primary_cohort_definition",
         "eligibility_definition",
         "cohort_definition_sensitivity",
@@ -1460,9 +1463,7 @@ def _output_declares_auxiliary_log(output: str) -> bool:
     return parsed is not None and parsed[0] == "log"
 
 
-_RENDER_SOURCE_OUTPUT_KINDS = frozenset(
-    {"statistic", "table"}
-)
+_RENDER_SOURCE_OUTPUT_KINDS = frozenset({"statistic", "table"})
 
 
 def _typed_render_source_outputs(outputs: Sequence[str]) -> List[str]:
@@ -1554,10 +1555,7 @@ def _effect_figure_semantics_supported_by_inputs(
                 # effect figure. Supporting-only estimates may not silently be
                 # promoted into that default role.
                 continue
-            if (
-                output_adjustment is not None
-                and input_adjustment != output_adjustment
-            ):
+            if output_adjustment is not None and input_adjustment != output_adjustment:
                 continue
             supported = True
             break
@@ -1957,9 +1955,7 @@ def _split_table_and_figure_outputs_in_plan(
         effect_figure_requested = any(
             effect_bearing_product(output) for output in figure_outputs
         )
-        effect_source_products = _typed_effect_result_identities(
-            render_source_outputs
-        )
+        effect_source_products = _typed_effect_result_identities(render_source_outputs)
         effect_figure_supported = _effect_figure_semantics_supported_by_inputs(
             figure_outputs=figure_outputs,
             effect_input_products=effect_source_products,
@@ -2695,8 +2691,7 @@ def _cap_plan_preserving_figure_steps(
         leaf_candidates = [
             step_id
             for step_id in kept_ids
-            if step_id not in hard_protected_ids
-            and step_id not in required_as_producer
+            if step_id not in hard_protected_ids and step_id not in required_as_producer
         ]
         if not leaf_candidates:
             break
@@ -2719,9 +2714,7 @@ def _cap_plan_preserving_figure_steps(
     kept, cycle_ids = _stable_topological_plan_steps(kept, kept_dependencies)
     dropped_ids = [step.step_id for step in steps if step.step_id not in kept_ids]
     dependency_displaced_figure_step_ids = [
-        step_id
-        for step_id in preserved_step_ids
-        if step_id not in kept_ids
+        step_id for step_id in preserved_step_ids if step_id not in kept_ids
     ]
     preserved_step_ids = [
         step_id for step_id in preserved_step_ids if step_id in kept_ids
@@ -4069,11 +4062,13 @@ def _step_contract_findings(
     # the substring matches ``primary_association``/``model_training``/``cluster``
     # below would falsely demand effect/prediction/clustering metrics from a
     # render-only step that legitimately has no such fields in its summary.
-    figure_only_step = bool(step.expected_outputs) and any(
-        _output_declares_figure(out) for out in step.expected_outputs
-    ) and all(
-        _output_declares_figure(out) or _output_declares_auxiliary_log(out)
-        for out in step.expected_outputs
+    figure_only_step = (
+        bool(step.expected_outputs)
+        and any(_output_declares_figure(out) for out in step.expected_outputs)
+        and all(
+            _output_declares_figure(out) or _output_declares_auxiliary_log(out)
+            for out in step.expected_outputs
+        )
     )
     findings.extend(
         declared_product_contract_findings(

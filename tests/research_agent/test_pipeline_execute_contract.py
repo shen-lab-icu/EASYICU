@@ -598,7 +598,7 @@ def test_publication_figure_gate_ignores_name_only_mentions(step_id, intent):
     from easyicu.research_agent.pipeline_execute import (
         _step_requires_publication_figure_exports,
     )
-    from easyicu.research_agent.schema import AnalysisStep
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
     step = AnalysisStep(
         step_id=step_id,
@@ -841,7 +841,7 @@ def test_final_gate_evaluator_preserves_group_order_and_attempt_binding(
 ):
     from easyicu.research_agent import pipeline_execute
     from easyicu.research_agent.contracts import ValidationFinding
-    from easyicu.research_agent.schema import AnalysisStep
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
     calls = []
 
@@ -933,6 +933,10 @@ def test_final_gate_evaluator_preserves_group_order_and_attempt_binding(
     }
     groups = pipeline_execute._evaluate_final_deterministic_gates(
         context=object(),
+        plan=AnalysisPlan(
+            research_question="Review sealed outputs.",
+            steps=[AnalysisStep(step_id="07_review", intent="Review sealed outputs.")],
+        ),
         cohort_path=tmp_path / "cohort.parquet",
         universe_path=tmp_path / "universe.parquet",
         run_dir=tmp_path,
@@ -1033,10 +1037,36 @@ def test_execute_phase_host_verifies_measurement_provenance_at_every_contract_ga
     # read-only review is owned by the reusable deterministic gate evaluator.
     assert len(direct_calls) == 1
     assert len(evaluator_calls) == 1
-    for call in [*direct_calls, *evaluator_calls]:
-        keywords = {keyword.arg: keyword.value for keyword in call.keywords}
-        assert isinstance(keywords.get("cohort_path"), ast.Name)
-        assert keywords["cohort_path"].id == "cohort_path"
+    direct_keywords = {
+        keyword.arg: keyword.value for keyword in direct_calls[0].keywords
+    }
+    evaluator_keywords = {
+        keyword.arg: keyword.value for keyword in evaluator_calls[0].keywords
+    }
+    assert isinstance(direct_keywords.get("cohort_path"), ast.Name)
+    assert direct_keywords["cohort_path"].id == "step_execution_cohort_path"
+    assert isinstance(evaluator_keywords.get("cohort_path"), ast.Name)
+    assert evaluator_keywords["cohort_path"].id == "execution_cohort_path"
+
+
+def test_primary_cohort_raw_runner_is_scoped_and_authority_hashes_are_rechecked():
+    from easyicu.research_agent import pipeline_execute
+
+    source = inspect.getsource(pipeline_execute.run_execute_phase)
+
+    assert "step_execution_cohort_path = (" in source
+    assert "universe_path if primary_cohort_uses_universe else cohort_path" in source
+    assert "cohort_path=step_execution_cohort_path" in source
+    assert '"execution_cohort_sha256": sha256_of_file(universe_path)' in source
+    assert (
+        '"authoritative_analysis_cohort_sha256": sha256_of_file(cohort_path)' in source
+    )
+    assert "current_universe_sha256 = sha256_of_file(universe_path)" in source
+    assert "current_cohort_sha256 = sha256_of_file(cohort_path)" in source
+    assert '"status": "blocked_input_authority_mutation"' in source
+    assert "or has_primary_cohort_universe_producer" in source
+    assert source.count('if run_input_authority_state["corrupted"]:') == 2
+    assert '"remaining_steps_suppressed": True' in source
 
 
 def test_plan_and_execute_result_dataclass_shapes_match_contracts_module():
