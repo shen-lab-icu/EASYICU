@@ -2696,6 +2696,108 @@ if isinstance(exposure_definition, pd.DataFrame):
     assert "downgraded_reason" not in findings[0].detail
 
 
+def test_llm_concept_auditor_downgrades_raw_resolver_branch_false_override(ra):
+    from easyicu.research_agent.audits.validators import (
+        _downgrade_finalized_exposure_reconciliation_findings,
+    )
+    from easyicu.research_agent.contracts import ValidationFinding
+
+    script = """
+REQUESTED_INPUTS = ['artifact:primary_exposure_definition']
+def resolve_raw_exposure(definition, frame):
+    return reconcile_binary_event_presence(frame)
+
+if isinstance(exposure_definition, pd.DataFrame):
+    finalized = pd.to_numeric(exposure_definition['vasopressor'], errors='coerce')
+    if finalized.isna().any() or not np.isfinite(finalized).all() or not finalized.isin([0, 1]).all():
+        raise RuntimeError('invalid finalized exposure')
+    treatment = finalized.astype(int)
+else:
+    treatment = resolve_raw_exposure(exposure_definition, frame).values
+frame['vasopressor'] = treatment
+"""
+    context = ra.build_research_context(
+        research_question="Assess balance by vasopressor exposure.",
+        cohort=pd.DataFrame({"stay_id": [1, 2], "vasopressor": [0, 1]}),
+        cohort_name="c",
+        database="synthetic",
+        primary_exposure="vasopressor",
+    )
+    findings = _downgrade_finalized_exposure_reconciliation_findings(
+        findings=[
+            ValidationFinding(
+                validator="llm_concept_auditor",
+                severity="error",
+                message=(
+                    "Authoritative exposure is overwritten by a hardcoded "
+                    "reconciliation."
+                ),
+                detail={
+                    "context": (
+                        "After resolving the finalized artifact, the script "
+                        "unconditionally replaces treatment with "
+                        "reconcile_binary_event_presence."
+                    )
+                },
+            )
+        ],
+        context=context,
+        script_text=script,
+    )
+
+    assert findings[0].severity == "warning"
+    assert "AST control-flow verification" in findings[0].detail["downgraded_reason"]
+
+
+def test_llm_concept_auditor_keeps_post_branch_reconciliation_blocking(ra):
+    from easyicu.research_agent.audits.validators import (
+        _downgrade_finalized_exposure_reconciliation_findings,
+    )
+    from easyicu.research_agent.contracts import ValidationFinding
+
+    script = """
+REQUESTED_INPUTS = ['artifact:primary_exposure_definition']
+def resolve_raw_exposure(definition, frame):
+    return reconcile_binary_event_presence(frame)
+
+if isinstance(exposure_definition, pd.DataFrame):
+    finalized = pd.to_numeric(exposure_definition['vasopressor'], errors='coerce')
+    if finalized.isna().any() or not np.isfinite(finalized).all() or not finalized.isin([0, 1]).all():
+        raise RuntimeError('invalid finalized exposure')
+    treatment = finalized.astype(int)
+else:
+    treatment = resolve_raw_exposure(exposure_definition, frame).values
+treatment = resolve_raw_exposure(exposure_definition, frame).values
+"""
+    context = ra.build_research_context(
+        research_question="Assess balance by vasopressor exposure.",
+        cohort=pd.DataFrame({"stay_id": [1, 2], "vasopressor": [0, 1]}),
+        cohort_name="c",
+        database="synthetic",
+        primary_exposure="vasopressor",
+    )
+    findings = _downgrade_finalized_exposure_reconciliation_findings(
+        findings=[
+            ValidationFinding(
+                validator="llm_concept_auditor",
+                severity="error",
+                message="The finalized exposure is overwritten.",
+                detail={
+                    "context": (
+                        "The script replaces the finalized values with "
+                        "reconcile_binary_event_presence."
+                    )
+                },
+            )
+        ],
+        context=context,
+        script_text=script,
+    )
+
+    assert findings[0].severity == "error"
+    assert "downgraded_reason" not in findings[0].detail
+
+
 def test_llm_concept_auditor_downgrades_companion_value_gating_false_positive(ra):
     class _CompanionGatingFalsePositiveLLM:
         def complete(self, messages, *, max_tokens=1024, temperature=0.0):
