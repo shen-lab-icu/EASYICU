@@ -16,6 +16,7 @@ from .schema import ValidationFinding
 class RepairReason(str, Enum):
     INVALID_HELPER_SIGNATURE = "INVALID_HELPER_SIGNATURE"
     UNDEFINED_HELPER = "UNDEFINED_HELPER"
+    UNBOUND_LOCAL = "UNBOUND_LOCAL"
     LOSSY_NUMERIC_COERCION = "LOSSY_NUMERIC_COERCION"
     ARBITRARY_COLUMN_FALLBACK = "ARBITRARY_COLUMN_FALLBACK"
     TYPED_PRODUCT_BINDING_INVALID = "TYPED_PRODUCT_BINDING_INVALID"
@@ -29,6 +30,7 @@ class RepairReason(str, Enum):
 _DETAIL_REASON_CODES = {
     "invalid_local_helper_call": RepairReason.INVALID_HELPER_SIGNATURE,
     "undefined_helper_call": RepairReason.UNDEFINED_HELPER,
+    "branch_local_unbound": RepairReason.UNBOUND_LOCAL,
     "lossy_ordinal_rounding": RepairReason.LOSSY_NUMERIC_COERCION,
     "arbitrary_column_fallback": RepairReason.ARBITRARY_COLUMN_FALLBACK,
     "typed binding unavailable": RepairReason.TYPED_PRODUCT_BINDING_INVALID,

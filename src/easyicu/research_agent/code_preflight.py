@@ -1028,6 +1028,187 @@ def _local_call_signature_findings(tree: ast.Module) -> list[ValidationFinding]:
     ]
 
 
+def _branch_local_unbound_findings(tree: ast.Module) -> list[ValidationFinding]:
+    """Find locals assigned in only one branch and read after the merge.
+
+    This deliberately handles only the mechanically provable straight-line
+    case.  Ambiguous nested control flow is left to Python/runtime validation.
+    """
+
+    def _scope_nodes_without_nested_functions(node: ast.AST) -> list[ast.AST]:
+        collected: list[ast.AST] = []
+
+        class _Visitor(ast.NodeVisitor):
+            def visit_FunctionDef(self, child: ast.FunctionDef) -> None:
+                return None
+
+            def visit_AsyncFunctionDef(self, child: ast.AsyncFunctionDef) -> None:
+                return None
+
+            def visit_Lambda(self, child: ast.Lambda) -> None:
+                return None
+
+            def visit_ListComp(self, child: ast.ListComp) -> None:
+                return None
+
+            def visit_SetComp(self, child: ast.SetComp) -> None:
+                return None
+
+            def visit_DictComp(self, child: ast.DictComp) -> None:
+                return None
+
+            def visit_GeneratorExp(self, child: ast.GeneratorExp) -> None:
+                return None
+
+            def generic_visit(self, child: ast.AST) -> None:
+                collected.append(child)
+                super().generic_visit(child)
+
+        _Visitor().visit(node)
+        return collected
+
+    def _names(statements: list[ast.stmt], context: type[ast.expr_context]) -> set[str]:
+        names: set[str] = set()
+        wrapper = ast.Module(body=statements, type_ignores=[])
+        for node in _scope_nodes_without_nested_functions(wrapper):
+            if isinstance(node, ast.Name) and isinstance(node.ctx, context):
+                names.add(node.id)
+        return names
+
+    def _branch_terminates(statements: list[ast.stmt]) -> bool:
+        return bool(statements) and isinstance(statements[-1], (ast.Raise, ast.Return))
+
+    findings: list[ValidationFinding] = []
+
+    def _direct_target_names(statement: ast.stmt) -> set[str]:
+        targets: list[ast.AST] = []
+        if isinstance(statement, ast.Assign):
+            targets = list(statement.targets)
+        elif isinstance(statement, (ast.AnnAssign, ast.AugAssign)):
+            targets = [statement.target]
+        elif isinstance(statement, (ast.Import, ast.ImportFrom)):
+            return {
+                alias.asname or alias.name.split(".")[0]
+                for alias in statement.names
+            }
+        return {
+            node.id
+            for target in targets
+            for node in ast.walk(target)
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
+        }
+
+    def _analyze_block(
+        statements: list[ast.stmt], initially_assigned: set[str]
+    ) -> None:
+        assigned_before = set(initially_assigned)
+        for index, statement in enumerate(statements):
+            if isinstance(statement, ast.If):
+                body_stores = _names(statement.body, ast.Store)
+                else_stores = _names(statement.orelse, ast.Store)
+                body_only = body_stores - else_stores - assigned_before
+                else_only = else_stores - body_stores - assigned_before
+                candidates = set()
+                if not _branch_terminates(statement.orelse):
+                    candidates.update(body_only)
+                if not _branch_terminates(statement.body):
+                    candidates.update(else_only)
+                following = statements[index + 1 :]
+                for name in sorted(candidates):
+                    load_lines = [
+                        int(node.lineno)
+                        for later in following
+                        for node in _scope_nodes_without_nested_functions(later)
+                        if isinstance(node, ast.Name)
+                        and isinstance(node.ctx, ast.Load)
+                        and node.id == name
+                    ]
+                    later_store_lines = [
+                        int(node.lineno)
+                        for later in following
+                        for node in _scope_nodes_without_nested_functions(later)
+                        if isinstance(node, ast.Name)
+                        and isinstance(node.ctx, ast.Store)
+                        and node.id == name
+                    ]
+                    if not load_lines:
+                        continue
+                    first_load = min(load_lines)
+                    if later_store_lines and min(later_store_lines) < first_load:
+                        continue
+                    assignment_lines = [
+                        int(node.lineno)
+                        for branch in (statement.body, statement.orelse)
+                        for node in _scope_nodes_without_nested_functions(
+                            ast.Module(body=branch, type_ignores=[])
+                        )
+                        if isinstance(node, ast.Name)
+                        and isinstance(node.ctx, ast.Store)
+                        and node.id == name
+                    ]
+                    findings.append(
+                        ValidationFinding(
+                            validator="mechanical_code_preflight",
+                            severity="error",
+                            message=(
+                                "A local variable is assigned in only one branch "
+                                "and then read after control-flow merges, so a "
+                                "valid input form can raise UnboundLocalError."
+                            ),
+                            detail={
+                                "reason": "branch_local_unbound",
+                                "name": name,
+                                "branch_line": int(statement.lineno),
+                                "assignment_lines": sorted(assignment_lines),
+                                "first_use_line": first_load,
+                            },
+                        )
+                    )
+
+                guaranteed = body_stores & else_stores
+                if _branch_terminates(statement.orelse):
+                    guaranteed.update(body_stores)
+                if _branch_terminates(statement.body):
+                    guaranteed.update(else_stores)
+                _analyze_block(statement.body, set(assigned_before))
+                _analyze_block(statement.orelse, set(assigned_before))
+                assigned_before.update(guaranteed)
+                continue
+
+            nested_blocks: list[list[ast.stmt]] = []
+            if isinstance(statement, (ast.For, ast.AsyncFor, ast.While)):
+                nested_blocks.extend([statement.body, statement.orelse])
+            elif isinstance(statement, (ast.With, ast.AsyncWith)):
+                nested_blocks.append(statement.body)
+            elif isinstance(statement, ast.Try):
+                nested_blocks.extend(
+                    [statement.body, statement.orelse, statement.finalbody]
+                )
+                nested_blocks.extend(handler.body for handler in statement.handlers)
+            for block in nested_blocks:
+                _analyze_block(block, set(assigned_before))
+            assigned_before.update(_direct_target_names(statement))
+
+    _analyze_block(tree.body, set())
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        arguments = {
+            argument.arg
+            for argument in [
+                *node.args.posonlyargs,
+                *node.args.args,
+                *node.args.kwonlyargs,
+            ]
+        }
+        if node.args.vararg is not None:
+            arguments.add(node.args.vararg.arg)
+        if node.args.kwarg is not None:
+            arguments.add(node.args.kwarg.arg)
+        _analyze_block(node.body, arguments)
+    return findings
+
+
 def _ordinal_rounding_findings(tree: ast.Module) -> list[ValidationFinding]:
     """Reject lossy round-to-integer coercion inside explicit ordinal branches."""
 
@@ -1259,6 +1440,7 @@ def audit_mechanical_code_contracts(
     findings.extend(_typed_dataframe_erasure_findings(tree, step))
     findings.extend(_undefined_direct_call_findings(tree))
     findings.extend(_local_call_signature_findings(tree))
+    findings.extend(_branch_local_unbound_findings(tree))
     findings.extend(_ordinal_rounding_findings(tree))
     findings.extend(_first_time_companion_findings(tree))
     return findings

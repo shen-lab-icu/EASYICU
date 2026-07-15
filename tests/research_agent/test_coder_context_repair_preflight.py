@@ -954,6 +954,59 @@ resolved = resolve(
     )
 
 
+def test_mechanical_preflight_blocks_branch_local_read_after_merge(ra):
+    code = """
+def consume(definition):
+    if not isinstance(definition, pd.DataFrame):
+        context_source_concept = load_raw_metadata(definition)
+    summary = {'source_concept': context_source_concept}
+    return summary
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    finding = next(
+        item
+        for item in findings
+        if item.detail and item.detail.get("reason") == "branch_local_unbound"
+    )
+    assert finding.detail["name"] == "context_source_concept"
+    assert finding.detail["first_use_line"] == 5
+
+
+def test_mechanical_preflight_accepts_local_assigned_in_both_branches(ra):
+    code = """
+def consume(definition):
+    if isinstance(definition, pd.DataFrame):
+        source_concept = load_finalized_metadata(definition)
+    else:
+        source_concept = load_raw_metadata(definition)
+    return {'source_concept': source_concept}
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail and finding.detail.get("reason") == "branch_local_unbound"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_accepts_missing_branch_that_terminates(ra):
+    code = """
+def consume(definition):
+    if isinstance(definition, pd.DataFrame):
+        source_concept = load_finalized_metadata(definition)
+    else:
+        raise RuntimeError('unsupported input form')
+    return {'source_concept': source_concept}
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail and finding.detail.get("reason") == "branch_local_unbound"
+        for finding in findings
+    )
+
+
 def test_mechanical_preflight_blocks_lossy_ordinal_rounding(ra):
     code = """
 def summarize(values, metadata):
