@@ -614,6 +614,99 @@ def audit_event_presence(frame):
     )
 
 
+def test_mechanical_preflight_blocks_tuple_caught_reconciliation_error(ra):
+    code = """
+def audit_event_presence(frame):
+    try:
+        result = reconcile_binary_event_presence(
+            frame,
+            count_column=count_column,
+            measured_column=measured_column,
+            representative_column=representative_column,
+        )
+    except (ValueError, TypeError) as exc:
+        return {'status': 'unavailable', 'reason': str(exc)}
+    return {'status': 'checked', 'audit': result.audit}
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_helper_error_swallowed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_blocks_conditionally_reraised_reconciliation_error(ra):
+    code = """
+def audit_event_presence(frame, strict):
+    try:
+        result = reconcile_binary_event_presence(
+            frame,
+            count_column=count_column,
+            measured_column=measured_column,
+            representative_column=representative_column,
+        )
+    except ValueError as exc:
+        if strict:
+            raise
+        return {'status': 'unavailable', 'reason': str(exc)}
+    return {'status': 'checked', 'audit': result.audit}
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_helper_error_swallowed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_accepts_unconditional_bare_reraise(ra):
+    code = """
+def audit_event_presence(frame):
+    try:
+        return reconcile_binary_event_presence(
+            frame,
+            count_column=count_column,
+            measured_column=measured_column,
+            representative_column=representative_column,
+        )
+    except (ValueError, TypeError):
+        raise
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_helper_error_swallowed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_ignores_lookup_only_handler(ra):
+    code = """
+def audit_event_presence(frame):
+    try:
+        result = reconcile_binary_event_presence(
+            frame,
+            count_column=count_column,
+            measured_column=measured_column,
+            representative_column=representative_column,
+        )
+        return lookup[result.row_status.name]
+    except KeyError:
+        return {'status': 'lookup_unavailable'}
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_helper_error_swallowed"
+        for finding in findings
+    )
+
+
 def test_mechanical_preflight_accepts_re_raised_reconciliation_error(ra):
     code = """
 def audit_event_presence(frame):
@@ -647,6 +740,36 @@ def audit_event_presence(frame):
             representative_column=representative_column,
         )
     except Exception as exc:
+        return {'status': 'unavailable', 'reason': str(exc)}
+    return result.audit
+"""
+    repaired, names = deterministic_concept_audit_repair(
+        code, ["provenance_helper_error_swallowed"]
+    )
+
+    assert names == ["provenance_helper_reraise_v1"]
+    assert "_easyicu_provenance_helper_reraise_v1" in repaired
+    findings = audit_mechanical_code_contracts(repaired, _figure_step(ra))
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_helper_error_swallowed"
+        for finding in findings
+    )
+
+
+def test_deterministic_repair_makes_conditional_tuple_handler_fail_closed(ra):
+    code = """
+def audit_event_presence(frame, strict):
+    try:
+        result = reconcile_binary_event_presence(
+            frame,
+            count_column=count_column,
+            measured_column=measured_column,
+            representative_column=representative_column,
+        )
+    except (ValueError, TypeError) as exc:
+        if strict:
+            raise
         return {'status': 'unavailable', 'reason': str(exc)}
     return result.audit
 """
@@ -720,6 +843,55 @@ def main():
     exposure_definition = typed.get('artifact:primary_exposure_definition')
     exposure_col = 'candidate_event_max'
     return frame[exposure_col].mean()
+"""
+    findings = audit_mechanical_code_contracts(code, step)
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "authoritative_primary_exposure_unused"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_does_not_count_print_as_exposure_consumption(ra):
+    step = ra.AnalysisStep(
+        step_id="diagnostics",
+        intent="Run planner-owned exposure diagnostics.",
+        inputs=["artifact:primary_exposure_definition"],
+        expected_outputs=["table:diagnostics"],
+        method="diagnostic_analysis",
+    )
+    code = """
+def main():
+    typed = load_typed_inputs()
+    exposure_definition = typed['artifact:primary_exposure_definition']
+    print(exposure_definition)
+    return {'status': 'ok'}
+"""
+    findings = audit_mechanical_code_contracts(code, step)
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "authoritative_primary_exposure_unused"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_requires_resolved_exposure_to_reach_result(ra):
+    step = ra.AnalysisStep(
+        step_id="diagnostics",
+        intent="Run planner-owned exposure diagnostics.",
+        inputs=["artifact:primary_exposure_definition"],
+        expected_outputs=["table:diagnostics"],
+        method="diagnostic_analysis",
+    )
+    code = """
+def main():
+    typed = load_typed_inputs()
+    exposure_definition = typed['artifact:primary_exposure_definition']
+    exposure_col = resolve_declared_exposure(frame, exposure_definition)
+    print(exposure_col)
+    return {'status': 'ok'}
 """
     findings = audit_mechanical_code_contracts(code, step)
 

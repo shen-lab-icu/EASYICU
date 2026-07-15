@@ -600,13 +600,34 @@ def _provenance_pair_scan_findings(tree: ast.Module) -> list[ValidationFinding]:
     return []
 
 
+_RECONCILIATION_FAILURE_EXCEPTIONS = frozenset(
+    {"BaseException", "Exception", "TypeError", "ValueError"}
+)
+
+
+def _caught_exception_names(node: ast.AST) -> set[str]:
+    if isinstance(node, ast.Tuple):
+        return {
+            name for element in node.elts for name in _caught_exception_names(element)
+        }
+    name = _call_name(node).split(".")[-1]
+    return {name} if name else set()
+
+
 def _handler_catches_reconciliation_failure(handler: ast.ExceptHandler) -> bool:
     """Return whether *handler* can swallow the standard helper's failures."""
 
     if handler.type is None:
         return True
-    caught = _call_name(handler.type).split(".")[-1]
-    return caught in {"BaseException", "Exception", "ValueError"}
+    return bool(
+        _caught_exception_names(handler.type) & _RECONCILIATION_FAILURE_EXCEPTIONS
+    )
+
+
+def _handler_immediately_raises(handler: ast.ExceptHandler) -> bool:
+    """Conservatively prove that no caught failure can continue execution."""
+
+    return bool(handler.body) and isinstance(handler.body[0], ast.Raise)
 
 
 def _swallowed_reconciliation_error_findings(
@@ -637,7 +658,7 @@ def _swallowed_reconciliation_error_findings(
         for handler in node.handlers:
             if not _handler_catches_reconciliation_failure(handler):
                 continue
-            if any(isinstance(candidate, ast.Raise) for candidate in ast.walk(handler)):
+            if _handler_immediately_raises(handler):
                 continue
             findings.append(
                 ValidationFinding(
@@ -683,6 +704,75 @@ def _scope_nodes(statements: list[ast.stmt]) -> list[ast.AST]:
     return collected
 
 
+_EXPOSURE_RESULT_CALLS = frozenset(
+    {
+        "agg",
+        "aggregate",
+        "average",
+        "bar",
+        "boxplot",
+        "count",
+        "describe",
+        "dump",
+        "fit",
+        "fit_predict",
+        "fit_regularized",
+        "groupby",
+        "hist",
+        "kdeplot",
+        "lineplot",
+        "mean",
+        "median",
+        "plot",
+        "predict",
+        "quantile",
+        "save",
+        "savefig",
+        "scatter",
+        "sum",
+        "to_csv",
+        "to_json",
+        "to_parquet",
+        "value_counts",
+        "violinplot",
+        "write",
+        "write_bytes",
+        "write_text",
+    }
+)
+
+
+def _assignment_target_names(node: ast.Assign | ast.AnnAssign) -> set[str]:
+    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+    names: set[str] = set()
+    pending = list(targets)
+    while pending:
+        target = pending.pop()
+        if isinstance(target, ast.Name):
+            names.add(target.id)
+        elif isinstance(target, (ast.List, ast.Tuple)):
+            pending.extend(target.elts)
+    return names
+
+
+def _contains_bound_exposure_selection(
+    node: ast.AST,
+    *,
+    definition_names: set[str],
+    column_binding_names: set[str],
+) -> bool:
+    for candidate in ast.walk(node):
+        if not isinstance(candidate, ast.Subscript):
+            continue
+        if _referenced_names(candidate.value) & (
+            definition_names | column_binding_names
+        ):
+            return True
+        if _referenced_names(candidate.slice) & column_binding_names:
+            return True
+    return False
+
+
 def _authoritative_exposure_binding_findings(
     tree: ast.Module, step: AnalysisStep
 ) -> list[ValidationFinding]:
@@ -720,19 +810,72 @@ def _authoritative_exposure_binding_findings(
         if not definition_names:
             continue
 
+        assignments = [
+            node
+            for node in nodes
+            if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None
+        ]
+        column_binding_names: set[str] = set()
+        for assignment in assignments:
+            if not isinstance(assignment.value, ast.Call):
+                continue
+            call_inputs = [
+                *assignment.value.args,
+                *[keyword.value for keyword in assignment.value.keywords],
+            ]
+            if any(
+                _referenced_names(value) & definition_names for value in call_inputs
+            ):
+                column_binding_names.update(_assignment_target_names(assignment))
+
+        selected_value_names: set[str] = set()
+        changed = True
+        while changed:
+            changed = False
+            for assignment in assignments:
+                target_names = _assignment_target_names(assignment)
+                if not target_names or target_names & definition_names:
+                    continue
+                value = assignment.value
+                if not (
+                    _contains_bound_exposure_selection(
+                        value,
+                        definition_names=definition_names,
+                        column_binding_names=column_binding_names,
+                    )
+                    or _referenced_names(value) & selected_value_names
+                ):
+                    continue
+                new_names = target_names - selected_value_names
+                if new_names:
+                    selected_value_names.update(new_names)
+                    changed = True
+
         for node in nodes:
-            if isinstance(node, ast.Call):
-                call_inputs = [
-                    *node.args,
-                    *[keyword.value for keyword in node.keywords],
-                ]
-                if any(
-                    _referenced_names(value) & definition_names for value in call_inputs
+            if isinstance(node, ast.Return) and node.value is not None:
+                if (
+                    _contains_bound_exposure_selection(
+                        node.value,
+                        definition_names=definition_names,
+                        column_binding_names=column_binding_names,
+                    )
+                    or _referenced_names(node.value) & selected_value_names
                 ):
                     return []
-            if isinstance(node, ast.Subscript):
-                if _referenced_names(node.value) & definition_names:
-                    return []
+            if not isinstance(node, ast.Call):
+                continue
+            call_name = _call_name(node.func).split(".")[-1].lower()
+            if call_name not in _EXPOSURE_RESULT_CALLS:
+                continue
+            if (
+                _contains_bound_exposure_selection(
+                    node,
+                    definition_names=definition_names,
+                    column_binding_names=column_binding_names,
+                )
+                or _referenced_names(node) & selected_value_names
+            ):
+                return []
 
         return [
             ValidationFinding(
