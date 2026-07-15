@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from easyicu.research_agent.cohort_schema import CohortDefinition
+from easyicu.research_agent.declared_product_contract import typed_product
 from easyicu.research_agent.evidence import EvidenceStore, sha256_of_file
 from easyicu.research_agent.pipeline_execute import (
     _plan_scientific_scope_signature,
@@ -56,8 +57,9 @@ def _register(
     payload: str = "current",
     evidence_id: str = "analysis_dataset",
     kind: str = "table",
+    source_stem: str = "analysis_dataset",
 ):
-    source = tmp_path / "source" / f"analysis_dataset{suffix}"
+    source = tmp_path / "source" / f"{source_stem}{suffix}"
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text(payload, encoding="utf-8")
     return store.register_file(
@@ -229,6 +231,7 @@ def test_typed_artifact_resolves_verified_current_producer_output(
     [
         ("table:analysis_dataset", "table", ".csv"),
         ("dataset:analysis_dataset", "table", ".parquet"),
+        ("cohort:analysis_dataset", "table", ".parquet"),
         ("artifact:analysis_dataset", "table", ".parquet"),
         ("artifact:analysis_dataset", "log", ".json"),
         ("model:analysis_dataset", "log", ".pkl"),
@@ -280,6 +283,7 @@ def test_typed_input_accepts_only_closed_compatible_evidence_kinds(
         ("table:analysis_dataset", "log", ".csv"),
         ("table:analysis_dataset", "figure", ".csv"),
         ("dataset:analysis_dataset", "log", ".parquet"),
+        ("cohort:analysis_dataset", "log", ".parquet"),
         ("model:analysis_dataset", "table", ".pkl"),
         ("artifact:analysis_dataset", "code", ".json"),
         ("artifact:analysis_dataset", "figure", ".json"),
@@ -322,7 +326,7 @@ def test_typed_input_rejects_incompatible_evidence_kind(
     assert ref is None
     assert failure is not None
     assert failure["reason"] == "evidence_kind_mismatch"
-    assert failure["declared_kind"] == declared_product.split(":", 1)[0]
+    assert failure["declared_kind"] == typed_product(declared_product)[0]
     assert failure["observed_evidence_kinds"] == [evidence_kind]
 
 
@@ -381,6 +385,76 @@ def test_old_artifact_is_rejected_after_latest_producer_failure(
     assert ref is None
     assert failure is not None
     assert failure["reason"] == "producer_not_successful"
+
+
+def test_failed_cohort_producer_blocks_typed_dataset_consumption(
+    tmp_path: Path,
+) -> None:
+    plan = _plan_for_typed_product("cohort:analysis_dataset")
+
+    ref, failure = _resolve_typed_input_evidence(
+        input_name="cohort:analysis_dataset",
+        plan=plan,
+        evidence_records=[],
+        per_step_records=[
+            {
+                "step_id": "producer",
+                "status": "contract_failed",
+                "evidence_ids": [],
+                "analysis_request": {"step": plan.steps[0].model_dump(mode="json")},
+                "plan_scientific_signature": _scope_signature(plan),
+            }
+        ],
+        run_dir=tmp_path,
+    )
+
+    assert ref is None
+    assert failure is not None
+    assert failure["kind"] == "dataset"
+    assert failure["reason"] == "producer_not_successful"
+
+
+def test_list_style_cohort_receipt_binds_prefixed_physical_filename(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(tmp_path)
+    current = _register(
+        store,
+        tmp_path,
+        suffix=".parquet",
+        kind="table",
+        source_stem="cohort_analysis_dataset",
+    )
+    plan = _plan_for_typed_product("cohort:analysis_dataset")
+
+    ref, failure = _resolve_typed_input_evidence(
+        input_name="cohort:analysis_dataset",
+        plan=plan,
+        evidence_records=store.records(),
+        per_step_records=[
+            {
+                "step_id": "producer",
+                "status": "ok",
+                "evidence_ids": [current.evidence_id],
+                "step_summary": {
+                    "output_files": [
+                        {
+                            "kind": "cohort",
+                            "name": "cohort:analysis_dataset",
+                            "relative_path": "cohort_analysis_dataset.parquet",
+                        }
+                    ]
+                },
+                "analysis_request": {"step": plan.steps[0].model_dump(mode="json")},
+                "plan_scientific_signature": _scope_signature(plan),
+            }
+        ],
+        run_dir=tmp_path,
+    )
+
+    assert failure is None
+    assert ref is not None
+    assert ref.evidence_id == current.evidence_id
 
 
 def test_tampered_current_artifact_fails_closed(tmp_path: Path) -> None:
