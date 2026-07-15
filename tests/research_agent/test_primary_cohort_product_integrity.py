@@ -124,6 +124,157 @@ def test_unique_closed_primary_cohort_producer_uses_raw_universe() -> None:
     assert primary_analysis_cohort_producer_uses_universe(step=step, plan=_plan(step))
 
 
+def test_analysis_set_alias_is_a_closed_primary_cohort_product() -> None:
+    step = _cohort_step(method="cohort_definition_with_attrition").model_copy(
+        update={
+            "expected_outputs": [
+                "cohort:analysis_set",
+                "table:cohort_flow",
+                "table:attrition",
+            ]
+        }
+    )
+
+    assert primary_analysis_cohort_producer_uses_universe(step=step, plan=_plan(step))
+
+
+def test_multiple_primary_cohort_aliases_fail_closed() -> None:
+    step = _cohort_step().model_copy(
+        update={
+            "expected_outputs": [
+                "artifact:analysis_cohort",
+                "cohort:analysis_set",
+                "table:cohort_flow",
+            ]
+        }
+    )
+
+    assert not primary_analysis_cohort_producer_uses_universe(
+        step=step,
+        plan=_plan(step),
+    )
+
+
+def test_foreign_analysis_set_products_do_not_pollute_primary_owner() -> None:
+    primary = _cohort_step(method="cohort_definition_with_attrition").model_copy(
+        update={
+            "expected_outputs": [
+                "cohort:analysis_set",
+                "table:cohort_flow",
+                "table:attrition",
+            ]
+        }
+    )
+    foreign = AnalysisStep(
+        step_id="02_model_specific_set",
+        intent="Report one model-specific analysis set.",
+        expected_outputs=["table:analysis_set"],
+        method="mixed_effects_regression",
+    )
+
+    assert primary_analysis_cohort_producer_uses_universe(
+        step=primary,
+        plan=_plan(primary, foreign),
+    )
+    assert not primary_analysis_cohort_producer_uses_universe(
+        step=foreign,
+        plan=_plan(primary, foreign),
+    )
+
+
+def test_noncohort_analysis_set_namespace_never_becomes_primary() -> None:
+    for output in ("artifact:analysis_set", "table:analysis_set"):
+        step = _cohort_step().model_copy(
+            update={
+                "expected_outputs": [output, "table:cohort_flow"],
+            }
+        )
+
+        assert not primary_analysis_cohort_producer_uses_universe(
+            step=step,
+            plan=_plan(step),
+        )
+
+
+def test_analysis_set_alias_preserves_full_locked_cohort(tmp_path: Path) -> None:
+    step = _cohort_step(method="cohort_definition_with_attrition").model_copy(
+        update={
+            "expected_outputs": [
+                "cohort:analysis_set",
+                "table:cohort_flow",
+                "table:cohort_attrition",
+            ]
+        }
+    )
+    plan = _plan(step)
+    universe_path, authoritative_path, authoritative = _write_authorities(tmp_path)
+    out_dir = tmp_path / "outputs"
+    summary = _write_outputs(
+        out_dir,
+        produced=authoritative,
+        universe_n=8,
+        final_n=4,
+    )
+    (out_dir / "analysis_cohort.parquet").rename(out_dir / "analysis_set.parquet")
+    summary["output_files"] = {
+        "cohort:analysis_set": "analysis_set.parquet",
+        "table:cohort_flow": "cohort_flow.csv",
+        "table:cohort_attrition": "cohort_attrition.csv",
+    }
+
+    assert (
+        primary_analysis_cohort_integrity_findings(
+            step=step,
+            plan=plan,
+            step_summary=summary,
+            out_dir=out_dir,
+            universe_path=universe_path,
+            authoritative_cohort_path=authoritative_path,
+        )
+        == []
+    )
+
+
+def test_analysis_set_alias_cannot_drop_authoritative_columns(tmp_path: Path) -> None:
+    step = _cohort_step(method="cohort_definition_with_attrition").model_copy(
+        update={
+            "expected_outputs": [
+                "cohort:analysis_set",
+                "table:cohort_flow",
+                "table:cohort_attrition",
+            ]
+        }
+    )
+    plan = _plan(step)
+    universe_path, authoritative_path, authoritative = _write_authorities(tmp_path)
+    out_dir = tmp_path / "outputs"
+    summary = _write_outputs(
+        out_dir,
+        produced=authoritative.drop(columns=["death"]),
+        universe_n=8,
+        final_n=4,
+    )
+    (out_dir / "analysis_cohort.parquet").rename(out_dir / "analysis_set.parquet")
+    summary["output_files"] = {
+        "cohort:analysis_set": "analysis_set.parquet",
+        "table:cohort_flow": "cohort_flow.csv",
+        "table:cohort_attrition": "cohort_attrition.csv",
+    }
+
+    findings = primary_analysis_cohort_integrity_findings(
+        step=step,
+        plan=plan,
+        step_summary=summary,
+        out_dir=out_dir,
+        universe_path=universe_path,
+        authoritative_cohort_path=authoritative_path,
+    )
+
+    assert len(findings) == 1
+    assert findings[0].severity == "error"
+    assert findings[0].detail["issue"] == "analysis_cohort_value_mismatch"
+
+
 def test_plain_attrition_role_uses_raw_universe() -> None:
     step = _cohort_step().model_copy(
         update={

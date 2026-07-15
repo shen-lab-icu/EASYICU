@@ -4594,6 +4594,10 @@ def _primary_analysis_cohort_canonical_schema_rules(
     if not _primary_analysis_cohort_attrition_candidate(step):
         return ()
     return (
+        "Write the declared primary analysis-cohort product with every physical "
+        "column from the host-authoritative locked cohort, preserving its exact "
+        "ordered row identity and values; additional derived columns are allowed, "
+        "but authoritative columns may not be dropped or changed.",
         "Write exact top-level integer fields `n_universe` and "
         "`n_final_analysis_cohort` in step_summary.json; do not hide either "
         "denominator in a nested mapping or under an approximate alias.",

@@ -1669,10 +1669,12 @@ def _resolved_typed_input_binding(
         "produced_by_step": binding["produced_by_step"],
     }
     host_contract = dict(producer_contract or {})
-    if declared_kind == "table":
+    if binding["evidence_kind"] == "table":
         # Table schema v2 is deliberately schema-only. Arbitrary
         # producer-authored role prose must not become a second source of
-        # scientific authority.
+        # scientific authority. Use the verified physical evidence kind rather
+        # than the Planner-facing alias: dataset/cohort and generic artifact
+        # products may also resolve to a digest-bound table.
         host_contract.pop("semantic_roles", None)
         host_contract.pop("semantic_roles_scope", None)
         schema_receipt = typed_product_schema_receipt(

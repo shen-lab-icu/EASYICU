@@ -760,12 +760,34 @@ _PRIMARY_ANALYSIS_COHORT_FLOW_PRODUCTS = frozenset(
 )
 
 
+def _primary_analysis_cohort_product(raw: object) -> tuple[str, str] | None:
+    """Return one exact primary-cohort product identity.
+
+    ``analysis_cohort`` is the legacy closed product across its supported
+    physical aliases. ``analysis_set`` is accepted only through the explicit
+    Planner-facing ``cohort:`` namespace; a model-specific
+    ``table:analysis_set`` or ``artifact:analysis_set`` must not become a
+    primary population merely because a cohort/attrition step exists nearby.
+    """
+
+    raw_kind, separator, _ = str(raw or "").strip().partition(":")
+    parsed = typed_product(raw)
+    if not separator or parsed is None:
+        return None
+    kind, name = parsed
+    if kind not in _PRIMARY_ANALYSIS_COHORT_DATA_KINDS:
+        return None
+    if name == "analysis_cohort":
+        return parsed
+    if _normalise(raw_kind) == "cohort" and name == "analysis_set":
+        return parsed
+    return None
+
+
 def _declares_analysis_cohort_product(step: AnalysisStep) -> bool:
     return any(
-        kind in _PRIMARY_ANALYSIS_COHORT_DATA_KINDS and name == "analysis_cohort"
+        _primary_analysis_cohort_product(raw) is not None
         for raw in (step.expected_outputs or [])
-        if (parsed := typed_product(raw)) is not None
-        for kind, name in (parsed,)
     )
 
 
@@ -773,12 +795,10 @@ def _primary_analysis_cohort_attrition_candidate(step: AnalysisStep) -> bool:
     method = _normalise(step.method).split("_with_", 1)[0]
     if method not in _PRIMARY_ANALYSIS_COHORT_METHODS:
         return False
-    parsed = [typed_product(raw) for raw in (step.expected_outputs or [])]
+    outputs = list(step.expected_outputs or [])
+    parsed = [typed_product(raw) for raw in outputs]
     return any(
-        product is not None
-        and product[0] in _PRIMARY_ANALYSIS_COHORT_DATA_KINDS
-        and product[1] == "analysis_cohort"
-        for product in parsed
+        _primary_analysis_cohort_product(raw) is not None for raw in outputs
     ) and any(
         product is not None
         and product[0] == "table"
@@ -801,20 +821,23 @@ def primary_analysis_cohort_producer_uses_universe(
     if not _primary_analysis_cohort_attrition_candidate(step):
         return False
 
-    parsed_outputs = [typed_product(raw) for raw in (step.expected_outputs or [])]
+    raw_outputs = list(step.expected_outputs or [])
+    parsed_outputs = [typed_product(raw) for raw in raw_outputs]
     if not parsed_outputs or any(product is None for product in parsed_outputs):
         return False
-    has_analysis_cohort = False
+    analysis_cohort_products = 0
     has_attrition = False
-    for kind, name in parsed_outputs:  # type: ignore[misc]
-        if kind in _PRIMARY_ANALYSIS_COHORT_DATA_KINDS and name == "analysis_cohort":
-            has_analysis_cohort = True
+    for raw, parsed in zip(raw_outputs, parsed_outputs, strict=True):
+        kind, name = parsed  # type: ignore[misc]
+        if _primary_analysis_cohort_product(raw) is not None:
+            analysis_cohort_products += 1
             continue
         if kind == "table" and name in _PRIMARY_ANALYSIS_COHORT_FLOW_PRODUCTS:
             has_attrition = True
             continue
         return False
-    assert has_analysis_cohort and has_attrition
+    if analysis_cohort_products != 1 or not has_attrition:
+        return False
 
     producers = [
         candidate
@@ -1609,16 +1632,30 @@ def primary_analysis_cohort_integrity_findings(
             error=str(exc)[:300],
         )
 
+    declared_cohort_products = {
+        product[1]
+        for raw in (step.expected_outputs or [])
+        if (product := _primary_analysis_cohort_product(raw)) is not None
+    }
+    if len(declared_cohort_products) != 1:
+        return finding(
+            "analysis_cohort_product_ambiguous",
+            "The primary analysis-cohort product must have exactly one "
+            "registered typed identity.",
+            declared_products=sorted(declared_cohort_products),
+        )
+    cohort_product = next(iter(declared_cohort_products))
     cohort_candidates = _registered_product_paths(
         step_summary,
-        product_name="analysis_cohort",
+        product_name=cohort_product,
         allowed_kinds=_PRIMARY_ANALYSIS_COHORT_DATA_KINDS,
     )
     if len(cohort_candidates) != 1:
         return finding(
             "analysis_cohort_product_ambiguous",
-            "The declared analysis_cohort product must resolve to exactly one "
+            "The declared primary analysis-cohort product must resolve to exactly one "
             "registered output file.",
+            product=cohort_product,
             candidates=cohort_candidates,
         )
     try:

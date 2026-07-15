@@ -142,6 +142,41 @@ def test_primary_cohort_schema_guidance_tracks_host_product_aliases() -> None:
     )
 
 
+def test_primary_cohort_schema_guidance_accepts_analysis_set_alias() -> None:
+    step = _primary_cohort_step().model_copy(
+        update={
+            "method": "cohort_definition_with_attrition",
+            "expected_outputs": [
+                "cohort:analysis_set",
+                "table:cohort_flow",
+                "table:attrition",
+            ],
+        }
+    )
+
+    guidance = _primary_analysis_cohort_output_contract(step)
+
+    _assert_canonical_schema_guidance(guidance)
+    assert "every physical column" in guidance
+    assert "ordered row identity" in guidance
+
+
+@pytest.mark.parametrize(
+    "output",
+    ["artifact:analysis_set", "table:analysis_set", "dataset:analysis_set"],
+)
+def test_primary_cohort_schema_guidance_rejects_foreign_analysis_set_namespaces(
+    output: str,
+) -> None:
+    step = _primary_cohort_step().model_copy(
+        update={
+            "expected_outputs": [output, "table:cohort_flow"],
+        }
+    )
+
+    assert _primary_analysis_cohort_output_contract(step) == ""
+
+
 def test_primary_cohort_schema_guidance_requires_host_method_family() -> None:
     step = _primary_cohort_step().model_copy(
         update={"method": "mixed_effects_regression"}
