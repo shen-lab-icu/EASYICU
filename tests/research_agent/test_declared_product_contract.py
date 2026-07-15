@@ -83,6 +83,36 @@ def test_assignment_binding_contract_does_not_fallback_to_arbitrary_numeric_colu
 
     assert contract is not None
     assert "propensity_score_column" not in contract["models"][0]
+
+
+def test_declared_diagnostic_rejects_not_computable_placeholder():
+    step = AnalysisStep(
+        step_id="diagnostics",
+        intent="Run the Planner-owned diagnostics.",
+        expected_outputs=["artifact:balance_diagnostics"],
+        method="diagnostic_analysis",
+    )
+    findings = declared_product_contract_findings(
+        step=step,
+        step_summary={
+            "status": "completed",
+            "diagnostic_status": "not_computable",
+            "skipped_reason": "required model binding is ambiguous",
+            "output_files": {
+                "artifact:balance_diagnostics": "balance_diagnostics.json"
+            },
+        },
+        effect_method_authorized=False,
+    )
+
+    finding = next(
+        item
+        for item in findings
+        if item.detail
+        and item.detail.get("kind") == "declared_diagnostic_not_completed"
+    )
+    assert finding.detail["diagnostic_status"] == "not_computable"
+    assert finding.detail["skipped_reason"] == "required model binding is ambiguous"
 SEALED_ABSOLUTE_RISK_REPAIR = "absolute_risk_incidence_prevalence_publication_bundle_v1"
 SEALED_IMPLEMENTATION_DIGEST = "a" * 64
 SEALED_PARENT_DIGESTS = {
