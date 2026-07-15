@@ -2857,6 +2857,71 @@ frame[product_contract['executable_column']] = treatment
     assert "AST control-flow verification" in findings[0].detail["downgraded_reason"]
 
 
+def test_llm_concept_auditor_accepts_finalized_only_consumer_without_helper_call(ra):
+    from easyicu.research_agent.audits.validators import (
+        _downgrade_finalized_exposure_reconciliation_findings,
+    )
+    from easyicu.research_agent.contracts import ValidationFinding
+
+    script = """
+REQUESTED_INPUTS = ['artifact:primary_exposure_definition']
+def resolve_finalized_exposure(definition, product_contract, frame):
+    if not isinstance(definition, pd.DataFrame):
+        raise RuntimeError('finalized table required')
+    executable = product_contract['executable_column']
+    finalized = pd.to_numeric(definition[executable], errors='coerce')
+    if finalized.isna().any() or not np.isfinite(finalized).all() or not finalized.isin([0, 1]).all():
+        raise RuntimeError('invalid finalized exposure')
+    return finalized.astype(int)
+treatment = resolve_finalized_exposure(
+    exposure_definition, product_contract, frame
+)
+"""
+    context = ra.build_research_context(
+        research_question="Assess balance by the registered exposure.",
+        cohort=pd.DataFrame({"stay_id": [1, 2], "treatment": [0, 1]}),
+        cohort_name="c",
+        database="synthetic",
+        primary_exposure="treatment",
+    )
+    findings = _downgrade_finalized_exposure_reconciliation_findings(
+        findings=[
+            ValidationFinding(
+                validator="llm_concept_auditor",
+                severity="error",
+                message="The script overwrites the finalized exposure.",
+                detail={
+                    "context": (
+                        "It assigns reconcile_binary_event_presence values after "
+                        "the finalized binding."
+                    )
+                },
+            ),
+            ValidationFinding(
+                validator="llm_concept_auditor",
+                severity="error",
+                message=(
+                    "The finalized-table exposure branch is incorrectly forced "
+                    "through sparse-event triad validation."
+                ),
+                detail={
+                    "context": (
+                        "It requires source_count_column and raw companion fields."
+                    )
+                },
+            ),
+        ],
+        context=context,
+        script_text=script,
+    )
+
+    assert [finding.severity for finding in findings] == ["warning", "warning"]
+    assert all(
+        "AST control-flow verification" in finding.detail["downgraded_reason"]
+        for finding in findings
+    )
+
+
 def test_llm_concept_auditor_downgrades_companion_value_gating_false_positive(ra):
     class _CompanionGatingFalsePositiveLLM:
         def complete(self, messages, *, max_tokens=1024, temperature=0.0):

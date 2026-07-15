@@ -1380,6 +1380,18 @@ def _finalized_branch_isolates_reconciliation(script_text: str) -> bool:
     return False
 
 
+def _has_executable_reconciliation_call(script_text: str) -> bool:
+    try:
+        tree = ast.parse(str(script_text or ""))
+    except SyntaxError:
+        return True
+    return any(
+        isinstance(node, ast.Call)
+        and _call_name(node) == "reconcile_binary_event_presence"
+        for node in ast.walk(tree)
+    )
+
+
 def _downgrade_finalized_exposure_reconciliation_findings(
     *,
     findings: Sequence[ValidationFinding],
@@ -1399,6 +1411,7 @@ def _downgrade_finalized_exposure_reconciliation_findings(
     script = str(script_text or "")
     normalized_script = re.sub(r"\s+", "", script.lower())
     reconciliation_isolated = _finalized_branch_isolates_reconciliation(script)
+    reconciliation_absent = not _has_executable_reconciliation_call(script)
     literal_direct_binding = bool(
         primary_exposure
         and "artifact:primary_exposure_definition" in script
@@ -1411,7 +1424,7 @@ def _downgrade_finalized_exposure_reconciliation_findings(
         and ("isfinite(" in normalized_script or ".notna()" in normalized_script)
     )
     contracted_direct_binding = bool(
-        reconciliation_isolated
+        (reconciliation_isolated or reconciliation_absent)
         and "artifact:primary_exposure_definition" in script
         and "dataframe" in script.lower()
         and "product_contract" in script
@@ -1444,6 +1457,14 @@ def _downgrade_finalized_exposure_reconciliation_findings(
         "instead of the finalized",
         "raw companions determine",
     )
+    false_forced_reconciliation_signals = (
+        "forced through sparse-event triad",
+        "forced through the sparse-event triad",
+        "requires source_count_column",
+        "requires the source_count_column",
+        "requires raw companion",
+        "requires the raw companion",
+    )
     downgraded: List[ValidationFinding] = []
     for finding in findings:
         if finding.validator == LLMConceptAuditor.name and finding.severity == "error":
@@ -1457,11 +1478,22 @@ def _downgrade_finalized_exposure_reconciliation_findings(
                 signal in text for signal in missing_reconciliation_signals
             ) and not any(signal in text for signal in finalized_override_signals)
             false_override_claim = (
-                reconciliation_isolated
+                (reconciliation_isolated or reconciliation_absent)
                 and "reconcile_binary_event_presence" in text
                 and any(signal in text for signal in finalized_override_signals)
             )
-            if complains_only_about_reconciliation or false_override_claim:
+            false_forced_reconciliation_claim = (
+                reconciliation_absent
+                and contracted_direct_binding
+                and any(
+                    signal in text for signal in false_forced_reconciliation_signals
+                )
+            )
+            if (
+                complains_only_about_reconciliation
+                or false_override_claim
+                or false_forced_reconciliation_claim
+            ):
                 detail = dict(finding.detail or {})
                 detail.setdefault(
                     "downgraded_reason",
@@ -1471,7 +1503,7 @@ def _downgrade_finalized_exposure_reconciliation_findings(
                         "the finalized branch directly binds and validates the "
                         "exact binary column from the row-aligned exposure "
                         "artifact."
-                        if false_override_claim
+                        if false_override_claim or false_forced_reconciliation_claim
                         else "The script directly binds and validates the exact "
                         "binary column from the finalized row-aligned exposure "
                         "artifact. Downstream raw-event reconciliation may audit "
