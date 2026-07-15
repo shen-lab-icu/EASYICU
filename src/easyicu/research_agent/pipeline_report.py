@@ -810,6 +810,82 @@ def _publication_figure_bundle_ready(
     }
 
 
+def _publication_provenance_ready(
+    *,
+    evidence: EvidenceStore,
+    run_dir: Path,
+    per_step_records: Optional[Sequence[Mapping[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Verify every declared raw/cohort source has a digest before publication.
+
+    Analysis may remain useful when a very large or temporarily unavailable raw
+    source could not be hashed.  Publication readiness is stricter: a missing,
+    unreadable, or size-capped source must not be represented by ``sha256=None``
+    and silently treated as reproducible.
+    """
+
+    records = [
+        record
+        for record in current_evidence_records(evidence.records(), per_step_records)
+        if str(record.evidence_id) == "provenance_sources"
+    ]
+    invalid_sources: List[Dict[str, Any]] = []
+    if len(records) != 1:
+        return {
+            "publication_provenance_ready": False,
+            "publication_provenance_invalid_sources": [],
+            "publication_provenance_error": (
+                "missing_provenance_evidence"
+                if not records
+                else "ambiguous_provenance_evidence"
+            ),
+        }
+    path = verified_run_evidence_path(run_dir, records[0])
+    if path is None:
+        return {
+            "publication_provenance_ready": False,
+            "publication_provenance_invalid_sources": [],
+            "publication_provenance_error": "unverified_provenance_evidence",
+        }
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        payload = None
+    raw_sources = payload.get("records") if isinstance(payload, Mapping) else None
+    if not isinstance(raw_sources, list) or not raw_sources:
+        return {
+            "publication_provenance_ready": False,
+            "publication_provenance_invalid_sources": [],
+            "publication_provenance_error": "invalid_provenance_payload",
+        }
+    for index, raw in enumerate(raw_sources):
+        digest = str(raw.get("sha256") or "") if isinstance(raw, Mapping) else ""
+        if isinstance(raw, Mapping) and re.fullmatch(r"[0-9a-f]{64}", digest):
+            continue
+        invalid_sources.append(
+            {
+                "index": index,
+                "relative_path": (
+                    str(raw.get("relative_path") or "")
+                    if isinstance(raw, Mapping)
+                    else ""
+                ),
+                "skipped_reason": (
+                    str(raw.get("skipped_reason") or "missing_sha256")
+                    if isinstance(raw, Mapping)
+                    else "invalid_source_record"
+                ),
+            }
+        )
+    return {
+        "publication_provenance_ready": not invalid_sources,
+        "publication_provenance_invalid_sources": invalid_sources,
+        "publication_provenance_error": (
+            None if not invalid_sources else "unhashed_declared_sources"
+        ),
+    }
+
+
 _STEP_ID_IN_MESSAGE_PATTERNS = (
     # Matches the in-message tokens written by every pipeline_execute
     # ValidationFinding site that references a specific step. See
@@ -1980,6 +2056,11 @@ def _compute_readiness_gates(
         findings=active_findings,
         per_step_records=per_step_records,
     )
+    publication_provenance = _publication_provenance_ready(
+        evidence=evidence,
+        run_dir=run_dir,
+        per_step_records=per_step_records,
+    )
     display_suite = summarize_display_suite_status(
         context=context,
         plan=plan,
@@ -2011,12 +2092,14 @@ def _compute_readiness_gates(
         "replan_budget_advisory": replan_budget_hit and not replan_budget_exhausted,
         "publication_ready": manuscript_ready
         and publication["publication_figure_bundle_ready"]
+        and publication_provenance["publication_provenance_ready"]
         and display_suite["display_suite_complete"]
         and article_contract["article_contract_complete"]
         and figure_strategy["article_figure_strategy_complete"],
         "manuscript_generated": manuscript_generated,
         **manuscript_text_gate,
         "writer_probe_mode": bool(writer_probe_mode),
+        **publication_provenance,
         "writer_probe_failed_steps": list(writer_probe_failed_steps or []),
         "missing_evidence_count": missing_evidence_count,
         "numeric_error_count": len(numeric_errors),
