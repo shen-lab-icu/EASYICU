@@ -4452,6 +4452,7 @@ def _step_contract_repair_guidance(
     step: AnalysisStep,
     step_summary: Dict[str, Any],
     code: str,
+    input_bindings: Optional[Mapping[str, Any]] = None,
 ) -> str:
     guidance: List[str] = []
     if not isinstance(step_summary, dict):
@@ -4464,6 +4465,49 @@ def _step_contract_repair_guidance(
         step_summary.get("primary_predictor") or step_summary.get("predictor") or ""
     ).strip()
     summary_text = json.dumps(step_summary or {}, ensure_ascii=False, default=str)
+    assignment_binding = (
+        input_bindings.get("artifact:assignment_model")
+        if isinstance(input_bindings, Mapping)
+        else None
+    )
+    assignment_contract = (
+        assignment_binding.get("product_contract")
+        if isinstance(assignment_binding, Mapping)
+        else None
+    )
+    assignment_models = (
+        assignment_contract.get("models")
+        if isinstance(assignment_contract, Mapping)
+        else None
+    )
+    if isinstance(assignment_models, list) and len(assignment_models) > 1:
+        roster = [
+            {
+                key: model.get(key)
+                for key in (
+                    "model_id",
+                    "analysis_set",
+                    "fit_status",
+                    "propensity_score_column",
+                    "weight_column",
+                )
+                if model.get(key) is not None
+            }
+            for model in assignment_models
+            if isinstance(model, Mapping)
+        ]
+        guidance.append(
+            "The digest-bound assignment product is a Planner-owned model roster, "
+            "not an ambiguous list from which the engine may choose a primary model. "
+            "If its contract declares `diagnostic_model_id` or `selected_model_id`, "
+            "use that exact entry. Otherwise compute and report the planned diagnostic "
+            "separately for every fitted roster entry, keyed by its `model_id` and "
+            "`analysis_set`; do not choose the first row, collapse variants, refit, or "
+            "imply that one is primary. Preserve each entry's exact declared propensity "
+            "and weight columns and its own analysis-set denominator. "
+            "Current typed roster facts: "
+            + json.dumps(roster, ensure_ascii=False, sort_keys=True)
+        )
     if is_ordered_stratified_analysis_step(step):
         guidance.append(
             "Keep this as an agent-authored ordered-stratified analysis, but call "

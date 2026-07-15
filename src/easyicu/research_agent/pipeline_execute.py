@@ -8148,6 +8148,7 @@ else:
                         step=step,
                         step_summary=visual_step_summary,
                         code=code,
+                        input_bindings=resolved_input_bindings,
                     )
                     try:
                         code = coder.repair(
