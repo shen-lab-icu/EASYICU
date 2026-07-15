@@ -246,18 +246,22 @@ def typed_product_binding_contract(
                 for key in ("column", "executable_column", "exposure_column")
                 if str(contract.get(key) or "").strip()
             }
-            if len(declared_columns) == 1:
-                executable_column = next(iter(declared_columns))
-                contract["executable_column"] = executable_column
-                contract["exposure_column"] = executable_column
-                contract.setdefault(
-                    "authoritative_primary_exposure", executable_column
-                )
+            if len(declared_columns) != 1:
+                return None
+            executable_column = next(iter(declared_columns))
+            artifact_columns = set(_tabular_artifact_columns(artifact_path))
+            if artifact_columns and executable_column not in artifact_columns:
+                return None
+            contract["executable_column"] = executable_column
+            contract["exposure_column"] = executable_column
+            contract["authoritative_primary_exposure"] = executable_column
             declared_windows = {
                 str(contract.get(key) or "").strip()
                 for key in ("window", "time_window")
                 if str(contract.get(key) or "").strip()
             }
+            if len(declared_windows) > 1:
+                return None
             if len(declared_windows) == 1:
                 time_window = next(iter(declared_windows))
                 contract["window"] = time_window
@@ -301,10 +305,22 @@ def typed_product_binding_contract(
     columns = _tabular_artifact_columns(artifact_path)
     normalized_columns = {column: _normalise(column) for column in columns}
     bound_models: list[dict[str, Any]] = []
+    fitted_identities: set[tuple[str, str]] = set()
     for raw_model in raw_models:
         if not isinstance(raw_model, Mapping):
-            continue
+            return None
         model = dict(raw_model)
+        fit_status = _normalise(raw_model.get("fit_status") or raw_model.get("status"))
+        if fit_status != "fitted":
+            continue
+        model_id = _normalise(raw_model.get("model_id"))
+        analysis_set = _normalise(raw_model.get("analysis_set"))
+        if not model_id or not analysis_set:
+            return None
+        identity = (model_id, analysis_set)
+        if identity in fitted_identities:
+            return None
+        fitted_identities.add(identity)
         identifiers = {
             _normalise(raw_model.get(key))
             for key in ("analysis_set", "model_id")
@@ -324,10 +340,28 @@ def typed_product_binding_contract(
                     candidates.append(column)
                     break
         unique_candidates = sorted(set(candidates))
-        if len(unique_candidates) == 1:
-            model["propensity_score_column"] = unique_candidates[0]
+        declared_score_columns = {
+            str(raw_model.get(key) or "").strip()
+            for key in ("propensity_score_column", "score_column")
+            if str(raw_model.get(key) or "").strip()
+        }
+        if len(declared_score_columns) > 1:
+            return None
+        if declared_score_columns:
+            declared_score = next(iter(declared_score_columns))
+            if declared_score not in columns:
+                return None
+            if unique_candidates and declared_score not in unique_candidates:
+                return None
+            unique_candidates = [declared_score]
+        if len(unique_candidates) != 1:
+            return None
+        model["model_id"] = str(raw_model.get("model_id"))
+        model["analysis_set"] = str(raw_model.get("analysis_set"))
+        model["fit_status"] = "fitted"
+        model["propensity_score_column"] = unique_candidates[0]
         bound_models.append(model)
-    return {"models": bound_models}
+    return {"models": bound_models} if bound_models else None
 
 
 def _canonical_kind(value: object) -> str:

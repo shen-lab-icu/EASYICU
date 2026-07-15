@@ -1051,6 +1051,22 @@ class StepSummaryIntegrityValidator:
         )
         summary_bindings: Dict[str, Dict[str, Any]] = {}
         raw_bindings = step_summary.get("input_bindings")
+        if host_bindings and not isinstance(raw_bindings, list):
+            findings.append(
+                ValidationFinding(
+                    validator=self.name,
+                    severity="error",
+                    message=(
+                        f"Step {step.step_id} consumed host-resolved typed inputs "
+                        "but omitted the required input_bindings receipt list."
+                    ),
+                    detail={
+                        "issue": "input_bindings_missing",
+                        "step_id": step.step_id,
+                        "resolved_input_keys": sorted(host_bindings),
+                    },
+                )
+            )
         if isinstance(raw_bindings, list):
             for index, raw in enumerate(raw_bindings):
                 path = f"input_bindings.{index}"
@@ -1195,7 +1211,25 @@ class StepSummaryIntegrityValidator:
                 for metadata_field in ("evidence_id", "sha256"):
                     reported = raw.get(metadata_field)
                     expected = host_bindings[input_key].get(metadata_field)
-                    if reported is not None and str(reported) != str(expected):
+                    if expected is not None and reported is None:
+                        findings.append(
+                            ValidationFinding(
+                                validator=self.name,
+                                severity="error",
+                                message=(
+                                    f"Input binding {metadata_field} is missing for "
+                                    f"{input_key!r} in step {step.step_id}."
+                                ),
+                                detail={
+                                    "issue": "input_binding_identity_missing",
+                                    "step_id": step.step_id,
+                                    "summary_path": path,
+                                    "input_key": input_key,
+                                    "field": metadata_field,
+                                },
+                            )
+                        )
+                    elif reported is not None and str(reported) != str(expected):
                         findings.append(
                             ValidationFinding(
                                 validator=self.name,
@@ -1213,6 +1247,25 @@ class StepSummaryIntegrityValidator:
                                 },
                             )
                         )
+
+        missing_binding_keys = sorted(set(host_bindings) - set(summary_bindings))
+        if missing_binding_keys:
+            findings.append(
+                ValidationFinding(
+                    validator=self.name,
+                    severity="error",
+                    message=(
+                        f"Step {step.step_id} did not provide exactly one identity "
+                        "receipt for every host-resolved typed input."
+                    ),
+                    detail={
+                        "issue": "input_binding_coverage_incomplete",
+                        "step_id": step.step_id,
+                        "missing_input_keys": missing_binding_keys,
+                        "resolved_input_keys": sorted(host_bindings),
+                    },
+                )
+            )
 
         declarations = self._artifact_declarations(step_summary)
         for declaration in declarations:

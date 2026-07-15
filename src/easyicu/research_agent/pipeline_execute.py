@@ -1110,6 +1110,7 @@ def _resolved_typed_input_binding(
             _evidence_record_field(record, "produced_by_step") or ""
         ),
     }
+    producer_contract: Optional[Dict[str, Any]] = None
     for step_record in reversed(list(producer_step_records)):
         if str(step_record.get("status") or "") != "ok":
             continue
@@ -1127,8 +1128,32 @@ def _resolved_typed_input_binding(
             artifact_path=verified_path,
         )
         if product_contract is not None:
-            binding["product_contract"] = product_contract
+            producer_contract = dict(product_contract)
         break
+    contract_required = product_name in {
+        "assignment_model",
+        "primary_exposure_definition",
+        "prespecified_confounder_set",
+    }
+    if contract_required and producer_contract is None:
+        return None
+    identity_row = {
+        "input_key": str(input_name),
+        "declared_kind": declared_kind,
+        "product": product_name,
+        "evidence_id": evidence_ref.evidence_id,
+        "sha256": binding["sha256"],
+        "produced_by_step": binding["produced_by_step"],
+    }
+    host_contract = dict(producer_contract or {})
+    host_contract.update(
+        {
+            "schema_version": "easyicu.host_typed_product.v1",
+            "identity_row": identity_row,
+        }
+    )
+    binding["identity_row"] = identity_row
+    binding["product_contract"] = host_contract
     return binding
 
 

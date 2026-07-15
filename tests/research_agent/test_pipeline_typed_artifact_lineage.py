@@ -15,7 +15,7 @@ from easyicu.research_agent.pipeline_execute import (
     _resolved_typed_input_binding,
     _write_resolved_inputs_manifest,
 )
-from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep, EvidenceRef
 
 
 def _plan(*, duplicate_producer: bool = False) -> AnalysisPlan:
@@ -606,10 +606,14 @@ def test_typed_table_uses_current_resume_authority_and_writes_exact_manifest(
     assert binding is not None
     assert binding["evidence_id"] == current.evidence_id
     assert binding["sha256"] == current.sha256
-    assert binding["product_contract"] == {
-        "value_column": "x",
-        "scale": "standardized",
-    }
+    assert binding["product_contract"]["value_column"] == "x"
+    assert binding["product_contract"]["scale"] == "standardized"
+    assert binding["product_contract"]["schema_version"] == (
+        "easyicu.host_typed_product.v1"
+    )
+    assert binding["product_contract"]["identity_row"] == binding["identity_row"]
+    assert binding["identity_row"]["input_key"] == "table:scaling_summary"
+    assert binding["identity_row"]["sha256"] == current.sha256
     assert Path(binding["absolute_path"]).read_text(encoding="utf-8").endswith("x,1\n")
 
     context_path = tmp_path / "research_context.json"
@@ -645,6 +649,72 @@ def test_resolved_inputs_manifest_rejects_context_outside_run(tmp_path: Path) ->
             bindings={},
             context_path=outside,
         )
+
+
+def test_generic_typed_table_gets_host_owned_identity_contract(tmp_path: Path) -> None:
+    store = EvidenceStore(tmp_path)
+    source = tmp_path / "source" / "analysis_data.csv"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("row_id,value\n1,2\n", encoding="utf-8")
+    record = store.register_file(
+        kind="table",
+        description="Typed analysis data.",
+        source_path=source,
+        produced_by_step="producer",
+    )
+    binding = _resolved_typed_input_binding(
+        input_name="artifact:quality_checked_analysis_data",
+        evidence_ref=EvidenceRef(evidence_id=record.evidence_id),
+        evidence_records=store.records(),
+        run_dir=tmp_path,
+        producer_step_records=[
+            {
+                "step_id": "producer",
+                "status": "ok",
+                "evidence_ids": [record.evidence_id],
+                "step_summary": {},
+            }
+        ],
+    )
+
+    assert binding is not None
+    assert binding["product_contract"] == {
+        "schema_version": "easyicu.host_typed_product.v1",
+        "identity_row": binding["identity_row"],
+    }
+    assert binding["identity_row"]["evidence_id"] == record.evidence_id
+
+
+def test_scientific_typed_product_without_coordinates_is_not_bound(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(tmp_path)
+    source = tmp_path / "source" / "exposure.csv"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("row_id,treatment\n1,1\n", encoding="utf-8")
+    record = store.register_file(
+        kind="table",
+        description="Exposure product missing its coordinate contract.",
+        source_path=source,
+        produced_by_step="producer",
+    )
+
+    binding = _resolved_typed_input_binding(
+        input_name="artifact:primary_exposure_definition",
+        evidence_ref=EvidenceRef(evidence_id=record.evidence_id),
+        evidence_records=store.records(),
+        run_dir=tmp_path,
+        producer_step_records=[
+            {
+                "step_id": "producer",
+                "status": "ok",
+                "evidence_ids": [record.evidence_id],
+                "step_summary": {},
+            }
+        ],
+    )
+
+    assert binding is None
 
 
 def test_typed_statistic_binds_current_verified_step_summary(tmp_path: Path) -> None:
