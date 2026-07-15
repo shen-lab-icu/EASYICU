@@ -8,7 +8,7 @@ import os
 import re
 import shutil
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -26,6 +26,8 @@ class ResumeApplication:
     resumed_step_ids: Set[str]
     findings: List[ValidationFinding]
     probe_summary: Dict[str, Any]
+    audit_history: List[Dict[str, Any]] = field(default_factory=list)
+    dropped_step_ids: Set[str] = field(default_factory=set)
 
 
 @dataclass(frozen=True)
@@ -341,6 +343,11 @@ class ResumeController:
             for rec in (self.resume_state or {}).get("per_step_records", []) or []
             if isinstance(rec, dict) and rec.get("step_id")
         ]
+        saved_attempt_history = [
+            dict(rec)
+            for rec in (self.resume_state or {}).get("step_attempt_history", []) or []
+            if isinstance(rec, dict) and rec.get("step_id")
+        ]
         # The checkpoint ledger is append-only, but resume authority is not:
         # only the newest outer record for a step may be reused.  In
         # particular, an old ``ok`` must not survive a later contract failure.
@@ -420,6 +427,12 @@ class ResumeController:
             resumed_step_ids=resumed_step_ids,
             findings=findings,
             probe_summary=probe_summary,
+            audit_history=(
+                saved_attempt_history
+                if saved_attempt_history
+                else [dict(record) for record in prior_history]
+            ),
+            dropped_step_ids=set(dropped_step_ids),
         )
 
     @staticmethod

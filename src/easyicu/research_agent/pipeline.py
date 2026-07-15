@@ -1789,6 +1789,7 @@ class ResearchAgentPipeline:
         context_top_k: Optional[int] = None,
         max_code_repair_attempts: int = 3,
         max_step_llm_repair_attempts: int = 2,
+        max_step_provider_calls: int = 5,
         enable_deterministic_code_fallback: bool = False,
         enable_deterministic_planner_fallback: bool = False,
         enable_deterministic_runner_repair: bool = True,
@@ -1907,6 +1908,7 @@ class ResearchAgentPipeline:
         self._max_step_llm_repair_attempts = max(
             0, int(max_step_llm_repair_attempts)
         )
+        self._max_step_provider_calls = max(0, int(max_step_provider_calls))
         self._enable_deterministic_code_fallback = bool(
             enable_deterministic_code_fallback
         )
@@ -4405,6 +4407,7 @@ class ResearchAgentPipeline:
             "enable_replanning": bool(self._enable_replanning),
             "max_code_repair_attempts": self._max_code_repair_attempts,
             "max_step_llm_repair_attempts": self._max_step_llm_repair_attempts,
+            "max_step_provider_calls": self._max_step_provider_calls,
             "enable_deterministic_code_fallback": bool(
                 self._enable_deterministic_code_fallback
             ),

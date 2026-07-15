@@ -757,8 +757,9 @@ def _evidence_closure_error(
     if record is None:
         return f"missing evidence record {evidence_id}"
     producer = str(record.get("produced_by_step") or "").strip()
-    if require_step_owner and producer and producer != step_id:
-        return f"evidence {evidence_id} belongs to step {producer}"
+    if require_step_owner and producer != step_id:
+        owner = producer or "<run-level>"
+        return f"evidence {evidence_id} belongs to step {owner}"
     if verified_run_evidence_path(run_dir, record) is None:
         return f"evidence {evidence_id} failed path/digest verification"
     dependencies = [
@@ -785,6 +786,563 @@ def _evidence_closure_error(
     return None
 
 
+_REQUIRED_STEP_AUTHORITY_KINDS = {
+    "step_summary_evidence_id",
+    "script_evidence_id",
+}
+_STEP_AUTHORITY_EXPECTED_KINDS = {
+    "step_summary_evidence_id": "statistic",
+    "script_evidence_id": "code",
+    "interpretation_evidence_id": "log",
+}
+_RESUME_AUTHORITY_MIGRATION_SCHEMA_VERSION = (
+    "easyicu.resume_step_authority_migration/1"
+)
+_HOST_PROBE_STEP_ID = "00_probe"
+_HOST_PROBE_AUTHORITY_KIND = "host_deterministic_probe"
+_HOST_PROBE_AUTHORITIES = {
+    "probe_summary_evidence_id": ("statistic", "probe_summary.json"),
+    "probe_table_evidence_id": ("table", "probe_variable_profile.csv"),
+}
+_HOST_COHORT_MATERIALIZER_GENERATION_MODE = (
+    "deterministic_cohort_materializer"
+)
+_HOST_COHORT_MATERIALIZER_AUTHORITY_KIND = (
+    "host_deterministic_cohort_materializer"
+)
+_HOST_COHORT_MATERIALIZER_AUTHORITY_FIELD = "cohort_table_evidence_id"
+_HOST_COHORT_MATERIALIZER_EVIDENCE_ID = "analysis_cohort_execute_repair"
+_HOST_COHORT_MATERIALIZER_SOURCE_NAME = "cohort_analysis.parquet"
+
+
+def _registered_source_name(
+    record: Mapping[str, Any],
+) -> Optional[str]:
+    """Recover ``filename`` from EvidenceStore's ``<id>__<filename>`` path."""
+
+    evidence_id = str(record.get("evidence_id") or "").strip()
+    relative_path = str(record.get("relative_path") or "").strip()
+    if not evidence_id or not relative_path:
+        return None
+    name = Path(relative_path).name
+    prefix = f"{evidence_id}__"
+    if not name.startswith(prefix):
+        return None
+    source_name = name[len(prefix) :]
+    return source_name or None
+
+
+def _host_probe_authority_error(
+    *,
+    record: Mapping[str, Any],
+    evidence_ids: Sequence[str],
+    step_id: str,
+    run_dir: Path,
+    records: Mapping[str, Dict[str, Any]],
+) -> Optional[str]:
+    """Validate the script-free, host-owned deterministic probe checkpoint."""
+
+    if record.get("step_authority_kind") != _HOST_PROBE_AUTHORITY_KIND:
+        return "successful host probe checkpoint lacks migrated probe authority"
+    listed = set(evidence_ids)
+    for field, (expected_kind, expected_source_name) in (
+        _HOST_PROBE_AUTHORITIES.items()
+    ):
+        evidence_id = str(record.get(field) or "").strip()
+        if not evidence_id:
+            return f"successful host probe checkpoint is missing required {field}"
+        if evidence_id not in listed:
+            return (
+                f"successful host probe {field} {evidence_id} is absent from "
+                "evidence_ids"
+            )
+        authority = records.get(evidence_id)
+        if not isinstance(authority, Mapping):
+            return f"successful host probe {field} references missing {evidence_id}"
+        if str(authority.get("produced_by_step") or "").strip() != step_id:
+            return f"successful host probe {field} is not owned by step {step_id}"
+        if str(authority.get("kind") or "").strip().lower() != expected_kind:
+            return (
+                f"successful host probe {field} has wrong evidence kind; "
+                f"expected {expected_kind}"
+            )
+        if (
+            str(authority.get("producer") or "").strip().lower() != "pipeline"
+            or str(authority.get("generation_mode") or "").strip().lower()
+            != "deterministic_probe"
+        ):
+            return f"successful host probe {field} is not host-owned probe evidence"
+        if _registered_source_name(authority) != expected_source_name:
+            return (
+                f"successful host probe {field} does not name "
+                f"{expected_source_name}"
+            )
+        error = _evidence_closure_error(
+            evidence_id=evidence_id,
+            step_id=step_id,
+            run_dir=run_dir,
+            records=records,
+            visited=set(),
+        )
+        if error is not None:
+            return error
+    return None
+
+
+def _host_cohort_materializer_authority_error(
+    *,
+    record: Mapping[str, Any],
+    evidence_ids: Sequence[str],
+    step_id: str,
+    run_dir: Path,
+    records: Mapping[str, Dict[str, Any]],
+) -> Optional[str]:
+    """Validate the single-product, script-free cohort materializer.
+
+    This is deliberately a separate closed contract from the probe and from
+    ordinary deterministic records.  The host only owns the mechanical
+    materialization of the Agent-selected cohort; the exact registered table
+    remains the sole authority for that planned producer step.
+    """
+
+    prefix = "successful host cohort materializer"
+    if (
+        str(record.get("generation_mode") or "").strip().lower()
+        != _HOST_COHORT_MATERIALIZER_GENERATION_MODE
+        or record.get("step_authority_kind")
+        != _HOST_COHORT_MATERIALIZER_AUTHORITY_KIND
+    ):
+        return f"{prefix} checkpoint lacks migrated cohort authority"
+
+    evidence_id = str(
+        record.get(_HOST_COHORT_MATERIALIZER_AUTHORITY_FIELD) or ""
+    ).strip()
+    if evidence_id != _HOST_COHORT_MATERIALIZER_EVIDENCE_ID:
+        return (
+            f"{prefix} checkpoint is missing exact "
+            f"{_HOST_COHORT_MATERIALIZER_AUTHORITY_FIELD}"
+        )
+    listed = [str(value).strip() for value in evidence_ids if str(value).strip()]
+    if listed != [evidence_id]:
+        return f"{prefix} checkpoint must list only its cohort table authority"
+
+    step_summary = record.get("step_summary")
+    if not isinstance(step_summary, Mapping):
+        return f"{prefix} checkpoint lacks its inline product receipt"
+    output_files = step_summary.get("output_files")
+    if not isinstance(output_files, Mapping) or dict(output_files) != {
+        "table:analysis_cohort": _HOST_COHORT_MATERIALIZER_SOURCE_NAME
+    }:
+        return f"{prefix} checkpoint does not declare the analysis cohort product"
+    n_universe = step_summary.get("n_universe")
+    n_cohort = step_summary.get("n_analysis_cohort")
+    if (
+        not isinstance(n_universe, int)
+        or isinstance(n_universe, bool)
+        or not isinstance(n_cohort, int)
+        or isinstance(n_cohort, bool)
+        or n_universe < 0
+        or n_cohort < 0
+        or n_cohort > n_universe
+    ):
+        return f"{prefix} checkpoint has invalid cohort accounting"
+
+    authority = records.get(evidence_id)
+    if not isinstance(authority, Mapping):
+        return f"{prefix} checkpoint references missing {evidence_id}"
+    if str(authority.get("evidence_id") or "").strip() != evidence_id:
+        return f"{prefix} authority has a mismatched evidence identity"
+    if str(authority.get("produced_by_step") or "").strip() != step_id:
+        return f"{prefix} authority is not owned by step {step_id}"
+    if str(authority.get("kind") or "").strip().lower() != "table":
+        return f"{prefix} authority is not a table"
+    if (
+        str(authority.get("producer") or "").strip().lower() != "cohort_repair"
+        or str(authority.get("generation_mode") or "").strip().lower() != "llm"
+    ):
+        return f"{prefix} authority is not the host cohort-repair product"
+    if _registered_source_name(authority) != _HOST_COHORT_MATERIALIZER_SOURCE_NAME:
+        return f"{prefix} authority does not name the canonical cohort product"
+    if str(authority.get("script_evidence_id") or "").strip() or list(
+        authority.get("inputs") or []
+    ):
+        return f"{prefix} authority has an unexpected executable dependency"
+    metadata = authority.get("metadata")
+    if not isinstance(metadata, Mapping) or not str(
+        metadata.get("reason") or ""
+    ).strip():
+        return f"{prefix} authority lacks its materialization reason"
+
+    closure_error = _evidence_closure_error(
+        evidence_id=evidence_id,
+        step_id=step_id,
+        run_dir=run_dir,
+        records=records,
+        visited=set(),
+    )
+    if closure_error is not None:
+        return closure_error
+
+    canonical_path = run_dir / _HOST_COHORT_MATERIALIZER_SOURCE_NAME
+    try:
+        resolved_root = run_dir.resolve(strict=True)
+        if canonical_path.is_symlink() or not canonical_path.is_file():
+            return f"{prefix} canonical cohort is missing or not a regular file"
+        resolved_canonical = canonical_path.resolve(strict=True)
+        resolved_canonical.relative_to(resolved_root)
+        expected_digest = str(authority.get("sha256") or "").strip().lower()
+        if sha256_of_file(resolved_canonical).lower() != expected_digest:
+            return f"{prefix} canonical cohort differs from sealed evidence"
+        try:
+            import pyarrow.parquet as pq  # type: ignore
+
+            actual_rows = int(pq.ParquetFile(resolved_canonical).metadata.num_rows)
+        except ImportError:
+            actual_rows = int(len(pd.read_parquet(resolved_canonical)))
+    except (FileNotFoundError, OSError, ValueError):
+        return f"{prefix} canonical cohort failed path verification"
+    except Exception as exc:
+        return (
+            f"{prefix} canonical cohort row count is unreadable: "
+            f"{type(exc).__name__}"
+        )
+    if actual_rows != n_cohort:
+        return (
+            f"{prefix} canonical cohort row count {actual_rows} does not match "
+            f"checkpoint {n_cohort}"
+        )
+    return None
+
+
+def _migrated_legacy_step_authority(
+    *,
+    record: Mapping[str, Any],
+    run_dir: Path,
+    records: Mapping[str, Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Return one proven legacy-authority checkpoint, never a guessed one.
+
+    Historical executable checkpoints already listed the exact code evidence,
+    and their explicit summary evidence named that code in
+    ``script_evidence_id``.  The outer checkpoint merely lacked the duplicated
+    convenience field.  Migrate only that closed chain.  The deterministic
+    probe and cohort materializer are script-free and therefore use their own
+    exact product contracts.
+    """
+
+    if str(record.get("status") or "").strip().lower() != "ok":
+        return None
+    step_id = str(record.get("step_id") or "").strip()
+    evidence_ids = [
+        str(value).strip()
+        for value in (record.get("evidence_ids") or [])
+        if str(value).strip()
+    ]
+    if not step_id or not evidence_ids:
+        return None
+
+    if step_id == _HOST_PROBE_STEP_ID:
+        if record.get("step_authority_kind") == _HOST_PROBE_AUTHORITY_KIND:
+            return None
+        migrated_fields: Dict[str, str] = {}
+        for field, (expected_kind, expected_source_name) in (
+            _HOST_PROBE_AUTHORITIES.items()
+        ):
+            candidates: list[str] = []
+            for evidence_id in evidence_ids:
+                authority = records.get(evidence_id)
+                if not isinstance(authority, Mapping):
+                    continue
+                if (
+                    str(authority.get("produced_by_step") or "").strip()
+                    != step_id
+                    or str(authority.get("kind") or "").strip().lower()
+                    != expected_kind
+                    or str(authority.get("producer") or "").strip().lower()
+                    != "pipeline"
+                    or str(authority.get("generation_mode") or "").strip().lower()
+                    != "deterministic_probe"
+                    or _registered_source_name(authority) != expected_source_name
+                ):
+                    continue
+                if (
+                    _evidence_closure_error(
+                        evidence_id=evidence_id,
+                        step_id=step_id,
+                        run_dir=run_dir,
+                        records=records,
+                        visited=set(),
+                    )
+                    is None
+                ):
+                    candidates.append(evidence_id)
+            if len(candidates) != 1:
+                return None
+            migrated_fields[field] = candidates[0]
+        migrated = dict(record)
+        migrated.update(migrated_fields)
+        migrated.update(
+            {
+                "step_authority_kind": _HOST_PROBE_AUTHORITY_KIND,
+                "resume_authority_migration_schema_version": (
+                    _RESUME_AUTHORITY_MIGRATION_SCHEMA_VERSION
+                ),
+                "resume_authority_migrated_fields": sorted(migrated_fields),
+            }
+        )
+        return migrated
+
+    if (
+        str(record.get("generation_mode") or "").strip().lower()
+        == _HOST_COHORT_MATERIALIZER_GENERATION_MODE
+    ):
+        if (
+            record.get("step_authority_kind")
+            == _HOST_COHORT_MATERIALIZER_AUTHORITY_KIND
+        ):
+            return None
+        migrated = dict(record)
+        migrated.update(
+            {
+                "step_authority_kind": (
+                    _HOST_COHORT_MATERIALIZER_AUTHORITY_KIND
+                ),
+                _HOST_COHORT_MATERIALIZER_AUTHORITY_FIELD: (
+                    _HOST_COHORT_MATERIALIZER_EVIDENCE_ID
+                ),
+            }
+        )
+        if (
+            _host_cohort_materializer_authority_error(
+                record=migrated,
+                evidence_ids=evidence_ids,
+                step_id=step_id,
+                run_dir=run_dir,
+                records=records,
+            )
+            is not None
+        ):
+            return None
+        migrated.update(
+            {
+                "resume_authority_migration_schema_version": (
+                    _RESUME_AUTHORITY_MIGRATION_SCHEMA_VERSION
+                ),
+                "resume_authority_migrated_fields": [
+                    _HOST_COHORT_MATERIALIZER_AUTHORITY_FIELD
+                ],
+            }
+        )
+        return migrated
+
+    if str(record.get("script_evidence_id") or "").strip():
+        return None
+    summary_id = str(record.get("step_summary_evidence_id") or "").strip()
+    if not summary_id or summary_id not in evidence_ids:
+        return None
+    summary = records.get(summary_id)
+    if not isinstance(summary, Mapping):
+        return None
+    if (
+        str(summary.get("produced_by_step") or "").strip() != step_id
+        or str(summary.get("kind") or "").strip().lower() != "statistic"
+        or _evidence_closure_error(
+            evidence_id=summary_id,
+            step_id=step_id,
+            run_dir=run_dir,
+            records=records,
+            visited=set(),
+        )
+        is not None
+    ):
+        return None
+    script_id = str(summary.get("script_evidence_id") or "").strip()
+    if not script_id or script_id not in evidence_ids:
+        return None
+    active_same_step_codes = [
+        evidence_id
+        for evidence_id in evidence_ids
+        if isinstance((authority := records.get(evidence_id)), Mapping)
+        and str(authority.get("produced_by_step") or "").strip() == step_id
+        and str(authority.get("kind") or "").strip().lower() == "code"
+        and _evidence_closure_error(
+            evidence_id=evidence_id,
+            step_id=step_id,
+            run_dir=run_dir,
+            records=records,
+            visited=set(),
+        )
+        is None
+    ]
+    if active_same_step_codes != [script_id]:
+        return None
+    migrated = dict(record)
+    migrated.update(
+        {
+            "script_evidence_id": script_id,
+            "resume_authority_migration_schema_version": (
+                _RESUME_AUTHORITY_MIGRATION_SCHEMA_VERSION
+            ),
+            "resume_authority_migrated_fields": ["script_evidence_id"],
+        }
+    )
+    return migrated
+
+
+def _interpretation_authority_is_applicable(
+    *,
+    record: Mapping[str, Any],
+    step_id: str,
+    records: Mapping[str, Dict[str, Any]],
+) -> bool:
+    """Return whether this checkpoint completed an Analyzer interpretation.
+
+    Current executor checkpoints name the interpretation explicitly.  Looking
+    for the immutable analyzer-owned evidence as well prevents a mutable
+    checkpoint from evading the requirement by deleting only that field.
+    Legacy/system steps that never created analyzer evidence remain eligible
+    for the two mandatory execution authorities below.
+    """
+
+    if "interpretation_evidence_id" in record:
+        return True
+    return any(
+        str(candidate.get("produced_by_step") or "").strip() == step_id
+        and str(candidate.get("producer") or "").strip().lower() == "analyzer"
+        for candidate in records.values()
+        if isinstance(candidate, Mapping)
+    )
+
+
+def _explicit_step_authority_error(
+    *,
+    record: Mapping[str, Any],
+    evidence_ids: Sequence[str],
+    step_id: str,
+    run_dir: Path,
+    records: Mapping[str, Dict[str, Any]],
+) -> Optional[str]:
+    """Require host-owned step authorities, not an arbitrary evidence blob.
+
+    A successful executable step always has a machine-readable summary and the
+    exact script that produced it.  Analyzer interpretation is additionally
+    required when that stage ran.  Merely listing some digest-valid run-level
+    evidence cannot substitute for those role-specific authorities.
+    """
+
+    if step_id == _HOST_PROBE_STEP_ID:
+        return _host_probe_authority_error(
+            record=record,
+            evidence_ids=evidence_ids,
+            step_id=step_id,
+            run_dir=run_dir,
+            records=records,
+        )
+
+    if (
+        str(record.get("generation_mode") or "").strip().lower()
+        == _HOST_COHORT_MATERIALIZER_GENERATION_MODE
+    ):
+        return _host_cohort_materializer_authority_error(
+            record=record,
+            evidence_ids=evidence_ids,
+            step_id=step_id,
+            run_dir=run_dir,
+            records=records,
+        )
+
+    listed = set(evidence_ids)
+    required_fields = set(_REQUIRED_STEP_AUTHORITY_KINDS)
+    if _interpretation_authority_is_applicable(
+        record=record,
+        step_id=step_id,
+        records=records,
+    ):
+        required_fields.add("interpretation_evidence_id")
+
+    for field in _STEP_AUTHORITY_EXPECTED_KINDS:
+        if field not in required_fields and field not in record:
+            continue
+        raw_value = record.get(field)
+        if not isinstance(raw_value, str) or not raw_value.strip():
+            return f"successful checkpoint is missing required {field}"
+        evidence_id = raw_value.strip()
+        if evidence_id not in listed:
+            return (
+                f"successful checkpoint {field} {evidence_id} is absent from "
+                "evidence_ids"
+            )
+        authority = records.get(evidence_id)
+        if authority is None:
+            return f"successful checkpoint {field} references missing {evidence_id}"
+        owner = str(authority.get("produced_by_step") or "").strip()
+        if owner != step_id:
+            return (
+                f"successful checkpoint {field} {evidence_id} is not owned by "
+                f"step {step_id}"
+            )
+        expected_kind = _STEP_AUTHORITY_EXPECTED_KINDS[field]
+        actual_kind = str(authority.get("kind") or "").strip().lower()
+        if actual_kind != expected_kind:
+            return (
+                f"successful checkpoint {field} {evidence_id} has kind "
+                f"{actual_kind or '<missing>'}, expected {expected_kind}"
+            )
+    return None
+
+
+def _external_evidence_dependencies(
+    *,
+    record: Mapping[str, Any],
+    step_id: str,
+    records: Mapping[str, Dict[str, Any]],
+) -> Dict[str, str]:
+    """Map upstream producer steps to evidence consumed by ``step_id``.
+
+    Output records carry digest-bound ``inputs`` while the checkpoint also
+    stores host-resolved typed inputs.  Inspect both and walk their closures so
+    invalidation propagates even when the downstream bytes themselves remain
+    intact.
+    """
+
+    roots = [
+        str(value).strip()
+        for value in (
+            list(record.get("evidence_ids") or [])
+            + list(record.get("resolved_input_evidence_ids") or [])
+        )
+        if str(value).strip()
+    ]
+    dependencies: Dict[str, str] = {}
+    visited: set[str] = set()
+    pending = list(dict.fromkeys(roots))
+    while pending:
+        evidence_id = pending.pop()
+        if evidence_id in visited:
+            continue
+        visited.add(evidence_id)
+        evidence_record = records.get(evidence_id)
+        if not isinstance(evidence_record, Mapping):
+            continue
+        producer = str(evidence_record.get("produced_by_step") or "").strip()
+        if producer and producer != step_id:
+            dependencies.setdefault(producer, evidence_id)
+            # This is the immediate authority edge. Its own upstream closure
+            # belongs to that producer and will be propagated in the next
+            # fixed-point iteration, preserving the actual A -> B -> C chain.
+            continue
+        nested = [
+            str(value).strip()
+            for value in (evidence_record.get("inputs") or [])
+            if str(value).strip()
+        ]
+        script_id = str(evidence_record.get("script_evidence_id") or "").strip()
+        if script_id:
+            nested.append(script_id)
+        pending.extend(nested)
+    return dependencies
+
+
 def invalidate_unverified_successful_steps(
     *,
     run_dir: Path,
@@ -799,10 +1357,26 @@ def invalidate_unverified_successful_steps(
         for record in (resume_state.get("per_step_records") or [])
         if isinstance(record, Mapping)
     ]
+    # Current checkpoints written before the explicit authority fields were
+    # introduced may still carry a complete, digest-bound authority chain.
+    # Append a migration checkpoint only when that chain proves the missing
+    # field exactly; the historical record remains immutable in the ledger.
+    for record in list(current_step_records(history)):
+        migrated = _migrated_legacy_step_authority(
+            record=record,
+            run_dir=run_dir,
+            records=records,
+        )
+        if migrated is not None:
+            history.append(migrated)
+    current_records = list(current_step_records(history))
+    successful_records = [
+        record
+        for record in current_records
+        if str(record.get("status") or "").strip().lower() == "ok"
+    ]
     invalidated: Dict[str, str] = {}
-    for record in current_step_records(history):
-        if str(record.get("status") or "").strip().lower() != "ok":
-            continue
+    for record in successful_records:
         step_id = str(record.get("step_id") or "").strip()
         evidence_ids = [
             str(value)
@@ -813,19 +1387,79 @@ def invalidate_unverified_successful_steps(
         if not evidence_ids:
             error = "successful checkpoint has no evidence_ids"
         else:
-            for evidence_id in evidence_ids:
-                error = _evidence_closure_error(
-                    evidence_id=evidence_id,
-                    step_id=step_id,
-                    run_dir=run_dir,
-                    records=records,
-                    visited=set(),
-                )
-                if error is not None:
-                    break
+            error = _explicit_step_authority_error(
+                record=record,
+                evidence_ids=evidence_ids,
+                step_id=step_id,
+                run_dir=run_dir,
+                records=records,
+            )
+            if error is None:
+                for evidence_id in evidence_ids:
+                    error = _evidence_closure_error(
+                        evidence_id=evidence_id,
+                        step_id=step_id,
+                        run_dir=run_dir,
+                        records=records,
+                        visited=set(),
+                    )
+                    if error is not None:
+                        break
         if error is None:
             continue
         invalidated[step_id] = error
+
+    # A digest-valid downstream file is not current authority when the step
+    # that supplied one of its inputs has just been invalidated.  Iterate to a
+    # fixed point so A -> B -> C invalidates both B and C in the same resume
+    # preparation pass, even when only A's checkpoint metadata was damaged.
+    previously_invalid = {
+        str(record.get("step_id") or "").strip()
+        for record in current_records
+        if str(record.get("status") or "").strip().lower()
+        == "resume_evidence_invalid"
+        and str(record.get("step_id") or "").strip()
+    }
+    dependency_map = {
+        str(record.get("step_id") or "").strip(): _external_evidence_dependencies(
+            record=record,
+            step_id=str(record.get("step_id") or "").strip(),
+            records=records,
+        )
+        for record in successful_records
+    }
+    while True:
+        changed = False
+        unavailable_steps = previously_invalid | set(invalidated)
+        for record in successful_records:
+            step_id = str(record.get("step_id") or "").strip()
+            if step_id in invalidated:
+                continue
+            dependencies = dependency_map.get(step_id, {})
+            invalid_dependency = next(
+                (
+                    (producer_step, evidence_id)
+                    for producer_step, evidence_id in dependencies.items()
+                    if producer_step in unavailable_steps
+                ),
+                None,
+            )
+            if invalid_dependency is None:
+                continue
+            producer_step, evidence_id = invalid_dependency
+            invalidated[step_id] = (
+                "successful checkpoint depends on invalidated step "
+                f"{producer_step} via evidence {evidence_id}"
+            )
+            changed = True
+        if not changed:
+            break
+
+    for record in successful_records:
+        step_id = str(record.get("step_id") or "").strip()
+        error = invalidated.get(step_id)
+        if error is None:
+            continue
         history.append(
             {
                 "step_id": step_id,

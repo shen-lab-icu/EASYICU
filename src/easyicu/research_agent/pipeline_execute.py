@@ -39,6 +39,7 @@ import stat
 import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -85,7 +86,9 @@ from .audits.validators import (
     StepSummaryFractionValidator,
     _downgrade_finalized_exposure_reconciliation_findings,
     _downgrade_metadata_supported_outcome_findings,
+    _verified_authoritative_exposure_flow,
 )
+from .audits.patterns import AnalysisPatternAuditor
 from .audits.step_summary_integrity import StepSummaryIntegrityValidator
 from .code_repair import (
     _deterministic_runner_repair,
@@ -98,6 +101,7 @@ from .code_preflight import audit_mechanical_code_contracts
 from .concept_audit_cache import LLMConceptAuditCache
 from .cohort_repair import extract_cohort_definition_from_prose
 from .cohort_schema import (
+    CohortDefinition,
     assert_cohort_definition_locked,
     materialize_locked_analysis_cohort,
     write_locked_cohort_definition,
@@ -203,6 +207,27 @@ from .repair_registry import (
     is_sealed_renderer_repair,
     repair_metadata_for,
 )
+from .provider_budget import (
+    ProviderCallBudgetError,
+    ProviderCallBudgetReceiptError,
+    StepProviderCallBudget,
+    complete_with_provider_budget,
+    load_provider_call_budget_receipt,
+    provider_call_budget_receipt_path,
+)
+from .run_input_capsule import (
+    RunInputIdentityError,
+    _HOST_COHORT_MATERIALIZER_AUTHORITY_FIELD,
+    _HOST_COHORT_MATERIALIZER_AUTHORITY_KIND,
+    _HOST_COHORT_MATERIALIZER_GENERATION_MODE,
+    _HOST_PROBE_AUTHORITIES,
+    _HOST_PROBE_AUTHORITY_KIND,
+    _host_cohort_materializer_authority_error,
+    _host_probe_authority_error,
+    build_environment_identity,
+    canonical_sha256,
+    engine_code_sha256,
+)
 from .runtime_artifacts import (
     current_step_records,
     current_successful_step_records,
@@ -228,6 +253,201 @@ _STANDARD_EXECUTOR_INTERNAL_PENDING_ARTIFACTS = frozenset(
     {".cluster_stability_assignments.pending.csv"}
 )
 _FIGURE_CONTRACT_SOURCE_DATA_SCHEMA_REPAIR_ID = "figure_contract_source_data_schema_v1"
+_DETERMINISTIC_GATE_SCHEMA_VERSION = "easyicu.deterministic_step_gate/1"
+_COHORT_TRANSLATION_PROVIDER_CATEGORY = "cohort_definition_translation"
+_HOST_COHORT_TRANSLATION_BUDGET_STEP_ID = "host_cohort_definition_translation"
+
+
+def _declares_host_cohort_only_product(step: AnalysisStep) -> bool:
+    declared = {
+        str(value or "").strip().casefold()
+        for value in (step.expected_outputs or [])
+        if str(value or "").strip()
+    }
+    return declared == {"table:analysis_cohort"}
+
+
+def _cohort_translation_budget_owner_step_id(plan: AnalysisPlan) -> str:
+    """Return one stable budget owner without making a cohort decision.
+
+    A single cohort-only product step is the natural owner because successful
+    host materialisation completes exactly that planned step.  Ambiguous or
+    mixed-product plans use a host pseudo-step instead of charging an arbitrary
+    analysis step.  This helper only assigns provider-call accounting; the
+    Planner's prose remains the sole source of inclusion/exclusion criteria.
+    """
+
+    cohort_only_step_ids = [
+        str(step.step_id)
+        for step in plan.steps
+        if _declares_host_cohort_only_product(step)
+    ]
+    if len(cohort_only_step_ids) == 1:
+        return cohort_only_step_ids[0]
+    return _HOST_COHORT_TRANSLATION_BUDGET_STEP_ID
+
+
+def _extract_cohort_definition_with_provider_budget(
+    *,
+    run_dir: Path,
+    budget_owner_step_id: str,
+    configured_limit: int,
+    cohort_prose: str,
+    universe_columns: Sequence[str],
+    llm: Any,
+    name: str,
+) -> Tuple[Optional[CohortDefinition], Dict[str, Any]]:
+    """Run cohort-prose translation under a crash-safe provider receipt.
+
+    This call happens before ``_execute_one_step`` creates its ordinary
+    per-step budget.  Reusing the same receipt namespace makes a cohort-only
+    planned step inherit this paid call if translation fails and the Coder must
+    later execute it.  Transport retries are charged by the active provider
+    scope just like coder/auditor retries.
+    """
+
+    receipt_path = provider_call_budget_receipt_path(
+        run_dir,
+        step_id=budget_owner_step_id,
+    )
+    effective_limit = max(0, int(configured_limit))
+    consumed_categories: Tuple[str, ...] = ()
+    if receipt_path.exists():
+        receipt_limit, consumed_categories = load_provider_call_budget_receipt(
+            receipt_path,
+            step_id=budget_owner_step_id,
+        )
+        effective_limit = min(effective_limit, receipt_limit)
+    budget = StepProviderCallBudget(
+        effective_limit,
+        step_id=budget_owner_step_id,
+        consumed_categories=consumed_categories,
+        receipt_path=receipt_path,
+    )
+    definition = complete_with_provider_budget(
+        budget=budget,
+        category=_COHORT_TRANSLATION_PROVIDER_CATEGORY,
+        call=lambda: extract_cohort_definition_from_prose(
+            cohort_prose=cohort_prose,
+            universe_columns=universe_columns,
+            llm=llm,
+            name=name,
+        ),
+    )
+    snapshot = budget.snapshot()
+    return definition, {
+        "budget_owner_step_id": budget_owner_step_id,
+        "step_provider_call_budget_scope": _COHORT_TRANSLATION_PROVIDER_CATEGORY,
+        "step_provider_call_budget": snapshot["limit"],
+        "step_provider_call_attempts": snapshot["used"],
+        "step_provider_call_remaining": snapshot["remaining"],
+        "step_provider_call_budget_exhausted": snapshot["exhausted"],
+        "step_provider_call_categories": snapshot["categories"],
+        "step_provider_call_receipt_version": 1,
+        "step_provider_call_receipt": str(receipt_path.relative_to(run_dir)),
+    }
+
+
+def _deterministic_gate_stamp() -> Dict[str, str]:
+    """Return the current host-owned deterministic gate identity.
+
+    The full engine digest is intentionally included.  This safely
+    over-invalidates when unrelated engine code changes, but never reuses a
+    success reviewed under an older deterministic implementation.
+    """
+
+    engine_digest = engine_code_sha256()
+    fingerprint = canonical_sha256(
+        {
+            "schema_version": _DETERMINISTIC_GATE_SCHEMA_VERSION,
+            "engine_code_sha256": engine_digest,
+        }
+    )
+    return {
+        "deterministic_gate_schema_version": _DETERMINISTIC_GATE_SCHEMA_VERSION,
+        "deterministic_gate_engine_code_sha256": engine_digest,
+        "deterministic_gate_fingerprint": fingerprint,
+    }
+
+
+def _deterministic_code_gate_findings(
+    *,
+    context: ResearchContext,
+    step: AnalysisStep,
+    script_text: str,
+    usage_auditor: Optional[ConceptUsageAuditor] = None,
+    pattern_auditor: Optional[AnalysisPatternAuditor] = None,
+) -> List[ValidationFinding]:
+    """Run the shared deterministic pre-execution code gate.
+
+    Fresh execution may add the optional LLM concept audit after this prefix.
+    Resume drift replay deliberately stops here: it rechecks deterministic
+    semantics and mechanics without invoking an LLM or mutating the script.
+    """
+
+    usage = usage_auditor if usage_auditor is not None else ConceptUsageAuditor()
+    patterns = (
+        pattern_auditor if pattern_auditor is not None else AnalysisPatternAuditor()
+    )
+    findings = usage.audit(
+        context=context,
+        script_text=script_text,
+        step=step,
+    )
+    findings.extend(
+        patterns.audit(
+            context=context,
+            script_text=script_text,
+            step=step,
+        )
+    )
+    compatibility_violations = detect_forbidden_pattern_usage(
+        script_text,
+        context,
+        step,
+    )
+    if compatibility_violations:
+        findings.append(
+            ValidationFinding(
+                validator="method_compatibility",
+                severity="error",
+                message=format_violation_message(compatibility_violations),
+                detail={
+                    "step_id": step.step_id,
+                    "violations": compatibility_violations,
+                },
+            )
+        )
+    findings.extend(audit_mechanical_code_contracts(script_text, step))
+    requires_primary_exposure_artifact = any(
+        str(value).strip().casefold() == "artifact:primary_exposure_definition"
+        for value in step.inputs or []
+    )
+    if (
+        requires_primary_exposure_artifact
+        and str(context.primary_exposure or "").strip()
+        and not _verified_authoritative_exposure_flow(
+            script_text,
+            primary_exposure=str(context.primary_exposure),
+        )
+    ):
+        findings.append(
+            ValidationFinding(
+                validator="typed_input_authority_flow",
+                severity="error",
+                message=(
+                    f"Step {step.step_id} does not prove that the exact host-bound "
+                    "primary exposure reaches its result-bearing model or figure "
+                    "after finite/domain validation."
+                ),
+                detail={
+                    "step_id": step.step_id,
+                    "input_key": "artifact:primary_exposure_definition",
+                    "issue": "typed_primary_exposure_not_consumed",
+                },
+            )
+        )
+    return findings
 
 
 def _merge_monotonic_concept_constraints(
@@ -272,6 +492,48 @@ def _persisted_monotonic_concept_constraints(
             continue
         parsed = _merge_monotonic_concept_constraints(parsed, [finding])
     return parsed
+
+
+def _monotonic_step_llm_repair_history(
+    records: Sequence[Mapping[str, Any]],
+    *,
+    limit: int,
+) -> tuple[int, List[str], bool]:
+    """Recover the largest durable logical-repair counter for one step.
+
+    Step records are append-only attempts.  The latest attempt may terminate
+    before copying the logical counter (for example, on a damaged provider
+    receipt), so latest-record-only recovery can incorrectly buy a fresh
+    repair budget.  A malformed explicit counter is treated conservatively as
+    exhausted instead of being ignored.
+    """
+
+    attempts = 0
+    classes: List[str] = []
+    invalid_snapshot = False
+    for record in records:
+        if "step_llm_repair_attempts" in record:
+            raw_attempts = record.get("step_llm_repair_attempts")
+            if (
+                isinstance(raw_attempts, bool)
+                or not isinstance(raw_attempts, int)
+                or raw_attempts < 0
+            ):
+                invalid_snapshot = True
+            else:
+                attempts = max(attempts, raw_attempts)
+        raw_classes = record.get("step_llm_repair_classes")
+        if not isinstance(raw_classes, list):
+            continue
+        normalized = [str(item).strip() for item in raw_classes]
+        if any(not item for item in normalized):
+            invalid_snapshot = True
+            continue
+        if len(normalized) > len(classes):
+            classes = normalized
+    if invalid_snapshot:
+        attempts = max(attempts, max(0, int(limit)))
+    return attempts, classes, invalid_snapshot
 
 
 def _remove_standard_executor_pending_artifacts(out_dir: Path) -> None:
@@ -1071,6 +1333,7 @@ def _resolved_typed_input_binding(
     evidence_records: Sequence[Any],
     run_dir: Path,
     producer_step_records: Sequence[Mapping[str, Any]] = (),
+    authoritative_cohort_path: Optional[Path] = None,
 ) -> Optional[Dict[str, Any]]:
     """Build the exact, digest-verified runtime binding for one typed input."""
 
@@ -1127,6 +1390,7 @@ def _resolved_typed_input_binding(
             product_name=product_name,
             step_summary=step_summary,
             artifact_path=verified_path,
+            authoritative_cohort_path=authoritative_cohort_path,
         )
         if product_contract is not None:
             producer_contract = dict(product_contract)
@@ -2689,6 +2953,147 @@ def scope_findings_to_records(
     return scoped
 
 
+def _filter_success_alias_bindings(
+    bindings: Mapping[str, Sequence[str]],
+    *,
+    existing_aliases: Mapping[str, str],
+    owners_by_evidence_id: Mapping[str, str],
+    step_id: str,
+    records_by_evidence_id: Optional[Mapping[str, Any]] = None,
+) -> Tuple[Dict[str, List[str]], Dict[str, str], Set[str]]:
+    """Keep cross-step product aliases on their existing authority.
+
+    A figure step may legitimately repeat a parent analysis role such as
+    ``primary_association``. Same-step retries may replace their own aliases,
+    but a child must not steal the parent's semantic authority merely because
+    both products mention that role.
+    """
+
+    filtered: Dict[str, List[str]] = {}
+    retained: Dict[str, str] = {}
+    for evidence_id, aliases in bindings.items():
+        accepted: List[str] = []
+        for alias in aliases:
+            alias = str(alias).strip()
+            if not alias:
+                continue
+            existing_id = str(existing_aliases.get(alias) or "").strip()
+            existing_owner = str(
+                owners_by_evidence_id.get(existing_id) or ""
+            ).strip()
+            if (
+                existing_id
+                and existing_id != evidence_id
+                and existing_owner != step_id
+            ):
+                retained[alias] = existing_id
+                continue
+            accepted.append(alias)
+        filtered[str(evidence_id)] = list(dict.fromkeys(accepted))
+    records = records_by_evidence_id or {}
+
+    def _record_source_name(evidence_id: str) -> str:
+        record = records.get(evidence_id)
+        relative_path = str(_evidence_record_field(record, "relative_path") or "")
+        name = Path(relative_path).name
+        prefix = f"{evidence_id}__"
+        return name[len(prefix) :] if name.startswith(prefix) else name
+
+    def _is_product_authority(evidence_id: str) -> bool:
+        record = records.get(evidence_id)
+        kind = str(_evidence_record_field(record, "kind") or "").lower()
+        source_name = _record_source_name(evidence_id)
+        if kind in {"table", "figure"}:
+            return True
+        return kind == "statistic" and source_name != "step_summary.json"
+
+    implicit_basename_aliases = {
+        evidence_id: Path(_record_source_name(evidence_id)).stem
+        for evidence_id in filtered
+        if _record_source_name(evidence_id)
+    }
+    alias_claimants: Dict[str, List[str]] = {}
+    for evidence_id, aliases in filtered.items():
+        for alias in aliases:
+            alias_claimants.setdefault(alias, []).append(evidence_id)
+        basename_alias = implicit_basename_aliases.get(evidence_id)
+        if basename_alias:
+            alias_claimants.setdefault(basename_alias, []).append(evidence_id)
+    suppressed_basename_evidence_ids: Set[str] = set()
+    for alias, claimants in alias_claimants.items():
+        unique_claimants = list(dict.fromkeys(claimants))
+        if len(unique_claimants) <= 1:
+            continue
+        product_claimants = [
+            evidence_id
+            for evidence_id in unique_claimants
+            if _is_product_authority(evidence_id)
+        ]
+        selected_product: Optional[str] = None
+        if len(product_claimants) == 1:
+            selected_product = product_claimants[0]
+        elif len(product_claimants) > 1:
+            product_sources = {
+                evidence_id: _record_source_name(evidence_id)
+                for evidence_id in product_claimants
+            }
+            figure_claimants = [
+                evidence_id
+                for evidence_id in product_claimants
+                if str(
+                    _evidence_record_field(records.get(evidence_id), "kind") or ""
+                ).lower()
+                == "figure"
+            ]
+            stems = {
+                Path(product_sources[evidence_id]).stem for evidence_id in figure_claimants
+            }
+            # PNG/SVG/PDF exports with one stem are formats of the same logical
+            # figure, not competing scientific products. Prefer the editable
+            # vector authority deterministically. Distinct real products keep
+            # their duplicate claims so EvidenceStore fails closed.
+            if len(figure_claimants) == len(product_claimants) and len(stems) == 1:
+                format_rank = {
+                    ".svg": 0,
+                    ".pdf": 1,
+                    ".png": 2,
+                    ".tiff": 3,
+                    ".tif": 3,
+                }
+                ranked = sorted(
+                    product_claimants,
+                    key=lambda evidence_id: (
+                        format_rank.get(
+                            Path(product_sources[evidence_id]).suffix.lower(), 99
+                        ),
+                        evidence_id,
+                    ),
+                )
+                best_rank = format_rank.get(
+                    Path(product_sources[ranked[0]]).suffix.lower(), 99
+                )
+                if sum(
+                    format_rank.get(
+                        Path(product_sources[evidence_id]).suffix.lower(), 99
+                    )
+                    == best_rank
+                    for evidence_id in ranked
+                ) == 1:
+                    selected_product = ranked[0]
+        if selected_product is None:
+            continue
+        for evidence_id in unique_claimants:
+            if evidence_id != selected_product:
+                filtered[evidence_id] = [
+                    candidate
+                    for candidate in filtered[evidence_id]
+                    if candidate != alias
+                ]
+                if implicit_basename_aliases.get(evidence_id) == alias:
+                    suppressed_basename_evidence_ids.add(evidence_id)
+    return filtered, retained, suppressed_basename_evidence_ids
+
+
 def _reader_label_from_stem(stem: str) -> str:
     words = [
         token for token in stem.replace("-", "_").replace(".", "_").split("_") if token
@@ -3773,6 +4178,1193 @@ def _demote_result_figure_shape_for_family_renderer(
     return demoted
 
 
+@dataclass(frozen=True)
+class _FinalDeterministicGateFindings:
+    """Attempt-bound finding groups produced by the final deterministic gate.
+
+    The immutable grouping keeps evaluation separate from orchestration: the
+    evaluator below reads sealed outputs and returns findings, while the caller
+    remains responsible for publishing them to the run manifest, evidence
+    metadata, and outer step status.  Resume revalidation can therefore reuse
+    the same evaluator without duplicating its gate composition.
+    """
+
+    stat_findings: Tuple[ValidationFinding, ...]
+    clinical_findings: Tuple[ValidationFinding, ...]
+    guard_findings: Tuple[ValidationFinding, ...]
+    contract_findings: Tuple[ValidationFinding, ...]
+    figure_source_findings: Tuple[ValidationFinding, ...]
+
+    def all_findings(self) -> Tuple[ValidationFinding, ...]:
+        """Return all groups in the historical manifest publication order."""
+
+        return (
+            *self.stat_findings,
+            *self.clinical_findings,
+            *self.guard_findings,
+            *self.contract_findings,
+            *self.figure_source_findings,
+        )
+
+
+@dataclass(frozen=True)
+class _ResumeDeterministicRevalidationResult:
+    """Append-only resume ledger after selective deterministic replay."""
+
+    resume_state: Dict[str, Any]
+    revalidated_step_ids: Tuple[str, ...]
+    invalidated_step_ids: Tuple[str, ...]
+
+
+def _verified_explicit_step_authority(
+    *,
+    record: Mapping[str, Any],
+    field: str,
+    expected_kind: str,
+    expected_source_name: Optional[str],
+    evidence_by_id: Mapping[str, Any],
+    run_dir: Path,
+) -> Tuple[Any, Path]:
+    """Resolve one exact checkpoint authority through owner/path/SHA checks."""
+
+    step_id = str(record.get("step_id") or "").strip()
+    evidence_id = str(record.get(field) or "").strip()
+    listed = {
+        str(value).strip()
+        for value in (record.get("evidence_ids") or [])
+        if str(value).strip()
+    }
+    if not evidence_id:
+        raise ValueError(f"successful checkpoint is missing required {field}")
+    if evidence_id not in listed:
+        raise ValueError(f"{field} {evidence_id} is absent from evidence_ids")
+    authority = evidence_by_id.get(evidence_id)
+    if authority is None:
+        raise ValueError(f"{field} references missing evidence {evidence_id}")
+    if str(_evidence_record_field(authority, "produced_by_step") or "") != step_id:
+        raise ValueError(f"{field} is not owned by step {step_id}")
+    actual_kind = str(_evidence_record_field(authority, "kind") or "").lower()
+    if actual_kind != expected_kind:
+        raise ValueError(
+            f"{field} has kind {actual_kind or '<missing>'}, expected {expected_kind}"
+        )
+    verified_path = verified_run_evidence_path(run_dir, authority)
+    if verified_path is None:
+        raise ValueError(f"{field} failed path/digest verification")
+    source_name = _registered_source_name(authority, verified_path)
+    if expected_source_name is not None and source_name != expected_source_name:
+        raise ValueError(f"{field} does not name {expected_source_name}")
+    return authority, verified_path
+
+
+def _verified_resume_step_summary(
+    *,
+    record: Mapping[str, Any],
+    evidence_by_id: Mapping[str, Any],
+    run_dir: Path,
+) -> Dict[str, Any]:
+    """Load a summary only from the record's explicit digest-bound evidence."""
+
+    field = (
+        "probe_summary_evidence_id"
+        if str(record.get("step_id") or "") == "00_probe"
+        else "step_summary_evidence_id"
+    )
+    _, summary_path = _verified_explicit_step_authority(
+        record=record,
+        field=field,
+        expected_kind="statistic",
+        expected_source_name=(
+            "probe_summary.json" if field == "probe_summary_evidence_id" else "step_summary.json"
+        ),
+        evidence_by_id=evidence_by_id,
+        run_dir=run_dir,
+    )
+    try:
+        payload = json.loads(summary_path.read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError) as exc:
+        raise ValueError(f"{field} is not readable JSON") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"{field} payload is not an object")
+    return payload
+
+
+def _verify_resume_step_script_lineage(
+    *,
+    record: Mapping[str, Any],
+    evidence_by_id: Mapping[str, Any],
+) -> None:
+    """Require every sealed non-code output to bind the reviewed script.
+
+    Owner and digest checks alone are insufficient: a mutable checkpoint could
+    list a second benign script from the same step and point
+    ``script_evidence_id`` at it while retaining outputs produced by the real
+    script.  Exact lineage closes that decoy-code path before preflight.
+    """
+
+    step_id = str(record.get("step_id") or "").strip()
+    script_evidence_id = str(record.get("script_evidence_id") or "").strip()
+    if not script_evidence_id:
+        raise ValueError("successful checkpoint is missing script_evidence_id")
+    for raw_id in record.get("evidence_ids") or []:
+        evidence_id = str(raw_id).strip()
+        authority = evidence_by_id.get(evidence_id)
+        if authority is None:
+            raise ValueError(f"listed evidence {evidence_id} is missing")
+        owner = str(_evidence_record_field(authority, "produced_by_step") or "")
+        if owner != step_id:
+            raise ValueError(
+                f"listed evidence {evidence_id} belongs to {owner or '<run-level>'}"
+            )
+        if evidence_id == script_evidence_id:
+            if str(_evidence_record_field(authority, "kind") or "").lower() != "code":
+                raise ValueError("script_evidence_id does not reference code evidence")
+            continue
+        bound_script_id = str(
+            _evidence_record_field(authority, "script_evidence_id") or ""
+        ).strip()
+        if bound_script_id != script_evidence_id:
+            raise ValueError(
+                f"listed evidence {evidence_id} is bound to script "
+                f"{bound_script_id or '<missing>'}, not {script_evidence_id}"
+            )
+
+
+def _trusted_resume_success_records(
+    *,
+    records: Sequence[Mapping[str, Any]],
+    evidence_by_id: Mapping[str, Any],
+    run_dir: Path,
+) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+    """Replace mutable checkpoint summaries with explicit evidence payloads."""
+
+    trusted: List[Dict[str, Any]] = []
+    errors: Dict[str, str] = {}
+    for record in records:
+        if str(record.get("status") or "").lower() != "ok":
+            continue
+        step_id = str(record.get("step_id") or "").strip()
+        if (
+            str(record.get("generation_mode") or "").strip().lower()
+            == _HOST_COHORT_MATERIALIZER_GENERATION_MODE
+            and record.get("step_authority_kind")
+            == _HOST_COHORT_MATERIALIZER_AUTHORITY_KIND
+        ):
+            copy = dict(record)
+            copy.pop("resolved_inputs", None)
+            copy.pop("resolved_input_bindings", None)
+            copy.pop("resolved_inputs_path", None)
+            trusted.append(copy)
+            continue
+        try:
+            summary = _verified_resume_step_summary(
+                record=record,
+                evidence_by_id=evidence_by_id,
+                run_dir=run_dir,
+            )
+        except ValueError as exc:
+            errors[step_id] = str(exc)
+            continue
+        copy = dict(record)
+        copy["step_summary"] = summary
+        # These mutable convenience receipts are never replay authority.
+        copy.pop("resolved_inputs", None)
+        copy.pop("resolved_input_bindings", None)
+        copy.pop("resolved_inputs_path", None)
+        trusted.append(copy)
+    return trusted, errors
+
+
+def _materialize_verified_step_output_view(
+    *,
+    record: Mapping[str, Any],
+    evidence_by_id: Mapping[str, Any],
+    run_dir: Path,
+    destination: Path,
+) -> None:
+    """Copy only listed, verified same-step evidence under source filenames."""
+
+    step_id = str(record.get("step_id") or "").strip()
+    listed = [
+        str(value).strip()
+        for value in (record.get("evidence_ids") or [])
+        if str(value).strip()
+    ]
+    if not listed:
+        raise ValueError("successful checkpoint has no evidence_ids")
+    destination.mkdir(parents=True, exist_ok=False)
+    copied: Dict[str, str] = {}
+    for evidence_id in listed:
+        authority = evidence_by_id.get(evidence_id)
+        if authority is None:
+            raise ValueError(f"listed evidence {evidence_id} is missing")
+        owner = str(_evidence_record_field(authority, "produced_by_step") or "")
+        if owner != step_id:
+            raise ValueError(
+                f"listed evidence {evidence_id} belongs to {owner or '<run-level>'}"
+            )
+        verified_path = verified_run_evidence_path(run_dir, authority)
+        if verified_path is None:
+            raise ValueError(f"listed evidence {evidence_id} failed digest verification")
+        source_name = _registered_source_name(authority, verified_path)
+        if (
+            not source_name
+            or Path(source_name).name != source_name
+            or "/" in source_name
+            or "\\" in source_name
+        ):
+            raise ValueError(f"listed evidence {evidence_id} has no safe source filename")
+        prior_id = copied.get(source_name)
+        if prior_id is not None and prior_id != evidence_id:
+            raise ValueError(f"multiple listed evidence records claim {source_name}")
+        target = destination / source_name
+        shutil.copyfile(verified_path, target)
+        target.chmod(stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
+        copied[source_name] = evidence_id
+
+
+def _resume_typed_input_bindings(
+    *,
+    step: AnalysisStep,
+    plan: AnalysisPlan,
+    evidence_records: Sequence[Any],
+    trusted_step_records: Sequence[Mapping[str, Any]],
+    run_dir: Path,
+    cohort_path: Path,
+) -> Tuple[Dict[str, Dict[str, Any]], List[str]]:
+    """Rebuild typed bindings without reading mutable resolved-input receipts."""
+
+    bindings: Dict[str, Dict[str, Any]] = {}
+    evidence_ids: List[str] = []
+    for raw_input in step.inputs or []:
+        input_name = str(raw_input)
+        if _typed_input_product(input_name) is None:
+            continue
+        ref, failure = _resolve_typed_input_evidence(
+            input_name=input_name,
+            plan=plan,
+            evidence_records=evidence_records,
+            per_step_records=trusted_step_records,
+            run_dir=run_dir,
+        )
+        if failure is not None or ref is None:
+            reason = failure or {"reason": "verified_reference_unavailable"}
+            raise ValueError(
+                f"typed input {input_name} could not be resolved: "
+                + json.dumps(reason, sort_keys=True, default=str)
+            )
+        binding = _resolved_typed_input_binding(
+            input_name=input_name,
+            evidence_ref=ref,
+            evidence_records=evidence_records,
+            run_dir=run_dir,
+            producer_step_records=trusted_step_records,
+            authoritative_cohort_path=cohort_path,
+        )
+        if binding is None:
+            raise ValueError(f"typed input {input_name} has no verified host binding")
+        bindings[input_name] = binding
+        evidence_ids.append(ref.evidence_id)
+    return bindings, list(dict.fromkeys(evidence_ids))
+
+
+def _resume_success_dependencies(
+    *,
+    plan: AnalysisPlan,
+    current_records: Sequence[Mapping[str, Any]],
+    evidence_by_id: Mapping[str, Any],
+) -> Dict[str, Set[str]]:
+    """Derive immutable plan/evidence producer edges for invalidation."""
+
+    product_producers: Dict[Tuple[str, str], Set[str]] = {}
+    for step in plan.steps:
+        for raw_output in step.expected_outputs or []:
+            product = _typed_input_product(raw_output)
+            if product is not None:
+                product_producers.setdefault(product, set()).add(step.step_id)
+    dependencies: Dict[str, Set[str]] = {}
+    steps_by_id = {step.step_id: step for step in plan.steps}
+    for record in current_records:
+        step_id = str(record.get("step_id") or "").strip()
+        deps = dependencies.setdefault(step_id, set())
+        step = steps_by_id.get(step_id)
+        if step is not None:
+            for raw_input in step.inputs or []:
+                product = _typed_input_product(raw_input)
+                producers = product_producers.get(product or ("", ""), set())
+                if len(producers) == 1:
+                    deps.update(producers - {step_id})
+        pending = [
+            str(value).strip()
+            for evidence_id in (record.get("evidence_ids") or [])
+            if (authority := evidence_by_id.get(str(evidence_id).strip())) is not None
+            for value in (_evidence_record_field(authority, "inputs") or [])
+            if str(value).strip()
+        ]
+        seen: Set[str] = set()
+        while pending:
+            evidence_id = pending.pop()
+            if evidence_id in seen:
+                continue
+            seen.add(evidence_id)
+            authority = evidence_by_id.get(evidence_id)
+            if authority is None:
+                continue
+            owner = str(_evidence_record_field(authority, "produced_by_step") or "")
+            if owner and owner != step_id:
+                deps.add(owner)
+                continue
+            pending.extend(
+                str(value).strip()
+                for value in (_evidence_record_field(authority, "inputs") or [])
+                if str(value).strip()
+            )
+    return dependencies
+
+
+def _evaluate_final_deterministic_gates(
+    *,
+    context: ResearchContext,
+    cohort_path: Path,
+    universe_path: Path,
+    run_dir: Path,
+    out_dir: Path,
+    step: AnalysisStep,
+    step_summary: Dict[str, Any],
+    step_record: Mapping[str, Any],
+    completed_step_records: Sequence[Mapping[str, Any]],
+    resolved_input_bindings: Mapping[str, Mapping[str, Any]],
+    attempt_id: str,
+    checkpoint_id: str,
+    stat_validator: StatisticalValidator,
+    clinical_validator: ClinicalConstraintValidator,
+    statistical_guard: StatisticalGuard,
+    cross_step_cohort_lock_validator: CrossStepCohortLockValidator,
+    cross_step_registered_output_validator: CrossStepRegisteredOutputValidator,
+    cross_step_reconciliation_trace_validator: CrossStepReconciliationTraceValidator,
+    step_summary_integrity_validator: StepSummaryIntegrityValidator,
+    step_summary_fraction_validator: StepSummaryFractionValidator,
+    cross_step_source_status_validator: CrossStepSourceStatusValidator,
+    primary_model_contract_validator: PrimaryModelContractValidator,
+    figure_contract_validator: FigureContractQualityValidator,
+    figure_source_validator: FigureSourceDataValidator,
+) -> _FinalDeterministicGateFindings:
+    """Evaluate the complete final deterministic review for one step attempt.
+
+    This function deliberately does not append to the run-wide findings list,
+    mutate ``step_record``, publish evidence, or decide the outer step status.
+    Filesystem-reading validators make it only *pure-ish*, but all gate
+    composition, compatibility demotions, and attempt binding now live here as
+    one reusable authority.
+    """
+
+    stat_findings = stat_validator.audit(
+        context=context,
+        cohort_path=cohort_path,
+        step=step,
+        out_dir=out_dir,
+        step_summary=step_summary,
+    )
+    clinical_findings = clinical_validator.audit(
+        context=context,
+        step=step,
+        out_dir=out_dir,
+        step_summary=step_summary,
+    )
+    guard_findings = statistical_guard.audit(
+        context=context,
+        cohort_path=cohort_path,
+        step=step,
+        out_dir=out_dir,
+        step_summary=step_summary,
+    )
+    contract_findings = _step_contract_findings(
+        step=step,
+        step_summary=step_summary,
+        completed_step_records=completed_step_records,
+        resolved_input_bindings=resolved_input_bindings,
+        out_dir=out_dir,
+    )
+    contract_findings.extend(
+        _cohort_definition_sensitivity_contract_findings(
+            step=step,
+            step_summary=step_summary,
+            out_dir=out_dir,
+            run_dir=run_dir,
+            universe_path=universe_path,
+            cohort_path=cohort_path,
+            context=context,
+            completed_step_records=completed_step_records,
+        )
+    )
+    contract_findings.extend(
+        cross_step_cohort_lock_validator.audit(
+            step=step,
+            step_summary=step_summary,
+            completed_step_records=completed_step_records,
+        )
+    )
+    contract_findings.extend(
+        cross_step_registered_output_validator.audit(
+            step=step,
+            step_summary=step_summary,
+            completed_step_records=completed_step_records,
+        )
+    )
+    contract_findings.extend(
+        cross_step_reconciliation_trace_validator.audit(
+            step=step,
+            step_summary=step_summary,
+            out_dir=out_dir,
+        )
+    )
+    contract_findings.extend(
+        step_summary_integrity_validator.audit(
+            step=step,
+            step_summary=step_summary,
+            resolved_input_bindings=resolved_input_bindings,
+            cohort_path=cohort_path,
+        )
+    )
+    contract_findings.extend(
+        step_summary_fraction_validator.audit(
+            step=step,
+            step_summary=step_summary,
+        )
+    )
+    contract_findings.extend(
+        cross_step_source_status_validator.audit(
+            step=step,
+            step_summary=step_summary,
+            completed_step_records=completed_step_records,
+        )
+    )
+    contract_findings.extend(
+        primary_model_contract_validator.audit(
+            step=step,
+            step_summary=step_summary,
+            context=context,
+            completed_step_records=completed_step_records,
+            out_dir=out_dir,
+            cohort_path=cohort_path,
+        )
+    )
+    contract_findings.extend(
+        _primary_exposure_contract_findings(
+            step=step,
+            step_summary=step_summary,
+            context=context,
+        )
+    )
+    contract_findings.extend(
+        _primary_exposure_measurement_filter_findings(
+            step=step,
+            step_summary=step_summary,
+            context=context,
+        )
+    )
+    contract_findings.extend(
+        _primary_exposure_overadjustment_findings(
+            step=step,
+            context=context,
+            out_dir=out_dir,
+        )
+    )
+    contract_findings.extend(
+        _primary_model_leakage_findings(
+            step=step,
+            context=context,
+            out_dir=out_dir,
+        )
+    )
+    contract_findings.extend(
+        figure_contract_validator.audit(
+            step=step,
+            out_dir=out_dir,
+            run_dir=run_dir,
+            step_summary=step_summary,
+        )
+    )
+    # Legacy deterministic-primary records own their historical core estimate;
+    # only their excess step-output declarations are demoted.  All integrity,
+    # exposure, leakage, and figure findings remain blocking.
+    contract_findings = _demote_step_contract_for_primary_runner(
+        step_record,
+        step_summary,
+        contract_findings,
+    )
+    # Some study-design families build the manuscript-facing multi-panel figure
+    # in the write phase.  Preserve the existing narrow step-figure demotion;
+    # the publication display-suite gate remains fail-closed.
+    contract_findings = _demote_result_figure_shape_for_family_renderer(
+        context,
+        contract_findings,
+    )
+    figure_source_findings = figure_source_validator.audit(
+        step=step,
+        out_dir=out_dir,
+        run_dir=run_dir,
+        step_summary=step_summary,
+        completed_step_records=completed_step_records,
+        resolved_input_bindings=resolved_input_bindings,
+    )
+
+    def _bind(
+        group: Sequence[ValidationFinding],
+    ) -> Tuple[ValidationFinding, ...]:
+        return tuple(
+            _bind_findings_to_step_attempt(
+                group,
+                step_id=step.step_id,
+                attempt_id=attempt_id,
+                checkpoint_id=checkpoint_id,
+            )
+        )
+
+    return _FinalDeterministicGateFindings(
+        stat_findings=_bind(stat_findings),
+        clinical_findings=_bind(clinical_findings),
+        guard_findings=_bind(guard_findings),
+        contract_findings=_bind(contract_findings),
+        figure_source_findings=_bind(figure_source_findings),
+    )
+
+
+def _selectively_revalidate_resume_successes(
+    *,
+    resume_state: Dict[str, Any],
+    plan: AnalysisPlan,
+    context: ResearchContext,
+    evidence: Any,
+    run_dir: Path,
+    cohort_path: Path,
+    universe_path: Path,
+    resume_from_step_id: Optional[str],
+) -> _ResumeDeterministicRevalidationResult:
+    """Replay changed deterministic gates against sealed evidence only.
+
+    The function runs before :class:`ResumeController` applies skip decisions.
+    It never invokes the coder, runner, analyzer, or LLM concept auditor.
+    Successful replay appends a new ``ok`` authority checkpoint; any error
+    appends ``resume_validator_invalid`` and makes the step executable again.
+    """
+
+    state = dict(resume_state)
+    authority_history = [
+        dict(record)
+        for record in (resume_state.get("per_step_records") or [])
+        if isinstance(record, Mapping)
+    ]
+    saved_attempt_history = [
+        dict(record)
+        for record in (resume_state.get("step_attempt_history") or [])
+        if isinstance(record, Mapping)
+    ]
+    history = saved_attempt_history or list(authority_history)
+    for authority_record in authority_history:
+        if authority_record not in history:
+            history.append(authority_record)
+    current_records = [
+        dict(record) for record in current_step_records(authority_history)
+    ]
+    current_successes = [
+        record
+        for record in current_records
+        if str(record.get("status") or "").strip().lower() == "ok"
+    ]
+    steps_by_id = {step.step_id: step for step in plan.steps}
+    step_order = {"00_probe": -1, **{s.step_id: i for i, s in enumerate(plan.steps)}}
+    seeded_invalidated = {
+        str(record.get("step_id") or "").strip(): (
+            "prior checkpoint already lacks current resume authority "
+            f"(status={str(record.get('status') or '').strip().lower()})"
+        )
+        for record in current_records
+        if str(record.get("status") or "").strip().lower()
+        in {"resume_evidence_invalid", "resume_validator_invalid"}
+    }
+    if resume_from_step_id and seeded_invalidated:
+        cut = step_order.get(resume_from_step_id)
+        earlier_invalid = sorted(
+            step_id
+            for step_id in seeded_invalidated
+            if cut is not None and step_order.get(step_id, cut) < cut
+        )
+        if earlier_invalid:
+            raise RunInputIdentityError(
+                "Cannot start resume after an already-invalid upstream "
+                "authority; resume at or before: " + ", ".join(earlier_invalid)
+            )
+    stamp = _deterministic_gate_stamp()
+    stale_successes = [
+        record
+        for record in current_successes
+        if record.get("deterministic_gate_fingerprint")
+        != stamp["deterministic_gate_fingerprint"]
+    ]
+    if not stale_successes and not seeded_invalidated:
+        return _ResumeDeterministicRevalidationResult(state, (), ())
+
+    evidence_records = list(evidence.records())
+    evidence_by_id = {
+        str(_evidence_record_field(record, "evidence_id") or ""): record
+        for record in evidence_records
+    }
+    trusted_records, trusted_summary_errors = _trusted_resume_success_records(
+        records=current_successes,
+        evidence_by_id=evidence_by_id,
+        run_dir=run_dir,
+    )
+    trusted_by_step = {
+        str(record.get("step_id") or ""): record for record in trusted_records
+    }
+    current_by_step = {
+        str(record.get("step_id") or ""): record for record in current_successes
+    }
+    dependencies = _resume_success_dependencies(
+        plan=plan,
+        current_records=current_records,
+        evidence_by_id=evidence_by_id,
+    )
+    invalidated: Dict[str, str] = dict(seeded_invalidated)
+    revalidated: List[str] = []
+    invalid_payloads: Dict[str, Dict[str, Any]] = {}
+    retirement_records: Dict[str, Mapping[str, Any]] = {}
+
+    def attempt_identity(step_id: str) -> Tuple[str, str]:
+        sequence = 1 + sum(
+            1
+            for record in history
+            if str(record.get("step_id") or "") == step_id
+            and record.get("revalidated_without_execution") is True
+        )
+        attempt_id = f"{step_id}:resume_revalidation:{sequence}"
+        return attempt_id, f"{attempt_id}:deterministic_review"
+
+    def indexed_alias_evidence_ids(prior_record: Mapping[str, Any]) -> List[str]:
+        step_id = str(prior_record.get("step_id") or "").strip()
+        indexed_ids: List[str] = []
+        for raw_id in prior_record.get("evidence_ids") or []:
+            evidence_id = str(raw_id).strip()
+            authority = evidence_by_id.get(evidence_id)
+            if (
+                authority is not None
+                and str(_evidence_record_field(authority, "produced_by_step") or "")
+                == step_id
+            ):
+                indexed_ids.append(evidence_id)
+        return list(dict.fromkeys(indexed_ids))
+
+    for invalid_step_id in seeded_invalidated:
+        prior_success = next(
+            (
+                record
+                for record in reversed(history)
+                if str(record.get("step_id") or "").strip() == invalid_step_id
+                and str(record.get("status") or "").strip().lower() == "ok"
+            ),
+            None,
+        )
+        if prior_success is not None:
+            retirement_records[invalid_step_id] = prior_success
+
+    def append_invalid(
+        *,
+        prior_record: Mapping[str, Any],
+        reason: str,
+        code_findings: Sequence[ValidationFinding] = (),
+        gate_findings: Optional[_FinalDeterministicGateFindings] = None,
+    ) -> None:
+        step_id = str(prior_record.get("step_id") or "").strip()
+        if step_id in invalidated:
+            return
+        attempt_id, checkpoint_id = attempt_identity(step_id)
+        if not code_findings and gate_findings is None:
+            code_findings = _bind_findings_to_step_attempt(
+                [
+                    ValidationFinding(
+                        validator="resume_deterministic_revalidation",
+                        severity="error",
+                        message=(
+                            f"Prior success for step {step_id} failed current "
+                            "deterministic replay."
+                        ),
+                        detail={"reason": reason},
+                    )
+                ],
+                step_id=step_id,
+                attempt_id=attempt_id,
+                checkpoint_id=checkpoint_id,
+            )
+        payload: Dict[str, Any] = {
+            "step_id": step_id,
+            "status": "resume_validator_invalid",
+            "revalidated_without_execution": True,
+            "attempt_id": attempt_id,
+            "review_checkpoint_id": checkpoint_id,
+            "resume_invalidation_reason": reason,
+            "invalidated_evidence_ids": list(prior_record.get("evidence_ids") or []),
+            "evidence_ids": [],
+            "deterministic_code_findings": [
+                finding.model_dump(mode="json") for finding in code_findings
+            ],
+            "retired_current_aliases": {},
+            **stamp,
+        }
+        for key, value in prior_record.items():
+            if key.startswith("step_provider_call_") or key.startswith(
+                "step_llm_repair_"
+            ):
+                payload[key] = value
+        if gate_findings is not None:
+            payload.update(
+                {
+                    "stat_findings": [
+                        finding.model_dump(mode="json")
+                        for finding in gate_findings.stat_findings
+                    ],
+                    "clinical_findings": [
+                        finding.model_dump(mode="json")
+                        for finding in gate_findings.clinical_findings
+                    ],
+                    "guard_findings": [
+                        finding.model_dump(mode="json")
+                        for finding in gate_findings.guard_findings
+                    ],
+                    "contract_findings": [
+                        finding.model_dump(mode="json")
+                        for finding in gate_findings.contract_findings
+                    ],
+                    "figure_source_findings": [
+                        finding.model_dump(mode="json")
+                        for finding in gate_findings.figure_source_findings
+                    ],
+                }
+            )
+        invalidated[step_id] = reason
+        invalid_payloads[step_id] = payload
+        retirement_records[step_id] = prior_record
+        history.append(payload)
+
+    stale_successes.sort(
+        key=lambda record: step_order.get(
+            str(record.get("step_id") or ""), len(step_order)
+        )
+    )
+    for prior_record in stale_successes:
+        step_id = str(prior_record.get("step_id") or "").strip()
+        invalid_upstream = sorted(
+            dependencies.get(step_id, set()).intersection(invalidated)
+        )
+        if invalid_upstream:
+            append_invalid(
+                prior_record=prior_record,
+                reason=(
+                    "current success depends on invalidated upstream step(s): "
+                    + ", ".join(invalid_upstream)
+                ),
+            )
+            continue
+        if step_id == "00_probe":
+            summary_error = trusted_summary_errors.get(step_id)
+            if summary_error is not None or step_id not in trusted_by_step:
+                append_invalid(
+                    prior_record=prior_record,
+                    reason=(summary_error or "probe summary authority is unavailable"),
+                )
+                continue
+            evidence_payloads = {
+                evidence_id: (
+                    record.model_dump(mode="json")
+                    if hasattr(record, "model_dump")
+                    else dict(record)
+                )
+                for evidence_id, record in evidence_by_id.items()
+            }
+            error = _host_probe_authority_error(
+                record=prior_record,
+                evidence_ids=list(prior_record.get("evidence_ids") or []),
+                step_id=step_id,
+                run_dir=run_dir,
+                records=evidence_payloads,
+            )
+            if error is not None:
+                append_invalid(prior_record=prior_record, reason=error)
+                continue
+            attempt_id, checkpoint_id = attempt_identity(step_id)
+            summary = trusted_by_step[step_id]["step_summary"]
+            replayed = {
+                **prior_record,
+                "status": "ok",
+                "step_summary": dict(summary),
+                "revalidated_without_execution": True,
+                "attempt_id": attempt_id,
+                "review_checkpoint_id": checkpoint_id,
+                **stamp,
+            }
+            history.append(replayed)
+            trusted_by_step[step_id] = replayed
+            revalidated.append(step_id)
+            continue
+
+        is_host_cohort_materializer = (
+            str(prior_record.get("generation_mode") or "").strip().lower()
+            == _HOST_COHORT_MATERIALIZER_GENERATION_MODE
+            or prior_record.get("step_authority_kind")
+            == _HOST_COHORT_MATERIALIZER_AUTHORITY_KIND
+        )
+        if is_host_cohort_materializer:
+            evidence_payloads = {
+                evidence_id: (
+                    record.model_dump(mode="json")
+                    if hasattr(record, "model_dump")
+                    else dict(record)
+                )
+                for evidence_id, record in evidence_by_id.items()
+            }
+            error = _host_cohort_materializer_authority_error(
+                record=prior_record,
+                evidence_ids=list(prior_record.get("evidence_ids") or []),
+                step_id=step_id,
+                run_dir=run_dir,
+                records=evidence_payloads,
+            )
+            if error is not None:
+                append_invalid(prior_record=prior_record, reason=error)
+                continue
+            attempt_id, checkpoint_id = attempt_identity(step_id)
+            replayed = {
+                **prior_record,
+                "status": "ok",
+                "step_summary": dict(prior_record["step_summary"]),
+                "revalidated_without_execution": True,
+                "attempt_id": attempt_id,
+                "review_checkpoint_id": checkpoint_id,
+                **stamp,
+            }
+            history.append(replayed)
+            trusted_by_step[step_id] = replayed
+            revalidated.append(step_id)
+            continue
+
+        step = steps_by_id.get(step_id)
+        summary_error = trusted_summary_errors.get(step_id)
+        if step is None or summary_error is not None:
+            append_invalid(
+                prior_record=prior_record,
+                reason=(summary_error or "successful step is absent from active plan"),
+            )
+            continue
+        trusted_record = trusted_by_step[step_id]
+        attempt_id, checkpoint_id = attempt_identity(step_id)
+        try:
+            _verify_resume_step_script_lineage(
+                record=prior_record,
+                evidence_by_id=evidence_by_id,
+            )
+            _, script_path = _verified_explicit_step_authority(
+                record=prior_record,
+                field="script_evidence_id",
+                expected_kind="code",
+                expected_source_name=None,
+                evidence_by_id=evidence_by_id,
+                run_dir=run_dir,
+            )
+            script_text = script_path.read_text(encoding="utf-8")
+            code_findings = _bind_findings_to_step_attempt(
+                _deterministic_code_gate_findings(
+                    context=context,
+                    step=step,
+                    script_text=script_text,
+                ),
+                step_id=step_id,
+                attempt_id=attempt_id,
+                checkpoint_id=checkpoint_id,
+            )
+            if any(finding.severity == "error" for finding in code_findings):
+                append_invalid(
+                    prior_record=prior_record,
+                    reason="current deterministic code preflight failed",
+                    code_findings=code_findings,
+                )
+                continue
+            trusted_current_records = [
+                record
+                for record in trusted_by_step.values()
+                if str(record.get("status") or "").lower() == "ok"
+                and str(record.get("step_id") or "") not in invalidated
+            ]
+            resolved_bindings, resolved_input_evidence_ids = (
+                _resume_typed_input_bindings(
+                    step=step,
+                    plan=plan,
+                    evidence_records=evidence_records,
+                    trusted_step_records=trusted_current_records,
+                    run_dir=run_dir,
+                    cohort_path=cohort_path,
+                )
+            )
+            with tempfile.TemporaryDirectory(
+                prefix=f".resume_gate_{step_id}_",
+                dir=run_dir,
+            ) as temporary_root:
+                replay_out_dir = Path(temporary_root) / "outputs"
+                _materialize_verified_step_output_view(
+                    record=prior_record,
+                    evidence_by_id=evidence_by_id,
+                    run_dir=run_dir,
+                    destination=replay_out_dir,
+                )
+                completed_records = [
+                    record
+                    for record in trusted_current_records
+                    if str(record.get("step_id") or "") != step_id
+                    and step_order.get(str(record.get("step_id") or ""), -1)
+                    < step_order.get(step_id, len(step_order))
+                ]
+                gate_findings = _evaluate_final_deterministic_gates(
+                    context=context,
+                    cohort_path=cohort_path,
+                    universe_path=universe_path,
+                    run_dir=run_dir,
+                    out_dir=replay_out_dir,
+                    step=step,
+                    step_summary=dict(trusted_record["step_summary"]),
+                    step_record=prior_record,
+                    completed_step_records=completed_records,
+                    resolved_input_bindings=resolved_bindings,
+                    attempt_id=attempt_id,
+                    checkpoint_id=checkpoint_id,
+                    stat_validator=StatisticalValidator(),
+                    clinical_validator=ClinicalConstraintValidator(),
+                    statistical_guard=StatisticalGuard(),
+                    cross_step_cohort_lock_validator=CrossStepCohortLockValidator(),
+                    cross_step_registered_output_validator=(
+                        CrossStepRegisteredOutputValidator()
+                    ),
+                    cross_step_reconciliation_trace_validator=(
+                        CrossStepReconciliationTraceValidator()
+                    ),
+                    step_summary_integrity_validator=StepSummaryIntegrityValidator(),
+                    step_summary_fraction_validator=StepSummaryFractionValidator(),
+                    cross_step_source_status_validator=CrossStepSourceStatusValidator(),
+                    primary_model_contract_validator=PrimaryModelContractValidator(),
+                    figure_contract_validator=FigureContractQualityValidator(),
+                    figure_source_validator=FigureSourceDataValidator(),
+                )
+            if any(finding.severity == "error" for finding in gate_findings.all_findings()):
+                append_invalid(
+                    prior_record=prior_record,
+                    reason="current deterministic artifact gates failed",
+                    code_findings=code_findings,
+                    gate_findings=gate_findings,
+                )
+                continue
+            prior_critique = prior_record.get("critique_report")
+            prior_critique_status = (
+                str(prior_critique.get("status") or "").strip().lower()
+                if isinstance(prior_critique, Mapping)
+                else ""
+            )
+            if prior_critique_status in {"blocked", "needs_revision"}:
+                append_invalid(
+                    prior_record=prior_record,
+                    reason=(
+                        "prior deterministic Critic status remains "
+                        f"{prior_critique_status}"
+                    ),
+                    code_findings=code_findings,
+                    gate_findings=gate_findings,
+                )
+                continue
+            evidence_refs = [
+                EvidenceRef(
+                    evidence_id=str(_evidence_record_field(authority, "evidence_id")),
+                    kind=_evidence_record_field(authority, "kind"),
+                    description=str(
+                        _evidence_record_field(authority, "description") or ""
+                    ),
+                    relative_path=str(
+                        _evidence_record_field(authority, "relative_path") or ""
+                    ),
+                )
+                for evidence_id in (prior_record.get("evidence_ids") or [])
+                if (authority := evidence_by_id.get(str(evidence_id))) is not None
+                and verified_run_evidence_path(run_dir, authority) is not None
+            ]
+            critique = CriticAgent().review_step(
+                step=step,
+                step_summary=dict(trusted_record["step_summary"]),
+                evidence_refs=evidence_refs,
+                findings=_actionable_validator_messages(
+                    code_findings,
+                    gate_findings.all_findings(),
+                ),
+            )
+            if critique.status != "pass":
+                append_invalid(
+                    prior_record=prior_record,
+                    reason=f"current deterministic Critic status={critique.status}",
+                    code_findings=code_findings,
+                    gate_findings=gate_findings,
+                )
+                continue
+        except (OSError, TypeError, UnicodeError, ValueError) as exc:
+            append_invalid(
+                prior_record=prior_record,
+                reason=f"{type(exc).__name__}: {exc}",
+            )
+            continue
+
+        replayed = {
+            **prior_record,
+            "status": "ok",
+            "step_summary": dict(trusted_record["step_summary"]),
+            "resolved_input_evidence_ids": resolved_input_evidence_ids,
+            "deterministic_code_findings": [
+                finding.model_dump(mode="json") for finding in code_findings
+            ],
+            "stat_findings": [
+                finding.model_dump(mode="json")
+                for finding in gate_findings.stat_findings
+            ],
+            "clinical_findings": [
+                finding.model_dump(mode="json")
+                for finding in gate_findings.clinical_findings
+            ],
+            "guard_findings": [
+                finding.model_dump(mode="json")
+                for finding in gate_findings.guard_findings
+            ],
+            "contract_findings": [
+                finding.model_dump(mode="json")
+                for finding in gate_findings.contract_findings
+            ],
+            "figure_source_findings": [
+                finding.model_dump(mode="json")
+                for finding in gate_findings.figure_source_findings
+            ],
+            "critique_report": critique.model_dump(mode="json"),
+            "revalidated_without_execution": True,
+            "attempt_id": attempt_id,
+            "review_checkpoint_id": checkpoint_id,
+            **stamp,
+        }
+        replayed.pop("resolved_inputs", None)
+        replayed.pop("resolved_input_bindings", None)
+        replayed.pop("resolved_inputs_path", None)
+        history.append(replayed)
+        trusted_by_step[step_id] = replayed
+        revalidated.append(step_id)
+
+    # Propagate invalid authority through immutable plan/evidence edges, even
+    # when a downstream success already carries the current fingerprint.
+    while True:
+        changed = False
+        for step_id, prior_record in current_by_step.items():
+            if step_id in invalidated:
+                continue
+            failed_dependencies = sorted(
+                dependencies.get(step_id, set()).intersection(invalidated)
+            )
+            if not failed_dependencies:
+                continue
+            append_invalid(
+                prior_record=prior_record,
+                reason=(
+                    "current success depends on invalidated upstream step(s): "
+                    + ", ".join(failed_dependencies)
+                ),
+            )
+            changed = True
+        if not changed:
+            break
+
+    # An explicit cut after a newly detected invalid authority must fail
+    # before any alias or manifest mutation.  The caller can restart at or
+    # before the earliest invalid upstream step.
+    if resume_from_step_id and invalidated:
+        cut = step_order.get(resume_from_step_id)
+        earlier_invalid = sorted(
+            step_id
+            for step_id in invalidated
+            if cut is not None and step_order.get(step_id, cut) < cut
+        )
+        if earlier_invalid:
+            raise RunInputIdentityError(
+                "Cannot start resume after deterministic-validator-invalid "
+                "upstream evidence; resume at or before: "
+                + ", ".join(earlier_invalid)
+            )
+
+    if invalid_payloads:
+        state_findings = list(resume_state.get("findings") or [])
+        for step_id, payload in invalid_payloads.items():
+            reason = str(payload.get("resume_invalidation_reason") or "")
+            state_findings.append(
+                ValidationFinding(
+                    validator="resume_deterministic_revalidation",
+                    severity="warning",
+                    message=(
+                        f"Prior success for step {step_id} was invalidated by "
+                        "current deterministic gates and requires re-execution."
+                    ),
+                    detail={
+                        "step_id": step_id,
+                        "reason": reason,
+                        "requires_reexecution": True,
+                    },
+                ).model_dump(mode="json")
+            )
+        state["findings"] = state_findings
+    state["step_attempt_history"] = history
+    state["per_step_records"] = [
+        dict(record) for record in current_step_records(history)
+    ]
+
+    retirement_batch = {
+        step_id: evidence_ids
+        for step_id, prior_record in retirement_records.items()
+        if (evidence_ids := indexed_alias_evidence_ids(prior_record))
+    }
+    current_aliases = evidence.aliases() if retirement_batch else {}
+    for step_id, evidence_ids in retirement_batch.items():
+        payload = invalid_payloads.get(step_id)
+        if payload is not None:
+            payload["retired_current_aliases"] = {
+                alias: evidence_id
+                for alias, evidence_id in current_aliases.items()
+                if evidence_id in set(evidence_ids)
+            }
+
+    # Persist the append-only checkpoint before revoking aliases.  A failed
+    # checkpoint write leaves aliases untouched; the batch retirement itself
+    # is atomic across every invalid step.  If retirement fails, restore the
+    # prior manifest so the two authority ledgers cannot disagree.
+    checkpoint_path = run_dir / "manifest_partial.json"
+    write_run_checkpoint(checkpoint_path, state)
+    if retirement_batch:
+        try:
+            evidence.retire_steps_current_aliases(retirement_batch)
+        except (KeyError, OSError, TypeError, ValueError) as exc:
+            try:
+                write_run_checkpoint(checkpoint_path, resume_state)
+            except (OSError, TypeError, ValueError) as rollback_exc:
+                raise RuntimeError(
+                    "resume revalidation alias retirement and manifest rollback "
+                    "both failed"
+                ) from rollback_exc
+            raise RuntimeError(
+                "resume revalidation alias retirement failed; manifest was rolled back"
+            ) from exc
+
+    return _ResumeDeterministicRevalidationResult(
+        resume_state=state,
+        revalidated_step_ids=tuple(revalidated),
+        invalidated_step_ids=tuple(sorted(invalidated)),
+    )
+
+
 def run_execute_phase(
     pipeline: "ResearchAgentPipeline",
     *,
@@ -3829,6 +5421,19 @@ def run_execute_phase(
         requested_resume_from_step_id is not None
         and os.environ.get("EASYICU_RESUME_REUSE_STEP_CODE") == "1"
     )
+    resumed_cohort_translation_budget: Optional[Dict[str, Any]] = None
+    resumed_cohort_translation_budget_owner: Optional[str] = None
+    if isinstance(plan_result.resume_state, Mapping):
+        raw_cohort_translation_budget = plan_result.resume_state.get(
+            "cohort_translation_provider_budget"
+        )
+        if isinstance(raw_cohort_translation_budget, Mapping):
+            candidate_owner = str(
+                raw_cohort_translation_budget.get("budget_owner_step_id") or ""
+            ).strip()
+            if candidate_owner:
+                resumed_cohort_translation_budget = dict(raw_cohort_translation_budget)
+                resumed_cohort_translation_budget_owner = candidate_owner
     # Replan convergence bookkeeping (see _maybe_replan). ``noop_streak``
     # counts consecutive substantively-identical revisions; ``total`` counts
     # substantive revisions; ``disabled`` latches once a guard trips.
@@ -3841,6 +5446,14 @@ def run_execute_phase(
         "budget_exhausted": False,
         "cohort_contract_emitted": False,
         "cohort_materialized": False,
+        # The first cohort-prose translation latches one provider-budget owner
+        # for the run.  Later replans cannot buy a fresh allowance by renaming
+        # or reshaping the cohort-definition step.
+        "cohort_translation_budget_owner_step_id": (
+            resumed_cohort_translation_budget_owner
+        ),
+        "cohort_translation_provider_budget": resumed_cohort_translation_budget,
+        "cohort_translation_provider_budget_error_emitted": False,
         # Directed replans fired when a model/estimation step self-blocks on a
         # task-viable cohort (see _maybe_directed_model_replan). Bounded so a
         # run that keeps self-blocking falls back to an honest diagnostic_only
@@ -3849,6 +5462,9 @@ def run_execute_phase(
     }
     role_resolver = plan_result.role_resolver
     llm_signature = plan_result.llm_signature
+    concept_audit_environment_sha256 = canonical_sha256(
+        build_environment_identity(llm_signature=llm_signature)
+    )
     prompt_version = plan_result.prompt_version
     prompt_files = plan_result.prompt_files
     assert_cohort_definition_locked(run_dir=run_dir, plan=plan)
@@ -3865,6 +5481,23 @@ def run_execute_phase(
     _analysis_cohort_path = run_dir / "cohort_analysis.parquet"
     if _analysis_cohort_path.exists():
         cohort_path = _analysis_cohort_path
+
+    # Validator/code drift is resolved before ResumeController decides which
+    # prior successes to skip and before any coder, runner, analyzer, or LLM
+    # collaborator is constructed.  The replay reads sealed evidence only.
+    if plan_result.resume_state is not None:
+        resume_revalidation = _selectively_revalidate_resume_successes(
+            resume_state=plan_result.resume_state,
+            plan=plan,
+            context=context,
+            evidence=evidence,
+            run_dir=run_dir,
+            cohort_path=cohort_path,
+            universe_path=universe_path,
+            resume_from_step_id=requested_resume_from_step_id,
+        )
+        plan_result.resume_state = resume_revalidation.resume_state
+        resume_controller.resume_state = resume_revalidation.resume_state
 
     coder = CoderAgent(role_resolver("coder"))
     # Opt-in altitude-2a: delegate script authoring + self-repair to a local
@@ -3889,8 +5522,6 @@ def run_execute_phase(
         universe_path=universe_path,
     )
     usage_auditor = ConceptUsageAuditor()
-    from .audits.patterns import AnalysisPatternAuditor
-
     pattern_auditor = AnalysisPatternAuditor()
     stat_validator = StatisticalValidator()
     figure_contract_validator = FigureContractQualityValidator()
@@ -3917,6 +5548,7 @@ def run_execute_phase(
     repair_ledger_lock = threading.Lock()
 
     per_step_records: List[Dict[str, Any]] = []
+    step_attempt_history: List[Dict[str, Any]] = []
     probe_summary: Dict[str, Any] = {}
     resumed_step_ids: set = set()
     # Steps can finish before the ordinary plan execution loop.  Keep those
@@ -3926,6 +5558,7 @@ def run_execute_phase(
     preexecuted_step_ids: set = set()
     if plan_result.resume_state is not None:
         resume_application = resume_controller.apply()
+        step_attempt_history.extend(resume_application.audit_history)
         per_step_records.extend(resume_application.per_step_records)
         resumed_step_ids = set(resume_application.resumed_step_ids)
         preexecuted_step_ids.update(resumed_step_ids)
@@ -3948,6 +5581,10 @@ def run_execute_phase(
             )
 
     def _flush_partial_manifest(extra: Optional[Dict[str, Any]] = None) -> None:
+        for record in per_step_records:
+            snapshot = dict(record)
+            if snapshot not in step_attempt_history:
+                step_attempt_history.append(snapshot)
         payload: Dict[str, Any] = {
             "schema_version": "easyicu.research_manifest_partial/1",
             "run_id": run_id,
@@ -3958,6 +5595,7 @@ def run_execute_phase(
             "evidence": [r.model_dump(mode="json") for r in evidence.records()],
             "findings": [f.model_dump(mode="json") for f in findings],
             "per_step_records": per_step_records,
+            "step_attempt_history": step_attempt_history,
             "llm_signature": llm_signature,
             "used_mock_llm": plan_result.used_mock_llm,
             "prompt_pack_version": prompt_version,
@@ -3966,6 +5604,9 @@ def run_execute_phase(
             "runtime_state": runtime_state.model_dump(mode="json"),
             "repair_ledger_path": str(repair_ledger.path.relative_to(run_dir)),
             "repairs_applied": [record.__dict__ for record in repair_ledger.records],
+            "cohort_translation_provider_budget": _replan_state.get(
+                "cohort_translation_provider_budget"
+            ),
         }
         if extra:
             payload.update(extra)
@@ -4092,13 +5733,62 @@ def run_execute_phase(
         columns = _universe_columns()
         if not columns:
             return False
-        definition = extract_cohort_definition_from_prose(
-            cohort_prose=_cohort_definition_prose(candidate_plan),
-            universe_columns=columns,
-            llm=role_resolver("planner"),
-            name=getattr(getattr(candidate_plan, "cohort", None), "name", "primary")
-            or "primary",
+        budget_owner_step_id = _replan_state.get(
+            "cohort_translation_budget_owner_step_id"
         )
+        if not budget_owner_step_id:
+            budget_owner_step_id = _cohort_translation_budget_owner_step_id(
+                candidate_plan
+            )
+            _replan_state["cohort_translation_budget_owner_step_id"] = (
+                budget_owner_step_id
+            )
+        try:
+            definition, budget_snapshot = (
+                _extract_cohort_definition_with_provider_budget(
+                    run_dir=run_dir,
+                    budget_owner_step_id=str(budget_owner_step_id),
+                    configured_limit=pipeline._max_step_provider_calls,
+                    cohort_prose=_cohort_definition_prose(candidate_plan),
+                    universe_columns=columns,
+                    llm=role_resolver("planner"),
+                    name=getattr(
+                        getattr(candidate_plan, "cohort", None),
+                        "name",
+                        "primary",
+                    )
+                    or "primary",
+                )
+            )
+        except ProviderCallBudgetError as exc:
+            error_detail = f"{type(exc).__name__}: {exc}"
+            _replan_state["cohort_translation_provider_budget"] = {
+                "budget_owner_step_id": str(budget_owner_step_id),
+                "error": error_detail,
+            }
+            if not _replan_state.get(
+                "cohort_translation_provider_budget_error_emitted"
+            ):
+                findings.append(
+                    ValidationFinding(
+                        validator="cohort_translation_provider_budget",
+                        severity="error",
+                        message=(
+                            "Cohort-definition translation could not obtain a "
+                            "trusted provider-call reservation; the host did not "
+                            "infer or apply cohort criteria."
+                        ),
+                        detail={
+                            "stage": "execute_repair",
+                            "reason": reason,
+                            "budget_owner_step_id": str(budget_owner_step_id),
+                            "error": error_detail,
+                        },
+                    )
+                )
+                _replan_state["cohort_translation_provider_budget_error_emitted"] = True
+            return False
+        _replan_state["cohort_translation_provider_budget"] = budget_snapshot
         if definition is None:
             return False
         candidate_plan.cohort = definition
@@ -4141,7 +5831,7 @@ def run_execute_phase(
         cohort_product_steps = [
             step
             for step in candidate_plan.steps
-            if set(step.expected_outputs or []) == {"table:analysis_cohort"}
+            if _declares_host_cohort_only_product(step)
         ]
         cohort_product_step = (
             cohort_product_steps[0] if len(cohort_product_steps) == 1 else None
@@ -4170,25 +5860,63 @@ def run_execute_phase(
             # single-product step using the cohort the Agent selected.  Record
             # that product under the planned producer and do not ask the Coder
             # to recreate or reinterpret the cohort scientifically.
-            per_step_records.append(
-                {
-                    "step_id": cohort_product_step.step_id,
-                    "intent": cohort_product_step.intent,
-                    "status": "ok",
-                    "generation_mode": "deterministic_cohort_materializer",
-                    "step_summary": {
-                        "output_files": {
-                            "table:analysis_cohort": str(
-                                cohort_path.relative_to(run_dir)
-                            )
-                        },
-                        "n_universe": int(result["n_universe"]),
-                        "n_analysis_cohort": int(result["n_cohort"]),
+            cohort_checkpoint = {
+                "step_id": cohort_product_step.step_id,
+                "intent": cohort_product_step.intent,
+                "status": "ok",
+                "generation_mode": _HOST_COHORT_MATERIALIZER_GENERATION_MODE,
+                "step_authority_kind": _HOST_COHORT_MATERIALIZER_AUTHORITY_KIND,
+                _HOST_COHORT_MATERIALIZER_AUTHORITY_FIELD: (
+                    cohort_record.evidence_id
+                ),
+                "step_summary": {
+                    "output_files": {
+                        "table:analysis_cohort": str(
+                            cohort_path.relative_to(run_dir)
+                        )
                     },
-                    "evidence_ids": [cohort_record.evidence_id],
-                }
+                    "n_universe": int(result["n_universe"]),
+                    "n_analysis_cohort": int(result["n_cohort"]),
+                },
+                "evidence_ids": [cohort_record.evidence_id],
+                **_deterministic_gate_stamp(),
+            }
+            if budget_owner_step_id == cohort_product_step.step_id:
+                cohort_checkpoint.update(
+                    {
+                        key: value
+                        for key, value in budget_snapshot.items()
+                        if key != "budget_owner_step_id"
+                    }
+                )
+            cohort_authority_error = _host_cohort_materializer_authority_error(
+                record=cohort_checkpoint,
+                evidence_ids=[cohort_record.evidence_id],
+                step_id=cohort_product_step.step_id,
+                run_dir=run_dir,
+                records={
+                    record.evidence_id: record.model_dump(mode="json")
+                    for record in evidence.records()
+                },
             )
-            preexecuted_step_ids.add(cohort_product_step.step_id)
+            if cohort_authority_error is None:
+                per_step_records.append(cohort_checkpoint)
+                preexecuted_step_ids.add(cohort_product_step.step_id)
+            else:
+                findings.append(
+                    ValidationFinding(
+                        validator="cohort_materializer_authority",
+                        severity="error",
+                        message=(
+                            "Host cohort materializer could not seal its exact "
+                            "single-product authority."
+                        ),
+                        detail={
+                            "step_id": cohort_product_step.step_id,
+                            "reason": cohort_authority_error,
+                        },
+                    )
+                )
         findings.append(
             ValidationFinding(
                 validator="cohort_materializer",
@@ -4502,6 +6230,7 @@ def run_execute_phase(
             out_dir=run_dir / "steps" / probe_step_id / "outputs",
         )
         probe_evidence_ids: List[str] = []
+        probe_authority_fields: Dict[str, str] = {}
         for probe_file in probe_files:
             kind = "statistic" if probe_file.name.endswith(".json") else "table"
             aliases = [probe_step_id]
@@ -4522,6 +6251,17 @@ def run_execute_phase(
                 aliases=aliases,
             )
             probe_evidence_ids.append(rec.evidence_id)
+            for field, (_kind, source_name) in _HOST_PROBE_AUTHORITIES.items():
+                if probe_file.name == source_name:
+                    probe_authority_fields[field] = rec.evidence_id
+        missing_probe_authorities = sorted(
+            set(_HOST_PROBE_AUTHORITIES) - set(probe_authority_fields)
+        )
+        if missing_probe_authorities:
+            raise RuntimeError(
+                "Host probe did not produce its required authority fields: "
+                + ", ".join(missing_probe_authorities)
+            )
         probe_record = {
             "step_id": probe_step_id,
             "intent": "Probe distributions, missingness, and obvious anomalies before execution.",
@@ -4529,6 +6269,9 @@ def run_execute_phase(
             "generation_mode": "deterministic_probe",
             "step_summary": probe_summary,
             "evidence_ids": probe_evidence_ids,
+            "step_authority_kind": _HOST_PROBE_AUTHORITY_KIND,
+            **probe_authority_fields,
+            **_deterministic_gate_stamp(),
         }
         per_step_records.append(probe_record)
         preexecuted_step_ids.add(probe_step_id)
@@ -4855,6 +6598,7 @@ def run_execute_phase(
                         evidence_records=evidence_snapshot,
                         run_dir=run_dir,
                         producer_step_records=records_snapshot,
+                        authoritative_cohort_path=cohort_path,
                     )
                     if binding is None:
                         failures.append(
@@ -4907,16 +6651,26 @@ def run_execute_phase(
     def _execute_one_step(step: AnalysisStep) -> Dict[str, Any]:
         nonlocal runtime_state
         with shared_lock:
+            resume_history = (
+                list(
+                    plan_result.resume_state.get("step_attempt_history")
+                    or plan_result.resume_state.get("per_step_records")
+                    or []
+                )
+                if isinstance(plan_result.resume_state, Mapping)
+                else []
+            )
+            candidate_history = resume_history + list(per_step_records)
             prior_attempt_records = [
                 record
-                for record in per_step_records
+                for record in candidate_history
                 if isinstance(record, Mapping)
                 and str(record.get("step_id") or "") == step.step_id
             ]
             prior_step_record = next(
                 (
                     record
-                    for record in current_step_records(per_step_records)
+                    for record in current_step_records(prior_attempt_records)
                     if str(record.get("step_id") or "") == step.step_id
                 ),
                 None,
@@ -4942,6 +6696,183 @@ def run_execute_phase(
                 _serializable_plan_scientific_scope_signature(plan)
             ),
         }
+        (
+            step_llm_repair_attempts,
+            prior_repair_classes,
+            repair_history_invalid,
+        ) = _monotonic_step_llm_repair_history(
+            prior_attempt_records,
+            limit=pipeline._max_step_llm_repair_attempts,
+        )
+        if step_llm_repair_attempts:
+            step_record["step_llm_repair_attempts"] = step_llm_repair_attempts
+            step_record["step_llm_repair_budget"] = (
+                pipeline._max_step_llm_repair_attempts
+            )
+        if prior_repair_classes:
+            step_record["step_llm_repair_classes"] = list(prior_repair_classes)
+        if repair_history_invalid:
+            step_record["step_llm_repair_history_invalid"] = True
+            step_record["step_llm_repair_budget_exhausted"] = True
+        configured_provider_limit = pipeline._max_step_provider_calls
+        effective_provider_limit = configured_provider_limit
+        provider_receipt_path = provider_call_budget_receipt_path(
+            run_dir,
+            step_id=step.step_id,
+        )
+        provider_receipt_relative_path = str(
+            provider_receipt_path.relative_to(run_dir)
+        )
+        prior_provider_categories: tuple[str, ...] = ()
+        prior_provider_attempts = 0
+        provider_receipt_integrity_error: Optional[str] = None
+        prior_snapshot_present = False
+        if isinstance(prior_step_record, Mapping):
+            snapshot_keys = {
+                "step_provider_call_budget",
+                "step_provider_call_attempts",
+                "step_provider_call_categories",
+            }
+            prior_snapshot_present = any(
+                key in prior_step_record for key in snapshot_keys
+            )
+            if prior_snapshot_present:
+                prior_limit = prior_step_record.get("step_provider_call_budget")
+                prior_attempts_raw = prior_step_record.get(
+                    "step_provider_call_attempts"
+                )
+                prior_categories_raw = prior_step_record.get(
+                    "step_provider_call_categories"
+                )
+                if (
+                    isinstance(prior_limit, bool)
+                    or not isinstance(prior_limit, int)
+                    or prior_limit < 0
+                    or isinstance(prior_attempts_raw, bool)
+                    or not isinstance(prior_attempts_raw, int)
+                    or prior_attempts_raw < 0
+                    or not isinstance(prior_categories_raw, list)
+                ):
+                    provider_receipt_integrity_error = (
+                        "Prior provider-call budget snapshot is incomplete or invalid."
+                    )
+                else:
+                    normalized_categories = tuple(
+                        str(item).strip() for item in prior_categories_raw
+                    )
+                    if (
+                        any(not item for item in normalized_categories)
+                        or prior_attempts_raw != len(normalized_categories)
+                    ):
+                        provider_receipt_integrity_error = (
+                            "Prior provider-call attempts and category history disagree."
+                        )
+                    else:
+                        prior_provider_attempts = prior_attempts_raw
+                        prior_provider_categories = normalized_categories
+                        effective_provider_limit = min(
+                            effective_provider_limit,
+                            prior_limit,
+                        )
+
+        if provider_receipt_integrity_error is None and provider_receipt_path.exists():
+            try:
+                receipt_limit, receipt_categories = (
+                    load_provider_call_budget_receipt(
+                        provider_receipt_path,
+                        step_id=step.step_id,
+                    )
+                )
+                effective_provider_limit = min(
+                    effective_provider_limit,
+                    receipt_limit,
+                )
+                if prior_snapshot_present and (
+                    len(receipt_categories) < len(prior_provider_categories)
+                    or receipt_categories[: len(prior_provider_categories)]
+                    != prior_provider_categories
+                ):
+                    raise ProviderCallBudgetReceiptError(
+                        "Durable provider-call receipt conflicts with the latest "
+                        "step snapshot."
+                    )
+                prior_provider_categories = receipt_categories
+                prior_provider_attempts = len(receipt_categories)
+            except ProviderCallBudgetReceiptError as exc:
+                provider_receipt_integrity_error = str(exc)
+        elif (
+            provider_receipt_integrity_error is None
+            and isinstance(prior_step_record, Mapping)
+            and prior_step_record.get("step_provider_call_receipt_version") == 1
+            and prior_provider_attempts > 0
+        ):
+            provider_receipt_integrity_error = (
+                "Durable provider-call receipt is missing for a paid prior attempt."
+            )
+
+        provider_budget = StepProviderCallBudget(
+            effective_provider_limit,
+            step_id=step.step_id,
+            consumed_categories=prior_provider_categories,
+            receipt_path=provider_receipt_path,
+        )
+
+        def _sync_provider_budget() -> None:
+            snapshot = provider_budget.snapshot()
+            step_record["step_provider_call_budget_scope"] = (
+                "coder_generation_repair_concept_audit_and_analyzer"
+            )
+            step_record["step_provider_call_budget"] = snapshot["limit"]
+            step_record["step_provider_call_attempts"] = snapshot["used"]
+            step_record["step_provider_call_remaining"] = snapshot["remaining"]
+            step_record["step_provider_call_budget_exhausted"] = snapshot[
+                "exhausted"
+            ]
+            step_record["step_provider_call_categories"] = snapshot["categories"]
+            step_record["step_provider_call_receipt_version"] = 1
+            step_record["step_provider_call_receipt"] = (
+                provider_receipt_relative_path if snapshot["used"] else None
+            )
+
+        _sync_provider_budget()
+        if provider_receipt_integrity_error is not None:
+            step_record.update(
+                {
+                    "status": "contract_failed",
+                    "generation_mode": "system",
+                    "provider_call_budget_receipt_invalid": True,
+                    "provider_call_budget_receipt_error": (
+                        provider_receipt_integrity_error
+                    ),
+                }
+            )
+            receipt_finding = ValidationFinding(
+                validator="provider_call_budget_receipt",
+                severity="error",
+                message=(
+                    f"Step {step.step_id} cannot resume because its durable "
+                    "provider-call receipt is missing, corrupt, or inconsistent."
+                ),
+                detail={
+                    "step_id": step.step_id,
+                    "receipt_path": provider_receipt_relative_path,
+                    "reason": provider_receipt_integrity_error,
+                },
+            )
+            with shared_lock:
+                findings.append(receipt_finding)
+                per_step_records.append(step_record)
+                _flush_partial_manifest()
+            emit_progress(
+                "step",
+                f"Step {step.step_id} failed closed: provider-call receipt invalid.",
+                status="failed",
+                run_id=run_id,
+                step_id=step.step_id,
+                current_step=step_order.get(step.step_id, 0) + 1,
+                total_steps=total_steps,
+            )
+            return step_record
         coder_context = _coder_context_with_locked_robustness_specs(
             context=agent_context,
             step=step,
@@ -4949,7 +6880,6 @@ def run_execute_phase(
         )
         resumed_code_reuse_used = False
         critic_resume_repair_used = False
-        step_llm_repair_attempts = 0
         resumed_quarantined_draft_used = False
         quarantined_draft_active = False
         quarantined_repair_materially_changed = False
@@ -5430,8 +7360,12 @@ def run_execute_phase(
                     code=prior_code,
                     run_log=critique_log,
                     attempt=1,
+                    provider_budget=provider_budget,
+                    provider_category="critic_resume_repair",
                 )
+                _sync_provider_budget()
             except Exception as exc:
+                _sync_provider_budget()
                 with shared_lock:
                     findings.append(
                         ValidationFinding(
@@ -6068,8 +8002,14 @@ else:
                         current_step=step_current,
                         total_steps=total_steps,
                     )
-                    code = coder.run(context=coder_context, step=step)
+                    code = coder.run(
+                        context=coder_context,
+                        step=step,
+                        provider_budget=provider_budget,
+                    )
+                    _sync_provider_budget()
                 except Exception as exc:
+                    _sync_provider_budget()
                     resumed_code = resume_controller.prior_code_for_step(step.step_id)
                     if resumed_code is not None:
                         code = _use_resumed_code(resumed_code, error=exc)
@@ -6147,36 +8087,13 @@ else:
             nonlocal quarantine_policy_superseded
             nonlocal pending_quarantined_errors
 
-            code_findings = usage_auditor.audit(
+            code_findings = _deterministic_code_gate_findings(
                 context=context,
-                script_text=script_text,
                 step=step,
+                script_text=script_text,
+                usage_auditor=usage_auditor,
+                pattern_auditor=pattern_auditor,
             )
-            code_findings.extend(
-                pattern_auditor.audit(
-                    context=context,
-                    script_text=script_text,
-                    step=step,
-                )
-            )
-            compatibility_violations = detect_forbidden_pattern_usage(
-                script_text,
-                context,
-                step,
-            )
-            if compatibility_violations:
-                code_findings.append(
-                    ValidationFinding(
-                        validator="method_compatibility",
-                        severity="error",
-                        message=format_violation_message(compatibility_violations),
-                        detail={
-                            "step_id": step.step_id,
-                            "violations": compatibility_violations,
-                        },
-                    )
-                )
-            code_findings.extend(audit_mechanical_code_contracts(script_text, step))
             deterministic_errors = [
                 finding
                 for finding in code_findings
@@ -6289,6 +8206,8 @@ else:
                             step=step,
                             script_text=script_text,
                             audit_prompt=audit_prompt,
+                            environment_sha256=(concept_audit_environment_sha256),
+                            auditor_identity=pipeline._llm_signature(llm_audit_client),
                             authority_bindings=resolved_input_bindings,
                             validator_implementation_sha256=(
                                 llm_concept_auditor_implementation_sha256
@@ -6327,9 +8246,38 @@ else:
                                 context=context,
                                 script_text=script_text,
                                 step=step,
+                                provider_budget=provider_budget,
                             )
+                            _sync_provider_budget()
                             llm_concept_audit_cache.put(audit_key, llm_findings)
                             code_findings.extend(llm_findings)
+            except ProviderCallBudgetError as exc:
+                _sync_provider_budget()
+                receipt_error = isinstance(exc, ProviderCallBudgetReceiptError)
+                code_findings.append(
+                    ValidationFinding(
+                        validator=(
+                            "provider_call_budget_receipt"
+                            if receipt_error
+                            else "provider_call_budget"
+                        ),
+                        severity="error",
+                        message=(
+                            f"Step {step.step_id} could not durably record its "
+                            "provider call before concept approval."
+                            if receipt_error
+                            else f"Step {step.step_id} exhausted its shared LLM "
+                            "provider-call budget before concept approval."
+                        ),
+                        detail={
+                            "step_id": step.step_id,
+                            "category": getattr(exc, "category", None),
+                            "limit": getattr(exc, "limit", provider_budget.limit),
+                            "used": getattr(exc, "used", provider_budget.used),
+                            "reason": str(exc),
+                        },
+                    )
+                )
             except BaseException:
                 # An operator interrupt must propagate, but a draft already
                 # rejected by deterministic findings remains resumable.
@@ -6571,12 +8519,14 @@ else:
             if (
                 concept_repair_attempts >= pipeline._max_code_repair_attempts
                 or not _llm_repair_budget_available()
+                or provider_budget.exhausted
             ):
                 if not _llm_repair_budget_available():
                     step_record["step_llm_repair_budget_exhausted"] = True
                     step_record["step_llm_repair_budget"] = (
                         pipeline._max_step_llm_repair_attempts
                     )
+                _sync_provider_budget()
                 fallback_code = _deterministic_fallback_code("concept_audit")
                 if fallback_code is not None:
                     fallback_checkpoint_error: Optional[Exception] = None
@@ -6814,7 +8764,10 @@ else:
                         + audit_log
                     ),
                     attempt=concept_repair_attempts,
+                    provider_budget=provider_budget,
+                    provider_category="concept_repair",
                 )
+                _sync_provider_budget()
                 if (
                     quarantined_draft_active
                     and not _python_repair_is_materially_changed(code, repaired_code)
@@ -6854,6 +8807,7 @@ else:
                     pending_quarantined_errors = []
                     step_record["quarantined_repair_materially_changed"] = True
             except BaseException as exc:
+                _sync_provider_budget()
                 checkpoint_error: Optional[Exception] = None
                 try:
                     checkpoint = store_quarantined_concept_draft(
@@ -7185,13 +9139,17 @@ else:
                                     + _monotonic_concept_constraint_log()
                                 ),
                                 attempt=concept_repair_attempts,
+                                provider_budget=provider_budget,
+                                provider_category="post_mutation_concept_repair",
                             )
+                            _sync_provider_budget()
                             llm_repair_used = True
                             _clear_output_dir(
                                 run_dir / "steps" / step.step_id / "outputs"
                             )
                             continue
                         except Exception as exc:
+                            _sync_provider_budget()
                             with shared_lock:
                                 findings.append(
                                     ValidationFinding(
@@ -7480,12 +9438,16 @@ else:
                     f"Repaired analysis script for step {step.step_id} "
                     f"(attempt {total_repair_attempts})."
                 )
-            script_evidence_id = None
-            if current_generation_mode != "llm":
-                script_digest = sha256_of_file(run_result.script_path)
-                script_evidence_id = (
-                    f"code_analysis_{script_digest[:8]}_{current_generation_mode}"
-                )
+            script_digest = sha256_of_file(run_result.script_path)
+            script_authority = "\0".join(
+                (step.step_id, script_digest, current_generation_mode)
+            )
+            script_evidence_id = (
+                "code_analysis_"
+                + hashlib.sha256(
+                    script_authority.encode("utf-8")
+                ).hexdigest()[:16]
+            )
             script_record = evidence.register_file(
                 kind="code",
                 description=script_description,
@@ -7531,6 +9493,7 @@ else:
                     "llm_signature": llm_signature,
                 },
             )
+            step_record["script_evidence_id"] = script_record.evidence_id
             log_path = run_result.runner_log_path or (run_result.cwd / "run.log")
             if log_path.exists():
                 evidence.register_file(
@@ -7810,11 +9773,15 @@ else:
                                         + _monotonic_concept_constraint_log()
                                     ),
                                     attempt=visual_repair_attempts,
+                                    provider_budget=provider_budget,
+                                    provider_category="visual_repair",
                                 )
+                                _sync_provider_budget()
                                 llm_repair_used = True
                                 _clear_output_dir(run_result.out_dir)
                                 continue
                             except Exception as exc:
+                                _sync_provider_budget()
                                 demoted_findings, blocking_visual_errors = (
                                     _demote_cosmetic_visual_findings(visual_findings)
                                 )
@@ -8484,11 +10451,15 @@ else:
                                 + _monotonic_concept_constraint_log()
                             ),
                             attempt=contract_repair_attempts,
+                            provider_budget=provider_budget,
+                            provider_category="contract_repair",
                         )
+                        _sync_provider_budget()
                         llm_repair_used = True
                         _clear_output_dir(run_result.out_dir)
                         continue
                     except Exception as exc:
+                        _sync_provider_budget()
                         fallback_code = _deterministic_fallback_code(
                             "contract_repair_failed"
                         )
@@ -8740,10 +10711,14 @@ else:
                     code=code,
                     run_log=run_log,
                     attempt=repair_attempts,
+                    provider_budget=provider_budget,
+                    provider_category="runtime_repair",
                 )
+                _sync_provider_budget()
                 llm_repair_used = True
                 _clear_output_dir(run_result.out_dir)
             except Exception as exc:
+                _sync_provider_budget()
                 # 🔧 2026-05-16: distinguish transient LLM/parse failures from
                 # exhausted budget. JSON-parse errors after the OpenAIClient
                 # retry chain already exhausted its own backoff still bubble up
@@ -9203,6 +11178,7 @@ else:
         step_record["result_evidence_sealed"] = True
 
         evidence_ids_for_step: List[str] = [script_record.evidence_id]
+        pending_success_aliases: Dict[str, List[str]] = {}
         step_summary_record_id: Optional[str] = None
         for art in run_result.artefacts:
             if not run_result.outputs_safe_to_collect:
@@ -9228,6 +11204,22 @@ else:
                 llm_repair_used=llm_repair_used,
             )
             if art.name == "step_summary.json":
+                summary_authority = "\0".join(
+                    (
+                        step.step_id,
+                        sealed_result_digests.get(
+                            art.name,
+                            sha256_of_file(art),
+                        ),
+                        script_record.evidence_id,
+                    )
+                )
+                summary_evidence_id = (
+                    "statistic_step_summary_"
+                    + hashlib.sha256(
+                        summary_authority.encode("utf-8")
+                    ).hexdigest()[:16]
+                )
                 rec = evidence.register_file(
                     kind="statistic",
                     description=f"Machine-readable summary for step {step.step_id}.",
@@ -9238,6 +11230,8 @@ else:
                     aliases=step_aliases,
                     producer="runner",
                     generation_mode=generation_mode,
+                    evidence_id=summary_evidence_id,
+                    publish_aliases=False,
                     metadata={
                         "script_evidence_id": script_record.evidence_id,
                         "figure_role": figure_role or "analysis_figure",
@@ -9257,6 +11251,7 @@ else:
                     aliases=step_aliases,
                     producer="runner",
                     generation_mode=generation_mode,
+                    publish_aliases=False,
                     metadata={
                         "script_evidence_id": script_record.evidence_id,
                         "diagnostic_only": standard_executor_terminal_block,
@@ -9281,6 +11276,7 @@ else:
                     aliases=step_aliases,
                     producer="runner",
                     generation_mode=generation_mode,
+                    publish_aliases=False,
                     metadata={
                         "script_evidence_id": script_record.evidence_id,
                         "figure_role": figure_role or "analysis_figure",
@@ -9299,21 +11295,28 @@ else:
                     aliases=step_aliases,
                     producer="runner",
                     generation_mode=generation_mode,
+                    publish_aliases=False,
                     metadata={
                         "script_evidence_id": script_record.evidence_id,
                         "diagnostic_only": standard_executor_terminal_block,
                         **repair_evidence_metadata,
                     },
                 )
+            pending_success_aliases[rec.evidence_id] = list(step_aliases)
             evidence_ids_for_step.append(rec.evidence_id)
 
         if step_summary_record_id is not None:
             step_record["step_summary_evidence_id"] = step_summary_record_id
-        if (
-            step_summary
-            and step_summary_record_id is not None
-            and not standard_executor_terminal_block
-        ):
+
+        def _register_current_step_numeric_claims() -> None:
+            """Publish numeric authority only after every step gate passes."""
+
+            if (
+                not step_summary
+                or step_summary_record_id is None
+                or standard_executor_terminal_block
+            ):
+                return
             # Value-level provenance (A-track): every numeric leaf in the
             # step's summary is registered as a NumericClaim so the
             # manuscript binder can reverse-link numbers in prose to the
@@ -9366,6 +11369,7 @@ else:
                     step.step_id,
                     exc,
                 )
+
         if standard_executor_terminal_block:
             terminal_summary = (
                 step_summary if step_summary else standard_executor_terminal_summary
@@ -9432,190 +11436,43 @@ else:
                 reason=standard_executor_terminal_reason,
             )
             return step_record
-        stat_findings = stat_validator.audit(
-            context=context,
-            cohort_path=cohort_path,
-            step=step,
-            out_dir=run_result.out_dir,
-            step_summary=step_summary,
-        )
-        clinical_findings = clinical_validator.audit(
-            context=context,
-            step=step,
-            out_dir=run_result.out_dir,
-            step_summary=step_summary,
-        )
-        guard_findings = statistical_guard.audit(
-            context=context,
-            cohort_path=cohort_path,
-            step=step,
-            out_dir=run_result.out_dir,
-            step_summary=step_summary,
-        )
         with shared_lock:
             completed_records_snapshot = list(per_step_records)
-        contract_findings = _step_contract_findings(
-            step=step,
-            step_summary=step_summary,
-            completed_step_records=completed_records_snapshot,
-            resolved_input_bindings=resolved_input_bindings,
-            out_dir=run_result.out_dir,
-        )
-        contract_findings.extend(
-            _cohort_definition_sensitivity_contract_findings(
-                step=step,
-                step_summary=step_summary,
-                out_dir=run_result.out_dir,
-                run_dir=run_dir,
-                universe_path=universe_path,
-                cohort_path=cohort_path,
-                context=context,
-                completed_step_records=completed_records_snapshot,
-            )
-        )
-        contract_findings.extend(
-            cross_step_cohort_lock_validator.audit(
-                step=step,
-                step_summary=step_summary,
-                completed_step_records=completed_records_snapshot,
-            )
-        )
-        contract_findings.extend(
-            cross_step_registered_output_validator.audit(
-                step=step,
-                step_summary=step_summary,
-                completed_step_records=completed_records_snapshot,
-            )
-        )
-        contract_findings.extend(
-            cross_step_reconciliation_trace_validator.audit(
-                step=step,
-                step_summary=step_summary,
-                out_dir=run_result.out_dir,
-            )
-        )
-        contract_findings.extend(
-            step_summary_integrity_validator.audit(
-                step=step,
-                step_summary=step_summary,
-                resolved_input_bindings=resolved_input_bindings,
-                cohort_path=cohort_path,
-            )
-        )
-        contract_findings.extend(
-            step_summary_fraction_validator.audit(
-                step=step,
-                step_summary=step_summary,
-            )
-        )
-        contract_findings.extend(
-            cross_step_source_status_validator.audit(
-                step=step,
-                step_summary=step_summary,
-                completed_step_records=completed_records_snapshot,
-            )
-        )
-        contract_findings.extend(
-            primary_model_contract_validator.audit(
-                step=step,
-                step_summary=step_summary,
-                context=context,
-                completed_step_records=completed_records_snapshot,
-                out_dir=run_result.out_dir,
-                cohort_path=cohort_path,
-            )
-        )
-        contract_findings.extend(
-            _primary_exposure_contract_findings(
-                step=step,
-                step_summary=step_summary,
-                context=context,
-            )
-        )
-        contract_findings.extend(
-            _primary_exposure_measurement_filter_findings(
-                step=step,
-                step_summary=step_summary,
-                context=context,
-            )
-        )
-        contract_findings.extend(
-            _primary_exposure_overadjustment_findings(
-                step=step,
-                context=context,
-                out_dir=run_result.out_dir,
-            )
-        )
-        contract_findings.extend(
-            _primary_model_leakage_findings(
-                step=step,
-                context=context,
-                out_dir=run_result.out_dir,
-            )
-        )
-        contract_findings.extend(
-            figure_contract_validator.audit(
-                step=step,
-                out_dir=run_result.out_dir,
-                run_dir=run_dir,
-                step_summary=step_summary,
-            )
-        )
-        # A deterministic PRIMARY runner owns its step's contract (see the early
-        # check above): demote step_contract missing-output errors to advisory so
-        # planner output-bloat cannot fail-close a step whose core estimate the
-        # runner already produced. Figure/exposure/leakage validators still block.
-        contract_findings = _demote_step_contract_for_primary_runner(
-            step_record, step_summary, contract_findings
-        )
-        # A study-design family whose PRIMARY publication figure is assembled
-        # deterministically in the write phase (phenotyping / prediction /
-        # time_to_event / causal_emulation) must not fail-close a step merely
-        # because its LLM-declared step figure is single-panel: that keeps
-        # execution_complete False and skips the very renderer that builds the
-        # multi-panel primary. The display-suite gate stays the fail-closed
-        # backstop. See _demote_result_figure_shape_for_family_renderer.
-        contract_findings = _demote_result_figure_shape_for_family_renderer(
-            context, contract_findings
-        )
-        figure_source_findings = figure_source_validator.audit(
-            step=step,
-            out_dir=run_result.out_dir,
+        final_gate_findings = _evaluate_final_deterministic_gates(
+            context=context,
+            cohort_path=cohort_path,
+            universe_path=universe_path,
             run_dir=run_dir,
+            out_dir=run_result.out_dir,
+            step=step,
             step_summary=step_summary,
+            step_record=step_record,
             completed_step_records=completed_records_snapshot,
             resolved_input_bindings=resolved_input_bindings,
-        )
-        stat_findings = _bind_findings_to_step_attempt(
-            stat_findings,
-            step_id=step.step_id,
             attempt_id=attempt_id,
             checkpoint_id=review_checkpoint_id,
+            stat_validator=stat_validator,
+            clinical_validator=clinical_validator,
+            statistical_guard=statistical_guard,
+            cross_step_cohort_lock_validator=cross_step_cohort_lock_validator,
+            cross_step_registered_output_validator=(
+                cross_step_registered_output_validator
+            ),
+            cross_step_reconciliation_trace_validator=(
+                cross_step_reconciliation_trace_validator
+            ),
+            step_summary_integrity_validator=step_summary_integrity_validator,
+            step_summary_fraction_validator=step_summary_fraction_validator,
+            cross_step_source_status_validator=cross_step_source_status_validator,
+            primary_model_contract_validator=primary_model_contract_validator,
+            figure_contract_validator=figure_contract_validator,
+            figure_source_validator=figure_source_validator,
         )
-        clinical_findings = _bind_findings_to_step_attempt(
-            clinical_findings,
-            step_id=step.step_id,
-            attempt_id=attempt_id,
-            checkpoint_id=review_checkpoint_id,
-        )
-        guard_findings = _bind_findings_to_step_attempt(
-            guard_findings,
-            step_id=step.step_id,
-            attempt_id=attempt_id,
-            checkpoint_id=review_checkpoint_id,
-        )
-        contract_findings = _bind_findings_to_step_attempt(
-            contract_findings,
-            step_id=step.step_id,
-            attempt_id=attempt_id,
-            checkpoint_id=review_checkpoint_id,
-        )
-        figure_source_findings = _bind_findings_to_step_attempt(
-            figure_source_findings,
-            step_id=step.step_id,
-            attempt_id=attempt_id,
-            checkpoint_id=review_checkpoint_id,
-        )
+        stat_findings = list(final_gate_findings.stat_findings)
+        clinical_findings = list(final_gate_findings.clinical_findings)
+        guard_findings = list(final_gate_findings.guard_findings)
+        contract_findings = list(final_gate_findings.contract_findings)
+        figure_source_findings = list(final_gate_findings.figure_source_findings)
         with shared_lock:
             findings.extend(stat_findings)
             findings.extend(clinical_findings)
@@ -9684,8 +11541,12 @@ else:
                 aliases=[f"{step.step_id}_critique"],
                 producer="critic",
                 generation_mode="system",
+                publish_aliases=False,
                 metadata={"script_evidence_id": script_record.evidence_id},
             )
+            pending_success_aliases[critique_record.evidence_id] = [
+                f"{step.step_id}_critique"
+            ]
             evidence_ids_for_step.append(critique_record.evidence_id)
             step_record["critique_report"] = critique.model_dump(mode="json")
             if critique.status in {"needs_revision", "blocked"}:
@@ -9749,10 +11610,25 @@ else:
                     step=step,
                     step_summary=step_summary,
                     evidence_ids=evidence_ids_for_step,
+                    provider_budget=provider_budget,
                 )
             except Exception as exc:
                 interpretation = f"(analyzer failed: {exc})"
                 interp_generation_mode = "system"
+        _sync_provider_budget()
+        # Content-addressing alone is insufficient for step-owned evidence:
+        # two steps may legitimately receive identical analyzer text.  Bind
+        # the identity to the producing step and exact script so a later
+        # resume never reuses another step's first-written authority record.
+        interpretation_authority = "\0".join(
+            (step.step_id, script_record.evidence_id, interpretation)
+        )
+        interpretation_evidence_id = (
+            "log_interpretation_"
+            + hashlib.sha256(
+                interpretation_authority.encode("utf-8")
+            ).hexdigest()[:16]
+        )
         interp_record = evidence.register_text(
             kind="log",
             description=f"Analyzer interpretation for step {step.step_id}.",
@@ -9760,10 +11636,15 @@ else:
             filename=f"interpretation_{step.step_id}.md",
             produced_by_step=step.step_id,
             script_evidence_id=script_record.evidence_id,
+            evidence_id=interpretation_evidence_id,
             producer="analyzer",
             generation_mode=interp_generation_mode,
             prompt_pack_version=prompt_version,
+            publish_aliases=False,
         )
+        pending_success_aliases[interp_record.evidence_id] = [
+            f"interpretation_{step.step_id}"
+        ]
         step_record["interpretation_evidence_id"] = interp_record.evidence_id
         evidence_ids_for_step.append(interp_record.evidence_id)
         step_record["evidence_ids"] = list(dict.fromkeys(evidence_ids_for_step))
@@ -9845,9 +11726,81 @@ else:
                     ),
                     detail={"step_id": step.step_id},
                 )
+        alias_publication_finding: Optional[ValidationFinding] = None
+        if step_record["status"] == "ok":
+            try:
+                current_evidence_records = evidence.records()
+                (
+                    success_alias_bindings,
+                    retained_cross_step_aliases,
+                    suppressed_basename_evidence_ids,
+                ) = (
+                    _filter_success_alias_bindings(
+                        pending_success_aliases,
+                        existing_aliases=evidence.aliases(),
+                        owners_by_evidence_id={
+                            record.evidence_id: str(
+                                record.produced_by_step or ""
+                            ).strip()
+                            for record in current_evidence_records
+                        },
+                        step_id=step.step_id,
+                        records_by_evidence_id={
+                            record.evidence_id: record
+                            for record in current_evidence_records
+                        },
+                    )
+                )
+                evidence.publish_step_success_aliases(
+                    success_alias_bindings,
+                    step_id=step.step_id,
+                    suppressed_basename_evidence_ids=(
+                        suppressed_basename_evidence_ids
+                    ),
+                )
+                if retained_cross_step_aliases:
+                    step_record["retained_cross_step_aliases"] = (
+                        retained_cross_step_aliases
+                    )
+            except (KeyError, ValueError, OSError) as exc:
+                step_record["status"] = "contract_failed"
+                alias_publication_finding = ValidationFinding(
+                    validator="result_evidence_authority",
+                    severity="error",
+                    message=(
+                        "Validated result evidence could not be promoted to "
+                        f"current authority for step {step.step_id}."
+                    ),
+                    detail={
+                        "step_id": step.step_id,
+                        "attempt_id": attempt_id,
+                        "checkpoint_id": review_checkpoint_id,
+                        "reason": str(exc),
+                    },
+                )
+                contract_findings.append(alias_publication_finding)
+                step_record["contract_findings"] = [
+                    finding.model_dump() for finding in contract_findings
+                ]
+                _propagate_findings_to_evidence(
+                    evidence_ids_for_step,
+                    [alias_publication_finding],
+                    metadata={
+                        "step_id": step.step_id,
+                        "generation_mode": step_record["generation_mode"],
+                    },
+                )
+                has_contract_error = True
+        if step_record["status"] == "ok":
+            # This stamp is written only after deterministic artifact gates and
+            # Critic review pass and current evidence aliases are published.
+            step_record.update(_deterministic_gate_stamp())
+            _register_current_step_numeric_claims()
         with shared_lock:
             if final_cleanup_finding is not None:
                 findings.append(final_cleanup_finding)
+            if alias_publication_finding is not None:
+                findings.append(alias_publication_finding)
             upsert_step_record(
                 per_step_records,
                 step_record,
