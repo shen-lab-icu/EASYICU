@@ -38,7 +38,9 @@ def test_register_step_summary_numerics_collects_leaves(ra, tmp_path: Path):
         "note": "analysis ran",  # non-numeric: skipped
     }
     claims = store.register_step_summary_numerics(
-        step_id="03_assoc", evidence_id="evid_assoc", summary=summary,
+        step_id="03_assoc",
+        evidence_id="evid_assoc",
+        summary=summary,
     )
     fields = {c.source_field for c in claims}
     assert "primary_or" in fields
@@ -54,21 +56,47 @@ def test_register_step_summary_numerics_is_idempotent(ra, tmp_path: Path):
     store = _store(ra, tmp_path)
     summary = {"primary_or": 1.42, "p_value": 0.003}
     a = store.register_step_summary_numerics(
-        step_id="s1", evidence_id="evid_a", summary=summary,
+        step_id="s1",
+        evidence_id="evid_a",
+        summary=summary,
     )
     b = store.register_step_summary_numerics(
-        step_id="s1", evidence_id="evid_a", summary=summary,
+        step_id="s1",
+        evidence_id="evid_a",
+        summary=summary,
     )
     assert len(a) == len(b)
-    assert len(store.numeric_claims()) == len(a), (
-        "re-running registration on the same step must not duplicate claims"
+    assert len(store.numeric_claims()) == len(
+        a
+    ), "re-running registration on the same step must not duplicate claims"
+
+
+def test_later_successful_attempt_keeps_its_own_numeric_claim_authority(
+    ra, tmp_path: Path
+):
+    store = _store(ra, tmp_path)
+    summary = {"primary_or": 1.42, "p_value": 0.003}
+
+    store.register_step_summary_numerics(
+        step_id="s1",
+        evidence_id="evid_attempt_1",
+        summary=summary,
     )
+    second = store.register_step_summary_numerics(
+        step_id="s1",
+        evidence_id="evid_attempt_2",
+        summary=summary,
+    )
+
+    assert {claim.evidence_id for claim in second} == {"evid_attempt_2"}
+    assert len(store.numeric_claims()) == 4
 
 
 def test_find_claim_for_value_supports_tolerance(ra, tmp_path: Path):
     store = _store(ra, tmp_path)
     store.register_step_summary_numerics(
-        step_id="s1", evidence_id="evid_a",
+        step_id="s1",
+        evidence_id="evid_a",
         summary={"primary_or": 1.42345},
     )
     # Exact literal hit (registry literal happens to be 1.42345)
@@ -124,6 +152,217 @@ def test_near_zero_literal_does_not_match_zero_claim(ra, tmp_path: Path):
     assert untraced == []
     assert "<!-- AMBIGUOUS:" not in bound
     assert binding_map["claim_1"].source_field == "risk_difference.ci_low"
+
+
+def test_numeric_binder_rejects_claim_from_latest_failed_attempt(
+    ra, tmp_path: Path
+) -> None:
+    from easyicu.research_agent.evidence import (
+        EvidenceEnforcementError,
+        EvidenceEnforcementMode,
+    )
+    from easyicu.research_agent.manuscript_post import bind_numeric_values
+
+    store = _store(ra, tmp_path)
+    store.register_numeric_claim(
+        value="0.999",
+        canonical=0.999,
+        evidence_id="retired_summary",
+        step_id="03_model",
+        source_field="auroc",
+    )
+    records = [
+        {
+            "step_id": "03_model",
+            "status": "ok",
+            "evidence_ids": ["retired_summary"],
+            "step_summary": {"auroc": 0.999},
+        },
+        {
+            "step_id": "03_model",
+            "status": "contract_failed",
+            "evidence_ids": [],
+            "step_summary": {},
+        },
+    ]
+
+    with pytest.raises(EvidenceEnforcementError):
+        bind_numeric_values(
+            "The AUROC was 0.999.",
+            evidence=store,
+            enforcement_mode=EvidenceEnforcementMode.STRICT,
+            per_step_records=records,
+        )
+
+
+def test_manuscript_numeric_audit_ignores_retired_summary(ra, tmp_path: Path) -> None:
+    from easyicu.research_agent.audits.manuscript_claims import (
+        audit_manuscript_numeric_claims,
+    )
+
+    records = [
+        {
+            "step_id": "03_model",
+            "status": "ok",
+            "evidence_ids": ["retired_summary"],
+            "step_summary": {"auroc": 0.999},
+        },
+        {
+            "step_id": "03_model",
+            "status": "contract_failed",
+            "evidence_ids": [],
+            "step_summary": {},
+        },
+        {
+            "step_id": "04_current",
+            "status": "ok",
+            "evidence_ids": ["current_summary"],
+            "step_summary": {"auroc": 0.8},
+        },
+    ]
+
+    findings = audit_manuscript_numeric_claims(
+        "The AUROC was 0.999.",
+        per_step_records=records,
+    )
+
+    assert any("AUROC claim" in finding.message for finding in findings)
+
+
+def test_numeric_binder_keeps_registered_run_level_context_claim(
+    ra, tmp_path: Path
+) -> None:
+    from easyicu.research_agent.evidence import (
+        EvidenceEnforcementError,
+        EvidenceEnforcementMode,
+    )
+    from easyicu.research_agent.manuscript_post import bind_numeric_values
+
+    context_path = tmp_path / "research_context.json"
+    context_path.write_text('{"n_stays": 94458}', encoding="utf-8")
+    store = _store(ra, tmp_path)
+    store.register_file(
+        kind="log",
+        description="Run-level research context.",
+        source_path=context_path,
+        evidence_id="research_context",
+        producer="pipeline",
+    )
+    store.register_numeric_claim(
+        value="94458",
+        canonical=94458.0,
+        evidence_id="research_context",
+        step_id="research_context",
+        source_field="cohort.n_stays",
+    )
+    store.register_numeric_claim(
+        value="777",
+        canonical=777.0,
+        evidence_id="research_context",
+        step_id="99_orphan",
+        source_field="invented",
+    )
+
+    bound, binding_map, untraced = bind_numeric_values(
+        "The source export contained 94,458 stays.",
+        evidence=store,
+        per_step_records=[],
+    )
+
+    assert untraced == []
+    assert binding_map["claim_1"].evidence_id == "research_context"
+    assert "evidence=research_context" in bound
+
+    with pytest.raises(EvidenceEnforcementError):
+        bind_numeric_values(
+            "The invented value was 777.",
+            evidence=store,
+            enforcement_mode=EvidenceEnforcementMode.STRICT,
+            per_step_records=[],
+        )
+
+
+def test_numeric_binder_rejects_tampered_current_evidence_blob(
+    ra, tmp_path: Path
+) -> None:
+    from easyicu.research_agent.evidence import (
+        EvidenceEnforcementError,
+        EvidenceEnforcementMode,
+    )
+    from easyicu.research_agent.manuscript_post import bind_numeric_values
+
+    summary_path = tmp_path / "step_summary.json"
+    summary_path.write_text('{"auroc": 0.81}', encoding="utf-8")
+    store = _store(ra, tmp_path)
+    record = store.register_file(
+        kind="statistic",
+        description="Current model summary.",
+        source_path=summary_path,
+        produced_by_step="03_model",
+        evidence_id="current_summary",
+        producer="runner",
+    )
+    store.register_numeric_claim(
+        value="0.81",
+        canonical=0.81,
+        evidence_id=record.evidence_id,
+        step_id="03_model",
+        source_field="auroc",
+    )
+    records = [
+        {
+            "step_id": "03_model",
+            "status": "ok",
+            "evidence_ids": [record.evidence_id],
+            "step_summary": {"auroc": 0.81},
+        }
+    ]
+    evidence_blob = tmp_path / record.relative_path
+    evidence_blob.write_text('{"auroc": 0.99}', encoding="utf-8")
+
+    with pytest.raises(EvidenceEnforcementError):
+        bind_numeric_values(
+            "The AUROC was 0.81.",
+            evidence=store,
+            enforcement_mode=EvidenceEnforcementMode.STRICT,
+            per_step_records=records,
+        )
+
+
+def test_numeric_binder_rejects_arbitrary_run_level_self_owner(
+    ra, tmp_path: Path
+) -> None:
+    from easyicu.research_agent.evidence import (
+        EvidenceEnforcementError,
+        EvidenceEnforcementMode,
+    )
+    from easyicu.research_agent.manuscript_post import bind_numeric_values
+
+    source = tmp_path / "fabricated.json"
+    source.write_text('{"value": 777}', encoding="utf-8")
+    store = _store(ra, tmp_path)
+    store.register_file(
+        kind="log",
+        description="Unrecognised run-level payload.",
+        source_path=source,
+        evidence_id="fabricated",
+        producer="pipeline",
+    )
+    store.register_numeric_claim(
+        value="777",
+        canonical=777.0,
+        evidence_id="fabricated",
+        step_id="fabricated",
+        source_field="value",
+    )
+
+    with pytest.raises(EvidenceEnforcementError):
+        bind_numeric_values(
+            "The fabricated value was 777.",
+            evidence=store,
+            enforcement_mode=EvidenceEnforcementMode.STRICT,
+            per_step_records=[],
+        )
 
 
 def test_context_numeric_claims_cover_source_counts_and_missingness(ra, tmp_path: Path):
@@ -212,16 +451,23 @@ def test_bind_numeric_values_attaches_footnotes(ra, tmp_path: Path):
 
     store = _store(ra, tmp_path)
     store.register_step_summary_numerics(
-        step_id="03_assoc", evidence_id="evid_assoc",
-        summary={"primary_or": 1.42, "or_ci_lower": 1.18,
-                 "or_ci_upper": 1.71, "p_value": 0.003, "n_rows": 1234},
+        step_id="03_assoc",
+        evidence_id="evid_assoc",
+        summary={
+            "primary_or": 1.42,
+            "or_ci_lower": 1.18,
+            "or_ci_upper": 1.71,
+            "p_value": 0.003,
+            "n_rows": 1234,
+        },
     )
     manuscript = (
         "Higher SOFA-2 was associated with mortality "
         "(OR=1.42, 95% CI 1.18-1.71, p=0.003) in 1,234 patients.\n"
     )
     bound, binding_map, untraced = bind_numeric_values(
-        manuscript, evidence=store,
+        manuscript,
+        evidence=store,
     )
     assert "[^claim_1]" in bound  # OR=1.42 got a footnote
     # Both CI bounds bound (the hyphen between them must NOT block the
@@ -301,15 +547,20 @@ def test_bind_numeric_values_footnote_exposes_derived_provenance(ra, tmp_path: P
 def test_bind_numeric_values_strict_raises_on_untraced(ra, tmp_path: Path):
     from easyicu.research_agent.manuscript_post import bind_numeric_values
 
-    store = _store(ra, tmp_path, )
+    store = _store(
+        ra,
+        tmp_path,
+    )
     store.register_step_summary_numerics(
-        step_id="s1", evidence_id="evid_a",
+        step_id="s1",
+        evidence_id="evid_a",
         summary={"primary_or": 1.42},
     )
     manuscript = "The OR was 1.42, but a stray 999 appeared.\n"
     # SOFT mode → annotates and returns list.
     bound, _, untraced = bind_numeric_values(
-        manuscript, evidence=store,
+        manuscript,
+        evidence=store,
         enforcement_mode=ra.EvidenceEnforcementMode.SOFT,
     )
     assert "999" in untraced
@@ -317,7 +568,8 @@ def test_bind_numeric_values_strict_raises_on_untraced(ra, tmp_path: Path):
     # STRICT mode → raises with detail.
     with pytest.raises(ra.EvidenceEnforcementError) as exc_info:
         bind_numeric_values(
-            manuscript, evidence=store,
+            manuscript,
+            evidence=store,
             enforcement_mode=ra.EvidenceEnforcementMode.STRICT,
         )
     assert "999" in exc_info.value.detail["untraced"]
@@ -360,13 +612,15 @@ def test_bind_numeric_values_does_not_skip_result_years(ra, tmp_path: Path):
 
 
 def test_bind_numeric_values_skips_existing_evidence_placeholders(
-    ra, tmp_path: Path,
+    ra,
+    tmp_path: Path,
 ):
     from easyicu.research_agent.manuscript_post import bind_numeric_values
 
     store = _store(ra, tmp_path)
     store.register_step_summary_numerics(
-        step_id="s1", evidence_id="evid_a",
+        step_id="s1",
+        evidence_id="evid_a",
         summary={"primary_or": 1.42},
     )
     # The "1.42" inside the placeholder must NOT be re-bound (it would
@@ -391,7 +645,8 @@ def test_bind_numeric_values_skips_sha256_in_link_targets(ra, tmp_path: Path):
 
     store = ra.EvidenceStore(tmp_path)
     store.register_step_summary_numerics(
-        step_id="s1", evidence_id="evid_assoc",
+        step_id="s1",
+        evidence_id="evid_assoc",
         summary={"primary_or": 1.42},
     )
     manuscript = (
@@ -424,7 +679,8 @@ def test_bind_numeric_values_skips_sha256_in_prose(ra, tmp_path: Path):
 def test_numeric_claims_persist_across_store_reload(ra, tmp_path: Path):
     store_a = _store(ra, tmp_path)
     store_a.register_step_summary_numerics(
-        step_id="s1", evidence_id="evid_a",
+        step_id="s1",
+        evidence_id="evid_a",
         summary={"primary_or": 1.42},
     )
     store_b = _store(ra, tmp_path)

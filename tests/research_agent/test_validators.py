@@ -2540,13 +2540,104 @@ def test_llm_concept_auditor_parses_findings(ra):
     from easyicu.research_agent.audits.validators import parse_llm_concept_audit_response
 
     raw = """```json
-{"findings":[{"severity":"warning","message":"ICU mortality may be confused with hospital mortality.","detail":{"column":"death_hosp"}}]}
+{"findings":[{"severity":"warning","message":"ICU mortality may be confused with hospital mortality.","detail":{"issue_code":"other","column":"death_hosp"}}]}
 ```"""
     findings = parse_llm_concept_audit_response(raw, step_id="04_primary")
     assert len(findings) == 1
     assert findings[0].validator == "llm_concept_auditor"
     assert findings[0].severity == "warning"
     assert findings[0].detail["step_id"] == "04_primary"
+
+
+@pytest.mark.parametrize(
+    ("raw", "response_issue"),
+    [
+        ("not json", "invalid_json"),
+        ('{"findings":{}}', "findings_must_be_a_list"),
+        (
+            '{"findings":[{"severity":"urgent","message":"x",'
+            '"detail":{"issue_code":"other"}}]}',
+            "finding_0_severity_is_invalid",
+        ),
+        (
+            '{"findings":[{"severity":"error","message":"x","detail":{}}]}',
+            "finding_0_issue_code_is_invalid",
+        ),
+    ],
+)
+def test_llm_concept_auditor_invalid_schema_fails_closed(
+    raw: str,
+    response_issue: str,
+) -> None:
+    from easyicu.research_agent.audits.validators import (
+        parse_llm_concept_audit_response,
+    )
+
+    findings = parse_llm_concept_audit_response(raw, step_id="04_primary")
+
+    assert len(findings) == 1
+    assert findings[0].severity == "error"
+    assert findings[0].detail["issue_code"] == (
+        "llm_concept_audit_response_invalid"
+    )
+    assert findings[0].detail["response_issue"] == response_issue
+    assert findings[0].detail["step_id"] == "04_primary"
+
+
+def test_llm_concept_auditor_does_not_downgrade_invalid_schema(ra) -> None:
+    class _MalformedAuditLLM:
+        def complete(self, messages, *, max_tokens=1024, temperature=0.0):
+            return '{"findings":[{"severity":"error","message":"x"}]}'
+
+    context = ra.build_research_context(
+        research_question="Describe the cohort.",
+        cohort=pd.DataFrame({"stay_id": [1, 2]}),
+        cohort_name="c",
+        database="synthetic",
+    )
+
+    findings = ra.LLMConceptAuditor(_MalformedAuditLLM()).audit(
+        context=context,
+        script_text="print('complete')",
+    )
+
+    assert len(findings) == 1
+    assert findings[0].severity == "error"
+    assert findings[0].detail["issue_code"] == (
+        "llm_concept_audit_response_invalid"
+    )
+
+
+def test_llm_concept_auditor_provider_failure_fails_closed(ra) -> None:
+    class _UnavailableAuditLLM:
+        def complete(self, messages, *, max_tokens=1024, temperature=0.0):
+            raise ConnectionError("provider transport unavailable")
+
+    context = ra.build_research_context(
+        research_question="Describe the cohort.",
+        cohort=pd.DataFrame({"stay_id": [1, 2]}),
+        cohort_name="c",
+        database="synthetic",
+    )
+    step = ra.AnalysisStep(
+        step_id="04_primary",
+        intent="Fit the planner-selected primary analysis.",
+    )
+
+    findings = ra.LLMConceptAuditor(_UnavailableAuditLLM()).audit(
+        context=context,
+        script_text="print('candidate')",
+        step=step,
+    )
+
+    assert len(findings) == 1
+    assert findings[0].validator == "llm_concept_auditor"
+    assert findings[0].severity == "error"
+    assert findings[0].detail == {
+        "issue_code": "llm_concept_audit_provider_failure",
+        "error_type": "ConnectionError",
+        "step_id": "04_primary",
+    }
 
 
 def test_llm_concept_auditor_prompt_includes_outcome_semantics(ra):
@@ -2642,6 +2733,7 @@ if isinstance(exposure_definition, pd.DataFrame):
         raise RuntimeError('invalid finalized exposure')
     treatment = finalized.astype(int)
     frame['vasopressor'] = treatment
+    model = sm.Logit(outcome, pd.DataFrame({'vasopressor': treatment}))
 """
     findings = ra.LLMConceptAuditor(_FalseReconciliationDemandLLM()).audit(
         context=ra.build_research_context(
@@ -2726,6 +2818,7 @@ if isinstance(exposure_definition, pd.DataFrame):
 else:
     treatment = resolve_raw_exposure(exposure_definition, frame).values
 frame['vasopressor'] = treatment
+model = sm.Logit(outcome, pd.DataFrame({'vasopressor': treatment}))
 """
     context = ra.build_research_context(
         research_question="Assess balance by vasopressor exposure.",
@@ -2885,6 +2978,7 @@ if isinstance(exposure_definition, pd.DataFrame):
 else:
     treatment = resolve_raw_exposure(exposure_definition, frame).values
 frame[product_contract['executable_column']] = treatment
+model = sm.Logit(outcome, pd.DataFrame({'treatment': treatment}))
 """
     context = ra.build_research_context(
         research_question="Assess balance by the registered exposure.",
@@ -2920,6 +3014,308 @@ frame[product_contract['executable_column']] = treatment
     assert "AST control-flow verification" in findings[0].detail["downgraded_reason"]
 
 
+def test_authoritative_exposure_flow_accepts_exact_host_manifest_binding() -> None:
+    from easyicu.research_agent.audits.validators import (
+        _verified_authoritative_exposure_flow,
+    )
+
+    script = """
+manifest_path = Path(os.environ['EASYICU_RESOLVED_INPUTS_JSON'])
+manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+exposure_binding = manifest['inputs']['artifact:primary_exposure_definition']
+exposure_definition = load_typed_table(exposure_binding)
+product_contract = exposure_binding['product_contract']
+def resolve_exposure(definition, product_contract):
+    executable = product_contract['executable_column']
+    finalized = pd.to_numeric(definition[executable], errors='coerce')
+    if finalized.isna().any() or not np.isfinite(finalized).all() or not finalized.isin([0, 1]).all():
+        raise RuntimeError('invalid finalized exposure')
+    return finalized.astype(int)
+treatment = resolve_exposure(exposure_definition, product_contract)
+model = sm.Logit(outcome, pd.DataFrame({'treatment': treatment}))
+"""
+
+    assert _verified_authoritative_exposure_flow(
+        script,
+        primary_exposure="treatment",
+    )
+
+
+def test_authoritative_exposure_flow_rejects_shadowed_resolved_inputs() -> None:
+    from easyicu.research_agent.audits.validators import (
+        _verified_authoritative_exposure_flow,
+    )
+
+    script = """
+decoy = pd.DataFrame({'treatment': [0, 1]})
+resolved_inputs = {
+    'artifact:primary_exposure_definition': {'value': decoy},
+}
+exposure_binding = resolved_inputs['artifact:primary_exposure_definition']
+exposure_definition = exposure_binding['value']
+finalized = pd.to_numeric(exposure_definition['treatment'], errors='coerce')
+if finalized.isna().any() or not np.isfinite(finalized).all() or not finalized.isin([0, 1]).all():
+    raise RuntimeError('invalid exposure')
+model = sm.Logit(outcome, pd.DataFrame({'treatment': finalized}))
+"""
+
+    assert not _verified_authoritative_exposure_flow(
+        script,
+        primary_exposure="treatment",
+    )
+
+
+def test_authoritative_exposure_flow_rejects_decoy_result_sink() -> None:
+    from easyicu.research_agent.audits.validators import (
+        _verified_authoritative_exposure_flow,
+    )
+
+    script = """
+exposure_binding = resolved_inputs['artifact:primary_exposure_definition']
+exposure_definition = exposure_binding['value']
+product_contract = exposure_binding['product_contract']
+executable = product_contract['executable_column']
+finalized = pd.to_numeric(exposure_definition[executable], errors='coerce')
+if finalized.isna().any() or not np.isfinite(finalized).all() or not finalized.isin([0, 1]).all():
+    raise RuntimeError('invalid finalized exposure')
+decoy = sm.Logit(outcome, pd.DataFrame({'treatment': finalized})).fit()
+raw_wrong = pd.to_numeric(frame['raw_wrong'], errors='coerce')
+primary = sm.Logit(outcome, pd.DataFrame({'treatment': raw_wrong})).fit()
+"""
+
+    assert not _verified_authoritative_exposure_flow(
+        script,
+        primary_exposure="treatment",
+    )
+
+
+def test_authoritative_exposure_flow_rejects_checks_without_fail_closed_guard() -> None:
+    from easyicu.research_agent.audits.validators import (
+        _verified_authoritative_exposure_flow,
+    )
+
+    script = """
+exposure_binding = resolved_inputs['artifact:primary_exposure_definition']
+exposure_definition = exposure_binding['value']
+product_contract = exposure_binding['product_contract']
+executable = product_contract['executable_column']
+finalized = pd.to_numeric(exposure_definition[executable], errors='coerce')
+finalized.isna().any()
+np.isfinite(finalized).all()
+finalized.isin([0, 1]).all()
+model = sm.Logit(outcome, pd.DataFrame({'treatment': finalized}))
+"""
+
+    assert not _verified_authoritative_exposure_flow(
+        script,
+        primary_exposure="treatment",
+    )
+
+
+def test_authoritative_exposure_flow_rejects_conditional_helper_return() -> None:
+    from easyicu.research_agent.audits.validators import (
+        _verified_authoritative_exposure_flow,
+    )
+
+    script = """
+exposure_binding = resolved_inputs['artifact:primary_exposure_definition']
+exposure_definition = exposure_binding['value']
+product_contract = exposure_binding['product_contract']
+executable = product_contract['executable_column']
+finalized = pd.to_numeric(exposure_definition[executable], errors='coerce')
+if finalized.isna().any() or not np.isfinite(finalized).all() or not finalized.isin([0, 1]).all():
+    raise RuntimeError('invalid finalized exposure')
+def choose_exposure():
+    if use_registered_exposure:
+        return finalized
+    return frame['raw_wrong']
+treatment = choose_exposure()
+model = sm.Logit(outcome, pd.DataFrame({'treatment': treatment}))
+"""
+
+    assert not _verified_authoritative_exposure_flow(
+        script,
+        primary_exposure="treatment",
+    )
+
+
+def test_authoritative_exposure_flow_rejects_conditional_expression_helper_return() -> None:
+    from easyicu.research_agent.audits.validators import (
+        _verified_authoritative_exposure_flow,
+    )
+
+    script = """
+exposure_binding = resolved_inputs['artifact:primary_exposure_definition']
+exposure_definition = exposure_binding['value']
+product_contract = exposure_binding['product_contract']
+executable = product_contract['executable_column']
+finalized = pd.to_numeric(exposure_definition[executable], errors='coerce')
+if finalized.isna().any() or not np.isfinite(finalized).all() or not finalized.isin([0, 1]).all():
+    raise RuntimeError('invalid finalized exposure')
+def choose_exposure():
+    return finalized if use_registered_exposure else frame['raw_wrong']
+treatment = choose_exposure()
+model = sm.Logit(outcome, pd.DataFrame({'treatment': treatment}))
+"""
+
+    assert not _verified_authoritative_exposure_flow(
+        script,
+        primary_exposure="treatment",
+    )
+
+
+def test_authoritative_exposure_flow_rejects_scope_shadowed_selected_name() -> None:
+    from easyicu.research_agent.audits.validators import (
+        _verified_authoritative_exposure_flow,
+    )
+
+    script = """
+exposure_binding = resolved_inputs['artifact:primary_exposure_definition']
+exposure_definition = exposure_binding['value']
+product_contract = exposure_binding['product_contract']
+executable = product_contract['executable_column']
+finalized = pd.to_numeric(exposure_definition[executable], errors='coerce')
+if finalized.isna().any() or not np.isfinite(finalized).all() or not finalized.isin([0, 1]).all():
+    raise RuntimeError('invalid finalized exposure')
+treatment = finalized
+def primary_model():
+    treatment = frame['raw_wrong']
+    return sm.Logit(outcome, pd.DataFrame({'treatment': treatment}))
+primary_model()
+"""
+
+    assert not _verified_authoritative_exposure_flow(
+        script,
+        primary_exposure="treatment",
+    )
+
+
+def test_authoritative_exposure_flow_rejects_mixedlm_after_decoy_model() -> None:
+    from easyicu.research_agent.audits.validators import (
+        _verified_authoritative_exposure_flow,
+    )
+
+    script = """
+exposure_binding = resolved_inputs['artifact:primary_exposure_definition']
+exposure_definition = exposure_binding['value']
+product_contract = exposure_binding['product_contract']
+executable = product_contract['executable_column']
+finalized = pd.to_numeric(exposure_definition[executable], errors='coerce')
+if finalized.isna().any() or not np.isfinite(finalized).all() or not finalized.isin([0, 1]).all():
+    raise RuntimeError('invalid finalized exposure')
+decoy = sm.Logit(outcome, pd.DataFrame({'treatment': finalized}))
+raw_design = pd.DataFrame({'treatment': frame['raw_wrong']})
+primary = sm.MixedLM(outcome, raw_design, groups=frame['hospital_id']).fit()
+"""
+
+    assert not _verified_authoritative_exposure_flow(
+        script,
+        primary_exposure="treatment",
+    )
+
+
+def test_authoritative_exposure_flow_rejects_unlisted_estimator_after_decoy_model() -> None:
+    from easyicu.research_agent.audits.validators import (
+        _verified_authoritative_exposure_flow,
+    )
+
+    script = """
+exposure_binding = resolved_inputs['artifact:primary_exposure_definition']
+exposure_definition = exposure_binding['value']
+product_contract = exposure_binding['product_contract']
+executable = product_contract['executable_column']
+finalized = pd.to_numeric(exposure_definition[executable], errors='coerce')
+if finalized.isna().any() or not np.isfinite(finalized).all() or not finalized.isin([0, 1]).all():
+    raise RuntimeError('invalid finalized exposure')
+decoy = sm.Logit(outcome, pd.DataFrame({'treatment': finalized})).fit()
+primary = sm.Probit(
+    outcome,
+    pd.DataFrame({'treatment': frame['raw_wrong']}),
+).fit()
+"""
+
+    assert not _verified_authoritative_exposure_flow(
+        script,
+        primary_exposure="treatment",
+    )
+
+
+def test_authoritative_exposure_flow_rejects_generic_train_sink_after_decoy_model() -> None:
+    from easyicu.research_agent.audits.validators import (
+        _verified_authoritative_exposure_flow,
+    )
+
+    script = """
+exposure_binding = resolved_inputs['artifact:primary_exposure_definition']
+exposure_definition = exposure_binding['value']
+product_contract = exposure_binding['product_contract']
+executable = product_contract['executable_column']
+finalized = pd.to_numeric(exposure_definition[executable], errors='coerce')
+if finalized.isna().any() or not np.isfinite(finalized).all() or not finalized.isin([0, 1]).all():
+    raise RuntimeError('invalid finalized exposure')
+decoy = sm.Logit(outcome, pd.DataFrame({'treatment': finalized})).fit()
+raw_design = xgb.DMatrix(
+    pd.DataFrame({'treatment': frame['raw_wrong']}),
+    label=outcome,
+)
+primary = xgb.train({}, raw_design)
+"""
+
+    assert not _verified_authoritative_exposure_flow(
+        script,
+        primary_exposure="treatment",
+    )
+
+
+def test_authoritative_exposure_flow_accepts_generic_train_sink_with_authority() -> None:
+    from easyicu.research_agent.audits.validators import (
+        _verified_authoritative_exposure_flow,
+    )
+
+    script = """
+exposure_binding = resolved_inputs['artifact:primary_exposure_definition']
+exposure_definition = exposure_binding['value']
+product_contract = exposure_binding['product_contract']
+executable = product_contract['executable_column']
+finalized = pd.to_numeric(exposure_definition[executable], errors='coerce')
+if finalized.isna().any() or not np.isfinite(finalized).all() or not finalized.isin([0, 1]).all():
+    raise RuntimeError('invalid finalized exposure')
+design = xgb.DMatrix(
+    pd.DataFrame({'treatment': finalized}),
+    label=outcome,
+)
+primary = xgb.train({}, design)
+"""
+
+    assert _verified_authoritative_exposure_flow(
+        script,
+        primary_exposure="treatment",
+    )
+
+
+def test_authoritative_exposure_flow_allows_unrelated_diagnostic_plot() -> None:
+    from easyicu.research_agent.audits.validators import (
+        _verified_authoritative_exposure_flow,
+    )
+
+    script = """
+exposure_binding = resolved_inputs['artifact:primary_exposure_definition']
+exposure_definition = exposure_binding['value']
+product_contract = exposure_binding['product_contract']
+executable = product_contract['executable_column']
+finalized = pd.to_numeric(exposure_definition[executable], errors='coerce')
+if finalized.isna().any() or not np.isfinite(finalized).all() or not finalized.isin([0, 1]).all():
+    raise RuntimeError('invalid finalized exposure')
+model = sm.Logit(outcome, pd.DataFrame({'treatment': finalized}))
+plt.plot(calibration_x, calibration_y)
+"""
+
+    assert _verified_authoritative_exposure_flow(
+        script,
+        primary_exposure="treatment",
+    )
+
+
 @pytest.mark.parametrize("resolver_name", ["resolve_finalized_exposure", "resolve_exposure"])
 def test_llm_concept_auditor_accepts_finalized_only_consumer_without_helper_call(
     ra, resolver_name
@@ -2944,6 +3340,7 @@ def {resolver_name}(definition, product_contract, frame):
 treatment = {resolver_name}(
     exposure_definition, product_contract, frame
 )
+model = sm.Logit(outcome, pd.DataFrame({{'treatment': treatment}}))
 """
     context = ra.build_research_context(
         research_question="Assess balance by the registered exposure.",
@@ -2985,11 +3382,9 @@ treatment = {resolver_name}(
         script_text=script,
     )
 
-    assert [finding.severity for finding in findings] == ["warning", "warning"]
-    assert all(
-        "AST control-flow verification" in finding.detail["downgraded_reason"]
-        for finding in findings
-    )
+    assert [finding.severity for finding in findings] == ["error", "warning"]
+    assert "downgraded_reason" not in findings[0].detail
+    assert "AST control-flow verification" in findings[1].detail["downgraded_reason"]
 
 
 def test_llm_concept_auditor_downgrades_companion_value_gating_false_positive(ra):
@@ -3304,6 +3699,7 @@ def test_llm_concept_auditor_downgrades_nonblocking_outcome_confusion(ra):
           "severity": "error",
           "message": "ICU vs hospital mortality confusion",
           "detail": {
+            "issue_code": "other",
             "issue": "Explicitly noted that 'death' is ICU mortality, but the script does not verify or enforce consistent usage across all downstream analyses or reporting."
           }
         }
@@ -3325,6 +3721,7 @@ def test_llm_concept_auditor_uses_context_to_downgrade_outcome_ambiguity(ra):
                   "severity": "error",
                   "message": "ICU vs hospital mortality confusion",
                   "detail": {
+                    "issue_code": "other",
                     "context": "The script uses death without clarifying whether it is ICU, hospital, or 28-day mortality."
                   }
                 }
@@ -3363,7 +3760,7 @@ def test_llm_concept_auditor_preserves_error_for_conflicting_outcome_label(ra):
                 {
                   "severity": "error",
                   "message": "ICU vs hospital mortality confusion",
-                  "detail": {"context": "The plot labels ICU death as hospital mortality."}
+                  "detail": {"issue_code": "other", "context": "The plot labels ICU death as hospital mortality."}
                 }
               ]
             }
@@ -3399,6 +3796,7 @@ class _HorizonMismatchLLM:
               "severity": "error",
               "message": "The fixed-window death alternative is incompatible with the bound hospital-mortality outcome.",
               "detail": {
+                "issue_code": "other",
                 "context": "The script copies a 0–720 hour window but consumes the hospital mortality flag without deriving 30-day mortality from event time."
               }
             }

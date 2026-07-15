@@ -74,6 +74,422 @@ def test_explicit_aliases(ra, tmp_path: Path):
         assert got is not None and got.evidence_id == rec.evidence_id
 
 
+def test_registration_can_defer_all_alias_publication(ra, tmp_path: Path):
+    src = tmp_path / "step_summary.json"
+    src.write_text('{"x":1}', encoding="utf-8")
+    store = ra.EvidenceStore(root=tmp_path)
+
+    rec = store.register_file(
+        kind="statistic",
+        description="Unsealed candidate summary.",
+        source_path=src,
+        produced_by_step="03_model",
+        evidence_id="draft_summary_v1",
+        aliases=["primary_association"],
+        publish_aliases=False,
+    )
+
+    assert store.aliases() == {}
+    assert store.get("primary_association") is None
+    assert store.get("step_summary") is None
+    assert store.get("draft_summary") is None
+    assert store.get(rec.evidence_id) is not None
+
+
+def test_publish_success_aliases_exposes_deferred_alias_surface(ra, tmp_path: Path):
+    src = tmp_path / "step_summary.json"
+    src.write_text('{"x":1}', encoding="utf-8")
+    store = ra.EvidenceStore(root=tmp_path)
+    rec = store.register_file(
+        kind="statistic",
+        description="Sealed summary.",
+        source_path=src,
+        produced_by_step="03_model",
+        evidence_id="sealed_summary",
+        aliases=["not_published_during_registration"],
+        publish_aliases=False,
+    )
+
+    published = store.publish_success_aliases(
+        rec.evidence_id,
+        aliases=["primary_association"],
+    )
+
+    assert set(published) == {
+        "primary_association",
+        "step_summary",
+        rec.evidence_id,
+    }
+    assert store.get("primary_association").evidence_id == rec.evidence_id
+    assert store.get("step_summary").evidence_id == rec.evidence_id
+    assert store.aliases()[rec.evidence_id] == rec.evidence_id
+    assert store.get("not_published_during_registration") is None
+
+
+def test_publish_success_aliases_replaces_only_same_step_owner(ra, tmp_path: Path):
+    first_src = tmp_path / "first.json"
+    same_step_src = tmp_path / "same_step.json"
+    other_step_src = tmp_path / "other_step.json"
+    first_src.write_text('{"x":1}', encoding="utf-8")
+    same_step_src.write_text('{"x":2}', encoding="utf-8")
+    other_step_src.write_text('{"x":3}', encoding="utf-8")
+    store = ra.EvidenceStore(root=tmp_path)
+    first = store.register_file(
+        kind="statistic",
+        description="First successful attempt.",
+        source_path=first_src,
+        produced_by_step="03_model",
+        evidence_id="summary_attempt_1",
+        aliases=["primary_association"],
+    )
+    same_step = store.register_file(
+        kind="statistic",
+        description="Later successful attempt.",
+        source_path=same_step_src,
+        produced_by_step="03_model",
+        evidence_id="summary_attempt_2",
+        publish_aliases=False,
+    )
+    other_step = store.register_file(
+        kind="statistic",
+        description="Different step.",
+        source_path=other_step_src,
+        produced_by_step="04_other",
+        evidence_id="summary_other_step",
+        publish_aliases=False,
+    )
+
+    same_step_published = store.publish_success_aliases(
+        same_step.evidence_id,
+        aliases=["primary_association"],
+    )
+    other_step_published = store.publish_success_aliases(
+        other_step.evidence_id,
+        aliases=["primary_association"],
+    )
+
+    assert first.evidence_id != same_step.evidence_id
+    assert same_step_published["primary_association"] == same_step.evidence_id
+    assert "primary_association" not in other_step_published
+    assert store.get("primary_association").evidence_id == same_step.evidence_id
+
+
+def test_step_success_alias_batch_rejects_stale_owner_without_partial_publish(
+    ra, tmp_path: Path
+):
+    first_src = tmp_path / "first.json"
+    candidate_a_src = tmp_path / "candidate_a.json"
+    candidate_b_src = tmp_path / "candidate_b.json"
+    first_src.write_text('{"x":1}', encoding="utf-8")
+    candidate_a_src.write_text('{"x":2}', encoding="utf-8")
+    candidate_b_src.write_text('{"x":3}', encoding="utf-8")
+    store = ra.EvidenceStore(root=tmp_path)
+    first = store.register_file(
+        kind="statistic",
+        description="Existing authority from another step.",
+        source_path=first_src,
+        produced_by_step="03_model",
+        evidence_id="summary_first",
+        aliases=["primary_association"],
+    )
+    candidate_a = store.register_file(
+        kind="statistic",
+        description="Candidate with a conflicting semantic alias.",
+        source_path=candidate_a_src,
+        produced_by_step="04_model",
+        evidence_id="summary_candidate_a",
+        publish_aliases=False,
+    )
+    candidate_b = store.register_file(
+        kind="statistic",
+        description="Candidate whose alias would otherwise be publishable.",
+        source_path=candidate_b_src,
+        produced_by_step="04_model",
+        evidence_id="summary_candidate_b",
+        publish_aliases=False,
+    )
+
+    with pytest.raises(ValueError, match="already owned"):
+        store.publish_step_success_aliases(
+            {
+                candidate_b.evidence_id: ["clean_alias"],
+                candidate_a.evidence_id: ["primary_association"],
+            },
+            step_id="04_model",
+        )
+
+    assert store.get("primary_association").evidence_id == first.evidence_id
+    assert store.get("clean_alias") is None
+    assert candidate_a.evidence_id not in store.aliases()
+    assert candidate_b.evidence_id not in store.aliases()
+    assert store.get(candidate_a.evidence_id).metadata["aliases_published"] is False
+    assert store.get(candidate_b.evidence_id).metadata["aliases_published"] is False
+
+
+def test_step_success_alias_batch_rejects_internal_explicit_alias_collision(
+    ra, tmp_path: Path
+):
+    store = ra.EvidenceStore(root=tmp_path)
+    first = store.register_text(
+        kind="statistic",
+        description="First candidate.",
+        text='{"estimate": 1}',
+        filename="first.json",
+        produced_by_step="03_model",
+        evidence_id="first_candidate",
+        publish_aliases=False,
+    )
+    second = store.register_text(
+        kind="statistic",
+        description="Second candidate.",
+        text='{"estimate": 2}',
+        filename="second.json",
+        produced_by_step="03_model",
+        evidence_id="second_candidate",
+        publish_aliases=False,
+    )
+
+    with pytest.raises(ValueError, match="batch alias 'primary_result'.*both"):
+        store.publish_step_success_aliases(
+            {
+                first.evidence_id: ["primary_result", "first_only"],
+                second.evidence_id: ["primary_result", "second_only"],
+            },
+            step_id="03_model",
+        )
+
+    assert store.aliases() == {}
+    assert store.get("first_only") is None
+    assert store.get("second_only") is None
+    assert store.get(first.evidence_id).metadata["aliases_published"] is False
+    assert store.get(second.evidence_id).metadata["aliases_published"] is False
+
+
+def test_step_success_alias_batch_rejects_internal_basename_collision(
+    ra, tmp_path: Path
+):
+    store = ra.EvidenceStore(root=tmp_path)
+    first = store.register_text(
+        kind="table",
+        description="First candidate with shared source name.",
+        text="term,estimate\na,1\n",
+        filename="shared_results.csv",
+        produced_by_step="03_model",
+        evidence_id="first_shared_candidate",
+        publish_aliases=False,
+    )
+    second = store.register_text(
+        kind="table",
+        description="Second candidate with shared source name.",
+        text="term,estimate\nb,2\n",
+        filename="shared_results.csv",
+        produced_by_step="03_model",
+        evidence_id="second_shared_candidate",
+        publish_aliases=False,
+    )
+
+    with pytest.raises(ValueError, match="batch alias 'shared_results'.*both"):
+        store.publish_step_success_aliases(
+            {
+                first.evidence_id: ["first_result"],
+                second.evidence_id: ["second_result"],
+            },
+            step_id="03_model",
+        )
+
+    assert store.aliases() == {}
+    assert store.get("first_result") is None
+    assert store.get("second_result") is None
+    assert store.get(first.evidence_id).metadata["aliases_published"] is False
+    assert store.get(second.evidence_id).metadata["aliases_published"] is False
+
+
+def test_step_success_alias_batch_allows_idempotent_alias_repetition(
+    ra, tmp_path: Path
+):
+    store = ra.EvidenceStore(root=tmp_path)
+    record = store.register_text(
+        kind="statistic",
+        description="One candidate with repeated declarations.",
+        text='{"estimate": 1}',
+        filename="primary_result.json",
+        produced_by_step="03_model",
+        evidence_id="primary_result_candidate",
+        publish_aliases=False,
+    )
+
+    published = store.publish_step_success_aliases(
+        {
+            record.evidence_id: [
+                "primary_result",
+                "primary_result",
+                record.evidence_id,
+            ]
+        },
+        step_id="03_model",
+    )
+
+    assert published[record.evidence_id]["primary_result"] == record.evidence_id
+    assert store.get("primary_result").evidence_id == record.evidence_id
+    assert store.get(record.evidence_id).metadata["aliases_published"] is True
+
+
+def test_retire_step_current_aliases_removes_only_explicit_same_step_authority(
+    ra, tmp_path: Path
+):
+    store = ra.EvidenceStore(root=tmp_path)
+    first = store.register_text(
+        kind="statistic",
+        description="First current product for the revalidated step.",
+        text='{"estimate": 1}',
+        filename="first.json",
+        produced_by_step="03_model",
+        evidence_id="first_current_product",
+        aliases=["primary_association"],
+    )
+    second = store.register_text(
+        kind="table",
+        description="Second current product for the revalidated step.",
+        text="term,estimate\nexposure,1\n",
+        filename="second.csv",
+        produced_by_step="03_model",
+        evidence_id="second_current_product",
+        aliases=["primary_results_table"],
+    )
+    historical = store.register_text(
+        kind="log",
+        description="Unretired history from the same step.",
+        text="history",
+        filename="history.txt",
+        produced_by_step="03_model",
+        evidence_id="same_step_history",
+        aliases=["same_step_history_alias"],
+    )
+
+    retired = store.retire_step_current_aliases(
+        [first.evidence_id, second.evidence_id],
+        step_id="03_model",
+    )
+
+    assert retired["primary_association"] == first.evidence_id
+    assert retired["primary_results_table"] == second.evidence_id
+    assert store.get("primary_association") is None
+    assert store.get("primary_results_table") is None
+    assert store.get(first.evidence_id).metadata["aliases_published"] is False
+    assert store.get(second.evidence_id).metadata["aliases_published"] is False
+    assert store.get("same_step_history_alias").evidence_id == historical.evidence_id
+    assert store.get(historical.evidence_id).metadata["aliases_published"] is True
+
+    reloaded = ra.EvidenceStore(root=tmp_path)
+    assert reloaded.get("primary_association") is None
+    assert reloaded.get(first.evidence_id).metadata["aliases_published"] is False
+    assert reloaded.get("same_step_history_alias").evidence_id == historical.evidence_id
+
+
+def test_retire_step_current_aliases_preserves_cross_step_and_run_level_aliases(
+    ra, tmp_path: Path
+):
+    store = ra.EvidenceStore(root=tmp_path)
+    current = store.register_text(
+        kind="statistic",
+        description="Authority to retire.",
+        text='{"estimate": 1}',
+        filename="current.json",
+        produced_by_step="03_model",
+        evidence_id="current_product",
+        aliases=["current_result"],
+    )
+    other_step = store.register_text(
+        kind="statistic",
+        description="Authority from a different step.",
+        text='{"estimate": 2}',
+        filename="other.json",
+        produced_by_step="04_model",
+        evidence_id="other_step_product",
+        aliases=["other_step_result"],
+    )
+    run_level = store.register_text(
+        kind="log",
+        description="Run-level authority.",
+        text="run authority",
+        filename="run_authority.txt",
+        evidence_id="run_level_product",
+        aliases=["run_level_result"],
+    )
+
+    store.retire_step_current_aliases([current.evidence_id], step_id="03_model")
+
+    assert store.get("current_result") is None
+    assert store.get("other_step_result").evidence_id == other_step.evidence_id
+    assert store.get("run_level_result").evidence_id == run_level.evidence_id
+    assert store.get(other_step.evidence_id).metadata["aliases_published"] is True
+    assert store.get(run_level.evidence_id).metadata["aliases_published"] is True
+
+
+def test_retire_step_current_aliases_rejects_invalid_owner_without_partial_mutation(
+    ra, tmp_path: Path
+):
+    store = ra.EvidenceStore(root=tmp_path)
+    owned = store.register_text(
+        kind="statistic",
+        description="Valid member of the requested retirement batch.",
+        text='{"estimate": 1}',
+        filename="owned.json",
+        produced_by_step="03_model",
+        evidence_id="owned_product",
+        aliases=["owned_result"],
+    )
+    foreign = store.register_text(
+        kind="statistic",
+        description="Invalid foreign member of the retirement batch.",
+        text='{"estimate": 2}',
+        filename="foreign.json",
+        produced_by_step="04_model",
+        evidence_id="foreign_product",
+        aliases=["foreign_result"],
+    )
+    aliases_before = store.aliases()
+
+    with pytest.raises(ValueError, match="owned by step '04_model'"):
+        store.retire_step_current_aliases(
+            [owned.evidence_id, foreign.evidence_id],
+            step_id="03_model",
+        )
+
+    assert store.aliases() == aliases_before
+    assert store.get(owned.evidence_id).metadata["aliases_published"] is True
+    assert store.get(foreign.evidence_id).metadata["aliases_published"] is True
+
+
+def test_retire_step_current_aliases_rolls_back_memory_when_save_fails(
+    ra, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    store = ra.EvidenceStore(root=tmp_path)
+    record = store.register_text(
+        kind="statistic",
+        description="Authority whose retirement cannot be persisted.",
+        text='{"estimate": 1}',
+        filename="current.json",
+        produced_by_step="03_model",
+        evidence_id="current_product",
+        aliases=["current_result"],
+    )
+    aliases_before = store.aliases()
+
+    def fail_save() -> None:
+        raise OSError("persistence unavailable")
+
+    monkeypatch.setattr(store, "_save", fail_save)
+    with pytest.raises(OSError, match="persistence unavailable"):
+        store.retire_step_current_aliases(
+            [record.evidence_id],
+            step_id="03_model",
+        )
+
+    assert store.aliases() == aliases_before
+    assert store.get(record.evidence_id).metadata["aliases_published"] is True
+
+
 def test_first_write_wins_on_alias_collision(ra, tmp_path: Path):
     a = tmp_path / "table_one.csv"
     a.write_text("a\n1\n")
@@ -333,6 +749,76 @@ def test_enforce_evidence_bound_scaffold_filters_bold_section_result_sentences(
         "missingness and component-completeness artefacts" in item for item in removed
     )
     assert any("consistent with the observed association" in item for item in removed)
+
+
+def test_enforce_evidence_bound_scaffold_does_not_exempt_list_or_quote_claims(
+    ra, tmp_path: Path
+):
+    store = ra.EvidenceStore(root=tmp_path)
+    scaffold = (
+        "## Mortality results\n"
+        "- **Results:** Mortality was lower in the intervention arm.\n"
+        "> Mortality was higher after adjustment.\n"
+        "- This section explains the prespecified study design.\n"
+        "> Context for the analysis is described here.\n"
+        "- **Results:** Mortality was lower {evidence:primary_result}.\n"
+        "- **Results:**\n"
+    )
+
+    filtered, removed = store.enforce_evidence_bound_scaffold(scaffold)
+
+    assert "## Mortality results" in filtered
+    assert "Mortality was lower in the intervention arm" not in filtered
+    assert "Mortality was higher after adjustment" not in filtered
+    assert "- This section explains the prespecified study design." in filtered
+    assert "> Context for the analysis is described here." in filtered
+    assert "- **Results:** Mortality was lower {evidence:primary_result}." in filtered
+    assert "- **Results:**" in filtered
+    assert removed == [
+        "**Results:** Mortality was lower in the intervention arm.",
+        "Mortality was higher after adjustment.",
+    ]
+
+
+def test_enforce_evidence_bound_scaffold_audits_assertive_result_headings(
+    ra, tmp_path: Path
+):
+    store = ra.EvidenceStore(root=tmp_path)
+    scaffold = (
+        "## Mortality was lower in the intervention arm.\n"
+        "> ## Median age was 65 years.\n"
+        "## Mean age was sixty-five years.\n"
+        "## Mortality was lower {evidence:primary_result}\n"
+    )
+
+    filtered, removed = store.enforce_evidence_bound_scaffold(scaffold)
+
+    assert "Mortality was lower in the intervention arm" not in filtered
+    assert "Median age was 65 years" not in filtered
+    assert "Mean age was sixty-five years" not in filtered
+    assert "## Mortality was lower {evidence:primary_result}" in filtered
+    assert removed == [
+        "Mortality was lower in the intervention arm.",
+        "Median age was 65 years.",
+        "Mean age was sixty-five years.",
+    ]
+
+
+def test_enforce_evidence_bound_scaffold_preserves_structural_headings(
+    ra, tmp_path: Path
+):
+    store = ra.EvidenceStore(root=tmp_path)
+    scaffold = (
+        "# Results\n"
+        "## Mortality results\n"
+        "> ## Methods and analysis\n"
+        "## 2. Sensitivity analyses\n"
+    )
+
+    filtered, removed = store.enforce_evidence_bound_scaffold(scaffold)
+
+    assert filtered == scaffold
+    assert removed == []
 
 
 @pytest.mark.parametrize(

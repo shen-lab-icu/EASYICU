@@ -133,11 +133,47 @@ def active_step_evidence_ids(
     """Evidence ids referenced by the latest successful step checkpoints."""
 
     return {
-        str(evidence_id)
-        for record in current_successful_step_records(per_step_records)
-        for evidence_id in (record.get("evidence_ids") or [])
-        if str(evidence_id).strip()
+        evidence_id
+        for evidence_ids in active_step_evidence_ids_by_step(per_step_records).values()
+        for evidence_id in evidence_ids
     }
+
+
+def active_step_evidence_ids_by_step(
+    per_step_records: Sequence[Mapping[str, Any]],
+) -> Dict[str, set[str]]:
+    """Current evidence authority keyed by its exact producing step.
+
+    A flat set is insufficient for claim publication because a retired claim
+    from one step could otherwise borrow an active evidence id from another.
+    """
+
+    return {
+        str(record.get("step_id") or "").strip(): {
+            str(evidence_id)
+            for evidence_id in (record.get("evidence_ids") or [])
+            if str(evidence_id).strip()
+        }
+        for record in current_successful_step_records(per_step_records)
+        if str(record.get("step_id") or "").strip()
+    }
+
+
+def run_level_evidence_matches_claim_owner(
+    *,
+    claim_step_id: str,
+    evidence_id: str,
+) -> bool:
+    """Bind a run-level numeric claim to its exact semantic record family."""
+
+    owner = str(claim_step_id or "").strip()
+    candidate = str(evidence_id or "").strip()
+    if not owner or not candidate:
+        return False
+    if candidate == owner:
+        return True
+    version = candidate.removeprefix(f"{owner}_v")
+    return version != candidate and version.isdigit() and int(version) >= 2
 
 
 def current_evidence_records(
@@ -784,6 +820,8 @@ __all__ = [
     "current_successful_step_records",
     "current_successful_step_ids",
     "active_step_evidence_ids",
+    "active_step_evidence_ids_by_step",
+    "run_level_evidence_matches_claim_owner",
     "current_evidence_records",
     "verified_run_evidence_path",
     "RunArtifactAuthorityError",

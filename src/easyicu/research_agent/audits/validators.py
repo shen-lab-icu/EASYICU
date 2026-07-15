@@ -65,6 +65,11 @@ from ..schema import (
     VariableRole,
 )
 from ..llm import LLMClient, LLMMessage
+from ..provider_budget import (
+    ProviderCallBudgetError,
+    StepProviderCallBudget,
+    complete_with_provider_budget,
+)
 from .outcome_semantics import (
     _finding_claims_mortality_horizon_mismatch,
     _script_copies_named_full_stay_window,
@@ -740,34 +745,59 @@ class LLMConceptAuditor:
         context: ResearchContext,
         script_text: str,
         step: Optional[AnalysisStep] = None,
+        provider_budget: Optional[StepProviderCallBudget] = None,
     ) -> List[ValidationFinding]:
         prompt = self._prompt(context=context, script_text=script_text, step=step)
         try:
-            raw = self.llm.complete(
-                [
-                    LLMMessage(
-                        role="system",
-                        content=(
-                            "You are a conservative ICU concept-use auditor. "
-                            "Return only JSON. Do not invent findings."
+            raw = complete_with_provider_budget(
+                budget=provider_budget,
+                category="concept_audit",
+                call=lambda: self.llm.complete(
+                    [
+                        LLMMessage(
+                            role="system",
+                            content=(
+                                "You are a conservative ICU concept-use auditor. "
+                                "Return only JSON. Do not invent findings."
+                            ),
                         ),
-                    ),
-                    LLMMessage(role="user", content=prompt),
-                ],
-                max_tokens=self.max_tokens,
-                temperature=0.0,
+                        LLMMessage(role="user", content=prompt),
+                    ],
+                    max_tokens=self.max_tokens,
+                    temperature=0.0,
+                ),
             )
+        except ProviderCallBudgetError:
+            raise
         except Exception as exc:
-            return [ValidationFinding(
-                validator=self.name,
-                severity="warning",
-                message=f"LLM concept auditor failed: {exc}",
-            )]
+            detail: Dict[str, Any] = {
+                "issue_code": "llm_concept_audit_provider_failure",
+                "error_type": type(exc).__name__,
+            }
+            if step is not None:
+                detail["step_id"] = step.step_id
+            return [
+                ValidationFinding(
+                    validator=self.name,
+                    severity="error",
+                    message=(
+                        "LLM concept auditor did not return a review because "
+                        f"its provider call failed: {str(exc)[:300]}"
+                    ),
+                    detail=detail,
+                )
+            ]
         findings = parse_llm_concept_audit_response(
             raw,
             validator=self.name,
             step_id=step.step_id if step else None,
         )
+        if any(
+            str((finding.detail or {}).get("issue_code") or "")
+            == "llm_concept_audit_response_invalid"
+            for finding in findings
+        ):
+            return findings
         findings = _downgrade_metadata_supported_outcome_findings(
             findings=findings,
             context=context,
@@ -971,6 +1001,44 @@ class LLMConceptAuditor:
         )
 
 
+_LLM_CONCEPT_ISSUE_CODES = frozenset(
+    {
+        "audit_only_companion_row_gating_required",
+        "finalized_exposure_missing_reconciliation",
+        "finalized_exposure_overridden",
+        "finalized_exposure_forced_raw_reconciliation",
+        "other",
+    }
+)
+
+
+def _invalid_llm_concept_audit_response(
+    *,
+    validator: str,
+    step_id: Optional[str],
+    reason: str,
+    raw: str,
+) -> List[ValidationFinding]:
+    detail: Dict[str, Any] = {
+        "issue_code": "llm_concept_audit_response_invalid",
+        "response_issue": reason,
+    }
+    if step_id:
+        detail["step_id"] = step_id
+    head = (raw or "").strip().replace("\n", " ")[:300]
+    return [
+        ValidationFinding(
+            validator=validator,
+            severity="error",
+            message=(
+                "LLM concept auditor returned a response outside its required "
+                f"JSON schema ({reason}): {head}"
+            ),
+            detail=detail,
+        )
+    ]
+
+
 def parse_llm_concept_audit_response(
     raw: str,
     *,
@@ -981,27 +1049,69 @@ def parse_llm_concept_audit_response(
     try:
         payload = json.loads(text)
     except Exception:
-        head = (raw or "").strip().replace("\n", " ")[:300]
-        return [ValidationFinding(
+        return _invalid_llm_concept_audit_response(
             validator=validator,
-            severity="warning",
-            message=f"LLM concept auditor returned unparsable output: {head}",
-            detail={"step_id": step_id} if step_id else None,
-        )]
-    items = payload.get("findings", []) if isinstance(payload, dict) else payload
+            step_id=step_id,
+            reason="invalid_json",
+            raw=raw,
+        )
+    if not isinstance(payload, dict) or set(payload) != {"findings"}:
+        return _invalid_llm_concept_audit_response(
+            validator=validator,
+            step_id=step_id,
+            reason="top_level_object_must_contain_only_findings",
+            raw=raw,
+        )
+    items = payload["findings"]
     if not isinstance(items, list):
-        return []
+        return _invalid_llm_concept_audit_response(
+            validator=validator,
+            step_id=step_id,
+            reason="findings_must_be_a_list",
+            raw=raw,
+        )
     findings: List[ValidationFinding] = []
-    for item in items:
+    for index, item in enumerate(items):
         if not isinstance(item, dict):
-            continue
-        msg = str(item.get("message") or "").strip()
-        if not msg:
-            continue
-        sev = str(item.get("severity") or "warning").lower()
+            return _invalid_llm_concept_audit_response(
+                validator=validator,
+                step_id=step_id,
+                reason=f"finding_{index}_must_be_an_object",
+                raw=raw,
+            )
+        msg = item.get("message")
+        sev = item.get("severity")
+        detail = item.get("detail")
+        if not isinstance(msg, str) or not msg.strip():
+            return _invalid_llm_concept_audit_response(
+                validator=validator,
+                step_id=step_id,
+                reason=f"finding_{index}_message_must_be_nonempty_string",
+                raw=raw,
+            )
         if sev not in {"info", "warning", "error"}:
-            sev = "warning"
-        detail = item.get("detail") if isinstance(item.get("detail"), dict) else {}
+            return _invalid_llm_concept_audit_response(
+                validator=validator,
+                step_id=step_id,
+                reason=f"finding_{index}_severity_is_invalid",
+                raw=raw,
+            )
+        if not isinstance(detail, dict):
+            return _invalid_llm_concept_audit_response(
+                validator=validator,
+                step_id=step_id,
+                reason=f"finding_{index}_detail_must_be_an_object",
+                raw=raw,
+            )
+        issue_code = detail.get("issue_code")
+        if issue_code not in _LLM_CONCEPT_ISSUE_CODES:
+            return _invalid_llm_concept_audit_response(
+                validator=validator,
+                step_id=step_id,
+                reason=f"finding_{index}_issue_code_is_invalid",
+                raw=raw,
+            )
+        msg = msg.strip()
         if step_id:
             detail = dict(detail)
             detail.setdefault("step_id", step_id)
@@ -1275,18 +1385,263 @@ def _call_name(node: ast.Call) -> str:
 
 
 _PRIMARY_EXPOSURE_ARTIFACT = "artifact:primary_exposure_definition"
+_RESOLVED_INPUTS_ENV = "EASYICU_RESOLVED_INPUTS_JSON"
+_MODEL_EXPOSURE_SINKS = {
+    "CoxPHFitter",
+    "GEE",
+    "GLM",
+    "KaplanMeierFitter",
+    "Logit",
+    "MixedLM",
+    "MNLogit",
+    "OLS",
+    "PHReg",
+    "gee",
+    "glm",
+    "logit",
+    "mixedlm",
+    "mnlogit",
+    "ols",
+    "phreg",
+}
+# Exact estimator-training entry points are structural API evidence, unlike a
+# loose substring search over source text.  Keep this library-neutral: an
+# unlisted estimator that trains through ``train(...)`` must not disappear
+# behind a decoy recognized model, while preprocessing helpers such as
+# ``train_test_split`` are not claimed merely because their name contains the
+# token ``train``.
+_MODEL_TRAINING_SINKS = frozenset(
+    {
+        "fit",
+        "fit_regularized",
+        "partial_fit",
+        "train",
+    }
+)
+_VISUAL_EXPOSURE_SINKS = {
+    "bar",
+    "barh",
+    "boxplot",
+    "errorbar",
+    "fill_between",
+    "hist",
+    "plot",
+    "scatter",
+    "step",
+    "violinplot",
+}
+
+
+def _qualified_call_name(node: ast.Call) -> str:
+    """Return a dotted call name without treating string contents as code."""
+
+    parts: list[str] = []
+    cursor: ast.AST = node.func
+    while isinstance(cursor, ast.Attribute):
+        parts.append(cursor.attr)
+        cursor = cursor.value
+    if isinstance(cursor, ast.Name):
+        parts.append(cursor.id)
+    return ".".join(reversed(parts))
+
+
+def _subscript_string_key(node: ast.AST) -> Optional[str]:
+    if not isinstance(node, ast.Subscript):
+        return None
+    candidate = node.slice
+    if isinstance(candidate, ast.Constant) and isinstance(candidate.value, str):
+        return candidate.value
+    return None
+
+
+def _is_resolved_inputs_environment_lookup(node: ast.AST) -> bool:
+    return bool(
+        isinstance(node, ast.Subscript)
+        and _subscript_string_key(node) == _RESOLVED_INPUTS_ENV
+        and isinstance(node.value, ast.Attribute)
+        and isinstance(node.value.value, ast.Name)
+        and node.value.value.id == "os"
+        and node.value.attr == "environ"
+    )
+
+
+def _host_manifest_names(tree: ast.Module) -> set[str]:
+    """Names proven to deserialize the host resolved-inputs manifest."""
+
+    assignments = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None
+    ]
+    manifest_path_names: set[str] = set()
+    manifest_text_names: set[str] = set()
+
+    def _targets(node: ast.Assign | ast.AnnAssign) -> List[ast.expr]:
+        return node.targets if isinstance(node, ast.Assign) else [node.target]
+
+    def _path_expression(node: ast.AST) -> bool:
+        if _is_resolved_inputs_environment_lookup(node):
+            return True
+        if isinstance(node, ast.Name):
+            return node.id in manifest_path_names
+        return bool(
+            isinstance(node, ast.Call)
+            and _call_name(node) == "Path"
+            and len(node.args) == 1
+            and _path_expression(node.args[0])
+        )
+
+    changed = True
+    while changed:
+        changed = False
+        for node in assignments:
+            if not _path_expression(node.value):
+                continue
+            for target in _targets(node):
+                if isinstance(target, ast.Name) and target.id not in manifest_path_names:
+                    manifest_path_names.add(target.id)
+                    changed = True
+
+    def _manifest_text_expression(node: ast.AST) -> bool:
+        if isinstance(node, ast.Name):
+            return node.id in manifest_text_names
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            return False
+        return node.func.attr in {"read_text", "read_bytes"} and _path_expression(
+            node.func.value
+        )
+
+    changed = True
+    while changed:
+        changed = False
+        for node in assignments:
+            if not _manifest_text_expression(node.value):
+                continue
+            for target in _targets(node):
+                if isinstance(target, ast.Name) and target.id not in manifest_text_names:
+                    manifest_text_names.add(target.id)
+                    changed = True
+
+    manifest_names: set[str] = set()
+    for node in assignments:
+        value = node.value
+        if not (
+            isinstance(value, ast.Call)
+            and _call_name(value) == "loads"
+            and len(value.args) == 1
+            and _manifest_text_expression(value.args[0])
+        ):
+            continue
+        manifest_names.update(
+            target.id for target in _targets(node) if isinstance(target, ast.Name)
+        )
+    return manifest_names
+
+
+def _is_exact_primary_exposure_lookup(
+    node: ast.AST,
+    *,
+    manifest_names: set[str],
+    allow_resolved_inputs: bool,
+) -> bool:
+    if not (
+        isinstance(node, ast.Subscript)
+        and _subscript_string_key(node) == _PRIMARY_EXPOSURE_ARTIFACT
+    ):
+        return False
+    container = node.value
+    if (
+        allow_resolved_inputs
+        and isinstance(container, ast.Name)
+        and container.id == "resolved_inputs"
+    ):
+        return True
+    return bool(
+        isinstance(container, ast.Subscript)
+        and _subscript_string_key(container) == "inputs"
+        and isinstance(container.value, ast.Name)
+        and container.value.id in manifest_names
+    )
+
+
+def _reachable_local_function_names(tree: ast.Module) -> set[str]:
+    """Return local functions reachable from executable module-level calls."""
+
+    functions = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    class _CallCollector(ast.NodeVisitor):
+        def __init__(self) -> None:
+            self.names: set[str] = set()
+
+        def visit_Call(self, node: ast.Call) -> None:
+            name = _call_name(node)
+            if name in functions:
+                self.names.add(name)
+            self.generic_visit(node)
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            return None
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            return None
+
+        def visit_Lambda(self, node: ast.Lambda) -> None:
+            return None
+
+        def visit_ClassDef(self, node: ast.ClassDef) -> None:
+            return None
+
+    collector = _CallCollector()
+    for statement in tree.body:
+        collector.visit(statement)
+    reachable = set(collector.names)
+    pending = list(reachable)
+    while pending:
+        name = pending.pop()
+        function = functions.get(name)
+        if function is None:
+            continue
+        nested = _CallCollector()
+        for statement in function.body:
+            nested.visit(statement)
+        new_names = nested.names - reachable
+        reachable.update(new_names)
+        pending.extend(new_names)
+    return reachable
 
 
 def _authoritative_exposure_names(tree: ast.Module) -> set[str]:
     """Names proven to receive the host-bound primary-exposure artifact."""
 
-    literals = {
-        str(node.value)
+    manifest_names = _host_manifest_names(tree)
+    reachable_functions = _reachable_local_function_names(tree)
+    parent: Dict[ast.AST, ast.AST] = {}
+    for container in ast.walk(tree):
+        for child in ast.iter_child_nodes(container):
+            parent[child] = container
+
+    def _in_executable_scope(node: ast.AST) -> bool:
+        cursor: Optional[ast.AST] = parent.get(node)
+        while cursor is not None:
+            if isinstance(cursor, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                return cursor.name in reachable_functions
+            cursor = parent.get(cursor)
+        return True
+
+    resolved_inputs_unshadowed = not any(
+        (
+            isinstance(node, ast.Name)
+            and node.id == "resolved_inputs"
+            and not isinstance(node.ctx, ast.Load)
+        )
+        or isinstance(node, ast.arg)
+        and node.arg == "resolved_inputs"
         for node in ast.walk(tree)
-        if isinstance(node, ast.Constant) and isinstance(node.value, str)
-    }
-    if _PRIMARY_EXPOSURE_ARTIFACT not in literals:
-        return set()
+    )
     names: set[str] = set()
     functions = {
         node.name: node
@@ -1294,14 +1649,17 @@ def _authoritative_exposure_names(tree: ast.Module) -> set[str]:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
     for node in ast.walk(tree):
-        if not isinstance(node, (ast.Assign, ast.AnnAssign)) or node.value is None:
+        if (
+            not isinstance(node, (ast.Assign, ast.AnnAssign))
+            or node.value is None
+            or not _in_executable_scope(node)
+        ):
             continue
-        value_literals = {
-            str(item.value)
-            for item in ast.walk(node.value)
-            if isinstance(item, ast.Constant) and isinstance(item.value, str)
-        }
-        if _PRIMARY_EXPOSURE_ARTIFACT not in value_literals:
+        if not _is_exact_primary_exposure_lookup(
+            node.value,
+            manifest_names=manifest_names,
+            allow_resolved_inputs=resolved_inputs_unshadowed,
+        ):
             continue
         targets = node.targets if isinstance(node, ast.Assign) else [node.target]
         names.update(target.id for target in targets if isinstance(target, ast.Name))
@@ -1309,7 +1667,11 @@ def _authoritative_exposure_names(tree: ast.Module) -> set[str]:
     while changed:
         changed = False
         for node in ast.walk(tree):
-            if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+            if (
+                isinstance(node, (ast.Assign, ast.AnnAssign))
+                and node.value is not None
+                and _in_executable_scope(node)
+            ):
                 referenced = {
                     item.id
                     for item in ast.walk(node.value)
@@ -1322,7 +1684,11 @@ def _authoritative_exposure_names(tree: ast.Module) -> set[str]:
                     if isinstance(target, ast.Name) and target.id not in names:
                         names.add(target.id)
                         changed = True
-            if not isinstance(node, ast.Call) or _call_name(node) not in functions:
+            if (
+                not isinstance(node, ast.Call)
+                or _call_name(node) not in functions
+                or not _in_executable_scope(node)
+            ):
                 continue
             function = functions[_call_name(node)]
             parameters = [*function.args.posonlyargs, *function.args.args]
@@ -1362,11 +1728,84 @@ def _verified_authoritative_exposure_flow(
     authority_names = _authoritative_exposure_names(tree)
     if not authority_names:
         return False
+    parent: Dict[ast.AST, ast.AST] = {}
+    for container in ast.walk(tree):
+        for child in ast.iter_child_nodes(container):
+            parent[child] = container
+    reachable_functions = _reachable_local_function_names(tree)
+
+    def _in_executable_scope(node: ast.AST) -> bool:
+        cursor: Optional[ast.AST] = parent.get(node)
+        while cursor is not None:
+            if isinstance(cursor, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                return cursor.name in reachable_functions
+            cursor = parent.get(cursor)
+        return True
+
+    functions = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name in reachable_functions
+    }
+
+    def _own_returns(
+        function: ast.FunctionDef | ast.AsyncFunctionDef,
+    ) -> list[ast.Return]:
+        returns: list[ast.Return] = []
+
+        class _ReturnCollector(ast.NodeVisitor):
+            def visit_Return(self, node: ast.Return) -> None:
+                returns.append(node)
+
+            def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+                return None
+
+            def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+                return None
+
+            def visit_Lambda(self, node: ast.Lambda) -> None:
+                return None
+
+            def visit_ClassDef(self, node: ast.ClassDef) -> None:
+                return None
+
+        collector = _ReturnCollector()
+        for statement in function.body:
+            collector.visit(statement)
+        return returns
+
+    def _return_is_authority_only(node: ast.AST) -> bool:
+        """Reject helper returns that can choose or blend an unrelated value."""
+
+        def _contains_selected(candidate: ast.AST) -> bool:
+            return any(
+                name.id in selected
+                for name in ast.walk(candidate)
+                if isinstance(name, ast.Name)
+            )
+
+        if isinstance(node, ast.IfExp):
+            return _return_is_authority_only(node.body) and _return_is_authority_only(
+                node.orelse
+            )
+        if not _contains_selected(node):
+            return False
+        return not any(
+            isinstance(candidate, ast.Subscript)
+            and not any(
+                isinstance(name, ast.Name) and name.id in selected
+                for name in ast.walk(candidate.value)
+            )
+            for candidate in ast.walk(node)
+        )
+
     contract_columns = {
         target.id
         for node in ast.walk(tree)
         if isinstance(node, (ast.Assign, ast.AnnAssign))
         and node.value is not None
+        and _in_executable_scope(node)
         and "executable_column" in {
             str(item.value)
             for item in ast.walk(node.value)
@@ -1406,15 +1845,35 @@ def _verified_authoritative_exposure_flow(
         node
         for node in ast.walk(tree)
         if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None
+        and _in_executable_scope(node)
     ]
     changed = True
     while changed:
         changed = False
+        selected_return_functions: set[str] = set()
+        for function_name, function in functions.items():
+            returns = _own_returns(function)
+            if not returns or not isinstance(function.body[-1], ast.Return):
+                continue
+            if all(
+                returned.value is not None
+                and _return_is_authority_only(returned.value)
+                for returned in returns
+            ):
+                selected_return_functions.add(function_name)
         for node in assignments:
             referenced = {
                 item.id for item in ast.walk(node.value) if isinstance(item, ast.Name)
             }
-            if not selects_authority(node.value) and not referenced & selected:
+            returns_selected = bool(
+                isinstance(node.value, ast.Call)
+                and _call_name(node.value) in selected_return_functions
+            )
+            if (
+                not selects_authority(node.value)
+                and not referenced & selected
+                and not returns_selected
+            ):
                 continue
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             new = {target.id for target in targets if isinstance(target, ast.Name)} - selected
@@ -1423,32 +1882,196 @@ def _verified_authoritative_exposure_flow(
                 changed = True
     if not selected:
         return False
-    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+
+    def _expression_consumes_selected(node: ast.AST) -> bool:
+        return selects_authority(node) or any(
+            name.id in selected
+            for name in ast.walk(node)
+            if isinstance(name, ast.Name)
+        )
+
+    # A name-based taint set is only safe while no executable scope rebinds a
+    # selected name from unrelated data.  Reject such shadowing rather than
+    # treating a same-spelled local variable as the host-bound exposure.
+    def _assignment_preserves_selected(
+        node: ast.Assign | ast.AnnAssign,
+    ) -> bool:
+        returns_selected = bool(
+            isinstance(node.value, ast.Call)
+            and _call_name(node.value) in selected_return_functions
+        )
+        return _expression_consumes_selected(node.value) or returns_selected
+
+    def _branch_side(node: ast.AST, branch: ast.If) -> Optional[str]:
+        cursor: ast.AST = node
+        while parent.get(cursor) is not branch:
+            next_cursor = parent.get(cursor)
+            if next_cursor is None:
+                return None
+            cursor = next_cursor
+        if cursor in branch.body:
+            return "body"
+        if cursor in branch.orelse:
+            return "orelse"
+        return None
+
+    def _mutually_exclusive(left: ast.AST, right: ast.AST) -> bool:
+        for candidate in ast.walk(tree):
+            if not isinstance(candidate, ast.If):
+                continue
+            left_side = _branch_side(left, candidate)
+            right_side = _branch_side(right, candidate)
+            if {left_side, right_side} == {"body", "orelse"}:
+                return True
+        return False
+
+    assignments_by_target: Dict[str, list[ast.Assign | ast.AnnAssign]] = {}
+    for node in assignments:
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        for target in targets:
+            if isinstance(target, ast.Name) and target.id in selected:
+                assignments_by_target.setdefault(target.id, []).append(node)
+    for target_assignments in assignments_by_target.values():
+        preserving = [
+            node for node in target_assignments if _assignment_preserves_selected(node)
+        ]
+        for node in target_assignments:
+            if node in preserving:
+                continue
+            if not any(_mutually_exclusive(node, other) for other in preserving):
+                return False
+
+    # Function parameters live in a different lexical scope.  A parameter
+    # whose spelling collides with a selected outer name is authoritative only
+    # when every executable call binds that parameter from selected data.
+    executable_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and _in_executable_scope(node)
+    ]
+    for function_name, function in functions.items():
+        parameters = [*function.args.posonlyargs, *function.args.args]
+        calls_to_function = [
+            call for call in executable_calls if _call_name(call) == function_name
+        ]
+        for index, parameter in enumerate(parameters):
+            if parameter.arg not in selected:
+                continue
+            values: list[ast.AST] = []
+            for call in calls_to_function:
+                if index < len(call.args):
+                    values.append(call.args[index])
+                    continue
+                values.extend(
+                    keyword.value
+                    for keyword in call.keywords
+                    if keyword.arg == parameter.arg
+                )
+            if not values or not all(_expression_consumes_selected(v) for v in values):
+                return False
+
+    def _fail_closed_guard(node: ast.If) -> bool:
+        if not node.body or not isinstance(node.body[0], ast.Raise):
+            return False
+        cursor: Optional[ast.AST] = parent.get(node)
+        while cursor is not None:
+            if isinstance(cursor, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef)):
+                return True
+            if isinstance(cursor, ast.If) and not any(
+                isinstance(name, ast.Name)
+                and (name.id in authority_names or name.id in selected)
+                for name in ast.walk(cursor.test)
+            ):
+                return False
+            if isinstance(
+                cursor,
+                (ast.For, ast.AsyncFor, ast.While, ast.Try, ast.With, ast.AsyncWith),
+            ):
+                return False
+            cursor = parent.get(cursor)
+        return False
+
+    guard_calls = [
+        (call, node.test)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.If)
+        and _in_executable_scope(node)
+        and _fail_closed_guard(node)
+        for call in ast.walk(node.test)
+        if isinstance(call, ast.Call) and _expression_consumes_selected(call)
+    ]
+
+    def _is_negated_in_guard(call: ast.Call, test: ast.AST) -> bool:
+        cursor: Optional[ast.AST] = parent.get(call)
+        while cursor is not None and cursor is not test:
+            if isinstance(cursor, ast.UnaryOp) and isinstance(
+                cursor.op, (ast.Not, ast.Invert)
+            ):
+                return True
+            if isinstance(cursor, ast.Compare) and any(
+                isinstance(value, ast.Constant) and value.value is False
+                for value in [cursor.left, *cursor.comparators]
+            ):
+                return True
+            cursor = parent.get(cursor)
+        return isinstance(test, ast.UnaryOp) and isinstance(
+            test.op, (ast.Not, ast.Invert)
+        )
+
     domain_checked = any(
         _call_name(call) == "isin"
+        and _is_negated_in_guard(call, test)
         and {0, 1} <= {
             item.value
             for item in ast.walk(call)
             if isinstance(item, ast.Constant) and isinstance(item.value, (int, float))
+            and not isinstance(item.value, bool)
         }
-        and any(name.id in selected for name in ast.walk(call) if isinstance(name, ast.Name))
-        for call in calls
+        for call, test in guard_calls
+    )
+    missing_checked = any(
+        _call_name(call) == "isna" and not _is_negated_in_guard(call, test)
+        for call, test in guard_calls
     )
     finite_checked = any(
-        _call_name(call) in {"isfinite", "isna", "notna"}
-        and any(name.id in selected for name in ast.walk(call) if isinstance(name, ast.Name))
-        for call in calls
+        _call_name(call) == "isfinite" and _is_negated_in_guard(call, test)
+        for call, test in guard_calls
     )
-    consumed = any(
-        isinstance(node, ast.Return)
-        and node.value is not None
-        and any(name.id in selected for name in ast.walk(node.value) if isinstance(name, ast.Name))
-        or isinstance(node, ast.Assign)
-        and any(isinstance(target, ast.Subscript) for target in node.targets)
-        and any(name.id in selected for name in ast.walk(node.value) if isinstance(name, ast.Name))
-        for node in ast.walk(tree)
+
+    def _call_consumes_selected(call: ast.Call) -> bool:
+        arguments: list[ast.AST] = [
+            *call.args,
+            *(item.value for item in call.keywords),
+        ]
+        if isinstance(call.func, ast.Attribute):
+            arguments.append(call.func.value)
+        return any(
+            name.id in selected
+            for argument in arguments
+            for name in ast.walk(argument)
+            if isinstance(name, ast.Name)
+        )
+
+    def _is_model_sink(call: ast.Call) -> bool:
+        name = _call_name(call)
+        if name in _MODEL_EXPOSURE_SINKS or name in _MODEL_TRAINING_SINKS:
+            return True
+        return _qualified_call_name(call).endswith(".MixedLM.from_formula")
+
+    model_roots = [call for call in executable_calls if _is_model_sink(call)]
+    visual_roots = [
+        call
+        for call in executable_calls
+        if _call_name(call) in _VISUAL_EXPOSURE_SINKS
+    ]
+    consumed = (
+        bool(model_roots)
+        and all(_call_consumes_selected(call) for call in model_roots)
+    ) or (
+        not model_roots
+        and any(_call_consumes_selected(call) for call in visual_roots)
     )
-    return domain_checked and finite_checked and consumed
+    return domain_checked and missing_checked and finite_checked and consumed
 
 
 def _finalized_branch_isolates_reconciliation(script_text: str) -> bool:
@@ -1619,8 +2242,9 @@ def _downgrade_finalized_exposure_reconciliation_findings(
             complains_only_about_reconciliation = (
                 issue_code == "finalized_exposure_missing_reconciliation"
             )
-            false_override_claim = issue_code == "finalized_exposure_overridden" and (
-                reconciliation_isolated or reconciliation_absent
+            false_override_claim = (
+                issue_code == "finalized_exposure_overridden"
+                and reconciliation_isolated
             )
             false_forced_reconciliation_claim = (
                 reconciliation_absent

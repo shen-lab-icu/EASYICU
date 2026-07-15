@@ -27,6 +27,16 @@ SEALED_DISTRIBUTION_REPAIR = (
 )
 
 
+def _assignment_cohort(tmp_path, *, stay_ids=(101,)):
+    path = tmp_path / "cohort.csv"
+    path.write_text(
+        "stay_id,value\n"
+        + "".join(f"{stay_id},{index}\n" for index, stay_id in enumerate(stay_ids)),
+        encoding="utf-8",
+    )
+    return path
+
+
 def test_assignment_binding_contract_maps_each_declared_model_to_exact_column(
     tmp_path,
 ):
@@ -53,6 +63,7 @@ def test_assignment_binding_contract_maps_each_declared_model_to_exact_column(
             ]
         },
         artifact_path=artifact,
+        authoritative_cohort_path=_assignment_cohort(tmp_path),
     )
 
     assert contract is not None
@@ -60,6 +71,9 @@ def test_assignment_binding_contract_maps_each_declared_model_to_exact_column(
         "propensity_source_aware",
         "propensity_complete_case",
     ]
+    assert contract["row_count"] == 1
+    assert len(contract["row_identity_sha256"]) == 64
+    assert len(contract["models"][0]["analysis_set_identity_sha256"]) == 64
 
 
 def test_assignment_binding_contract_does_not_fallback_to_arbitrary_numeric_column(
@@ -79,6 +93,23 @@ def test_assignment_binding_contract_does_not_fallback_to_arbitrary_numeric_colu
             ]
         },
         artifact_path=artifact,
+        authoritative_cohort_path=_assignment_cohort(tmp_path),
+    )
+
+    assert contract is None
+
+
+def test_assignment_binding_contract_does_not_trust_same_name_summary_mapping(
+    tmp_path,
+):
+    artifact = tmp_path / "assignment_model.csv"
+    artifact.write_text("row_index,unrelated\n0,0.2\n", encoding="utf-8")
+
+    contract = typed_product_binding_contract(
+        product_name="assignment_model",
+        step_summary={"assignment_model": {"foo": "bar"}},
+        artifact_path=artifact,
+        authoritative_cohort_path=_assignment_cohort(tmp_path),
     )
 
     assert contract is None
@@ -107,6 +138,7 @@ def test_assignment_binding_contract_rejects_invalid_propensity_values(
             ]
         },
         artifact_path=artifact,
+        authoritative_cohort_path=_assignment_cohort(tmp_path),
     )
 
     assert contract is None
@@ -132,9 +164,75 @@ def test_assignment_binding_contract_checks_row_identity_and_declared_n(tmp_path
             ]
         },
         artifact_path=artifact,
+        authoritative_cohort_path=_assignment_cohort(
+            tmp_path, stay_ids=(101, 102)
+        ),
     )
 
     assert contract is None
+
+
+def test_assignment_binding_contract_rejects_identity_rows_from_another_cohort(
+    tmp_path,
+):
+    artifact = tmp_path / "assignment_model.csv"
+    artifact.write_text(
+        "stay_id,propensity_source_aware\n999001,0.2\n999002,0.3\n",
+        encoding="utf-8",
+    )
+
+    contract = typed_product_binding_contract(
+        product_name="assignment_model",
+        step_summary={
+            "assignment_models": [
+                {
+                    "model_id": "assignment_source_aware",
+                    "analysis_set": "source_aware",
+                    "fit_status": "fitted",
+                    "n": 2,
+                }
+            ]
+        },
+        artifact_path=artifact,
+        authoritative_cohort_path=_assignment_cohort(
+            tmp_path, stay_ids=(101, 102)
+        ),
+    )
+
+    assert contract is None
+
+
+def test_assignment_binding_contract_accepts_exact_cohort_identity_and_order(
+    tmp_path,
+):
+    artifact = tmp_path / "assignment_model.csv"
+    artifact.write_text(
+        "stay_id,propensity_source_aware\n101,0.2\n102,0.3\n",
+        encoding="utf-8",
+    )
+
+    contract = typed_product_binding_contract(
+        product_name="assignment_model",
+        step_summary={
+            "assignment_models": [
+                {
+                    "model_id": "assignment_source_aware",
+                    "analysis_set": "source_aware",
+                    "fit_status": "fitted",
+                    "n": 2,
+                }
+            ]
+        },
+        artifact_path=artifact,
+        authoritative_cohort_path=_assignment_cohort(
+            tmp_path, stay_ids=(101, 102)
+        ),
+    )
+
+    assert contract is not None
+    assert contract["row_identity_column"] == "stay_id"
+    assert contract["row_count"] == 2
+    assert contract["models"][0]["analysis_set_n"] == 2
 
 
 def test_declared_diagnostic_rejects_not_computable_placeholder():
@@ -271,6 +369,26 @@ def test_confounder_binding_contract_does_not_scan_arbitrary_lists(tmp_path):
     contract = typed_product_binding_contract(
         product_name="prespecified_confounder_set",
         step_summary={},
+        artifact_path=artifact,
+    )
+
+    assert contract is None
+
+
+def test_confounder_binding_contract_does_not_trust_same_name_summary_mapping(
+    tmp_path,
+):
+    artifact = tmp_path / "prespecified_confounder_set.json"
+    artifact.write_text(
+        json.dumps({"candidate_columns": ["age", "first_numeric_column"]}),
+        encoding="utf-8",
+    )
+
+    contract = typed_product_binding_contract(
+        product_name="prespecified_confounder_set",
+        step_summary={
+            "prespecified_confounder_set": {"covariates": ["age"]}
+        },
         artifact_path=artifact,
     )
 

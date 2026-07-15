@@ -20,6 +20,9 @@ from .context import ResearchContext
 from .evidence import EvidenceStore
 from .pipeline_report import _blocked_outcome_step_ids
 from .robustness_panel import load_robustness_panel, worst_rows_by_axis
+from .runtime_artifacts import (
+    current_step_records,
+)
 from .scalar_utils import _first_present_scalar
 
 
@@ -128,11 +131,25 @@ def _summarise_primary_association_table(path: Optional[Path]) -> Dict[str, Any]
     return digest
 
 
-def _preferred_writer_evidence_names(evidence: EvidenceStore) -> List[str]:
+def _preferred_writer_evidence_names(
+    evidence: EvidenceStore,
+    per_step_records: Sequence[Dict[str, Any]] | None = None,
+) -> List[str]:
     aliases = evidence.aliases()
+    allowed_ids = (
+        {
+            str(record.evidence_id)
+            for record in evidence.current_verified_records(per_step_records)
+        }
+        if per_step_records is not None
+        else None
+    )
+
     def is_citable(name: str) -> bool:
         record = evidence.get(name)
         if record is None:
+            return False
+        if allowed_ids is not None and record.evidence_id not in allowed_ids:
             return False
         return record.finding_severity not in {"warning", "error"}
 
@@ -151,10 +168,7 @@ def _preferred_writer_evidence_names(evidence: EvidenceStore) -> List[str]:
         "reporting_checklist",
     ]
     out: List[str] = [name for name in preferred if is_citable(name)]
-    step_aliases = [
-        name for name in sorted(aliases)
-        if re.match(r"^\d{2}[_-]", name)
-    ]
+    step_aliases = [name for name in sorted(aliases) if re.match(r"^\d{2}[_-]", name)]
     for name in step_aliases:
         if name not in out and is_citable(name):
             out.append(name)
@@ -167,7 +181,9 @@ def _preferred_writer_evidence_names(evidence: EvidenceStore) -> List[str]:
             continue
         seen.add(name)
         clean_names.append(name)
-    return clean_names or evidence.resolvable_names()
+    if clean_names or per_step_records is not None:
+        return clean_names
+    return evidence.resolvable_names()
 
 
 # Module-level constant: the keys the "primary" writer digest pulls out
@@ -426,17 +442,25 @@ def _render_writer_evidence_digest(
         "skipped",
         "error",
     )
-    for record in per_step_records:
+    records = [dict(record) for record in current_step_records(per_step_records or [])]
+    for record in records:
         step_id = str(record.get("step_id") or "unknown_step")
         status = str(record.get("status") or "unknown")
         lines.append(f"- {step_id} [{status}]")
         summary = record.get("step_summary")
-        if not isinstance(summary, dict) or not summary:
+        if (
+            status.strip().lower() != "ok"
+            or not isinstance(summary, dict)
+            or not summary
+        ):
             lines.append("  {}")
             continue
         digest_row: Dict[str, Any] = {}
         for key in preferred_keys:
-            if has_panel_primary and key in _PRIMARY_EFFECT_DIGEST_KEYS_WHEN_PANEL_PRESENT:
+            if (
+                has_panel_primary
+                and key in _PRIMARY_EFFECT_DIGEST_KEYS_WHEN_PANEL_PRESENT
+            ):
                 continue
             scalar = _first_present_scalar(summary, (key,))
             if scalar is not None:
@@ -449,7 +473,9 @@ def _render_writer_evidence_digest(
             digest_row["target_outcome"] = str(summary["target_outcome"])
         elif "outcome" in summary:
             digest_row["target_outcome"] = str(summary["outcome"])
-        if "primary_or_ci" in summary and isinstance(summary["primary_or_ci"], (list, tuple)):
+        if "primary_or_ci" in summary and isinstance(
+            summary["primary_or_ci"], (list, tuple)
+        ):
             ci_values = list(summary["primary_or_ci"])
             if len(ci_values) == 2:
                 digest_row.setdefault("primary_ci_low", ci_values[0])
@@ -463,7 +489,8 @@ def _render_writer_evidence_digest(
         if not has_panel_primary:
             digest_row.update(_summarise_primary_association_table(primary_path))
         lines.append(
-            "  " + json.dumps(digest_row, ensure_ascii=False, sort_keys=True, default=str)
+            "  "
+            + json.dumps(digest_row, ensure_ascii=False, sort_keys=True, default=str)
         )
     primary = "\n".join(lines)
     primary = _append_blocked_outcome_gate_block(primary, run_dir=run_dir)
@@ -570,7 +597,8 @@ def _render_writer_evidence_digest_v2(
         run_dir=run_dir,
         include_robustness_panel=False,
     )
-    records = list(per_step_records or [])
+    all_records = list(per_step_records or [])
+    records = [dict(record) for record in current_step_records(all_records)]
     if not records:
         return _append_robustness_panel_block(primary, run_dir=run_dir)
     primary_keys_lower = {k.lower() for k in WRITER_DIGEST_PREFERRED_KEYS}
@@ -581,6 +609,8 @@ def _render_writer_evidence_digest_v2(
     # record every key v1 *would* include.
     primary_step_field_keys: set[tuple[str, str]] = set()
     for record in records:
+        if str(record.get("status") or "").strip().lower() != "ok":
+            continue
         step_id = str(record.get("step_id") or "unknown_step")
         summary = record.get("step_summary")
         if not isinstance(summary, dict):
@@ -594,7 +624,7 @@ def _render_writer_evidence_digest_v2(
     if evidence is not None:
         # Group claims by step_id, sorted for determinism.
         claims_by_step: Dict[str, List[Any]] = {}
-        for claim in evidence.numeric_claims():
+        for claim in evidence.authoritative_numeric_claims(all_records):
             if claim.source_field == "__easyicu_numeric_claim_overflow__":
                 continue
             claims_by_step.setdefault(claim.step_id, []).append(claim)
@@ -614,9 +644,7 @@ def _render_writer_evidence_digest_v2(
                 and c.source_field.lower() not in primary_keys_lower
                 and not _is_hidden_robustness_row_claim(step_id, c.source_field)
             ]
-            derived_claims = [
-                c for c in uncovered if getattr(c, "is_derived", False)
-            ]
+            derived_claims = [c for c in uncovered if getattr(c, "is_derived", False)]
             secondary_claims = [
                 c for c in uncovered if not getattr(c, "is_derived", False)
             ]
@@ -664,6 +692,8 @@ def _render_writer_evidence_digest_v2(
         # Fallback path: walk step_summary directly. Cheaper than the
         # registry path but lacks canonical floats.
         for record in records:
+            if str(record.get("status") or "").strip().lower() != "ok":
+                continue
             step_id = str(record.get("step_id") or "unknown_step")
             summary = record.get("step_summary")
             if not isinstance(summary, dict) or not summary:
@@ -671,7 +701,9 @@ def _render_writer_evidence_digest_v2(
             uncovered_pairs: List[tuple[str, Any]] = []
             for key, value in summary.items():
                 if not isinstance(value, (int, float, str)) and not (
-                    isinstance(value, list) and value and isinstance(value[0], (int, float))
+                    isinstance(value, list)
+                    and value
+                    and isinstance(value[0], (int, float))
                 ):
                     continue
                 if (step_id, key) in primary_step_field_keys:

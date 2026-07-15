@@ -19,9 +19,14 @@ primary block. The v1 path is unchanged and tested in
 
 from __future__ import annotations
 
+import inspect
+import json
 from pathlib import Path
 
-from easyicu.research_agent.evidence import EvidenceStore
+import pytest
+
+from easyicu.research_agent.evidence import EvidenceEnforcementError, EvidenceStore
+from easyicu.research_agent.pipeline_write import run_write_phase
 from easyicu.research_agent.pipeline_writer_aux import (
     WRITER_DIGEST_PREFERRED_KEYS,
     _preferred_writer_evidence_names,
@@ -32,6 +37,35 @@ from easyicu.research_agent.pipeline_writer_aux import (
 
 def _record(step_id: str, status: str, summary: dict) -> dict:
     return {"step_id": step_id, "status": status, "step_summary": summary}
+
+
+def _register_step_evidence(
+    evidence: EvidenceStore,
+    tmp_path: Path,
+    *,
+    step_id: str,
+    evidence_id: str,
+    payload: dict | None = None,
+):
+    source = tmp_path / f"{evidence_id}.json"
+    source.write_text(json.dumps(payload or {}), encoding="utf-8")
+    return evidence.register_file(
+        kind="statistic",
+        description=f"Summary for {step_id}.",
+        source_path=source,
+        produced_by_step=step_id,
+        evidence_id=evidence_id,
+        producer="runner",
+    )
+
+
+def test_write_phase_never_reads_append_only_evidence_without_current_ledger() -> None:
+    """Every writer-side reader must share the current verified snapshot."""
+
+    source = inspect.getsource(run_write_phase)
+
+    assert "evidence.current_verified_records(" in source
+    assert "evidence.records()" not in source
 
 
 def test_preferred_writer_evidence_names_excludes_records_with_active_findings(
@@ -67,6 +101,96 @@ def test_preferred_writer_evidence_names_excludes_records_with_active_findings(
     assert "table_one" in names
     assert "primary_association" not in names
     assert "primary_association_table" not in names
+
+
+def test_preferred_writer_evidence_names_excludes_retired_step_alias(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(tmp_path)
+    retired_path = tmp_path / "primary_association.csv"
+    current_path = tmp_path / "current_table.csv"
+    retired_path.write_text("term,or\nexposure,999\n", encoding="utf-8")
+    current_path.write_text("term,or\nexposure,1.2\n", encoding="utf-8")
+    retired = store.register_file(
+        kind="table",
+        description="Retired association.",
+        source_path=retired_path,
+        produced_by_step="03_model",
+        aliases=["primary_association"],
+    )
+    current = store.register_file(
+        kind="table",
+        description="Current result.",
+        source_path=current_path,
+        produced_by_step="04_current",
+    )
+    records = [
+        {
+            **_record("03_model", "ok", {}),
+            "evidence_ids": [retired.evidence_id],
+        },
+        {
+            **_record("03_model", "contract_failed", {}),
+            "evidence_ids": [],
+        },
+        {
+            **_record("04_current", "ok", {}),
+            "evidence_ids": [current.evidence_id],
+        },
+    ]
+
+    names = _preferred_writer_evidence_names(store, records)
+
+    assert "primary_association" not in names
+    assert retired.evidence_id not in names
+    assert current.evidence_id in names
+
+
+def test_bind_manuscript_rejects_retired_first_write_alias(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(tmp_path, enforcement_mode="strict")
+    retired_path = tmp_path / "retired.csv"
+    current_path = tmp_path / "current.csv"
+    retired_path.write_text("term,value\nold,999\n", encoding="utf-8")
+    current_path.write_text("term,value\nnew,1\n", encoding="utf-8")
+    retired = store.register_file(
+        kind="table",
+        description="Retired result.",
+        source_path=retired_path,
+        produced_by_step="03_model",
+        evidence_id="retired_result",
+        aliases=["primary_association"],
+    )
+    current = store.register_file(
+        kind="table",
+        description="Current result.",
+        source_path=current_path,
+        produced_by_step="04_current",
+        evidence_id="current_result",
+    )
+    records = [
+        {
+            **_record("03_model", "ok", {}),
+            "evidence_ids": [retired.evidence_id],
+        },
+        {
+            **_record("03_model", "contract_failed", {}),
+            "evidence_ids": [],
+        },
+        {
+            **_record("04_current", "ok", {}),
+            "evidence_ids": [current.evidence_id],
+        },
+    ]
+
+    with pytest.raises(EvidenceEnforcementError) as exc_info:
+        store.bind_manuscript(
+            "Result {evidence:primary_association}.",
+            per_step_records=records,
+        )
+
+    assert "primary_association" in str(exc_info.value)
 
 
 def test_v2_empty_records_returns_v1_output() -> None:
@@ -125,6 +249,12 @@ def test_v2_without_evidence_skips_when_nothing_outside_primary() -> None:
 
 def test_v2_with_evidence_reads_claim_registry(tmp_path: Path) -> None:
     evidence = EvidenceStore(root=tmp_path)
+    _register_step_evidence(
+        evidence,
+        tmp_path,
+        step_id="03_primary",
+        evidence_id="03_primary_summary",
+    )
     # Register one primary leaf and two secondary leaves into the
     # claim registry. We bypass the source-step_summary path on purpose
     # to assert v2 reads the *registry*, not just summary.
@@ -142,7 +272,12 @@ def test_v2_with_evidence_reads_claim_registry(tmp_path: Path) -> None:
         step_id="03_primary",
         source_field="cohort_male_fraction",  # not in primary keys
     )
-    records = [_record("03_primary", "ok", {"sample_size": 785, "primary_or": 1.42})]
+    records = [
+        {
+            **_record("03_primary", "ok", {"sample_size": 785, "primary_or": 1.42}),
+            "evidence_ids": ["03_primary_summary"],
+        }
+    ]
     out = _render_writer_evidence_digest_v2(records, evidence=evidence)
     assert "## secondary numbers" in out
     assert "cohort_male_fraction=0.86" in out
@@ -152,8 +287,131 @@ def test_v2_with_evidence_reads_claim_registry(tmp_path: Path) -> None:
     assert "median_los_icu=" not in secondary
 
 
+def test_v2_excludes_claims_from_retired_failed_attempt(tmp_path: Path) -> None:
+    evidence = EvidenceStore(root=tmp_path)
+    _register_step_evidence(
+        evidence,
+        tmp_path,
+        step_id="03_primary",
+        evidence_id="failed_summary",
+    )
+    _register_step_evidence(
+        evidence,
+        tmp_path,
+        step_id="03_primary",
+        evidence_id="current_summary",
+    )
+    evidence.register_numeric_claim(
+        value="999",
+        canonical=999.0,
+        evidence_id="failed_summary",
+        step_id="03_primary",
+        source_field="secondary_metric",
+    )
+    evidence.register_numeric_claim(
+        value="1.25",
+        canonical=1.25,
+        evidence_id="current_summary",
+        step_id="03_primary",
+        source_field="secondary_metric",
+    )
+    records = [
+        {
+            **_record("03_primary", "contract_failed", {"secondary_metric": 999}),
+            "evidence_ids": ["failed_summary"],
+        },
+        {
+            **_record("03_primary", "ok", {"secondary_metric": 1.25}),
+            "evidence_ids": ["current_summary"],
+        },
+    ]
+
+    out = _render_writer_evidence_digest_v2(records, evidence=evidence)
+
+    assert "secondary_metric=1.25" in out
+    assert "secondary_metric=999" not in out
+
+
+def test_v2_does_not_let_failed_claim_borrow_another_steps_active_id(
+    tmp_path: Path,
+) -> None:
+    evidence = EvidenceStore(root=tmp_path)
+    _register_step_evidence(
+        evidence,
+        tmp_path,
+        step_id="04_current",
+        evidence_id="current_other_step",
+    )
+    evidence.register_numeric_claim(
+        value="999",
+        canonical=999.0,
+        evidence_id="current_other_step",
+        step_id="03_failed",
+        source_field="secondary_metric",
+    )
+    evidence.register_numeric_claim(
+        value="777",
+        canonical=777.0,
+        evidence_id="orphan",
+        step_id="99_orphan",
+        source_field="secondary_metric",
+    )
+    run_path = tmp_path / "research_context.json"
+    run_path.write_text('{"n": 1}', encoding="utf-8")
+    evidence.register_file(
+        kind="log",
+        description="Run-level context.",
+        source_path=run_path,
+        evidence_id="research_context",
+        producer="pipeline",
+    )
+    evidence.register_numeric_claim(
+        value="666",
+        canonical=666.0,
+        evidence_id="research_context",
+        step_id="99_orphan",
+        source_field="secondary_metric",
+    )
+    records = [
+        {
+            **_record("03_failed", "contract_failed", {}),
+            "evidence_ids": ["retired_failed"],
+        },
+        {
+            **_record("04_current", "ok", {}),
+            "evidence_ids": ["current_other_step"],
+        },
+    ]
+
+    out = _render_writer_evidence_digest_v2(records, evidence=evidence)
+
+    assert "secondary_metric=999" not in out
+    assert "secondary_metric=777" not in out
+    assert "secondary_metric=666" not in out
+    assert "99_orphan" not in out
+
+
+def test_writer_digest_hides_values_from_current_failed_attempt() -> None:
+    records = [
+        _record("03_primary", "ok", {"secondary_metric": 1.25}),
+        _record("03_primary", "contract_failed", {"secondary_metric": 999}),
+    ]
+
+    out = _render_writer_evidence_digest_v2(records)
+
+    assert "03_primary [contract_failed]" in out
+    assert "secondary_metric=999" not in out
+    assert "secondary_metric=1.25" not in out
+
+
 def test_v2_secondary_cap_truncates_with_marker(tmp_path: Path) -> None:
     evidence = EvidenceStore(root=tmp_path)
+    _register_step_evidence(
+        evidence,
+        tmp_path,
+        step_id="03_primary",
+        evidence_id="03_primary_summary",
+    )
     # Twenty-five secondary leaves; cap is 3 → expect 3 visible + a
     # "more leaves omitted" marker mentioning 22.
     for i in range(25):
@@ -164,7 +422,12 @@ def test_v2_secondary_cap_truncates_with_marker(tmp_path: Path) -> None:
             step_id="03_primary",
             source_field=f"leaf_{i:02d}",
         )
-    records = [_record("03_primary", "ok", {})]
+    records = [
+        {
+            **_record("03_primary", "ok", {}),
+            "evidence_ids": ["03_primary_summary"],
+        }
+    ]
     out = _render_writer_evidence_digest_v2(
         records, evidence=evidence, secondary_cap_per_step=3
     )
@@ -177,6 +440,12 @@ def test_v2_secondary_cap_truncates_with_marker(tmp_path: Path) -> None:
 
 def test_v2_secondary_cap_counts_only_uncovered_claims(tmp_path: Path) -> None:
     evidence = EvidenceStore(root=tmp_path)
+    _register_step_evidence(
+        evidence,
+        tmp_path,
+        step_id="03_primary",
+        evidence_id="03_primary_summary",
+    )
     evidence.register_numeric_claim(
         value="1.42",
         canonical=1.42,
@@ -192,7 +461,12 @@ def test_v2_secondary_cap_counts_only_uncovered_claims(tmp_path: Path) -> None:
             step_id="03_primary",
             source_field=f"leaf_{i:02d}",
         )
-    records = [_record("03_primary", "ok", {"primary_or": 1.42})]
+    records = [
+        {
+            **_record("03_primary", "ok", {"primary_or": 1.42}),
+            "evidence_ids": ["03_primary_summary"],
+        }
+    ]
     out = _render_writer_evidence_digest_v2(
         records, evidence=evidence, secondary_cap_per_step=2
     )
@@ -201,6 +475,12 @@ def test_v2_secondary_cap_counts_only_uncovered_claims(tmp_path: Path) -> None:
 
 def test_v2_shows_derived_numbers_in_separate_block(tmp_path: Path) -> None:
     evidence = EvidenceStore(root=tmp_path)
+    _register_step_evidence(
+        evidence,
+        tmp_path,
+        step_id="03_primary",
+        evidence_id="03_primary_summary",
+    )
     evidence.register_numeric_claim(
         value="1.42",
         canonical=1.42,
@@ -227,11 +507,14 @@ def test_v2_shows_derived_numbers_in_separate_block(tmp_path: Path) -> None:
         step_id="03_primary",
     )
     records = [
-        _record(
-            "03_primary",
-            "ok",
-            {"primary_or": 1.42, "primary_or_se": 0.13},
-        )
+        {
+            **_record(
+                "03_primary",
+                "ok",
+                {"primary_or": 1.42, "primary_or_se": 0.13},
+            ),
+            "evidence_ids": ["03_primary_summary"],
+        }
     ]
     out = _render_writer_evidence_digest_v2(records, evidence=evidence)
     assert "## derived numbers" in out
@@ -251,6 +534,12 @@ def test_v2_treats_statistic_prefix_as_same_key(tmp_path: Path) -> None:
     source_field=``statistic:auroc`` isn't shown in the secondary
     block when v1 already cited ``auroc`` for the same step."""
     evidence = EvidenceStore(root=tmp_path)
+    _register_step_evidence(
+        evidence,
+        tmp_path,
+        step_id="04_model",
+        evidence_id="04_model",
+    )
     evidence.register_numeric_claim(
         value="0.79",
         canonical=0.79,
@@ -259,11 +548,14 @@ def test_v2_treats_statistic_prefix_as_same_key(tmp_path: Path) -> None:
         source_field="statistic:auroc",
     )
     records = [
-        _record(
-            "04_model",
-            "ok",
-            {"statistic": {"auroc": 0.79}},  # v1 will pull this as auroc=0.79
-        )
+        {
+            **_record(
+                "04_model",
+                "ok",
+                {"statistic": {"auroc": 0.79}},  # v1 cites auroc=0.79
+            ),
+            "evidence_ids": ["04_model"],
+        }
     ]
     out = _render_writer_evidence_digest_v2(records, evidence=evidence)
     # v1 primary block emitted auroc; v2 must NOT echo statistic:auroc=0.79
@@ -280,6 +572,12 @@ def test_v2_skips_overflow_sentinel(tmp_path: Path) -> None:
     cap is exceeded. The writer must never see this — it's an audit
     marker, not a citable value."""
     evidence = EvidenceStore(root=tmp_path)
+    _register_step_evidence(
+        evidence,
+        tmp_path,
+        step_id="03_step",
+        evidence_id="03_step",
+    )
     evidence.register_numeric_claim(
         value="42",
         canonical=42.0,
@@ -294,7 +592,12 @@ def test_v2_skips_overflow_sentinel(tmp_path: Path) -> None:
         step_id="03_step",
         source_field="cohort_male_fraction",
     )
-    records = [_record("03_step", "ok", {})]
+    records = [
+        {
+            **_record("03_step", "ok", {}),
+            "evidence_ids": ["03_step"],
+        }
+    ]
     out = _render_writer_evidence_digest_v2(records, evidence=evidence)
     assert "__easyicu_numeric_claim_overflow__" not in out
     assert "cohort_male_fraction=3.2" in out

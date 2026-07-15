@@ -581,6 +581,19 @@ def run_write_phase(
                 )
             )
 
+    # The evidence store is append-only across resume attempts. Freeze one
+    # digest-verified view after the optional literature inputs are registered
+    # and use it for every analysis-facing writer consumer; otherwise an old
+    # failed figure, code file, or statistic can leak back through a reader
+    # that walks ``evidence.records``.
+    current_verified_evidence_records = evidence.current_verified_records(
+        per_step_records
+    )
+    current_evidence_names = evidence.current_resolvable_names(per_step_records)
+    preferred_writer_evidence_names = _preferred_writer_evidence_names(
+        evidence,
+        per_step_records,
+    )
     emit_progress(
         "writer",
         "Drafting manuscript scaffold.",
@@ -599,7 +612,7 @@ def run_write_phase(
                     description=record.description,
                     relative_path=record.relative_path,
                 )
-                for record in evidence.records()
+                for record in current_verified_evidence_records
             ],
             findings=[
                 f.message for f in findings if f.severity in {"warning", "error"}
@@ -659,7 +672,7 @@ def run_write_phase(
             )
         scaffold = writer.run(
             context=agent_context,
-            evidence_ids=_preferred_writer_evidence_names(evidence),
+            evidence_ids=preferred_writer_evidence_names,
             evidence_digest=writer_evidence_digest,
         )
     except Exception as exc:
@@ -683,6 +696,7 @@ def run_write_phase(
         scaffold,
         context=context,
         evidence=evidence,
+        allowed_evidence_names=current_evidence_names,
     )
     if placeholder_repairs:
         findings.append(
@@ -703,6 +717,7 @@ def run_write_phase(
     scaffold, citation_repairs = _repair_common_writer_citation_omissions(
         scaffold,
         evidence=evidence,
+        allowed_evidence_names=current_evidence_names,
     )
     if citation_repairs:
         findings.append(
@@ -755,7 +770,10 @@ def run_write_phase(
                 generation_mode="system",
             )
 
-    bound_unfiltered = evidence.bind_manuscript(evidence_bound_scaffold)
+    bound_unfiltered = evidence.bind_manuscript(
+        evidence_bound_scaffold,
+        per_step_records=per_step_records,
+    )
     bound, demoted_missing_ids = _demote_unresolved_evidence_placeholders(
         bound_unfiltered
     )
@@ -840,6 +858,7 @@ def run_write_phase(
         bound,
         evidence=evidence,
         enforcement_mode=pipeline._evidence_enforcement_mode,
+        per_step_records=per_step_records,
     )
     bound_evidence_id = (
         "manuscript_scaffold_writer_probe"
@@ -927,7 +946,7 @@ def run_write_phase(
     manuscript_critique, critic_review_error = _review_manuscript_with_fail_safe(
         critic,
         scaffold=bound,
-        available_evidence_ids=evidence.resolvable_names(),
+        available_evidence_ids=current_evidence_names,
     )
     if manuscript_output_blockers:
         manuscript_critique = manuscript_critique.model_copy(
@@ -1017,7 +1036,7 @@ def run_write_phase(
             bib_basename = "manuscript_scaffold"
             # Collect registered figure paths for auto-embedding.
             fig_paths_for_latex: List[Tuple[str, str]] = []
-            for rec in evidence.records():
+            for rec in current_verified_evidence_records:
                 if rec.kind != "figure":
                     continue
                 # Prefer PNG for LaTeX compatibility; SVG needs
@@ -1129,7 +1148,7 @@ def run_write_phase(
         except Exception:
             bound_text = ""
         causal_report = run_causal_audit(
-            evidence_records=evidence.records(),
+            evidence_records=current_verified_evidence_records,
             run_dir=run_dir,
             bound_manuscript=bound_text,
         )
@@ -1206,9 +1225,15 @@ def run_write_phase(
         )
 
         rigor_findings = MethodologicalRigorAuditor().audit(
-            context=context, evidence=evidence
+            context=context,
+            evidence=evidence,
+            evidence_records=current_verified_evidence_records,
         )
-        signals = extract_method_signals(context, evidence)
+        signals = extract_method_signals(
+            context,
+            evidence,
+            evidence_records=current_verified_evidence_records,
+        )
         if evidence.get("methodological_rigor_report") is None:
             evidence.register_json(
                 kind="statistic",
@@ -1261,7 +1286,7 @@ def run_write_phase(
                 (
                     "strobe",
                     build_strobe_checklist(
-                        evidence_records=evidence.records(),
+                        evidence_records=current_verified_evidence_records,
                         bound_manuscript=bound_text,
                         task_kind=getattr(pipeline, "_benchmark_task_kind", None),
                     ),
@@ -1272,7 +1297,7 @@ def run_write_phase(
                 (
                     "tripod_ai",
                     build_tripod_ai_checklist(
-                        evidence_records=evidence.records(),
+                        evidence_records=current_verified_evidence_records,
                         bound_manuscript=bound_text,
                     ),
                 )
@@ -1282,7 +1307,7 @@ def run_write_phase(
                 (
                     "internal_phenotype",
                     build_internal_phenotype_checklist(
-                        evidence_records=evidence.records(),
+                        evidence_records=current_verified_evidence_records,
                         bound_manuscript=bound_text,
                         task_kind=getattr(pipeline, "_benchmark_task_kind", None),
                     ),
@@ -1360,7 +1385,7 @@ def run_write_phase(
     # uses to tighten the draft before submission.
     if pipeline._enable_reviewer_round:
         reviewer_report = run_reviewer_round(
-            evidence_records=evidence.records(),
+            evidence_records=current_verified_evidence_records,
             findings=findings,
             round_index=0,
         )
@@ -1429,7 +1454,7 @@ def run_write_phase(
         # Preserve plan order: iterate plan, pick first 'code'
         # evidence per step.
         code_records_by_step: Dict[str, Any] = {}
-        for rec in evidence.records():
+        for rec in current_verified_evidence_records:
             if rec.kind != "code":
                 continue
             step_id = rec.produced_by_step or ""

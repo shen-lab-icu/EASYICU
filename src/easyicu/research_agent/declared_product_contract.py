@@ -244,11 +244,20 @@ def _assignment_artifact_frame(
     return None
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def typed_product_binding_contract(
     *,
     product_name: str,
     step_summary: Mapping[str, Any],
     artifact_path: Path,
+    authoritative_cohort_path: Path | None = None,
 ) -> dict[str, Any] | None:
     """Return producer-declared coordinates needed to consume a typed product.
 
@@ -256,10 +265,11 @@ def typed_product_binding_contract(
     cohort, exposure, outcome, model, method, or estimand for the consumer.
     """
 
+    normalized_product = _normalise(product_name)
     exact_contract = step_summary.get(product_name)
     if isinstance(exact_contract, Mapping):
         contract = dict(exact_contract)
-        if _normalise(product_name) == "primary_exposure_definition":
+        if normalized_product == "primary_exposure_definition":
             declared_columns = {
                 str(contract.get(key) or "").strip()
                 for key in ("column", "executable_column", "exposure_column")
@@ -285,8 +295,15 @@ def typed_product_binding_contract(
                 time_window = next(iter(declared_windows))
                 contract["window"] = time_window
                 contract["time_window"] = time_window
-        return contract
-    normalized_product = _normalise(product_name)
+        # Assignment-model and confounder-set contracts are host-owned.  Their
+        # schema must be derived from the registered artifact and canonical
+        # producer roster below; an arbitrary same-name mapping in the summary
+        # is not authority and must never bypass those checks.
+        if normalized_product not in {
+            "assignment_model",
+            "prespecified_confounder_set",
+        }:
+            return contract
     if normalized_product == "prespecified_confounder_set":
         if artifact_path.suffix.lower() != ".json":
             return None
@@ -316,6 +333,16 @@ def typed_product_binding_contract(
                 contract[key] = dict(value)
         return contract
     if normalized_product != "assignment_model":
+        return None
+
+    # Assignment scores are row-level scientific inputs.  Internal
+    # self-consistency is not enough: an arbitrary, unique set of identifiers
+    # with plausible probabilities must not become a valid typed product.  The
+    # host therefore requires the producer artifact to be a row-aligned view of
+    # the immutable analysis cohort.  Individual models may leave scores null
+    # outside their Planner-owned analysis set, but they may not substitute a
+    # different population.
+    if authoritative_cohort_path is None:
         return None
 
     raw_models = step_summary.get("assignment_models")
@@ -436,6 +463,62 @@ def typed_product_binding_contract(
     import numpy as np
     import pandas as pd
 
+    try:
+        cohort_path = Path(authoritative_cohort_path)
+        suffix = cohort_path.suffix.lower()
+        if suffix in {".parquet", ".pq"}:
+            if identity_column == "row_index":
+                import pyarrow.parquet as pq
+
+                cohort_n = int(pq.ParquetFile(cohort_path).metadata.num_rows)
+                expected_identity = pd.Series(range(cohort_n), name=identity_column)
+            else:
+                cohort_frame = pd.read_parquet(
+                    cohort_path, columns=[identity_column]
+                )
+                expected_identity = cohort_frame[identity_column]
+        elif suffix == ".csv":
+            if identity_column == "row_index":
+                cohort_n = len(pd.read_csv(cohort_path, usecols=[0]))
+                expected_identity = pd.Series(range(cohort_n), name=identity_column)
+            else:
+                cohort_frame = pd.read_csv(cohort_path, usecols=[identity_column])
+                expected_identity = cohort_frame[identity_column]
+        elif suffix == ".tsv":
+            if identity_column == "row_index":
+                cohort_n = len(pd.read_csv(cohort_path, sep="\t", usecols=[0]))
+                expected_identity = pd.Series(range(cohort_n), name=identity_column)
+            else:
+                cohort_frame = pd.read_csv(
+                    cohort_path, sep="\t", usecols=[identity_column]
+                )
+                expected_identity = cohort_frame[identity_column]
+        else:
+            return None
+    except Exception:
+        return None
+    expected_identity = expected_identity.reset_index(drop=True)
+    observed_identity = identity.reset_index(drop=True)
+    if (
+        len(observed_identity) != len(expected_identity)
+        or expected_identity.isna().any()
+        or expected_identity.duplicated().any()
+        or not observed_identity.astype("string").equals(
+            expected_identity.astype("string")
+        )
+    ):
+        return None
+
+    def _identity_digest(values: "pd.Series") -> str:
+        digest = hashlib.sha256()
+        for value in values.astype("string"):
+            encoded = str(value).encode("utf-8")
+            digest.update(len(encoded).to_bytes(8, "big"))
+            digest.update(encoded)
+        return digest.hexdigest()
+
+    row_identity_sha256 = _identity_digest(observed_identity)
+
     for model in bound_models:
         score_column = str(model["propensity_score_column"])
         score = pd.to_numeric(frame[score_column], errors="coerce")
@@ -459,8 +542,17 @@ def typed_product_binding_contract(
         ):
             return None
         model["row_identity_column"] = identity_column
+        model["analysis_set_n"] = int(nonmissing.sum())
+        model["analysis_set_identity_sha256"] = _identity_digest(
+            observed_identity[nonmissing].reset_index(drop=True)
+        )
     return {
         "row_identity_column": identity_column,
+        "row_count": len(observed_identity),
+        "row_identity_sha256": row_identity_sha256,
+        "authoritative_cohort_sha256": _sha256_file(
+            Path(authoritative_cohort_path)
+        ),
         "models": bound_models,
     }
 
