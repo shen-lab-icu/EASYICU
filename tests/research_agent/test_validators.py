@@ -2798,6 +2798,65 @@ treatment = resolve_raw_exposure(exposure_definition, frame).values
     assert "downgraded_reason" not in findings[0].detail
 
 
+def test_llm_concept_auditor_accepts_contract_bound_finalized_branch(ra):
+    from easyicu.research_agent.audits.validators import (
+        _downgrade_finalized_exposure_reconciliation_findings,
+    )
+    from easyicu.research_agent.contracts import ValidationFinding
+
+    script = """
+REQUESTED_INPUTS = ['artifact:primary_exposure_definition']
+def resolve_finalized_exposure(definition, product_contract, frame):
+    executable = product_contract['executable_column']
+    finalized = pd.to_numeric(definition[executable], errors='coerce')
+    if finalized.isna().any() or not np.isfinite(finalized).all() or not finalized.isin([0, 1]).all():
+        raise RuntimeError('invalid finalized exposure')
+    return finalized.astype(int)
+
+def resolve_raw_exposure(definition, frame):
+    return reconcile_binary_event_presence(frame)
+
+if isinstance(exposure_definition, pd.DataFrame):
+    treatment = resolve_finalized_exposure(
+        exposure_definition, product_contract, frame
+    )
+else:
+    treatment = resolve_raw_exposure(exposure_definition, frame).values
+frame[product_contract['executable_column']] = treatment
+"""
+    context = ra.build_research_context(
+        research_question="Assess balance by the registered exposure.",
+        cohort=pd.DataFrame({"stay_id": [1, 2], "treatment": [0, 1]}),
+        cohort_name="c",
+        database="synthetic",
+        primary_exposure="treatment",
+    )
+    findings = _downgrade_finalized_exposure_reconciliation_findings(
+        findings=[
+            ValidationFinding(
+                validator="llm_concept_auditor",
+                severity="error",
+                message=(
+                    "The script overwrites the authoritative finalized exposure "
+                    "with a second helper result."
+                ),
+                detail={
+                    "context": (
+                        "It unconditionally runs "
+                        "reconcile_binary_event_presence after resolving the "
+                        "artifact."
+                    )
+                },
+            )
+        ],
+        context=context,
+        script_text=script,
+    )
+
+    assert findings[0].severity == "warning"
+    assert "AST control-flow verification" in findings[0].detail["downgraded_reason"]
+
+
 def test_llm_concept_auditor_downgrades_companion_value_gating_false_positive(ra):
     class _CompanionGatingFalsePositiveLLM:
         def complete(self, messages, *, max_tokens=1024, temperature=0.0):
