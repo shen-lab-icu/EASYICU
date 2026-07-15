@@ -196,7 +196,7 @@ def test_ambiguous_or_mixed_primary_cohort_owner_fails_closed(tmp_path: Path) ->
     assert findings[0].detail["issue"] == "primary_cohort_product_owner_ambiguous"
 
 
-def test_truthful_primary_cohort_and_attrition_pass(tmp_path: Path) -> None:
+def test_truthful_cohort_and_legacy_free_text_attrition_pass(tmp_path: Path) -> None:
     step = _cohort_step()
     plan = _plan(step)
     universe_path, authoritative_path, authoritative = _write_authorities(tmp_path)
@@ -285,6 +285,92 @@ def test_filtered_cohort_cannot_masquerade_as_universe(tmp_path: Path) -> None:
     assert findings[0].severity == "error"
     assert findings[0].detail["issue"] == "cohort_denominator_mismatch"
     assert findings[0].detail["expected_universe_n"] == 8
+
+
+def test_summary_synonymous_denominators_must_agree(tmp_path: Path) -> None:
+    step = _cohort_step()
+    plan = _plan(step)
+    universe_path, authoritative_path, authoritative = _write_authorities(tmp_path)
+    out_dir = tmp_path / "outputs"
+    summary = _write_outputs(
+        out_dir,
+        produced=authoritative,
+        universe_n=8,
+        final_n=4,
+    )
+    summary["universe_n"] = 999
+
+    findings = primary_analysis_cohort_integrity_findings(
+        step=step,
+        plan=plan,
+        step_summary=summary,
+        out_dir=out_dir,
+        universe_path=universe_path,
+        authoritative_cohort_path=authoritative_path,
+    )
+
+    assert findings[0].detail["issue"] == "cohort_denominator_fields_disagree"
+
+
+def test_summary_synonymous_denominators_must_all_be_integral(
+    tmp_path: Path,
+) -> None:
+    step = _cohort_step()
+    plan = _plan(step)
+    universe_path, authoritative_path, authoritative = _write_authorities(tmp_path)
+    out_dir = tmp_path / "outputs"
+    summary = _write_outputs(
+        out_dir,
+        produced=authoritative,
+        universe_n=8,
+        final_n=4,
+    )
+    summary["final_cohort_n"] = "not-a-count"
+
+    findings = primary_analysis_cohort_integrity_findings(
+        step=step,
+        plan=plan,
+        step_summary=summary,
+        out_dir=out_dir,
+        universe_path=universe_path,
+        authoritative_cohort_path=authoritative_path,
+    )
+
+    assert findings[0].detail["issue"] == "cohort_denominator_fields_nonintegral"
+
+
+def test_matching_summary_synonymous_denominators_pass(tmp_path: Path) -> None:
+    step = _cohort_step()
+    plan = _plan(step)
+    universe_path, authoritative_path, authoritative = _write_authorities(tmp_path)
+    out_dir = tmp_path / "outputs"
+    summary = _write_outputs(
+        out_dir,
+        produced=authoritative,
+        universe_n=8,
+        final_n=4,
+    )
+    summary.update(
+        {
+            "universe_n": 8.0,
+            "n_input_universe": "8",
+            "n_analysis_cohort": 4.0,
+            "n_final_cohort": "4",
+            "final_cohort_n": 4,
+        }
+    )
+
+    assert (
+        primary_analysis_cohort_integrity_findings(
+            step=step,
+            plan=plan,
+            step_summary=summary,
+            out_dir=out_dir,
+            universe_path=universe_path,
+            authoritative_cohort_path=authoritative_path,
+        )
+        == []
+    )
 
 
 def test_same_n_wrong_cohort_row_identities_fail_closed(tmp_path: Path) -> None:
@@ -442,6 +528,197 @@ def test_detailed_remaining_rows_schema_is_verified(tmp_path: Path) -> None:
     )
 
 
+def test_sequential_attrition_cannot_swap_planner_predicate_ids(
+    tmp_path: Path,
+) -> None:
+    step = _cohort_step()
+    plan = _plan(step)
+    universe_path, authoritative_path, authoritative = _write_authorities(tmp_path)
+    out_dir = tmp_path / "outputs"
+    summary = _write_outputs(
+        out_dir,
+        produced=authoritative,
+        universe_n=8,
+        final_n=4,
+    )
+    swapped = pd.DataFrame(
+        {
+            "criterion_id": [
+                "universe",
+                "include_02_los_icu",
+                "include_01_age",
+            ],
+            "n_remaining_rows": [8, 7, 4],
+            "n_excluded_rows": [0, 1, 3],
+        }
+    )
+    swapped.to_csv(out_dir / "cohort_flow.csv", index=False)
+    swapped.to_csv(out_dir / "cohort_attrition.csv", index=False)
+
+    findings = primary_analysis_cohort_integrity_findings(
+        step=step,
+        plan=plan,
+        step_summary=summary,
+        out_dir=out_dir,
+        universe_path=universe_path,
+        authoritative_cohort_path=authoritative_path,
+    )
+
+    assert findings[0].detail["issue"] == "attrition_sequence_rule_ids_mismatch"
+
+
+def test_sequential_attrition_synonymous_remaining_counts_must_agree(
+    tmp_path: Path,
+) -> None:
+    step = _cohort_step()
+    plan = _plan(step)
+    universe_path, authoritative_path, authoritative = _write_authorities(tmp_path)
+    out_dir = tmp_path / "outputs"
+    summary = _write_outputs(
+        out_dir,
+        produced=authoritative,
+        universe_n=8,
+        final_n=4,
+    )
+    contradictory = pd.DataFrame(
+        {
+            "criterion_id": ["universe", "include_01_age", "include_02_los_icu"],
+            "n_remaining": [8, 7, 4],
+            "n_remaining_rows": [8, 999, 4],
+            "n_excluded_rows": [0, 1, 3],
+        }
+    )
+    contradictory.to_csv(out_dir / "cohort_flow.csv", index=False)
+    contradictory.to_csv(out_dir / "cohort_attrition.csv", index=False)
+
+    findings = primary_analysis_cohort_integrity_findings(
+        step=step,
+        plan=plan,
+        step_summary=summary,
+        out_dir=out_dir,
+        universe_path=universe_path,
+        authoritative_cohort_path=authoritative_path,
+    )
+
+    assert findings[0].detail["issue"] == "attrition_count_columns_disagree"
+
+
+def test_sequential_attrition_synonymous_exclusion_counts_must_agree(
+    tmp_path: Path,
+) -> None:
+    step = _cohort_step()
+    plan = _plan(step)
+    universe_path, authoritative_path, authoritative = _write_authorities(tmp_path)
+    out_dir = tmp_path / "outputs"
+    summary = _write_outputs(
+        out_dir,
+        produced=authoritative,
+        universe_n=8,
+        final_n=4,
+    )
+    contradictory = pd.DataFrame(
+        {
+            "criterion_id": ["universe", "include_01_age", "include_02_los_icu"],
+            "n_remaining_rows": [8, 7, 4],
+            "n_excluded_at_step": [0, 1, 3],
+            "n_excluded_rows": [0, 3, 1],
+        }
+    )
+    contradictory.to_csv(out_dir / "cohort_flow.csv", index=False)
+    contradictory.to_csv(out_dir / "cohort_attrition.csv", index=False)
+
+    findings = primary_analysis_cohort_integrity_findings(
+        step=step,
+        plan=plan,
+        step_summary=summary,
+        out_dir=out_dir,
+        universe_path=universe_path,
+        authoritative_cohort_path=authoritative_path,
+    )
+
+    assert findings[0].detail["issue"] == "attrition_count_columns_disagree"
+
+
+def test_sequential_attrition_matching_synonymous_counts_pass(tmp_path: Path) -> None:
+    step = _cohort_step()
+    plan = _plan(step)
+    universe_path, authoritative_path, authoritative = _write_authorities(tmp_path)
+    out_dir = tmp_path / "outputs"
+    summary = _write_outputs(
+        out_dir,
+        produced=authoritative,
+        universe_n=8,
+        final_n=4,
+    )
+    truthful = pd.DataFrame(
+        {
+            "criterion_id": ["universe", "include_01_age", "include_02_los_icu"],
+            "attrition_category": [
+                "universe",
+                "include_01_age",
+                "include_02_los_icu",
+            ],
+            "n_remaining": [8, 7, 4],
+            "n_remaining_rows": [8, 7, 4],
+            "n_excluded_at_step": [0, 1, 3],
+            "n_removed_from_prior_stage": [0, 1, 3],
+            "n_excluded_rows": [0, 1, 3],
+        }
+    )
+    truthful.to_csv(out_dir / "cohort_flow.csv", index=False)
+    truthful.to_csv(out_dir / "cohort_attrition.csv", index=False)
+
+    assert (
+        primary_analysis_cohort_integrity_findings(
+            step=step,
+            plan=plan,
+            step_summary=summary,
+            out_dir=out_dir,
+            universe_path=universe_path,
+            authoritative_cohort_path=authoritative_path,
+        )
+        == []
+    )
+
+
+def test_canonical_attrition_identity_columns_must_agree(tmp_path: Path) -> None:
+    step = _cohort_step()
+    plan = _plan(step)
+    universe_path, authoritative_path, authoritative = _write_authorities(tmp_path)
+    out_dir = tmp_path / "outputs"
+    summary = _write_outputs(
+        out_dir,
+        produced=authoritative,
+        universe_n=8,
+        final_n=4,
+    )
+    contradictory = pd.DataFrame(
+        {
+            "criterion_id": ["universe", "include_01_age", "include_02_los_icu"],
+            "attrition_category": [
+                "universe",
+                "include_02_los_icu",
+                "include_01_age",
+            ],
+            "n_remaining_rows": [8, 7, 4],
+            "n_excluded_rows": [0, 1, 3],
+        }
+    )
+    contradictory.to_csv(out_dir / "cohort_flow.csv", index=False)
+    contradictory.to_csv(out_dir / "cohort_attrition.csv", index=False)
+
+    findings = primary_analysis_cohort_integrity_findings(
+        step=step,
+        plan=plan,
+        step_summary=summary,
+        out_dir=out_dir,
+        universe_path=universe_path,
+        authoritative_cohort_path=authoritative_path,
+    )
+
+    assert findings[0].detail["issue"] == "attrition_identity_columns_disagree"
+
+
 def test_explicit_terminal_cohort_row_is_allowed(tmp_path: Path) -> None:
     step = _cohort_step()
     plan = _plan(step)
@@ -522,6 +799,50 @@ def test_bare_n_rows_sequence_cannot_hide_forged_intermediate_count(
     assert findings[0].detail["issue"] == "attrition_stage_counts_mismatch"
 
 
+def test_single_row_denominator_synonymous_fields_must_agree(tmp_path: Path) -> None:
+    step = _cohort_step().model_copy(
+        update={
+            "expected_outputs": [
+                "artifact:analysis_cohort",
+                "table:cohort_denominator",
+            ]
+        }
+    )
+    plan = _plan(step)
+    universe_path, authoritative_path, authoritative = _write_authorities(tmp_path)
+    out_dir = tmp_path / "outputs"
+    out_dir.mkdir(parents=True)
+    authoritative.to_parquet(out_dir / "analysis_cohort.parquet", index=False)
+    pd.DataFrame(
+        {
+            "n_universe": [8],
+            "universe_n": [999],
+            "n_analysis_cohort": [4],
+            "final_cohort_n": [4],
+        }
+    ).to_csv(out_dir / "denominators.csv", index=False)
+    summary = {
+        "status": "completed",
+        "n_universe": 8,
+        "n_final_analysis_cohort": 4,
+        "output_files": {
+            "artifact:analysis_cohort": "analysis_cohort.parquet",
+            "table:cohort_denominator": "denominators.csv",
+        },
+    }
+
+    findings = primary_analysis_cohort_integrity_findings(
+        step=step,
+        plan=plan,
+        step_summary=summary,
+        out_dir=out_dir,
+        universe_path=universe_path,
+        authoritative_cohort_path=authoritative_path,
+    )
+
+    assert findings[0].detail["issue"] == "cohort_denominator_fields_disagree"
+
+
 def test_partition_attrition_must_conserve_excluded_rows(tmp_path: Path) -> None:
     step = _cohort_step().model_copy(
         update={
@@ -594,6 +915,14 @@ def test_truthful_partition_attrition_passes(tmp_path: Path) -> None:
             ],
             "n": [8, 3, 1, 4],
             "status": ["denominator", "excluded", "excluded", "retained"],
+            "partition_status": [
+                " Denominator ",
+                "EXCLUDED",
+                "excluded",
+                "Retained",
+            ],
+            "row_role": ["denominator", "excluded", "excluded", "retained"],
+            "role": ["denominator", "excluded", "excluded", "retained"],
         }
     ).to_csv(out_dir / "attrition.csv", index=False)
     summary = {
@@ -665,3 +994,108 @@ def test_partition_attrition_cannot_swap_rule_labels(tmp_path: Path) -> None:
     )
 
     assert findings[0].detail["issue"] == "attrition_partition_rule_counts_mismatch"
+
+
+def test_partition_attrition_synonymous_count_columns_must_agree(
+    tmp_path: Path,
+) -> None:
+    step = _cohort_step().model_copy(
+        update={
+            "expected_outputs": [
+                "artifact:analysis_cohort",
+                "table:attrition",
+            ]
+        }
+    )
+    plan = _plan(step)
+    universe_path, authoritative_path, authoritative = _write_authorities(tmp_path)
+    out_dir = tmp_path / "outputs"
+    out_dir.mkdir(parents=True)
+    authoritative.to_parquet(out_dir / "analysis_cohort.parquet", index=False)
+    pd.DataFrame(
+        {
+            "attrition_category": [
+                "universe",
+                "include_01_age",
+                "include_02_los_icu",
+                "primary_analysis_cohort",
+            ],
+            "n": [8, 1, 3, 4],
+            "n_rows": [8, 3, 1, 4],
+            "status": ["denominator", "excluded", "excluded", "retained"],
+        }
+    ).to_csv(out_dir / "attrition.csv", index=False)
+    summary = {
+        "status": "completed",
+        "n_universe": 8,
+        "n_final_analysis_cohort": 4,
+        "output_files": {
+            "artifact:analysis_cohort": "analysis_cohort.parquet",
+            "table:attrition": "attrition.csv",
+        },
+    }
+
+    findings = primary_analysis_cohort_integrity_findings(
+        step=step,
+        plan=plan,
+        step_summary=summary,
+        out_dir=out_dir,
+        universe_path=universe_path,
+        authoritative_cohort_path=authoritative_path,
+    )
+
+    assert findings[0].detail["issue"] == "attrition_count_columns_disagree"
+
+
+def test_partition_attrition_role_aliases_must_agree(tmp_path: Path) -> None:
+    step = _cohort_step().model_copy(
+        update={
+            "expected_outputs": [
+                "artifact:analysis_cohort",
+                "table:attrition",
+            ]
+        }
+    )
+    plan = _plan(step)
+    universe_path, authoritative_path, authoritative = _write_authorities(tmp_path)
+    out_dir = tmp_path / "outputs"
+    out_dir.mkdir(parents=True)
+    authoritative.to_parquet(out_dir / "analysis_cohort.parquet", index=False)
+    pd.DataFrame(
+        {
+            "attrition_category": [
+                "universe",
+                "include_01_age",
+                "include_02_los_icu",
+                "primary_analysis_cohort",
+            ],
+            "n": [8, 1, 3, 4],
+            "status": ["denominator", "excluded", "excluded", "retained"],
+            "partition_status": [
+                "denominator",
+                "excluded",
+                "retained",
+                "excluded",
+            ],
+        }
+    ).to_csv(out_dir / "attrition.csv", index=False)
+    summary = {
+        "status": "completed",
+        "n_universe": 8,
+        "n_final_analysis_cohort": 4,
+        "output_files": {
+            "artifact:analysis_cohort": "analysis_cohort.parquet",
+            "table:attrition": "attrition.csv",
+        },
+    }
+
+    findings = primary_analysis_cohort_integrity_findings(
+        step=step,
+        plan=plan,
+        step_summary=summary,
+        out_dir=out_dir,
+        universe_path=universe_path,
+        authoritative_cohort_path=authoritative_path,
+    )
+
+    assert findings[0].detail["issue"] == "attrition_role_columns_disagree"

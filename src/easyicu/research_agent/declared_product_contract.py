@@ -1268,12 +1268,54 @@ def _integral_count(value: Any) -> int | None:
     return int(number)
 
 
-def _summary_count(summary: Mapping[str, Any], names: Sequence[str]) -> int | None:
-    for name in names:
-        count = _integral_count(summary.get(name))
-        if count is not None:
-            return count
-    return None
+_PRIMARY_RAW_DENOMINATOR_FIELDS = (
+    "n_universe",
+    "universe_n",
+    "n_input_universe",
+)
+_PRIMARY_FINAL_DENOMINATOR_FIELDS = (
+    "n_final_analysis_cohort",
+    "n_analysis_cohort",
+    "n_final_cohort",
+    "final_cohort_n",
+)
+
+
+def _coherent_integral_count_columns(
+    table: Any,
+    names: Sequence[str],
+) -> tuple[str | None, dict[str, list[int | None]], str | None]:
+    """Read synonymous structural-count columns without first-match masking."""
+
+    present = [name for name in names if name in table.columns]
+    values_by_column = {
+        name: [_integral_count(value) for value in table[name].tolist()]
+        for name in present
+    }
+    if any(value is None for values in values_by_column.values() for value in values):
+        return (present[0] if present else None), values_by_column, "nonintegral"
+    if len(present) > 1:
+        reference = values_by_column[present[0]]
+        if any(values_by_column[name] != reference for name in present[1:]):
+            return present[0], values_by_column, "disagree"
+    return (present[0] if present else None), values_by_column, None
+
+
+def _coherent_integral_mapping_counts(
+    mapping: Mapping[str, Any],
+    names: Sequence[str],
+) -> tuple[int | None, dict[str, int | None], str | None]:
+    """Read all present synonymous count fields from one declared mapping."""
+
+    present = [name for name in names if name in mapping]
+    values_by_field = {name: _integral_count(mapping[name]) for name in present}
+    if any(value is None for value in values_by_field.values()):
+        return None, values_by_field, "nonintegral"
+    if len(present) > 1:
+        reference = values_by_field[present[0]]
+        if any(values_by_field[name] != reference for name in present[1:]):
+            return reference, values_by_field, "disagree"
+    return (values_by_field[present[0]] if present else None), values_by_field, None
 
 
 def primary_analysis_cohort_integrity_findings(
@@ -1485,18 +1527,37 @@ def primary_analysis_cohort_integrity_findings(
             error=str(exc)[:300],
         )
 
-    reported_raw_n = _summary_count(
-        step_summary, ("n_universe", "universe_n", "n_input_universe")
+    reported_raw_n, raw_denominators_by_field, raw_denominator_issue = (
+        _coherent_integral_mapping_counts(
+            step_summary,
+            _PRIMARY_RAW_DENOMINATOR_FIELDS,
+        )
     )
-    reported_final_n = _summary_count(
-        step_summary,
-        (
-            "n_final_analysis_cohort",
-            "n_analysis_cohort",
-            "n_final_cohort",
-            "final_cohort_n",
-        ),
+    reported_final_n, final_denominators_by_field, final_denominator_issue = (
+        _coherent_integral_mapping_counts(
+            step_summary,
+            _PRIMARY_FINAL_DENOMINATOR_FIELDS,
+        )
     )
+    if (
+        raw_denominator_issue == "nonintegral"
+        or final_denominator_issue == "nonintegral"
+    ):
+        return finding(
+            "cohort_denominator_fields_nonintegral",
+            "The primary cohort summary contains a non-integral structural "
+            "denominator in one of its synonymous fields.",
+            raw_denominators_by_field=raw_denominators_by_field,
+            final_denominators_by_field=final_denominators_by_field,
+        )
+    if raw_denominator_issue == "disagree" or final_denominator_issue == "disagree":
+        return finding(
+            "cohort_denominator_fields_disagree",
+            "The primary cohort summary contains contradictory synonymous "
+            "structural denominator fields.",
+            raw_denominators_by_field=raw_denominators_by_field,
+            final_denominators_by_field=final_denominators_by_field,
+        )
     if reported_raw_n != raw_n or reported_final_n != locked_n:
         return finding(
             "cohort_denominator_mismatch",
@@ -1555,26 +1616,78 @@ def primary_analysis_cohort_integrity_findings(
                 f"The declared {product} table has no verifiable count sequence.",
                 product=product,
             )
-        remaining_column = next(
-            (
-                name
-                for name in ("n_remaining", "n_remaining_rows")
-                if name in table.columns
-            ),
-            None,
+        # Only typed identity columns carry an exact host-owned predicate ID.
+        # Legacy ``criterion`` remains descriptive free text; its row order and
+        # verified counts provide the compatibility identity without routing on
+        # case-specific wording.
+        canonical_identity_columns = [
+            name
+            for name in ("criterion_id", "attrition_category")
+            if name in table.columns
+        ]
+        normalised_identity_by_column = {
+            name: [_normalise(value) for value in table[name].tolist()]
+            for name in canonical_identity_columns
+        }
+        if len(canonical_identity_columns) > 1:
+            reference = normalised_identity_by_column[canonical_identity_columns[0]]
+            if any(
+                normalised_identity_by_column[name] != reference
+                for name in canonical_identity_columns[1:]
+            ):
+                return finding(
+                    "attrition_identity_columns_disagree",
+                    f"The declared {product} table has contradictory canonical "
+                    "Planner-predicate identity columns.",
+                    product=product,
+                    identity_columns=canonical_identity_columns,
+                    identities_by_column=normalised_identity_by_column,
+                )
+        canonical_identity_column = (
+            canonical_identity_columns[0] if canonical_identity_columns else None
         )
-        partition_count_column = next(
-            (name for name in ("n", "n_rows") if name in table.columns),
-            None,
+
+        remaining_column, remaining_by_column, remaining_issue = (
+            _coherent_integral_count_columns(
+                table,
+                ("n_remaining", "n_remaining_rows"),
+            )
+        )
+        partition_count_column, partition_by_column, partition_issue = (
+            _coherent_integral_count_columns(table, ("n", "n_rows"))
         )
         if remaining_column is None and partition_count_column is None:
-            table_raw_n = _summary_count(
-                table.iloc[0].to_dict(), ("n_universe", "universe_n")
+            denominator_row = table.iloc[0].to_dict()
+            table_raw_n, table_raw_by_field, table_raw_issue = (
+                _coherent_integral_mapping_counts(
+                    denominator_row,
+                    _PRIMARY_RAW_DENOMINATOR_FIELDS,
+                )
             )
-            table_final_n = _summary_count(
-                table.iloc[0].to_dict(),
-                ("n_analysis_cohort", "n_final_cohort", "final_cohort_n"),
+            table_final_n, table_final_by_field, table_final_issue = (
+                _coherent_integral_mapping_counts(
+                    denominator_row,
+                    _PRIMARY_FINAL_DENOMINATOR_FIELDS,
+                )
             )
+            if table_raw_issue == "nonintegral" or table_final_issue == "nonintegral":
+                return finding(
+                    "cohort_denominator_fields_nonintegral",
+                    f"The declared {product} table contains a non-integral "
+                    "structural denominator in one of its synonymous fields.",
+                    product=product,
+                    raw_denominators_by_field=table_raw_by_field,
+                    final_denominators_by_field=table_final_by_field,
+                )
+            if table_raw_issue == "disagree" or table_final_issue == "disagree":
+                return finding(
+                    "cohort_denominator_fields_disagree",
+                    f"The declared {product} table contains contradictory "
+                    "synonymous structural denominator fields.",
+                    product=product,
+                    raw_denominators_by_field=table_raw_by_field,
+                    final_denominators_by_field=table_final_by_field,
+                )
             if (
                 product in {"cohort_denominator", "cohort_denominators"}
                 and len(table) == 1
@@ -1587,17 +1700,37 @@ def primary_analysis_cohort_integrity_findings(
                 f"The declared {product} table has no verifiable count sequence.",
                 product=product,
             )
-        count_column = remaining_column or partition_count_column
+        if remaining_column is not None:
+            count_column = remaining_column
+            count_values_by_column = remaining_by_column
+            count_issue = remaining_issue
+        else:
+            count_column = partition_count_column
+            count_values_by_column = partition_by_column
+            count_issue = partition_issue
         assert count_column is not None
-        counts = [_integral_count(value) for value in table[count_column].tolist()]
-        if any(value is None for value in counts):
+        if count_issue == "nonintegral":
             return finding(
                 "attrition_counts_nonintegral",
                 f"The declared {product} table contains invalid structural counts.",
                 product=product,
                 count_column=count_column,
+                count_columns=list(count_values_by_column),
             )
-        integral_counts = [int(value) for value in counts if value is not None]
+        if count_issue == "disagree":
+            return finding(
+                "attrition_count_columns_disagree",
+                f"The declared {product} table has contradictory synonymous "
+                "structural-count columns.",
+                product=product,
+                count_columns=list(count_values_by_column),
+                values_by_column=count_values_by_column,
+            )
+        integral_counts = [
+            int(value)
+            for value in count_values_by_column[count_column]
+            if value is not None
+        ]
         if any(value < 0 for value in integral_counts):
             return finding(
                 "attrition_counts_negative",
@@ -1632,17 +1765,15 @@ def primary_analysis_cohort_integrity_findings(
                     f"The declared {product} remaining-count sequence increases.",
                     product=product,
                 )
-            excluded_column = next(
-                (
-                    name
-                    for name in (
+            excluded_column, exclusions_by_column, exclusion_issue = (
+                _coherent_integral_count_columns(
+                    table,
+                    (
                         "n_excluded_at_step",
                         "n_removed_from_prior_stage",
                         "n_excluded_rows",
-                    )
-                    if name in table.columns
-                ),
-                None,
+                    ),
+                )
             )
             if excluded_column is None:
                 return finding(
@@ -1651,26 +1782,37 @@ def primary_analysis_cohort_integrity_findings(
                     "exclusions.",
                     product=product,
                 )
-            exclusions = [
-                _integral_count(value) for value in table[excluded_column].tolist()
-            ]
-            if any(value is None for value in exclusions):
+            if exclusion_issue == "nonintegral":
                 return finding(
                     "attrition_exclusions_nonintegral",
                     f"The declared {product} table contains invalid per-step "
                     "exclusion counts.",
                     product=product,
+                    count_columns=list(exclusions_by_column),
+                )
+            if exclusion_issue == "disagree":
+                return finding(
+                    "attrition_count_columns_disagree",
+                    f"The declared {product} table has contradictory synonymous "
+                    "per-step exclusion-count columns.",
+                    product=product,
+                    count_columns=list(exclusions_by_column),
+                    values_by_column=exclusions_by_column,
                 )
             integral_exclusions = [
-                int(value) for value in exclusions if value is not None
+                int(value)
+                for value in exclusions_by_column[excluded_column]
+                if value is not None
             ]
             reported_remaining = list(integral_counts)
             reported_exclusions = list(integral_exclusions)
+            has_terminal_row = False
             if (
                 len(reported_remaining) == len(expected_remaining_counts) + 1
                 and reported_remaining[-1] == locked_n
                 and reported_exclusions[-1] == 0
             ):
+                has_terminal_row = True
                 reported_remaining.pop()
                 reported_exclusions.pop()
             if reported_remaining != expected_remaining_counts:
@@ -1691,6 +1833,35 @@ def primary_analysis_cohort_integrity_findings(
                     expected_exclusions=expected_exclusion_counts,
                     reported_exclusions=reported_exclusions,
                 )
+            if canonical_identity_column is not None:
+                reported_rule_ids = normalised_identity_by_column[
+                    canonical_identity_column
+                ]
+                expected_rule_ids = ["universe", *expected_criterion_ids]
+                reported_predicate_ids = (
+                    reported_rule_ids[:-1] if has_terminal_row else reported_rule_ids
+                )
+                allowed_terminal_ids = {
+                    "analysis_cohort",
+                    "final_analysis_cohort",
+                    "final_cohort",
+                    "primary_analysis_cohort",
+                }
+                terminal_id_valid = (
+                    not has_terminal_row
+                    or reported_rule_ids[-1] in allowed_terminal_ids
+                )
+                if reported_predicate_ids != expected_rule_ids or not terminal_id_valid:
+                    return finding(
+                        "attrition_sequence_rule_ids_mismatch",
+                        f"The declared {product} canonical identity sequence does "
+                        "not bind each row to the corresponding Planner-locked "
+                        "cohort predicate.",
+                        product=product,
+                        identity_column=canonical_identity_column,
+                        expected_criterion_ids=expected_rule_ids,
+                        reported_criterion_ids=reported_rule_ids,
+                    )
             start_column = (
                 "n_at_start_rows" if "n_at_start_rows" in table.columns else None
             )
@@ -1718,14 +1889,30 @@ def primary_analysis_cohort_integrity_findings(
         # never treated as an ordered flow because that would make arbitrary
         # intermediate values unverifiable.
         assert partition_count_column is not None
-        role_column = next(
-            (
-                name
-                for name in ("status", "partition_status", "row_role", "role")
-                if name in table.columns
-            ),
-            None,
-        )
+        role_columns = [
+            name
+            for name in ("status", "partition_status", "row_role", "role")
+            if name in table.columns
+        ]
+        normalised_roles_by_column = {
+            name: [_normalise(value) for value in table[name].tolist()]
+            for name in role_columns
+        }
+        if len(role_columns) > 1:
+            reference = normalised_roles_by_column[role_columns[0]]
+            if any(
+                normalised_roles_by_column[name] != reference
+                for name in role_columns[1:]
+            ):
+                return finding(
+                    "attrition_role_columns_disagree",
+                    f"The declared {product} partition table has contradictory "
+                    "synonymous row-role columns.",
+                    product=product,
+                    role_columns=role_columns,
+                    roles_by_column=normalised_roles_by_column,
+                )
+        role_column = role_columns[0] if role_columns else None
         if role_column is None:
             if partition_count_column == "n_rows":
                 reported_remaining = list(integral_counts)
@@ -1750,7 +1937,7 @@ def primary_analysis_cohort_integrity_findings(
                 product=product,
                 count_column=partition_count_column,
             )
-        roles = [_normalise(value) for value in table[role_column].tolist()]
+        roles = normalised_roles_by_column[role_column]
         denominator_rows = [
             index for index, role in enumerate(roles) if role == "denominator"
         ]
@@ -1795,14 +1982,7 @@ def primary_analysis_cohort_integrity_findings(
                 expected_excluded_n=raw_n - locked_n,
                 reported_excluded_n=reported_excluded,
             )
-        category_column = next(
-            (
-                name
-                for name in ("criterion_id", "attrition_category")
-                if name in table.columns
-            ),
-            None,
-        )
+        category_column = canonical_identity_column
         if expected_criterion_ids and category_column is None:
             return finding(
                 "attrition_partition_rule_ids_unverifiable",
@@ -1813,6 +1993,25 @@ def primary_analysis_cohort_integrity_findings(
             )
         if expected_criterion_ids:
             assert category_column is not None
+            denominator_id = _normalise(
+                table.iloc[denominator_rows[0]][category_column]
+            )
+            retained_id = _normalise(table.iloc[retained_rows[0]][category_column])
+            if denominator_id != "universe" or retained_id not in {
+                "analysis_cohort",
+                "final_analysis_cohort",
+                "final_cohort",
+                "primary_analysis_cohort",
+            }:
+                return finding(
+                    "attrition_partition_boundary_ids_mismatch",
+                    f"The declared {product} canonical identity column does not "
+                    "identify the universe and retained analysis cohort exactly.",
+                    product=product,
+                    identity_column=category_column,
+                    reported_denominator_id=denominator_id,
+                    reported_retained_id=retained_id,
+                )
             reported_rule_ids = [
                 _normalise(table.iloc[index][category_column])
                 for index in excluded_rows
