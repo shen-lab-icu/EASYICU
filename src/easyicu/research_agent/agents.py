@@ -1146,9 +1146,7 @@ class CriticAgent:
             unsupported_claims=[],
             missing_evidence_refs=[] if evidence_refs else [step.step_id],
             suggested_repairs=(
-                []
-                if status == "pass"
-                else _suggest_repairs_for(step_summary, concerns)
+                [] if status == "pass" else _suggest_repairs_for(step_summary, concerns)
             ),
             related_evidence_refs=list(evidence_refs),
         )
@@ -1673,6 +1671,16 @@ class CoderAgent:
             "function called in that scope (for example, never write "
             "`audit = audit(...)`); Python can otherwise raise "
             "UnboundLocalError. Use a distinct result name.\n"
+            "- Every local assignment must dominate its first use on every "
+            "continuing control-flow path. If a value is produced inside a "
+            "try block and read after try/except, initialize that local to None "
+            "before the enclosing try (or assign it on every non-terminating "
+            "handler/branch), then use `local is None` for fallback. Never infer "
+            "whether a local was assigned from an unrelated summary or mapping "
+            "key. For required validation or provenance, propagate the failure "
+            "and fail closed; do not replace it with a None fallback and then "
+            "mark success. A fallback is permitted only for explicitly optional "
+            "state. Fix every diagnosed occurrence in the same patch.\n"
             "- Resolve declared columns by explicit registered names and fail "
             "closed when none is present; never choose an arbitrary dtype- or "
             "frame-order fallback.\n"
@@ -1783,9 +1791,7 @@ class CoderAgent:
         return repaired
 
 
-def _repair_specialization(
-    *, context: ResearchContext, run_log: str, code: str
-) -> str:
+def _repair_specialization(*, context: ResearchContext, run_log: str, code: str) -> str:
     """Add a binding repair contract for a diagnosed method-suite failure.
 
     The trigger is category-level validator evidence, never a benchmark item,
@@ -2200,9 +2206,7 @@ class AnalyzerAgent:
         return complete_with_provider_budget(
             budget=provider_budget,
             category="analyzer",
-            call=lambda: self.llm.complete(
-                messages, max_tokens=512, temperature=0.2
-            ),
+            call=lambda: self.llm.complete(messages, max_tokens=512, temperature=0.2),
         ).strip()
 
 
@@ -2686,9 +2690,7 @@ def _normalise_plan_payload(
                     if key in allowed_model_requirement:
                         requirement_payload[key] = value
                     else:
-                        dropped["model_requirements"].append(
-                            f"{requirement_id}:{key}"
-                        )
+                        dropped["model_requirements"].append(f"{requirement_id}:{key}")
                 requirements.append(requirement_payload)
             if "model_requirements" in step_payload:
                 step_payload["model_requirements"] = requirements

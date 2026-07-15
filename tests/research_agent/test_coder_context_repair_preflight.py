@@ -192,6 +192,31 @@ def test_figure_coder_guide_excludes_unrelated_method_families(ra):
     assert len(guide) < len(_CODER_GUIDE) * 0.7
 
 
+def test_table_coder_guide_loads_host_owned_descriptive_input_contract(ra):
+    from easyicu.research_agent.agents import _CODER_GUIDE
+
+    step = ra.AnalysisStep(
+        step_id="describe",
+        intent="Describe the Agent-selected cohort variables.",
+        inputs=["selected_variable"],
+        expected_outputs=["table:table_one"],
+        method="table_one",
+    )
+
+    guide = coder_guide_for_step(_CODER_GUIDE, step)
+
+    assert "methods.descriptive_inputs" in guide
+    assert "strict_numeric_input" in guide
+    assert "closed_categorical_counts" in guide
+    assert "measurement_provenance_receipt" in guide
+    assert (
+        "only when an\n  exact declared measured/count companion pair exists" in guide
+    )
+    assert "Never invent a provenance pair" in guide
+    assert "level/count-only `.table`" in guide
+    assert "percentage denominator" in guide
+
+
 def test_coder_repair_applies_minimal_patch_without_full_rewrite(ra):
     patch = json.dumps(
         {
@@ -1090,6 +1115,98 @@ def audit_event_presence(frame):
     )
 
 
+def test_mechanical_preflight_blocks_swallowed_descriptive_input_error(ra):
+    code = """
+from easyicu.research_agent.methods.descriptive_inputs import (
+    DescriptiveInputError,
+    measurement_provenance_receipt,
+)
+
+def audit_measurement(frame):
+    try:
+        return measurement_provenance_receipt(
+            frame,
+            measured_column=measured_column,
+            count_column=count_column,
+        )
+    except DescriptiveInputError:
+        return {'status': 'unavailable'}
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "host_validation_helper_error_swallowed"
+        and finding.detail.get("helper_names") == ["measurement_provenance_receipt"]
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_accepts_descriptive_input_error_reraise(ra):
+    code = """
+from easyicu.research_agent.methods.descriptive_inputs import (
+    DescriptiveInputError,
+    strict_numeric_input,
+)
+
+def summarize(values):
+    try:
+        return strict_numeric_input(values)
+    except DescriptiveInputError:
+        raise
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "host_validation_helper_error_swallowed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_ignores_custom_helper_with_same_name(ra):
+    code = """
+def strict_numeric_input(values):
+    return values
+
+def summarize(values):
+    try:
+        return strict_numeric_input(values)
+    except ValueError:
+        return None
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "host_validation_helper_error_swallowed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_blocks_contextlib_suppressed_host_helper(ra):
+    code = """
+import contextlib
+from easyicu.research_agent.methods.descriptive_inputs import (
+    DescriptiveInputError,
+    strict_numeric_input,
+)
+
+def summarize(values):
+    with contextlib.suppress(DescriptiveInputError):
+        return strict_numeric_input(values)
+    return None
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "host_validation_helper_error_swallowed"
+        and finding.detail.get("helper_names") == ["strict_numeric_input"]
+        for finding in findings
+    )
+
+
 def test_mechanical_preflight_blocks_reraise_suppressed_by_finally_return(ra):
     code = """
 def audit_event_presence(frame):
@@ -1835,8 +1952,7 @@ resolved = resolve(
     findings = audit_mechanical_code_contracts(code, _figure_step(ra))
 
     assert not any(
-        finding.detail
-        and finding.detail.get("reason") == "invalid_local_helper_call"
+        finding.detail and finding.detail.get("reason") == "invalid_local_helper_call"
         for finding in findings
     )
 
@@ -1928,6 +2044,243 @@ def consume(definition):
 
     assert not any(
         finding.detail and finding.detail.get("reason") == "branch_local_unbound"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_blocks_try_local_read_after_continuing_handler(ra):
+    code = """
+def build_receipt(frame):
+    try:
+        audit_rows = compute_audit(frame)
+    except ValueError:
+        record_failure()
+    return audit_rows
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "branch_local_unbound"
+        and finding.detail.get("name") == "audit_rows"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_accepts_try_local_initialized_before_handler(ra):
+    code = """
+def build_receipt(frame):
+    audit_rows = None
+    try:
+        audit_rows = compute_audit(frame)
+    except ValueError:
+        record_failure()
+    if audit_rows is None:
+        return failed_receipt()
+    return audit_rows
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "branch_local_unbound"
+        and finding.detail.get("name") == "audit_rows"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_accepts_try_local_when_handler_terminates(ra):
+    code = """
+def build_receipt(frame):
+    try:
+        audit_rows = compute_audit(frame)
+    except ValueError:
+        raise
+    return audit_rows
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "branch_local_unbound"
+        and finding.detail.get("name") == "audit_rows"
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize(
+    "handler_body",
+    [
+        "print(audit_rows)",
+        "audit_rows += 1",
+    ],
+)
+def test_mechanical_preflight_blocks_try_local_read_inside_handler(ra, handler_body):
+    code = f"""
+def build_receipt(frame):
+    try:
+        audit_rows = compute_audit(frame)
+    except ValueError:
+        {handler_body}
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "branch_local_unbound"
+        and finding.detail.get("name") == "audit_rows"
+        and finding.detail.get("scope") == "build_receipt"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_blocks_try_local_read_inside_finally(ra):
+    code = """
+def build_receipt(frame):
+    try:
+        audit_rows = compute_audit(frame)
+    except ValueError:
+        pass
+    finally:
+        print(audit_rows)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "branch_local_unbound"
+        and finding.detail.get("name") == "audit_rows"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_blocks_exception_alias_read_after_handler(ra):
+    code = """
+def build_receipt(frame):
+    try:
+        compute_audit(frame)
+    except ValueError as audit_error:
+        log(audit_error)
+    return audit_error
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "branch_local_unbound"
+        and finding.detail.get("name") == "audit_error"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_accepts_nonthrowing_try_prefix_assignment(ra):
+    code = """
+def build_receipt(frame):
+    try:
+        audit_rows = 1
+        compute_audit(frame)
+    except ValueError:
+        log_failure()
+    return audit_rows
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "branch_local_unbound"
+        and finding.detail.get("name") == "audit_rows"
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize("initializer", ["x: int", "x = {[]}", "x = {[]: 1}"])
+def test_mechanical_preflight_does_not_treat_failing_prefix_as_assignment(
+    ra, initializer
+):
+    code = f"""
+def build_receipt():
+    try:
+        {initializer}
+    except Exception:
+        pass
+    return x
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "branch_local_unbound"
+        and finding.detail.get("name") == "x"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_does_not_treat_finally_annotation_as_binding(ra):
+    code = """
+def build_receipt():
+    try:
+        may_fail()
+    except Exception:
+        pass
+    finally:
+        x: int
+    return x
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "branch_local_unbound"
+        and finding.detail.get("name") == "x"
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize(
+    "handler_body",
+    [
+        "for x in [1, 2]:\n            consume(x)\n        raise",
+        "with resource() as x:\n            consume(x)\n        raise",
+    ],
+)
+def test_mechanical_preflight_accepts_handler_binding_before_body_use(ra, handler_body):
+    code = f"""
+def build_receipt():
+    try:
+        x = may_fail()
+    except Exception:
+        {handler_body}
+    return x
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "branch_local_unbound"
+        and finding.detail.get("name") == "x"
+        and "inside an exception handler" in finding.message
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_does_not_claim_nested_try_store_is_straight_line(ra):
+    code = """
+def build_receipt(frame, use_primary):
+    try:
+        if use_primary:
+            audit_rows = primary_audit(frame)
+        else:
+            audit_rows = secondary_audit(frame)
+    except ValueError:
+        raise
+    return audit_rows
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "branch_local_unbound"
+        and finding.detail.get("name") == "audit_rows"
         for finding in findings
     )
 

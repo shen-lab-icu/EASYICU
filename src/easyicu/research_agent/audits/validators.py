@@ -3408,6 +3408,10 @@ class PrimaryModelContractValidator:
         "publication_figure_generation",
         "visualization",
     }
+    _SOURCE_VARIABLE_SEMANTICS = (
+        "term may be an encoded or transformed design column; source_variable "
+        "must name the unique original authoritative cohort column"
+    )
 
     @staticmethod
     def _normalise(value: Any) -> str:
@@ -4366,15 +4370,110 @@ class PrimaryModelContractValidator:
             mask &= values.notna()
             if pd.api.types.is_numeric_dtype(values):
                 numeric = pd.to_numeric(values, errors="coerce")
-                mask &= numeric.map(lambda value: pd.notna(value) and abs(value) != float("inf"))
+                mask &= numeric.map(
+                    lambda value: pd.notna(value) and abs(value) != float("inf")
+                )
         elif analysis_set != "source_aware":
             return None
         event_n = (
-            int(outcome_values.loc[mask].sum())
-            if outcome_type == "binary"
-            else None
+            int(outcome_values.loc[mask].sum()) if outcome_type == "binary" else None
         )
         return int(mask.sum()), event_n
+
+    @classmethod
+    def _coefficient_source_authority_issues(
+        cls,
+        *,
+        frame: pd.DataFrame,
+        coefficient_rows: pd.DataFrame,
+        contracts: Sequence[Mapping[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Require coefficient lineage to name a physical cohort column."""
+
+        fitted_model_ids = {
+            str(contract.get("model_id") or "")
+            for contract in contracts
+            if cls._normalise(contract.get("fit_status")) == "fitted"
+        }
+        authoritative_columns = [str(column) for column in frame.columns]
+        issues: List[Dict[str, Any]] = []
+        for _, row in coefficient_rows.iterrows():
+            model_id = str(row.get("model_id") or "")
+            term_role = cls._normalise(row.get("term_role"))
+            if model_id not in fitted_model_ids or term_role == "intercept":
+                continue
+            raw_source = row.get("source_variable")
+            source = "" if pd.isna(raw_source) else str(raw_source).strip()
+            match_count = authoritative_columns.count(source) if source else 0
+            if match_count == 1:
+                continue
+            reason = (
+                "source_variable_missing_from_authoritative_cohort"
+                if match_count == 0
+                else "source_variable_not_unique_in_authoritative_cohort"
+            )
+            issues.append(
+                {
+                    "model_id": model_id,
+                    "term": str(row.get("term") or ""),
+                    "term_role": term_role,
+                    "issue": "coefficient_source_variable_unresolvable",
+                    "reason": reason,
+                    "reported_source_variable": source or None,
+                    "missing_raw_source_variables": (
+                        [source or "<blank>"] if match_count == 0 else []
+                    ),
+                    "authoritative_match_count": match_count,
+                    "required_semantics": cls._SOURCE_VARIABLE_SEMANTICS,
+                }
+            )
+        return issues
+
+    @classmethod
+    def _denominator_resolution_detail(
+        cls,
+        *,
+        frame: pd.DataFrame,
+        outcome: str,
+        outcome_type: str,
+        covariates: Sequence[str],
+        contract: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        policy = cls._normalise(contract.get("baseline_missing_policy"))
+        analysis_set = cls._normalise(contract.get("analysis_set"))
+        required_sources = [outcome] if outcome else []
+        if policy in {"drop_missing", "drop_missing_baseline", "complete_case"}:
+            required_sources.extend(str(value) for value in covariates)
+        if analysis_set == "complete_case":
+            required_sources.append(str(contract.get("exposure_source") or ""))
+        required_sources = [value for value in dict.fromkeys(required_sources) if value]
+        authoritative_columns = [str(column) for column in frame.columns]
+        missing = [
+            source for source in required_sources if source not in authoritative_columns
+        ]
+        ambiguous = [
+            source
+            for source in required_sources
+            if authoritative_columns.count(source) > 1
+        ]
+        if missing:
+            reason = "required_raw_source_missing_from_authoritative_cohort"
+        elif ambiguous:
+            reason = "required_raw_source_not_unique_in_authoritative_cohort"
+        elif outcome_type not in cls._OUTCOME_TYPES:
+            reason = "unsupported_outcome_type"
+        elif policy not in cls._BASELINE_MISSING_POLICIES:
+            reason = "unsupported_baseline_missing_policy"
+        elif analysis_set not in cls._ANALYSIS_SETS:
+            reason = "unsupported_analysis_set"
+        else:
+            reason = "denominator_inputs_not_machine_resolvable"
+        return {
+            "reason": reason,
+            "missing_raw_source_variables": missing,
+            "ambiguous_raw_source_variables": ambiguous,
+            "required_semantics": cls._SOURCE_VARIABLE_SEMANTICS,
+        }
 
     def audit(
         self,
@@ -4831,6 +4930,14 @@ class PrimaryModelContractValidator:
         except Exception:
             cohort = None
             issues.append({"issue": "cohort_unreadable_for_denominator_audit"})
+        if cohort is not None and coefficient_rows is not None:
+            issues.extend(
+                self._coefficient_source_authority_issues(
+                    frame=cohort,
+                    coefficient_rows=coefficient_rows,
+                    contracts=contracts,
+                )
+            )
         for contract in contracts:
             model_id = str(contract.get("model_id") or "")
             metadata = self._model_metadata(contract, metadata_by_id)
@@ -4991,6 +5098,13 @@ class PrimaryModelContractValidator:
                         {
                             "model_id": model_id,
                             "issue": "denominator_contract_unresolvable",
+                            **self._denominator_resolution_detail(
+                                frame=cohort,
+                                outcome=outcome,
+                                outcome_type=outcome_type,
+                                covariates=model_covariates,
+                                contract=contract,
+                            ),
                         }
                     )
                 elif (reported_n, reported_events) != expected:

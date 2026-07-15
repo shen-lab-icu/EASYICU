@@ -469,6 +469,100 @@ def _deterministic_code_gate_findings(
     return findings
 
 
+def _finding_occurrence_identity(finding: ValidationFinding) -> str:
+    """Return a stable identity for one structured validation occurrence.
+
+    Human messages and source line numbers may change after a minimal patch.
+    A named variable/input/path is the durable locator in that case.  Findings
+    without any stable locator retain their positional detail so two anonymous
+    code locations are not accidentally folded together.
+    """
+
+    positional_keys = {
+        "line",
+        "lines",
+        "lineno",
+        "col_offset",
+        "end_lineno",
+        "end_col_offset",
+        "offset",
+        "offsets",
+    }
+
+    def _without_positions(value: Any) -> Any:
+        if isinstance(value, Mapping):
+            cleaned: Dict[str, Any] = {}
+            for raw_key, raw_value in value.items():
+                key = str(raw_key)
+                normalized = key.casefold()
+                if (
+                    normalized in positional_keys
+                    or normalized.endswith("_line")
+                    or normalized.endswith("_lines")
+                    or normalized.endswith("_lineno")
+                    or normalized.endswith("_offset")
+                    or normalized.endswith("_offsets")
+                ):
+                    continue
+                cleaned[key] = _without_positions(raw_value)
+            return cleaned
+        if isinstance(value, (list, tuple)):
+            return [_without_positions(item) for item in value]
+        return value
+
+    detail = dict(finding.detail or {})
+    structured_reason = str(
+        detail.get("reason") or detail.get("kind") or detail.get("issue") or ""
+    ).strip()
+    stable_detail = _without_positions(detail)
+    explicit_occurrence = stable_detail.get("occurrence_id")
+    locator_keys = (
+        "scope",
+        "name",
+        "model_id",
+        "requirement_id",
+        "check_id",
+        "term",
+        "term_role",
+        "input",
+        "input_name",
+        "column",
+        "column_name",
+        "source_variable",
+        "field",
+        "variable",
+        "path",
+        "artifact",
+        "product",
+    )
+    if explicit_occurrence not in (None, ""):
+        stable_locator = {"occurrence_id": explicit_occurrence}
+    else:
+        # Validator-owned semantic locators are stable across line shifts and
+        # changing audit counts. Arbitrary detail fields are payload, not
+        # identity: including e.g. invalid_n would retain stale versions of one
+        # occurrence, while deleting scope would fold different functions.
+        stable_locator = {
+            key: stable_detail[key]
+            for key in locator_keys
+            if stable_detail.get(key) not in (None, "", [], {})
+        }
+    payload: Dict[str, Any] = {
+        "validator": finding.validator,
+        "structured_reason": structured_reason,
+        "locator": stable_locator if stable_locator else detail,
+    }
+    if not structured_reason or not stable_locator:
+        payload["message"] = str(finding.message or "")
+    return json.dumps(
+        payload,
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        default=str,
+    )
+
+
 def _merge_monotonic_concept_constraints(
     existing: Sequence[ValidationFinding],
     candidates: Sequence[ValidationFinding],
@@ -480,14 +574,49 @@ def _merge_monotonic_concept_constraints(
     retain both constraints so a resumed repair cannot regress the earlier fix.
     """
 
-    merged = list(existing)
-    seen = {(finding.validator, finding.message) for finding in merged}
-    for finding in candidates:
-        key = (finding.validator, finding.message)
-        if finding.severity != "error" or key in seen:
+    merged: List[ValidationFinding] = []
+    index_by_occurrence: Dict[str, int] = {}
+
+    def _latest_with_evidence(
+        prior: ValidationFinding,
+        latest: ValidationFinding,
+    ) -> ValidationFinding:
+        evidence_ids = list(
+            dict.fromkeys(
+                [
+                    *(str(item) for item in prior.evidence_ids or []),
+                    *(str(item) for item in latest.evidence_ids or []),
+                ]
+            )
+        )
+        return latest.model_copy(update={"evidence_ids": evidence_ids})
+
+    for finding in existing:
+        if finding.severity != "error":
+            # Preserve pre-existing nonblocking audit history exactly as the
+            # prior implementation did. New warnings are not monotonic repair
+            # constraints and therefore are not added below.
+            merged.append(finding)
             continue
-        merged.append(finding)
-        seen.add(key)
+        key = _finding_occurrence_identity(finding)
+        prior_index = index_by_occurrence.get(key)
+        if prior_index is None:
+            index_by_occurrence[key] = len(merged)
+            merged.append(finding)
+        else:
+            # Keep the latest wording and source coordinates for the same
+            # durable occurrence while preserving every distinct locator.
+            merged[prior_index] = _latest_with_evidence(merged[prior_index], finding)
+    for finding in candidates:
+        if finding.severity != "error":
+            continue
+        key = _finding_occurrence_identity(finding)
+        prior_index = index_by_occurrence.get(key)
+        if prior_index is None:
+            index_by_occurrence[key] = len(merged)
+            merged.append(finding)
+        else:
+            merged[prior_index] = _latest_with_evidence(merged[prior_index], finding)
     return merged
 
 
@@ -8503,13 +8632,16 @@ else:
                 if supersession is not None:
                     reclassified_findings, provenance = supersession
                     existing_keys = {
-                        (finding.validator, finding.severity, finding.message)
+                        (finding.severity, _finding_occurrence_identity(finding))
                         for finding in code_findings
                     }
                     code_findings.extend(
                         finding
                         for finding in reclassified_findings
-                        if (finding.validator, finding.severity, finding.message)
+                        if (
+                            finding.severity,
+                            _finding_occurrence_identity(finding),
+                        )
                         not in existing_keys
                     )
                     quarantine_policy_superseded = True
@@ -8693,13 +8825,16 @@ else:
                 raise
             if pending_quarantined_errors:
                 existing_keys = {
-                    (finding.validator, finding.severity, finding.message)
+                    (finding.severity, _finding_occurrence_identity(finding))
                     for finding in code_findings
                 }
                 code_findings.extend(
                     finding
                     for finding in pending_quarantined_errors
-                    if (finding.validator, finding.severity, finding.message)
+                    if (
+                        finding.severity,
+                        _finding_occurrence_identity(finding),
+                    )
                     not in existing_keys
                 )
             return code_findings
@@ -8996,9 +9131,11 @@ else:
                                     detail={"step_id": step.step_id},
                                 )
                             )
-                        seen_msgs = {f.message for f in findings}
+                        seen_occurrences = {
+                            _finding_occurrence_identity(f) for f in findings
+                        }
                         for f in usage_findings:
-                            if f.message in seen_msgs:
+                            if _finding_occurrence_identity(f) in seen_occurrences:
                                 continue
                             # Demote ``error`` severity to
                             # ``warning`` because the run is
