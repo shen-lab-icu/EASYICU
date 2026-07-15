@@ -19,7 +19,10 @@ from typing import Any, Collection, Mapping, Optional
 
 import pandas as pd
 
-from ..declared_product_contract import read_digest_bound_artifact_snapshot
+from ..declared_product_contract import (
+    read_digest_bound_artifact_snapshot,
+    typed_product,
+)
 from ..publication_figures import (
     add_panel_label,
     apply_publication_style,
@@ -89,9 +92,7 @@ def _unique_metric_name(
         return None
     if normalized_unit:
         qualified = [
-            name
-            for name in matches
-            if _normalise(name) == f"{base}_{normalized_unit}"
+            name for name in matches if _normalise(name) == f"{base}_{normalized_unit}"
         ]
         if len(qualified) == 1:
             return qualified[0]
@@ -210,6 +211,210 @@ class DistributionAvailabilityInputs:
     status_schema: tuple[str, ...]
 
 
+def distribution_availability_planner_table_roles(
+    expected_outputs: Collection[Any],
+) -> tuple[set[str], set[str], set[str]]:
+    """Return declared tables and the exact renderer-role candidates."""
+
+    declared_tables = {
+        parsed[1]
+        for raw in expected_outputs
+        if (parsed := typed_product(raw)) is not None and parsed[0] == "table"
+    }
+    declared_tokens = {
+        product: tuple(token for token in product.split("_") if token)
+        for product in declared_tables
+    }
+
+    def _matches(*suffixes: tuple[str, ...]) -> set[str]:
+        return {
+            product
+            for product, tokens in declared_tokens.items()
+            if any(
+                len(tokens) >= len(suffix) and tokens[-len(suffix) :] == suffix
+                for suffix in suffixes
+            )
+        }
+
+    return (
+        declared_tables,
+        _matches(("distribution",)),
+        _matches(
+            ("measurement", "audit"),
+            ("availability",),
+            ("measurement", "coverage"),
+            ("source", "coverage"),
+            ("missingness",),
+        ),
+    )
+
+
+def distribution_availability_parent_contract_issue(
+    *,
+    planned_method: Any,
+    parent_out: Optional[Path],
+    parent_summary: Mapping[str, Any],
+    expected_outputs: Collection[Any],
+    planned_inputs: Collection[Any] = (),
+    host_context: Any = None,
+) -> Optional[dict[str, Any]]:
+    """Return one host-owned issue for an unrenderable controlled parent.
+
+    This is the pre-registration counterpart of the digest seal below.  It
+    validates only the two table roles already selected by the Planner and the
+    agent-authored summary; it never scans sibling products or chooses a
+    variable, cohort, denominator, category schema, or statistic.
+    """
+
+    if str(planned_method or "").strip().lower() != CONTROLLED_METHOD:
+        return None
+    # This is an output-family contract, not a free method-name hook.  Only a
+    # Planner step with both renderer roles enters it. Auxiliary tables remain
+    # outside the renderer permission set. ``missingness`` is the generic
+    # legacy terminal for a source-availability table.
+    declared_tables, distribution_roles, availability_roles = (
+        distribution_availability_planner_table_roles(expected_outputs)
+    )
+    if not distribution_roles or not availability_roles:
+        return None
+    # Some compatibility/unit-test callers do not have execution outputs.  The
+    # real early and final gates always pass an output directory; do not turn a
+    # missing optional test argument into a new global failure mode.
+    if parent_out is None:
+        return None
+
+    distribution = parent_summary.get("distribution")
+    measurement = parent_summary.get("measurement_audit")
+    exposure = parent_summary.get("primary_exposure")
+    selected_names: set[str] = set()
+    contract_issue: Optional[str] = None
+    expected_exposure: Optional[str] = None
+    expected_unit: Optional[str] = None
+    reported_exposure = (
+        str(exposure.get("column") or "").strip()
+        if isinstance(exposure, Mapping)
+        else ""
+    )
+    reported_unit = (
+        str(exposure.get("unit") or "").strip() if isinstance(exposure, Mapping) else ""
+    )
+    if len(distribution_roles) != 1 or len(availability_roles) != 1:
+        contract_issue = "planner_table_roles_ambiguous"
+    elif host_context is not None:
+        expected_exposure = str(
+            getattr(host_context, "primary_exposure", None) or ""
+        ).strip()
+        if not expected_exposure:
+            contract_issue = "host_primary_exposure_unavailable"
+        elif expected_exposure not in {str(value) for value in planned_inputs}:
+            contract_issue = "host_primary_exposure_not_planner_input"
+        elif reported_exposure != expected_exposure:
+            contract_issue = "summary_primary_exposure_mismatch"
+        else:
+            variable_getter = getattr(host_context, "variable", None)
+            descriptor = (
+                variable_getter(expected_exposure)
+                if callable(variable_getter)
+                else None
+            )
+            expected_unit = str(getattr(descriptor, "unit", None) or "").strip()
+            if expected_unit and _normalise(reported_unit) != _normalise(expected_unit):
+                contract_issue = "summary_primary_exposure_unit_mismatch"
+    if contract_issue is None and (
+        not isinstance(distribution, Mapping) or not isinstance(measurement, Mapping)
+    ):
+        contract_issue = "summary_table_roles_missing"
+    elif contract_issue is None:
+        distribution_name = _safe_csv_name(distribution.get("table"))
+        measurement_name = _safe_csv_name(measurement.get("table"))
+        if (
+            distribution_name is None
+            or measurement_name is None
+            or distribution_name == measurement_name
+        ):
+            contract_issue = "summary_table_roles_invalid"
+        else:
+            selected_names = {distribution_name, measurement_name}
+            required_products = {Path(name).stem for name in selected_names}
+            role_products = distribution_roles | availability_roles
+            if required_products != role_products:
+                contract_issue = "summary_tables_not_exact_planner_roles"
+            else:
+                prepared = prepare_distribution_availability_inputs(
+                    parent_out=Path(parent_out),
+                    parent_summary=parent_summary,
+                    verified_table_names=selected_names,
+                )
+                if prepared is not None:
+                    return None
+                contract_issue = "closed_schema_rejected"
+    if contract_issue is None:
+        raise AssertionError("invalid parent contract did not record a reason")
+    return {
+        "kind": "controlled_renderer_parent_contract_invalid",
+        "reason": "distribution_availability_parent_contract_invalid",
+        "contract_issue": contract_issue,
+        "controlled_method": CONTROLLED_METHOD,
+        "declared_table_products": sorted(declared_tables),
+        "distribution_role_products": sorted(distribution_roles),
+        "availability_role_products": sorted(availability_roles),
+        "selected_table_files": sorted(selected_names),
+        "expected_primary_exposure": expected_exposure,
+        "reported_primary_exposure": reported_exposure or None,
+        "planner_inputs": [str(value) for value in planned_inputs],
+        "expected_primary_exposure_unit": expected_unit,
+        "reported_primary_exposure_unit": reported_unit or None,
+        "required_summary_slots": [
+            "primary_exposure",
+            "distribution",
+            "measurement_audit",
+        ],
+        "required_table_roles": [
+            "distribution.table",
+            "measurement_audit.table",
+        ],
+        "required_schema": {
+            "primary_exposure": [
+                "column",
+                "authoritative=true",
+                "role=authoritative_primary_exposure",
+            ],
+            "distribution_summary": [
+                "table",
+                "observed_n",
+                *list(_METRICS),
+            ],
+            "distribution_table_columns": sorted(_DISTRIBUTION_COLUMNS),
+            "measurement_summary": [
+                "table",
+                "source_status_schema",
+                "source_status_counts",
+                "status_assignment_n",
+            ],
+            "measurement_table_columns": sorted(_MEASUREMENT_COLUMNS),
+            "distribution_invariants": [
+                "exactly one selected row for primary_exposure.column",
+                "row_type identifies the exposure distribution",
+                "category or analysis_set selects valid_observed",
+                "n <= denominator_n",
+                "percentage == 100 * n / denominator_n",
+                "fraction == n / denominator_n",
+                "min <= q25 <= median <= q75 <= max",
+                "five-number values exactly match the distribution summary",
+            ],
+            "measurement_invariants": [
+                "source_status rows exactly match source_status_schema",
+                "category == source_status for every status row",
+                "source_status_counts exactly match table counts",
+                "all status rows share the distribution denominator_n",
+                "sum(source_status_counts) == denominator_n",
+                "status_assignment_n == denominator_n",
+                "valid_observed count == distribution.observed_n",
+            ],
+        },
+    }
+
+
 def prepare_distribution_availability_inputs(
     *,
     parent_out: Path,
@@ -283,9 +488,7 @@ def prepare_distribution_availability_inputs(
     summary_metric_names: dict[str, str] = {}
     for base in _METRICS:
         summary_name = _unique_metric_name(distribution.keys(), base, unit=unit)
-        table_aliases = _metric_alias_names(
-            distribution_frame.columns, base, unit=unit
-        )
+        table_aliases = _metric_alias_names(distribution_frame.columns, base, unit=unit)
         declared_aliases = _metric_alias_names(distribution.keys(), base, unit=unit)
         if summary_name is None or not table_aliases or not declared_aliases:
             return None
@@ -361,9 +564,7 @@ def prepare_distribution_availability_inputs(
     ):
         return None
 
-    row_window_present, row_window = _normalised_optional(
-        candidate.get("time_window")
-    )
+    row_window_present, row_window = _normalised_optional(candidate.get("time_window"))
     row_unit_present, row_unit = _normalised_optional(candidate.get("unit"))
     declared_window_present, declared_window = _normalised_optional(
         exposure.get("time_window")
@@ -395,11 +596,7 @@ def prepare_distribution_availability_inputs(
         "denominator_n",
         "percentage",
         "fraction",
-        *(
-            alias
-            for aliases in metric_alias_columns.values()
-            for alias in aliases
-        ),
+        *(alias for aliases in metric_alias_columns.values() for alias in aliases),
     ]
     numeric = candidates[numeric_columns].apply(pd.to_numeric, errors="coerce")
     if numeric.isna().any().any() or len(numeric) != 1:
@@ -510,7 +707,7 @@ def prepare_distribution_availability_inputs(
     if set(denominators) != {denominator_n} or sum(counts) != denominator_n:
         return None
     declared_assignment_n = _nonnegative_integer(measurement.get("status_assignment_n"))
-    if declared_assignment_n is not None and declared_assignment_n != denominator_n:
+    if declared_assignment_n is None or declared_assignment_n != denominator_n:
         return None
     for status, count, percentage_raw, fraction_raw in zip(
         status_schema,
@@ -805,6 +1002,8 @@ def render_distribution_availability_bundle_from_prior_outputs(
 __all__ = [
     "CONTROLLED_METHOD",
     "REPAIR_ID",
+    "distribution_availability_parent_contract_issue",
+    "distribution_availability_planner_table_roles",
     "prepare_distribution_availability_inputs",
     "render_distribution_availability_bundle_from_prior_outputs",
 ]

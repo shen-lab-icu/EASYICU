@@ -4905,6 +4905,7 @@ def _evaluate_final_deterministic_gates(
     contract_findings = _step_contract_findings(
         step=step,
         step_summary=step_summary,
+        context=context,
         completed_step_records=completed_step_records,
         resolved_input_bindings=resolved_input_bindings,
         out_dir=out_dir,
@@ -10566,6 +10567,7 @@ else:
                 early_contract_findings = _step_contract_findings(
                     step=step,
                     step_summary=visual_step_summary,
+                    context=context,
                     completed_step_records=completed_records_snapshot,
                     resolved_input_bindings=resolved_input_bindings,
                     out_dir=run_result.out_dir,

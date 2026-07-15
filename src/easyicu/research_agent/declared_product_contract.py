@@ -174,6 +174,7 @@ _PRODUCT_SLOT_SUFFIXES: Mapping[str, tuple[tuple[str, ...], ...]] = {
     "absolute_risk": (("absolute", "risk"),),
     "distribution": (("distribution",),),
     "availability": (
+        ("measurement", "availability"),
         ("availability",),
         ("availability", "panel"),
         ("measurement", "coverage"),
@@ -822,6 +823,20 @@ def _planner_product_slot_and_subject(
                         "role_by_subject",
                     )
                 )
+    if matches:
+        longest_by_slot_and_syntax = {
+            (slot, syntax): max(
+                len(role_tokens)
+                for candidate_slot, role_tokens, _subject, candidate_syntax in matches
+                if candidate_slot == slot and candidate_syntax == syntax
+            )
+            for slot, _role_tokens, _subject, syntax in matches
+        }
+        matches = {
+            match
+            for match in matches
+            if len(match[1]) == longest_by_slot_and_syntax[(match[0], match[3])]
+        }
     if len(matches) != 1:
         raise ValueError(
             "Planner figure role does not map uniquely to an authorized product slot"

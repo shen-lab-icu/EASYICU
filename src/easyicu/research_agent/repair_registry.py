@@ -381,6 +381,7 @@ _SEALED_RENDERER_PARENT_OUTPUT_ROLE_GROUPS: Dict[
             ("availability",),
             ("measurement", "coverage"),
             ("source", "coverage"),
+            ("missingness",),
         ),
     ),
     "absolute_risk_incidence_prevalence_publication_bundle_v1": (

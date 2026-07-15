@@ -4050,6 +4050,7 @@ def _step_contract_findings(
     *,
     step: AnalysisStep,
     step_summary: Dict[str, Any],
+    context: Optional[ResearchContext] = None,
     completed_step_records: Optional[Sequence[Dict[str, Any]]] = None,
     resolved_input_bindings: Optional[Mapping[str, Mapping[str, Any]]] = None,
     out_dir: Optional[Path] = None,
@@ -4129,6 +4130,36 @@ def _step_contract_findings(
             out_dir=out_dir,
         )
     )
+    from .figures.distribution_availability import (
+        distribution_availability_parent_contract_issue,
+    )
+
+    distribution_parent_issue = distribution_availability_parent_contract_issue(
+        planned_method=step.method,
+        parent_out=out_dir,
+        parent_summary=step_summary,
+        expected_outputs=step.expected_outputs or [],
+        planned_inputs=step.inputs or [],
+        host_context=context,
+    )
+    if distribution_parent_issue is not None:
+        findings.append(
+            ValidationFinding(
+                validator="distribution_availability_parent_contract",
+                severity="error",
+                message=(
+                    "The controlled distribution/availability audit did not "
+                    "produce the closed parent schema required by its declared "
+                    "renderer. Preserve the Planner-selected exposure and write "
+                    "the two declared table roles plus their matching summary "
+                    "contracts before this step can be successful."
+                ),
+                detail={
+                    "step_id": step.step_id,
+                    **distribution_parent_issue,
+                },
+            )
+        )
 
     # The input parquet is already the locked analysis cohort. A generated
     # downstream QC/model/descriptive script must not relabel itself as a cohort
