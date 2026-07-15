@@ -326,6 +326,21 @@ def deterministic_concept_audit_repair(
             repaired = guarded
             repair_names.append(repair_name)
 
+    swallowed_helper_finding = any(
+        "provenance_helper_error_swallowed" in str(message).lower()
+        or (
+            "reconcile_binary_event_presence" in str(message).lower()
+            and "without re-raising" in str(message).lower()
+        )
+        for message in audit_messages
+    )
+    if swallowed_helper_finding:
+        fail_closed = _patch_swallowed_reconciliation_error(repaired)
+        if fail_closed != repaired:
+            repair_name = "provenance_helper_reraise_v1"
+            repaired = fail_closed
+            repair_names.append(repair_name)
+
     bidirectional_scan_finding = any(
         (
             "measurement-provenance audit scans measured columns only"
@@ -363,6 +378,7 @@ _PROVENANCE_DECISION_KEYS = (
 )
 _PROVENANCE_GUARD_SENTINEL = "_easyicu_provenance_fail_closed_guard_v1"
 _PROVENANCE_PAIR_SCAN_SENTINEL = "_easyicu_provenance_bidirectional_pair_scan_v1"
+_PROVENANCE_HELPER_RERAISE_SENTINEL = "_easyicu_provenance_helper_reraise_v1"
 
 
 def _string_literals(node: ast.AST) -> set[str]:
@@ -559,6 +575,59 @@ def _patch_provenance_bidirectional_pair_scan(code: str) -> str:
             f"{indent})\n"
         )
         insertions.append((insertion_line, patch))
+
+    if not insertions:
+        return code
+    for line_number, patch in sorted(insertions, reverse=True):
+        lines.insert(line_number, patch)
+    return "".join(lines)
+
+
+def _patch_swallowed_reconciliation_error(code: str) -> str:
+    """Re-raise a caught standard-helper validation failure in place."""
+
+    if _PROVENANCE_HELPER_RERAISE_SENTINEL in code:
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    lines = code.splitlines(keepends=True)
+    insertions: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Try):
+            continue
+        calls_reconciliation = any(
+            isinstance(candidate, ast.Call)
+            and _simple_call_name(candidate.func).split(".")[-1]
+            == "reconcile_binary_event_presence"
+            for statement in node.body
+            for candidate in ast.walk(statement)
+        )
+        if not calls_reconciliation:
+            continue
+        for handler in node.handlers:
+            caught = (
+                _simple_call_name(handler.type).split(".")[-1]
+                if handler.type is not None
+                else ""
+            )
+            if handler.type is not None and caught not in {
+                "BaseException",
+                "Exception",
+                "ValueError",
+            }:
+                continue
+            if any(isinstance(candidate, ast.Raise) for candidate in ast.walk(handler)):
+                continue
+            source_line = lines[handler.lineno - 1]
+            handler_indent = source_line[: len(source_line) - len(source_line.lstrip())]
+            patch = (
+                f"{handler_indent}    # {_PROVENANCE_HELPER_RERAISE_SENTINEL}\n"
+                f"{handler_indent}    raise\n"
+            )
+            insertions.append((handler.lineno, patch))
 
     if not insertions:
         return code

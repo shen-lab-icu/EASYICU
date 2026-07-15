@@ -591,6 +591,79 @@ def provenance_audit(frame):
     )
 
 
+def test_mechanical_preflight_blocks_swallowed_reconciliation_error(ra):
+    code = """
+def audit_event_presence(frame):
+    try:
+        result = reconcile_binary_event_presence(
+            frame,
+            count_column=count_column,
+            measured_column=measured_column,
+            representative_column=representative_column,
+        )
+    except Exception as exc:
+        return {'status': 'unavailable', 'reason': str(exc)}
+    return {'status': 'checked', 'audit': result.audit}
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_helper_error_swallowed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_accepts_re_raised_reconciliation_error(ra):
+    code = """
+def audit_event_presence(frame):
+    try:
+        return reconcile_binary_event_presence(
+            frame,
+            count_column=count_column,
+            measured_column=measured_column,
+            representative_column=representative_column,
+        )
+    except ValueError as exc:
+        raise RuntimeError('declared provenance triad is invalid') from exc
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_helper_error_swallowed"
+        for finding in findings
+    )
+
+
+def test_deterministic_repair_re_raises_swallowed_reconciliation_error(ra):
+    code = """
+def audit_event_presence(frame):
+    try:
+        result = reconcile_binary_event_presence(
+            frame,
+            count_column=count_column,
+            measured_column=measured_column,
+            representative_column=representative_column,
+        )
+    except Exception as exc:
+        return {'status': 'unavailable', 'reason': str(exc)}
+    return result.audit
+"""
+    repaired, names = deterministic_concept_audit_repair(
+        code, ["provenance_helper_error_swallowed"]
+    )
+
+    assert names == ["provenance_helper_reraise_v1"]
+    assert "_easyicu_provenance_helper_reraise_v1" in repaired
+    findings = audit_mechanical_code_contracts(repaired, _figure_step(ra))
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_helper_error_swallowed"
+        for finding in findings
+    )
+
+
 def test_mechanical_preflight_blocks_double_first_time_companion(ra):
     code = """
 def timing_audit(frame, candidates):

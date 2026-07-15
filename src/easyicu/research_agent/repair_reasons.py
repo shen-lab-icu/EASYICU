@@ -51,6 +51,7 @@ _DETAIL_REASON_CODES = {
         RepairReason.STRUCTURAL_ACCOUNTING_INVALID
     ),
     "provenance_audit_not_fail_closed": RepairReason.PROVENANCE_NOT_FAIL_CLOSED,
+    "provenance_helper_error_swallowed": RepairReason.PROVENANCE_NOT_FAIL_CLOSED,
     "provenance_pair_scan_not_bidirectional": (
         RepairReason.PROVENANCE_NOT_FAIL_CLOSED
     ),

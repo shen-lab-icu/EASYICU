@@ -600,6 +600,64 @@ def _provenance_pair_scan_findings(tree: ast.Module) -> list[ValidationFinding]:
     return []
 
 
+def _handler_catches_reconciliation_failure(handler: ast.ExceptHandler) -> bool:
+    """Return whether *handler* can swallow the standard helper's failures."""
+
+    if handler.type is None:
+        return True
+    caught = _call_name(handler.type).split(".")[-1]
+    return caught in {"BaseException", "Exception", "ValueError"}
+
+
+def _swallowed_reconciliation_error_findings(
+    tree: ast.Module,
+) -> list[ValidationFinding]:
+    """Reject caught sparse-event reconciliation failures that continue.
+
+    ``reconcile_binary_event_presence`` is itself a deterministic validation
+    boundary.  Once an Agent elects to call it, converting its exception into
+    an ``unavailable`` audit and continuing can publish outputs after a known
+    contradictory triad.  This is mechanical fail-close enforcement; it does
+    not select the exposure or require the optional helper to be called.
+    """
+
+    findings: list[ValidationFinding] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Try):
+            continue
+        calls_reconciliation = any(
+            isinstance(candidate, ast.Call)
+            and _call_name(candidate.func).split(".")[-1]
+            == "reconcile_binary_event_presence"
+            for statement in node.body
+            for candidate in ast.walk(statement)
+        )
+        if not calls_reconciliation:
+            continue
+        for handler in node.handlers:
+            if not _handler_catches_reconciliation_failure(handler):
+                continue
+            if any(isinstance(candidate, ast.Raise) for candidate in ast.walk(handler)):
+                continue
+            findings.append(
+                ValidationFinding(
+                    validator="mechanical_code_preflight",
+                    severity="error",
+                    message=(
+                        "Errors from reconcile_binary_event_presence are caught "
+                        "without re-raising, so an invalid declared provenance "
+                        "triad could be recorded as unavailable and execution "
+                        "could continue."
+                    ),
+                    detail={
+                        "reason": "provenance_helper_error_swallowed",
+                        "line": handler.lineno,
+                    },
+                )
+            )
+    return findings
+
+
 def _scope_nodes(statements: list[ast.stmt]) -> list[ast.AST]:
     """Walk one lexical scope without borrowing uses from nested functions."""
 
@@ -1434,6 +1492,7 @@ def audit_mechanical_code_contracts(
     findings.extend(_binding_metadata_findings(tree))
     findings.extend(_provenance_fail_closed_findings(tree))
     findings.extend(_provenance_pair_scan_findings(tree))
+    findings.extend(_swallowed_reconciliation_error_findings(tree))
     findings.extend(_authoritative_exposure_binding_findings(tree, step))
     findings.extend(_authoritative_exposure_fallback_findings(tree, step))
     findings.extend(_finalized_exposure_reconciliation_findings(tree, step))
