@@ -231,7 +231,9 @@ def _tabular_artifact_columns(path: Path) -> list[str]:
     if suffix in {".csv", ".tsv"}:
         delimiter = "\t" if suffix == ".tsv" else ","
         with path.open("r", encoding="utf-8", newline="") as handle:
-            return [str(value) for value in next(csv.reader(handle, delimiter=delimiter))]
+            return [
+                str(value) for value in next(csv.reader(handle, delimiter=delimiter))
+            ]
     if suffix in {".parquet", ".pq"}:
         import pyarrow.parquet as pq
 
@@ -394,9 +396,10 @@ def typed_product_binding_contract(
         candidates: list[str] = []
         for column, normalized_column in normalized_columns.items():
             for prefix in ("propensity_score_", "propensity_", "ps_"):
-                if normalized_column.startswith(prefix) and normalized_column[
-                    len(prefix) :
-                ] in identifiers:
+                if (
+                    normalized_column.startswith(prefix)
+                    and normalized_column[len(prefix) :] in identifiers
+                ):
                     candidates.append(column)
                     break
         unique_candidates = sorted(set(candidates))
@@ -459,9 +462,7 @@ def typed_product_binding_contract(
         if len(identity_candidates) != 1:
             return None
         identity_column = identity_candidates[0]
-    score_columns = [
-        str(model["propensity_score_column"]) for model in bound_models
-    ]
+    score_columns = [str(model["propensity_score_column"]) for model in bound_models]
     try:
         frame = _assignment_artifact_frame(
             artifact_path,
@@ -487,9 +488,7 @@ def typed_product_binding_contract(
                 cohort_n = int(pq.ParquetFile(cohort_path).metadata.num_rows)
                 expected_identity = pd.Series(range(cohort_n), name=identity_column)
             else:
-                cohort_frame = pd.read_parquet(
-                    cohort_path, columns=[identity_column]
-                )
+                cohort_frame = pd.read_parquet(cohort_path, columns=[identity_column])
                 expected_identity = cohort_frame[identity_column]
         elif suffix == ".csv":
             if identity_column == "row_index":
@@ -564,9 +563,7 @@ def typed_product_binding_contract(
         "row_identity_column": identity_column,
         "row_count": len(observed_identity),
         "row_identity_sha256": row_identity_sha256,
-        "authoritative_cohort_sha256": _sha256_file(
-            Path(authoritative_cohort_path)
-        ),
+        "authoritative_cohort_sha256": _sha256_file(Path(authoritative_cohort_path)),
         "models": bound_models,
     }
 
@@ -603,6 +600,93 @@ def typed_product(value: object) -> tuple[str, str] | None:
     if not canonical_kind or not product_name:
         return None
     return canonical_kind, product_name
+
+
+_PRIMARY_ANALYSIS_COHORT_METHODS = frozenset(
+    {
+        "cohort_construction",
+        "cohort_definition",
+        "cohort_definition_and_attrition",
+        "eligibility_definition",
+        "primary_cohort_definition",
+    }
+)
+_PRIMARY_ANALYSIS_COHORT_DATA_KINDS = frozenset({"artifact", "dataset", "table"})
+_PRIMARY_ANALYSIS_COHORT_FLOW_PRODUCTS = frozenset(
+    {
+        "attrition",
+        "attrition_by_rule",
+        "cohort_attrition",
+        "cohort_denominator",
+        "cohort_denominators",
+        "cohort_flow",
+        "eligibility_flow",
+    }
+)
+
+
+def _declares_analysis_cohort_product(step: AnalysisStep) -> bool:
+    return any(
+        kind in _PRIMARY_ANALYSIS_COHORT_DATA_KINDS and name == "analysis_cohort"
+        for raw in (step.expected_outputs or [])
+        if (parsed := typed_product(raw)) is not None
+        for kind, name in (parsed,)
+    )
+
+
+def _primary_analysis_cohort_attrition_candidate(step: AnalysisStep) -> bool:
+    method = _normalise(step.method).split("_with_", 1)[0]
+    if method not in _PRIMARY_ANALYSIS_COHORT_METHODS:
+        return False
+    parsed = [typed_product(raw) for raw in (step.expected_outputs or [])]
+    return any(
+        product is not None
+        and product[0] in _PRIMARY_ANALYSIS_COHORT_DATA_KINDS
+        and product[1] == "analysis_cohort"
+        for product in parsed
+    ) and any(
+        product is not None
+        and product[0] == "table"
+        and product[1] in _PRIMARY_ANALYSIS_COHORT_FLOW_PRODUCTS
+        for product in parsed
+    )
+
+
+def primary_analysis_cohort_producer_uses_universe(
+    *, step: AnalysisStep, plan: Any
+) -> bool:
+    """Bind only one closed primary-cohort producer to the raw universe.
+
+    The host materialises the Planner-locked cohort before ordinary analysis
+    steps run.  A mixed cohort+attrition producer must nevertheless see the raw
+    universe so it can report truthful exclusions.  This predicate changes only
+    the input role: the Agent still owns every cohort criterion and output.
+    """
+
+    if not _primary_analysis_cohort_attrition_candidate(step):
+        return False
+
+    parsed_outputs = [typed_product(raw) for raw in (step.expected_outputs or [])]
+    if not parsed_outputs or any(product is None for product in parsed_outputs):
+        return False
+    has_analysis_cohort = False
+    has_attrition = False
+    for kind, name in parsed_outputs:  # type: ignore[misc]
+        if kind in _PRIMARY_ANALYSIS_COHORT_DATA_KINDS and name == "analysis_cohort":
+            has_analysis_cohort = True
+            continue
+        if kind == "table" and name in _PRIMARY_ANALYSIS_COHORT_FLOW_PRODUCTS:
+            has_attrition = True
+            continue
+        return False
+    assert has_analysis_cohort and has_attrition
+
+    producers = [
+        candidate
+        for candidate in getattr(plan, "steps", ())
+        if _declares_analysis_cohort_product(candidate)
+    ]
+    return len(producers) == 1 and producers[0].step_id == step.step_id
 
 
 def _contained_regular_output_file(out_dir: Path, value: object) -> Path:
@@ -1085,6 +1169,691 @@ def _iter_paths(value: Any) -> Iterable[str]:
             yield from _iter_paths(child)
 
 
+def _registered_output_paths(summary: Mapping[str, Any]) -> list[str]:
+    paths: list[str] = []
+
+    def visit(node: Any) -> None:
+        if isinstance(node, Mapping):
+            for raw_key, child in node.items():
+                key = _normalise(raw_key)
+                if key in _OUTPUT_CONTAINER_KEYS:
+                    paths.extend(_iter_paths(child))
+                elif isinstance(child, (Mapping, list, tuple)):
+                    visit(child)
+        elif isinstance(node, (list, tuple)):
+            for child in node:
+                visit(child)
+
+    visit(summary)
+    return list(dict.fromkeys(paths))
+
+
+def _registered_product_paths(
+    summary: Mapping[str, Any],
+    *,
+    product_name: str,
+    allowed_kinds: frozenset[str],
+) -> list[str]:
+    explicit: list[str] = []
+
+    def matches(value: object) -> bool:
+        parsed = typed_product(value)
+        return bool(
+            parsed is not None
+            and parsed[0] in allowed_kinds
+            and parsed[1] == product_name
+        )
+
+    def visit_container(value: Any) -> None:
+        if isinstance(value, Mapping):
+            descriptor_kind = value.get("kind") or value.get("product_type")
+            descriptor_name = value.get("name")
+            descriptor = (
+                f"{descriptor_kind}:{descriptor_name}"
+                if descriptor_kind is not None and descriptor_name is not None
+                else descriptor_name
+            )
+            if matches(descriptor):
+                explicit.extend(
+                    _iter_paths(
+                        next(
+                            (
+                                value.get(key)
+                                for key in ("path", "relative_path", "filename")
+                                if value.get(key)
+                            ),
+                            None,
+                        )
+                    )
+                )
+            for raw_key, child in value.items():
+                if matches(raw_key):
+                    explicit.extend(_iter_paths(child))
+                elif isinstance(child, (Mapping, list, tuple)):
+                    visit_container(child)
+        elif isinstance(value, (list, tuple)):
+            for child in value:
+                visit_container(child)
+
+    def visit_summary(node: Any) -> None:
+        if isinstance(node, Mapping):
+            for raw_key, child in node.items():
+                if _normalise(raw_key) in _OUTPUT_CONTAINER_KEYS:
+                    visit_container(child)
+                elif isinstance(child, (Mapping, list, tuple)):
+                    visit_summary(child)
+        elif isinstance(node, (list, tuple)):
+            for child in node:
+                visit_summary(child)
+
+    visit_summary(summary)
+    if explicit:
+        return list(dict.fromkeys(explicit))
+    return [
+        value
+        for value in _registered_output_paths(summary)
+        if _file_stem(value) == product_name
+    ]
+
+
+def _integral_count(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number) or number < 0 or not number.is_integer():
+        return None
+    return int(number)
+
+
+def _summary_count(summary: Mapping[str, Any], names: Sequence[str]) -> int | None:
+    for name in names:
+        count = _integral_count(summary.get(name))
+        if count is not None:
+            return count
+    return None
+
+
+def primary_analysis_cohort_integrity_findings(
+    *,
+    step: AnalysisStep,
+    plan: Any,
+    step_summary: Mapping[str, Any],
+    out_dir: Path,
+    universe_path: Path,
+    authoritative_cohort_path: Path,
+) -> list[ValidationFinding]:
+    """Verify one Agent-produced primary cohort against host-locked authority.
+
+    This gate never chooses eligibility.  It replays the Planner-owned typed
+    cohort definition on the raw universe, then checks the produced row identity
+    and declared attrition accounting before the attempt may become current.
+    """
+
+    if not _primary_analysis_cohort_attrition_candidate(step):
+        return []
+
+    def finding(issue: str, message: str, **detail: Any) -> list[ValidationFinding]:
+        return [
+            ValidationFinding(
+                validator="primary_analysis_cohort_integrity",
+                severity="error",
+                message=message,
+                detail={"issue": issue, "step_id": step.step_id, **detail},
+            )
+        ]
+
+    if not primary_analysis_cohort_producer_uses_universe(step=step, plan=plan):
+        return finding(
+            "primary_cohort_product_owner_ambiguous",
+            "A mixed analysis_cohort + attrition step must be the plan's unique "
+            "closed primary-cohort product owner before it may execute.",
+        )
+
+    try:
+        import pandas as pd
+
+        from .cohort_schema import (
+            CohortDefinition,
+            build_cohort,
+            coerce_cohort_definition,
+        )
+
+        universe = pd.read_parquet(universe_path).reset_index(drop=True)
+        authoritative = pd.read_parquet(authoritative_cohort_path).reset_index(
+            drop=True
+        )
+        definition = coerce_cohort_definition(getattr(plan, "cohort", None))
+        replayed = universe.copy()
+        expected_remaining_counts = [int(len(replayed))]
+        expected_exclusion_counts = [0]
+        expected_criterion_ids: list[str] = []
+        if definition is not None:
+            ordered_predicates = [
+                ("include", predicate) for predicate in definition.inclusion
+            ] + [("exclude", predicate) for predicate in definition.exclusion]
+            for order, (kind, predicate) in enumerate(ordered_predicates, start=1):
+                before_n = int(len(replayed))
+                one = CohortDefinition(
+                    name=f"criterion_{order}",
+                    inclusion=(predicate,) if kind == "include" else (),
+                    exclusion=(predicate,) if kind == "exclude" else (),
+                )
+                replayed = build_cohort(one, replayed).reset_index(drop=True)
+                after_n = int(len(replayed))
+                concept = _normalise(predicate.concept_id)
+                expected_criterion_ids.append(f"{kind}_{order:02d}_{concept}")
+                expected_remaining_counts.append(after_n)
+                expected_exclusion_counts.append(before_n - after_n)
+    except Exception as exc:
+        return finding(
+            "authority_replay_unavailable",
+            "The primary analysis-cohort product could not be verified against "
+            "the raw universe and Planner-locked cohort definition.",
+            error_type=type(exc).__name__,
+            error=str(exc)[:300],
+        )
+
+    raw_n = int(len(universe))
+    locked_n = int(len(authoritative))
+    if len(replayed) != locked_n:
+        return finding(
+            "locked_cohort_replay_count_mismatch",
+            "The Planner-locked cohort replay does not match the authoritative "
+            "materialised cohort denominator.",
+            raw_universe_n=raw_n,
+            replayed_cohort_n=int(len(replayed)),
+            authoritative_cohort_n=locked_n,
+        )
+
+    identity_column = next(
+        (
+            candidate
+            for candidate in ("stay_id", "encounter_id", "row_id")
+            if all(
+                candidate in frame.columns
+                and not frame[candidate].isna().any()
+                and not frame[candidate].duplicated().any()
+                for frame in (replayed, authoritative)
+            )
+        ),
+        None,
+    )
+    if identity_column is None:
+        return finding(
+            "row_identity_unverifiable",
+            "The primary analysis cohort has no shared unique row identity; "
+            "cohort membership cannot be sealed safely.",
+        )
+
+    expected_identity = (
+        replayed[identity_column].astype("string").reset_index(drop=True)
+    )
+    authoritative_identity = (
+        authoritative[identity_column].astype("string").reset_index(drop=True)
+    )
+    if not expected_identity.equals(authoritative_identity):
+        return finding(
+            "authoritative_cohort_identity_mismatch",
+            "The materialised analysis cohort does not match the row identities "
+            "obtained by replaying the Planner-locked definition.",
+            identity_column=identity_column,
+            raw_universe_n=raw_n,
+            authoritative_cohort_n=locked_n,
+        )
+    try:
+        pd.testing.assert_frame_equal(
+            replayed.loc[:, authoritative.columns].reset_index(drop=True),
+            authoritative,
+            check_dtype=False,
+            check_exact=True,
+        )
+    except (AssertionError, KeyError) as exc:
+        return finding(
+            "authoritative_cohort_value_mismatch",
+            "The materialised analysis cohort changes host columns relative to "
+            "the Planner-locked cohort replay.",
+            error=str(exc)[:300],
+        )
+
+    cohort_candidates = _registered_product_paths(
+        step_summary,
+        product_name="analysis_cohort",
+        allowed_kinds=_PRIMARY_ANALYSIS_COHORT_DATA_KINDS,
+    )
+    if len(cohort_candidates) != 1:
+        return finding(
+            "analysis_cohort_product_ambiguous",
+            "The declared analysis_cohort product must resolve to exactly one "
+            "registered output file.",
+            candidates=cohort_candidates,
+        )
+    try:
+        produced_path = _contained_regular_output_file(
+            Path(out_dir), cohort_candidates[0]
+        )
+        if produced_path.suffix.lower() == ".parquet":
+            produced = pd.read_parquet(produced_path).reset_index(drop=True)
+        elif produced_path.suffix.lower() == ".feather":
+            produced = pd.read_feather(produced_path).reset_index(drop=True)
+        elif produced_path.suffix.lower() in {".csv", ".tsv"}:
+            produced = pd.read_csv(
+                produced_path,
+                sep="\t" if produced_path.suffix.lower() == ".tsv" else ",",
+            ).reset_index(drop=True)
+        else:
+            raise ValueError("unsupported analysis-cohort file type")
+    except Exception as exc:
+        return finding(
+            "analysis_cohort_product_unreadable",
+            "The declared analysis_cohort product is unreadable or outside the "
+            "step output directory.",
+            error_type=type(exc).__name__,
+            error=str(exc)[:300],
+        )
+    if (
+        identity_column not in produced.columns
+        or produced[identity_column].isna().any()
+        or produced[identity_column].duplicated().any()
+        or not produced[identity_column]
+        .astype("string")
+        .reset_index(drop=True)
+        .equals(authoritative_identity)
+    ):
+        return finding(
+            "analysis_cohort_identity_mismatch",
+            "The produced analysis_cohort does not preserve the exact ordered row "
+            "identity of the Planner-locked cohort.",
+            identity_column=identity_column,
+            produced_cohort_n=int(len(produced)),
+            authoritative_cohort_n=locked_n,
+        )
+    try:
+        pd.testing.assert_frame_equal(
+            produced.loc[:, authoritative.columns].reset_index(drop=True),
+            authoritative,
+            check_dtype=False,
+            check_exact=True,
+        )
+    except (AssertionError, KeyError) as exc:
+        return finding(
+            "analysis_cohort_value_mismatch",
+            "The produced analysis_cohort changes or omits authoritative cohort "
+            "columns; only additional derived columns are allowed.",
+            error=str(exc)[:300],
+        )
+
+    reported_raw_n = _summary_count(
+        step_summary, ("n_universe", "universe_n", "n_input_universe")
+    )
+    reported_final_n = _summary_count(
+        step_summary,
+        (
+            "n_final_analysis_cohort",
+            "n_analysis_cohort",
+            "n_final_cohort",
+            "final_cohort_n",
+        ),
+    )
+    if reported_raw_n != raw_n or reported_final_n != locked_n:
+        return finding(
+            "cohort_denominator_mismatch",
+            "The primary cohort summary does not report the raw-universe and "
+            "locked final denominators exactly.",
+            expected_universe_n=raw_n,
+            reported_universe_n=reported_raw_n,
+            expected_final_n=locked_n,
+            reported_final_n=reported_final_n,
+        )
+
+    declared_flow_products = {
+        name
+        for raw in (step.expected_outputs or [])
+        if (parsed := typed_product(raw)) is not None
+        for kind, name in (parsed,)
+        if kind == "table" and name in _PRIMARY_ANALYSIS_COHORT_FLOW_PRODUCTS
+    }
+    for product in sorted(declared_flow_products):
+        candidates = _registered_product_paths(
+            step_summary,
+            product_name=product,
+            allowed_kinds=frozenset({"table"}),
+        )
+        if len(candidates) != 1:
+            return finding(
+                "attrition_product_ambiguous",
+                f"The declared {product} product must resolve to exactly one "
+                "registered table.",
+                product=product,
+                candidates=candidates,
+            )
+        try:
+            table_path = _contained_regular_output_file(Path(out_dir), candidates[0])
+            if table_path.suffix.lower() == ".parquet":
+                table = pd.read_parquet(table_path)
+            elif table_path.suffix.lower() == ".feather":
+                table = pd.read_feather(table_path)
+            else:
+                table = pd.read_csv(
+                    table_path,
+                    sep="\t" if table_path.suffix.lower() == ".tsv" else ",",
+                )
+        except Exception as exc:
+            return finding(
+                "attrition_product_unreadable",
+                f"The declared {product} table is unreadable or outside the step "
+                "output directory.",
+                product=product,
+                error_type=type(exc).__name__,
+                error=str(exc)[:300],
+            )
+        if table.empty:
+            return finding(
+                "attrition_counts_unverifiable",
+                f"The declared {product} table has no verifiable count sequence.",
+                product=product,
+            )
+        remaining_column = next(
+            (
+                name
+                for name in ("n_remaining", "n_remaining_rows")
+                if name in table.columns
+            ),
+            None,
+        )
+        partition_count_column = next(
+            (name for name in ("n", "n_rows") if name in table.columns),
+            None,
+        )
+        if remaining_column is None and partition_count_column is None:
+            table_raw_n = _summary_count(
+                table.iloc[0].to_dict(), ("n_universe", "universe_n")
+            )
+            table_final_n = _summary_count(
+                table.iloc[0].to_dict(),
+                ("n_analysis_cohort", "n_final_cohort", "final_cohort_n"),
+            )
+            if (
+                product in {"cohort_denominator", "cohort_denominators"}
+                and len(table) == 1
+                and table_raw_n == raw_n
+                and table_final_n == locked_n
+            ):
+                continue
+            return finding(
+                "attrition_counts_unverifiable",
+                f"The declared {product} table has no verifiable count sequence.",
+                product=product,
+            )
+        count_column = remaining_column or partition_count_column
+        assert count_column is not None
+        counts = [_integral_count(value) for value in table[count_column].tolist()]
+        if any(value is None for value in counts):
+            return finding(
+                "attrition_counts_nonintegral",
+                f"The declared {product} table contains invalid structural counts.",
+                product=product,
+                count_column=count_column,
+            )
+        integral_counts = [int(value) for value in counts if value is not None]
+        if any(value < 0 for value in integral_counts):
+            return finding(
+                "attrition_counts_negative",
+                f"The declared {product} table contains negative structural counts.",
+                product=product,
+                count_column=count_column,
+            )
+
+        # Sequential flow schema: every row records the population remaining
+        # after one rule.  When exclusions are explicit, each transition must
+        # reconcile row by row; a matching grand total alone is insufficient.
+        if remaining_column is not None:
+            if integral_counts[0] != raw_n or integral_counts[-1] != locked_n:
+                return finding(
+                    "attrition_endpoints_mismatch",
+                    f"The declared {product} table does not run from the raw "
+                    "universe to the locked analysis cohort.",
+                    product=product,
+                    expected_universe_n=raw_n,
+                    reported_first_n=integral_counts[0],
+                    expected_final_n=locked_n,
+                    reported_last_n=integral_counts[-1],
+                )
+            if any(
+                current > previous
+                for previous, current in zip(
+                    integral_counts, integral_counts[1:], strict=False
+                )
+            ):
+                return finding(
+                    "attrition_counts_increase",
+                    f"The declared {product} remaining-count sequence increases.",
+                    product=product,
+                )
+            excluded_column = next(
+                (
+                    name
+                    for name in (
+                        "n_excluded_at_step",
+                        "n_removed_from_prior_stage",
+                        "n_excluded_rows",
+                    )
+                    if name in table.columns
+                ),
+                None,
+            )
+            if excluded_column is None:
+                return finding(
+                    "attrition_exclusions_unverifiable",
+                    f"The declared {product} table does not report per-step "
+                    "exclusions.",
+                    product=product,
+                )
+            exclusions = [
+                _integral_count(value) for value in table[excluded_column].tolist()
+            ]
+            if any(value is None for value in exclusions):
+                return finding(
+                    "attrition_exclusions_nonintegral",
+                    f"The declared {product} table contains invalid per-step "
+                    "exclusion counts.",
+                    product=product,
+                )
+            integral_exclusions = [
+                int(value) for value in exclusions if value is not None
+            ]
+            reported_remaining = list(integral_counts)
+            reported_exclusions = list(integral_exclusions)
+            if (
+                len(reported_remaining) == len(expected_remaining_counts) + 1
+                and reported_remaining[-1] == locked_n
+                and reported_exclusions[-1] == 0
+            ):
+                reported_remaining.pop()
+                reported_exclusions.pop()
+            if reported_remaining != expected_remaining_counts:
+                return finding(
+                    "attrition_stage_counts_mismatch",
+                    f"The declared {product} remaining counts do not match the "
+                    "ordered Planner-locked cohort predicates.",
+                    product=product,
+                    expected_remaining_counts=expected_remaining_counts,
+                    reported_remaining_counts=reported_remaining,
+                )
+            if reported_exclusions != expected_exclusion_counts:
+                return finding(
+                    "attrition_transitions_do_not_conserve",
+                    f"The declared {product} exclusions do not match each "
+                    "ordered Planner-locked cohort predicate.",
+                    product=product,
+                    expected_exclusions=expected_exclusion_counts,
+                    reported_exclusions=reported_exclusions,
+                )
+            start_column = (
+                "n_at_start_rows" if "n_at_start_rows" in table.columns else None
+            )
+            if start_column is not None:
+                starts = [
+                    _integral_count(value) for value in table[start_column].tolist()
+                ]
+                expected_starts = [raw_n, *integral_counts[:-1]]
+                if (
+                    any(value is None for value in starts)
+                    or [int(value) for value in starts if value is not None]
+                    != expected_starts
+                ):
+                    return finding(
+                        "attrition_start_counts_do_not_conserve",
+                        f"The declared {product} start counts do not match the "
+                        "preceding remaining denominators.",
+                        product=product,
+                        expected_start_counts=expected_starts,
+                    )
+            continue
+
+        # Partition schema: one denominator row, one retained row, and zero or
+        # more mutually exclusive excluded partitions.  A bare ``n`` column is
+        # never treated as an ordered flow because that would make arbitrary
+        # intermediate values unverifiable.
+        assert partition_count_column is not None
+        role_column = next(
+            (
+                name
+                for name in ("status", "partition_status", "row_role", "role")
+                if name in table.columns
+            ),
+            None,
+        )
+        if role_column is None:
+            if partition_count_column == "n_rows":
+                reported_remaining = list(integral_counts)
+                if (
+                    len(reported_remaining) == len(expected_remaining_counts) + 1
+                    and reported_remaining[-1] == locked_n
+                ):
+                    reported_remaining.pop()
+                if reported_remaining == expected_remaining_counts:
+                    continue
+                return finding(
+                    "attrition_stage_counts_mismatch",
+                    f"The declared {product} row-count sequence does not match "
+                    "the ordered Planner-locked cohort predicates.",
+                    product=product,
+                    expected_remaining_counts=expected_remaining_counts,
+                    reported_remaining_counts=reported_remaining,
+                )
+            return finding(
+                "attrition_partition_roles_unverifiable",
+                f"The declared {product} partition table has no explicit row roles.",
+                product=product,
+                count_column=partition_count_column,
+            )
+        roles = [_normalise(value) for value in table[role_column].tolist()]
+        denominator_rows = [
+            index for index, role in enumerate(roles) if role == "denominator"
+        ]
+        retained_rows = [
+            index for index, role in enumerate(roles) if role == "retained"
+        ]
+        excluded_rows = [
+            index for index, role in enumerate(roles) if role == "excluded"
+        ]
+        if (
+            len(denominator_rows) != 1
+            or len(retained_rows) != 1
+            or len(denominator_rows) + len(retained_rows) + len(excluded_rows)
+            != len(table)
+        ):
+            return finding(
+                "attrition_partition_roles_invalid",
+                f"The declared {product} partition table must contain exactly "
+                "one denominator row, one retained row, and only explicit "
+                "excluded partitions otherwise.",
+                product=product,
+                role_column=role_column,
+            )
+        reported_denominator = integral_counts[denominator_rows[0]]
+        reported_retained = integral_counts[retained_rows[0]]
+        reported_excluded_counts = [integral_counts[index] for index in excluded_rows]
+        reported_excluded = sum(reported_excluded_counts)
+        if (
+            reported_denominator != raw_n
+            or reported_retained != locked_n
+            or reported_excluded != raw_n - locked_n
+        ):
+            return finding(
+                "attrition_partitions_do_not_conserve",
+                f"The declared {product} partitions do not reconcile the raw "
+                "and final cohort denominators.",
+                product=product,
+                expected_universe_n=raw_n,
+                reported_universe_n=reported_denominator,
+                expected_retained_n=locked_n,
+                reported_retained_n=reported_retained,
+                expected_excluded_n=raw_n - locked_n,
+                reported_excluded_n=reported_excluded,
+            )
+        category_column = next(
+            (
+                name
+                for name in ("criterion_id", "attrition_category")
+                if name in table.columns
+            ),
+            None,
+        )
+        if expected_criterion_ids and category_column is None:
+            return finding(
+                "attrition_partition_rule_ids_unverifiable",
+                f"The declared {product} partition table does not identify the "
+                "Planner-locked cohort rules attached to each exclusion.",
+                product=product,
+                expected_criterion_ids=expected_criterion_ids,
+            )
+        if expected_criterion_ids:
+            assert category_column is not None
+            reported_rule_ids = [
+                _normalise(table.iloc[index][category_column])
+                for index in excluded_rows
+            ]
+            if len(reported_rule_ids) != len(set(reported_rule_ids)) or set(
+                reported_rule_ids
+            ) != set(expected_criterion_ids):
+                return finding(
+                    "attrition_partition_rule_ids_mismatch",
+                    f"The declared {product} excluded partitions do not identify "
+                    "each Planner-locked cohort predicate exactly once.",
+                    product=product,
+                    expected_criterion_ids=expected_criterion_ids,
+                    reported_criterion_ids=reported_rule_ids,
+                )
+            reported_by_rule = dict(
+                zip(reported_rule_ids, reported_excluded_counts, strict=True)
+            )
+            expected_by_rule = dict(
+                zip(
+                    expected_criterion_ids,
+                    expected_exclusion_counts[1:],
+                    strict=True,
+                )
+            )
+        else:
+            reported_by_rule = {}
+            expected_by_rule = {}
+        if reported_by_rule != expected_by_rule:
+            return finding(
+                "attrition_partition_rule_counts_mismatch",
+                f"The declared {product} excluded partitions do not match the "
+                "Planner-locked cohort predicates.",
+                product=product,
+                expected_by_rule=expected_by_rule,
+                reported_by_rule=reported_by_rule,
+            )
+
+    return []
+
+
 def _summary_scalar_products(value: Any) -> set[tuple[str, str]]:
     """Return exact statistic/log keys backed by non-null scalar values."""
 
@@ -1176,8 +1945,7 @@ def _registered_products(
                 (
                     value.get(key)
                     for key in ("path", "relative_path", "filename")
-                    if isinstance(value.get(key), str)
-                    and str(value.get(key)).strip()
+                    if isinstance(value.get(key), str) and str(value.get(key)).strip()
                 ),
                 None,
             )
