@@ -487,6 +487,308 @@ def _inline_provenance_failure_coverage(
     return None
 
 
+def _patch_returned_provenance_failure_guard(code: str) -> str:
+    """Guard every exact failure-collection return at its call site."""
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    if not (_PROVENANCE_FAILURE_KEYS | {"audit_only"}) <= _string_literals(tree):
+        return code
+
+    parents: dict[ast.AST, ast.AST] = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+
+    def _scope(node: ast.AST) -> ast.AST | None:
+        current: ast.AST | None = node
+        while current is not None and not isinstance(
+            current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module)
+        ):
+            current = parents.get(current)
+        return current
+
+    def _local_nodes(function: ast.AST) -> list[ast.AST]:
+        return [
+            node
+            for node in ast.walk(function)
+            if node is function or _scope(node) is function
+        ]
+
+    def _next_statement(statement: ast.stmt) -> ast.stmt | None:
+        parent = parents.get(statement)
+        if parent is None:
+            return None
+        for _, value in ast.iter_fields(parent):
+            if not isinstance(value, list) or statement not in value:
+                continue
+            index = value.index(statement)
+            if index + 1 < len(value) and isinstance(value[index + 1], ast.stmt):
+                return value[index + 1]
+        return None
+
+    def _is_guard(statement: ast.stmt | None, name: str) -> bool:
+        if not isinstance(statement, ast.If) or not statement.body:
+            return False
+        test = statement.test
+        if isinstance(test, ast.Name) and test.id == name:
+            return isinstance(statement.body[0], ast.Raise)
+        if not isinstance(test, ast.Compare) or len(test.ops) != 1:
+            return False
+        left, right = test.left, test.comparators[0]
+        return (
+            isinstance(left, ast.Call)
+            and isinstance(left.func, ast.Name)
+            and left.func.id == "len"
+            and len(left.args) == 1
+            and isinstance(left.args[0], ast.Name)
+            and left.args[0].id == name
+            and isinstance(right, ast.Constant)
+            and right.value == 0
+            and isinstance(test.ops[0], (ast.Gt, ast.NotEq))
+            and isinstance(statement.body[0], ast.Raise)
+        )
+
+    all_functions = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    ]
+
+    def _local_tokens(function: ast.AST) -> set[str]:
+        return {
+            str(candidate.value)
+            for candidate in _local_nodes(function)
+            if isinstance(candidate, ast.Constant)
+            and isinstance(candidate.value, str)
+        }
+
+    marker_nodes = [
+        node
+        for node in all_functions
+        if _PROVENANCE_FAILURE_KEYS <= _local_tokens(node)
+        and "audit_only" in _local_tokens(node)
+    ]
+    marker_names = {node.name for node in marker_nodes}
+    if any(
+        sum(function.name == name for function in all_functions) != 1
+        for name in marker_names
+    ):
+        return code
+    for candidate in ast.walk(tree):
+        targets: list[ast.AST] = []
+        if isinstance(candidate, ast.Assign):
+            targets = list(candidate.targets)
+        elif isinstance(candidate, (ast.AnnAssign, ast.AugAssign, ast.NamedExpr)):
+            targets = [candidate.target]
+        if any(
+            isinstance(target, ast.Name) and target.id in marker_names
+            for target in targets
+        ):
+            return code
+    marker_functions = {node.name: node for node in marker_nodes}
+    returned_slots: dict[str, int | None] = {}
+    for name, function in marker_functions.items():
+        local_nodes = _local_nodes(function)
+        assignments: dict[str, ast.AST] = {}
+        for candidate in local_nodes:
+            if not isinstance(candidate, (ast.Assign, ast.AnnAssign)):
+                continue
+            targets = (
+                candidate.targets
+                if isinstance(candidate, ast.Assign)
+                else [candidate.target]
+            )
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    assignments.setdefault(target.id, candidate.value)
+
+        collection_events: dict[str, set[ast.Call]] = {}
+        for guard in local_nodes:
+            if not isinstance(guard, ast.If):
+                continue
+            coverage = _inline_provenance_failure_coverage(
+                guard.test,
+                assignments=assignments,
+            )
+            if not coverage:
+                continue
+            if coverage != _PROVENANCE_FAILURE_KEYS:
+                continue
+            for statement in guard.body:
+                if isinstance(statement, (ast.Raise, ast.Return)):
+                    break
+                if (
+                    isinstance(statement, ast.Expr)
+                    and isinstance(statement.value, ast.Call)
+                    and isinstance(statement.value.func, ast.Attribute)
+                    and statement.value.func.attr in {"append", "add"}
+                    and isinstance(statement.value.func.value, ast.Name)
+                ):
+                    collection_events.setdefault(
+                        statement.value.func.value.id, set()
+                    ).add(statement.value)
+
+        def _empty_initialization(node: ast.AST) -> bool:
+            return (isinstance(node, (ast.List, ast.Set)) and not node.elts) or (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id in {"list", "set"}
+                and not node.args
+                and not node.keywords
+            )
+
+        local_returns = [node for node in local_nodes if isinstance(node, ast.Return)]
+        valid_collections: set[str] = set()
+        for collection, allowed_calls in collection_events.items():
+
+            def _mutates_collection(target: ast.AST) -> bool:
+                if isinstance(target, ast.Name):
+                    return target.id == collection
+                if isinstance(target, (ast.Tuple, ast.List)):
+                    return any(_mutates_collection(item) for item in target.elts)
+                if isinstance(target, (ast.Subscript, ast.Attribute)):
+                    return any(
+                        isinstance(item, ast.Name) and item.id == collection
+                        for item in ast.walk(target)
+                    )
+                return False
+
+            initializations = 0
+            invalid_mutation = False
+            boundary_lines = [
+                int(call.lineno) for call in allowed_calls
+            ] + [int(statement.lineno) for statement in local_returns]
+            for candidate in local_nodes:
+                targets: list[ast.AST] = []
+                value: ast.AST | None = None
+                if isinstance(candidate, ast.Assign):
+                    targets = list(candidate.targets)
+                    value = candidate.value
+                elif isinstance(candidate, ast.AnnAssign):
+                    targets = [candidate.target]
+                    value = candidate.value
+                elif isinstance(candidate, (ast.AugAssign, ast.NamedExpr, ast.Delete)):
+                    targets = (
+                        list(candidate.targets)
+                        if isinstance(candidate, ast.Delete)
+                        else [candidate.target]
+                    )
+                if any(_mutates_collection(target) for target in targets):
+                    if (
+                        value is not None
+                        and len(targets) == 1
+                        and isinstance(targets[0], ast.Name)
+                        and _empty_initialization(value)
+                        and parents.get(candidate) is function
+                        and boundary_lines
+                        and int(candidate.lineno) < min(boundary_lines)
+                    ):
+                        initializations += 1
+                    else:
+                        invalid_mutation = True
+                if value is not None and any(
+                    isinstance(item, ast.Name) and item.id == collection
+                    for item in ast.walk(value)
+                ):
+                    invalid_mutation = True
+                if (
+                    isinstance(candidate, ast.Call)
+                    and isinstance(candidate.func, ast.Attribute)
+                    and isinstance(candidate.func.value, ast.Name)
+                    and candidate.func.value.id == collection
+                    and candidate not in allowed_calls
+                    and candidate.func.attr not in {"append", "add"}
+                ):
+                    invalid_mutation = True
+                if isinstance(candidate, ast.Call) and any(
+                    any(
+                        isinstance(item, ast.Name) and item.id == collection
+                        for item in ast.walk(argument)
+                    )
+                    for argument in [
+                        *candidate.args,
+                        *(keyword.value for keyword in candidate.keywords),
+                    ]
+                ):
+                    invalid_mutation = True
+            if (
+                initializations == 1
+                and not invalid_mutation
+                and all(
+                    parents.get(statement) is function
+                    for statement in local_returns
+                )
+            ):
+                valid_collections.add(collection)
+
+        positions: set[int] = set()
+        for statement in local_returns:
+            if statement.value is None:
+                positions.clear()
+                break
+            values = (
+                list(statement.value.elts)
+                if isinstance(statement.value, (ast.Tuple, ast.List))
+                else [statement.value]
+            )
+            matches = {
+                index
+                for index, value in enumerate(values)
+                if isinstance(value, ast.Name) and value.id in valid_collections
+            }
+            if len(matches) != 1:
+                positions.clear()
+                break
+            positions.update(matches)
+        returned_slots[name] = next(iter(positions)) if len(positions) == 1 else None
+
+    calls: list[tuple[ast.stmt, str]] = []
+    for call in ast.walk(tree):
+        if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Name):
+            continue
+        called = call.func.id
+        if called not in marker_functions or returned_slots.get(called) is None:
+            continue
+        node = parents.get(call)
+        if not (isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is call):
+            return code
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        slot = returned_slots[called]
+        if not (
+            slot is not None
+            and len(targets) == 1
+            and isinstance(targets[0], (ast.Tuple, ast.List))
+            and slot < len(targets[0].elts)
+            and isinstance(targets[0].elts[slot], ast.Name)
+        ):
+            return code
+        calls.append((node, targets[0].elts[slot].id))
+
+    lines = code.splitlines(keepends=True)
+    insertions: list[tuple[int, str]] = []
+    for statement, collection_name in calls:
+        if _is_guard(_next_statement(statement), collection_name):
+            continue
+        source_line = lines[statement.lineno - 1]
+        indent = source_line[: len(source_line) - len(source_line.lstrip())]
+        guard = (
+            f"{indent}# {_PROVENANCE_GUARD_SENTINEL}\n"
+            f"{indent}if {collection_name}:\n"
+            f"{indent}    raise RuntimeError(\n"
+            f'{indent}        "Measurement provenance audit failed; "\n'
+            f'{indent}        "scientific outputs were not published."\n'
+            f"{indent}    )\n"
+        )
+        insertions.append((getattr(statement, "end_lineno", statement.lineno), guard))
+    for line_number, guard in sorted(insertions, reverse=True):
+        lines.insert(line_number, guard)
+    return "".join(lines)
+
+
 def _patch_inline_provenance_failure_guard(code: str) -> str:
     """Terminate an authored full raw-count failure branch before outputs.
 
@@ -608,31 +910,111 @@ def _patch_provenance_fail_closed_guard(code: str) -> str:
     threshold or invents an audit policy from raw counts.
     """
 
-    if _PROVENANCE_GUARD_SENTINEL in code:
-        return code
     try:
         tree = ast.parse(code)
     except SyntaxError:
         return code
+    if _PROVENANCE_GUARD_SENTINEL in code:
+        from .code_preflight import _provenance_fail_closed_findings
 
+        if not _provenance_fail_closed_findings(tree):
+            return code
+
+    parents = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+
+    def _nearest_function(node: ast.AST) -> ast.AST | None:
+        current = parents.get(node)
+        while current is not None and not isinstance(
+            current, (ast.FunctionDef, ast.AsyncFunctionDef)
+        ):
+            current = parents.get(current)
+        return current
+
+    def _local_tokens(function: ast.AST) -> set[str]:
+        return {
+            str(candidate.value)
+            for candidate in ast.walk(function)
+            if isinstance(candidate, ast.Constant)
+            and isinstance(candidate.value, str)
+            and _nearest_function(candidate) is function
+        }
+
+    all_functions = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    ]
+    marker_nodes = [
+        node
+        for node in all_functions
+        if _PROVENANCE_FAILURE_KEYS <= _local_tokens(node)
+        and "audit_only" in _local_tokens(node)
+    ]
+    marker_names = {node.name for node in marker_nodes}
+    if any(
+        sum(function.name == name for function in all_functions) != 1
+        for name in marker_names
+    ):
+        return code
+    for candidate in ast.walk(tree):
+        targets: list[ast.AST] = []
+        if isinstance(candidate, ast.Assign):
+            targets = list(candidate.targets)
+        elif isinstance(candidate, (ast.AnnAssign, ast.AugAssign, ast.NamedExpr)):
+            targets = [candidate.target]
+        if any(
+            isinstance(target, ast.Name) and target.id in marker_names
+            for target in targets
+        ):
+            return code
     marker_functions: dict[str, tuple[str, ...]] = {}
-    for node in ast.walk(tree):
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        tokens = _string_literals(node)
-        if not (_PROVENANCE_FAILURE_KEYS <= tokens and "audit_only" in tokens):
-            continue
+    for node in marker_nodes:
+        tokens = _local_tokens(node)
         decision_keys = tuple(key for key in _PROVENANCE_DECISION_KEYS if key in tokens)
         if decision_keys:
             marker_functions[node.name] = decision_keys
     lines = code.splitlines(keepends=True)
     insertions: list[tuple[int, str]] = []
+
+    def _next_statement(statement: ast.stmt) -> ast.stmt | None:
+        parent = parents.get(statement)
+        if parent is None:
+            return None
+        for _, value in ast.iter_fields(parent):
+            if not isinstance(value, list) or statement not in value:
+                continue
+            index = value.index(statement)
+            if index + 1 < len(value) and isinstance(value[index + 1], ast.stmt):
+                return value[index + 1]
+        return None
+
+    def _decision_guarded(
+        statement: ast.stmt | None,
+        result_name: str,
+        decision_keys: tuple[str, ...],
+    ) -> bool:
+        if not isinstance(statement, ast.If) or not statement.body:
+            return False
+        if not isinstance(statement.body[0], ast.Raise):
+            return False
+        names = {
+            node.id for node in ast.walk(statement.test) if isinstance(node, ast.Name)
+        }
+        keys = _string_literals(statement.test) & set(decision_keys)
+        return result_name in names and bool(keys)
+
     for node in ast.walk(tree):
         if not isinstance(node, (ast.Assign, ast.AnnAssign)) or node.value is None:
             continue
-        if not isinstance(node.value, ast.Call):
+        if not isinstance(node.value, ast.Call) or not isinstance(
+            node.value.func, ast.Name
+        ):
             continue
-        called = _simple_call_name(node.value.func).split(".")[-1]
+        called = node.value.func.id
         decision_keys = marker_functions.get(called)
         if not decision_keys:
             continue
@@ -642,6 +1024,8 @@ def _patch_provenance_fail_closed_guard(code: str) -> str:
             continue
 
         result_name = target_names[0]
+        if _decision_guarded(_next_statement(node), result_name, decision_keys):
+            continue
         source_line = lines[node.lineno - 1] if node.lineno <= len(lines) else ""
         indent = source_line[: len(source_line) - len(source_line.lstrip())]
         tests: list[str] = []
@@ -666,10 +1050,12 @@ def _patch_provenance_fail_closed_guard(code: str) -> str:
         )
         insertions.append((getattr(node, "end_lineno", node.lineno), guard))
 
-    if insertions:
-        for line_number, guard in sorted(insertions, reverse=True):
-            lines.insert(line_number, guard)
-        return "".join(lines)
+    for line_number, guard in sorted(insertions, reverse=True):
+        lines.insert(line_number, guard)
+    decision_repaired = "".join(lines)
+    returned_guard = _patch_returned_provenance_failure_guard(decision_repaired)
+    if returned_guard != code:
+        return returned_guard
     return _patch_inline_provenance_failure_guard(code)
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from datetime import timedelta
 import json
 
@@ -653,7 +654,7 @@ model.fit(frame)
     )
 
 
-def test_mechanical_preflight_accepts_terminating_provenance_failure_collection(ra):
+def test_mechanical_preflight_rejects_unbound_provenance_failure_collection(ra):
     code = """
 def provenance_audit(frame):
     checks = [{
@@ -674,6 +675,35 @@ model.fit(frame)
 """
     findings = audit_mechanical_code_contracts(code, _figure_step(ra))
 
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_accepts_helper_returned_provenance_failures(ra):
+    code = """
+def run_measurement_provenance_audit(frame):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    checks = [{
+        'role': 'audit_only',
+        'invalid_pair_n': invalid_pair_n,
+        'discordant_n': discordant_n,
+    }]
+    failures = []
+    if invalid_pair_n > 0 or discordant_n > 0:
+        failures.append('invalid or discordant provenance pair')
+    return {'checks': checks}, failures
+
+audit, audit_failures = run_measurement_provenance_audit(frame)
+if len(audit_failures) > 0:
+    raise RuntimeError('measurement provenance failed')
+model.fit(frame)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
     assert not any(
         finding.detail
         and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
@@ -681,7 +711,407 @@ model.fit(frame)
     )
 
 
-def test_mechanical_preflight_accepts_direct_return_from_inline_provenance_guard(ra):
+def test_mechanical_preflight_accepts_extra_monotonic_failure_appends(ra):
+    code = """
+def provenance_audit(frame):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    checks = [{'role': 'audit_only', 'invalid_pair_n': invalid_pair_n,
+               'discordant_n': discordant_n}]
+    failures = []
+    if missing_pair:
+        failures.append('missing pair')
+    if invalid_pair_n > 0 or discordant_n > 0:
+        failures.append('invalid or discordant pair')
+    if not checks:
+        failures.append('no checks')
+    return {'checks': checks}, failures
+
+audit, failures = provenance_audit(frame)
+if failures:
+    raise RuntimeError('failed')
+model.fit(frame)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_blocks_helper_that_only_returns_provenance_failures(ra):
+    code = """
+def run_measurement_provenance_audit(frame):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    checks = [{
+        'role': 'audit_only',
+        'invalid_pair_n': invalid_pair_n,
+        'discordant_n': discordant_n,
+    }]
+    failures = []
+    if invalid_pair_n > 0 or discordant_n > 0:
+        failures.append('invalid or discordant provenance pair')
+    return {'checks': checks}, failures
+
+audit, provenance_failures = run_measurement_provenance_audit(frame)
+write_audit(audit, provenance_failures)
+model.fit(frame)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_deterministic_repair_guards_returned_provenance_failures_once(ra):
+    code = """
+def run_measurement_provenance_audit(frame):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    checks = [{
+        'role': 'audit_only',
+        'invalid_pair_n': invalid_pair_n,
+        'discordant_n': discordant_n,
+    }]
+    failures = []
+    if invalid_pair_n > 0 or discordant_n > 0:
+        failures.append('invalid or discordant provenance pair')
+    return {'checks': checks}, failures
+
+audit, provenance_failures = run_measurement_provenance_audit(frame)
+model.fit(frame)
+"""
+    initial = audit_mechanical_code_contracts(code, _figure_step(ra))
+    messages = [finding.message for finding in initial if finding.severity == "error"]
+
+    repaired, names = deterministic_concept_audit_repair(code, messages)
+    repaired_again, names_again = deterministic_concept_audit_repair(repaired, messages)
+    final = audit_mechanical_code_contracts(repaired, _figure_step(ra))
+
+    assert names == ["provenance_fail_closed_guard_v1"]
+    assert names_again == []
+    assert repaired_again == repaired
+    module = ast.parse(repaired)
+    call_assignment = module.body[-3]
+    guard = module.body[-2]
+    assert isinstance(call_assignment, ast.Assign)
+    assert isinstance(guard, ast.If)
+    assert isinstance(guard.test, ast.Name)
+    assert guard.test.id == "provenance_failures"
+    assert isinstance(guard.body[0], ast.Raise)
+    assert isinstance(module.body[-1], ast.Expr)
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in final
+    )
+
+
+@pytest.mark.parametrize(
+    "failure_branch",
+    [
+        """if invalid_pair_n == 0 and discordant_n == 0:
+        pass
+    else:
+        failures.append('failed')""",
+        """if invalid_pair_n > 0 or discordant_n > 0:
+        if verbose:
+            failures.append('failed')""",
+        """if invalid_pair_n > 0 or discordant_n > 0:
+        return {'checks': checks}, failures
+        failures.append('failed')""",
+        """if invalid_pair_n > 0 or discordant_n > 0:
+        failures.extend(['failed'])""",
+        """if mode == 'invalid_pair_n' or mode == 'discordant_n':
+        failures.append('failed')""",
+    ],
+)
+def test_mechanical_preflight_rejects_nonexact_returned_failure_grammar(
+    ra, failure_branch
+):
+    code = f"""
+def provenance_audit(frame, verbose=False, mode=''):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    checks = [{{'role': 'audit_only', 'invalid_pair_n': invalid_pair_n,
+               'discordant_n': discordant_n}}]
+    failures = []
+    {failure_branch}
+    return {{'checks': checks}}, failures
+
+audit, failures = provenance_audit(frame)
+if failures:
+    raise RuntimeError('failed')
+model.fit(frame)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "failures = []",
+        "failures.clear()",
+        "failures.pop()",
+        "failures.remove('failed')",
+        "failures[:] = []",
+        "del failures[:]",
+        "wipe(failures)",
+        "wipe(items=failures)",
+        "alias = failures\n    alias.clear()",
+        "container = [failures]",
+    ],
+)
+def test_mechanical_preflight_rejects_mutated_returned_failure_collection(ra, mutation):
+    code = f"""
+def provenance_audit(frame):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    checks = [{{'role': 'audit_only', 'invalid_pair_n': invalid_pair_n,
+               'discordant_n': discordant_n}}]
+    failures = []
+    if invalid_pair_n > 0 or discordant_n > 0:
+        failures.append('failed')
+    {mutation}
+    return {{'checks': checks}}, failures
+
+audit, failures = provenance_audit(frame)
+if failures:
+    raise RuntimeError('failed')
+model.fit(frame)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_rejects_conditional_failure_collection_init(ra):
+    code = """
+def provenance_audit(frame, setup):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    checks = [{'role': 'audit_only', 'invalid_pair_n': invalid_pair_n,
+               'discordant_n': discordant_n}]
+    if setup:
+        failures = []
+    if invalid_pair_n > 0 or discordant_n > 0:
+        failures.append('failed')
+    return {'checks': checks}, failures
+
+audit, failures = provenance_audit(frame, setup)
+if failures:
+    raise RuntimeError('failed')
+model.fit(frame)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize(
+    "call",
+    ["provenance_audit(frame)", "consume(provenance_audit(frame))"],
+)
+def test_mechanical_preflight_rejects_unbound_marker_calls(ra, call):
+    code = f"""
+def provenance_audit(frame):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    checks = [{{'role': 'audit_only', 'invalid_pair_n': invalid_pair_n,
+               'discordant_n': discordant_n}}]
+    failures = []
+    if invalid_pair_n > 0 or discordant_n > 0:
+        failures.append('failed')
+    return {{'checks': checks}}, failures
+
+{call}
+model.fit(frame)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_rejects_cross_scope_provenance_guard_decoy(ra):
+    code = """
+def provenance_audit(frame):
+    checks = [{'role': 'audit_only', 'invalid_pair_n': 1, 'discordant_n': 0}]
+    return {'fail_closed': True, 'checks': checks}
+
+audit = provenance_audit(frame)
+def unrelated():
+    audit = {'fail_closed': True}
+    if audit['fail_closed']:
+        raise RuntimeError('unrelated')
+model.fit(frame)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_mechanical_preflight_rejects_ambiguous_same_name_marker_binding(ra, nested):
+    replacement = """
+def provenance_audit(frame):
+    return {'fail_closed': False}
+
+audit = provenance_audit(frame)
+"""
+    if nested:
+        replacement = """
+def wrapper():
+    def provenance_audit(frame):
+        return {'fail_closed': False}
+    return provenance_audit(frame)
+
+audit = wrapper()
+"""
+    code = f"""
+def provenance_audit(frame):
+    checks = [{{'role': 'audit_only', 'invalid_pair_n': 1, 'discordant_n': 0}}]
+    return {{'fail_closed': True, 'checks': checks}}
+
+{replacement}
+if audit['fail_closed']:
+    raise RuntimeError('failed')
+model.fit(frame)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_rejects_return_only_decision_wrapper(ra):
+    code = """
+def provenance_audit(frame):
+    checks = [{'role': 'audit_only', 'invalid_pair_n': 1, 'discordant_n': 0}]
+    return {'fail_closed': True, 'checks': checks}
+
+def wrapper():
+    audit = provenance_audit(frame)
+    if audit['fail_closed']:
+        return
+
+wrapper()
+model.fit(frame)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_rejects_return_only_wrapper_guard(ra):
+    code = """
+def provenance_audit(frame):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    checks = [{'role': 'audit_only', 'invalid_pair_n': invalid_pair_n,
+               'discordant_n': discordant_n}]
+    failures = []
+    if invalid_pair_n > 0 or discordant_n > 0:
+        failures.append('failed')
+    return {'checks': checks}, failures
+
+def wrapper():
+    audit, failures = provenance_audit(frame)
+    if failures:
+        return
+
+wrapper()
+model.fit(frame)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize("terminal", ["return", "raise RuntimeError('failed')"])
+def test_mechanical_preflight_rejects_unused_marker_helper(ra, terminal):
+    code = f"""
+def provenance_audit(frame):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    audit = {{'role': 'audit_only', 'invalid_pair_n': invalid_pair_n,
+             'discordant_n': discordant_n}}
+    if invalid_pair_n > 0 or discordant_n > 0:
+        {terminal}
+model.fit(frame)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_deterministic_repair_guards_every_returned_failure_call(ra):
+    code = """
+def provenance_audit(frame):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    checks = [{'role': 'audit_only', 'invalid_pair_n': invalid_pair_n,
+               'discordant_n': discordant_n}]
+    failures = []
+    if invalid_pair_n > 0 or discordant_n > 0:
+        failures.append('failed')
+    return {'checks': checks}, failures
+
+audit_one, failures_one = provenance_audit(frame)
+audit_two, failures_two = provenance_audit(frame)
+model.fit(frame)
+"""
+    initial = audit_mechanical_code_contracts(code, _figure_step(ra))
+    messages = [finding.message for finding in initial if finding.severity == "error"]
+    repaired, names = deterministic_concept_audit_repair(code, messages)
+    repaired_again, names_again = deterministic_concept_audit_repair(repaired, messages)
+    final = audit_mechanical_code_contracts(repaired, _figure_step(ra))
+
+    assert names == ["provenance_fail_closed_guard_v1"]
+    assert names_again == []
+    assert repaired_again == repaired
+    guards = [node for node in ast.parse(repaired).body if isinstance(node, ast.If)]
+    assert [guard.test.id for guard in guards] == ["failures_one", "failures_two"]
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in final
+    )
+
+
+def test_mechanical_preflight_rejects_unused_inline_provenance_helper(ra):
     code = """
 def run(frame):
     valid_pairs = frame['measured'].notna() & frame['count'].notna()
@@ -699,7 +1129,7 @@ def run(frame):
 """
     findings = audit_mechanical_code_contracts(code, _figure_step(ra))
 
-    assert not any(
+    assert any(
         finding.detail
         and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
         for finding in findings
@@ -855,7 +1285,7 @@ model.fit(frame)
     )
 
 
-def test_mechanical_preflight_accepts_all_path_nested_provenance_termination(ra):
+def test_mechanical_preflight_rejects_nonraising_nested_provenance_termination(ra):
     code = """
 def provenance_audit(frame):
     checks = [{
@@ -875,7 +1305,7 @@ model.fit(frame)
 """
     findings = audit_mechanical_code_contracts(code, _figure_step(ra))
 
-    assert not any(
+    assert any(
         finding.detail
         and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
         for finding in findings
@@ -2169,6 +2599,145 @@ def build_receipt(frame):
         finding.detail
         and finding.detail.get("reason") == "branch_local_unbound"
         and finding.detail.get("name") == "audit_error"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_accepts_rebound_exception_alias_in_later_handler(ra):
+    code = """
+def fit_model(frame):
+    try:
+        fit_primary(frame)
+    except Exception as exc:
+        log_primary_failure(str(exc))
+
+    try:
+        fit_fallback(frame)
+    except Exception as exc:
+        log_fallback_failure(str(exc))
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "branch_local_unbound"
+        and finding.detail.get("name") == "exc"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_blocks_exception_alias_read_between_handlers(ra):
+    code = """
+def fit_model(frame):
+    try:
+        fit_primary(frame)
+    except Exception as exc:
+        log_primary_failure(str(exc))
+
+    log_between_attempts(exc)
+
+    try:
+        fit_fallback(frame)
+    except Exception as exc:
+        log_fallback_failure(str(exc))
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "branch_local_unbound"
+        and finding.detail.get("name") == "exc"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_blocks_rebound_exception_alias_after_later_handler(ra):
+    code = """
+def fit_model(frame):
+    try:
+        fit_primary(frame)
+    except Exception as exc:
+        log_primary_failure(str(exc))
+
+    try:
+        fit_fallback(frame)
+    except Exception as exc:
+        log_fallback_failure(str(exc))
+
+    print(exc)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "branch_local_unbound"
+        and finding.detail.get("name") == "exc"
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize(
+    "try_suffix",
+    [
+        """else:
+        log(exc)""",
+        """finally:
+        log(exc)""",
+    ],
+)
+def test_mechanical_preflight_blocks_exception_alias_in_try_sibling_suite(
+    ra, try_suffix
+):
+    code = f"""
+def fit_model(frame):
+    try:
+        fit_primary(frame)
+    except Exception as exc:
+        log(str(exc))
+    {try_suffix}
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "branch_local_unbound"
+        and finding.detail.get("name") == "exc"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_blocks_exception_alias_in_handler_type(ra):
+    code = """
+def fit_model(frame):
+    try:
+        fit_primary(frame)
+    except choose_exception_type(exc) as exc:
+        log(str(exc))
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "branch_local_unbound"
+        and finding.detail.get("name") == "exc"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_accepts_outer_rebound_alias_in_nested_handler(ra):
+    code = """
+def fit_model(frame):
+    try:
+        fit_primary(frame)
+    except Exception as exc:
+        try:
+            log(str(exc))
+        except LoggingError:
+            log_fallback(str(exc))
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "branch_local_unbound"
+        and finding.detail.get("name") == "exc"
         for finding in findings
     )
 
