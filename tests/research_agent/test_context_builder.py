@@ -69,6 +69,49 @@ def test_wide_concept_resolution_does_not_fuzzy_match_unknown_columns(
     assert source is None
 
 
+def test_composite_wide_output_inherits_catalog_source_concept(ra, monkeypatch):
+    from easyicu.concept import catalog
+    from easyicu.research_agent import context as context_module
+
+    monkeypatch.setitem(
+        catalog.COMPOSITE_CONCEPT_OUTPUT_SOURCES,
+        "derived_signal",
+        "canonical_signal",
+    )
+    monkeypatch.setattr(
+        context_module,
+        "_safe_get_concept_info",
+        lambda name: (
+            {
+                "name": "canonical_signal",
+                "description": "Catalog-owned composite source.",
+            }
+            if name == "canonical_signal"
+            else None
+        ),
+    )
+
+    context = ra.build_research_context(
+        research_question="Evaluate a catalog-owned composite signal.",
+        cohort=pd.DataFrame(
+            {
+                "stay_id": [1, 2, 3],
+                "derived_signal_max": [0.0, 1.0, 2.0],
+                "derived_signal_measured": [1, 1, 1],
+            }
+        ),
+        cohort_name="synthetic",
+        database="synthetic",
+    )
+
+    assert context.variable("derived_signal_max").source_concept == (
+        "canonical_signal"
+    )
+    assert context.variable("derived_signal_measured").source_concept == (
+        "canonical_signal"
+    )
+
+
 def test_build_context_basic(ra):
     df = pd.DataFrame({
         "stay_id": [1, 2, 3, 4],

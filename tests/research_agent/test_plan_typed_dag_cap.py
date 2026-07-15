@@ -1,5 +1,7 @@
 """Generic typed-DAG guards for plan capping and execution order."""
 
+import pytest
+
 from easyicu.research_agent.plan_utils import (
     _augment_report_typed_product_inputs,
     _cap_plan_preserving_figure_steps,
@@ -113,6 +115,39 @@ def test_missing_typed_producer_remains_fail_closed():
         for finding in dag_findings
     )
 
+
+@pytest.mark.parametrize("kind", ["feature", "qc"])
+def test_plan_rejects_typed_kinds_without_materialization_and_binding(kind: str):
+    product = f"{kind}:derived_product"
+    plan = AnalysisPlan(
+        research_question="Generic derived product contract",
+        steps=[
+            _step("01_derive", inputs=["raw_value"], outputs=[product]),
+            _step("02_consume", inputs=[product], outputs=["table:result"]),
+        ],
+    )
+
+    findings = _typed_plan_dag_findings(plan)
+    reasons = {(finding.detail or {}).get("reason") for finding in findings}
+
+    assert "typed_output_kind_not_materializable" in reasons
+    assert "typed_input_kind_not_runtime_bindable" in reasons
+    assert "typed_input_producer_missing" not in reasons
+    assert all(finding.severity == "error" for finding in findings)
+
+
+@pytest.mark.parametrize("kind", ["dataset", "table"])
+def test_plan_accepts_materializable_runtime_bindable_product_kinds(kind: str):
+    product = f"{kind}:derived_product"
+    plan = AnalysisPlan(
+        research_question="Generic derived product contract",
+        steps=[
+            _step("01_derive", inputs=["raw_value"], outputs=[product]),
+            _step("02_consume", inputs=[product], outputs=["table:result"]),
+        ],
+    )
+
+    assert _typed_plan_dag_findings(plan) == []
 
 
 def test_report_consumes_unique_prior_typed_results_without_raw_recomputation():

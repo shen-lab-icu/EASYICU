@@ -99,6 +99,20 @@ def _concept_info_for_wide_column(
         info = _safe_get_concept_info(base)
         if info is not None:
             return info, base
+        # Composite loaders expose canonical output names that intentionally
+        # differ from their source concept id.  Keep that ownership in the
+        # upstream concept catalog and project it into ResearchContext instead
+        # of duplicating output aliases in the research-agent engine.
+        try:
+            from easyicu.concept.catalog import COMPOSITE_CONCEPT_OUTPUT_SOURCES
+        except Exception:
+            composite_source = None
+        else:
+            composite_source = COMPOSITE_CONCEPT_OUTPUT_SOURCES.get(base)
+        if composite_source:
+            info = _safe_get_concept_info(str(composite_source))
+            if info is not None:
+                return info, str(composite_source)
         break
     return None, None
 

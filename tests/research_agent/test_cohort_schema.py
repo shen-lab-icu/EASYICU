@@ -6,6 +6,7 @@ import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -609,3 +610,268 @@ def test_materialize_resolves_kdigo_alias_to_aki_stage_column(tmp_path: Path) ->
     assert (tmp_path / "cohort_analysis.parquet").exists()
     # adults (age>=18) with a measured KDIGO stage (aki_stage_max>=0, NaN dropped)
     assert result["n_cohort"] == 2
+
+
+def _synthetic_source_predicate():
+    from easyicu.research_agent.cohort_schema import ConceptPredicate, TimeWindow
+
+    return ConceptPredicate(
+        concept_id="canonical_signal",
+        time_window=TimeWindow(
+            anchor="icu_admit",
+            start_offset_hours=0.0,
+            end_offset_hours=24.0,
+        ),
+        aggregation="any",
+        op="not_missing",
+        value=None,
+    )
+
+
+def _synthetic_binding_plan(definition, inputs):
+    return SimpleNamespace(
+        cohort=definition,
+        steps=[
+            SimpleNamespace(
+                inputs=list(inputs),
+                expected_outputs=[
+                    "table:cohort_attrition",
+                    "artifact:analysis_cohort",
+                ],
+            )
+        ],
+    )
+
+
+def _synthetic_binding_context(
+    *descriptors,
+    primary_exposure="exported_signal_max",
+    target_outcome=None,
+):
+    return SimpleNamespace(
+        variables=list(descriptors),
+        primary_exposure=primary_exposure,
+        target_outcome=target_outcome,
+    )
+
+
+def test_materialize_binds_unique_planner_input_by_source_concept(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from easyicu.research_agent import cohort_schema
+
+    monkeypatch.setattr(
+        cohort_schema,
+        "_EXTRA_COHORT_CONCEPT_IDS",
+        {"canonical_signal"},
+    )
+    definition = cohort_schema.CohortDefinition(
+        name="primary",
+        inclusion=(_synthetic_source_predicate(),),
+    )
+    universe_path = tmp_path / "cohort.parquet"
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3],
+            "exported_signal_max": [0.0, None, 2.0],
+            "exported_signal_measured": [1, 0, 1],
+            "exported_signal_n": [2, 0, 3],
+        }
+    ).to_parquet(universe_path, index=False)
+    context = _synthetic_binding_context(
+        SimpleNamespace(
+            name="exported_signal_max",
+            source_concept="canonical_signal",
+            role="other",
+        ),
+        SimpleNamespace(
+            name="exported_signal_measured",
+            source_concept="canonical_signal",
+            role="meta",
+        ),
+        SimpleNamespace(
+            name="exported_signal_n",
+            source_concept="canonical_signal",
+            role="meta",
+        ),
+    )
+
+    result = cohort_schema.materialize_locked_analysis_cohort(
+        run_dir=tmp_path,
+        plan=_synthetic_binding_plan(
+            definition,
+            [
+                "stay_id",
+                "exported_signal_max",
+                "exported_signal_measured",
+                "exported_signal_n",
+            ],
+        ),
+        universe_path=universe_path,
+        context=context,
+    )
+
+    assert result["status"] == "applied"
+    assert result["n_cohort"] == 2
+    provenance = json.loads(
+        (tmp_path / "cohort_analysis_provenance.json").read_text(encoding="utf-8")
+    )
+    assert provenance["predicate_column_bindings"] == [
+        {
+            "concept_id": "canonical_signal",
+            "column": "exported_signal_max",
+            "basis": "planner_declared_operational_output_source_concept",
+        }
+    ]
+
+
+@pytest.mark.parametrize("exact_column", ["canonical_signal", "canonical_signal_any"])
+def test_materialize_exact_column_precedes_context_binding(
+    tmp_path: Path,
+    monkeypatch,
+    exact_column: str,
+) -> None:
+    from easyicu.research_agent import cohort_schema
+
+    monkeypatch.setattr(
+        cohort_schema,
+        "_EXTRA_COHORT_CONCEPT_IDS",
+        {"canonical_signal"},
+    )
+    definition = cohort_schema.CohortDefinition(
+        name="primary",
+        inclusion=(_synthetic_source_predicate(),),
+    )
+    universe_path = tmp_path / "cohort.parquet"
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2],
+            exact_column: [1.0, None],
+            "exported_signal_max": [None, 2.0],
+        }
+    ).to_parquet(universe_path, index=False)
+    context = _synthetic_binding_context(
+        SimpleNamespace(
+            name="exported_signal_max",
+            source_concept="canonical_signal",
+            role="other",
+        )
+    )
+
+    result = cohort_schema.materialize_locked_analysis_cohort(
+        run_dir=tmp_path,
+        plan=_synthetic_binding_plan(
+            definition,
+            [exact_column, "exported_signal_max"],
+        ),
+        universe_path=universe_path,
+        context=context,
+    )
+
+    assert result["status"] == "applied"
+    assert pd.read_parquet(tmp_path / "cohort_analysis.parquet")[
+        "stay_id"
+    ].tolist() == [1]
+    provenance = json.loads(
+        (tmp_path / "cohort_analysis_provenance.json").read_text(encoding="utf-8")
+    )
+    assert provenance["predicate_column_bindings"] == []
+
+
+def test_materialize_rejects_ambiguous_source_concept_bindings(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from easyicu.research_agent import cohort_schema
+
+    monkeypatch.setattr(
+        cohort_schema,
+        "_EXTRA_COHORT_CONCEPT_IDS",
+        {"canonical_signal"},
+    )
+    definition = cohort_schema.CohortDefinition(
+        name="primary",
+        inclusion=(_synthetic_source_predicate(),),
+    )
+    universe_path = tmp_path / "cohort.parquet"
+    pd.DataFrame(
+        {
+            "exported_signal_max": [0.0, 1.0],
+            "exported_signal_first": [0.0, 1.0],
+        }
+    ).to_parquet(universe_path, index=False)
+    context = _synthetic_binding_context(
+        SimpleNamespace(
+            name="exported_signal_max",
+            source_concept="canonical_signal",
+            role="other",
+        ),
+        SimpleNamespace(
+            name="exported_signal_first",
+            source_concept="canonical_signal",
+            role="outcome",
+        ),
+        target_outcome="exported_signal_first",
+    )
+
+    result = cohort_schema.materialize_locked_analysis_cohort(
+        run_dir=tmp_path,
+        plan=_synthetic_binding_plan(
+            definition,
+            ["exported_signal_max", "exported_signal_first"],
+        ),
+        universe_path=universe_path,
+        context=context,
+    )
+
+    assert result["status"] == "error"
+    assert "binding is ambiguous" in result["error"]
+    assert not (tmp_path / "cohort_analysis.parquet").exists()
+
+
+def test_materialize_does_not_bind_non_operational_loader_sibling(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from easyicu.research_agent import cohort_schema
+
+    monkeypatch.setattr(
+        cohort_schema,
+        "_EXTRA_COHORT_CONCEPT_IDS",
+        {"canonical_signal"},
+    )
+    definition = cohort_schema.CohortDefinition(
+        name="primary",
+        inclusion=(_synthetic_source_predicate(),),
+    )
+    universe_path = tmp_path / "cohort.parquet"
+    pd.DataFrame(
+        {
+            "exported_signal_max": [0.0, 1.0],
+            "exported_signal_component": [0.0, 1.0],
+        }
+    ).to_parquet(universe_path, index=False)
+    context = _synthetic_binding_context(
+        SimpleNamespace(
+            name="exported_signal_max",
+            source_concept="canonical_signal",
+            role="other",
+        ),
+        SimpleNamespace(
+            name="exported_signal_component",
+            source_concept="canonical_signal",
+            role="other",
+        ),
+    )
+
+    result = cohort_schema.materialize_locked_analysis_cohort(
+        run_dir=tmp_path,
+        plan=_synthetic_binding_plan(definition, ["exported_signal_component"]),
+        universe_path=universe_path,
+        context=context,
+    )
+
+    assert result["status"] == "error"
+    assert "missing concept column 'canonical_signal'" in result["error"]
+    assert not (tmp_path / "cohort_analysis.parquet").exists()
