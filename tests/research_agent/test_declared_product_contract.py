@@ -180,6 +180,52 @@ def test_primary_exposure_binding_contract_does_not_resolve_conflicting_windows(
     assert contract is not None
     assert contract["window"] == "baseline"
     assert contract["time_window"] == "follow_up"
+
+
+def test_confounder_binding_contract_uses_exact_declared_covariate_field(tmp_path):
+    artifact = tmp_path / "prespecified_confounder_set.json"
+    artifact.write_text(
+        json.dumps(
+            {
+                "artifact_type": "prespecified_confounder_set",
+                "selected_covariates": ["age", "severity_group"],
+                "ordinal_encoding": {
+                    "severity_group": {"modelling_choice": "ordered categorical"}
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    contract = typed_product_binding_contract(
+        product_name="prespecified_confounder_set",
+        step_summary={},
+        artifact_path=artifact,
+    )
+
+    assert contract == {
+        "covariates": ["age", "severity_group"],
+        "source_field": "selected_covariates",
+        "ordinal_encoding": {
+            "severity_group": {"modelling_choice": "ordered categorical"}
+        },
+    }
+
+
+def test_confounder_binding_contract_does_not_scan_arbitrary_lists(tmp_path):
+    artifact = tmp_path / "prespecified_confounder_set.json"
+    artifact.write_text(
+        json.dumps({"candidate_columns": ["age", "first_numeric_column"]}),
+        encoding="utf-8",
+    )
+
+    contract = typed_product_binding_contract(
+        product_name="prespecified_confounder_set",
+        step_summary={},
+        artifact_path=artifact,
+    )
+
+    assert contract is None
 SEALED_ABSOLUTE_RISK_REPAIR = "absolute_risk_incidence_prevalence_publication_bundle_v1"
 SEALED_IMPLEMENTATION_DIGEST = "a" * 64
 SEALED_PARENT_DIGESTS = {
