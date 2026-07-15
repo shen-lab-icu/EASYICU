@@ -424,6 +424,221 @@ def test_unfinished_step_record_restores_only_binding_concept_errors() -> None:
     )
 
 
+def test_monotonic_constraints_keep_distinct_locals_and_refresh_line_numbers() -> None:
+    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.pipeline_execute import (
+        _merge_monotonic_concept_constraints,
+    )
+
+    def finding(name: str, branch_line: int, first_use_line: int):
+        return ValidationFinding(
+            validator="mechanical_code_preflight",
+            severity="error",
+            message="A local may be unbound after a continuing branch.",
+            detail={
+                "reason": "branch_local_unbound",
+                "name": name,
+                "branch_line": branch_line,
+                "first_use_line": first_use_line,
+            },
+        )
+
+    merged = _merge_monotonic_concept_constraints(
+        [finding("coercion_audit", 588, 596)],
+        [
+            finding("coercion_audit", 633, 641),
+            finding("provenance_audit", 643, 653),
+            finding("source_status", 655, 670),
+        ],
+    )
+
+    assert [item.detail["name"] for item in merged] == [
+        "coercion_audit",
+        "provenance_audit",
+        "source_status",
+    ]
+    assert merged[0].detail["branch_line"] == 633
+    assert merged[0].detail["first_use_line"] == 641
+
+
+def test_monotonic_constraints_preserve_existing_warning_history() -> None:
+    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.pipeline_execute import (
+        _merge_monotonic_concept_constraints,
+    )
+
+    warning = ValidationFinding(
+        validator="audit_history",
+        severity="warning",
+        message="Existing nonblocking audit context.",
+    )
+    new_warning = warning.model_copy(update={"message": "New transient warning."})
+
+    merged = _merge_monotonic_concept_constraints([warning], [new_warning])
+
+    assert merged == [warning]
+
+
+def test_monotonic_constraints_keep_same_local_from_distinct_scopes(ra) -> None:
+    from easyicu.research_agent.code_preflight import audit_mechanical_code_contracts
+    from easyicu.research_agent.pipeline_execute import (
+        _merge_monotonic_concept_constraints,
+    )
+
+    code = """
+def first():
+    try:
+        value = may_fail()
+    except ValueError:
+        pass
+    return value
+
+def second():
+    try:
+        value = may_fail()
+    except ValueError:
+        pass
+    return value
+"""
+    step = ra.AnalysisStep(
+        step_id="scope_check",
+        intent="Exercise mechanical scope identity.",
+        expected_outputs=["table:scope_check"],
+        method="descriptive_summary",
+    )
+    findings = [
+        finding
+        for finding in audit_mechanical_code_contracts(code, step)
+        if (finding.detail or {}).get("reason") == "branch_local_unbound"
+    ]
+
+    assert {(finding.detail or {}).get("scope") for finding in findings} == {
+        "first",
+        "second",
+    }
+    assert len(_merge_monotonic_concept_constraints([], findings)) == 2
+
+
+def test_branch_local_occurrence_ids_distinguish_identical_sibling_tries(ra) -> None:
+    from easyicu.research_agent.code_preflight import audit_mechanical_code_contracts
+    from easyicu.research_agent.pipeline_execute import (
+        _merge_monotonic_concept_constraints,
+    )
+
+    code = """
+def analyze():
+    try:
+        result = compute()
+    except ValueError:
+        pass
+    consume(result)
+    try:
+        result = compute()
+    except ValueError:
+        pass
+    consume(result)
+"""
+    step = ra.AnalysisStep(
+        step_id="sibling_scope_check",
+        intent="Exercise mechanical occurrence identity.",
+        expected_outputs=["table:scope_check"],
+        method="descriptive_summary",
+    )
+    findings = [
+        finding
+        for finding in audit_mechanical_code_contracts(code, step)
+        if (finding.detail or {}).get("reason") == "branch_local_unbound"
+        and (finding.detail or {}).get("name") == "result"
+        and "continuing try/except" in finding.message
+    ]
+
+    assert len(findings) == 2
+    assert len({finding.detail["occurrence_id"] for finding in findings}) == 2
+    assert len(_merge_monotonic_concept_constraints([], findings)) == 2
+
+
+def test_branch_local_occurrence_id_survives_body_edit(ra) -> None:
+    from easyicu.research_agent.code_preflight import audit_mechanical_code_contracts
+
+    step = ra.AnalysisStep(
+        step_id="body_edit_scope_check",
+        intent="Exercise mechanical occurrence identity.",
+        expected_outputs=["table:scope_check"],
+        method="descriptive_summary",
+    )
+
+    def occurrence(call: str) -> str:
+        code = f"""
+def analyze():
+    try:
+        result = {call}()
+    except ValueError:
+        pass
+    consume(result)
+"""
+        finding = next(
+            finding
+            for finding in audit_mechanical_code_contracts(code, step)
+            if (finding.detail or {}).get("reason") == "branch_local_unbound"
+            and (finding.detail or {}).get("name") == "result"
+            and "continuing try/except" in finding.message
+        )
+        return finding.detail["occurrence_id"]
+
+    assert occurrence("primary_compute") == occurrence("alternate_compute")
+
+
+def test_monotonic_constraint_identity_ignores_changing_audit_counts() -> None:
+    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.pipeline_execute import (
+        _merge_monotonic_concept_constraints,
+    )
+
+    def finding(invalid_n: int):
+        return ValidationFinding(
+            validator="row_alignment",
+            severity="error",
+            message="The selected column failed row alignment.",
+            detail={
+                "reason": "row_alignment_unverified",
+                "column": "selected_value",
+                "invalid_n": invalid_n,
+            },
+        )
+
+    merged = _merge_monotonic_concept_constraints([finding(3)], [finding(1)])
+
+    assert len(merged) == 1
+    assert merged[0].detail["invalid_n"] == 1
+
+
+def test_monotonic_constraint_identity_unions_changing_evidence_support() -> None:
+    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.pipeline_execute import (
+        _merge_monotonic_concept_constraints,
+    )
+
+    def finding(evidence_id: str):
+        return ValidationFinding(
+            validator="row_alignment",
+            severity="error",
+            message="The selected column failed row alignment.",
+            detail={
+                "reason": "row_alignment_unverified",
+                "occurrence_id": "selected_value_alignment",
+            },
+            evidence_ids=[evidence_id],
+        )
+
+    merged = _merge_monotonic_concept_constraints(
+        [finding("evidence-old")],
+        [finding("evidence-new")],
+    )
+
+    assert len(merged) == 1
+    assert merged[0].evidence_ids == ["evidence-old", "evidence-new"]
+
+
 def test_executed_script_digest_mismatch_blocks_outputs_before_evidence(
     ra, tmp_path: Path
 ) -> None:

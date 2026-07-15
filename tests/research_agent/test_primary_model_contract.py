@@ -996,6 +996,86 @@ def test_primary_model_contract_checks_denominators_and_fit_diagnostics(
     assert "separation_requires_penalized_fit_or_no_estimate" in issues
 
 
+def test_primary_model_contract_rejects_encoded_term_as_raw_source(
+    tmp_path: Path,
+):
+    cohort_path, out_dir = _write_inputs(tmp_path)
+    cohort = pd.read_parquet(cohort_path)
+    cohort["group"] = ["A", "B", "A", "B", "A", "B"]
+    cohort.to_parquet(cohort_path, index=False)
+
+    table_path = out_dir / "model_coefficients.csv"
+    table = pd.read_csv(table_path)
+    target = table["model_id"].eq("lab_source_aware") & table["term"].eq("age")
+    table.loc[target, "term"] = "group_B"
+    table.loc[target, "source_variable"] = "group_B"
+    table.to_csv(table_path, index=False)
+
+    prior_records = copy.deepcopy(_prior_records())
+    prior_records[0]["step_summary"]["planned_adjustment_context"][
+        "candidate_covariates"
+    ].append("group")
+    findings = PrimaryModelContractValidator().audit(
+        step=_step(),
+        step_summary={"model_contracts": _contracts()},
+        context=_context(),
+        completed_step_records=prior_records,
+        out_dir=out_dir,
+        cohort_path=cohort_path,
+    )
+
+    issues = [
+        issue
+        for finding in findings
+        for issue in (finding.detail or {}).get("issues", [])
+    ]
+    lineage_issue = next(
+        issue
+        for issue in issues
+        if issue.get("issue") == "coefficient_source_variable_unresolvable"
+        and issue.get("model_id") == "lab_source_aware"
+    )
+    assert lineage_issue["term"] == "group_B"
+    assert lineage_issue["reported_source_variable"] == "group_B"
+    assert lineage_issue["missing_raw_source_variables"] == ["group_B"]
+    assert lineage_issue["reason"] == (
+        "source_variable_missing_from_authoritative_cohort"
+    )
+
+
+def test_primary_model_contract_accepts_encoded_term_with_raw_source(
+    tmp_path: Path,
+):
+    cohort_path, out_dir = _write_inputs(tmp_path)
+    cohort = pd.read_parquet(cohort_path)
+    cohort["group"] = ["A", "B", "A", "B", "A", "B"]
+    cohort.to_parquet(cohort_path, index=False)
+
+    table_path = out_dir / "model_coefficients.csv"
+    table = pd.read_csv(table_path)
+    target = table["model_id"].eq("lab_source_aware") & table["term"].eq("age")
+    table.loc[target, "term"] = "group_B"
+    table.loc[target, "source_variable"] = "group"
+    table.to_csv(table_path, index=False)
+
+    prior_records = copy.deepcopy(_prior_records())
+    prior_records[0]["step_summary"]["planned_adjustment_context"][
+        "candidate_covariates"
+    ].append("group")
+    findings = PrimaryModelContractValidator().audit(
+        step=_step(),
+        step_summary={"model_contracts": _contracts()},
+        context=_context(),
+        completed_step_records=prior_records,
+        out_dir=out_dir,
+        cohort_path=cohort_path,
+    )
+
+    issues = _issue_types(findings)
+    assert "coefficient_source_variable_unresolvable" not in issues
+    assert "denominator_contract_unresolvable" not in issues
+
+
 def test_primary_model_contract_does_not_expand_legacy_simple_steps(
     tmp_path: Path,
 ):
@@ -1034,10 +1114,12 @@ def test_primary_model_contract_is_wired_into_all_contract_passes() -> None:
     # repairable output checks have passed.
     assert len(early_calls) == 1
     assert len(final_calls) == 1
-    for call in [*early_calls, *final_calls]:
-        keywords = {keyword.arg: keyword.value for keyword in call.keywords}
-        assert isinstance(keywords.get("cohort_path"), ast.Name)
-        assert keywords["cohort_path"].id == "cohort_path"
+    early_keywords = {keyword.arg: keyword.value for keyword in early_calls[0].keywords}
+    final_keywords = {keyword.arg: keyword.value for keyword in final_calls[0].keywords}
+    assert isinstance(early_keywords.get("cohort_path"), ast.Name)
+    assert early_keywords["cohort_path"].id == "step_execution_cohort_path"
+    assert isinstance(final_keywords.get("cohort_path"), ast.Name)
+    assert final_keywords["cohort_path"].id == "execution_cohort_path"
 
 
 def test_primary_model_contract_rejects_noncanonical_machine_fields(

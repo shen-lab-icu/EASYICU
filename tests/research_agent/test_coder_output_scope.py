@@ -291,10 +291,7 @@ def test_coder_repair_requires_bidirectional_provenance_pairs(ra):
         context=_context(ra),
         step=step,
         code="measured = [c for c in frame if c.endswith('_measured')]\n",
-        run_log=(
-            "DETAIL: {\"reason\": "
-            "\"provenance_pair_scan_not_bidirectional\"}"
-        ),
+        run_log=('DETAIL: {"reason": ' '"provenance_pair_scan_not_bidirectional"}'),
     )
 
     prompt = llm.messages[-1].content
@@ -321,9 +318,7 @@ def test_coder_repair_consumes_authoritative_exposure_definition(ra):
             "'artifact:primary_exposure_definition')\n"
             "exposure_col = 'candidate_event_max'\n"
         ),
-        run_log=(
-            "DETAIL: {\"reason\": \"authoritative_primary_exposure_unused\"}"
-        ),
+        run_log=('DETAIL: {"reason": "authoritative_primary_exposure_unused"}'),
     )
 
     prompt = llm.messages[-1].content
@@ -348,8 +343,8 @@ def test_coder_repair_replaces_undefined_helper_without_stub(ra):
         step=step,
         code="result = missing_renderer(source)\n",
         run_log=(
-            "DETAIL: {\"reason\": \"undefined_helper_call\", "
-            "\"calls\": [{\"name\": \"missing_renderer\", \"line\": 1}]}"
+            'DETAIL: {"reason": "undefined_helper_call", '
+            '"calls": [{"name": "missing_renderer", "line": 1}]}'
         ),
     )
 
@@ -463,7 +458,7 @@ def test_coder_repair_completes_declared_assignment_product(ra):
         step=step,
         code="assignment_models = []\n",
         run_log=(
-            "DETAIL: {\"kind\": \"assignment_model_unfitted\"}; "
+            'DETAIL: {"kind": "assignment_model_unfitted"}; '
             "assignment model artifact but registered no successfully fitted "
             "assignment model"
         ),
@@ -542,10 +537,7 @@ def test_coder_repair_removes_constructed_exposure_fallback(ra):
         context=context,
         step=step,
         code="try:\n    resolved = bind(definition)\nexcept:\n    resolved = {}\n",
-        run_log=(
-            "DETAIL: {\"reason\": "
-            "\"authoritative_primary_exposure_fallback\"}"
-        ),
+        run_log=('DETAIL: {"reason": ' '"authoritative_primary_exposure_fallback"}'),
     )
 
     prompt = llm.messages[-1].content
@@ -597,9 +589,7 @@ def test_coder_repair_fail_closes_partial_structural_accounting_figure(ra):
         context=_context(ra),
         step=step,
         code="valid_rows = frame.loc[valid_mask].copy()\n",
-        run_log=(
-            "Renders a partial cohort flow after excluding invalid source rows."
-        ),
+        run_log=("Renders a partial cohort flow after excluding invalid source rows."),
     )
 
     prompt = llm.messages[-1].content
@@ -698,7 +688,9 @@ def test_all_coder_paths_fail_close_effect_scope_for_non_effect_owner(ra):
         assert "effect_output_authorized: false" in prompt
         assert "reference-group contrasts" in prompt
         assert "nested step_summary fields" in prompt
-        assert "p-values for any such undeclared effect contrast or interaction" in prompt
+        assert (
+            "p-values for any such undeclared effect contrast or interaction" in prompt
+        )
         assert "Descriptive counts, denominators, rates, absolute summaries" in prompt
         assert "inferred analysis family is context only" in prompt
     run_prompt, repair_prompt, _agentic_prompt = prompts
@@ -776,10 +768,13 @@ def test_typed_model_requirement_roster_also_authorizes_effect_output(ra):
     )
 
     assert effect_output_authorized(step) is True
-    assert "effect_output_authorized: true" in _ordinary_run_repair_and_agentic_prompts(
-        ra=ra,
-        step=step,
-    )[0]
+    assert (
+        "effect_output_authorized: true"
+        in _ordinary_run_repair_and_agentic_prompts(
+            ra=ra,
+            step=step,
+        )[0]
+    )
 
 
 def test_prespecified_robustness_refit_prompt_has_effect_authority(ra):
@@ -814,6 +809,24 @@ def test_coder_repair_prompt_forbids_helper_result_name_shadowing(ra):
     assert "never write `audit = audit(...)`" in repair_prompt
     assert "UnboundLocalError" in repair_prompt
     assert "Use a distinct result name" in repair_prompt
+    assert "assignment must dominate its first use" in repair_prompt
+    assert "before the enclosing try" in repair_prompt
+    assert "`local is None`" in repair_prompt
+    assert "unrelated summary or mapping key" in repair_prompt
+    assert "propagate the failure and fail closed" in repair_prompt
+    assert "fallback is permitted only for explicitly optional" in repair_prompt
+
+
+def test_coder_prompt_distinguishes_design_term_from_raw_source_variable(ra):
+    from easyicu.research_agent.agents import _CODER_GUIDE
+
+    assert "`term` must be the actual encoded or transformed design-matrix term" in (
+        _CODER_GUIDE
+    )
+    assert "`source_variable` must be the exact original authoritative cohort" in (
+        _CODER_GUIDE
+    )
+    assert "Never copy an encoded dummy or transformed" in _CODER_GUIDE
 
 
 def test_coder_prompt_binds_typed_inputs_to_resolved_manifest(ra):

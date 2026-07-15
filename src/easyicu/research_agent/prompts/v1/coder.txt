@@ -54,6 +54,10 @@ Code contract:
   column (`estimate`, `odds_ratio`, or `or`), `ci_low`, `ci_high`, and
   `interval_method`. `term_role` is exactly one of `intercept`, `exposure`,
   `availability`, or `adjustment`.
+  `term` must be the actual encoded or transformed design-matrix term, while
+  `source_variable` must be the exact original authoritative cohort column
+  from which that term was derived. Never copy an encoded dummy or transformed
+  term into `source_variable` unless that exact physical cohort column exists.
   Measurement/source terms are `availability`, never ordinary adjustment
   covariates.
   Before fitting, audit every categorical predictor (exposure, adjustment, and
@@ -603,6 +607,17 @@ CSV CELL VALUES — MANDATORY:
   single cell with `(n, pct)` tuples.
 
 TABLE-ONE / DESCRIPTIVE SUMMARIES:
+- The Agent still chooses the variables, declared category levels, grouping,
+  denominator policy, and statistics. For applicable mechanical input checks,
+  import `strict_numeric_input`, `closed_categorical_counts`, and, only when an
+  exact declared measured/count companion pair exists,
+  `measurement_provenance_receipt` from
+  `easyicu.research_agent.methods.descriptive_inputs`. Use `.values` from the
+  strict numeric result and the level/count-only `.table` from the closed
+  categorical result; explicitly choose and report any percentage denominator
+  in the output contract. Never invent a provenance pair, catch
+  `DescriptiveInputError` and continue, use a provenance receipt as a row mask,
+  or use it as permission to alter an analysis denominator.
 - For table-one or descriptive steps, build the output table as a
   list of flat row dictionaries from the start. Do not create a
   deeply nested dict and then infer whether a variable is continuous
@@ -614,9 +629,9 @@ TABLE-ONE / DESCRIPTIVE SUMMARIES:
   `add_categorical(variable, series)` writes one row per category
   with `category`, `count`, `percentage`, `missing_n`, `missing_pct`.
 - For binary variables, never assume keys are integer `1` or string
-  `"1"`. Convert observed categories to strings for CSV output and
-  use membership checks or `.get(...)` when extracting counts for
-  step_summary.json.
+  `"1"`. Canonicalize the Agent-declared closed levels with
+  `closed_categorical_counts` before converting its output levels to strings
+  for CSV output or extracting counts for `step_summary.json`.
 - Treat every categorical or ordered distribution as a closed partition
   of its declared non-missing denominator. Every non-missing observation
   must map to exactly one emitted category (including an explicit

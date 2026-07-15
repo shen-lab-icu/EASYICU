@@ -16,6 +16,10 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 import pandas as pd
 
 from ..icu_rules import companion_count_column_for_measured
+from ..methods.descriptive_inputs import (
+    DescriptiveInputError,
+    measurement_provenance_receipt,
+)
 from ..schema import AnalysisStep, ValidationFinding
 
 
@@ -721,12 +725,38 @@ class StepSummaryIntegrityValidator:
                 columns.append(resolved_count_column)
             try:
                 frame = cls._read_table_columns(locked_cohort, columns)
-                measured, measured_semantic_valid = cls._coerce_semantic_numeric(
-                    frame[measured_column],
-                    allow_boolean=True,
-                )
-                valid_measured = measured_semantic_valid & measured.isin([0, 1])
-                invalid_measured_n = int((~valid_measured).sum())
+                if count_ambiguous or resolved_count_column is None:
+                    measured, measured_semantic_valid = cls._coerce_semantic_numeric(
+                        frame[measured_column],
+                        allow_boolean=True,
+                    )
+                    valid_measured = measured_semantic_valid & measured.isin([0, 1])
+                    invalid_measured_n = int((~valid_measured).sum())
+                    host = None
+                else:
+                    try:
+                        receipt = measurement_provenance_receipt(
+                            frame,
+                            measured_column=measured_column,
+                            count_column=resolved_count_column,
+                        )
+                        receipt_audit = {
+                            "comparison_n": receipt["comparison_n"],
+                            "invalid_pair_n": receipt["invalid_pair_n"],
+                            "discordant_n": receipt["discordant_n"],
+                            "invalid_measured_n": 0,
+                        }
+                    except DescriptiveInputError as exc:
+                        receipt_audit = exc.audit
+                    invalid_measured_n = int(receipt_audit.get("invalid_measured_n", 0))
+                    host = {
+                        field: int(receipt_audit[field])
+                        for field in (
+                            "comparison_n",
+                            "invalid_pair_n",
+                            "discordant_n",
+                        )
+                    }
                 replay["invalid_measured_n"] = invalid_measured_n
                 if invalid_measured_n:
                     findings.append(
@@ -747,27 +777,6 @@ class StepSummaryIntegrityValidator:
                     replay["state"] = replay.get("state") or "count_unavailable"
                     continue
 
-                count, count_semantic_valid = cls._coerce_semantic_numeric(
-                    frame[resolved_count_column],
-                    allow_boolean=False,
-                )
-                valid_count = (
-                    count_semantic_valid
-                    & count.notna()
-                    & count.ge(0)
-                    & count.lt(float("inf"))
-                    & count.mod(1).eq(0)
-                )
-                valid_pair = valid_measured & valid_count
-                host = {
-                    "comparison_n": int(valid_pair.sum()),
-                    "invalid_pair_n": int((~valid_pair).sum()),
-                    "discordant_n": int(
-                        (
-                            measured[valid_pair].astype(bool) != count[valid_pair].gt(0)
-                        ).sum()
-                    ),
-                }
                 replay.update({"state": "checked", "host": host})
                 if host["invalid_pair_n"]:
                     findings.append(

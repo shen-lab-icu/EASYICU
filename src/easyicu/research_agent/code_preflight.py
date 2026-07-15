@@ -1010,10 +1010,23 @@ def _provenance_pair_scan_findings(tree: ast.Module) -> list[ValidationFinding]:
     return []
 
 
-_RECONCILIATION_FAILURE_EXCEPTIONS = frozenset(
-    {"BaseException", "Exception", "TypeError", "ValueError"}
+_HOST_VALIDATION_FAILURE_EXCEPTIONS = frozenset(
+    {
+        "BaseException",
+        "DescriptiveInputError",
+        "Exception",
+        "TypeError",
+        "ValueError",
+    }
 )
 _RECONCILIATION_HELPER_NAME = "reconcile_binary_event_presence"
+_DESCRIPTIVE_INPUT_HELPER_NAMES = frozenset(
+    {
+        "closed_categorical_counts",
+        "measurement_provenance_receipt",
+        "strict_numeric_input",
+    }
+)
 
 
 def _caught_exception_names(node: ast.AST) -> set[str]:
@@ -1026,12 +1039,12 @@ def _caught_exception_names(node: ast.AST) -> set[str]:
 
 
 def _handler_catches_reconciliation_failure(handler: ast.ExceptHandler) -> bool:
-    """Return whether *handler* can swallow the standard helper's failures."""
+    """Return whether *handler* can swallow a host validation failure."""
 
     if handler.type is None:
         return True
     return bool(
-        _caught_exception_names(handler.type) & _RECONCILIATION_FAILURE_EXCEPTIONS
+        _caught_exception_names(handler.type) & _HOST_VALIDATION_FAILURE_EXCEPTIONS
     )
 
 
@@ -1043,8 +1056,10 @@ def _handler_immediately_raises(handler: ast.ExceptHandler) -> bool:
 
 def _reconciliation_helper_call_names(
     *,
-    target: ast.Try,
+    target: ast.AST,
     parents: dict[int, ast.AST],
+    helper_name: str = _RECONCILIATION_HELPER_NAME,
+    require_authoritative_import: bool = False,
 ) -> set[str]:
     """Return helper aliases visible from *target*'s lexical scopes.
 
@@ -1056,7 +1071,7 @@ def _reconciliation_helper_call_names(
     borrowed into the current execution path.
     """
 
-    names = {_RECONCILIATION_HELPER_NAME}
+    names = set() if require_authoritative_import else {helper_name}
     alias_pairs: list[tuple[str, str]] = []
 
     class _AliasVisitor(ast.NodeVisitor):
@@ -1073,8 +1088,15 @@ def _reconciliation_helper_call_names(
             return
 
         def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+            module = str(node.module or "")
             for imported in node.names:
-                if imported.name == _RECONCILIATION_HELPER_NAME:
+                if imported.name != helper_name:
+                    continue
+                if require_authoritative_import and not module.endswith(
+                    "easyicu.research_agent.methods.descriptive_inputs"
+                ):
+                    continue
+                if imported.name == helper_name:
                     names.add(imported.asname or imported.name)
 
         def visit_Assign(self, node: ast.Assign) -> None:
@@ -1222,13 +1244,15 @@ def _finally_exception_suppressor(finalbody: list[ast.stmt]) -> ast.AST | None:
 def _swallowed_reconciliation_error_findings(
     tree: ast.Module,
 ) -> list[ValidationFinding]:
-    """Reject caught sparse-event reconciliation failures that continue.
+    """Reject caught host-owned validation failures that continue.
 
     ``reconcile_binary_event_presence`` is itself a deterministic validation
     boundary.  Once an Agent elects to call it, converting its exception into
     an ``unavailable`` audit and continuing can publish outputs after a known
-    contradictory triad.  This is mechanical fail-close enforcement; it does
-    not select the exposure or require the optional helper to be called.
+    contradictory triad.  The descriptive-input helpers provide the same
+    fail-closed boundary for coercion, closed accounting, and measurement
+    provenance.  This is mechanical enforcement; it does not select variables,
+    category levels, grouping, or any scientific method.
     """
 
     findings: list[ValidationFinding] = []
@@ -1237,62 +1261,151 @@ def _swallowed_reconciliation_error_findings(
         for parent in ast.walk(tree)
         for child in ast.iter_child_nodes(parent)
     }
+    helper_names = {
+        _RECONCILIATION_HELPER_NAME,
+        *_DESCRIPTIVE_INPUT_HELPER_NAMES,
+    }
+
+    def _aliases_for(target: ast.AST) -> dict[str, set[str]]:
+        return {
+            helper_name: _reconciliation_helper_call_names(
+                target=target,
+                parents=parents,
+                helper_name=helper_name,
+                require_authoritative_import=(
+                    helper_name in _DESCRIPTIVE_INPUT_HELPER_NAMES
+                ),
+            )
+            for helper_name in helper_names
+        }
+
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.With, ast.AsyncWith)):
+            continue
+        suppresses_validation_failure = False
+        for item in node.items:
+            context = item.context_expr
+            if not isinstance(context, ast.Call):
+                continue
+            if _call_name(context.func).split(".")[-1] != "suppress":
+                continue
+            caught = {
+                name
+                for argument in context.args
+                for name in _caught_exception_names(argument)
+            }
+            if caught & _HOST_VALIDATION_FAILURE_EXCEPTIONS:
+                suppresses_validation_failure = True
+                break
+        if not suppresses_validation_failure:
+            continue
+        aliases_by_helper = _aliases_for(node)
+        suppressed_helpers = {
+            helper_name
+            for helper_name, call_names in aliases_by_helper.items()
+            if call_names
+            and _statements_call_reconciliation(
+                node.body,
+                helper_call_names=call_names,
+            )
+        }
+        if not suppressed_helpers:
+            continue
+        provenance_only = suppressed_helpers == {_RECONCILIATION_HELPER_NAME}
+        findings.append(
+            ValidationFinding(
+                validator="mechanical_code_preflight",
+                severity="error",
+                message=(
+                    "A context manager suppresses errors from a host-owned "
+                    "validation helper, so invalid declared inputs could "
+                    "continue as usable."
+                ),
+                detail={
+                    "reason": (
+                        "provenance_helper_error_swallowed"
+                        if provenance_only
+                        else "host_validation_helper_error_swallowed"
+                    ),
+                    "helper_names": sorted(suppressed_helpers),
+                    "line": int(node.lineno),
+                },
+            )
+        )
+
     for node in ast.walk(tree):
         if not isinstance(node, ast.Try):
             continue
-        helper_call_names = _reconciliation_helper_call_names(
-            target=node,
-            parents=parents,
-        )
-        calls_reconciliation = _statements_call_reconciliation(
-            node.body,
-            helper_call_names=helper_call_names,
-        )
-        calls_before_finally = _statements_call_reconciliation(
-            [
-                *node.body,
-                *node.orelse,
-                *(statement for handler in node.handlers for statement in handler.body),
-            ],
-            helper_call_names=helper_call_names,
-        )
+        aliases_by_helper = _aliases_for(node)
+        calls_in_body = {
+            helper_name
+            for helper_name, call_names in aliases_by_helper.items()
+            if _statements_call_reconciliation(
+                node.body,
+                helper_call_names=call_names,
+            )
+        }
+        before_finally = [
+            *node.body,
+            *node.orelse,
+            *(statement for handler in node.handlers for statement in handler.body),
+        ]
+        calls_before_finally = {
+            helper_name
+            for helper_name, call_names in aliases_by_helper.items()
+            if _statements_call_reconciliation(
+                before_finally,
+                helper_call_names=call_names,
+            )
+        }
         finally_suppressor = _finally_exception_suppressor(node.finalbody)
         if calls_before_finally and finally_suppressor is not None:
+            provenance_only = calls_before_finally == {_RECONCILIATION_HELPER_NAME}
             findings.append(
                 ValidationFinding(
                     validator="mechanical_code_preflight",
                     severity="error",
                     message=(
-                        "Errors from reconcile_binary_event_presence can be "
+                        "Errors from a host-owned validation helper can be "
                         "suppressed by control flow in the finally suite, so "
-                        "an invalid declared provenance triad could continue."
+                        "invalid declared inputs could continue."
                     ),
                     detail={
-                        "reason": "provenance_helper_error_swallowed",
+                        "reason": (
+                            "provenance_helper_error_swallowed"
+                            if provenance_only
+                            else "host_validation_helper_error_swallowed"
+                        ),
+                        "helper_names": sorted(calls_before_finally),
                         "line": getattr(finally_suppressor, "lineno", node.lineno),
                     },
                 )
             )
             continue
-        if not calls_reconciliation:
+        if not calls_in_body:
             continue
         for handler in node.handlers:
             if not _handler_catches_reconciliation_failure(handler):
                 continue
             if _handler_immediately_raises(handler):
                 continue
+            provenance_only = calls_in_body == {_RECONCILIATION_HELPER_NAME}
             findings.append(
                 ValidationFinding(
                     validator="mechanical_code_preflight",
                     severity="error",
                     message=(
-                        "Errors from reconcile_binary_event_presence enter "
-                        "control flow that can continue without propagating the "
-                        "failure, so an invalid declared provenance triad could "
-                        "be recorded as unavailable."
+                        "Errors from a host-owned validation helper enter control "
+                        "flow that can continue without propagating the failure, "
+                        "so invalid declared inputs could be recorded as usable."
                     ),
                     detail={
-                        "reason": "provenance_helper_error_swallowed",
+                        "reason": (
+                            "provenance_helper_error_swallowed"
+                            if provenance_only
+                            else "host_validation_helper_error_swallowed"
+                        ),
+                        "helper_names": sorted(calls_in_body),
                         "line": handler.lineno,
                     },
                 )
@@ -1900,31 +2013,240 @@ def _branch_local_unbound_findings(tree: ast.Module) -> list[ValidationFinding]:
     def _branch_terminates(statements: list[ast.stmt]) -> bool:
         return bool(statements) and isinstance(statements[-1], (ast.Raise, ast.Return))
 
+    parents = {
+        id(child): parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+
+    def _scope_label(node: ast.AST) -> str:
+        names: list[str] = []
+        current: ast.AST | None = node
+        while current is not None:
+            if isinstance(
+                current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+            ):
+                names.append(current.name)
+            current = parents.get(id(current))
+        return ".".join(reversed(names)) or "<module>"
+
+    def _occurrence_id(
+        *,
+        scope: str,
+        name: str,
+        phase: str,
+        lexical_path: tuple[str, ...],
+    ) -> str:
+        path = "/".join(lexical_path) or "root"
+        return f"branch_local_unbound:{scope}:{path}:{phase}:{name}"
+
     findings: list[ValidationFinding] = []
+
+    def _target_names(target: ast.AST | None) -> set[str]:
+        if target is None:
+            return set()
+        return {
+            node.id
+            for node in ast.walk(target)
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
+        }
 
     def _direct_target_names(statement: ast.stmt) -> set[str]:
         targets: list[ast.AST] = []
         if isinstance(statement, ast.Assign):
             targets = list(statement.targets)
-        elif isinstance(statement, (ast.AnnAssign, ast.AugAssign)):
+        elif isinstance(statement, ast.AnnAssign) and statement.value is not None:
+            targets = [statement.target]
+        elif isinstance(statement, ast.AugAssign):
             targets = [statement.target]
         elif isinstance(statement, (ast.Import, ast.ImportFrom)):
             return {
-                alias.asname or alias.name.split(".")[0]
-                for alias in statement.names
+                alias.asname or alias.name.split(".")[0] for alias in statement.names
             }
-        return {
-            node.id
-            for target in targets
-            for node in ast.walk(target)
-            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
-        }
+        return {name for target in targets for name in _target_names(target)}
+
+    def _is_hashable_literal(value: ast.AST) -> bool:
+        if isinstance(value, ast.Constant):
+            try:
+                hash(value.value)
+            except TypeError:
+                return False
+            return True
+        if isinstance(value, ast.Tuple):
+            return all(_is_hashable_literal(item) for item in value.elts)
+        return False
+
+    def _is_nonthrowing_literal(value: ast.AST) -> bool:
+        if isinstance(value, ast.Constant):
+            return True
+        if isinstance(value, (ast.Tuple, ast.List)):
+            return all(_is_nonthrowing_literal(item) for item in value.elts)
+        if isinstance(value, ast.Set):
+            return all(_is_hashable_literal(item) for item in value.elts)
+        if isinstance(value, ast.Dict):
+            return all(
+                key is not None and _is_hashable_literal(key) for key in value.keys
+            ) and all(_is_nonthrowing_literal(item) for item in value.values)
+        return False
+
+    def _safe_prefix_assignments(statements: list[ast.stmt]) -> set[str]:
+        """Return direct local names assigned before any operation can fail."""
+
+        assigned: set[str] = set()
+        for statement in statements:
+            if isinstance(statement, ast.Pass) or (
+                isinstance(statement, ast.Expr)
+                and isinstance(statement.value, ast.Constant)
+                and isinstance(statement.value.value, str)
+            ):
+                continue
+            if isinstance(statement, ast.Assign) and _is_nonthrowing_literal(
+                statement.value
+            ):
+                if all(isinstance(target, ast.Name) for target in statement.targets):
+                    assigned.update(target.id for target in statement.targets)
+                    continue
+            if (
+                isinstance(statement, ast.AnnAssign)
+                and isinstance(statement.target, ast.Name)
+                and statement.value is not None
+                and _is_nonthrowing_literal(statement.value)
+            ):
+                assigned.add(statement.target.id)
+                continue
+            break
+        return assigned
+
+    def _load_lines(statement: ast.AST, name: str) -> list[int]:
+        lines = [
+            int(node.lineno)
+            for node in _scope_nodes_without_nested_functions(statement)
+            if isinstance(node, ast.Name)
+            and isinstance(node.ctx, ast.Load)
+            and node.id == name
+        ]
+        lines.extend(
+            int(node.lineno)
+            for node in _scope_nodes_without_nested_functions(statement)
+            if isinstance(node, ast.AugAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == name
+        )
+        return sorted(set(lines))
+
+    def _first_unassigned_load(
+        statements: list[ast.stmt],
+        *,
+        name: str,
+        initially_assigned: bool,
+    ) -> tuple[Optional[int], bool, bool]:
+        """Return first definite read-before-store plus post-block state."""
+
+        assigned = initially_assigned
+        for statement in statements:
+            if isinstance(statement, ast.If):
+                test_lines = _load_lines(statement.test, name)
+                if test_lines and not assigned:
+                    return min(test_lines), assigned, True
+                body_line, body_assigned, body_continues = _first_unassigned_load(
+                    statement.body,
+                    name=name,
+                    initially_assigned=assigned,
+                )
+                else_line, else_assigned, else_continues = _first_unassigned_load(
+                    statement.orelse,
+                    name=name,
+                    initially_assigned=assigned,
+                )
+                branch_lines = [
+                    line for line in (body_line, else_line) if line is not None
+                ]
+                if branch_lines:
+                    return min(branch_lines), assigned, True
+                if body_continues and else_continues:
+                    assigned = body_assigned and else_assigned
+                elif body_continues:
+                    assigned = body_assigned
+                elif else_continues:
+                    assigned = else_assigned
+                else:
+                    return None, assigned, False
+                continue
+
+            if isinstance(statement, (ast.For, ast.AsyncFor)):
+                iterator_lines = _load_lines(statement.iter, name)
+                if iterator_lines and not assigned:
+                    return min(iterator_lines), assigned, True
+                target_assigned = name in _target_names(statement.target)
+                body_line, _, _ = _first_unassigned_load(
+                    statement.body,
+                    name=name,
+                    initially_assigned=assigned or target_assigned,
+                )
+                else_line, _, _ = _first_unassigned_load(
+                    statement.orelse,
+                    name=name,
+                    initially_assigned=assigned,
+                )
+                branch_lines = [
+                    line for line in (body_line, else_line) if line is not None
+                ]
+                if branch_lines:
+                    return min(branch_lines), assigned, True
+                # A loop may be empty, so its target is not a post-loop
+                # definite assignment.
+                continue
+
+            if isinstance(statement, (ast.With, ast.AsyncWith)):
+                context_lines = [
+                    line
+                    for item in statement.items
+                    for line in _load_lines(item.context_expr, name)
+                ]
+                if context_lines and not assigned:
+                    return min(context_lines), assigned, True
+                target_assigned = any(
+                    name in _target_names(item.optional_vars)
+                    for item in statement.items
+                )
+                body_line, body_assigned, body_continues = _first_unassigned_load(
+                    statement.body,
+                    name=name,
+                    initially_assigned=assigned or target_assigned,
+                )
+                if body_line is not None:
+                    return body_line, assigned, True
+                if body_continues:
+                    assigned = body_assigned or target_assigned
+                else:
+                    return None, assigned, False
+                continue
+
+            lines = _load_lines(statement, name)
+            if lines and not assigned:
+                return min(lines), assigned, True
+            if name in _direct_target_names(statement):
+                assigned = True
+            if isinstance(statement, (ast.Raise, ast.Return)):
+                return None, assigned, False
+        return None, assigned, True
 
     def _analyze_block(
-        statements: list[ast.stmt], initially_assigned: set[str]
+        statements: list[ast.stmt],
+        initially_assigned: set[str],
+        scope: str,
+        block_path: tuple[str, ...],
     ) -> None:
         assigned_before = set(initially_assigned)
         for index, statement in enumerate(statements):
+            statement_kind = type(statement).__name__.lower()
+            statement_ordinal = sum(
+                isinstance(prior, type(statement)) for prior in statements[:index]
+            )
+            statement_path = (
+                *block_path,
+                f"{statement_kind}[{statement_ordinal}]",
+            )
             if isinstance(statement, ast.If):
                 body_stores = _names(statement.body, ast.Store)
                 else_stores = _names(statement.orelse, ast.Store)
@@ -1979,6 +2301,13 @@ def _branch_local_unbound_findings(tree: ast.Module) -> list[ValidationFinding]:
                             ),
                             detail={
                                 "reason": "branch_local_unbound",
+                                "occurrence_id": _occurrence_id(
+                                    scope=scope,
+                                    name=name,
+                                    phase="if_merge",
+                                    lexical_path=statement_path,
+                                ),
+                                "scope": scope,
                                 "name": name,
                                 "branch_line": int(statement.lineno),
                                 "assignment_lines": sorted(assignment_lines),
@@ -1992,26 +2321,322 @@ def _branch_local_unbound_findings(tree: ast.Module) -> list[ValidationFinding]:
                     guaranteed.update(body_stores)
                 if _branch_terminates(statement.body):
                     guaranteed.update(else_stores)
-                _analyze_block(statement.body, set(assigned_before))
-                _analyze_block(statement.orelse, set(assigned_before))
+                _analyze_block(
+                    statement.body,
+                    set(assigned_before),
+                    scope,
+                    (*statement_path, "body"),
+                )
+                _analyze_block(
+                    statement.orelse,
+                    set(assigned_before),
+                    scope,
+                    (*statement_path, "else"),
+                )
                 assigned_before.update(guaranteed)
                 continue
 
-            nested_blocks: list[list[ast.stmt]] = []
-            if isinstance(statement, (ast.For, ast.AsyncFor, ast.While)):
-                nested_blocks.extend([statement.body, statement.orelse])
-            elif isinstance(statement, (ast.With, ast.AsyncWith)):
-                nested_blocks.append(statement.body)
-            elif isinstance(statement, ast.Try):
-                nested_blocks.extend(
-                    [statement.body, statement.orelse, statement.finalbody]
+            if isinstance(statement, (ast.Try, ast.TryStar)):
+                following = statements[index + 1 :]
+
+                def _top_level_stores(block: list[ast.stmt]) -> set[str]:
+                    return {
+                        name
+                        for block_statement in block
+                        for name in _direct_target_names(block_statement)
+                    }
+
+                def _top_level_unbound_annotations(
+                    block: list[ast.stmt],
+                ) -> set[str]:
+                    return {
+                        name
+                        for block_statement in block
+                        if isinstance(block_statement, ast.AnnAssign)
+                        and block_statement.value is None
+                        for name in _target_names(block_statement.target)
+                    }
+
+                normal_guaranteed = _top_level_stores(
+                    [*statement.body, *statement.orelse]
                 )
-                nested_blocks.extend(handler.body for handler in statement.handlers)
-            for block in nested_blocks:
-                _analyze_block(block, set(assigned_before))
+                final_guaranteed = _top_level_stores(statement.finalbody)
+                safe_exception_prefix = _safe_prefix_assignments(statement.body)
+                continuing_handlers = [
+                    handler
+                    for handler in statement.handlers
+                    if not _branch_all_paths_exit(handler.body)
+                ]
+                handler_guaranteed = [
+                    _top_level_stores(handler.body) for handler in continuing_handlers
+                ]
+                # Limit this proof to straight-line stores at the try/handler
+                # level. Nested conditionals and loops need their own path
+                # proof; recursively treating any nested store as guaranteed
+                # would create false positives for valid all-branch code.
+                all_try_stores = set().union(
+                    _top_level_stores(statement.body),
+                    _top_level_stores(statement.orelse),
+                    _top_level_stores(statement.finalbody),
+                    _top_level_unbound_annotations(statement.body),
+                    _top_level_unbound_annotations(statement.orelse),
+                    _top_level_unbound_annotations(statement.finalbody),
+                    *(
+                        _top_level_stores(handler.body)
+                        for handler in statement.handlers
+                    ),
+                    *(
+                        _top_level_unbound_annotations(handler.body)
+                        for handler in statement.handlers
+                    ),
+                )
+                internal_candidates = all_try_stores - assigned_before
+                assignment_lines_by_name = {
+                    name: sorted(
+                        int(node.lineno)
+                        for node in _scope_nodes_without_nested_functions(statement)
+                        if isinstance(node, ast.Name)
+                        and isinstance(node.ctx, ast.Store)
+                        and node.id == name
+                    )
+                    for name in internal_candidates
+                }
+                for handler_index, handler in enumerate(statement.handlers):
+                    for name in sorted(internal_candidates):
+                        handler_initial = (
+                            name in assigned_before
+                            or name in safe_exception_prefix
+                            or handler.name == name
+                        )
+                        first_load, _, _ = _first_unassigned_load(
+                            handler.body,
+                            name=name,
+                            initially_assigned=handler_initial,
+                        )
+                        if first_load is None:
+                            continue
+                        findings.append(
+                            ValidationFinding(
+                                validator="mechanical_code_preflight",
+                                severity="error",
+                                message=(
+                                    "A try-local variable can be read inside an "
+                                    "exception handler before the failing path "
+                                    "has assigned it."
+                                ),
+                                detail={
+                                    "reason": "branch_local_unbound",
+                                    "occurrence_id": _occurrence_id(
+                                        scope=scope,
+                                        name=name,
+                                        phase=f"handler_{handler_index}",
+                                        lexical_path=statement_path,
+                                    ),
+                                    "scope": scope,
+                                    "name": name,
+                                    "branch_line": int(handler.lineno),
+                                    "assignment_lines": assignment_lines_by_name[name],
+                                    "first_use_line": first_load,
+                                },
+                            )
+                        )
+
+                for name in sorted(internal_candidates):
+                    first_load, _, _ = _first_unassigned_load(
+                        statement.finalbody,
+                        name=name,
+                        initially_assigned=(
+                            name in assigned_before or name in safe_exception_prefix
+                        ),
+                    )
+                    if first_load is None:
+                        continue
+                    findings.append(
+                        ValidationFinding(
+                            validator="mechanical_code_preflight",
+                            severity="error",
+                            message=(
+                                "A try-local variable can be read in a finally "
+                                "suite before an exceptional path has assigned it."
+                            ),
+                            detail={
+                                "reason": "branch_local_unbound",
+                                "occurrence_id": _occurrence_id(
+                                    scope=scope,
+                                    name=name,
+                                    phase="finally",
+                                    lexical_path=statement_path,
+                                ),
+                                "scope": scope,
+                                "name": name,
+                                "branch_line": int(statement.lineno),
+                                "assignment_lines": assignment_lines_by_name[name],
+                                "first_use_line": first_load,
+                            },
+                        )
+                    )
+
+                candidates = (
+                    all_try_stores
+                    - assigned_before
+                    - final_guaranteed
+                    - safe_exception_prefix
+                )
+                for name in sorted(candidates):
+                    if name in normal_guaranteed and all(
+                        name in names for names in handler_guaranteed
+                    ):
+                        continue
+                    load_lines = [
+                        int(node.lineno)
+                        for later in following
+                        for node in _scope_nodes_without_nested_functions(later)
+                        if isinstance(node, ast.Name)
+                        and isinstance(node.ctx, ast.Load)
+                        and node.id == name
+                    ]
+                    later_store_lines = [
+                        int(node.lineno)
+                        for later in following
+                        for node in _scope_nodes_without_nested_functions(later)
+                        if isinstance(node, ast.Name)
+                        and isinstance(node.ctx, ast.Store)
+                        and node.id == name
+                    ]
+                    if not load_lines:
+                        continue
+                    first_load = min(load_lines)
+                    if later_store_lines and min(later_store_lines) < first_load:
+                        continue
+                    assignment_lines = [
+                        int(node.lineno)
+                        for node in _scope_nodes_without_nested_functions(statement)
+                        if isinstance(node, ast.Name)
+                        and isinstance(node.ctx, ast.Store)
+                        and node.id == name
+                    ]
+                    findings.append(
+                        ValidationFinding(
+                            validator="mechanical_code_preflight",
+                            severity="error",
+                            message=(
+                                "A local variable is not assigned on every "
+                                "continuing try/except path before it is read, "
+                                "so an exception can raise UnboundLocalError."
+                            ),
+                            detail={
+                                "reason": "branch_local_unbound",
+                                "occurrence_id": _occurrence_id(
+                                    scope=scope,
+                                    name=name,
+                                    phase="after_try",
+                                    lexical_path=statement_path,
+                                ),
+                                "scope": scope,
+                                "name": name,
+                                "branch_line": int(statement.lineno),
+                                "assignment_lines": sorted(assignment_lines),
+                                "first_use_line": first_load,
+                            },
+                        )
+                    )
+
+                for handler_index, handler in enumerate(statement.handlers):
+                    alias = str(handler.name or "").strip()
+                    if not alias or alias in final_guaranteed:
+                        continue
+                    load_lines = [
+                        int(node.lineno)
+                        for later in following
+                        for node in _scope_nodes_without_nested_functions(later)
+                        if isinstance(node, ast.Name)
+                        and isinstance(node.ctx, ast.Load)
+                        and node.id == alias
+                    ]
+                    later_store_lines = [
+                        int(node.lineno)
+                        for later in following
+                        for node in _scope_nodes_without_nested_functions(later)
+                        if isinstance(node, ast.Name)
+                        and isinstance(node.ctx, ast.Store)
+                        and node.id == alias
+                    ]
+                    if not load_lines:
+                        continue
+                    first_load = min(load_lines)
+                    if later_store_lines and min(later_store_lines) < first_load:
+                        continue
+                    if alias in assigned_before and _branch_all_paths_exit(
+                        handler.body
+                    ):
+                        continue
+                    findings.append(
+                        ValidationFinding(
+                            validator="mechanical_code_preflight",
+                            severity="error",
+                            message=(
+                                "A Python exception alias is cleared when its "
+                                "handler exits and cannot be read afterward "
+                                "without a new assignment."
+                            ),
+                            detail={
+                                "reason": "branch_local_unbound",
+                                "occurrence_id": _occurrence_id(
+                                    scope=scope,
+                                    name=alias,
+                                    phase=f"exception_alias_{handler_index}",
+                                    lexical_path=statement_path,
+                                ),
+                                "scope": scope,
+                                "name": alias,
+                                "branch_line": int(handler.lineno),
+                                "assignment_lines": [int(handler.lineno)],
+                                "first_use_line": first_load,
+                            },
+                        )
+                    )
+
+                nested_try_blocks = [
+                    ("body", statement.body),
+                    ("else", statement.orelse),
+                    ("finally", statement.finalbody),
+                    *(
+                        (f"handler[{handler_index}]", handler.body)
+                        for handler_index, handler in enumerate(statement.handlers)
+                    ),
+                ]
+                for role, block in nested_try_blocks:
+                    _analyze_block(
+                        block,
+                        set(assigned_before),
+                        scope,
+                        (*statement_path, role),
+                    )
+                if final_guaranteed:
+                    assigned_before.update(final_guaranteed)
+                elif normal_guaranteed and all(handler_guaranteed):
+                    assigned_before.update(
+                        normal_guaranteed.intersection(*handler_guaranteed)
+                    )
+                continue
+
+            nested_blocks: list[tuple[str, list[ast.stmt]]] = []
+            if isinstance(statement, (ast.For, ast.AsyncFor, ast.While)):
+                nested_blocks.extend(
+                    [("body", statement.body), ("else", statement.orelse)]
+                )
+            elif isinstance(statement, (ast.With, ast.AsyncWith)):
+                nested_blocks.append(("body", statement.body))
+            for role, block in nested_blocks:
+                _analyze_block(
+                    block,
+                    set(assigned_before),
+                    scope,
+                    (*statement_path, role),
+                )
             assigned_before.update(_direct_target_names(statement))
 
-    _analyze_block(tree.body, set())
+    _analyze_block(tree.body, set(), "<module>", ())
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
@@ -2027,7 +2652,7 @@ def _branch_local_unbound_findings(tree: ast.Module) -> list[ValidationFinding]:
             arguments.add(node.args.vararg.arg)
         if node.args.kwarg is not None:
             arguments.add(node.args.kwarg.arg)
-        _analyze_block(node.body, arguments)
+        _analyze_block(node.body, arguments, _scope_label(node), ())
     return findings
 
 

@@ -52,11 +52,24 @@ _DETAIL_REASON_CODES = {
     "structural_accounting_integer_validation": (
         RepairReason.STRUCTURAL_ACCOUNTING_INVALID
     ),
+    "host_validation_helper_error_swallowed": (
+        RepairReason.STRUCTURAL_ACCOUNTING_INVALID
+    ),
+    "source_variable_missing_from_authoritative_cohort": (
+        RepairReason.TYPED_PRODUCT_BINDING_INVALID
+    ),
+    "source_variable_not_unique_in_authoritative_cohort": (
+        RepairReason.TYPED_PRODUCT_BINDING_INVALID
+    ),
+    "required_raw_source_missing_from_authoritative_cohort": (
+        RepairReason.TYPED_PRODUCT_BINDING_INVALID
+    ),
+    "required_raw_source_not_unique_in_authoritative_cohort": (
+        RepairReason.TYPED_PRODUCT_BINDING_INVALID
+    ),
     "provenance_audit_not_fail_closed": RepairReason.PROVENANCE_NOT_FAIL_CLOSED,
     "provenance_helper_error_swallowed": RepairReason.PROVENANCE_NOT_FAIL_CLOSED,
-    "provenance_pair_scan_not_bidirectional": (
-        RepairReason.PROVENANCE_NOT_FAIL_CLOSED
-    ),
+    "provenance_pair_scan_not_bidirectional": (RepairReason.PROVENANCE_NOT_FAIL_CLOSED),
     "declared_diagnostic_not_completed": RepairReason.DIAGNOSTIC_NOT_COMPLETED,
 }
 
@@ -90,42 +103,60 @@ def typed_repair_ticket(
     grouped: dict[tuple[str, str, str], dict[str, Any]] = {}
     seen_occurrences: set[str] = set()
     for finding in findings:
-        reason = repair_reason_for_finding(finding)
         detail = dict(finding.detail or {})
-        structured_reason = str(
-            detail.get("reason") or detail.get("kind") or ""
-        ).strip()
-        key = (reason.value, finding.validator, structured_reason)
-        occurrence = {
-            "message": str(finding.message or ""),
-            "detail": detail,
-            "evidence_ids": list(finding.evidence_ids or []),
-        }
-        occurrence_key = json.dumps(
-            {
-                "group": key,
-                "occurrence": occurrence,
-            },
-            sort_keys=True,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            default=str,
-        )
-        if occurrence_key in seen_occurrences:
-            continue
-        seen_occurrences.add(occurrence_key)
-        item = grouped.get(key)
-        if item is None:
-            item = {
-                "reason": reason.value,
-                "validator": finding.validator,
-                "structured_reason": structured_reason or None,
-                "detail": detail,
-                "occurrences": [],
+        nested_issues = detail.get("issues")
+        if (
+            isinstance(nested_issues, list)
+            and nested_issues
+            and all(isinstance(issue, Mapping) for issue in nested_issues)
+        ):
+            shared_detail = {
+                key: value for key, value in detail.items() if key != "issues"
             }
-            grouped[key] = item
-            ticket.append(item)
-        item["occurrences"].append(occurrence)
+            occurrence_details = [
+                {**shared_detail, **dict(issue)} for issue in nested_issues
+            ]
+        else:
+            occurrence_details = [detail]
+        for occurrence_detail in occurrence_details:
+            occurrence_finding = finding.model_copy(
+                update={"detail": occurrence_detail}
+            )
+            reason = repair_reason_for_finding(occurrence_finding)
+            structured_reason = str(
+                occurrence_detail.get("reason") or occurrence_detail.get("kind") or ""
+            ).strip()
+            key = (reason.value, finding.validator, structured_reason)
+            occurrence = {
+                "message": str(finding.message or ""),
+                "detail": occurrence_detail,
+                "evidence_ids": list(finding.evidence_ids or []),
+            }
+            occurrence_key = json.dumps(
+                {
+                    "group": key,
+                    "occurrence": occurrence,
+                },
+                sort_keys=True,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                default=str,
+            )
+            if occurrence_key in seen_occurrences:
+                continue
+            seen_occurrences.add(occurrence_key)
+            item = grouped.get(key)
+            if item is None:
+                item = {
+                    "reason": reason.value,
+                    "validator": finding.validator,
+                    "structured_reason": structured_reason or None,
+                    "detail": occurrence_detail,
+                    "occurrences": [],
+                }
+                grouped[key] = item
+                ticket.append(item)
+            item["occurrences"].append(occurrence)
     for item in ticket:
         item["occurrence_count"] = len(item["occurrences"])
     return ticket
