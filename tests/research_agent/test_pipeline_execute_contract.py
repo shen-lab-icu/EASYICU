@@ -966,7 +966,9 @@ def test_figure_repair_precedes_output_evidence_and_numeric_claim_seal():
         'step_record["status"] = _step_status_from_contract_findings('
     )
     numeric_authority_publish = source.rindex("_register_current_step_numeric_claims()")
-    result_authority_publish = source.rindex("evidence.publish_step_success_aliases(")
+    result_authority_publish = source.rindex(
+        "evidence_registrar.promote_validated_step("
+    )
     final_repair = source.rindex("_repair_publication_figure_in_staging(")
 
     assert final_repair < seal < artifact_registration < numeric_registration
