@@ -56,9 +56,7 @@ from .icu_rules import (
 )
 from .llm import LLMClient, LLMMessage
 from .code_patch import (
-    CodePatchError,
     PATCH_FORMAT,
-    apply_code_patch,
     looks_like_executable_python,
     repair_code_excerpt,
 )
@@ -74,6 +72,7 @@ from .plan_utils import (
 )
 from .prompts import PROMPT_PACK_VERSION, load_prompt_pack
 from .provider_budget import StepProviderCallBudget, complete_with_provider_budget
+from .repair_coordination import RepairCoordinator
 from .repair_reasons import structured_repair_metadata
 from .schema import (
     AggregationRule,
@@ -1753,75 +1752,58 @@ class CoderAgent:
                 ),
             ),
         ]
-        raw_patch = complete_with_provider_budget(
-            budget=provider_budget,
-            category=f"{provider_category}_patch",
-            call=lambda: self.llm.complete(
+
+        def _full_rewrite(reason: str) -> str:
+            fallback_messages = [
+                LLMMessage(
+                    role="system",
+                    content=_SYSTEM_GUIDE + "\n\n" + scoped_guide,
+                ),
+                LLMMessage(
+                    role="user",
+                    content=(
+                        f"REPAIR THE PYTHON CODE FOR STEP {step.step_id}.\n"
+                        "FULL-REWRITE FALLBACK after minimal patch failure.\n"
+                        + shared_contract
+                        + "\nThe minimal patch could not be safely applied "
+                        f"({reason}). Return only one complete runnable Python "
+                        "script. Do not return JSON, a patch object, or prose. "
+                        "Preserve all planner-owned scientific choices and change "
+                        "only what the diagnosis requires.\n\n"
+                        "DIAGNOSED REPAIR CONTRACT:\n"
+                        + repair_specialization
+                        + "\nDIAGNOSIS / TRACEBACK:\n``\n"
+                        + run_log[-8000:]
+                        + "\n``\n\nCOMPLETE PREVIOUS SCRIPT:\n```python\n"
+                        + code
+                        + "\n```\n\nSTEP-SCOPED RESEARCH CONTEXT:\n"
+                        + _format_context(scoped_context)
+                    ),
+                ),
+            ]
+            return self.llm.complete(
+                fallback_messages,
+                max_tokens=_CODER_MAX_TOKENS,
+                temperature=0.05,
+            )
+
+        repair_result = RepairCoordinator(
+            provider_budget=provider_budget,
+            provider_category=provider_category,
+            normalize_script=_strip_code_fence,
+            is_executable_script=_looks_like_python_script,
+        ).repair(
+            code=code,
+            patch_call=lambda: self.llm.complete(
                 patch_messages,
                 max_tokens=min(2048, _CODER_MAX_TOKENS),
                 temperature=0.0,
             ),
+            full_rewrite_call=_full_rewrite,
         )
-        try:
-            repaired = apply_code_patch(code, raw_patch)
-        except CodePatchError as patch_error:
-            # Compatibility and latency guard: if a client ignored the JSON
-            # instruction but already returned a valid complete script, the
-            # patch attempt has failed and that response is itself the allowed
-            # full-rewrite fallback.  Otherwise make one explicit fallback call.
-            direct_script = _strip_code_fence(str(raw_patch or "").strip())
-            if _looks_like_python_script(direct_script):
-                repaired = direct_script
-            else:
-                fallback_messages = [
-                    LLMMessage(
-                        role="system",
-                        content=_SYSTEM_GUIDE + "\n\n" + scoped_guide,
-                    ),
-                    LLMMessage(
-                        role="user",
-                        content=(
-                            f"REPAIR THE PYTHON CODE FOR STEP {step.step_id}.\n"
-                            "FULL-REWRITE FALLBACK after minimal patch failure.\n"
-                            + shared_contract
-                            + "\nThe minimal patch could not be safely applied "
-                            f"({patch_error}). Return only one complete runnable Python "
-                            "script. Do not return JSON, a patch object, or prose. "
-                            "Preserve all planner-owned scientific choices and change "
-                            "only what the diagnosis requires.\n\n"
-                            "DIAGNOSED REPAIR CONTRACT:\n"
-                            + repair_specialization
-                            + "\nDIAGNOSIS / TRACEBACK:\n``\n"
-                            + run_log[-8000:]
-                            + "\n``\n\nCOMPLETE PREVIOUS SCRIPT:\n```python\n"
-                            + code
-                            + "\n```\n\nSTEP-SCOPED RESEARCH CONTEXT:\n"
-                            + _format_context(scoped_context)
-                        ),
-                    ),
-                ]
-                raw = complete_with_provider_budget(
-                    budget=provider_budget,
-                    category=f"{provider_category}_full_rewrite",
-                    call=lambda: self.llm.complete(
-                        fallback_messages,
-                        max_tokens=_CODER_MAX_TOKENS,
-                        temperature=0.05,
-                    ),
-                )
-                try:
-                    # Some providers ignore the full-script instruction but
-                    # still emit a valid exact patch. Apply it rather than ever
-                    # executing the JSON payload as Python.
-                    repaired = apply_code_patch(code, raw)
-                except CodePatchError:
-                    repaired = _strip_code_fence(raw.strip())
-        if not _looks_like_python_script(repaired):
-            raise ValueError(
-                "Coder repair returned non-script output; refusing to replace "
-                "the previous analysis script."
-            )
-        return repaired
+        self.last_repair_transport = repair_result.mode
+        self.last_repair_provider_calls = repair_result.provider_calls
+        return repair_result.code
 
 
 def _repair_specialization(*, context: ResearchContext, run_log: str, code: str) -> str:
