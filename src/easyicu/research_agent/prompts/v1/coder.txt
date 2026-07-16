@@ -153,6 +153,12 @@ Code contract:
   reconciled values before claiming `row_supported`.
   If no compatible registered artefact exists, report that precise gap; do
   not silently substitute an arbitrary evidence file.
+- Run every host-owned input-validation or provenance helper outside any broad
+  model/plot `try/except` whose handler records a skipped result and continues.
+  Its failure must terminate the step before scientific outputs are written.
+  If surrounding resource cleanup makes a `try` unavoidable, every matching
+  handler must have a bare `raise` as its first executable statement; a guard
+  beside the helper call does not help when an outer handler swallows it.
 - For rendering-only figure steps, prefer the explicitly named upstream
   analysis step outputs over broad evidence-directory search. Do not use
   existing figure files, previous figure source-data CSVs, robustness panels,
@@ -618,13 +624,6 @@ TABLE-ONE / DESCRIPTIVE SUMMARIES:
   in the output contract. Never invent a provenance pair, catch
   `DescriptiveInputError` and continue, use a provenance receipt as a row mask,
   or use it as permission to alter an analysis denominator.
-- Run every host-owned input-validation or provenance helper, including
-  `measurement_provenance_receipt`, outside any broad model/plot
-  `try/except` whose handler records a skipped result and continues. Its
-  failure must terminate the step before scientific outputs are written. If
-  surrounding resource cleanup makes a `try` unavoidable, every matching
-  handler must have a bare `raise` as its first executable statement; a guard
-  beside the helper call does not help when an outer handler swallows it.
 - For table-one or descriptive steps, build the output table as a
   list of flat row dictionaries from the start. Do not create a
   deeply nested dict and then infer whether a variable is continuous
