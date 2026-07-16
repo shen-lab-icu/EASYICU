@@ -37,7 +37,7 @@ from datetime import datetime
 REPAIR_KEYS = ("repair", "rewrite")
 AUDIT_KEYS = ("audit",)
 INIT_KEYS = ("initial",)
-RECEIPT_SCHEMA_VERSIONS = {1, 2, 3, 4}
+RECEIPT_SCHEMA_VERSIONS = {1, 2, 3, 4, 5}
 RUN_SESSION_START = "Research context built."
 RUN_SESSION_END = "Research-agent run complete."
 STEP_SESSION_START = re.compile(r"^Step \d+/\d+ started:")
@@ -61,6 +61,14 @@ def _receipt_digest(payload: dict) -> str:
         payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _is_sha256_hex(value: object) -> bool:
+    return bool(
+        isinstance(value, str)
+        and len(value) == 64
+        and all(char in "0123456789abcdef" for char in value)
+    )
 
 
 def _categorize(cat: str) -> str:
@@ -119,7 +127,7 @@ def read_receipts(run_dir: str, inputs: dict) -> list[dict]:
         for c in cats:
             breakdown[_categorize(c)] += 1
         logical_repairs = d.get("logical_repairs", [])
-        if d.get("schema_version") in {3, 4}:
+        if d.get("schema_version") in {3, 4, 5}:
             if not isinstance(logical_repairs, list):
                 raise BaselineError(f"receipt logical repair ledger invalid: {p}")
             for index, entry in enumerate(logical_repairs, start=1):
@@ -139,6 +147,16 @@ def read_receipts(run_dir: str, inputs: dict) -> list[dict]:
                     and not isinstance(history_len, bool)
                     else None
                 )
+                binding = entry.get("binding") if isinstance(entry, dict) else None
+                binding_sha256 = (
+                    entry.get("binding_sha256") if isinstance(entry, dict) else None
+                )
+                if binding is None and binding_sha256 is None:
+                    binding_valid = True
+                elif isinstance(binding, dict) and isinstance(binding_sha256, str):
+                    binding_valid = binding_sha256 == _receipt_digest(binding)
+                else:
+                    binding_valid = False
                 if (
                     not isinstance(entry, dict)
                     or entry.get("attempt_id") != index
@@ -148,15 +166,82 @@ def read_receipts(run_dir: str, inputs: dict) -> list[dict]:
                     or not isinstance(history_len, int)
                     or not 0 <= history_len <= len(cats)
                     or history_sha256 != expected_history_sha256
+                    or not binding_valid
                 ):
                     raise BaselineError(
                         f"receipt logical repair history inconsistent: {p}"
                     )
+                if d.get("schema_version") == 5:
+                    transport = entry.get("transport")
+                    if not isinstance(transport, dict):
+                        raise BaselineError(
+                            f"receipt logical repair transport invalid: {p}"
+                        )
+                    state = transport.get("state")
+                    if state in {"pending", "legacy_untracked"}:
+                        transport_valid = set(transport) == {"state"}
+                    elif state in {"completed", "failed"}:
+                        terminal_history_len = transport.get("provider_history_len")
+                        terminal_calls = transport.get("provider_calls")
+                        terminal_history_valid = bool(
+                            isinstance(terminal_history_len, int)
+                            and not isinstance(terminal_history_len, bool)
+                            and history_len <= terminal_history_len <= len(cats)
+                            and (
+                                state == "failed" or terminal_history_len > history_len
+                            )
+                            and transport.get("provider_history_sha256")
+                            == _receipt_digest(
+                                {"categories": cats[:terminal_history_len]}
+                            )
+                            and isinstance(terminal_calls, int)
+                            and not isinstance(terminal_calls, bool)
+                            and terminal_calls == terminal_history_len - history_len
+                        )
+                        if state == "completed":
+                            transport_valid = bool(
+                                terminal_history_valid
+                                and set(transport)
+                                == {
+                                    "state",
+                                    "mode",
+                                    "after_code_sha256",
+                                    "provider_history_len",
+                                    "provider_history_sha256",
+                                    "provider_calls",
+                                }
+                                and isinstance(transport.get("mode"), str)
+                                and transport["mode"].strip() == transport["mode"]
+                                and transport["mode"]
+                                and _is_sha256_hex(transport.get("after_code_sha256"))
+                            )
+                        else:
+                            transport_valid = bool(
+                                terminal_history_valid
+                                and set(transport)
+                                == {
+                                    "state",
+                                    "error_type",
+                                    "provider_history_len",
+                                    "provider_history_sha256",
+                                    "provider_calls",
+                                }
+                                and isinstance(transport.get("error_type"), str)
+                                and transport["error_type"].strip()
+                                == transport["error_type"]
+                                and transport["error_type"]
+                            )
+                    else:
+                        transport_valid = False
+                    if not transport_valid:
+                        raise BaselineError(
+                            f"receipt logical repair transport inconsistent: {p}"
+                        )
         elif logical_repairs:
             raise BaselineError(
                 f"legacy receipt unexpectedly declares logical repairs: {p}"
             )
-        if d.get("schema_version") == 4:
+        if d.get("schema_version") in {4, 5}:
             reservation = d.get("final_reservation_state")
             if not isinstance(reservation, dict):
                 raise BaselineError(f"receipt final reservation state invalid: {p}")

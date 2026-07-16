@@ -222,7 +222,6 @@ from .provider_budget import (
     ProviderCallBudgetReceiptError,
     StepProviderCallBudget,
     complete_with_provider_budget,
-    load_provider_call_budget_receipt,
     load_provider_call_budget_state,
     provider_call_budget_receipt_path,
 )
@@ -336,19 +335,37 @@ def _extract_cohort_definition_with_provider_budget(
     )
     effective_limit = max(0, int(configured_limit))
     consumed_categories: Tuple[str, ...] = ()
+    logical_repair_entries: tuple[Dict[str, object], ...] = ()
+    required_reservation_token: Optional[str] = None
+    reservation_bound_provider_history_len: Optional[int] = None
+    completed_reservation_token: Optional[str] = None
+    reservation_released = False
     if receipt_path.exists():
-        receipt_limit, consumed_categories = load_provider_call_budget_receipt(
+        receipt_state = load_provider_call_budget_state(
             receipt_path,
             step_id=budget_owner_step_id,
             expected_reserved_final_category=reserved_final_category,
         )
-        effective_limit = min(effective_limit, receipt_limit)
+        effective_limit = min(effective_limit, receipt_state.limit)
+        consumed_categories = receipt_state.categories
+        logical_repair_entries = receipt_state.logical_repairs
+        required_reservation_token = receipt_state.required_reservation_token
+        reservation_bound_provider_history_len = (
+            receipt_state.reservation_bound_provider_history_len
+        )
+        completed_reservation_token = receipt_state.completed_reservation_token
+        reservation_released = receipt_state.reservation_released
     budget = StepProviderCallBudget(
         effective_limit,
         step_id=budget_owner_step_id,
         consumed_categories=consumed_categories,
+        logical_repair_entries=logical_repair_entries,
         receipt_path=receipt_path,
         reserved_final_category=reserved_final_category,
+        required_reservation_token=required_reservation_token,
+        reservation_bound_provider_history_len=(reservation_bound_provider_history_len),
+        completed_reservation_token=completed_reservation_token,
+        reservation_released=reservation_released,
     )
     definition = complete_with_provider_budget(
         budget=budget,
@@ -7445,7 +7462,7 @@ def run_execute_phase(
             provider_receipt_integrity_error is None
             and isinstance(prior_step_record, Mapping)
             and prior_step_record.get("step_provider_call_receipt_version")
-            in {1, 2, 3, PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION}
+            in {1, 2, 3, 4, PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION}
             and (prior_provider_attempts > 0 or step_llm_repair_attempts > 0)
         ):
             provider_receipt_integrity_error = (
@@ -7466,6 +7483,16 @@ def run_execute_phase(
             completed_reservation_token=prior_completed_reservation_token,
             reservation_released=prior_reservation_released,
         )
+
+        if provider_receipt_integrity_error is None:
+            try:
+                # A crash before the first provider call leaves an exact unpaid
+                # reservation that can be resumed. A crash after any paid call
+                # but before the result digest was sealed is unknowable and must
+                # block the step before any other route can ignore or replace it.
+                provider_budget.next_logical_repair_attempt_id()
+            except ProviderCallBudgetReceiptError as exc:
+                provider_receipt_integrity_error = str(exc)
 
         try:
             step_repair_budget = StepRepairBudget(
@@ -7584,7 +7611,7 @@ def run_execute_phase(
 
             binding = RepairAuthorityBinding(
                 step_id=step.step_id,
-                attempt_id=step_repair_budget.llm_repair_attempts + 1,
+                attempt_id=step_repair_budget.next_attempt_id,
                 repair_class=str(repair_class),
                 before_code_sha256=sha256_of_bytes(before_code.encode("utf-8")),
                 step_spec_sha256=canonical_sha256(step.model_dump(mode="json")),
@@ -8081,8 +8108,11 @@ def run_execute_phase(
                     attempt=1,
                     provider_budget=provider_budget,
                     provider_category="critic_resume_repair",
+                    logical_repair_attempt_id=(step_repair_budget.llm_repair_attempts),
                 )
                 _sync_provider_budget()
+            except ProviderCallBudgetReceiptError:
+                raise
             except Exception as exc:
                 _sync_provider_budget()
                 with shared_lock:
@@ -9612,6 +9642,7 @@ else:
                     attempt=concept_repair_attempts,
                     provider_budget=provider_budget,
                     provider_category="concept_repair",
+                    logical_repair_attempt_id=(step_repair_budget.llm_repair_attempts),
                 )
                 _sync_provider_budget()
                 if (
@@ -9652,6 +9683,8 @@ else:
                     quarantined_repair_materially_changed = True
                     pending_quarantined_errors = []
                     step_record["quarantined_repair_materially_changed"] = True
+            except ProviderCallBudgetReceiptError:
+                raise
             except BaseException as exc:
                 _sync_provider_budget()
                 checkpoint_error: Optional[Exception] = None
@@ -9998,6 +10031,9 @@ else:
                                 attempt=concept_repair_attempts,
                                 provider_budget=provider_budget,
                                 provider_category="post_mutation_concept_repair",
+                                logical_repair_attempt_id=(
+                                    step_repair_budget.llm_repair_attempts
+                                ),
                             )
                             _sync_provider_budget()
                             llm_repair_used = True
@@ -10005,6 +10041,8 @@ else:
                                 run_dir / "steps" / step.step_id / "outputs"
                             )
                             continue
+                        except ProviderCallBudgetReceiptError:
+                            raise
                         except Exception as exc:
                             _sync_provider_budget()
                             checkpoint_error: Optional[Exception] = None
@@ -10771,11 +10809,16 @@ else:
                                     attempt=visual_repair_attempts,
                                     provider_budget=provider_budget,
                                     provider_category="visual_repair",
+                                    logical_repair_attempt_id=(
+                                        step_repair_budget.llm_repair_attempts
+                                    ),
                                 )
                                 _sync_provider_budget()
                                 llm_repair_used = True
                                 _clear_output_dir(run_result.out_dir)
                                 continue
+                            except ProviderCallBudgetReceiptError:
+                                raise
                             except Exception as exc:
                                 _sync_provider_budget()
                                 demoted_findings, blocking_visual_errors = (
@@ -11462,11 +11505,16 @@ else:
                             attempt=contract_repair_attempts,
                             provider_budget=provider_budget,
                             provider_category="contract_repair",
+                            logical_repair_attempt_id=(
+                                step_repair_budget.llm_repair_attempts
+                            ),
                         )
                         _sync_provider_budget()
                         llm_repair_used = True
                         _clear_output_dir(run_result.out_dir)
                         continue
+                    except ProviderCallBudgetReceiptError:
+                        raise
                     except Exception as exc:
                         _sync_provider_budget()
                         fallback_code = _deterministic_fallback_code(
@@ -11739,6 +11787,9 @@ else:
                         attempt=repair_attempts,
                         provider_budget=provider_budget,
                         provider_category="runtime_repair",
+                        logical_repair_attempt_id=(
+                            step_repair_budget.llm_repair_attempts
+                        ),
                     )
                     _sync_provider_budget()
                     if not _python_repair_is_materially_changed(code, repaired_code):
@@ -11750,6 +11801,8 @@ else:
                     runtime_repair_applied = True
                     _clear_output_dir(run_result.out_dir)
                     break
+                except ProviderCallBudgetReceiptError:
+                    raise
                 except Exception as exc:
                     _sync_provider_budget()
                     # Transport/parse failure did not change the candidate. Retry

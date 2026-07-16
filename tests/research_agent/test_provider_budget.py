@@ -34,6 +34,27 @@ from easyicu.research_agent.schema import (
 )
 
 
+def _canonical_digest(payload: dict) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _category_digest(categories: list[str]) -> str:
+    return _canonical_digest({"categories": categories})
+
+
+def _payload_digest_without_sha(payload: dict) -> str:
+    return _canonical_digest(
+        {key: value for key, value in payload.items() if key != "sha256"}
+    )
+
+
 class _AuditLLM:
     name = "audit-budget-test"
 
@@ -152,6 +173,65 @@ def test_pre_step_cohort_translation_has_durable_shared_provider_budget(tmp_path
             name="adult_icu",
         )
     assert llm.calls == 2
+
+
+def test_cohort_translation_preserves_existing_single_ledger_state(tmp_path):
+    owner_step_id = "01_cohort_definition"
+    receipt_path = provider_call_budget_receipt_path(
+        tmp_path,
+        step_id=owner_step_id,
+    )
+    seed = StepProviderCallBudget(
+        5,
+        step_id=owner_step_id,
+        receipt_path=receipt_path,
+        reserved_final_category="concept_audit",
+    )
+    assert seed.reserve_logical_repair("runtime", max_repairs=2) == 1
+    seed.consume("runtime_repair_patch")
+    seed.complete_logical_repair_transport(
+        attempt_id=1,
+        mode="minimal_patch",
+        after_code_sha256="a" * 64,
+    )
+
+    class _TranslationLLM:
+        name = "preserve-ledger-test"
+
+        def complete(self, messages, **kwargs):  # noqa: ANN001, ANN003
+            del messages, kwargs
+            return json.dumps(
+                {
+                    "inclusion": [
+                        {"concept_id": "age", "op": ">=", "value": 18}
+                    ],
+                    "exclusion": [],
+                }
+            )
+
+    definition, _snapshot = _extract_cohort_definition_with_provider_budget(
+        run_dir=tmp_path,
+        budget_owner_step_id=owner_step_id,
+        configured_limit=5,
+        cohort_prose="Include adults age 18 years or older.",
+        universe_columns=["stay_id", "age"],
+        llm=_TranslationLLM(),
+        name="adult_icu",
+        reserved_final_category="concept_audit",
+    )
+
+    assert definition is not None
+    state = load_provider_call_budget_state(
+        receipt_path,
+        step_id=owner_step_id,
+        expected_reserved_final_category="concept_audit",
+    )
+    assert state.categories == (
+        "runtime_repair_patch",
+        "cohort_definition_translation",
+    )
+    assert len(state.logical_repairs) == 1
+    assert state.logical_repairs[0]["transport"]["state"] == "completed"
 
 
 def test_cohort_translation_budget_owner_is_structural_not_prose_routed():
@@ -648,7 +728,118 @@ def test_logical_repair_reservation_is_durable_before_provider_call(tmp_path):
         reserved_final_category="concept_audit",
     )
     assert restored.logical_repair_classes == ("contract",)
-    assert restored.reserve_logical_repair("runtime", max_repairs=1) is None
+    assert restored.next_logical_repair_attempt_id() == 1
+    assert restored.reserve_logical_repair("contract", max_repairs=1) == 1
+    with pytest.raises(ProviderCallBudgetReceiptError, match="different authority"):
+        restored.reserve_logical_repair("runtime", max_repairs=1)
+
+
+def test_logical_repair_transport_success_binds_after_code_and_provider_history(
+    tmp_path,
+):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="bound_transport")
+    budget = StepProviderCallBudget(
+        5,
+        step_id="bound_transport",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    assert budget.reserve_logical_repair("contract", max_repairs=2) == 1
+    budget.consume("contract_repair_patch")
+    after_code = "print('repaired')\n"
+    budget.complete_logical_repair_transport(
+        attempt_id=1,
+        mode="minimal_patch",
+        after_code_sha256=hashlib.sha256(after_code.encode("utf-8")).hexdigest(),
+    )
+
+    state = load_provider_call_budget_state(
+        path,
+        step_id="bound_transport",
+        expected_reserved_final_category="concept_audit",
+    )
+    transport = state.logical_repairs[0]["transport"]
+    assert transport == {
+        "state": "completed",
+        "mode": "minimal_patch",
+        "after_code_sha256": hashlib.sha256(
+            after_code.encode("utf-8")
+        ).hexdigest(),
+        "provider_history_len": 1,
+        "provider_history_sha256": _category_digest(
+            ["contract_repair_patch"]
+        ),
+        "provider_calls": 1,
+    }
+
+
+def test_paid_pending_logical_repair_fails_closed_without_duplicate_call(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="paid_pending")
+    budget = StepProviderCallBudget(
+        5,
+        step_id="paid_pending",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    assert budget.reserve_logical_repair("runtime", max_repairs=2) == 1
+    budget.consume("runtime_repair_patch")
+
+    with pytest.raises(ProviderCallBudgetReceiptError, match="paid provider calls"):
+        budget.next_logical_repair_attempt_id()
+    with pytest.raises(ProviderCallBudgetReceiptError, match="duplicate repair"):
+        budget.reserve_logical_repair("runtime", max_repairs=2)
+    assert budget.categories == ("runtime_repair_patch",)
+
+
+def test_failed_logical_repair_transport_is_terminal_and_allows_next_attempt(
+    tmp_path,
+):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="failed_transport")
+    budget = StepProviderCallBudget(
+        5,
+        step_id="failed_transport",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    assert budget.reserve_logical_repair("runtime", max_repairs=2) == 1
+    budget.consume("runtime_repair_patch")
+    budget.fail_logical_repair_transport(
+        attempt_id=1,
+        error_type="JSONDecodeError",
+    )
+
+    assert budget.logical_repair_transport_states == ("failed",)
+    assert budget.next_logical_repair_attempt_id() == 2
+    assert budget.reserve_logical_repair("runtime", max_repairs=2) == 2
+
+
+def test_schema_v5_transport_tamper_fails_closed_with_recomputed_outer_digest(
+    tmp_path,
+):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="tampered_transport")
+    budget = StepProviderCallBudget(
+        5,
+        step_id="tampered_transport",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    assert budget.reserve_logical_repair("runtime", max_repairs=2) == 1
+    budget.consume("runtime_repair_patch")
+    budget.complete_logical_repair_transport(
+        attempt_id=1,
+        mode="minimal_patch",
+        after_code_sha256="a" * 64,
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["logical_repairs"][0]["transport"]["after_code_sha256"] = "b" * 63
+    payload["sha256"] = _payload_digest_without_sha(payload)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(
+        ProviderCallBudgetReceiptError,
+        match="completed repair transport",
+    ):
+        load_provider_call_budget_state(path, step_id="tampered_transport")
 
 
 def test_logical_repair_binding_payload_and_digest_are_consistent(tmp_path):

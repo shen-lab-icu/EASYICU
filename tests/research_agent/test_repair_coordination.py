@@ -11,13 +11,18 @@ repair.
 from __future__ import annotations
 
 import ast
+import hashlib
 import inspect
 import json
 
 import pytest
 
 from easyicu.research_agent import pipeline_execute
-from easyicu.research_agent.provider_budget import StepProviderCallBudget
+from easyicu.research_agent.provider_budget import (
+    ProviderCallBudgetReceiptError,
+    StepProviderCallBudget,
+    load_provider_call_budget_state,
+)
 from easyicu.research_agent.repair_coordination import (
     RepairAuthorityBinding,
     RepairCoordinator,
@@ -68,6 +73,22 @@ def _repair_budget(tmp_path, *, limit: int = 7, max_llm: int = 3, initial: int =
     return provider, step_record, budget
 
 
+def _complete_attempt(
+    provider: StepProviderCallBudget,
+    attempt_id: int,
+    *,
+    category: str,
+) -> None:
+    provider.consume(category)
+    provider.complete_logical_repair_transport(
+        attempt_id=attempt_id,
+        mode="minimal_patch",
+        after_code_sha256=hashlib.sha256(
+            f"# repaired {attempt_id}\n".encode("utf-8")
+        ).hexdigest(),
+    )
+
+
 def test_sync_provider_writes_exact_key_set(tmp_path):
     provider, step_record, budget = _repair_budget(tmp_path)
     budget.sync_provider()
@@ -81,6 +102,7 @@ def test_sync_provider_writes_exact_key_set(tmp_path):
         "step_provider_call_reserved_category",
         "step_provider_call_reservation_released",
         "step_provider_call_receipt_version",
+        "step_llm_repair_transport_states",
         "step_provider_call_receipt",
     ]
     assert (
@@ -116,6 +138,7 @@ def test_probe_refusal_records_unavailable_and_syncs(tmp_path):
 def test_consume_appends_repair_classes_in_order(tmp_path):
     provider, step_record, budget = _repair_budget(tmp_path, max_llm=3)
     assert budget.consume("concept")
+    _complete_attempt(provider, 1, category="concept_repair_patch")
     assert budget.consume("runtime")
     assert step_record["step_llm_repair_attempts"] == 2
     assert step_record["step_llm_repair_budget"] == 3
@@ -171,6 +194,24 @@ def test_every_pipeline_llm_repair_reservation_is_authority_bound():
         assert keywords == {"before_code", "repair_ticket"}
 
 
+def test_every_pipeline_coder_repair_binds_current_logical_attempt():
+    tree = ast.parse(inspect.getsource(pipeline_execute.run_execute_phase))
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "coder"
+        and node.func.attr == "repair"
+    ]
+
+    assert len(calls) == 6
+    for call in calls:
+        keywords = {keyword.arg for keyword in call.keywords}
+        assert "logical_repair_attempt_id" in keywords
+
+
 def test_durable_ledger_recovers_attempt_missing_from_step_snapshot(tmp_path):
     provider, _first_record, first = _repair_budget(tmp_path, max_llm=3)
     assert first.consume("concept")
@@ -196,6 +237,11 @@ def test_durable_ledger_recovers_attempt_missing_from_step_snapshot(tmp_path):
 
     assert resumed.llm_repair_attempts == 1
     assert resumed_record["step_llm_repair_classes"] == ["concept"]
+    assert resumed.next_attempt_id == 1
+    assert resumed.consume("concept")
+    assert resumed_record["step_llm_repair_attempts"] == 1
+    assert resumed_record["step_llm_repair_classes"] == ["concept"]
+    _complete_attempt(restored_provider, 1, category="concept_repair_patch")
     assert resumed.consume("runtime")
     assert resumed_record["step_llm_repair_attempts"] == 2
     assert resumed_record["step_llm_repair_classes"] == ["concept", "runtime"]
@@ -219,6 +265,7 @@ def test_sync_reports_receipt_after_logical_reservation_before_provider_call(
 def test_logical_exhaustion_marks_record_and_refuses(tmp_path):
     provider, step_record, budget = _repair_budget(tmp_path, max_llm=1)
     assert budget.consume("concept")
+    _complete_attempt(provider, 1, category="concept_repair_patch")
     assert not budget.consume("contract")
     assert step_record["step_llm_repair_budget_exhausted"] is True
     assert step_record["step_llm_repair_classes"] == ["concept"]
@@ -318,3 +365,121 @@ def test_repair_coordinator_does_not_buy_rewrite_for_patch_response_script():
     assert calls == ["patch"]
     assert result.mode == "patch_response_full_script"
     assert result.provider_calls == 1
+
+
+def test_repair_coordinator_persists_completed_transport_before_return(tmp_path):
+    provider = _budget(tmp_path)
+    assert provider.reserve_logical_repair("runtime", max_repairs=2) == 1
+    coordinator = RepairCoordinator(
+        provider_budget=provider,
+        provider_category="runtime_repair",
+        normalize_script=lambda value: value,
+        is_executable_script=lambda value: value.startswith("import "),
+    )
+
+    result = coordinator.repair(
+        code="import os\nvalue = 1\n",
+        patch_call=lambda: json.dumps(
+            {
+                "format": "easyicu.code_patch/1",
+                "edits": [
+                    {
+                        "old": "value = 1",
+                        "new": "value = 2",
+                        "expected_count": 1,
+                    }
+                ],
+            }
+        ),
+        full_rewrite_call=lambda _reason: "unused",
+        logical_repair_attempt_id=1,
+    )
+
+    state = load_provider_call_budget_state(
+        tmp_path / "receipt.json",
+        step_id=STEP_ID,
+        expected_reserved_final_category="concept_audit",
+    )
+    transport = state.logical_repairs[0]["transport"]
+    assert transport["state"] == "completed"
+    assert transport["mode"] == "minimal_patch"
+    assert (
+        transport["after_code_sha256"]
+        == hashlib.sha256(result.code.encode("utf-8")).hexdigest()
+    )
+
+
+def test_repair_coordinator_persists_failed_transport_before_reraising(tmp_path):
+    provider = _budget(tmp_path)
+    assert provider.reserve_logical_repair("runtime", max_repairs=2) == 1
+    coordinator = RepairCoordinator(
+        provider_budget=provider,
+        provider_category="runtime_repair",
+        normalize_script=lambda value: value,
+        is_executable_script=lambda value: value.startswith("import "),
+    )
+
+    with pytest.raises(RuntimeError, match="provider unavailable"):
+        coordinator.repair(
+            code="import os\nvalue = 1\n",
+            patch_call=lambda: (_ for _ in ()).throw(
+                RuntimeError("provider unavailable")
+            ),
+            full_rewrite_call=lambda _reason: "unused",
+            logical_repair_attempt_id=1,
+        )
+
+    state = load_provider_call_budget_state(
+        tmp_path / "receipt.json",
+        step_id=STEP_ID,
+        expected_reserved_final_category="concept_audit",
+    )
+    assert state.logical_repairs[0]["transport"]["state"] == "failed"
+    assert state.logical_repairs[0]["transport"]["error_type"] == "RuntimeError"
+
+
+def test_transport_receipt_failure_never_returns_unsealed_repaired_code(
+    tmp_path,
+    monkeypatch,
+):
+    provider = _budget(tmp_path)
+    assert provider.reserve_logical_repair("runtime", max_repairs=2) == 1
+    coordinator = RepairCoordinator(
+        provider_budget=provider,
+        provider_category="runtime_repair",
+        normalize_script=lambda value: value,
+        is_executable_script=lambda value: value.startswith("import "),
+    )
+    original_persist = provider._persist_locked
+    persist_calls = 0
+
+    def fail_on_transport_terminal():
+        nonlocal persist_calls
+        persist_calls += 1
+        if persist_calls == 2:
+            raise ProviderCallBudgetReceiptError("simulated terminal write failure")
+        original_persist()
+
+    monkeypatch.setattr(provider, "_persist_locked", fail_on_transport_terminal)
+
+    with pytest.raises(ProviderCallBudgetReceiptError, match="terminal write failure"):
+        coordinator.repair(
+            code="import os\nvalue = 1\n",
+            patch_call=lambda: json.dumps(
+                {
+                    "format": "easyicu.code_patch/1",
+                    "edits": [
+                        {
+                            "old": "value = 1",
+                            "new": "value = 2",
+                            "expected_count": 1,
+                        }
+                    ],
+                }
+            ),
+            full_rewrite_call=lambda _reason: "unused",
+            logical_repair_attempt_id=1,
+        )
+
+    assert provider.logical_repair_transport_states == ("pending",)
+    assert provider.categories == ("runtime_repair_patch",)

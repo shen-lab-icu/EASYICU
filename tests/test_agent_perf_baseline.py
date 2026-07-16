@@ -318,6 +318,55 @@ def test_schema_v4_final_audit_state_is_validated(tmp_path):
         apb.read_receipts(str(run), {})
 
 
+def test_schema_v5_repair_transport_is_validated(tmp_path):
+    run = tmp_path / "run_v5"
+    run.mkdir()
+    categories = ["runtime_repair_patch"]
+    logical_repairs = [
+        {
+            "attempt_id": 1,
+            "repair_class": "runtime",
+            "provider_history_len": 0,
+            "provider_history_sha256": apb._receipt_digest({"categories": []}),
+            "transport": {
+                "state": "completed",
+                "mode": "minimal_patch",
+                "after_code_sha256": "a" * 64,
+                "provider_history_len": 1,
+                "provider_history_sha256": apb._receipt_digest(
+                    {"categories": categories}
+                ),
+                "provider_calls": 1,
+            },
+        }
+    ]
+    _write_receipt(
+        run,
+        "01_model",
+        categories,
+        schema_version=5,
+        logical_repairs=logical_repairs,
+        final_reservation_state={
+            "required_token": None,
+            "bound_provider_history_len": None,
+            "bound_provider_history_sha256": None,
+            "completed_token": None,
+            "released": False,
+        },
+    )
+    assert apb.read_receipts(str(run), {})[0]["logical_repair_attempts"] == 1
+
+    path = next((run / ".runtime" / "provider_call_budgets").glob("*.json"))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["logical_repairs"][0]["transport"]["provider_calls"] = 2
+    body = {key: value for key, value in payload.items() if key != "sha256"}
+    payload["sha256"] = apb._receipt_digest(body)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(apb.BaselineError, match="transport inconsistent"):
+        apb.read_receipts(str(run), {})
+
+
 def test_corrupt_cost_file_fails_closed(tmp_path):
     run = _base_run(tmp_path)
     (run / "evidence" / "cost_records_v9__cost_records.json").write_text(

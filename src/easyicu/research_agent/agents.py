@@ -1558,6 +1558,8 @@ class CoderAgent:
         self.llm = llm
         self.last_compatibility_violations: List[Dict[str, object]] = []
         self.last_compatibility_repair_attempts: int = 0
+        self.last_repair_transport: Optional[str] = None
+        self.last_repair_provider_calls: int = 0
 
     def run(
         self,
@@ -1664,6 +1666,7 @@ class CoderAgent:
         attempt: int = 1,
         provider_budget: Optional[StepProviderCallBudget] = None,
         provider_category: str = "repair",
+        logical_repair_attempt_id: Optional[int] = None,
     ) -> str:
         """Apply a minimal exact patch, falling back to one full rewrite.
 
@@ -1787,6 +1790,8 @@ class CoderAgent:
                 temperature=0.05,
             )
 
+        self.last_repair_transport = None
+        self.last_repair_provider_calls = 0
         repair_result = RepairCoordinator(
             provider_budget=provider_budget,
             provider_category=provider_category,
@@ -1800,6 +1805,7 @@ class CoderAgent:
                 temperature=0.0,
             ),
             full_rewrite_call=_full_rewrite,
+            logical_repair_attempt_id=logical_repair_attempt_id,
         )
         self.last_repair_transport = repair_result.mode
         self.last_repair_provider_calls = repair_result.provider_calls
