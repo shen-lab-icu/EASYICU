@@ -1,0 +1,118 @@
+{
+  "run_dir": "research_output/_diagnostic_e3_8317_fresh_ceb00f2_20260716T072600Z/E3_kdigo_gradient/aware/run_20260716T072721_7fd5c5",
+  "calls": {
+    "all_provider_calls": 15,
+    "step_scoped_calls": 12,
+    "run_level_planner_calls": 3,
+    "cost_record_calls": 15,
+    "reconciliation_delta": 0,
+    "repair_calls": 7,
+    "blocked_provider_requests": 1,
+    "per_step": [
+      {
+        "step_id": "02_exposure_derivation_and_qc",
+        "total_calls": 6,
+        "limit": 7,
+        "sequence": [
+          "initial_generation",
+          "concept_repair_patch",
+          "concept_repair_full_rewrite",
+          "concept_repair_patch",
+          "concept_audit",
+          "concept_repair_patch"
+        ],
+        "breakdown": {
+          "initial_generation": 1,
+          "repair": 4,
+          "concept_audit": 1
+        },
+        "repair_calls": 4
+      },
+      {
+        "step_id": "01_cohort_flow",
+        "total_calls": 6,
+        "limit": 7,
+        "sequence": [
+          "initial_generation",
+          "runtime_repair_patch",
+          "runtime_repair_full_rewrite",
+          "runtime_repair_patch",
+          "concept_audit",
+          "analyzer"
+        ],
+        "breakdown": {
+          "initial_generation": 1,
+          "repair": 3,
+          "concept_audit": 1,
+          "analyzer": 1
+        },
+        "repair_calls": 3
+      }
+    ]
+  },
+  "tokens_from_deduped_cost_records": {
+    "by_role": {
+      "coder": {
+        "n": 9,
+        "prompt": 170232,
+        "completion": 25970,
+        "total": 196202
+      },
+      "planner": {
+        "n": 3,
+        "prompt": 77488,
+        "completion": 14557,
+        "total": 92045
+      },
+      "analyzer": {
+        "n": 3,
+        "prompt": 76574,
+        "completion": 1771,
+        "total": 78345
+      }
+    },
+    "total": {
+      "n": 15,
+      "prompt": 324294,
+      "completion": 42298,
+      "total": 366592
+    }
+  },
+  "wall_time": {
+    "sandbox_execution_seconds": {
+      "01_cohort_flow": 0.669,
+      "02_exposure_derivation_and_qc": 1.719
+    },
+    "sandbox_execution_seconds_total": 2.388,
+    "session_active_wall_seconds": 865.7,
+    "run_session_count": 5,
+    "step_active_wall_seconds": {
+      "01_cohort_flow": 201.4,
+      "02_exposure_derivation_and_qc": 373.5
+    },
+    "wall_method": "explicit_audit_session_boundaries"
+  },
+  "resume_count": 4,
+  "inputs_sha256": {
+    ".runtime/provider_call_budgets/13351fdffead3d7e.json": "dcda2d7a5d906eb8b6deec1ad1459c519cf68cc5476ac7822f3cf430d9555d5d",
+    ".runtime/provider_call_budgets/4580e820bfd9a583.json": "d2d4760d32f67e5248252d9d02fcb1cd93d291865c75dff11ce692499547c4e7",
+    "cost_records.json": "4dfd2c6cce4617bb7e08b5221a49d9638c426a04242c386412a8deae945efc27",
+    "evidence/cost_records__cost_records.json": "23f3ee0900f7de47f8defcb28cd17974164e3d11ebd59105e517fddcb83f2947",
+    "evidence/cost_records_v2__cost_records.json": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "evidence/cost_records_v3__cost_records.json": "fcf85c979640be609c6cc4fff0cd39a975556c149e249801973cb7b18bd5d2bd",
+    "evidence/cost_records_v4__cost_records.json": "f525964b5b0d082f0f11a7af7613287100ec02226cc90d3bd8dc35531143b7dc",
+    "evidence/cost_records_v5__cost_records.json": "4dfd2c6cce4617bb7e08b5221a49d9638c426a04242c386412a8deae945efc27",
+    "audit_log.jsonl": "87fe4c702d9b4d758b5f798ff269f4d0e1882f5d43909a817f4d8800a703a5ce",
+    "run_status.json": "960fe42bf0e33f6308e35188f853bfbedf42a194f7ff322611dae49a9ca65110",
+    "resume_environment_receipt_0001.json": "19ab52c735dd0317a58ba14b173620e3d9f200df72a83e55dc46756536ac810d",
+    "resume_environment_receipt_0002.json": "861fe6c8ca936cf03e61cca61124a944c3c27d73176ad820975caa0209d1799a",
+    "resume_environment_receipt_0003.json": "7ddfb51fd9970e4b04e77a390fe8a9b5eb18fbc365f7db25e33504cfc12a1b50",
+    "resume_environment_receipt_0004.json": "6484e553121dd368b8e95e968e9d7870091f0894595d09dea14890f2e5fc99bf"
+  },
+  "notes": [
+    "Calls from append-only, digest-VERIFIED provider-call receipts + planner from cost_records.",
+    "blocked_provider_requests are budget-denied and are NOT real provider calls.",
+    "sandbox_execution_seconds is in-sandbox compute only; active wall (LLM round-trips) dominates.",
+    "cost_records lack per-step token attribution; totals are whole-run deduped union."
+  ]
+}
