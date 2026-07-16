@@ -9,6 +9,7 @@ only selector of current step authority.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import os
@@ -18,7 +19,7 @@ import stat
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Annotated, Literal, Optional
+from typing import Annotated, Literal, Mapping, Optional
 
 from pydantic import (
     BaseModel,
@@ -29,7 +30,7 @@ from pydantic import (
     model_validator,
 )
 
-from .code_patch import looks_like_executable_python
+from .gate_semantics import blocking_validator_findings
 from .schema import ValidationFinding
 
 STEP_AUTHORITY_CAPSULE_SCHEMA_VERSION = "easyicu.step_authority_capsule/1"
@@ -65,6 +66,27 @@ MediaType = Literal[
 
 class StepAuthorityCapsuleError(RuntimeError):
     """Capsule bytes or storage cannot be trusted."""
+
+
+def _is_candidate_python(text: str) -> bool:
+    """Accept valid executable AST, while rejecting prose and literal payloads."""
+
+    stripped = str(text or "").strip()
+    if not stripped:
+        return False
+    try:
+        tree = ast.parse(stripped)
+    except SyntaxError:
+        return False
+    if not tree.body:
+        return False
+    return not all(
+        isinstance(node, ast.Expr)
+        and isinstance(
+            node.value, (ast.Constant, ast.Dict, ast.List, ast.Set, ast.Tuple)
+        )
+        for node in tree.body
+    )
 
 
 class _StrictFrozenModel(BaseModel):
@@ -110,6 +132,7 @@ class CandidateOrigin(_StrictFrozenModel):
     logical_repair_attempt_id: Optional[int] = Field(default=None, ge=1)
     repair_ticket_sha256: Optional[Sha256] = None
     deterministic_reason_sha256: Optional[Sha256] = None
+    adopted_from_capsule_sha256: Optional[Sha256] = None
 
     @field_validator("provider_category")
     @classmethod
@@ -143,6 +166,7 @@ class CandidateOrigin(_StrictFrozenModel):
                 or self.logical_repair_attempt_id is not None
                 or self.repair_ticket_sha256 is not None
                 or self.deterministic_reason_sha256 is not None
+                or self.adopted_from_capsule_sha256 is not None
             ):
                 raise ValueError(
                     "initial generation requires its own provider transport"
@@ -153,6 +177,7 @@ class CandidateOrigin(_StrictFrozenModel):
                 or not transport_bound
                 or not repair_bound
                 or self.deterministic_reason_sha256 is not None
+                or self.adopted_from_capsule_sha256 is not None
             ):
                 raise ValueError("repair origin requires exact ledger coordinates")
         elif self.kind == "deterministic_mutation":
@@ -162,8 +187,18 @@ class CandidateOrigin(_StrictFrozenModel):
                 or self.logical_repair_attempt_id is not None
                 or self.repair_ticket_sha256 is not None
                 or self.deterministic_reason_sha256 is None
+                or self.adopted_from_capsule_sha256 is not None
             ):
                 raise ValueError("deterministic mutation cannot claim provider calls")
+        elif self.kind == "legacy_adoption":
+            if (
+                provider_bound
+                or transport_bound
+                or self.logical_repair_attempt_id is not None
+                or self.repair_ticket_sha256 is not None
+                or self.deterministic_reason_sha256 is not None
+            ):
+                raise ValueError("legacy adoption cannot invent generation authority")
         elif (
             provider_bound
             or transport_bound
@@ -171,7 +206,7 @@ class CandidateOrigin(_StrictFrozenModel):
             or self.repair_ticket_sha256 is not None
             or self.deterministic_reason_sha256 is not None
         ):
-            raise ValueError("legacy adoption cannot invent generation authority")
+            raise ValueError("candidate origin is inconsistent")
         return self
 
 
@@ -210,6 +245,7 @@ class ExecutionSeal(_StrictFrozenModel):
     """Completed sandbox result, including failures that must not be rerun."""
 
     execution_identity_sha256: Sha256
+    execution_context_sha256: Sha256
     code_sha256: Sha256
     resolved_inputs_sha256: Sha256
     returncode: int
@@ -246,6 +282,8 @@ class ExecutionSeal(_StrictFrozenModel):
             raise ValueError("degraded isolation requires a reason")
         if not self.isolation_degraded and self.isolation_degradation_reason:
             raise ValueError("non-degraded isolation cannot claim a degradation reason")
+        if self.execution_identity_sha256 != execution_seal_identity_sha256(self):
+            raise ValueError("execution identity does not match the sealed result")
         return self
 
 
@@ -379,6 +417,39 @@ def _canonical_json_bytes(value: object) -> bytes:
         ensure_ascii=False,
         allow_nan=False,
     ).encode("utf-8")
+
+
+def _json_compatible(value: object) -> object:
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
+    if isinstance(value, Mapping):
+        return {str(key): _json_compatible(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_compatible(item) for item in value]
+    return value
+
+
+def execution_seal_identity_sha256(
+    execution: ExecutionSeal | Mapping[str, object],
+) -> str:
+    """Derive one execution identity from every replay-relevant coordinate."""
+
+    if isinstance(execution, ExecutionSeal):
+        payload = execution.model_dump(
+            mode="json", exclude={"execution_identity_sha256"}
+        )
+    else:
+        payload = dict(execution)
+        payload.pop("execution_identity_sha256", None)
+        payload = _json_compatible(payload)
+    return _sha256_bytes(
+        _canonical_json_bytes(
+            {
+                "schema": "easyicu.step_execution_identity/1",
+                "execution": payload,
+            }
+        )
+    )
 
 
 def concept_audit_authority_sha256(
@@ -689,6 +760,21 @@ def _authority_identity(capsule: StepAuthorityCapsule) -> tuple[object, ...]:
     )
 
 
+def _scientific_adoption_identity(
+    capsule: StepAuthorityCapsule,
+) -> tuple[object, ...]:
+    return (
+        capsule.step_id,
+        capsule.run_input_capsule_sha256,
+        capsule.planner_scope,
+        capsule.scoped_coder_context,
+        capsule.resolved_inputs,
+        capsule.typed_bindings_sha256,
+        capsule.upstream_authority_sha256,
+        capsule.candidate_code,
+    )
+
+
 def _verify_parent_transition(
     capsule: StepAuthorityCapsule,
     *,
@@ -696,16 +782,24 @@ def _verify_parent_transition(
 ) -> None:
     if _authority_identity(parent) != _authority_identity(capsule):
         raise StepAuthorityCapsuleError("parent capsule authority binding disagrees")
-    if capsule.stage in {"concept_audited", "executed"}:
+    if capsule.stage == "concept_audited":
+        if (
+            parent.stage not in {"candidate", "concept_audited"}
+            or parent.candidate_code != capsule.candidate_code
+            or parent.candidate_origin != capsule.candidate_origin
+        ):
+            raise StepAuthorityCapsuleError("audit is not bound to its candidate")
+    elif capsule.stage == "executed":
         if (
             parent.stage != "candidate"
             or parent.candidate_code != capsule.candidate_code
             or parent.candidate_origin != capsule.candidate_origin
         ):
-            raise StepAuthorityCapsuleError("stage is not bound to its candidate")
+            raise StepAuthorityCapsuleError("execution is not bound to its candidate")
     elif capsule.stage == "executed_concept_audited":
         if (
-            parent.stage not in {"concept_audited", "executed"}
+            parent.stage
+            not in {"concept_audited", "executed", "executed_concept_audited"}
             or parent.candidate_code != capsule.candidate_code
             or parent.candidate_origin != capsule.candidate_origin
         ):
@@ -715,7 +809,10 @@ def _verify_parent_transition(
         if (
             parent.stage == "concept_audited"
             and parent.concept_audit != capsule.concept_audit
-        ) or (parent.stage == "executed" and parent.execution != capsule.execution):
+        ) or (
+            parent.stage in {"executed", "executed_concept_audited"}
+            and parent.execution != capsule.execution
+        ):
             raise StepAuthorityCapsuleError("combined stage rewrites its parent seal")
 
 
@@ -743,9 +840,7 @@ def _verify_audit_findings(root: Path, audit: ConceptAuditSeal) -> None:
         raise StepAuthorityCapsuleError(
             "provider or schema failures cannot become concept-audit authority"
         )
-    derived = (
-        "blocked" if any(item.severity == "error" for item in findings) else "passed"
-    )
+    derived = "blocked" if blocking_validator_findings(findings) else "passed"
     if audit.result != derived:
         raise StepAuthorityCapsuleError(
             "concept-audit result disagrees with sealed finding severities"
@@ -795,7 +890,7 @@ def _verify_capsule_contents(
         code = code_bytes.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise StepAuthorityCapsuleError("candidate code is not UTF-8") from exc
-    if not looks_like_executable_python(code):
+    if not _is_candidate_python(code):
         raise StepAuthorityCapsuleError("candidate code is not executable Python")
 
     if capsule.concept_audit is not None:
@@ -855,6 +950,16 @@ def _verify_capsule_contents(
                 kind="blobs",
                 digest=output.content.sha256,
                 size_bytes=output.content.size_bytes,
+            )
+    adopted_from = capsule.candidate_origin.adopted_from_capsule_sha256
+    if adopted_from is not None:
+        source = _load_capsule_model(root, adopted_from)
+        _verify_capsule_contents(root, source, ancestry=visited)
+        if _scientific_adoption_identity(source) != _scientific_adoption_identity(
+            capsule
+        ):
+            raise StepAuthorityCapsuleError(
+                "adopted candidate disagrees with its verified scientific source"
             )
     if capsule.parent_capsule_sha256 is not None:
         parent = _load_capsule_model(root, capsule.parent_capsule_sha256)
@@ -936,6 +1041,7 @@ __all__ = [
     "StepAuthorityCapsuleRef",
     "VerifiedStepAuthorityCapsule",
     "concept_audit_authority_sha256",
+    "execution_seal_identity_sha256",
     "load_verified_step_authority_capsule",
     "put_content_blob",
     "read_verified_content",

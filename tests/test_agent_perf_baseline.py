@@ -30,6 +30,7 @@ def _write_receipt(
     logical_repairs: list[dict] | None = None,
     schema_version: int | None = None,
     final_reservation_state: dict | None = None,
+    initial_generation: dict | None = None,
 ) -> None:
     resolved_schema = schema_version or (3 if logical_repairs is not None else 2)
     payload = {
@@ -43,6 +44,8 @@ def _write_receipt(
         payload["logical_repairs"] = logical_repairs
     if final_reservation_state is not None:
         payload["final_reservation_state"] = final_reservation_state
+    if initial_generation is not None:
+        payload["initial_generation"] = initial_generation
     payload["sha256"] = apb._receipt_digest({k: v for k, v in payload.items()})
     if tamper:
         payload["categories"] = categories + [
@@ -453,6 +456,55 @@ def test_schema_v5_legacy_binding_keeps_full_history_delta_accounting(tmp_path):
     )
 
     assert apb.read_receipts(str(run), {})[0]["logical_repair_attempts"] == 1
+
+
+def test_schema_v6_initial_generation_transport_is_verified(tmp_path):
+    run = tmp_path / "run_v6_initial"
+    run.mkdir()
+    categories = ["initial_generation"]
+    binding = {"schema_version": "easyicu.initial_generation_authority/1"}
+    initial_generation = {
+        "binding": binding,
+        "binding_sha256": apb._receipt_digest(binding),
+        "provider_history_len": 0,
+        "provider_history_sha256": apb._receipt_digest({"categories": []}),
+        "provider_transport_id": "initial_generation:1",
+        "transport": {
+            "state": "completed",
+            "after_code_sha256": "a" * 64,
+            "after_code_size_bytes": 42,
+            "provider_history_len": 1,
+            "provider_history_sha256": apb._receipt_digest({"categories": categories}),
+            "provider_calls": 1,
+        },
+    }
+    _write_receipt(
+        run,
+        "01_model",
+        categories,
+        schema_version=6,
+        logical_repairs=[],
+        initial_generation=initial_generation,
+        final_reservation_state={
+            "required_token": None,
+            "bound_provider_history_len": None,
+            "bound_provider_history_sha256": None,
+            "completed_token": None,
+            "released": False,
+        },
+    )
+
+    assert apb.read_receipts(str(run), {})[0]["total_calls"] == 1
+
+    path = next((run / ".runtime" / "provider_call_budgets").glob("*.json"))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["initial_generation"]["transport"]["after_code_size_bytes"] = -1
+    body = {key: value for key, value in payload.items() if key != "sha256"}
+    payload["sha256"] = apb._receipt_digest(body)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(apb.BaselineError, match="completed initial generation"):
+        apb.read_receipts(str(run), {})
 
 
 def test_corrupt_cost_file_fails_closed(tmp_path):

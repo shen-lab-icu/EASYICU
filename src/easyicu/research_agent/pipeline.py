@@ -182,7 +182,9 @@ from .audits.manuscript_claims import (  # noqa: E402,F401
     _extract_percent_claims_near,
 )
 
-_audit_manuscript_numeric_claims = audit_manuscript_numeric_claims  # noqa: F841 (legacy alias)
+_audit_manuscript_numeric_claims = (
+    audit_manuscript_numeric_claims  # noqa: F841 (legacy alias)
+)
 
 from .evidence import (
     EvidenceEnforcementError,
@@ -298,6 +300,7 @@ from .llm import (
 from .memory import RunMemory
 from .prompts import PROMPT_PACK_VERSION, prompt_pack_files
 from .runner import CodeRunner, DockerRunner, RunResult, select_safe_runner_kind
+from .method_capabilities import set_runtime_capability_snapshot_provider
 from .schema import (
     AgentRuntimeState,
     AnalysisManifest,
@@ -438,8 +441,7 @@ def _load_compatible_resume_plan(
         for record in current_successful_step_records(
             (resume_state or {}).get("per_step_records") or []
         )
-        if record.get("step_id")
-        and record.get("step_id") != "00_probe"
+        if record.get("step_id") and record.get("step_id") != "00_probe"
     }
     for candidate in _resume_plan_candidate_paths(
         run_dir=run_dir,
@@ -753,9 +755,7 @@ def _migrate_legacy_resume_figure_render_edges(
         for output in producer_step.expected_outputs or []:
             parsed = typed_product(output)
             if parsed is not None and parsed[0] in {"statistic", "table"}:
-                producer_ids.setdefault(parsed, set()).add(
-                    str(producer_step.step_id)
-                )
+                producer_ids.setdefault(parsed, set()).add(str(producer_step.step_id))
                 producer_tokens.setdefault(parsed, []).append(
                     (str(producer_step.step_id), str(output))
                 )
@@ -823,9 +823,8 @@ def _migrate_legacy_resume_figure_render_edges(
         parent_id = str(parent.step_id)
         child_id = str(child.step_id)
         child_is_in_resume_window = cut_index is None or index >= cut_index
-        parent_is_available_or_scheduled = (
-            parent_id in completed_step_ids
-            or (cut_index is not None and index - 1 >= cut_index)
+        parent_is_available_or_scheduled = parent_id in completed_step_ids or (
+            cut_index is not None and index - 1 >= cut_index
         )
         if (
             not child_is_in_resume_window
@@ -1737,17 +1736,34 @@ def _migrate_legacy_resume_trajectory_stability_spec(
 
 
 def _load_resume_state(run_dir: Path) -> Optional[Dict[str, Any]]:
-    partial = run_dir / "manifest_partial.json"
-    checkpoint = partial if partial.exists() else run_dir / "manifest.json"
-    if not checkpoint.exists():
-        return None
     try:
-        loaded = json.loads(checkpoint.read_text(encoding="utf-8"))
+        loaded = load_run_artifact_authority(run_dir)
     except Exception as exc:
-        raise ValueError(f"Cannot resume from corrupt checkpoint: {checkpoint}") from exc
-    if not isinstance(loaded, dict):
+        raise ValueError(
+            f"Cannot resume from corrupt checkpoint authority: {run_dir}"
+        ) from exc
+    if loaded is not None:
+        return dict(loaded)
+    # ``None`` is the explicit legacy signal: no checkpoint in this run has a
+    # per-step ledger. Preserve read-only legacy adoption without weakening the
+    # modern monotonic selector above.
+    legacy_candidates = [
+        path
+        for path in (run_dir / "manifest_partial.json", run_dir / "manifest.json")
+        if path.is_file()
+    ]
+    if not legacy_candidates:
+        return None
+    checkpoint = max(legacy_candidates, key=lambda path: path.stat().st_mtime_ns)
+    try:
+        legacy = json.loads(checkpoint.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise ValueError(
+            f"Cannot resume from corrupt checkpoint: {checkpoint}"
+        ) from exc
+    if not isinstance(legacy, dict):
         raise ValueError(f"Cannot resume from non-object checkpoint: {checkpoint}")
-    return loaded
+    return legacy
 
 
 class ResearchAgentPipeline:
@@ -1906,9 +1922,7 @@ class ResearchAgentPipeline:
         self._disable_icu_context = bool(disable_icu_context)
         self._context_top_k = int(context_top_k) if context_top_k else None
         self._max_code_repair_attempts = max(0, int(max_code_repair_attempts))
-        self._max_step_llm_repair_attempts = max(
-            0, int(max_step_llm_repair_attempts)
-        )
+        self._max_step_llm_repair_attempts = max(0, int(max_step_llm_repair_attempts))
         self._max_step_provider_calls = max(0, int(max_step_provider_calls))
         self._enable_deterministic_code_fallback = bool(
             enable_deterministic_code_fallback
@@ -2120,6 +2134,11 @@ class ResearchAgentPipeline:
         ``EASYICU_UNIVERSE_PARQUET`` so explicit robustness steps can reach the
         pre-纳排 universe without re-running extraction.
         """
+        # Runner capability discovery is scoped to the backend selected for
+        # this build.  Clear a Docker snapshot left in the current ContextVar
+        # before a custom factory (which need not instantiate CodeRunner) can
+        # inherit it.  DockerRunner installs its own provider below.
+        set_runtime_capability_snapshot_provider(None)
         runner_kwargs = dict(self._runner_kwargs)
         extra_env = dict(runner_kwargs.pop("extra_env", {}) or {})
         if target_outcome:
@@ -2226,11 +2245,9 @@ class ResearchAgentPipeline:
             context = ResearchContext.model_validate_json(
                 resume_context_evidence_path.read_text(encoding="utf-8")
             )
-            if (
-                not context_path.is_file()
-                or sha256_of_file(context_path)
-                != sha256_of_file(resume_context_evidence_path)
-            ):
+            if not context_path.is_file() or sha256_of_file(
+                context_path
+            ) != sha256_of_file(resume_context_evidence_path):
                 shutil.copy2(resume_context_evidence_path, context_path)
         else:
             builder = (
@@ -3784,9 +3801,7 @@ class ResearchAgentPipeline:
                     )
                     resume_state = prepared_resume.resume_state
                     resume_input_verified = prepared_resume.input_verified
-                    resume_context_evidence_path = (
-                        prepared_resume.context_evidence_path
-                    )
+                    resume_context_evidence_path = prepared_resume.context_evidence_path
                     experiment_spec_path = prepared_resume.experiment_spec_path
                     if prepared_resume.cohort_path is not None:
                         cohort_path = prepared_resume.cohort_path
@@ -5206,9 +5221,11 @@ def _render_cohort_overlap_publication_bundle_from_prior_outputs(
     ax_heat = fig.add_subplot(grid[:, 1])
 
     colors = [
-        palette.get("blue", "#0F4D92")
-        if str(row.get("definition_type", "")).lower() == "primary"
-        else palette.get("teal", "#42949E")
+        (
+            palette.get("blue", "#0F4D92")
+            if str(row.get("definition_type", "")).lower() == "primary"
+            else palette.get("teal", "#42949E")
+        )
         for row in plot_df.to_dict(orient="records")
     ]
     ax_n.barh(y, plot_df["n_included"].astype(float), color=colors, height=0.58)
@@ -5374,9 +5391,9 @@ def _render_cohort_overlap_publication_bundle_from_prior_outputs(
             "source_step_id": parent_step_id,
             "source_attrition_table": str(attrition_path),
             "source_overlap_table": str(overlap_path),
-            "source_equivalence_audit": str(audit_path)
-            if audit_path.exists()
-            else None,
+            "source_equivalence_audit": (
+                str(audit_path) if audit_path.exists() else None
+            ),
             "source_data_files": [
                 source_attrition_path.name,
                 source_overlap_path.name,
@@ -5961,23 +5978,29 @@ def _render_missingness_publication_bundle_from_prior_outputs(
     missing_pct = (
         100.0 * missing_n / total
         if total_col is not None and missing_n_col is not None
-        else pd.to_numeric(source[missing_pct_col], errors="coerce")
-        if missing_pct_col is not None
-        else pd.Series(pd.NA, index=source.index, dtype="Float64")
+        else (
+            pd.to_numeric(source[missing_pct_col], errors="coerce")
+            if missing_pct_col is not None
+            else pd.Series(pd.NA, index=source.index, dtype="Float64")
+        )
     )
     unavailable_pct = (
         100.0 * unavailable_n / total
         if total_col is not None and unavailable_n_col is not None
-        else pd.to_numeric(source[unavailable_pct_col], errors="coerce")
-        if unavailable_pct_col is not None
-        else pd.Series(pd.NA, index=source.index, dtype="Float64")
+        else (
+            pd.to_numeric(source[unavailable_pct_col], errors="coerce")
+            if unavailable_pct_col is not None
+            else pd.Series(pd.NA, index=source.index, dtype="Float64")
+        )
     )
     measured_pct = (
         100.0 * measured_n / total
         if total_col is not None and measured_n.notna().any()
-        else pd.to_numeric(source[measured_pct_col], errors="coerce")
-        if measured_pct_col is not None
-        else 100.0 - missing_pct
+        else (
+            pd.to_numeric(source[measured_pct_col], errors="coerce")
+            if measured_pct_col is not None
+            else 100.0 - missing_pct
+        )
     )
     labels = source[label_col].astype(str)
     display_labels = (
@@ -6913,9 +6936,9 @@ def _render_descriptive_publication_bundle_from_prior_outputs(
                 "row_category": cat,
                 "display_label": display,
                 "is_continuous": bool(is_cont),
-                "overall_median": float(median_v)
-                if pd.notna(median_v)
-                else float("nan"),
+                "overall_median": (
+                    float(median_v) if pd.notna(median_v) else float("nan")
+                ),
                 "overall_percentage": float(pct_v) if pd.notna(pct_v) else float("nan"),
                 "source_table": table_path.name,
                 "source_transform": "table_one_baseline_summary_v1",
@@ -7339,9 +7362,9 @@ def _association_descriptive_context(
                             _find_column(frame, exact=("ci_high_pct", "upper_pct"))
                             or _find_column(frame, exact=("ci_high", "upper")),
                         ),
-                        "plot_denominator": row.get(denominator_col)
-                        if denominator_col
-                        else None,
+                        "plot_denominator": (
+                            row.get(denominator_col) if denominator_col else None
+                        ),
                         "plot_event_n": row.get(event_col) if event_col else None,
                         "source_table": table_path.name,
                         "source_row_index": int(idx),
@@ -7436,9 +7459,9 @@ def _association_descriptive_context(
                                 ),
                             ),
                         ),
-                        "plot_denominator": row.get(denominator_col)
-                        if denominator_col
-                        else None,
+                        "plot_denominator": (
+                            row.get(denominator_col) if denominator_col else None
+                        ),
                         "plot_event_n": row.get(event_col) if event_col else None,
                         "source_table": table_path.name,
                         "source_row_index": int(idx),
@@ -7706,9 +7729,11 @@ def _render_absolute_risk_publication_bundle_from_prior_outputs(
     risk_x = [
         _as_percent(
             row,
-            "outcome_risk_pct"
-            if "outcome_risk_pct" in frame.columns
-            else "outcome_risk",
+            (
+                "outcome_risk_pct"
+                if "outcome_risk_pct" in frame.columns
+                else "outcome_risk"
+            ),
         )
         for _, row in risk.iterrows()
     ]
@@ -7971,9 +7996,7 @@ def _render_association_publication_bundle_from_prior_outputs(
             return or_c, lo_c, hi_c
         return None
 
-    sealed_repair_id = (
-        "association_publication_bundle_from_planned_model_contract_v1"
-    )
+    sealed_repair_id = "association_publication_bundle_from_planned_model_contract_v1"
     parent: Optional[tuple[Path, pd.DataFrame, tuple[str, str, str]]] = None
     if preverified_parent_artifacts is not None:
         if authorized_repair_id != sealed_repair_id:
@@ -7981,9 +8004,7 @@ def _render_association_publication_bundle_from_prior_outputs(
         try:
             candidate_frame = pd.read_csv(
                 io.BytesIO(
-                    preverified_parent_artifacts[
-                        "adjusted_association_estimates.csv"
-                    ]
+                    preverified_parent_artifacts["adjusted_association_estimates.csv"]
                 )
             )
         except (KeyError, OSError, ValueError):
@@ -8117,8 +8138,7 @@ def _render_association_publication_bundle_from_prior_outputs(
             for contract in model_contracts
             if isinstance(contract, dict)
             and primary_exposure
-            and str(contract.get("exposure_source") or "").strip()
-            == primary_exposure
+            and str(contract.get("exposure_source") or "").strip() == primary_exposure
             and str(contract.get("exposure_role") or "primary").lower() == "primary"
             and str(contract.get("analysis_role") or "").lower()
             in {"primary", "sensitivity"}
@@ -8558,9 +8578,11 @@ def _render_association_publication_bundle_from_prior_outputs(
     observed_repair_id = (
         sealed_repair_id
         if authorized_repair_id == sealed_repair_id
-        else "association_publication_bundle_from_parent_outputs_v3"
-        if descriptive_rows
-        else "association_publication_bundle_from_parent_outputs_v2"
+        else (
+            "association_publication_bundle_from_parent_outputs_v3"
+            if descriptive_rows
+            else "association_publication_bundle_from_parent_outputs_v2"
+        )
     )
     existing_summary.update(
         {
@@ -9035,9 +9057,11 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
         n_plot = n_plot.reset_index(drop=True)
         y_n = list(range(len(n_plot)))
         colors = [
-            palette.get("blue", "#0F4D92")
-            if _truthy_figure_value(value)
-            else palette.get("neutral_light", "#D8D8D8")
+            (
+                palette.get("blue", "#0F4D92")
+                if _truthy_figure_value(value)
+                else palette.get("neutral_light", "#D8D8D8")
+            )
             for value in n_plot["converged"].fillna(False)
         ]
         ax_n.barh(
@@ -9806,9 +9830,7 @@ def _sealed_renderer_parent_digest_seal(
         }
     elif repair_id == "sensitivity_publication_bundle_from_locked_summary_v1":
         required_names = {"step_summary.json", "robustness_summary.csv"}
-    elif repair_id == (
-        "association_publication_bundle_from_planned_model_contract_v1"
-    ):
+    elif repair_id == ("association_publication_bundle_from_planned_model_contract_v1"):
         required_names = {
             "step_summary.json",
             "adjusted_association_estimates.csv",
@@ -9835,7 +9857,9 @@ def _sealed_renderer_parent_digest_seal(
             artifact_digests=sealed,
         )
         summary = json.loads(snapshot["step_summary.json"].decode("utf-8"))
-        estimates = pd.read_csv(io.BytesIO(snapshot["adjusted_association_estimates.csv"]))
+        estimates = pd.read_csv(
+            io.BytesIO(snapshot["adjusted_association_estimates.csv"])
+        )
     except (OSError, KeyError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
         return None
     if not isinstance(summary, Mapping):
@@ -9943,9 +9967,7 @@ def _render_authorized_sealed_publication_bundle(
             preverified_parent_artifacts=snapshot,
             authorized_repair_id=repair_id,
         )
-    elif repair_id == (
-        "association_publication_bundle_from_planned_model_contract_v1"
-    ):
+    elif repair_id == ("association_publication_bundle_from_planned_model_contract_v1"):
         observed = _render_association_publication_bundle_from_prior_outputs(
             run_dir=run_dir,
             current_step_id=current_step_id,
@@ -10122,9 +10144,7 @@ def deterministic_figure_repair_id_for_upstream(
             and _absolute_risk_parent_digest_seal(run_dir, step_id) is not None
             else None
         )
-    if repair_id == (
-        "association_publication_bundle_from_planned_model_contract_v1"
-    ):
+    if repair_id == ("association_publication_bundle_from_planned_model_contract_v1"):
         return (
             repair_id
             if "adjusted_association_estimates.csv" in verified_tables

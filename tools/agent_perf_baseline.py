@@ -37,7 +37,7 @@ from datetime import datetime
 REPAIR_KEYS = ("repair", "rewrite")
 AUDIT_KEYS = ("audit",)
 INIT_KEYS = ("initial",)
-RECEIPT_SCHEMA_VERSIONS = {1, 2, 3, 4, 5}
+RECEIPT_SCHEMA_VERSIONS = {1, 2, 3, 4, 5, 6}
 REPAIR_AUTHORITY_BINDING_SCHEMA_V2 = "easyicu.repair_authority_binding/2"
 REPAIR_TRANSPORT_PROVIDER_SUFFIXES = ("patch", "full_rewrite")
 RUN_SESSION_START = "Research context built."
@@ -111,6 +111,106 @@ def _repair_owned_provider_calls(
     return sum(category in owned_categories for category in suffix)
 
 
+def _verify_initial_generation(
+    raw_entry: object,
+    *,
+    categories: list[str],
+    path: str,
+) -> None:
+    """Mirror the schema-v6 initial candidate transport checks fail-closed."""
+
+    if raw_entry is None:
+        return
+    required_entry_keys = {
+        "binding",
+        "binding_sha256",
+        "provider_history_len",
+        "provider_history_sha256",
+        "provider_transport_id",
+        "transport",
+    }
+    if not isinstance(raw_entry, dict) or set(raw_entry) != required_entry_keys:
+        raise BaselineError(f"receipt initial-generation entry invalid: {path}")
+    binding = raw_entry.get("binding")
+    binding_sha256 = raw_entry.get("binding_sha256")
+    reserved_len = raw_entry.get("provider_history_len")
+    transport_id = raw_entry.get("provider_transport_id")
+    if (
+        not isinstance(binding, dict)
+        or not _is_sha256_hex(binding_sha256)
+        or binding_sha256 != _receipt_digest(binding)
+        or isinstance(reserved_len, bool)
+        or not isinstance(reserved_len, int)
+        or not 0 <= reserved_len <= len(categories)
+        or raw_entry.get("provider_history_sha256")
+        != _receipt_digest({"categories": categories[:reserved_len]})
+        or not isinstance(transport_id, str)
+        or not transport_id.startswith("initial_generation:")
+        or not transport_id.removeprefix("initial_generation:").isdigit()
+    ):
+        raise BaselineError(
+            f"receipt initial-generation authority inconsistent: {path}"
+        )
+    transport = raw_entry.get("transport")
+    if not isinstance(transport, dict):
+        raise BaselineError(f"receipt initial-generation transport invalid: {path}")
+    state = transport.get("state")
+    allowed_keys = {"state"}
+    if state in {"completed", "failed"}:
+        allowed_keys.update(
+            {
+                "provider_history_len",
+                "provider_history_sha256",
+                "provider_calls",
+            }
+        )
+    if state == "completed":
+        allowed_keys.update({"after_code_sha256", "after_code_size_bytes"})
+    elif state == "failed":
+        allowed_keys.add("error_type")
+    elif state != "pending":
+        raise BaselineError(
+            f"receipt initial-generation transport state invalid: {path}"
+        )
+    if set(transport) != allowed_keys:
+        raise BaselineError(
+            f"receipt initial-generation transport fields inconsistent: {path}"
+        )
+    if state == "pending":
+        return
+    history_len = transport.get("provider_history_len")
+    provider_calls = transport.get("provider_calls")
+    if (
+        isinstance(history_len, bool)
+        or not isinstance(history_len, int)
+        or not reserved_len <= history_len <= len(categories)
+        or transport.get("provider_history_sha256")
+        != _receipt_digest({"categories": categories[:history_len]})
+        or isinstance(provider_calls, bool)
+        or not isinstance(provider_calls, int)
+        or provider_calls
+        != sum(
+            category == "initial_generation"
+            for category in categories[reserved_len:history_len]
+        )
+    ):
+        raise BaselineError(f"receipt initial-generation history inconsistent: {path}")
+    if state == "completed" and (
+        provider_calls < 1
+        or not _is_sha256_hex(transport.get("after_code_sha256"))
+        or isinstance(transport.get("after_code_size_bytes"), bool)
+        or not isinstance(transport.get("after_code_size_bytes"), int)
+        or transport["after_code_size_bytes"] < 0
+    ):
+        raise BaselineError(f"receipt completed initial generation invalid: {path}")
+    if state == "failed" and (
+        not isinstance(transport.get("error_type"), str)
+        or not transport["error_type"].strip()
+        or transport["error_type"] != transport["error_type"].strip()
+    ):
+        raise BaselineError(f"receipt failed initial generation invalid: {path}")
+
+
 def _categorize(cat: str) -> str:
     c = cat.lower()
     if any(k in c for k in AUDIT_KEYS):
@@ -167,7 +267,7 @@ def read_receipts(run_dir: str, inputs: dict) -> list[dict]:
         for c in cats:
             breakdown[_categorize(c)] += 1
         logical_repairs = d.get("logical_repairs", [])
-        if d.get("schema_version") in {3, 4, 5}:
+        if d.get("schema_version") in {3, 4, 5, 6}:
             if not isinstance(logical_repairs, list):
                 raise BaselineError(f"receipt logical repair ledger invalid: {p}")
             for index, entry in enumerate(logical_repairs, start=1):
@@ -212,7 +312,7 @@ def read_receipts(run_dir: str, inputs: dict) -> list[dict]:
                         f"receipt logical repair history inconsistent: {p}"
                     )
                 provider_category = _bound_repair_provider_category(binding, path=p)
-                if d.get("schema_version") == 5:
+                if d.get("schema_version") in {5, 6}:
                     transport = entry.get("transport")
                     if not isinstance(transport, dict):
                         raise BaselineError(
@@ -249,21 +349,49 @@ def read_receipts(run_dir: str, inputs: dict) -> list[dict]:
                             and (state == "failed" or terminal_calls > 0)
                         )
                         if state == "completed":
+                            completed_keys = {
+                                "state",
+                                "mode",
+                                "after_code_sha256",
+                                "provider_history_len",
+                                "provider_history_sha256",
+                                "provider_calls",
+                            }
+                            result_persistence = transport.get("result_persistence")
+                            if d.get("schema_version") == 6:
+                                completed_keys.add("result_persistence")
+                            if result_persistence == "content_addressed":
+                                completed_keys.add("after_code_size_bytes")
                             transport_valid = bool(
                                 terminal_history_valid
-                                and set(transport)
-                                == {
-                                    "state",
-                                    "mode",
-                                    "after_code_sha256",
-                                    "provider_history_len",
-                                    "provider_history_sha256",
-                                    "provider_calls",
-                                }
+                                and set(transport) == completed_keys
                                 and isinstance(transport.get("mode"), str)
                                 and transport["mode"].strip() == transport["mode"]
                                 and transport["mode"]
                                 and _is_sha256_hex(transport.get("after_code_sha256"))
+                                and (
+                                    d.get("schema_version") != 6
+                                    or result_persistence
+                                    in {
+                                        "content_addressed",
+                                        "legacy_untracked",
+                                        "untracked",
+                                    }
+                                )
+                                and (
+                                    result_persistence != "content_addressed"
+                                    or (
+                                        isinstance(
+                                            transport.get("after_code_size_bytes"),
+                                            int,
+                                        )
+                                        and not isinstance(
+                                            transport.get("after_code_size_bytes"),
+                                            bool,
+                                        )
+                                        and transport["after_code_size_bytes"] >= 0
+                                    )
+                                )
                             )
                         else:
                             transport_valid = bool(
@@ -295,7 +423,13 @@ def read_receipts(run_dir: str, inputs: dict) -> list[dict]:
             raise BaselineError(
                 f"legacy receipt unexpectedly declares logical repairs: {p}"
             )
-        if d.get("schema_version") in {4, 5}:
+        if d.get("schema_version") == 6:
+            _verify_initial_generation(
+                d.get("initial_generation"), categories=cats, path=p
+            )
+        elif d.get("initial_generation") is not None:
+            raise BaselineError(f"legacy receipt declares initial generation: {p}")
+        if d.get("schema_version") in {4, 5, 6}:
             reservation = d.get("final_reservation_state")
             if not isinstance(reservation, dict):
                 raise BaselineError(f"receipt final reservation state invalid: {p}")

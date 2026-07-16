@@ -104,31 +104,76 @@ class AgenticCoderAgent:
         # cohort parquet is only read, so it stays outside this writable dir.
         if self.backend == "codex":
             return [
-                "codex", "exec",
-                "--sandbox", "workspace-write",
+                "codex",
+                "exec",
+                "--sandbox",
+                "workspace-write",
                 "--skip-git-repo-check",
-                "--color", "never",
-                "-C", workdir,
+                "--color",
+                "never",
+                "-C",
+                workdir,
             ]
         if self.backend == "claude":
             return [
-                "claude", "-p",
-                "--output-format", "text",
-                "--permission-mode", "acceptEdits",
-                "--add-dir", workdir,
+                "claude",
+                "-p",
+                "--output-format",
+                "text",
+                "--permission-mode",
+                "acceptEdits",
+                "--add-dir",
+                workdir,
             ]
         raise ValueError(f"Unsupported agentic coder backend: {self.backend!r}")
 
     # -- main ---------------------------------------------------------------
-    def run(self, *, context: ResearchContext, step: AnalysisStep) -> str:
+    def run(
+        self,
+        *,
+        context: ResearchContext,
+        step: AnalysisStep,
+        **authority_hooks: Any,
+    ) -> str:
         self.last_delegation_used = False
+        provider_budget = authority_hooks.pop("provider_budget", None)
+        fallback_kwargs = dict(authority_hooks)
+        if provider_budget is not None:
+            fallback_kwargs["provider_budget"] = provider_budget
+            # The local CLI is not yet a receipt-aware provider transport.  In
+            # a capsule-backed pipeline, delegating before the durable initial
+            # reservation would make a crash repeat the external CLI attempt,
+            # while an empty CLI result followed by the fallback would record
+            # only one of two real attempts.  Keep standalone delegation
+            # available, but route authority-bound generation through the
+            # receipt-aware fallback until the CLI has its own adapter.
+            if authority_hooks.get("initial_generation_binding") is not None:
+                return self.fallback.run(
+                    context=context,
+                    step=step,
+                    **fallback_kwargs,
+                )
+            if provider_budget.initial_generation_resume_status() == ("unpaid_pending"):
+                return self.fallback.run(
+                    context=context,
+                    step=step,
+                    **fallback_kwargs,
+                )
         if not cli_backend_available(self.backend):
-            return self.fallback.run(context=context, step=step)
+            return self.fallback.run(
+                context=context,
+                step=step,
+                **fallback_kwargs,
+            )
 
         script = self._delegate(context, step)
         if not script:
             # CLI produced nothing usable — degrade to the LLM coder.
-            return self.fallback.run(context=context, step=step)
+            return self.fallback.run(
+                context=context,
+                step=step,
+                **fallback_kwargs,
+            )
 
         self.last_delegation_used = True
         return self._enforce_compatibility(context, step, script)
@@ -160,40 +205,29 @@ class AgenticCoderAgent:
 
         return _strip_code_fence(code.strip())
 
+    def repair(self, **kwargs: Any) -> str:
+        """Keep pipeline repair accounting on the wrapped Coder transport."""
+
+        return self.fallback.repair(**kwargs)
+
     def _enforce_compatibility(
         self, context: ResearchContext, step: AnalysisStep, code: str
     ) -> str:
-        """Apply the same pre-execution matrix check ``CoderAgent.run`` does.
-
-        The CLI's output is held to the identical method-compatibility invariant
-        (e.g. no clustering over an ordinal SOFA component); violations are
-        routed through the wrapped coder's ``repair`` path, and the post-hoc
-        validator in ``audits/patterns.py`` remains the second line of defence.
-        """
-        from .agents import _MAX_PRE_EXEC_COMPATIBILITY_REPAIRS
-        from .method_compatibility import (
-            detect_forbidden_pattern_usage,
-            format_violation_message,
-        )
+        """Record violations; the central repair coordinator owns any repair."""
+        from .method_compatibility import detect_forbidden_pattern_usage
 
         self.last_compatibility_repair_attempts = 0
-        for attempt in range(1, _MAX_PRE_EXEC_COMPATIBILITY_REPAIRS + 1):
-            violations = detect_forbidden_pattern_usage(code, context, step)
-            self.last_compatibility_violations = violations
-            if not violations:
-                break
-            self.last_compatibility_repair_attempts = attempt
-            code = self.fallback.repair(
-                context=context,
-                step=step,
-                code=code,
-                run_log=format_violation_message(violations),
-                attempt=attempt,
-            )
+        self.last_compatibility_violations = detect_forbidden_pattern_usage(
+            code,
+            context,
+            step,
+        )
         return code
 
 
-def maybe_wrap_coder(coder: Any, *, env: "os._Environ[str] | dict[str, str] | None" = None) -> Any:
+def maybe_wrap_coder(
+    coder: Any, *, env: "os._Environ[str] | dict[str, str] | None" = None
+) -> Any:
     """Return an :class:`AgenticCoderAgent` wrapping ``coder`` iff opted in.
 
     Controlled by ``EASYICU_AGENTIC_CODER_BACKEND`` (``codex`` / ``claude``).

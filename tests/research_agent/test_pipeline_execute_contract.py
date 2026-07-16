@@ -28,9 +28,201 @@ from __future__ import annotations
 
 import inspect
 import json
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import fields
+from types import SimpleNamespace
 
 import pytest
+
+
+def test_llm_authority_signature_binds_endpoint_options_and_fallback_order() -> None:
+    from easyicu.research_agent.pipeline_cache import llm_signature
+
+    def client(endpoint: str, *, effort: str = "high"):
+        return SimpleNamespace(
+            name="openai-compatible",
+            _model="gpt-5.6-luna",
+            _resolved_base_url=endpoint,
+            _extra_body={"reasoning_effort": effort},
+        )
+
+    endpoint_a = client("http://127.0.0.1:8787/v1")
+    endpoint_b = client("http://127.0.0.1:8317/v1")
+    assert llm_signature(endpoint_a) != llm_signature(endpoint_b)
+    assert llm_signature(endpoint_b) != llm_signature(
+        client("http://127.0.0.1:8317/v1", effort="low")
+    )
+
+    fallback_ab = SimpleNamespace(name="fallback", _clients=[endpoint_a, endpoint_b])
+    fallback_ba = SimpleNamespace(name="fallback", _clients=[endpoint_b, endpoint_a])
+    assert llm_signature(fallback_ab) != llm_signature(fallback_ba)
+
+
+def test_capsule_checkpoint_upsert_never_overwrites_prior_terminal_attempt() -> None:
+    from easyicu.research_agent.pipeline_execute import (
+        _append_terminal_step_record,
+        _upsert_current_capsule_checkpoint,
+    )
+    from easyicu.research_agent.runtime_artifacts import current_step_records
+
+    records = [
+        {
+            "step_id": "01_summary",
+            "attempt_id": "attempt-1",
+            "status": "candidate_checkpointed",
+        },
+        {
+            "step_id": "01_summary",
+            "attempt_id": "attempt-1",
+            "status": "ok",
+        },
+    ]
+    pending = {
+        "step_id": "01_summary",
+        "attempt_id": "attempt-2",
+        "status": "capsule_revalidation_pending",
+    }
+    _upsert_current_capsule_checkpoint(records, pending)
+
+    assert records[-1] == pending
+    assert current_step_records(records)[-1]["status"] == (
+        "capsule_revalidation_pending"
+    )
+
+    terminal = {
+        "step_id": "01_summary",
+        "attempt_id": "attempt-2",
+        "status": "contract_failed",
+    }
+    _append_terminal_step_record(records, terminal)
+
+    assert pending not in records
+    assert records[-1] == terminal
+    assert current_step_records(records)[-1] == terminal
+
+
+@pytest.mark.parametrize("version", [5, 6])
+def test_provider_receipt_requirement_covers_legacy_and_initial_pending(
+    version: int,
+) -> None:
+    from easyicu.research_agent.pipeline_execute import (
+        _step_snapshot_requires_provider_receipt,
+    )
+
+    assert _step_snapshot_requires_provider_receipt(
+        {
+            "step_provider_call_receipt_version": version,
+            "capsule_pending_initial_transport_id": "initial_generation:1",
+        },
+        provider_attempts=0,
+        logical_repair_attempts=0,
+    )
+    assert _step_snapshot_requires_provider_receipt(
+        {
+            "step_provider_call_receipt_version": version,
+            "step_provider_call_receipt": (
+                ".runtime/provider_call_budgets/example.json"
+            ),
+        },
+        provider_attempts=0,
+        logical_repair_attempts=0,
+    )
+
+
+def test_non_typed_alias_requires_current_successful_step_authority(tmp_path) -> None:
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.pipeline_execute import (
+        _current_verified_evidence_record,
+    )
+
+    source = tmp_path / "source.csv"
+    source.write_text("x\n1\n", encoding="utf-8")
+    store = EvidenceStore(tmp_path)
+    record = store.register_file(
+        kind="table",
+        description="pending output",
+        source_path=source,
+        produced_by_step="01_summary",
+        aliases=["summary_table"],
+        publish_aliases=False,
+    )
+    store.publish_step_success_aliases(
+        {record.evidence_id: ["summary_table"]},
+        step_id="01_summary",
+    )
+    pending = [
+        {
+            "step_id": "01_summary",
+            "attempt_id": "attempt-1",
+            "status": "executed_pending_review",
+            "evidence_ids": [record.evidence_id],
+        }
+    ]
+    assert _current_verified_evidence_record(store, "summary_table", pending) is None
+
+    successful = [{**pending[0], "status": "ok"}]
+    assert (
+        _current_verified_evidence_record(store, "summary_table", successful) == record
+    )
+
+
+def test_step_run_input_capsule_must_match_sealed_evidence(tmp_path) -> None:
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.pipeline_execute import (
+        _verified_run_input_capsule_digest,
+    )
+    from easyicu.research_agent.run_input_capsule import RunInputIdentityError
+
+    capsule = tmp_path / "run_input_capsule.json"
+    capsule.write_text('{"schema_version":"test"}\n', encoding="utf-8")
+    store = EvidenceStore(tmp_path)
+    record = store.register_file(
+        kind="log",
+        description="sealed run input capsule",
+        source_path=capsule,
+        evidence_id="run_input_capsule",
+        producer="pipeline",
+        generation_mode="system",
+    )
+
+    assert (
+        _verified_run_input_capsule_digest(
+            run_dir=tmp_path,
+            evidence_store=store,
+        )
+        == record.sha256
+    )
+
+    capsule.write_text('{"schema_version":"tampered"}\n', encoding="utf-8")
+    with pytest.raises(RunInputIdentityError, match="digest changed"):
+        _verified_run_input_capsule_digest(
+            run_dir=tmp_path,
+            evidence_store=store,
+        )
+
+
+def test_parallel_step_worker_inherits_runner_capability_context() -> None:
+    import easyicu.research_agent.method_capabilities as method_capabilities
+    from easyicu.research_agent.pipeline_execute import _submit_in_current_context
+
+    method_capabilities.set_runtime_capability_snapshot_provider(
+        lambda: {"docker-only-capability"}
+    )
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [
+                _submit_in_current_context(
+                    executor,
+                    method_capabilities.runtime_capability_snapshot,
+                )
+                for _ in range(2)
+            ]
+            assert [future.result() for future in futures] == [
+                frozenset({"docker-only-capability"}),
+                frozenset({"docker-only-capability"}),
+            ]
+    finally:
+        method_capabilities.set_runtime_capability_snapshot_provider(None)
 
 
 def test_consistent_local_figure_source_descriptor_is_canonicalized_for_consumers(
@@ -250,9 +442,12 @@ def test_critic_messages_keep_only_blocking_errors():
 
 def test_code_repair_findings_keep_only_blocking_errors():
     from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.gate_semantics import blocking_validator_findings
     from easyicu.research_agent.pipeline_execute import (
         _blocking_validator_findings,
     )
+
+    assert _blocking_validator_findings is blocking_validator_findings
 
     findings = _blocking_validator_findings(
         [

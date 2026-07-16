@@ -234,9 +234,10 @@ class ClusterSelectionManifest(BaseModel):
             raise ValueError("minimum selection requires direction=minimize")
         if self.selection_rule == "maximum" and self.direction != "maximize":
             raise ValueError("maximum selection requires direction=maximize")
-        if self.selection_rule in {"elbow", "multi_criteria"} and not str(
-            self.rationale or ""
-        ).strip():
+        if (
+            self.selection_rule in {"elbow", "multi_criteria"}
+            and not str(self.rationale or "").strip()
+        ):
             raise ValueError("elbow/multi_criteria selection requires rationale")
         return self
 
@@ -1381,6 +1382,24 @@ class StepRecord(BaseModel):
     code_repair_attempts: Optional[int] = None
     runner_repair: Optional[str] = None
     deterministic_code_fallback: Optional[str] = None
+
+    # Immutable StepAuthorityCapsule checkpoint/replay coordinates. These do
+    # not grant evidence authority; they select the exact candidate/audit/
+    # execution snapshot that resume may verify and reuse.
+    step_authority_capsule_ref: Optional[Dict[str, Any]] = None
+    step_authority_capsule_stage: Optional[str] = None
+    step_authority_capsule_reused: Optional[bool] = None
+    step_authority_frozen_context_reused: Optional[bool] = None
+    step_authority_capsule_cache_miss: Optional[str] = None
+    step_authority_execution_cache_miss: Optional[str] = None
+    step_authority_audit_cache_miss: Optional[str] = None
+    capsule_execution_replayed: Optional[bool] = None
+    capsule_concept_audit_replayed: Optional[bool] = None
+    capsule_pending_initial_transport_id: Optional[str] = None
+    capsule_pending_initial_binding_sha256: Optional[str] = None
+    capsule_pending_repair_attempt_id: Optional[int] = None
+    capsule_pending_repair_binding_sha256: Optional[str] = None
+    capsule_pending_repair_failure_status: Optional[str] = None
 
     # Concept / contract / quality findings.
     concept_audit_error_count: Optional[int] = None

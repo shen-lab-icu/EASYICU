@@ -221,7 +221,11 @@ class StepRepairBudget:
         ]
         step_record["step_provider_call_receipt"] = (
             self._provider_receipt_relative_path
-            if snapshot["used"] or snapshot["logical_repair_attempts"]
+            if (
+                snapshot["used"]
+                or snapshot["logical_repair_attempts"]
+                or snapshot["initial_generation_transport_state"] is not None
+            )
             else None
         )
 
@@ -384,6 +388,7 @@ class RepairCoordinator:
         patch_call: Callable[[], str],
         full_rewrite_call: Callable[[str], str],
         logical_repair_attempt_id: Optional[int] = None,
+        persist_result: Optional[Callable[[str, str], object]] = None,
     ) -> RepairTransportResult:
         if logical_repair_attempt_id is not None and self._provider_budget is None:
             raise ValueError(
@@ -413,6 +418,21 @@ class RepairCoordinator:
                 )
             raise
 
+        persisted_result: object = None
+        if persist_result is not None:
+            try:
+                persisted_result = persist_result(result.code, result.mode)
+            except ProviderCallBudgetReceiptError:
+                raise
+            except Exception as exc:
+                if logical_repair_attempt_id is not None:
+                    assert self._provider_budget is not None
+                    self._provider_budget.fail_logical_repair_transport(
+                        attempt_id=logical_repair_attempt_id,
+                        error_type=type(exc).__name__,
+                    )
+                raise
+
         if logical_repair_attempt_id is not None:
             assert self._provider_budget is not None
             self._provider_budget.complete_logical_repair_transport(
@@ -421,6 +441,11 @@ class RepairCoordinator:
                 after_code_sha256=hashlib.sha256(
                     result.code.encode("utf-8")
                 ).hexdigest(),
+                after_code_size_bytes=(
+                    int(getattr(persisted_result, "size_bytes"))
+                    if getattr(persisted_result, "size_bytes", None) is not None
+                    else None
+                ),
             )
         return result
 

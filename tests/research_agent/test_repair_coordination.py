@@ -192,10 +192,15 @@ def test_every_pipeline_llm_repair_reservation_is_authority_bound():
         and node.func.id == "_consume_llm_repair_budget"
     ]
 
-    assert len(calls) == 6
+    assert len(calls) == 7
     for call in calls:
         keywords = {keyword.arg for keyword in call.keywords}
-        assert keywords == {"before_code", "repair_ticket", "provider_category"}
+        assert keywords == {
+            "before_code",
+            "repair_ticket",
+            "provider_category",
+            "failure_status",
+        }
     reserved_categories = sorted(
         keyword.value.value
         for call in calls
@@ -207,15 +212,13 @@ def test_every_pipeline_llm_repair_reservation_is_authority_bound():
         keyword.value.value
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and isinstance(node.func.value, ast.Name)
-        and node.func.value.id == "coder"
-        and node.func.attr == "repair"
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_repair_with_capsule"
         for keyword in node.keywords
         if keyword.arg == "provider_category"
         and isinstance(keyword.value, ast.Constant)
     )
-    assert reserved_categories == coder_categories
+    assert reserved_categories == sorted([*coder_categories, "compatibility_repair"])
 
 
 def test_every_pipeline_coder_repair_binds_current_logical_attempt():
@@ -224,10 +227,8 @@ def test_every_pipeline_coder_repair_binds_current_logical_attempt():
         node
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and isinstance(node.func.value, ast.Name)
-        and node.func.value.id == "coder"
-        and node.func.attr == "repair"
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_repair_with_capsule"
     ]
 
     assert len(calls) == 6

@@ -172,6 +172,37 @@ def test_constructor_honours_environment_image(
     assert runner.image == "company/easyicu-ra:1.4"
 
 
+def test_runner_authority_changes_when_same_tag_resolves_to_new_image(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+    runner = ra.DockerRunner(
+        workdir=tmp_path / "run",
+        cohort_parquet=cohort,
+        image="company/easyicu-ra:latest",
+        extra_env={"TRAJECTORY_PARQUET": str(tmp_path / "trajectory.parquet")},
+    )
+    trajectory = tmp_path / "trajectory.parquet"
+    trajectory.write_bytes(b"trajectory-a")
+    image_identity = ["sha256:" + "a" * 64, ()]
+    monkeypatch.setattr(
+        runner,
+        "_inspect_image_identity",
+        lambda: tuple(image_identity),
+    )
+    first = runner.authority_identity_sha256
+    image_identity[0] = "sha256:" + "c" * 64
+    second = runner.authority_identity_sha256
+    trajectory.write_bytes(b"trajectory-b")
+    third = runner.authority_identity_sha256
+
+    assert first != second
+    assert second != third
+
+
 # ---------------------------------------------------------------------------
 # build_command shape
 # ---------------------------------------------------------------------------
@@ -234,8 +265,7 @@ def test_build_command_has_safety_knobs(
         for s in cmd
     ), f"output mount missing in {joined}"
     assert not any(
-        "type=bind" in s and s.endswith("target=/easyicu-run/steps/step_x")
-        for s in cmd
+        "type=bind" in s and s.endswith("target=/easyicu-run/steps/step_x") for s in cmd
     ), f"step directory must not be writable in {joined}"
     # Env injection.
     assert "-e" in cmd
@@ -410,9 +440,7 @@ def test_run_invokes_subprocess_and_writes_log(
     assert cmd[0] == runner.docker_executable and cmd[1] == "run"
     assert immutable_id in cmd
     assert "img:0" not in cmd
-    assert not any(
-        "EASYICU_RUN_ARTIFACT_AUTHORITY_SNAPSHOT=" in token for token in cmd
-    )
+    assert not any("EASYICU_RUN_ARTIFACT_AUTHORITY_SNAPSHOT=" in token for token in cmd)
     cidfile_arg = next(token for token in cmd if token.startswith("--cidfile="))
     assert not Path(cidfile_arg.split("=", 1)[1]).exists()
 
@@ -441,9 +469,7 @@ def test_run_invokes_subprocess_and_writes_log(
     assert "* shap" not in capability_block
     # Script persisted to disk before run.
     assert result.script_path.read_text(encoding="utf-8") == "print('hi')\n"
-    assert not (
-        result.cwd / ".run_artifact_authority_snapshot.json"
-    ).exists()
+    assert not (result.cwd / ".run_artifact_authority_snapshot.json").exists()
 
 
 def test_docker_coder_capabilities_use_image_snapshot_before_first_step(
@@ -764,7 +790,9 @@ def test_stale_cleanup_treats_step_id_glob_metacharacters_literally(
     assert unrelated.exists()
 
 
-@pytest.mark.parametrize("run_exception", [OSError("docker failed"), KeyboardInterrupt()])
+@pytest.mark.parametrize(
+    "run_exception", [OSError("docker failed"), KeyboardInterrupt()]
+)
 def test_host_interruption_preserves_cleanup_sentinel(
     ra,
     tmp_path: Path,
@@ -889,6 +917,56 @@ def test_pull_image_invoked_when_requested(
     assert captured[3][:2] == [runner.docker_executable, "run"]
 
 
+def test_pull_precedes_and_binds_authority_image_identity(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+    calls: List[List[str]] = []
+    pulled = {"value": False}
+
+    def fake_run(cmd, *args, **kwargs):
+        del args, kwargs
+        calls.append(list(cmd))
+        if len(cmd) >= 2 and cmd[1] == "pull":
+            pulled["value"] = True
+            return _FakeProc()
+        if len(cmd) >= 3 and cmd[1:3] == ["image", "inspect"]:
+            image = "b" if pulled["value"] else "a"
+            return _FakeProc(
+                stdout=json.dumps({"Id": "sha256:" + image * 64, "RepoDigests": []})
+            )
+        if "pip" in cmd and "freeze" in cmd:
+            return _FakeProc(
+                stdout=(
+                    "numpy==2\npandas==2\nscipy==1\nmatplotlib==3\n"
+                    "statsmodels==0.14\nscikit-learn==1\npyarrow==23\n"
+                )
+            )
+        raise AssertionError(cmd)
+
+    import easyicu.research_agent.runner as runner_module
+
+    monkeypatch.setattr(runner_module.subprocess, "run", fake_run)
+    runner = ra.DockerRunner(
+        workdir=tmp_path / "run",
+        cohort_parquet=cohort,
+        image="img:latest",
+        pull_image=True,
+    )
+
+    authority = runner.authority_identity_sha256
+    provenance, _requirements = runner._capture_runtime_provenance()
+
+    assert calls[0][1] == "pull"
+    assert calls[1][1:3] == ["image", "inspect"]
+    assert provenance["image_id"] == "sha256:" + "b" * 64
+    assert authority
+    assert sum(call[1] == "pull" for call in calls) == 1
+
+
 # ---------------------------------------------------------------------------
 # Pipeline wiring
 # ---------------------------------------------------------------------------
@@ -940,6 +1018,8 @@ def test_pipeline_runner_factory_overrides_kind(
     ra,
     tmp_path: Path,
 ):
+    import easyicu.research_agent.method_capabilities as method_capabilities
+
     cohort_path = _make_cohort(tmp_path)
     seen: Dict[str, Any] = {}
 
@@ -954,11 +1034,15 @@ def test_pipeline_runner_factory_overrides_kind(
         runner_kind="docker",  # ignored when runner_factory is set
         runner_factory=fake_factory,
     )
+    method_capabilities.set_runtime_capability_snapshot_provider(
+        lambda: {"docker-only-capability"}
+    )
     runner = pipe._build_runner(
         run_dir=tmp_path / "ra" / "run", cohort_path=cohort_path
     )
     assert runner == "sentinel-runner"
     assert seen["cohort_parquet"] == cohort_path
+    assert method_capabilities.runtime_capability_snapshot() is None
 
 
 def test_pipeline_unknown_runner_kind_raises(ra, tmp_path: Path):
