@@ -20,6 +20,7 @@ class RepairReason(str, Enum):
     UNDEFINED_HELPER = "UNDEFINED_HELPER"
     UNBOUND_LOCAL = "UNBOUND_LOCAL"
     LOSSY_NUMERIC_COERCION = "LOSSY_NUMERIC_COERCION"
+    LOSSY_ORDINAL_ROUNDING = "LOSSY_ORDINAL_ROUNDING"
     INVALID_NUMERIC_REDUCTION = "INVALID_NUMERIC_REDUCTION"
     ARBITRARY_COLUMN_FALLBACK = "ARBITRARY_COLUMN_FALLBACK"
     TYPED_PRODUCT_BINDING_INVALID = "TYPED_PRODUCT_BINDING_INVALID"
@@ -120,7 +121,7 @@ _DETAIL_REASON_CODES = {
     "invalid_local_helper_call": RepairReason.INVALID_HELPER_SIGNATURE,
     "undefined_helper_call": RepairReason.UNDEFINED_HELPER,
     "branch_local_unbound": RepairReason.UNBOUND_LOCAL,
-    "lossy_ordinal_rounding": RepairReason.LOSSY_NUMERIC_COERCION,
+    "lossy_ordinal_rounding": RepairReason.LOSSY_ORDINAL_ROUNDING,
     "lossy_numeric_coercion": RepairReason.LOSSY_NUMERIC_COERCION,
     "scalar_cast_before_reduction": RepairReason.INVALID_NUMERIC_REDUCTION,
     "arbitrary_column_fallback": RepairReason.ARBITRARY_COLUMN_FALLBACK,
