@@ -275,6 +275,34 @@ def test_coder_repair_budget_exhaustion_prevents_full_rewrite(ra):
     assert budget.categories == ("repair_patch",)
 
 
+def test_coder_repair_uses_last_non_audit_slot_for_direct_rewrite(ra):
+    """Do not strand a repair by spending its sole slot on a bad patch."""
+    llm = _SequenceLLM(["import os\nvalue = 3\n"])
+    budget = StepProviderCallBudget(
+        3,
+        step_id="render",
+        reserved_final_category="concept_audit",
+    )
+    budget.consume("initial_generation")
+
+    coder = CoderAgent(llm)
+    repaired = coder.repair(
+        context=_context(ra),
+        step=_figure_step(ra),
+        code="import os\nvalue = 1\n",
+        run_log="ERROR: local value is invalid",
+        provider_budget=budget,
+    )
+
+    assert repaired.endswith("value = 3")
+    assert len(llm.calls) == 1
+    assert budget.categories == ("initial_generation", "repair_full_rewrite")
+    assert coder.last_repair_transport == "full_rewrite"
+    assert coder.last_repair_provider_calls == 1
+    assert budget.can_consume("concept_audit") is True
+    assert budget.can_consume("repair_patch") is False
+
+
 def test_patch_json_is_never_accepted_as_complete_python_script():
     payload = json.dumps(
         {

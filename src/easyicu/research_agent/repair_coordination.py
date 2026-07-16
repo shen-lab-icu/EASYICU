@@ -1,4 +1,4 @@
-"""Step-level repair budget accounting — batch-1 of the A2 control-plane split.
+"""Step-level repair coordination for the A2 control-plane split.
 
 This module is a LINE-FOR-LINE extraction of four accounting closures that
 lived inside ``pipeline_execute.run_execute_phase``'s step worker, plus the
@@ -17,18 +17,24 @@ contract:
   with the injected ``authorize`` callback, which remains defined at the call
   site.
 
-No decision logic lives here yet — batches 2+ (GateEvaluator, the repair
-decision ladder) build on this seam.
+The LLM transport ladder also lives here.  It is deliberately science-neutral:
+the Coder still owns the repair prompt and the Planner-owned scientific
+coordinates, while :class:`RepairCoordinator` decides only whether the current
+provider allowance can afford patch-then-rewrite or must spend its sole
+non-audit slot directly on a full rewrite.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+from .code_patch import CodePatchError, apply_code_patch
 from .code_repair import deterministic_concept_audit_repair
 from .provider_budget import (
     PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION,
     StepProviderCallBudget,
+    complete_with_provider_budget,
 )
 
 
@@ -126,6 +132,124 @@ class StepRepairBudget:
         return True
 
 
+@dataclass(frozen=True)
+class RepairTransportResult:
+    """Result of one mechanical patch/full-rewrite transport transaction."""
+
+    code: str
+    mode: str
+    provider_calls: int
+
+
+class RepairCoordinator:
+    """Execute the mechanical patch → optional full-rewrite ladder once.
+
+    The coordinator never chooses a model, variable, cohort, product, or
+    estimand.  It receives already-built Coder prompts as callables and owns
+    only transport accounting plus deterministic response parsing.
+
+    When the shared budget has exactly one non-audit call left while a final
+    audit slot remains reserved, attempting a patch is unsafe: a malformed
+    patch would consume the only repair slot and make its required fallback
+    impossible.  In that state the coordinator goes directly to full rewrite.
+    """
+
+    def __init__(
+        self,
+        *,
+        provider_budget: Optional[StepProviderCallBudget],
+        provider_category: str,
+        normalize_script: Callable[[str], str],
+        is_executable_script: Callable[[str], bool],
+    ) -> None:
+        self._provider_budget = provider_budget
+        self._provider_category = str(provider_category).strip() or "repair"
+        self._normalize_script = normalize_script
+        self._is_executable_script = is_executable_script
+
+    def _must_skip_patch(self) -> bool:
+        if self._provider_budget is None:
+            return False
+        snapshot = self._provider_budget.snapshot()
+        reservation_active = bool(
+            snapshot.get("reserved_final_category")
+            and not snapshot.get("reservation_released")
+        )
+        if not reservation_active:
+            return False
+        non_audit_remaining = max(0, int(snapshot["remaining"]) - 1)
+        return non_audit_remaining == 1
+
+    def _call(self, suffix: str, call: Callable[[], str]) -> str:
+        return complete_with_provider_budget(
+            budget=self._provider_budget,
+            category=f"{self._provider_category}_{suffix}",
+            call=call,
+        )
+
+    def _parse_full_rewrite(self, *, code: str, raw: str) -> tuple[str, str]:
+        try:
+            # Some providers ignore the full-script instruction but still emit
+            # a valid exact patch. Applying it remains safer than executing a
+            # JSON payload as Python.
+            return apply_code_patch(code, raw), "full_rewrite_response_patch"
+        except CodePatchError:
+            return self._normalize_script(str(raw or "").strip()), "full_rewrite"
+
+    def repair(
+        self,
+        *,
+        code: str,
+        patch_call: Callable[[], str],
+        full_rewrite_call: Callable[[str], str],
+    ) -> RepairTransportResult:
+        calls_before = self._provider_budget.used if self._provider_budget else 0
+        repaired: str
+        mode: str
+
+        if self._must_skip_patch():
+            raw = self._call(
+                "full_rewrite",
+                lambda: full_rewrite_call(
+                    "minimal patch skipped because only one non-audit provider "
+                    "call remained while the mandatory final audit stayed reserved"
+                ),
+            )
+            repaired, mode = self._parse_full_rewrite(code=code, raw=raw)
+        else:
+            raw_patch = self._call("patch", patch_call)
+            try:
+                repaired = apply_code_patch(code, raw_patch)
+                mode = "minimal_patch"
+            except CodePatchError as patch_error:
+                # If a provider ignored the JSON instruction but already
+                # returned a valid complete script, that response is the one
+                # allowed fallback; do not buy another full rewrite.
+                direct_script = self._normalize_script(str(raw_patch or "").strip())
+                if self._is_executable_script(direct_script):
+                    repaired = direct_script
+                    mode = "patch_response_full_script"
+                else:
+                    fallback_reason = str(patch_error)
+                    raw = self._call(
+                        "full_rewrite",
+                        lambda: full_rewrite_call(fallback_reason),
+                    )
+                    repaired, mode = self._parse_full_rewrite(code=code, raw=raw)
+
+        if not self._is_executable_script(repaired):
+            raise ValueError(
+                "Coder repair returned non-script output; refusing to replace "
+                "the previous analysis script."
+            )
+        calls_after = self._provider_budget.used if self._provider_budget else 0
+        return RepairTransportResult(
+            code=repaired,
+            mode=mode,
+            provider_calls=(calls_after - calls_before) if self._provider_budget else 0,
+        )
+
+
 def authorized_deterministic_concept_repair(
     script_text: str,
     error_messages: Sequence[str],
@@ -157,6 +281,8 @@ def authorized_deterministic_concept_repair(
 
 
 __all__ = [
+    "RepairCoordinator",
+    "RepairTransportResult",
     "StepRepairBudget",
     "authorized_deterministic_concept_repair",
 ]

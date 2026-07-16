@@ -14,6 +14,7 @@ import json
 
 from easyicu.research_agent.provider_budget import StepProviderCallBudget
 from easyicu.research_agent.repair_coordination import (
+    RepairCoordinator,
     StepRepairBudget,
     authorized_deterministic_concept_repair,
 )
@@ -152,3 +153,50 @@ def test_receipt_on_disk_matches_snapshot_projection(tmp_path):
     payload = json.loads((tmp_path / "receipt.json").read_text(encoding="utf-8"))
     assert payload["categories"] == step_record["step_provider_call_categories"]
     assert payload["limit"] == step_record["step_provider_call_budget"]
+
+
+def test_repair_coordinator_keeps_patch_as_default_without_audit_reservation():
+    calls: list[str] = []
+    provider = StepProviderCallBudget(2, step_id=STEP_ID)
+    coordinator = RepairCoordinator(
+        provider_budget=provider,
+        provider_category="runtime_repair",
+        normalize_script=lambda value: value,
+        is_executable_script=lambda value: value.startswith("import "),
+    )
+
+    result = coordinator.repair(
+        code="import os\nvalue = 1\n",
+        patch_call=lambda: calls.append("patch") or "not-json",
+        full_rewrite_call=lambda _reason: calls.append("rewrite")
+        or "import os\nvalue = 2\n",
+    )
+
+    assert calls == ["patch", "rewrite"]
+    assert result.mode == "full_rewrite"
+    assert result.provider_calls == 2
+    assert provider.categories == (
+        "runtime_repair_patch",
+        "runtime_repair_full_rewrite",
+    )
+
+
+def test_repair_coordinator_does_not_buy_rewrite_for_patch_response_script():
+    calls: list[str] = []
+    provider = StepProviderCallBudget(2, step_id=STEP_ID)
+    coordinator = RepairCoordinator(
+        provider_budget=provider,
+        provider_category="contract_repair",
+        normalize_script=lambda value: value,
+        is_executable_script=lambda value: value.startswith("import "),
+    )
+
+    result = coordinator.repair(
+        code="import os\nvalue = 1\n",
+        patch_call=lambda: calls.append("patch") or "import os\nvalue = 2\n",
+        full_rewrite_call=lambda _reason: calls.append("rewrite") or "unused",
+    )
+
+    assert calls == ["patch"]
+    assert result.mode == "patch_response_full_script"
+    assert result.provider_calls == 1
