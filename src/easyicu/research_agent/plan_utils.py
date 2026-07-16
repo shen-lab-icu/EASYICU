@@ -79,7 +79,6 @@ from .trajectory_contract import (
 )
 from .trajectory_plan_contract import trajectory_plan_contract_applies
 
-
 _WIDE_MEASUREMENT_VALUE_SUFFIXES = (
     "_median",
     "_first",
@@ -2238,24 +2237,106 @@ def _preserve_figure_steps_after_replan(
         for step in current.steps
         if step.step_id not in revised_ids and _step_produces_figure(step)
     ]
-    if not dropped_figure_steps:
-        return revised, []
     new_steps = list(revised.steps) + list(dropped_figure_steps)
+
+    # A host-split render child carries exact typed inputs from its direct
+    # parent.  A replanner may echo the original, pre-normalised parent while
+    # dropping the split child.  Re-attaching only the child would then create
+    # an impossible DAG: the child asks for products that the echoed parent no
+    # longer declares.  Restore only products that were already declared by
+    # that same direct parent in ``current``.  This is structural contract
+    # preservation, not authority to choose a new table, model, or estimand.
+    current_output_owners: Dict[Tuple[str, str], List[Tuple[str, str]]] = {}
+    for step in current.steps:
+        for raw_output in step.expected_outputs or []:
+            product = typed_product(raw_output)
+            if product is not None:
+                current_output_owners.setdefault(product, []).append(
+                    (str(step.step_id), str(raw_output))
+                )
+
+    resulting_producers: Dict[Tuple[str, str], Set[str]] = {}
+    for step in new_steps:
+        for raw_output in step.expected_outputs or []:
+            product = typed_product(raw_output)
+            if product is not None:
+                resulting_producers.setdefault(product, set()).add(str(step.step_id))
+
+    result_ids = {str(step.step_id) for step in new_steps}
+    current_figure_ids = {
+        str(step.step_id) for step in current.steps if _step_produces_figure(step)
+    }
+    restored_by_parent: Dict[str, List[str]] = {}
+    for figure_step in new_steps:
+        if str(figure_step.step_id) not in current_figure_ids:
+            continue
+        parent_id = _parent_step_id_for_figure_step(figure_step)
+        if not parent_id or parent_id not in result_ids:
+            continue
+        for raw_input in figure_step.inputs or []:
+            product = typed_product(raw_input)
+            if product is None or resulting_producers.get(product):
+                continue
+            prior_owners = current_output_owners.get(product, [])
+            if len(prior_owners) != 1 or prior_owners[0][0] != parent_id:
+                continue
+            restored_output = prior_owners[0][1]
+            restored_by_parent.setdefault(parent_id, []).append(restored_output)
+            resulting_producers.setdefault(product, set()).add(parent_id)
+
+    if restored_by_parent:
+        repaired_steps: List[AnalysisStep] = []
+        for step in new_steps:
+            additions = restored_by_parent.get(str(step.step_id), [])
+            if not additions:
+                repaired_steps.append(step)
+                continue
+            repaired_steps.append(
+                step.model_copy(
+                    update={
+                        "expected_outputs": list(
+                            dict.fromkeys([*(step.expected_outputs or []), *additions])
+                        )
+                    }
+                )
+            )
+        new_steps = repaired_steps
+
+    if not dropped_figure_steps and not restored_by_parent:
+        return revised, []
+
     preserved = revised.model_copy(update={"steps": new_steps})
-    findings = [
-        ValidationFinding(
-            validator="replanner",
-            severity="warning",
-            message=(
-                "Replanner attempted to drop "
-                f"{len(dropped_figure_steps)} figure-producing step(s); "
-                "they were re-attached to preserve task contract."
-            ),
-            detail={
-                "preserved_step_ids": [s.step_id for s in dropped_figure_steps],
-            },
+    findings: List[ValidationFinding] = []
+    if dropped_figure_steps:
+        findings.append(
+            ValidationFinding(
+                validator="replanner",
+                severity="warning",
+                message=(
+                    "Replanner attempted to drop "
+                    f"{len(dropped_figure_steps)} figure-producing step(s); "
+                    "they were re-attached to preserve task contract."
+                ),
+                detail={
+                    "preserved_step_ids": [s.step_id for s in dropped_figure_steps],
+                },
+            )
         )
-    ]
+    if restored_by_parent:
+        findings.append(
+            ValidationFinding(
+                validator="replanner",
+                severity="warning",
+                message=(
+                    "Restored exact typed outputs on existing direct parent "
+                    "steps so preserved figure children retain a valid product DAG."
+                ),
+                detail={
+                    "reason": "preserved_figure_parent_output_contract",
+                    "restored_outputs_by_parent": restored_by_parent,
+                },
+            )
+        )
     return preserved, findings
 
 
