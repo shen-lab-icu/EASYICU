@@ -2816,7 +2816,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
 def test_resume_reaudits_material_deterministic_quarantine_repair(
     ra, tmp_path: Path, monkeypatch, legacy_stale_checkpoint: bool
 ) -> None:
-    """A clean deterministic replay retires stale findings, not the gate."""
+    """A deterministic replay retires stale findings without a new coder call."""
 
     import easyicu.research_agent.pipeline_execute as execute_module
 
@@ -2832,6 +2832,20 @@ def test_resume_reaudits_material_deterministic_quarantine_repair(
         execute_module,
         "deterministic_concept_audit_repair",
         gated_repair,
+    )
+    real_repair_history = execute_module._monotonic_step_llm_repair_history
+    exhaust_logical_budget = {"value": False}
+
+    def forced_repair_history(records, *, limit):
+        attempts, classes, invalid = real_repair_history(records, limit=limit)
+        if not exhaust_logical_budget["value"]:
+            return attempts, classes, invalid
+        return limit, ["concept"] * limit, invalid
+
+    monkeypatch.setattr(
+        execute_module,
+        "_monotonic_step_llm_repair_history",
+        forced_repair_history,
     )
 
     draft_code = """
@@ -2936,6 +2950,22 @@ if __name__ == "__main__":
     assert first_llm.write_calls == 1
     assert first_llm.repair_calls == 1
     assert (run_dir / "steps" / "01_summary" / ".quarantine").is_dir()
+    first_partial = json.loads(
+        (run_dir / "manifest_partial.json").read_text(encoding="utf-8")
+    )
+    first_record = next(
+        item
+        for item in first_partial["per_step_records"]
+        if item.get("step_id") == "01_summary"
+    )
+    first_provider_categories = list(
+        first_record.get("step_provider_call_categories") or []
+    )
+    # Deterministic revalidation/repair runs before the coder-repair budget
+    # branch.  It remains available when that durable logical budget is fully
+    # spent without requesting another coder generation or coder repair.  Other
+    # pipeline roles may still be invoked while the resumed step is finalized.
+    exhaust_logical_budget["value"] = True
 
     if legacy_stale_checkpoint:
         from easyicu.research_agent.pipeline_resume import (
@@ -3027,6 +3057,22 @@ if __name__ == "__main__":
     )
     assert resumed_llm.write_calls == 0
     assert resumed_llm.repair_calls == 0
+    resumed_provider_categories = list(
+        record.get("step_provider_call_categories") or []
+    )
+    assert resumed_provider_categories[: len(first_provider_categories)] == (
+        first_provider_categories
+    )
+    new_provider_categories = resumed_provider_categories[
+        len(first_provider_categories) :
+    ]
+    assert not any(
+        category == "initial_generation"
+        or category.endswith(("_patch", "_full_rewrite"))
+        for category in new_provider_categories
+    )
+    assert record["step_llm_repair_attempts"] == 2
+    assert record["step_llm_repair_budget"] == 2
     assert quarantine_absent_at_runner == [True]
     assert record["status"] == "ok"
     if legacy_stale_checkpoint:

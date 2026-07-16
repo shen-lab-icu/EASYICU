@@ -47,7 +47,6 @@ from easyicu.research_agent.code_repair import (
     deterministic_concept_audit_repair,
 )
 
-
 # ---------------------------------------------------------------------------
 # _KEYERROR_NOT_IN_INDEX_RE / _extract_missing_index_columns
 # ---------------------------------------------------------------------------
@@ -716,6 +715,9 @@ def measurement_provenance_audit(frame):
 def main(frame):
     provenance = measurement_provenance_audit(frame)
     write_scientific_outputs(frame)
+
+if __name__ == "__main__":
+    main(frame)
 """.lstrip()
     out, names = deterministic_concept_audit_repair(
         code,
@@ -766,6 +768,9 @@ def main(frame):
         final_mask = False
         summary['status'] = 'failed_provenance_audit'
     publish_outputs(frame, final_mask)
+
+if __name__ == "__main__":
+    main(frame)
 """.lstrip()
 
     out, names = deterministic_concept_audit_repair(

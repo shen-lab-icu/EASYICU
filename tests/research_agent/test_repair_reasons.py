@@ -130,6 +130,19 @@ def test_host_validation_swallow_has_structural_accounting_reason():
     assert ticket[0]["reason"] == RepairReason.STRUCTURAL_ACCOUNTING_INVALID.value
 
 
+def test_scalar_cast_before_reduction_has_typed_numeric_reason():
+    finding = ValidationFinding(
+        validator="mechanical_code_preflight",
+        severity="error",
+        message="wording may change",
+        detail={"reason": "scalar_cast_before_reduction", "lines": [12]},
+    )
+
+    assert typed_repair_ticket([finding])[0]["reason"] == (
+        RepairReason.INVALID_NUMERIC_REDUCTION.value
+    )
+
+
 def test_llm_concept_finding_has_typed_semantics_reason_without_phrase_routing():
     finding = ValidationFinding(
         validator="llm_concept_auditor",

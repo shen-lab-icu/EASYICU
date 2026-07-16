@@ -305,7 +305,6 @@ def find_column(frame, candidates, numeric=False):
     return None
 """
     findings = audit_mechanical_code_contracts(code, _figure_step(ra))
-
     assert any(
         finding.detail and finding.detail.get("reason") == "arbitrary_column_fallback"
         for finding in findings
@@ -520,6 +519,238 @@ def render(frame):
     )
 
 
+def test_mechanical_preflight_repairs_scalar_cast_before_sum(ra):
+    code = """
+import numpy as np
+
+left = np.array([True, False, True])
+right = np.array([True, True, False])
+count = int(
+    left & right
+).sum()
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    messages = [
+        value
+        for finding in findings
+        if finding.detail
+        and finding.detail.get("reason") == "scalar_cast_before_reduction"
+        for value in (finding.message, finding.detail.get("reason"))
+        if value
+    ]
+
+    assert messages
+    repaired, repair_names = deterministic_concept_audit_repair(code, messages)
+    repaired_again, repair_names_again = deterministic_concept_audit_repair(
+        repaired, messages
+    )
+    namespace = {}
+    exec(repaired, namespace)
+
+    assert repair_names == ["scalar_cast_before_reduction_v1"]
+    assert repair_names_again == []
+    assert repaired_again == repaired
+    assert namespace["count"] == 1
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "scalar_cast_before_reduction"
+        for finding in audit_mechanical_code_contracts(repaired, _figure_step(ra))
+    )
+
+
+def test_mechanical_preflight_preserves_shadowed_int_before_sum(ra):
+    code = """
+def int(value):
+    return value
+
+count = int(mask).sum()
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    repaired, repair_names = deterministic_concept_audit_repair(
+        code,
+        ["scalar_cast_before_reduction"],
+    )
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "scalar_cast_before_reduction"
+        for finding in findings
+    )
+    assert repair_names == []
+    assert repaired == code
+
+
+@pytest.mark.parametrize("unused_import", ["builtins", "operator", "sys"])
+def test_mechanical_preflight_allows_unused_namespace_import_before_scalar_repair(
+    ra, unused_import
+):
+    code = f"""
+import {unused_import}
+count = int(mask).sum()
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    messages = [
+        finding.detail.get("reason")
+        for finding in findings
+        if finding.detail
+        and finding.detail.get("reason") == "scalar_cast_before_reduction"
+    ]
+    repaired, repair_names = deterministic_concept_audit_repair(code, messages)
+
+    assert messages == ["scalar_cast_before_reduction"]
+    assert repair_names == ["scalar_cast_before_reduction_v1"]
+    assert "int((mask).sum())" in repaired
+
+
+@pytest.mark.parametrize(
+    "shadowing",
+    [
+        "match value:\n    case int:\n        pass",
+        "match values:\n    case [*int]:\n        pass",
+        "from custom_numeric import *",
+        "import builtins\nbuiltins.int = custom_int",
+        "__builtins__['int'] = custom_int",
+        "__builtins__.int = custom_int",
+        "import builtins\nsetattr(builtins, 'int', custom_int)",
+        "import builtins as b\nb.int = custom_int",
+        "globals()['int'] = custom_int",
+        "locals()['int'] = custom_int",
+        "exec('int = custom_int')",
+        "match value:\n    case {'a': a, **int}:\n        pass",
+        "def typed[int](value):\n    return value",
+    ],
+    ids=[
+        "match-as",
+        "match-star",
+        "import-star",
+        "builtins-attribute",
+        "builtins-mapping",
+        "builtins-object-attribute",
+        "builtins-setattr",
+        "builtins-alias",
+        "globals-mutation",
+        "locals-mutation",
+        "exec-binding",
+        "match-mapping-rest",
+        "type-parameter",
+    ],
+)
+def test_mechanical_preflight_preserves_dynamically_shadowed_int_before_sum(
+    ra, shadowing
+):
+    code = f"""
+{shadowing}
+
+count = int(mask).sum()
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    repaired, repair_names = deterministic_concept_audit_repair(
+        code,
+        ["scalar_cast_before_reduction"],
+    )
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "scalar_cast_before_reduction"
+        for finding in findings
+    )
+    assert repair_names == []
+    assert repaired == code
+
+
+@pytest.mark.parametrize(
+    "shadowing",
+    [
+        "runner = exec\nrunner('global int; int = custom_int')",
+        "import builtins\nrunner = builtins.exec\nrunner('global int; int = custom_int')",
+        "import builtins\nrunner = builtins.__dict__['exec']\nrunner('global int; int = custom_int')",
+        "import builtins\nrunner = builtins.__dict__.get('exec')\nrunner('global int; int = custom_int')",
+        "import builtins\nrunner = builtins.__getattribute__('exec')\nrunner('global int; int = custom_int')",
+        "import builtins\nrunner = getattr(builtins, 'exec')\nrunner('global int; int = custom_int')",
+        "import builtins\nsetter = getattr(builtins, 'setattr')\nsetter(builtins, 'int', custom_int)",
+        "import builtins\nrunner = builtins.__dict__.copy()['exec']\nrunner('global int; int = custom_int')",
+        "import builtins\nrunner = dict(builtins.__dict__)['exec']\nrunner('global int; int = custom_int')",
+        "import builtins\nrunner = next(v for k, v in builtins.__dict__.items() if k == 'exec')\nrunner('global int; int = custom_int')",
+        "import builtins\ndict.update(builtins.__dict__, {'int': custom_int})",
+        "import builtins\nd = builtins.__dict__\nd |= {'int': custom_int}",
+        "import builtins, operator\noperator.setitem(builtins.__dict__, 'int', custom_int)",
+        "import builtins, operator\noperator.ior(builtins.__dict__, {'int': custom_int})",
+        "import builtins\nfrom operator import ior\nior(builtins.__dict__, {'int': custom_int})",
+        "import builtins\nbuiltins.__setattr__('int', custom_int)",
+        "import builtins, operator\nrunner = operator.getitem(builtins.__dict__, 'exec')\nrunner('global int; int = custom_int')",
+        "import sys\nrunner = sys.modules['builtins'].__dict__['exec']\nrunner('global int; int = custom_int')",
+        "import sys\ns = sys\nrunner = s.modules['builtins'].exec\nrunner('global int; int = custom_int')",
+        "import __main__\n__main__.__dict__.update({'int': custom_int})",
+        "from __main__ import __dict__ as scope\nscope.update({'int': custom_int})",
+        "import sys\nsys._getframe().f_builtins.update({'int': custom_int})",
+        "def anchor():\n    pass\nscope = anchor.__getattribute__('__globals__')\nscope.update({'int': custom_int})",
+        "def anchor():\n    pass\nscope = object.__getattribute__(anchor, '__globals__')\nscope.update({'int': custom_int})",
+        "import inspect\ndef anchor():\n    pass\nscope = dict(inspect.getmembers(anchor))['__globals__']\nscope.update({'int': custom_int})",
+        "import gc\ndef anchor():\n    pass\nscope = gc.get_referents(anchor)[0]\nscope.update({'int': custom_int})",
+        "from importlib import import_module as load\nrunner = load('builtins').exec\nrunner('global int; int = custom_int')",
+        "import pydoc\nrunner = pydoc.locate('builtins.exec')\nrunner('global int; int = custom_int')",
+        "import pkgutil\nrunner = pkgutil.resolve_name('builtins:exec')\nrunner('global int; int = custom_int')",
+        "from unittest.mock import patch\nwith patch('builtins.int', new=custom_int):\n    count = int(mask).sum()",
+    ],
+    ids=[
+        "exec-alias",
+        "builtins-attribute",
+        "builtins-subscript",
+        "builtins-mapping-get",
+        "builtins-getattribute",
+        "getattr-exec",
+        "getattr-setattr",
+        "builtins-copy",
+        "builtins-dict-copy",
+        "builtins-items",
+        "dict-update-builtins",
+        "builtins-alias-ior",
+        "operator-setitem",
+        "operator-ior",
+        "imported-operator-ior",
+        "builtins-magic-setattr",
+        "operator-getitem",
+        "sys-modules-builtins",
+        "sys-alias-modules-builtins",
+        "main-module-dict",
+        "main-module-dict-from-import",
+        "sys-frame-builtins",
+        "function-getattribute-globals",
+        "object-getattribute-globals",
+        "inspect-getmembers",
+        "gc-get-referents",
+        "importlib-alias",
+        "pydoc-locate",
+        "pkgutil-resolve-name",
+        "unittest-mock-patch",
+    ],
+)
+def test_mechanical_preflight_preserves_indirectly_shadowed_int_before_sum(
+    ra, shadowing
+):
+    code = f"""
+{shadowing}
+
+count = int(mask).sum()
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    repaired, repair_names = deterministic_concept_audit_repair(
+        code,
+        ["scalar_cast_before_reduction"],
+    )
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "scalar_cast_before_reduction"
+        for finding in findings
+    )
+    assert repair_names == []
+    assert repaired == code
+
+
 def test_mechanical_preflight_blocks_unpersisted_binding_metadata(ra):
     code = """
 def load(binding):
@@ -618,6 +849,1383 @@ model.fit(frame)
     findings = audit_mechanical_code_contracts(code, _figure_step(ra))
 
     assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_accepts_inline_failure_collection_then_raise(ra):
+    code = """
+def main(frame):
+    valid_pairs = frame['measured'].notna() & frame['count'].notna()
+    discordant = valid_pairs & (frame['measured'] != (frame['count'] > 0))
+    invalid_pair_n = int((~valid_pairs).sum())
+    discordant_n = int(discordant.sum())
+    checks = [{
+        'role': 'audit_only',
+        'invalid_pair_n': invalid_pair_n,
+        'discordant_n': discordant_n,
+    }]
+    failures = []
+    if invalid_pair_n or discordant_n:
+        failures.append('invalid measurement provenance')
+    if failures:
+        reason = '; '.join(failures)
+        write_failed_summary(checks, reason)
+        raise RuntimeError(reason)
+    model.fit(frame)
+
+main(frame)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_deterministic_repair_proves_aggregate_provenance_loop_coverage(ra):
+    code = """
+def main(frame, stems):
+    checks = []
+    failures = []
+    for stem in stems:
+        if stem == 'unavailable':
+            checks.append({
+                'role': 'audit_only',
+                'invalid_pair_n': None,
+                'discordant_n': None,
+            })
+            failures.append('unavailable pair')
+            continue
+        invalid_pair_n = int(frame['measured'].isna().sum())
+        discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+        checks.append({
+            'role': 'audit_only',
+            'invalid_pair_n': invalid_pair_n,
+            'discordant_n': discordant_n,
+        })
+        if invalid_pair_n or discordant_n:
+            failures.append('invalid measurement provenance')
+    if not checks:
+        raise RuntimeError('no provenance checks')
+    if failures:
+        raise RuntimeError('invalid measurement provenance')
+    model.fit(frame)
+
+main(frame, stems)
+"""
+    initial = audit_mechanical_code_contracts(code, _figure_step(ra))
+    messages = [
+        value
+        for finding in initial
+        if finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for value in (finding.message, finding.detail.get("reason"))
+        if value
+    ]
+
+    repaired, repair_names = deterministic_concept_audit_repair(code, messages)
+    repaired_again, repair_names_again = deterministic_concept_audit_repair(
+        repaired, messages
+    )
+    final = audit_mechanical_code_contracts(repaired, _figure_step(ra))
+
+    assert messages
+    assert repair_names == ["provenance_fail_closed_guard_v1"]
+    assert repair_names_again == []
+    assert repaired_again == repaired
+    assert "_easyicu_provenance_loop_observed = False" in repaired
+    assert "if not _easyicu_provenance_loop_observed:" in repaired
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in final
+    )
+
+
+def test_mechanical_preflight_rejects_uncovered_aggregate_provenance_loop(ra):
+    code = """
+def main(frame):
+    failures = []
+    for item in []:
+        invalid_pair_n = int(frame['measured'].isna().sum())
+        discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+        checks = [{'role': 'audit_only', 'invalid_pair_n': invalid_pair_n,
+                   'discordant_n': discordant_n}]
+        if invalid_pair_n or discordant_n:
+            failures.append('failed')
+    if failures:
+        raise RuntimeError('failed')
+    model.fit(frame)
+
+main(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    repaired, repair_names = deterministic_concept_audit_repair(
+        code, ["provenance_audit_not_fail_closed"]
+    )
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+    assert repair_names == []
+    assert repaired == code
+
+
+def test_mechanical_preflight_rejects_uncovered_continue_with_loop_sentinel(ra):
+    code = """
+def main(frame, stems, skip):
+    checks = []
+    failures = []
+    _easyicu_provenance_loop_observed = False
+    for stem in stems:
+        _easyicu_provenance_loop_observed = True
+        if skip:
+            continue
+        invalid_pair_n = int(frame['measured'].isna().sum())
+        discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+        checks.append({'role': 'audit_only', 'invalid_pair_n': invalid_pair_n,
+                       'discordant_n': discordant_n})
+        if invalid_pair_n or discordant_n:
+            failures.append('failed')
+    if not _easyicu_provenance_loop_observed:
+        raise RuntimeError('no iterations')
+    if failures:
+        raise RuntimeError('failed')
+    model.fit(frame)
+
+main(frame, stems, skip)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize(
+    "call_site",
+    [
+        "if False:\n    provenance_audit(frame)",
+        "if enabled:\n    provenance_audit(frame)",
+        "for _ in []:\n    provenance_audit(frame)",
+        "match mode:\n    case 'audit':\n        provenance_audit(frame)",
+        "callback = lambda: provenance_audit(frame)",
+        "with contextlib.suppress(RuntimeError):\n    provenance_audit(frame)",
+        (
+            "try:\n    provenance_audit(frame)\n"
+            "except RuntimeError:\n    raise\n"
+            "finally:\n    model.fit(frame)"
+        ),
+    ],
+    ids=[
+        "false-branch",
+        "runtime-branch",
+        "empty-loop",
+        "match",
+        "dead-lambda",
+        "suppressed",
+        "finally-sink",
+    ],
+)
+def test_mechanical_preflight_rejects_non_direct_self_raising_provenance_call(
+    ra, call_site
+):
+    code = f"""
+def provenance_audit(frame):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    checks = [{{'role': 'audit_only', 'invalid_pair_n': invalid_pair_n,
+               'discordant_n': discordant_n}}]
+    if invalid_pair_n or discordant_n:
+        raise RuntimeError('invalid measurement provenance')
+
+{call_site}
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_rejects_early_returning_self_raising_helper(ra):
+    code = """
+def provenance_audit(frame, skip):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    checks = [{'role': 'audit_only', 'invalid_pair_n': invalid_pair_n,
+               'discordant_n': discordant_n}]
+    if skip:
+        return
+    if invalid_pair_n or discordant_n:
+        raise RuntimeError('invalid measurement provenance')
+
+provenance_audit(frame, skip)
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize("wrapper", ["module", "terminal_main"])
+def test_mechanical_preflight_rejects_provenance_call_after_result_sink(ra, wrapper):
+    call_site = "model.fit(frame)\nprovenance_audit(frame)"
+    if wrapper == "terminal_main":
+        call_site = (
+            "def main():\n"
+            "    model.fit(frame)\n"
+            "    provenance_audit(frame)\n\n"
+            "if __name__ == '__main__':\n"
+            "    main()"
+        )
+    code = f"""
+def provenance_audit(frame):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    checks = [{{'role': 'audit_only', 'invalid_pair_n': invalid_pair_n,
+               'discordant_n': discordant_n}}]
+    if invalid_pair_n or discordant_n:
+        raise RuntimeError('invalid measurement provenance')
+
+{call_site}
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize("definition_kind", ["decorated", "async", "generator"])
+def test_mechanical_preflight_rejects_indirect_marker_runtime_binding(
+    ra, definition_kind
+):
+    prefix = ""
+    function_head = "def provenance_audit(frame):"
+    extra_body = ""
+    if definition_kind == "decorated":
+        prefix = "@swallow\n"
+    elif definition_kind == "async":
+        function_head = "async def provenance_audit(frame):"
+    else:
+        extra_body = "\n    yield checks"
+    code = f"""
+{prefix}{function_head}
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    checks = [{{'role': 'audit_only', 'invalid_pair_n': invalid_pair_n,
+               'discordant_n': discordant_n}}]
+    if invalid_pair_n or discordant_n:
+        raise RuntimeError('invalid measurement provenance'){extra_body}
+
+provenance_audit(frame)
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize(
+    "rebind",
+    [
+        "class provenance_audit:\n    pass",
+        "for provenance_audit in [noop]:\n    pass",
+        "with manager() as provenance_audit:\n    pass",
+    ],
+    ids=["class", "for-target", "with-target"],
+)
+def test_mechanical_preflight_rejects_rebound_marker_helper(ra, rebind):
+    code = f"""
+def provenance_audit(frame):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    checks = [{{'role': 'audit_only', 'invalid_pair_n': invalid_pair_n,
+               'discordant_n': discordant_n}}]
+    if invalid_pair_n or discordant_n:
+        raise RuntimeError('invalid measurement provenance')
+
+{rebind}
+provenance_audit(frame)
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize(
+    "rebind",
+    [
+        "globals()['provenance_audit'] = noop",
+        "vars()['provenance_audit'] = noop",
+        "exec('provenance_audit = noop', globals())",
+    ],
+    ids=["globals", "vars", "exec"],
+)
+def test_mechanical_preflight_rejects_dynamic_marker_rebinding(ra, rebind):
+    code = f"""
+def provenance_audit(frame):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    checks = [{{'role': 'audit_only', 'invalid_pair_n': invalid_pair_n,
+               'discordant_n': discordant_n}}]
+    if invalid_pair_n or discordant_n:
+        raise RuntimeError('invalid measurement provenance')
+
+{rebind}
+provenance_audit(frame)
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize(
+    "rebind",
+    [
+        "runner = exec\nrunner('global provenance_audit; provenance_audit = lambda frame: None')",
+        "import builtins\nrunner = builtins.__dict__.get('exec')\nrunner('global provenance_audit; provenance_audit = lambda frame: None')",
+        "import builtins\nrunner = builtins.__getattribute__('exec')\nrunner('global provenance_audit; provenance_audit = lambda frame: None')",
+        "import builtins\nrunner = getattr(builtins, 'exec')\nrunner('global provenance_audit; provenance_audit = lambda frame: None')",
+        "import builtins\nrunner = builtins.__dict__.copy()['exec']\nrunner('global provenance_audit; provenance_audit = lambda frame: None')",
+        "import builtins\nrunner = next(v for k, v in builtins.__dict__.items() if k == 'exec')\nrunner('global provenance_audit; provenance_audit = lambda frame: None')",
+        "name = 'provenance_audit'\nsetattr(sys.modules[__name__], name, noop)",
+        "import operator\noperator.setitem(sys.modules[__name__].__dict__, 'provenance_audit', noop)",
+        "sys.modules[__name__].__setattr__('provenance_audit', noop)",
+        "import builtins, operator\nrunner = operator.getitem(builtins.__dict__, 'exec')\nrunner('global provenance_audit; provenance_audit = lambda frame: None')",
+        "runner = sys.modules['builtins'].__dict__['exec']\nrunner('global provenance_audit; provenance_audit = lambda frame: None')",
+        "s = sys\nrunner = s.modules['builtins'].exec\nrunner('global provenance_audit; provenance_audit = lambda frame: None')",
+        "import __main__\n__main__.__dict__.update({'provenance_audit': noop})",
+        "from __main__ import __dict__ as scope\nscope.update({'provenance_audit': noop})",
+        "runner = sys._getframe().f_builtins['exec']\nrunner('global provenance_audit; provenance_audit = lambda frame: None')",
+        "scope = provenance_audit.__getattribute__('__globals__')\nscope.update({'provenance_audit': noop})",
+        "scope = object.__getattribute__(provenance_audit, '__globals__')\nscope.update({'provenance_audit': noop})",
+        "import inspect\nscope = dict(inspect.getmembers(provenance_audit))['__globals__']\nscope.update({'provenance_audit': noop})",
+        "import gc\nscope = gc.get_referents(provenance_audit)[0]\nscope.update({'provenance_audit': noop})",
+        "from importlib import import_module as load\nrunner = load('builtins').exec\nrunner('global provenance_audit; provenance_audit = lambda frame: None')",
+        "import pydoc\nrunner = pydoc.locate('builtins.exec')\nrunner('global provenance_audit; provenance_audit = lambda frame: None')",
+        "import pkgutil\nrunner = pkgutil.resolve_name('builtins:exec')\nrunner('global provenance_audit; provenance_audit = lambda frame: None')",
+        "from unittest.mock import patch\npatch('__main__.provenance_audit', new=noop).start()",
+    ],
+    ids=[
+        "exec-alias",
+        "builtins-mapping-get",
+        "builtins-getattribute",
+        "getattr-exec",
+        "builtins-copy",
+        "builtins-items",
+        "dynamic-setattr-name",
+        "operator-setitem",
+        "module-magic-setattr",
+        "operator-getitem",
+        "sys-modules-builtins",
+        "sys-alias-modules-builtins",
+        "main-module-dict",
+        "main-module-dict-from-import",
+        "sys-frame-builtins",
+        "function-getattribute-globals",
+        "object-getattribute-globals",
+        "inspect-getmembers",
+        "gc-get-referents",
+        "importlib-alias",
+        "pydoc-locate",
+        "pkgutil-resolve-name",
+        "unittest-mock-patch",
+    ],
+)
+def test_mechanical_preflight_rejects_indirect_marker_rebinding(ra, rebind):
+    code = f"""
+import sys
+
+def provenance_audit(frame):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    checks = [{{'role': 'audit_only', 'invalid_pair_n': invalid_pair_n,
+               'discordant_n': discordant_n}}]
+    if invalid_pair_n or discordant_n:
+        raise RuntimeError('invalid measurement provenance')
+
+{rebind}
+provenance_audit(frame)
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_rejects_module_level_provenance_fallthrough(ra):
+    code = """
+invalid_pair_n = int(frame['measured'].isna().sum())
+discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+checks = [{
+    'role': 'audit_only',
+    'invalid_pair_n': invalid_pair_n,
+    'discordant_n': discordant_n,
+}]
+provenance_gate_failed = invalid_pair_n > 0 or discordant_n > 0
+if provenance_gate_failed:
+    table_rows = []
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_accepts_module_level_provenance_raise(ra):
+    code = """
+invalid_pair_n = int(frame['measured'].isna().sum())
+discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+checks = [{
+    'role': 'audit_only',
+    'invalid_pair_n': invalid_pair_n,
+    'discordant_n': discordant_n,
+}]
+provenance_gate_failed = invalid_pair_n > 0 or discordant_n > 0
+if provenance_gate_failed:
+    raise RuntimeError('invalid measurement provenance')
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["invalid_pair_n = 0", "discordant_n = 0"],
+)
+def test_mechanical_preflight_rejects_module_count_rebound_after_audit(ra, mutation):
+    code = f"""
+invalid_pair_n = int(frame['measured'].isna().sum())
+discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+checks = [{{
+    'role': 'audit_only',
+    'invalid_pair_n': invalid_pair_n,
+    'discordant_n': discordant_n,
+}}]
+{mutation}
+if invalid_pair_n > 0 or discordant_n > 0:
+    raise RuntimeError('invalid measurement provenance')
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize("scope", ["module", "function"])
+def test_mechanical_preflight_rejects_mutable_provenance_count_binding(ra, scope):
+    body = """
+invalid_pair_n = np.array(1)
+discordant_n = np.array(0)
+checks = [{
+    'role': 'audit_only',
+    'invalid_pair_n': invalid_pair_n,
+    'discordant_n': discordant_n,
+}]
+invalid_pair_n[...] = 0
+if invalid_pair_n or discordant_n:
+    raise RuntimeError('invalid measurement provenance')
+""".strip()
+    if scope == "function":
+        indented = "\n".join(f"    {line}" for line in body.splitlines())
+        code = f"""
+import numpy as np
+def provenance_audit(frame):
+{indented}
+
+provenance_audit(frame)
+model.fit(frame)
+"""
+    else:
+        code = f"""
+import numpy as np
+{body}
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_rejects_module_last_loop_value_guard(ra):
+    code = """
+checks = []
+for measured, count in pairs:
+    invalid_pair_n = int(measured.isna().sum())
+    discordant_n = int((measured != (count > 0)).sum())
+    checks.append({
+        'role': 'audit_only',
+        'invalid_pair_n': invalid_pair_n,
+        'discordant_n': discordant_n,
+    })
+if invalid_pair_n > 0 or discordant_n > 0:
+    raise RuntimeError('invalid measurement provenance')
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_rejects_conditionally_reached_module_guard(ra):
+    code = """
+if enabled:
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    checks = [{
+        'role': 'audit_only',
+        'invalid_pair_n': invalid_pair_n,
+        'discordant_n': discordant_n,
+    }]
+    if invalid_pair_n > 0 or discordant_n > 0:
+        raise RuntimeError('invalid measurement provenance')
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_rejects_decoy_module_audit_row(ra):
+    code = """
+real_invalid_pair_n = int(frame['measured'].isna().sum())
+real_discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+real_checks = [{
+    'role': 'audit_only',
+    'invalid_pair_n': real_invalid_pair_n,
+    'discordant_n': real_discordant_n,
+}]
+invalid_pair_n = int(0)
+discordant_n = int(0)
+decoy_checks = [{
+    'role': 'audit_only',
+    'invalid_pair_n': invalid_pair_n,
+    'discordant_n': discordant_n,
+}]
+if invalid_pair_n > 0 or discordant_n > 0:
+    raise RuntimeError('invalid measurement provenance')
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_rejects_module_output_before_guard(ra):
+    code = """
+invalid_pair_n = int(frame['measured'].isna().sum())
+discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+checks = [{
+    'role': 'audit_only',
+    'invalid_pair_n': invalid_pair_n,
+    'discordant_n': discordant_n,
+}]
+frame.to_csv(output_path)
+if invalid_pair_n > 0 or discordant_n > 0:
+    raise RuntimeError('invalid measurement provenance')
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize(
+    "intervening",
+    [
+        "reset_counts()",
+        "checks.clear()",
+        "alias = checks\nalias.clear()",
+    ],
+    ids=["helper-resets-counts", "audit-container-clear", "audit-alias-clear"],
+)
+def test_mechanical_preflight_rejects_module_post_audit_side_effects(ra, intervening):
+    code = f"""
+def reset_counts():
+    global invalid_pair_n, discordant_n
+    invalid_pair_n = 0
+    discordant_n = 0
+
+invalid_pair_n = int(frame['measured'].isna().sum())
+discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+checks = [{{
+    'role': 'audit_only',
+    'invalid_pair_n': invalid_pair_n,
+    'discordant_n': discordant_n,
+}}]
+{intervening}
+if invalid_pair_n or discordant_n:
+    raise RuntimeError('invalid measurement provenance')
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_rejects_module_helper_sink_before_guard(ra):
+    code = """
+def publish(result):
+    result.to_csv(output_path)
+
+publish(result)
+invalid_pair_n = int(frame['measured'].isna().sum())
+discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+checks = [{
+    'role': 'audit_only',
+    'invalid_pair_n': invalid_pair_n,
+    'discordant_n': discordant_n,
+}]
+if invalid_pair_n or discordant_n:
+    raise RuntimeError('invalid measurement provenance')
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize(
+    "helper_setup",
+    [
+        "def reset():\n    global invalid_pair_n, discordant_n\n    invalid_pair_n = discordant_n = 0\nr = reset\nr()",
+        "def publish(value):\n    value.to_csv(output_path)\npub = publish\npub(result)",
+        "def first():\n    pass\ndef second():\n    pass\nalias = first\nalias = second\nalias()",
+        "a = b\nb = a",
+        "def invoke(fn):\n    fn()\ndef reset():\n    global invalid_pair_n, discordant_n\n    invalid_pair_n = discordant_n = 0\ninvoke(reset)",
+        "def reset():\n    global invalid_pair_n, discordant_n\n    invalid_pair_n = discordant_n = 0\ndef chooser():\n    return reset\nr = chooser()\nr()",
+        "def reset():\n    global invalid_pair_n, discordant_n\n    invalid_pair_n = discordant_n = 0\nr: object = reset\nr()",
+        "def reset():\n    global invalid_pair_n, discordant_n\n    invalid_pair_n = discordant_n = 0\nr = s = reset\nr()",
+        "def reset():\n    global invalid_pair_n, discordant_n\n    invalid_pair_n = discordant_n = 0\n(r,) = (reset,)\nr()",
+        "def reset():\n    global invalid_pair_n, discordant_n\n    invalid_pair_n = discordant_n = 0\nr = [reset][0]\nr()",
+        "def reset():\n    global invalid_pair_n, discordant_n\n    invalid_pair_n = discordant_n = 0\nr = reset if enabled else safe\nr()",
+    ],
+    ids=[
+        "reset-alias",
+        "sink-alias",
+        "ambiguous-rebind",
+        "alias-cycle",
+        "higher-order-invoke",
+        "returned-helper",
+        "annotated-alias",
+        "multi-target-alias",
+        "unpacked-alias",
+        "subscript-alias",
+        "conditional-alias",
+    ],
+)
+def test_mechanical_preflight_rejects_ambiguous_module_helper_aliases(ra, helper_setup):
+    code = f"""
+{helper_setup}
+invalid_pair_n = int(frame['measured'].isna().sum())
+discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+checks = [{{
+    'role': 'audit_only',
+    'invalid_pair_n': invalid_pair_n,
+    'discordant_n': discordant_n,
+}}]
+if invalid_pair_n or discordant_n:
+    raise RuntimeError('invalid measurement provenance')
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_rejects_unproven_module_append_container(ra):
+    code = """
+invalid_pair_n = int(frame['measured'].isna().sum())
+discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+checks = external_noop
+checks.append({
+    'role': 'audit_only',
+    'invalid_pair_n': invalid_pair_n,
+    'discordant_n': discordant_n,
+})
+if invalid_pair_n or discordant_n:
+    raise RuntimeError('invalid measurement provenance')
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize(
+    "extra_field",
+    [
+        "**override",
+        "key_factory(): side_effect()",
+        "'invalid_pair_n': 0",
+    ],
+    ids=["dict-unpack", "computed-key", "duplicate-key"],
+)
+def test_mechanical_preflight_rejects_ambiguous_module_audit_dict(ra, extra_field):
+    code = f"""
+invalid_pair_n = int(frame['measured'].isna().sum())
+discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+checks = [{{
+    'role': 'audit_only',
+    'invalid_pair_n': invalid_pair_n,
+    'discordant_n': discordant_n,
+    {extra_field},
+}}]
+if invalid_pair_n or discordant_n:
+    raise RuntimeError('invalid measurement provenance')
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize(
+    "audit_statement",
+    [
+        "checks = [{'role': 'audit_only', 'invalid_pair_n': invalid_pair_n, "
+        "'discordant_n': discordant_n} for _ in []]",
+        "checks = [{'role': 'audit_only', 'invalid_pair_n': invalid_pair_n, "
+        "'discordant_n': discordant_n}] if enabled else []",
+        "class Audit:\n    checks = [{'role': 'audit_only', "
+        "'invalid_pair_n': invalid_pair_n, 'discordant_n': discordant_n}]",
+    ],
+    ids=["empty-list-comprehension", "conditional-expression", "class-body"],
+)
+def test_mechanical_preflight_rejects_nonmaterialized_module_audit_row(
+    ra, audit_statement
+):
+    code = f"""
+invalid_pair_n = int(frame['measured'].isna().sum())
+discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+{audit_statement}
+if invalid_pair_n or discordant_n:
+    raise RuntimeError('invalid measurement provenance')
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize(
+    "definition",
+    [
+        "def unused(value=result.to_csv(output_path)):\n    pass",
+        "@publish_result(result)\ndef unused():\n    pass",
+    ],
+    ids=["default-argument", "decorator"],
+)
+def test_mechanical_preflight_rejects_module_definition_time_sink(ra, definition):
+    code = f"""
+{definition}
+invalid_pair_n = int(frame['measured'].isna().sum())
+discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+checks = [{{
+    'role': 'audit_only',
+    'invalid_pair_n': invalid_pair_n,
+    'discordant_n': discordant_n,
+}}]
+if invalid_pair_n or discordant_n:
+    raise RuntimeError('invalid measurement provenance')
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_rejects_module_dynamic_count_rebinding(ra):
+    code = """
+invalid_pair_n = int(frame['measured'].isna().sum())
+discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+checks = [{
+    'role': 'audit_only',
+    'invalid_pair_n': invalid_pair_n,
+    'discordant_n': discordant_n,
+}]
+exec('invalid_pair_n = 0; discordant_n = 0')
+if invalid_pair_n > 0 or discordant_n > 0:
+    raise RuntimeError('invalid measurement provenance')
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_module_provenance_ignores_sink_inside_unexecuted_helper(ra):
+    code = """
+def unused_helper(frame):
+    model.fit(frame)
+
+invalid_pair_n = int(frame['measured'].isna().sum())
+discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+checks = [{
+    'role': 'audit_only',
+    'invalid_pair_n': invalid_pair_n,
+    'discordant_n': discordant_n,
+}]
+if invalid_pair_n > 0 or discordant_n > 0:
+    raise RuntimeError('invalid measurement provenance')
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_deterministic_repair_declines_nested_module_provenance_branch(ra):
+    code = """
+if 'measured' in frame.columns and 'count' in frame.columns:
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    checks = [{
+        'role': 'audit_only',
+        'invalid_pair_n': invalid_pair_n,
+        'discordant_n': discordant_n,
+    }]
+    provenance_failed = invalid_pair_n > 0 or discordant_n > 0
+    if provenance_failed:
+        summary['status'] = 'failed_provenance_audit'
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    messages = [
+        finding.detail.get("reason")
+        for finding in findings
+        if finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+    ]
+    repaired, repair_names = deterministic_concept_audit_repair(code, messages)
+    repaired_findings = audit_mechanical_code_contracts(repaired, _figure_step(ra))
+
+    assert repair_names == []
+    assert repaired == code
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in repaired_findings
+    )
+
+
+def test_mechanical_preflight_allows_unrelated_static_setattr_with_marker(ra):
+    code = """
+def provenance_audit(frame):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    checks = [{'role': 'audit_only', 'invalid_pair_n': invalid_pair_n,
+               'discordant_n': discordant_n}]
+    if invalid_pair_n or discordant_n:
+        raise RuntimeError('invalid measurement provenance')
+
+setattr(config, 'display_label', 'audit')
+provenance_audit(frame)
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_rejects_marker_code_replacement(ra):
+    code = """
+def provenance_audit(frame):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    checks = [{'role': 'audit_only', 'invalid_pair_n': invalid_pair_n,
+               'discordant_n': discordant_n}]
+    if invalid_pair_n or discordant_n:
+        raise RuntimeError('invalid measurement provenance')
+
+provenance_audit.__code__ = noop.__code__
+provenance_audit(frame)
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize(
+    "owner_binding", ["decorated", "for-target", "code-replacement"]
+)
+def test_mechanical_preflight_rejects_indirect_terminal_owner(ra, owner_binding):
+    decorator = "@replace\n" if owner_binding == "decorated" else ""
+    rebind = "for main in [evil]:\n    pass\n" if owner_binding == "for-target" else ""
+    if owner_binding == "code-replacement":
+        rebind = "main.__code__ = evil.__code__\n"
+    code = f"""
+def provenance_audit(frame):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    checks = [{{'role': 'audit_only', 'invalid_pair_n': invalid_pair_n,
+               'discordant_n': discordant_n}}]
+    if invalid_pair_n or discordant_n:
+        raise RuntimeError('invalid measurement provenance')
+
+def evil():
+    model.fit(frame)
+
+{decorator}def main():
+    provenance_audit(frame)
+
+{rebind}if __name__ == '__main__':
+    main()
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_rejects_decorated_returned_marker_helper(ra):
+    code = """
+@swallow
+def provenance_audit(frame):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    checks = [{'role': 'audit_only', 'invalid_pair_n': invalid_pair_n,
+               'discordant_n': discordant_n}]
+    failures = []
+    if invalid_pair_n or discordant_n:
+        failures.append('failed')
+    return {'checks': checks}, failures
+
+audit, failures = provenance_audit(frame)
+if failures:
+    raise RuntimeError('failed')
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_rejects_conditionally_raising_failure_collection(ra):
+    code = """
+def main(frame, strict_mode):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    checks = [{
+        'role': 'audit_only',
+        'invalid_pair_n': invalid_pair_n,
+        'discordant_n': discordant_n,
+    }]
+    failures = []
+    if invalid_pair_n or discordant_n:
+        failures.append('invalid measurement provenance')
+    if failures:
+        write_failed_summary(checks)
+        if strict_mode:
+            raise RuntimeError('invalid measurement provenance')
+    model.fit(frame)
+
+main(frame, strict_mode)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_rejects_failure_collection_mutated_after_guard(ra):
+    code = """
+def main(frame):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    checks = [{
+        'role': 'audit_only',
+        'invalid_pair_n': invalid_pair_n,
+        'discordant_n': discordant_n,
+    }]
+    failures = []
+    if invalid_pair_n or discordant_n:
+        failures.append('invalid measurement provenance')
+    if failures:
+        raise RuntimeError('invalid measurement provenance')
+    failures.clear()
+    model.fit(frame)
+
+main(frame)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_rejects_custom_empty_collection_constructor(ra):
+    code = """
+class Noop:
+    def append(self, value):
+        pass
+    def __bool__(self):
+        return False
+
+def list():
+    return Noop()
+
+def main(frame):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    checks = [{'role': 'audit_only', 'invalid_pair_n': invalid_pair_n,
+               'discordant_n': discordant_n}]
+    failures = list()
+    if invalid_pair_n or discordant_n:
+        failures.append('invalid measurement provenance')
+    if failures:
+        raise RuntimeError('invalid measurement provenance')
+    model.fit(frame)
+
+main(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_deterministic_repair_declines_custom_returned_collection_constructor(ra):
+    code = """
+class Noop:
+    def append(self, value):
+        pass
+    def __bool__(self):
+        return False
+
+def list():
+    return Noop()
+
+def provenance_audit(frame):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    checks = [{'role': 'audit_only', 'invalid_pair_n': invalid_pair_n,
+               'discordant_n': discordant_n}]
+    failures = list()
+    if invalid_pair_n or discordant_n:
+        failures.append('failed')
+    return {'checks': checks}, failures
+
+audit, failures = provenance_audit(frame)
+model.fit(frame)
+"""
+
+    repaired, repair_names = deterministic_concept_audit_repair(
+        code, ["provenance_audit_not_fail_closed"]
+    )
+
+    assert repair_names == []
+    assert repaired == code
+
+
+def test_mechanical_preflight_rejects_inline_terminal_guard_swallowed_by_try(ra):
+    code = """
+def main(frame):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    checks = [{'role': 'audit_only', 'invalid_pair_n': invalid_pair_n,
+               'discordant_n': discordant_n}]
+    failures = []
+    if invalid_pair_n or discordant_n:
+        failures.append('invalid measurement provenance')
+    try:
+        if failures:
+            raise RuntimeError('invalid measurement provenance')
+    except RuntimeError:
+        pass
+    model.fit(frame)
+
+main(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_rejects_self_raising_helper_swallowed_by_caller(ra):
+    code = """
+def provenance_audit(frame):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    checks = [{'role': 'audit_only', 'invalid_pair_n': invalid_pair_n,
+               'discordant_n': discordant_n}]
+    if invalid_pair_n or discordant_n:
+        raise RuntimeError('invalid measurement provenance')
+
+try:
+    provenance_audit(frame)
+except RuntimeError:
+    pass
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize(
+    "controlled_append",
+    [
+        """if collect_failures:
+        if invalid_pair_n or discordant_n:
+            failures.append('invalid measurement provenance')""",
+        """match audit_mode:
+        case 'provenance':
+            if invalid_pair_n or discordant_n:
+                failures.append('invalid measurement provenance')""",
+    ],
+    ids=["conditional", "match"],
+)
+def test_mechanical_preflight_rejects_control_nested_full_failure_append(
+    ra, controlled_append
+):
+    code = f"""
+def main(frame, collect_failures=True, audit_mode='provenance'):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    checks = [{{'role': 'audit_only', 'invalid_pair_n': invalid_pair_n,
+               'discordant_n': discordant_n}}]
+    failures = []
+    {controlled_append}
+    if failures:
+        raise RuntimeError('invalid measurement provenance')
+    model.fit(frame)
+
+main(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_rejects_scientific_sink_inside_terminal_guard(ra):
+    code = """
+def main(frame):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    checks = [{'role': 'audit_only', 'invalid_pair_n': invalid_pair_n,
+               'discordant_n': discordant_n}]
+    failures = []
+    if invalid_pair_n or discordant_n:
+        failures.append('invalid measurement provenance')
+    if failures:
+        model.fit(frame)
+        raise RuntimeError('invalid measurement provenance')
+
+main(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_rejects_swallowed_failure_append_payload(ra):
+    code = """
+def main(frame):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    checks = [{'role': 'audit_only', 'invalid_pair_n': invalid_pair_n,
+               'discordant_n': discordant_n}]
+    failures = []
+    try:
+        if invalid_pair_n or discordant_n:
+            failures.append(build_failure_message(frame))
+    except Exception:
+        pass
+    if failures:
+        raise RuntimeError('invalid measurement provenance')
+    model.fit(frame)
+
+main(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
         finding.detail
         and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
         for finding in findings
