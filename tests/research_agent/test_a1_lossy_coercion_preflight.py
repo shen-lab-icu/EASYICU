@@ -20,6 +20,9 @@ running BEFORE any LLM audit.
 
 from __future__ import annotations
 
+import pandas as pd
+import pytest
+
 from easyicu.research_agent.code_preflight import audit_mechanical_code_contracts
 from easyicu.research_agent.repair_reasons import (
     RepairReason,
@@ -218,6 +221,181 @@ def test_t4_dict_key_guard_passes(ra):
 
 def test_t4_host_helper_passes(ra):
     assert _lossy_findings(_T4_GUARDED_BY_HOST_HELPER, ra) == []
+
+
+def test_lossy_coercion_guard_is_a_typed_deterministic_minimal_repair(ra):
+    from easyicu.research_agent.code_repair import (
+        deterministic_concept_audit_repair,
+    )
+
+    repaired, names = deterministic_concept_audit_repair(
+        _T2_E3_QUARANTINED_SHAPE,
+        ["human-facing wording is intentionally irrelevant"],
+        repair_reasons=[RepairReason.LOSSY_NUMERIC_COERCION],
+        repair_findings=_lossy_findings(_T2_E3_QUARANTINED_SHAPE, ra),
+    )
+
+    assert names == ["lossy_numeric_coercion_guard_v1"]
+    assert repaired.count("_easyicu_lossy_numeric_coercion_guard_v1") == 1
+    assert repaired.count('record["newly_invalid_or_coerced_n"]') == 1
+    assert "return coerced, record" in repaired
+    assert _lossy_findings(repaired, ra) == []
+
+
+def test_lossy_guard_does_not_route_on_human_message_text() -> None:
+    from easyicu.research_agent.code_repair import (
+        deterministic_concept_audit_repair,
+    )
+
+    repaired, names = deterministic_concept_audit_repair(
+        _T2_E3_QUARANTINED_SHAPE,
+        ["lossy_numeric_coercion"],
+        repair_reasons=[],
+    )
+    assert repaired == _T2_E3_QUARANTINED_SHAPE
+    assert names == []
+
+
+def test_lossy_guard_refuses_ambiguous_multiple_audit_sites(ra) -> None:
+    from easyicu.research_agent.code_repair import (
+        deterministic_concept_audit_repair,
+    )
+
+    ambiguous = (
+        _T1_UNCHECKED_LOSS_COUNT
+        + "\n"
+        + _T1_UNCHECKED_LOSS_COUNT.replace(
+            "numeric_coercion_audit", "second_numeric_coercion_audit"
+        )
+    )
+    repaired, names = deterministic_concept_audit_repair(
+        ambiguous,
+        [],
+        repair_reasons=[RepairReason.LOSSY_NUMERIC_COERCION],
+        repair_findings=_lossy_findings(ambiguous, ra),
+    )
+    assert repaired == ambiguous
+    assert names == []
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        "(original.notna() & coerced.isna()).sum() / len(original)",
+        "int((original.notna() & coerced.isna()).sum()) / len(original)",
+    ],
+    ids=["fraction", "integer-then-normalized"],
+)
+def test_lossy_guard_refuses_normalized_rates(ra, replacement: str) -> None:
+    from easyicu.research_agent.code_repair import (
+        deterministic_concept_audit_repair,
+    )
+
+    normalized = _T2_E3_QUARANTINED_SHAPE.replace(
+        "int(\n            (original.notna() & coerced.isna()).sum()\n        )",
+        replacement,
+    )
+    repaired, names = deterministic_concept_audit_repair(
+        normalized,
+        [],
+        repair_reasons=[RepairReason.LOSSY_NUMERIC_COERCION],
+        repair_findings=_lossy_findings(normalized, ra),
+    )
+    assert repaired == normalized
+    assert names == []
+
+
+@pytest.mark.parametrize(
+    "dict_tail",
+    [
+        ', "newly_invalid_or_coerced_n": 0',
+        ", **{'newly_invalid_or_coerced_n': 0}",
+    ],
+    ids=["duplicate-key", "mapping-overwrite"],
+)
+def test_lossy_guard_refuses_count_overwrite(ra, dict_tail: str) -> None:
+    from easyicu.research_agent.code_repair import (
+        deterministic_concept_audit_repair,
+    )
+
+    overwritten = _T2_E3_QUARANTINED_SHAPE.replace(
+        "        ),\n    }",
+        f"        ){dict_tail},\n    }}",
+    )
+    repaired, names = deterministic_concept_audit_repair(
+        overwritten,
+        [],
+        repair_reasons=[RepairReason.LOSSY_NUMERIC_COERCION],
+        repair_findings=_lossy_findings(overwritten, ra),
+    )
+    assert repaired == overwritten
+    assert names == []
+
+
+def test_lossy_guard_refuses_same_line_return(ra) -> None:
+    from easyicu.research_agent.code_repair import (
+        deterministic_concept_audit_repair,
+    )
+
+    same_line = """
+import pandas as pd
+
+def numeric_coercion_audit(frame, column):
+    original = frame[column]
+    coerced = pd.to_numeric(original, errors="coerce")
+    record = {"newly_invalid_or_coerced_n": int((original.notna() & coerced.isna()).sum())}; return coerced, record
+"""
+    repaired, names = deterministic_concept_audit_repair(
+        same_line,
+        [],
+        repair_reasons=[RepairReason.LOSSY_NUMERIC_COERCION],
+        repair_findings=_lossy_findings(same_line, ra),
+    )
+    assert repaired == same_line
+    assert names == []
+
+
+def test_lossy_guard_requires_exact_structured_finding(ra) -> None:
+    from easyicu.research_agent.code_repair import (
+        deterministic_concept_audit_repair,
+    )
+
+    ordinal_finding = ValidationFinding(
+        validator="mechanical_code_preflight",
+        severity="error",
+        message="irrelevant",
+        detail={"reason": "lossy_ordinal_rounding", "lines": [1]},
+    )
+    repaired, names = deterministic_concept_audit_repair(
+        _T2_E3_QUARANTINED_SHAPE,
+        [],
+        repair_reasons=[RepairReason.LOSSY_NUMERIC_COERCION],
+        repair_findings=[ordinal_finding],
+    )
+    assert repaired == _T2_E3_QUARANTINED_SHAPE
+    assert names == []
+
+
+def test_lossy_guard_raises_on_dirty_observed_value(ra) -> None:
+    from easyicu.research_agent.code_repair import (
+        deterministic_concept_audit_repair,
+    )
+
+    repaired, names = deterministic_concept_audit_repair(
+        _T2_E3_QUARANTINED_SHAPE,
+        [],
+        repair_reasons=[RepairReason.LOSSY_NUMERIC_COERCION],
+        repair_findings=_lossy_findings(_T2_E3_QUARANTINED_SHAPE, ra),
+    )
+    namespace: dict[str, object] = {"cohort": pd.DataFrame({"aki_stage_max": [0.0]})}
+    exec(repaired, namespace)
+    with pytest.raises(ValueError, match="numeric coercion invalidated"):
+        namespace["numeric_coercion_audit"](
+            pd.DataFrame({"stage": [0, "dirty"]}),
+            "stage",
+            "ordinal",
+        )
+    assert names == ["lossy_numeric_coercion_guard_v1"]
 
 
 def test_t4_assert_guard_passes(ra):

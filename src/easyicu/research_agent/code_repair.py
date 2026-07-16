@@ -64,6 +64,8 @@ from .code_repair_helpers import (  # noqa: F401  (re-exported for back-compat)
     _statsmodels_repair_allowed_for_family,
     _strip_columns_from_list_literals,
 )
+from .repair_reasons import RepairReason
+from .schema import ValidationFinding
 
 _NULL_PRIMARY_EFFECT_MARKERS = (
     '"complete_case_n": null',
@@ -290,10 +292,325 @@ _FILLNA_ZERO_ASSIGN_RE = re.compile(
     re.MULTILINE,
 )
 
+_LOSSY_NUMERIC_COERCION_GUARD_SENTINEL = "_easyicu_lossy_numeric_coercion_guard_v1"
+_LOSSY_NUMERIC_COERCION_COUNT_KEY = "newly_invalid_or_coerced_n"
+
+
+def _lossy_numeric_coercion_repair_lines(
+    findings: Sequence[ValidationFinding],
+) -> frozenset[int]:
+    """Return exact host-owned loss-count lines eligible for repair."""
+
+    lines: set[int] = set()
+    for finding in findings:
+        detail = finding.detail or {}
+        if not (
+            finding.validator == "mechanical_code_preflight"
+            and finding.severity == "error"
+            and detail.get("reason") == "lossy_numeric_coercion"
+        ):
+            continue
+        issues = detail.get("issues")
+        if not isinstance(issues, list):
+            continue
+        for issue in issues:
+            if not isinstance(issue, dict) or issue.get("gap") != (
+                "unchecked_coercion_loss_count"
+            ):
+                continue
+            raw_lines = issue.get("lines")
+            if not isinstance(raw_lines, list):
+                continue
+            lines.update(
+                value
+                for value in raw_lines
+                if isinstance(value, int) and not isinstance(value, bool) and value > 0
+            )
+    return frozenset(lines)
+
+
+def _expression_key(node: ast.AST) -> str:
+    return ast.dump(node, annotate_fields=True, include_attributes=False)
+
+
+def _call_tail(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return ""
+
+
+def _lexical_scope(
+    node: ast.AST,
+    parents: dict[ast.AST, ast.AST],
+) -> ast.AST:
+    current = node
+    while current in parents:
+        current = parents[current]
+        if isinstance(
+            current,
+            (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef),
+        ):
+            return current
+    return current
+
+
+def _exact_loss_count_call(
+    value: ast.AST,
+    *,
+    tree: ast.Module,
+    parents: dict[ast.AST, ast.AST],
+) -> Optional[ast.Call]:
+    """Return an exact loss count tied to its numeric-coercion definition."""
+
+    candidate = value
+    if (
+        isinstance(candidate, ast.Call)
+        and isinstance(candidate.func, ast.Name)
+        and candidate.func.id == "int"
+        and len(candidate.args) == 1
+        and not candidate.keywords
+    ):
+        candidate = candidate.args[0]
+    if not (
+        isinstance(candidate, ast.Call)
+        and not candidate.args
+        and not candidate.keywords
+        and isinstance(candidate.func, ast.Attribute)
+        and candidate.func.attr == "sum"
+        and isinstance(candidate.func.value, ast.BinOp)
+        and isinstance(candidate.func.value.op, ast.BitAnd)
+    ):
+        return None
+    terms = (candidate.func.value.left, candidate.func.value.right)
+
+    def _method_name(node: ast.AST) -> str:
+        if not (
+            isinstance(node, ast.Call)
+            and not node.args
+            and not node.keywords
+            and isinstance(node.func, ast.Attribute)
+        ):
+            return ""
+        return node.func.attr
+
+    present_terms = [
+        term for term in terms if _method_name(term) in {"notna", "notnull"}
+    ]
+    missing_terms = [term for term in terms if _method_name(term) in {"isna", "isnull"}]
+    if len(present_terms) != 1 or len(missing_terms) != 1:
+        return None
+    present_call = present_terms[0]
+    missing_call = missing_terms[0]
+    assert isinstance(present_call, ast.Call)
+    assert isinstance(present_call.func, ast.Attribute)
+    assert isinstance(missing_call, ast.Call)
+    assert isinstance(missing_call.func, ast.Attribute)
+    if not isinstance(missing_call.func.value, ast.Name):
+        return None
+    coerced_name = missing_call.func.value.id
+    raw_identity = _expression_key(present_call.func.value)
+    raw_names = {
+        node.id
+        for node in ast.walk(present_call.func.value)
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+    }
+    candidate_scope = _lexical_scope(candidate, parents)
+    matching_coercions = []
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == coerced_name
+            and isinstance(node.value, ast.Call)
+            and _call_tail(node.value.func) == "to_numeric"
+            and node.value.args
+            and any(
+                keyword.arg == "errors"
+                and isinstance(keyword.value, ast.Constant)
+                and keyword.value.value == "coerce"
+                for keyword in node.value.keywords
+            )
+            and _expression_key(node.value.args[0]) == raw_identity
+            and _lexical_scope(node, parents) is candidate_scope
+            and int(node.lineno) < int(candidate.lineno)
+        ):
+            continue
+        matching_coercions.append(node)
+    if len(matching_coercions) != 1:
+        return None
+    coercion = matching_coercions[0]
+    protected_names = {coerced_name, *raw_names}
+    for node in ast.walk(candidate_scope):
+        if not isinstance(
+            node,
+            (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.NamedExpr),
+        ):
+            continue
+        if _lexical_scope(node, parents) is not candidate_scope:
+            continue
+        if not (int(coercion.lineno) < int(node.lineno) < int(candidate.lineno)):
+            continue
+        targets: list[ast.AST] = []
+        if isinstance(node, ast.Assign):
+            targets.extend(node.targets)
+        else:
+            targets.append(node.target)
+        assigned_names = {
+            child.id
+            for target in targets
+            for child in ast.walk(target)
+            if isinstance(child, ast.Name)
+        }
+        if assigned_names & protected_names:
+            return None
+    return candidate
+
+
+def _standalone_statement_source(
+    code: str,
+    statement: ast.Assign | ast.AnnAssign,
+    *,
+    tree: ast.Module,
+    parents: dict[ast.AST, ast.AST],
+) -> Optional[tuple[list[str], str]]:
+    """Return source lines and indent only for an isolated statement."""
+
+    if statement.end_lineno is None:
+        return None
+    if statement.lineno < 1:
+        return None
+    lines = code.splitlines(keepends=True)
+    if statement.end_lineno > len(lines):
+        return None
+    for other in ast.walk(tree):
+        if not isinstance(other, ast.stmt) or other is statement:
+            continue
+        if int(statement.lineno) <= int(other.lineno) <= int(statement.end_lineno):
+            return None
+    current: Optional[ast.AST] = statement
+    while current is not None and current in parents:
+        current = parents[current]
+        if isinstance(current, (ast.Try, ast.TryStar, ast.With, ast.AsyncWith)):
+            return None
+    start_line = lines[statement.lineno - 1]
+    indent = start_line[: len(start_line) - len(start_line.lstrip(" \t"))]
+    return lines, indent
+
+
+def _patch_lossy_numeric_coercion_guard(
+    code: str,
+    *,
+    finding_lines: frozenset[int],
+) -> str:
+    """Insert one fail-closed guard around an existing loss-count audit.
+
+    The repair is deliberately narrower than the detector: it applies only
+    when exactly one simple dict assignment already computes the host-standard
+    loss count from ``notna() & isna()`` followed by ``sum()``. It never
+    chooses a column, coercion policy, domain, or missing-data strategy.
+    """
+
+    if _LOSSY_NUMERIC_COERCION_GUARD_SENTINEL in code:
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    if not finding_lines:
+        return code
+
+    parents = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+
+    # The existing audit commonly wraps the exact integer count in ``int``.
+    # Reuse the conservative namespace proof from the preflight before trusting
+    # that wrapper; dynamic or shadowed builtins make this repair ineligible.
+    from .code_preflight import _builtin_int_binding_is_unmodified
+
+    builtin_int_is_safe = _builtin_int_binding_is_unmodified(tree)
+    candidates: list[tuple[ast.Assign | ast.AnnAssign, str]] = []
+    for node in ast.walk(tree):
+        target: Optional[ast.AST] = None
+        value: Optional[ast.AST] = None
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+            value = node.value
+        elif isinstance(node, ast.AnnAssign):
+            target = node.target
+            value = node.value
+        if not isinstance(target, ast.Name) or not isinstance(value, ast.Dict):
+            continue
+        if any(key is None for key in value.keys):
+            # ``**mapping`` could overwrite the host-standard count at runtime.
+            continue
+        matching_values = [
+            candidate_value
+            for key, candidate_value in zip(value.keys, value.values)
+            if isinstance(key, ast.Constant)
+            and key.value == _LOSSY_NUMERIC_COERCION_COUNT_KEY
+        ]
+        if len(matching_values) != 1:
+            continue
+        loss_value = matching_values[0]
+        loss_call = _exact_loss_count_call(
+            loss_value,
+            tree=tree,
+            parents=parents,
+        )
+        if loss_call is None or int(loss_call.lineno) not in finding_lines:
+            continue
+        if (
+            isinstance(loss_value, ast.Call)
+            and isinstance(loss_value.func, ast.Name)
+            and loss_value.func.id == "int"
+            and not builtin_int_is_safe
+        ):
+            continue
+        candidates.append((node, target.id))
+    if len(candidates) != 1:
+        return code
+
+    assignment, record_name = candidates[0]
+    standalone = _standalone_statement_source(
+        code,
+        assignment,
+        tree=tree,
+        parents=parents,
+    )
+    if standalone is None or assignment.end_lineno is None:
+        return code
+    lines, indent = standalone
+    body_indent = indent + ("\t" if "\t" in indent else "    ")
+    if not lines[assignment.end_lineno - 1].endswith(("\n", "\r")):
+        lines[assignment.end_lineno - 1] += "\n"
+    guard = (
+        f"{indent}# {_LOSSY_NUMERIC_COERCION_GUARD_SENTINEL}\n"
+        f'{indent}if {record_name}["{_LOSSY_NUMERIC_COERCION_COUNT_KEY}"] > 0:\n'
+        f'{body_indent}raise ValueError("numeric coercion invalidated observed '
+        'non-missing values")\n'
+    )
+    lines.insert(assignment.end_lineno, guard)
+    repaired = "".join(lines)
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
 
 def deterministic_concept_audit_repair(
     code: str,
     audit_messages: Sequence[str],
+    *,
+    repair_reasons: Sequence[RepairReason] = (),
+    repair_findings: Sequence[ValidationFinding] = (),
 ) -> tuple[str, List[str]]:
     """Apply narrow, science-neutral repairs named by concept-audit errors.
 
@@ -316,6 +633,16 @@ def deterministic_concept_audit_repair(
     )
     repaired = code
     repair_names: List[str] = []
+
+    if RepairReason.LOSSY_NUMERIC_COERCION in set(repair_reasons):
+        guarded = _patch_lossy_numeric_coercion_guard(
+            repaired,
+            finding_lines=_lossy_numeric_coercion_repair_lines(repair_findings),
+        )
+        if guarded != repaired:
+            repair_name = "lossy_numeric_coercion_guard_v1"
+            repaired = guarded
+            repair_names.append(repair_name)
 
     scalar_cast_finding = any(
         "scalar_cast_before_reduction" in str(message).lower()

@@ -218,6 +218,138 @@ def test_disabled_llm_audit_records_final_gate_without_claiming_llm_approval(
     )
 
 
+def test_typed_lossy_guard_repairs_without_logical_llm_budget(
+    ra, tmp_path: Path
+) -> None:
+    lossy_code = r"""
+import json
+import os
+import pandas as pd
+
+cohort = pd.read_parquet(os.environ["COHORT_PARQUET"])
+
+def numeric_coercion_audit(frame, column):
+    original = frame[column]
+    coerced = pd.to_numeric(original, errors="coerce")
+    record = {
+        "newly_invalid_or_coerced_n": int(
+            (original.notna() & coerced.isna()).sum()
+        ),
+    }
+    return coerced, record
+
+stage_numeric, coercion_record = numeric_coercion_audit(
+    cohort, "aki_stage_max"
+)
+out = os.environ["STEP_OUT_DIR"]
+table_path = os.path.join(out, "exposure_qc.csv")
+pd.DataFrame({"aki_stage_max": stage_numeric}).to_csv(table_path, index=False)
+summary = {
+    "n": int(len(cohort)),
+    "newly_invalid_or_coerced_n": int(
+        coercion_record["newly_invalid_or_coerced_n"]
+    ),
+    "output_files": [
+        {"kind": "table", "name": "exposure_qc", "path": "exposure_qc.csv"}
+    ],
+}
+with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as handle:
+    json.dump(summary, handle)
+"""
+    plan = json.dumps(
+        {
+            "research_question": "Audit an ordered numeric exposure.",
+            "steps": [
+                {
+                    "step_id": "02_exposure_qc",
+                    "intent": "Audit the ordered exposure without silent coercion.",
+                    "inputs": ["aki_stage_max"],
+                    "expected_outputs": ["table:exposure_qc"],
+                    "method": "ordered_exposure_quality_control",
+                    "icu_rule_refs": [],
+                }
+            ],
+            "rationale": "typed deterministic repair budget regression",
+        }
+    )
+
+    class LossyGuardLLM:
+        name = "lossy-guard-llm"
+
+        def __init__(self) -> None:
+            self.repair_calls = 0
+            self.audit_calls = 0
+
+        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
+            del max_tokens, temperature
+            system = "\n".join(
+                str(message.content or "")
+                for message in messages
+                if message.role == "system"
+            )
+            user = next(
+                (str(message.content or "") for message in reversed(messages)),
+                "",
+            )
+            upper = user.upper()
+            if "ICU-AWARE RESEARCH PLAN" in upper:
+                return plan
+            if "WRITE THE PYTHON CODE" in upper:
+                return lossy_code
+            if "REPAIR THE PYTHON CODE" in upper:
+                self.repair_calls += 1
+                raise AssertionError("typed mechanical repair must avoid the coder")
+            if "CONSERVATIVE ICU CONCEPT-USE AUDITOR" in system.upper():
+                self.audit_calls += 1
+                return json.dumps({"findings": []})
+            if "INTERPRET THE RESULTS" in upper:
+                return "The exposure quality-control table is available."
+            return "{}"
+
+    llm = LossyGuardLLM()
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=llm,
+        enable_literature=False,
+        enable_visual_qa=False,
+        enable_latex=False,
+        enable_llm_concept_audit=True,
+        enable_deterministic_code_fallback=False,
+        enable_deterministic_runner_repair=False,
+        max_step_llm_repair_attempts=0,
+    )
+    result = pipeline.run(
+        question="Audit an ordered numeric exposure.",
+        cohort=pd.DataFrame(
+            {
+                "stay_id": [1, 2, 3],
+                "aki_stage_max": [0.0, 1.0, 2.0],
+                "death": [0, 1, 0],
+            }
+        ),
+        cohort_name="lossy_guard_test",
+        database="synthetic",
+        target_outcome="death",
+        stop_after_step_id="02_exposure_qc",
+        stop_after_analysis=True,
+    )
+
+    partial = json.loads(
+        (Path(result.workdir) / "manifest_partial.json").read_text(encoding="utf-8")
+    )
+    record = [
+        item
+        for item in partial["per_step_records"]
+        if item.get("step_id") == "02_exposure_qc"
+    ][-1]
+    assert record["status"] == "ok"
+    assert record["deterministic_concept_repairs"] == 1
+    assert record["applied_concept_repair_names"] == ["lossy_numeric_coercion_guard_v1"]
+    assert record.get("step_llm_repair_attempts", 0) == 0
+    assert llm.repair_calls == 0
+    assert llm.audit_calls == 1
+
+
 def test_runtime_repair_transport_retry_does_not_reexecute_known_failure(
     ra, tmp_path: Path, monkeypatch
 ) -> None:

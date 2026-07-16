@@ -2922,10 +2922,21 @@ def test_resume_reaudits_material_deterministic_quarantine_repair(
     real_repair = coordination_module.deterministic_concept_audit_repair
     repair_enabled = {"value": False}
 
-    def gated_repair(code, messages):
+    def gated_repair(
+        code,
+        messages,
+        *,
+        repair_reasons=(),
+        repair_findings=(),
+    ):
         if not repair_enabled["value"]:
             return code, []
-        return real_repair(code, messages)
+        return real_repair(
+            code,
+            messages,
+            repair_reasons=repair_reasons,
+            repair_findings=repair_findings,
+        )
 
     monkeypatch.setattr(
         coordination_module,
