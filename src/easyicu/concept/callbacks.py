@@ -1502,8 +1502,14 @@ def _callback_aumc_death(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
 ) -> ICUTable:
-    """AUMC death callback: marks death if it occurred within 72 hours of ICU discharge.
-    
+    """AUMC death callback (SUPERSEDED — not on the active extraction path).
+
+    NOTE (2026-07-16): the live `death` extraction dispatches through
+    ``callback_apply._apply_callback`` (``if expr == "aumc_death"``), which applies the
+    ricu 72h-of-ICU-discharge proxy in the loader's minute scale. This
+    CALLBACK_REGISTRY entry has no consumer for `death`; it is kept only for backward
+    compatibility and must not be reused without correcting its millisecond threshold.
+
     R ricu logic: x[, val_var := is_true(index_var - val_var < hours(72L))]
     where index_var = dateofdeath, val_var = dischargedat
     
@@ -1556,7 +1562,13 @@ def _callback_sic_death(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
 ) -> ICUTable:
-    """SICdb death callback: marks death based on OffsetOfDeath in cases table.
+    """SICdb death callback (SUPERSEDED — not on the active extraction path).
+
+    NOTE (2026-07-16): the live `death` extraction dispatches through
+    ``callback_apply._apply_callback`` (``if expr == "sic_death"``), which now reads
+    `HospitalDischargeType == 2028` (Deceased) for in-hospital mortality. Flagging any
+    non-null OffsetOfDeath (below) captures registry deaths up to ~1yr of follow-up
+    (~annual mortality, not in-hospital) and must not be reused.
 
     SICdb stores OffsetOfDeath in seconds from ICU admission.
     If OffsetOfDeath is NaN, patient survived.
