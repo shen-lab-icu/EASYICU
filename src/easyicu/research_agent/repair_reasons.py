@@ -121,6 +121,7 @@ _DETAIL_REASON_CODES = {
     "undefined_helper_call": RepairReason.UNDEFINED_HELPER,
     "branch_local_unbound": RepairReason.UNBOUND_LOCAL,
     "lossy_ordinal_rounding": RepairReason.LOSSY_NUMERIC_COERCION,
+    "lossy_numeric_coercion": RepairReason.LOSSY_NUMERIC_COERCION,
     "scalar_cast_before_reduction": RepairReason.INVALID_NUMERIC_REDUCTION,
     "arbitrary_column_fallback": RepairReason.ARBITRARY_COLUMN_FALLBACK,
     "typed binding unavailable": RepairReason.TYPED_PRODUCT_BINDING_INVALID,
@@ -162,13 +163,40 @@ _DETAIL_REASON_CODES = {
 }
 
 
+# llm_concept_auditor findings carry a strict-schema ``issue_code`` enum
+# (validated upstream against _LLM_CONCEPT_ISSUE_CODES).  Routing is explicit
+# per code so a future mechanical code can be re-routed without prose
+# guessing; every current code keeps the historical semantic route.
+# Structural/mechanical gaps (e.g. lossy numeric coercion) are identified by
+# the deterministic AST preflight BEFORE any LLM audit, so ``issue_code=other``
+# no longer needs to absorb them.
+_LLM_CONCEPT_ISSUE_CODE_REASONS = {
+    "audit_only_companion_row_gating_required": (
+        RepairReason.SCIENTIFIC_SEMANTICS_VIOLATION
+    ),
+    "finalized_exposure_missing_reconciliation": (
+        RepairReason.SCIENTIFIC_SEMANTICS_VIOLATION
+    ),
+    "finalized_exposure_overridden": RepairReason.SCIENTIFIC_SEMANTICS_VIOLATION,
+    "finalized_exposure_forced_raw_reconciliation": (
+        RepairReason.SCIENTIFIC_SEMANTICS_VIOLATION
+    ),
+    "plausibility_range_exclusion_required": (
+        RepairReason.SCIENTIFIC_SEMANTICS_VIOLATION
+    ),
+}
+
+
 def repair_reason_for_finding(finding: ValidationFinding) -> RepairReason:
     detail: Mapping[str, Any] = finding.detail or {}
     structured_reason = str(detail.get("reason") or detail.get("kind") or "").strip()
     if structured_reason in _DETAIL_REASON_CODES:
         return _DETAIL_REASON_CODES[structured_reason]
     if finding.validator == "llm_concept_auditor":
-        return RepairReason.SCIENTIFIC_SEMANTICS_VIOLATION
+        issue_code = str(detail.get("issue_code") or "").strip()
+        return _LLM_CONCEPT_ISSUE_CODE_REASONS.get(
+            issue_code, RepairReason.SCIENTIFIC_SEMANTICS_VIOLATION
+        )
     if finding.validator in {
         "declared_product_contract",
         "typed_artifact_evidence_lineage",
