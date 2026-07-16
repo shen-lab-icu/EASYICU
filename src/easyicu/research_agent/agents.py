@@ -1799,6 +1799,58 @@ class CoderAgent:
         return repaired
 
 
+def _structured_repair_metadata(run_log: str) -> tuple[set[str], set[str]]:
+    """Read exact reason/helper tokens from host-owned repair payloads.
+
+    Human-readable validator text is intentionally ignored here.  Both repair
+    call sites serialize either a typed ticket or ``DETAIL`` object, so routing
+    can follow those stable fields without turning prose into an implicit
+    dispatch protocol.
+    """
+
+    reasons: set[str] = set()
+    helper_names: set[str] = set()
+
+    def _collect(payload: Any) -> None:
+        if isinstance(payload, dict):
+            for key in ("reason", "structured_reason"):
+                value = payload.get(key)
+                if isinstance(value, str) and value.strip():
+                    reasons.add(value.strip())
+            helpers = payload.get("helper_names")
+            if isinstance(helpers, list):
+                helper_names.update(
+                    str(item).strip()
+                    for item in helpers
+                    if isinstance(item, str) and item.strip()
+                )
+            for value in payload.values():
+                _collect(value)
+        elif isinstance(payload, list):
+            for item in payload:
+                _collect(item)
+
+    decoder = json.JSONDecoder()
+    for marker in (
+        "TYPED REPAIR TICKET (authoritative routing):",
+        "DETAIL:",
+    ):
+        cursor = 0
+        while True:
+            marker_index = run_log.find(marker, cursor)
+            if marker_index < 0:
+                break
+            fragment = run_log[marker_index + len(marker) :].lstrip()
+            try:
+                payload, _ = decoder.raw_decode(fragment)
+            except (json.JSONDecodeError, TypeError):
+                pass
+            else:
+                _collect(payload)
+            cursor = marker_index + len(marker)
+    return reasons, helper_names
+
+
 def _repair_specialization(*, context: ResearchContext, run_log: str, code: str) -> str:
     """Add a binding repair contract for a diagnosed method-suite failure.
 
@@ -1808,6 +1860,7 @@ def _repair_specialization(*, context: ResearchContext, run_log: str, code: str)
     """
 
     normalized = re.sub(r"[^a-z0-9]+", " ", str(run_log).lower()).strip()
+    structured_reasons, structured_helpers = _structured_repair_metadata(run_log)
     sparse_event_signals = (
         "binary event reconciliation",
         "binary event presence",
@@ -1902,7 +1955,35 @@ def _repair_specialization(*, context: ResearchContext, run_log: str, code: str)
         "count columns that lack a paired measured column",
         "scans measured columns only",
     )
-    if any(signal in normalized for signal in audit_only_signals):
+    swallowed_host_validation = bool(
+        structured_reasons
+        & {
+            "host_validation_helper_error_swallowed",
+            "provenance_helper_error_swallowed",
+        }
+    )
+    if swallowed_host_validation:
+        helper_list = ", ".join(sorted(structured_helpers)) or "the reported helper"
+        guidance.append(
+            "- DIAGNOSED HOST-VALIDATION ERROR-FLOW REPAIR (binding): repair "
+            f"the exact host-owned helper occurrence(s) reported for {helper_list}. "
+            "Move each validation call and its immediate guard before and outside "
+            "any broad recoverable model/plot `try`. Only when that is genuinely "
+            "impossible, make every matching handler's first executable statement "
+            "a bare `raise`. Do not replace or reimplement the reported helper, "
+            "change its declared inputs, or change any cohort, denominator, "
+            "exposure, outcome, method, or estimand. Model-fit failure may be "
+            "summarized only after all host validation has succeeded.\n"
+        )
+
+    measurement_provenance_swallowed = (
+        "host_validation_helper_error_swallowed" in structured_reasons
+        and "measurement_provenance_receipt" in structured_helpers
+    )
+    if (
+        any(signal in normalized for signal in audit_only_signals)
+        or measurement_provenance_swallowed
+    ):
         guidance.append(
             "- DIAGNOSED PROVENANCE/VALUE-SELECTION REPAIR (binding): keep the "
             "declared physiological or ordered value column as the sole basis for "
@@ -1924,21 +2005,25 @@ def _repair_specialization(*, context: ResearchContext, run_log: str, code: str)
             "collection, treat an empty checks collection as failure, and guard "
             "that collection before any scientific sink. Do not rely only on an "
             "`any(...)` or `all(...)` generator reduction whose collection and "
-            "failure flow cannot be verified independently by the host. Prefer "
-            "the host-owned `measurement_provenance_receipt` from "
+            "failure flow cannot be verified independently by the host. For "
+            "every exact declared pair, prefer the host-owned "
+            "`measurement_provenance_receipt` from "
             "`easyicu.research_agent.methods.descriptive_inputs` for each exact "
-            "measured/count pair the Agent already declared; it validates the "
+            "measured/count pair the Agent already declared instead of "
+            "reimplementing that standard audit; it validates the "
             "pair and raises on invalid or discordant rows without choosing a "
             "cohort, denominator, exposure, outcome, or method. Do not catch that "
             "failure and continue. If the current script keeps a custom audit, "
             "the typed ticket's helper/call/handler lines must all be repaired in "
             "the same patch and every caught validation failure must be "
-            "unconditionally re-raised. For every ticket occurrence with a "
-            "`handler_line` (or a host-validation `line` that identifies an "
-            "`except`), edit that exact handler: its first executable statement "
-            "must be a bare `raise`. Do not merely add or move a guard beside "
-            "the helper call, because an outer handler would still swallow the "
-            "failure. The normal-exit summary rule applies only to model-fit "
+            "unconditionally re-raised. First move the host validation call and "
+            "its immediate guard before and outside any broad recoverable "
+            "model/plot `try`. Only when that is genuinely impossible, repair "
+            "every ticket occurrence with a `handler_line` (or a host-validation "
+            "`line` that identifies an `except`) so that exact handler's first "
+            "executable statement is a bare `raise`. Do not merely add or move a "
+            "guard beside the helper call, because an outer handler would still "
+            "swallow the failure. The normal-exit summary rule applies only to model-fit "
             "failures after validation has succeeded, never to provenance or "
             "host-validation failures.\n"
         )

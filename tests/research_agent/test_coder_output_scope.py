@@ -8,7 +8,7 @@ from easyicu.research_agent.pipeline_execute import (
     _typed_parent_schema_context_block,
 )
 from easyicu.research_agent.plan_utils import effect_output_authorized
-from easyicu.research_agent.schema import PlannedModelRequirement
+from easyicu.research_agent.schema import AnalysisStep, PlannedModelRequirement
 
 
 class _RecordingLLM:
@@ -359,18 +359,144 @@ def test_coder_repair_targets_the_reported_swallowing_handler(ra):
     )
 
     prompt = llm.messages[-1].content
-    assert "edit that exact handler" in prompt
-    assert "first executable statement must be a bare `raise`" in prompt
+    assert "First move the host validation call" in prompt
+    assert "before and outside any broad recoverable" in prompt
+    assert "first executable statement is a bare `raise`" in prompt
     assert "normal-exit summary rule applies only to model-fit failures" in prompt
+
+
+def test_coder_repair_routes_swallowed_host_provenance_helper(ra):
+    llm = _RecordingLLM()
+    step = ra.AnalysisStep(
+        step_id="descriptive_step",
+        intent="Describe the planner-locked cohort.",
+        inputs=["artifact:analysis_cohort"],
+        expected_outputs=["table:descriptive_summary"],
+        method="descriptive_statistics",
+    )
+
+    CoderAgent(llm).repair(
+        context=_context(ra),
+        step=step,
+        code=(
+            "try:\n"
+            "    receipt = measurement_provenance_receipt(frame, "
+            "measured_column='x_measured', count_column='x_n')\n"
+            "except Exception as exc:\n"
+            "    write_failure_summary(exc)\n"
+        ),
+        run_log=(
+            'DETAIL: {"reason":"host_validation_helper_error_swallowed",'
+            '"helper_names":["measurement_provenance_receipt"],"line":3}'
+        ),
+    )
+
+    prompt = llm.messages[-1].content
+    assert "DIAGNOSED PROVENANCE/VALUE-SELECTION REPAIR" in prompt
+    assert "instead of reimplementing that standard audit" in prompt
+    assert "First move the host validation call" in prompt
+    assert "helper/call/handler lines must all be repaired" in prompt
+
+
+def test_coder_repair_keeps_nonprovenance_host_helper_out_of_provenance_route(ra):
+    llm = _RecordingLLM()
+    step = ra.AnalysisStep(
+        step_id="descriptive_step",
+        intent="Describe the planner-locked cohort.",
+        inputs=["artifact:analysis_cohort"],
+        expected_outputs=["table:descriptive_summary"],
+        method="descriptive_statistics",
+    )
+
+    CoderAgent(llm).repair(
+        context=_context(ra),
+        step=step,
+        code=(
+            "try:\n"
+            "    values = strict_numeric_input(frame, column='age')\n"
+            "except Exception as exc:\n"
+            "    write_failure_summary(exc)\n"
+        ),
+        run_log=(
+            'DETAIL: {"reason":"host_validation_helper_error_swallowed",'
+            '"helper_names":["strict_numeric_input"],"line":3}'
+        ),
+    )
+
+    prompt = llm.messages[-1].content
+    assert "DIAGNOSED HOST-VALIDATION ERROR-FLOW REPAIR" in prompt
+    assert "strict_numeric_input" in prompt
+    assert "DIAGNOSED PROVENANCE/VALUE-SELECTION REPAIR" not in prompt
+    assert "measurement_provenance_receipt" not in prompt
+
+
+def test_coder_repair_keeps_sparse_event_helper_in_its_own_route(ra):
+    llm = _RecordingLLM()
+    step = ra.AnalysisStep(
+        step_id="exposure_step",
+        intent="Materialize the planner-defined binary event exposure.",
+        inputs=["artifact:analysis_cohort"],
+        expected_outputs=["artifact:primary_exposure_definition"],
+        method="exposure_definition",
+    )
+
+    CoderAgent(llm).repair(
+        context=_context(ra),
+        step=step,
+        code=(
+            "try:\n"
+            "    result = reconcile_binary_event_presence(frame, "
+            "count_column=count_col, measured_column=measured_col, "
+            "representative_column=value_col)\n"
+            "except Exception as exc:\n"
+            "    write_failure_summary(exc)\n"
+        ),
+        run_log=(
+            'DETAIL: {"reason":"provenance_helper_error_swallowed",'
+            '"helper_names":["reconcile_binary_event_presence"],"line":3}'
+        ),
+    )
+
+    prompt = llm.messages[-1].content
+    assert "DIAGNOSED SPARSE-EVENT REPAIR" in prompt
+    assert "DIAGNOSED HOST-VALIDATION ERROR-FLOW REPAIR" in prompt
+    assert "DIAGNOSED PROVENANCE/VALUE-SELECTION REPAIR" not in prompt
+    assert "measurement_provenance_receipt" not in prompt
 
 
 def test_coder_guide_separates_model_failure_from_host_validation_failure() -> None:
     from easyicu.research_agent.agents import _CODER_GUIDE
+    from easyicu.research_agent.coder_context import coder_guide_for_step
 
-    assert "outside any broad model/plot" in _CODER_GUIDE
+    assert "Run every host-owned input-validation or provenance helper" in _CODER_GUIDE
+    assert "model/plot `try/except`" in _CODER_GUIDE
     assert "a bare `raise` as its first executable statement" in _CODER_GUIDE
     assert "For a model-fitting failure only" in _CODER_GUIDE
     assert "never applies to input-binding" in _CODER_GUIDE
+
+    table_step = AnalysisStep(
+        step_id="descriptive_step",
+        intent="Describe a locked cohort.",
+        expected_outputs=["table:table_one"],
+        method="descriptive_statistics",
+    )
+    cohort_step = AnalysisStep(
+        step_id="cohort_step",
+        intent="Materialize the planner-defined cohort.",
+        expected_outputs=["artifact:analysis_cohort", "table:cohort_flow"],
+        method="cohort_definition",
+    )
+    table_scoped = coder_guide_for_step(_CODER_GUIDE, table_step)
+    assert "Run every host-owned input-validation or provenance helper" in table_scoped
+    assert "model/plot `try/except`" in table_scoped
+    assert "a bare `raise` as its first executable statement" in table_scoped
+
+    cohort_scoped = coder_guide_for_step(_CODER_GUIDE, cohort_step)
+    assert "Run every host-owned input-validation or provenance helper" in cohort_scoped
+    assert "model/plot `try/except`" in cohort_scoped
+    assert "a bare `raise` as its first executable statement" in cohort_scoped
+    assert "For a model-fitting failure only" in cohort_scoped
+    assert "never applies to input-binding" in cohort_scoped
 
 
 def test_coder_repair_requires_bidirectional_provenance_pairs(ra):
