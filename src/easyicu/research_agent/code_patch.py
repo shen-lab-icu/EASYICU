@@ -6,6 +6,8 @@ import ast
 import json
 import re
 
+from .repair_reasons import structured_repair_metadata
+
 
 PATCH_FORMAT = "easyicu.code_patch/1"
 
@@ -111,7 +113,14 @@ def looks_like_executable_python(text: str) -> bool:
 
 
 def repair_code_excerpt(code: str, run_log: str, *, char_limit: int = 10_000) -> str:
-    """Select imports and the most diagnosis-relevant top-level AST blocks."""
+    """Select exact, diagnosis-relevant source slices within ``char_limit``.
+
+    Host-owned typed coordinates take priority over human validator prose.
+    Imports, named helper definitions, and complete sibling statements around
+    reported source lines are retained.  Oversized functions are never added
+    whole and then truncated, because a partial AST block hides the very
+    definitions and guards a minimal patch needs.
+    """
 
     text = str(code or "")
     if len(text) <= char_limit:
@@ -121,13 +130,67 @@ def repair_code_excerpt(code: str, run_log: str, *, char_limit: int = 10_000) ->
     except SyntaxError:
         return text[: char_limit // 2] + "\n# ... omitted ...\n" + text[-char_limit // 2 :]
 
-    tokens = {
-        token
-        for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]{2,}", str(run_log or ""))
-        if token.lower() not in {"error", "script", "column", "finding", "step"}
+    metadata = structured_repair_metadata(run_log)
+    structured_terms = {
+        *metadata.reasons,
+        *metadata.helper_names,
+        *metadata.failure_modes,
     }
+    token_sources = structured_terms or set(
+        re.findall(r"[A-Za-z_][A-Za-z0-9_]{2,}", str(run_log or ""))
+    )
+    stop_tokens = {
+        "after",
+        "all",
+        "and",
+        "any",
+        "before",
+        "but",
+        "can",
+        "closed",
+        "completed",
+        "count",
+        "detail",
+        "does",
+        "error",
+        "evidence",
+        "fail",
+        "failed",
+        "finding",
+        "from",
+        "helper",
+        "line",
+        "message",
+        "module",
+        "none",
+        "not",
+        "occurrence",
+        "occurrences",
+        "reason",
+        "script",
+        "severity",
+        "status",
+        "step",
+        "that",
+        "the",
+        "this",
+        "true",
+        "validator",
+        "with",
+        "without",
+    }
+    tokens: set[str] = set()
+    for source in token_sources:
+        candidates = [source, *str(source).split("_")]
+        tokens.update(
+            candidate
+            for candidate in candidates
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{2,}", candidate)
+            and candidate.lower() not in stop_tokens
+        )
+
     lines = text.splitlines(keepends=True)
-    blocks: list[tuple[int, int, int]] = []
+    blocks: list[tuple[int, int, int, ast.stmt]] = []
     for node in tree.body:
         start = max(1, int(getattr(node, "lineno", 1)))
         end = max(start, int(getattr(node, "end_lineno", start)))
@@ -139,28 +202,152 @@ def repair_code_excerpt(code: str, run_log: str, *, char_limit: int = 10_000) ->
             name = getattr(node, "name", "")
             if name in tokens:
                 score += 20
-        blocks.append((score, start, end))
+        blocks.append((score, start, end, node))
 
+    separator = "# ... unrelated code omitted; exact line blocks preserved ...\n"
     chosen: list[tuple[int, int]] = []
-    used = 0
-    for _score, start, end in sorted(blocks, key=lambda item: (-item[0], item[1])):
-        block_len = sum(len(line) for line in lines[start - 1 : end])
-        if chosen and used + block_len > char_limit:
+
+    def _merge_ranges(ranges: list[tuple[int, int]]) -> list[tuple[int, int]]:
+        merged: list[tuple[int, int]] = []
+        for start, end in sorted(ranges):
+            if merged and start <= merged[-1][1] + 1:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+        return merged
+
+    def _rendered_size(ranges: list[tuple[int, int]]) -> int:
+        return sum(
+            sum(len(line) for line in lines[start - 1 : end])
+            for start, end in ranges
+        ) + max(0, len(ranges) - 1) * len(separator)
+
+    def _try_add_range(start: int, end: int) -> bool:
+        nonlocal chosen
+        start = max(1, start)
+        end = min(len(lines), max(start, end))
+        candidate = _merge_ranges([*chosen, (start, end)])
+        if _rendered_size(candidate) > char_limit:
+            return False
+        chosen = candidate
+        return True
+
+    # Imports are required repair context, not low-scoring optional blocks.
+    for _score, start, end, node in blocks:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            _try_add_range(start, end)
+
+    # Include the exact definition of a helper named by the validator when it
+    # fits.  This lets a patch change both a call and its failure contract.
+    named_helpers = {
+        name
+        for name in metadata.helper_names
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name)
+    }
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
-        chosen.append((start, end))
-        used += block_len
-        if used >= char_limit * 0.85:
+        if node.name not in named_helpers:
+            continue
+        _try_add_range(int(node.lineno), int(node.end_lineno or node.lineno))
+
+    def _sibling_context(line_number: int) -> bool:
+        suites: list[tuple[int, list[ast.stmt], int]] = []
+        for parent in ast.walk(tree):
+            for _field, value in ast.iter_fields(parent):
+                if not isinstance(value, list):
+                    continue
+                statements = [item for item in value if isinstance(item, ast.stmt)]
+                for index, statement in enumerate(statements):
+                    start = int(getattr(statement, "lineno", 0) or 0)
+                    end = int(getattr(statement, "end_lineno", start) or start)
+                    if start <= line_number <= end:
+                        suites.append((end - start, statements, index))
+        if not suites:
+            return False
+        _span, statements, index = min(suites, key=lambda item: item[0])
+        for radius in range(4, -1, -1):
+            selected = statements[
+                max(0, index - radius) : min(len(statements), index + radius + 1)
+            ]
+            start = int(selected[0].lineno)
+            end = int(selected[-1].end_lineno or selected[-1].lineno)
+            if _try_add_range(start, end):
+                return True
+        return False
+
+    for line_number in sorted(metadata.line_anchors):
+        _sibling_context(line_number)
+
+    # With no source line (for example a module-scope finding), take compact
+    # neighborhoods around the strongest typed-token blocks.  Neighboring
+    # assignments and guards remain visible instead of isolated loops.
+    ranked_indices = sorted(
+        range(len(blocks)),
+        key=lambda index: (-blocks[index][0], blocks[index][1]),
+    )
+    seeds: list[int] = []
+    for index in ranked_indices:
+        score, _start, _end, node = blocks[index]
+        if score <= 0 or isinstance(node, (ast.Import, ast.ImportFrom)):
+            continue
+        if any(abs(index - seed) <= 4 for seed in seeds):
+            continue
+        added = False
+        for radius in range(4, -1, -1):
+            neighborhood = blocks[
+                max(0, index - radius) : min(len(blocks), index + radius + 1)
+            ]
+            if _try_add_range(neighborhood[0][1], neighborhood[-1][2]):
+                added = True
+                break
+        if not added:
+            # The top-level node is itself too large.  Use a complete sibling
+            # slice around its strongest matching nested statement.
+            nested = []
+            for statement in ast.walk(node):
+                if not isinstance(statement, ast.stmt) or statement is node:
+                    continue
+                start = int(getattr(statement, "lineno", 0) or 0)
+                end = int(getattr(statement, "end_lineno", start) or start)
+                source = "".join(lines[start - 1 : end])
+                nested_score = sum(4 for token in tokens if token in source)
+                if nested_score > 0:
+                    nested.append((nested_score, end - start, start))
+            if nested:
+                _nested_score, _nested_span, nested_line = max(
+                    nested,
+                    key=lambda item: (item[0], -item[1], -item[2]),
+                )
+                added = _sibling_context(nested_line)
+        if added:
+            seeds.append(index)
+        if len(seeds) >= 3:
             break
+
+    # Use any remaining capacity for other exact high-scoring blocks.
+    for index in ranked_indices:
+        score, start, end, node = blocks[index]
+        if score <= 0 or isinstance(node, (ast.Import, ast.ImportFrom)):
+            continue
+        _try_add_range(start, end)
+
+    if not chosen:
+        # Parsed code with no usable diagnostic token: retain complete leading
+        # top-level statements rather than slicing through an AST node.
+        for _score, start, end, _node in blocks:
+            if not _try_add_range(start, end):
+                break
+
     chosen.sort()
-    parts = []
+    parts: list[str] = []
     previous_end = 0
     for start, end in chosen:
         if previous_end and start > previous_end + 1:
-            parts.append("# ... unrelated code omitted; exact line blocks preserved ...\n")
+            parts.append(separator)
         parts.extend(lines[start - 1 : end])
         previous_end = end
-    excerpt = "".join(parts)
-    return excerpt[:char_limit]
+    return "".join(parts)
 
 
 __all__ = [

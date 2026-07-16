@@ -464,6 +464,86 @@ def test_coder_repair_keeps_sparse_event_helper_in_its_own_route(ra):
     assert "measurement_provenance_receipt" not in prompt
 
 
+def test_coder_repair_replaces_unverifiable_module_provenance_scanner(ra):
+    llm = _RecordingLLM()
+    step = ra.AnalysisStep(
+        step_id="descriptive_step",
+        intent="Describe the planner-locked cohort.",
+        inputs=["artifact:analysis_cohort", "x_measured", "x_n"],
+        expected_outputs=["table:descriptive_summary"],
+        method="descriptive_statistics",
+    )
+
+    CoderAgent(llm).repair(
+        context=_context(ra),
+        step=step,
+        code=(
+            "provenance_failures = []\n"
+            "for stem in stems:\n"
+            "    provenance_failures.extend(custom_pair_audit(stem))\n"
+            "if provenance_failures:\n"
+            "    raise ValueError(provenance_failures)\n"
+        ),
+        run_log=(
+            'DETAIL: {"reason":"provenance_audit_not_fail_closed",'
+            '"issues":[{"failure_mode":'
+            '"module_provenance_scope_not_proven_fail_closed",'
+            '"helper_name":"<module>"}]}'
+        ),
+    )
+
+    prompt = llm.messages[-1].content
+    assert "DIAGNOSED MODULE-SCOPE PROVENANCE REPAIR" in prompt
+    assert "do not add another guard" in prompt
+    assert "Remove the duplicate custom marker audit" in prompt
+    assert (
+        "measurement_provenance_receipt(frame, "
+        "measured_column=measured_column, count_column=count_column)"
+    ) in prompt
+    assert "may not change values, rows, denominators" in prompt
+
+
+def test_coder_repair_routes_unverifiable_provenance_result_guard(ra):
+    llm = _RecordingLLM()
+    step = ra.AnalysisStep(
+        step_id="cohort_step",
+        intent="Materialize the planner-defined cohort.",
+        inputs=["artifact:analysis_cohort", "x_measured", "x_n"],
+        expected_outputs=["artifact:analysis_cohort", "table:cohort_flow"],
+        method="cohort_definition",
+    )
+    ticket = """
+TYPED REPAIR TICKET (authoritative routing):
+[{"reason":"PROVENANCE_NOT_FAIL_CLOSED",
+  "structured_reason":"provenance_audit_not_fail_closed",
+  "detail":{"issues":[{
+    "failure_mode":"provenance_helper_result_not_immediately_guarded",
+    "helper_name":"provenance_audit",
+    "call_line":205,
+    "following_guard_line":206
+  }]}}]
+"""
+
+    CoderAgent(llm).repair(
+        context=_context(ra),
+        step=step,
+        code=(
+            "summary, ok = provenance_audit(frame)\n"
+            "checks = summary.get('checks', [])\n"
+            "if ok is not True:\n"
+            "    raise ValueError('invalid')\n"
+        ),
+        run_log=ticket,
+    )
+
+    prompt = llm.messages[-1].content
+    assert "DIAGNOSED PROVENANCE RESULT-GUARD REPAIR" in prompt
+    assert "provenance_audit" in prompt
+    assert "self-raising host-owned `measurement_provenance_receipt`" in prompt
+    assert "very next executable sibling statement" in prompt
+    assert "A later boolean status check" in prompt
+
+
 def test_coder_guide_separates_model_failure_from_host_validation_failure() -> None:
     from easyicu.research_agent.agents import _CODER_GUIDE
     from easyicu.research_agent.coder_context import coder_guide_for_step

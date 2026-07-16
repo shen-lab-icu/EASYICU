@@ -1,4 +1,8 @@
-from easyicu.research_agent.repair_reasons import RepairReason, typed_repair_ticket
+from easyicu.research_agent.repair_reasons import (
+    RepairReason,
+    structured_repair_metadata,
+    typed_repair_ticket,
+)
 from easyicu.research_agent.schema import ValidationFinding
 
 
@@ -52,6 +56,44 @@ def test_typed_repair_ticket_folds_only_identical_occurrences():
     ticket = typed_repair_ticket([finding, finding.model_copy(deep=True)])
 
     assert ticket[0]["occurrence_count"] == 1
+
+
+def test_structured_repair_metadata_reads_nested_exact_coordinates_only():
+    run_log = """
+TYPED REPAIR TICKET (authoritative routing):
+[
+  {
+    "reason": "PROVENANCE_NOT_FAIL_CLOSED",
+    "structured_reason": "provenance_audit_not_fail_closed",
+    "detail": {
+      "issues": [
+        {
+          "failure_mode": "provenance_helper_result_not_immediately_guarded",
+          "helper_name": "provenance_audit",
+          "call_line": 205,
+          "following_guard_line": 206
+        }
+      ]
+    }
+  }
+]
+
+Human prose mentions fake_helper and line 999 but is not routing authority.
+DETAIL: {"reason":"host_validation_helper_error_swallowed","helper_names":["strict_numeric_input"],"line":33}
+"""
+
+    metadata = structured_repair_metadata(run_log)
+
+    assert metadata.reasons == {
+        "PROVENANCE_NOT_FAIL_CLOSED",
+        "provenance_audit_not_fail_closed",
+        "host_validation_helper_error_swallowed",
+    }
+    assert metadata.helper_names == {"provenance_audit", "strict_numeric_input"}
+    assert metadata.failure_modes == {
+        "provenance_helper_result_not_immediately_guarded"
+    }
+    assert metadata.line_anchors == {33, 205, 206}
 
 
 def test_typed_unbound_local_ticket_keeps_same_message_at_three_locals():

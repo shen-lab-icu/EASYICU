@@ -74,6 +74,7 @@ from .plan_utils import (
 )
 from .prompts import PROMPT_PACK_VERSION, load_prompt_pack
 from .provider_budget import StepProviderCallBudget, complete_with_provider_budget
+from .repair_reasons import structured_repair_metadata
 from .schema import (
     AggregationRule,
     AgentRuntimeState,
@@ -1799,58 +1800,6 @@ class CoderAgent:
         return repaired
 
 
-def _structured_repair_metadata(run_log: str) -> tuple[set[str], set[str]]:
-    """Read exact reason/helper tokens from host-owned repair payloads.
-
-    Human-readable validator text is intentionally ignored here.  Both repair
-    call sites serialize either a typed ticket or ``DETAIL`` object, so routing
-    can follow those stable fields without turning prose into an implicit
-    dispatch protocol.
-    """
-
-    reasons: set[str] = set()
-    helper_names: set[str] = set()
-
-    def _collect(payload: Any) -> None:
-        if isinstance(payload, dict):
-            for key in ("reason", "structured_reason"):
-                value = payload.get(key)
-                if isinstance(value, str) and value.strip():
-                    reasons.add(value.strip())
-            helpers = payload.get("helper_names")
-            if isinstance(helpers, list):
-                helper_names.update(
-                    str(item).strip()
-                    for item in helpers
-                    if isinstance(item, str) and item.strip()
-                )
-            for value in payload.values():
-                _collect(value)
-        elif isinstance(payload, list):
-            for item in payload:
-                _collect(item)
-
-    decoder = json.JSONDecoder()
-    for marker in (
-        "TYPED REPAIR TICKET (authoritative routing):",
-        "DETAIL:",
-    ):
-        cursor = 0
-        while True:
-            marker_index = run_log.find(marker, cursor)
-            if marker_index < 0:
-                break
-            fragment = run_log[marker_index + len(marker) :].lstrip()
-            try:
-                payload, _ = decoder.raw_decode(fragment)
-            except (json.JSONDecodeError, TypeError):
-                pass
-            else:
-                _collect(payload)
-            cursor = marker_index + len(marker)
-    return reasons, helper_names
-
-
 def _repair_specialization(*, context: ResearchContext, run_log: str, code: str) -> str:
     """Add a binding repair contract for a diagnosed method-suite failure.
 
@@ -1860,7 +1809,9 @@ def _repair_specialization(*, context: ResearchContext, run_log: str, code: str)
     """
 
     normalized = re.sub(r"[^a-z0-9]+", " ", str(run_log).lower()).strip()
-    structured_reasons, structured_helpers = _structured_repair_metadata(run_log)
+    repair_metadata = structured_repair_metadata(run_log)
+    structured_reasons = repair_metadata.reasons
+    structured_helpers = repair_metadata.helper_names
     sparse_event_signals = (
         "binary event reconciliation",
         "binary event presence",
@@ -1980,6 +1931,46 @@ def _repair_specialization(*, context: ResearchContext, run_log: str, code: str)
         "host_validation_helper_error_swallowed" in structured_reasons
         and "measurement_provenance_receipt" in structured_helpers
     )
+    if (
+        "module_provenance_scope_not_proven_fail_closed"
+        in repair_metadata.failure_modes
+    ):
+        guidance.append(
+            "- DIAGNOSED MODULE-SCOPE PROVENANCE REPAIR (binding): do not add "
+            "another guard to the ad-hoc module scanner. Remove the duplicate "
+            "custom marker audit and, for every exact measured/count pair already "
+            "declared by the Agent, import and directly call "
+            "`measurement_provenance_receipt(frame, "
+            "measured_column=measured_column, count_column=count_column)` from "
+            "`easyicu.research_agent.methods.descriptive_inputs`. The host helper "
+            "returns audit metadata and raises on unavailable, invalid, or "
+            "discordant pairs; do not catch it, turn its receipt into a row mask, "
+            "or retain a second custom provenance marker around the same pair. "
+            "This replacement may validate only pairs the Agent already declared "
+            "and may not change values, rows, denominators, or scientific choices.\n"
+        )
+
+    result_guard_modes = {
+        "provenance_helper_result_not_immediately_guarded",
+        "provenance_helper_result_guard_not_fail_closed",
+    }
+    if repair_metadata.failure_modes & result_guard_modes:
+        helper_list = ", ".join(sorted(structured_helpers)) or "the reported helper"
+        guidance.append(
+            "- DIAGNOSED PROVENANCE RESULT-GUARD REPAIR (binding): the reported "
+            f"custom helper occurrence(s) for {helper_list} are not a provable "
+            "fail-closed boundary. Prefer replacing an exact declared "
+            "measured/count audit with the self-raising host-owned "
+            "`measurement_provenance_receipt` call and remove the duplicate custom "
+            "marker helper. If a custom helper must remain, it must either raise "
+            "internally on every invalid path or return one explicit failure "
+            "collection; the caller's very next executable sibling statement must "
+            "test that collection and raise on every branch before reading, "
+            "normalizing, clearing, or copying any helper result. A later boolean "
+            "status check or another downstream guard is not sufficient. Preserve "
+            "all Agent-declared inputs and scientific choices.\n"
+        )
+
     if (
         any(signal in normalized for signal in audit_only_signals)
         or measurement_provenance_swallowed
