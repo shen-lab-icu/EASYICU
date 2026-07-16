@@ -34,12 +34,16 @@ STEP_ID = "02_exposure_derivation_and_qc"
 
 
 def _authority_binding(
-    *, attempt_id: int = 1, repair_class: str = "concept"
+    *,
+    attempt_id: int = 1,
+    repair_class: str = "concept",
+    provider_category: str = "concept_repair",
 ) -> RepairAuthorityBinding:
     return RepairAuthorityBinding(
         step_id=STEP_ID,
         attempt_id=attempt_id,
         repair_class=repair_class,
+        provider_category=provider_category,
         before_code_sha256="a" * 64,
         step_spec_sha256="b" * 64,
         resolved_inputs_sha256="c" * 64,
@@ -191,7 +195,27 @@ def test_every_pipeline_llm_repair_reservation_is_authority_bound():
     assert len(calls) == 6
     for call in calls:
         keywords = {keyword.arg for keyword in call.keywords}
-        assert keywords == {"before_code", "repair_ticket"}
+        assert keywords == {"before_code", "repair_ticket", "provider_category"}
+    reserved_categories = sorted(
+        keyword.value.value
+        for call in calls
+        for keyword in call.keywords
+        if keyword.arg == "provider_category"
+        and isinstance(keyword.value, ast.Constant)
+    )
+    coder_categories = sorted(
+        keyword.value.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "coder"
+        and node.func.attr == "repair"
+        for keyword in node.keywords
+        if keyword.arg == "provider_category"
+        and isinstance(keyword.value, ast.Constant)
+    )
+    assert reserved_categories == coder_categories
 
 
 def test_every_pipeline_coder_repair_binds_current_logical_attempt():
@@ -436,6 +460,47 @@ def test_repair_coordinator_persists_failed_transport_before_reraising(tmp_path)
     )
     assert state.logical_repairs[0]["transport"]["state"] == "failed"
     assert state.logical_repairs[0]["transport"]["error_type"] == "RuntimeError"
+
+
+def test_repair_coordinator_rejects_mismatched_bound_provider_category(tmp_path):
+    provider = _budget(tmp_path)
+    binding = _authority_binding(
+        repair_class="runtime",
+        provider_category="runtime_repair",
+    )
+    assert (
+        provider.reserve_logical_repair(
+            "runtime",
+            max_repairs=2,
+            binding=binding.payload(),
+            binding_sha256=binding.sha256,
+        )
+        == 1
+    )
+    coordinator = RepairCoordinator(
+        provider_budget=provider,
+        provider_category="contract_repair",
+        normalize_script=lambda value: value,
+        is_executable_script=lambda value: value.startswith("import "),
+    )
+    provider_called = False
+
+    def patch_call():
+        nonlocal provider_called
+        provider_called = True
+        return "unused"
+
+    with pytest.raises(ProviderCallBudgetReceiptError, match="provider category"):
+        coordinator.repair(
+            code="import os\nvalue = 1\n",
+            patch_call=patch_call,
+            full_rewrite_call=lambda _reason: "unused",
+            logical_repair_attempt_id=1,
+        )
+
+    assert provider_called is False
+    assert provider.categories == ()
+    assert provider.logical_repair_transport_states == ("pending",)
 
 
 def test_transport_receipt_failure_never_returns_unsealed_repaired_code(

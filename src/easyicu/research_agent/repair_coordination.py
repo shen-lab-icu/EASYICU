@@ -40,7 +40,7 @@ from .provider_budget import (
     complete_with_provider_budget,
 )
 
-REPAIR_AUTHORITY_BINDING_SCHEMA_VERSION = "easyicu.repair_authority_binding/1"
+REPAIR_AUTHORITY_BINDING_SCHEMA_VERSION = "easyicu.repair_authority_binding/2"
 
 
 def _is_sha256_hex(value: str) -> bool:
@@ -60,6 +60,7 @@ class RepairAuthorityBinding:
     step_id: str
     attempt_id: int
     repair_class: str
+    provider_category: str
     before_code_sha256: str
     step_spec_sha256: str
     resolved_inputs_sha256: str
@@ -71,6 +72,8 @@ class RepairAuthorityBinding:
     schema_version: str = REPAIR_AUTHORITY_BINDING_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
+        if self.schema_version != REPAIR_AUTHORITY_BINDING_SCHEMA_VERSION:
+            raise ValueError("repair authority binding schema is unsupported")
         if not str(self.step_id).strip():
             raise ValueError("repair authority step_id must be non-empty")
         if (
@@ -81,6 +84,13 @@ class RepairAuthorityBinding:
             raise ValueError("repair authority attempt_id must be >= 1")
         if not str(self.repair_class).strip():
             raise ValueError("repair authority class must be non-empty")
+        provider_category = self.provider_category
+        if (
+            not isinstance(provider_category, str)
+            or not provider_category.strip()
+            or provider_category != provider_category.strip()
+        ):
+            raise ValueError("repair authority provider category must be non-empty")
         if not str(self.prompt_pack_version).strip():
             raise ValueError("repair authority prompt version must be non-empty")
         digest_fields = (
@@ -378,6 +388,12 @@ class RepairCoordinator:
         if logical_repair_attempt_id is not None and self._provider_budget is None:
             raise ValueError(
                 "logical repair transport binding requires a provider budget"
+            )
+        if logical_repair_attempt_id is not None:
+            assert self._provider_budget is not None
+            self._provider_budget.assert_logical_repair_provider_category(
+                attempt_id=logical_repair_attempt_id,
+                provider_category=self._provider_category,
             )
 
         try:

@@ -38,6 +38,8 @@ REPAIR_KEYS = ("repair", "rewrite")
 AUDIT_KEYS = ("audit",)
 INIT_KEYS = ("initial",)
 RECEIPT_SCHEMA_VERSIONS = {1, 2, 3, 4, 5}
+REPAIR_AUTHORITY_BINDING_SCHEMA_V2 = "easyicu.repair_authority_binding/2"
+REPAIR_TRANSPORT_PROVIDER_SUFFIXES = ("patch", "full_rewrite")
 RUN_SESSION_START = "Research context built."
 RUN_SESSION_END = "Research-agent run complete."
 STEP_SESSION_START = re.compile(r"^Step \d+/\d+ started:")
@@ -69,6 +71,44 @@ def _is_sha256_hex(value: object) -> bool:
         and len(value) == 64
         and all(char in "0123456789abcdef" for char in value)
     )
+
+
+def _bound_repair_provider_category(binding: object, *, path: str) -> str | None:
+    if not isinstance(binding, dict):
+        return None
+    schema_version = binding.get("schema_version")
+    has_provider_category = "provider_category" in binding
+    if schema_version != REPAIR_AUTHORITY_BINDING_SCHEMA_V2:
+        if has_provider_category:
+            raise BaselineError(
+                f"legacy repair binding declares provider category: {path}"
+            )
+        return None
+    provider_category = binding.get("provider_category")
+    if (
+        not isinstance(provider_category, str)
+        or not provider_category.strip()
+        or provider_category != provider_category.strip()
+    ):
+        raise BaselineError(f"repair binding provider category invalid: {path}")
+    return provider_category
+
+
+def _repair_owned_provider_calls(
+    categories: list[str],
+    *,
+    reserved_history_len: int,
+    history_len: int,
+    provider_category: str | None,
+) -> int:
+    suffix = categories[reserved_history_len:history_len]
+    if provider_category is None:
+        return len(suffix)
+    owned_categories = {
+        f"{provider_category}_{transport_suffix}"
+        for transport_suffix in REPAIR_TRANSPORT_PROVIDER_SUFFIXES
+    }
+    return sum(category in owned_categories for category in suffix)
 
 
 def _categorize(cat: str) -> str:
@@ -171,6 +211,7 @@ def read_receipts(run_dir: str, inputs: dict) -> list[dict]:
                     raise BaselineError(
                         f"receipt logical repair history inconsistent: {p}"
                     )
+                provider_category = _bound_repair_provider_category(binding, path=p)
                 if d.get("schema_version") == 5:
                     transport = entry.get("transport")
                     if not isinstance(transport, dict):
@@ -183,20 +224,29 @@ def read_receipts(run_dir: str, inputs: dict) -> list[dict]:
                     elif state in {"completed", "failed"}:
                         terminal_history_len = transport.get("provider_history_len")
                         terminal_calls = transport.get("provider_calls")
+                        expected_terminal_calls = (
+                            _repair_owned_provider_calls(
+                                cats,
+                                reserved_history_len=history_len,
+                                history_len=terminal_history_len,
+                                provider_category=provider_category,
+                            )
+                            if isinstance(terminal_history_len, int)
+                            and not isinstance(terminal_history_len, bool)
+                            else None
+                        )
                         terminal_history_valid = bool(
                             isinstance(terminal_history_len, int)
                             and not isinstance(terminal_history_len, bool)
                             and history_len <= terminal_history_len <= len(cats)
-                            and (
-                                state == "failed" or terminal_history_len > history_len
-                            )
                             and transport.get("provider_history_sha256")
                             == _receipt_digest(
                                 {"categories": cats[:terminal_history_len]}
                             )
                             and isinstance(terminal_calls, int)
                             and not isinstance(terminal_calls, bool)
-                            and terminal_calls == terminal_history_len - history_len
+                            and terminal_calls == expected_terminal_calls
+                            and (state == "failed" or terminal_calls > 0)
                         )
                         if state == "completed":
                             transport_valid = bool(
@@ -236,6 +286,10 @@ def read_receipts(run_dir: str, inputs: dict) -> list[dict]:
                     if not transport_valid:
                         raise BaselineError(
                             f"receipt logical repair transport inconsistent: {p}"
+                        )
+                    if state == "pending" and index != len(logical_repairs):
+                        raise BaselineError(
+                            f"receipt pending logical repair is not final: {p}"
                         )
         elif logical_repairs:
             raise BaselineError(

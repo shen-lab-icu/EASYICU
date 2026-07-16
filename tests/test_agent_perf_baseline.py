@@ -367,6 +367,94 @@ def test_schema_v5_repair_transport_is_validated(tmp_path):
         apb.read_receipts(str(run), {})
 
 
+def test_schema_v5_v2_binding_counts_only_owned_repair_calls(tmp_path):
+    run = tmp_path / "run_v5_owned"
+    run.mkdir()
+    categories = ["concept_audit", "runtime_repair_patch"]
+    binding = {
+        "schema_version": "easyicu.repair_authority_binding/2",
+        "provider_category": "runtime_repair",
+    }
+    _write_receipt(
+        run,
+        "01_model",
+        categories,
+        schema_version=5,
+        logical_repairs=[
+            {
+                "attempt_id": 1,
+                "repair_class": "runtime",
+                "provider_history_len": 0,
+                "provider_history_sha256": apb._receipt_digest({"categories": []}),
+                "binding": binding,
+                "binding_sha256": apb._receipt_digest(binding),
+                "transport": {
+                    "state": "completed",
+                    "mode": "minimal_patch",
+                    "after_code_sha256": "a" * 64,
+                    "provider_history_len": 2,
+                    "provider_history_sha256": apb._receipt_digest(
+                        {"categories": categories}
+                    ),
+                    "provider_calls": 1,
+                },
+            }
+        ],
+        final_reservation_state={
+            "required_token": None,
+            "bound_provider_history_len": None,
+            "bound_provider_history_sha256": None,
+            "completed_token": None,
+            "released": False,
+        },
+    )
+
+    receipt = apb.read_receipts(str(run), {})[0]
+    assert receipt["logical_repair_attempts"] == 1
+
+
+def test_schema_v5_legacy_binding_keeps_full_history_delta_accounting(tmp_path):
+    run = tmp_path / "run_v5_legacy"
+    run.mkdir()
+    categories = ["concept_audit", "runtime_repair_patch"]
+    binding = {"schema_version": "easyicu.repair_authority_binding/1"}
+    _write_receipt(
+        run,
+        "01_model",
+        categories,
+        schema_version=5,
+        logical_repairs=[
+            {
+                "attempt_id": 1,
+                "repair_class": "runtime",
+                "provider_history_len": 0,
+                "provider_history_sha256": apb._receipt_digest({"categories": []}),
+                "binding": binding,
+                "binding_sha256": apb._receipt_digest(binding),
+                "transport": {
+                    "state": "completed",
+                    "mode": "minimal_patch",
+                    "after_code_sha256": "a" * 64,
+                    "provider_history_len": 2,
+                    "provider_history_sha256": apb._receipt_digest(
+                        {"categories": categories}
+                    ),
+                    "provider_calls": 2,
+                },
+            }
+        ],
+        final_reservation_state={
+            "required_token": None,
+            "bound_provider_history_len": None,
+            "bound_provider_history_sha256": None,
+            "completed_token": None,
+            "released": False,
+        },
+    )
+
+    assert apb.read_receipts(str(run), {})[0]["logical_repair_attempts"] == 1
+
+
 def test_corrupt_cost_file_fails_closed(tmp_path):
     run = _base_run(tmp_path)
     (run / "evidence" / "cost_records_v9__cost_records.json").write_text(
