@@ -160,7 +160,11 @@ from .pipeline import (
     _semantic_aliases_for,
 )
 from .publication_figures import make_figure_contract
-from .repair_reasons import typed_repair_ticket
+from .repair_reasons import (
+    RepairReason,
+    repair_reason_for_finding,
+    typed_repair_ticket,
+)
 from .plan_utils import (
     _augment_measurement_companion_inputs,
     _augment_report_typed_product_inputs,
@@ -9960,6 +9964,8 @@ else:
             *,
             script_text: str,
             error_messages: Sequence[str],
+            repair_reasons: Sequence[RepairReason] = (),
+            repair_findings: Sequence[ValidationFinding] = (),
             source: str,
         ) -> Tuple[str, List[str]]:
             # Implementation extracted to repair_coordination (A2 batch-1);
@@ -9967,6 +9973,8 @@ else:
             return authorized_deterministic_concept_repair(
                 script_text,
                 error_messages,
+                repair_reasons=repair_reasons,
+                repair_findings=repair_findings,
                 authorize=_authorize_automatic_repair,
                 step=step,
                 source=source,
@@ -10124,9 +10132,16 @@ else:
                     )
                     if value
                 ]
+                _audit_repair_reasons = [
+                    repair_reason_for_finding(finding)
+                    for finding in usage_findings
+                    if finding.severity == "error"
+                ]
                 _det_code, _det_names = _authorized_deterministic_concept_repair(
                     script_text=code,
                     error_messages=_audit_error_msgs,
+                    repair_reasons=_audit_repair_reasons,
+                    repair_findings=usage_findings,
                     source="deterministic_concept_audit_repair",
                 )
                 if _det_names and _det_code != code:
@@ -10792,6 +10807,10 @@ else:
                         )
                         if value
                     ]
+                    post_mutation_reasons = [
+                        repair_reason_for_finding(finding)
+                        for finding in post_mutation_errors
+                    ]
                     if (
                         deterministic_concept_repairs
                         < _MAX_DETERMINISTIC_CONCEPT_REPAIRS
@@ -10800,6 +10819,8 @@ else:
                             _authorized_deterministic_concept_repair(
                                 script_text=code,
                                 error_messages=post_mutation_messages,
+                                repair_reasons=post_mutation_reasons,
+                                repair_findings=post_mutation_errors,
                                 source=("post_mutation_deterministic_concept_repair"),
                             )
                         )
@@ -11342,9 +11363,7 @@ else:
                         step_id=step.step_id,
                         code=code,
                         resolved_inputs_path=resolved_inputs_path,
-                        output_dir=(
-                            run_dir / "steps" / step.step_id / "outputs"
-                        ),
+                        output_dir=(run_dir / "steps" / step.step_id / "outputs"),
                     ),
                 )
 
@@ -14259,6 +14278,7 @@ else:
             apply_revised_plan=_apply_revised_plan,
         )
     else:
+
         def _record_parallel_worker_error(exc: BaseException) -> None:
             with shared_lock:
                 findings.append(

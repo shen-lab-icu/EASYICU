@@ -273,6 +273,7 @@ _STRUCTURAL_REPAIRS = {
     "inline_missing_to_jsonable_utils_v1",
     "json_dump_numpy_key_sanitizer_v1",
     "local_wilson_proportion_confint_v1",
+    "lossy_numeric_coercion_guard_v1",
     "matplotlib_errorbar_xerr_shape_v1",
     "normalize_first_time_companion_v1",
     "primary_predictor_safe_summary_lookup_v1",

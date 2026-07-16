@@ -33,6 +33,8 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from .code_patch import CodePatchError, apply_code_patch
 from .code_repair import deterministic_concept_audit_repair
+from .repair_reasons import RepairReason
+from .schema import ValidationFinding
 from .provider_budget import (
     PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION,
     ProviderCallBudgetReceiptError,
@@ -507,6 +509,8 @@ def authorized_deterministic_concept_repair(
     script_text: str,
     error_messages: Sequence[str],
     *,
+    repair_reasons: Sequence[RepairReason] = (),
+    repair_findings: Sequence[ValidationFinding] = (),
     authorize: Callable[..., Optional[Any]],
     step: Any,
     source: str,
@@ -516,6 +520,8 @@ def authorized_deterministic_concept_repair(
     candidate_code, repair_names = deterministic_concept_audit_repair(
         script_text,
         error_messages,
+        repair_reasons=repair_reasons,
+        repair_findings=repair_findings,
     )
     if not repair_names or candidate_code == script_text:
         return script_text, []
