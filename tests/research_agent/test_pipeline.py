@@ -8606,6 +8606,120 @@ def test_preserve_figure_steps_after_replan_no_op_when_figure_kept(ra):
     ]
 
 
+def test_preserve_figure_steps_after_replan_restores_exact_parent_products(ra):
+    """An echoed pre-split parent must not strand the preserved render child."""
+    from easyicu.research_agent.pipeline import (
+        _preserve_figure_steps_after_replan,
+    )
+
+    current_parent = ra.AnalysisStep(
+        step_id="01_model_training",
+        intent="Fit the agent-selected prediction model.",
+        method="prediction_model",
+        expected_outputs=[
+            "statistic:auroc",
+            "table:model_performance",
+            "table:roc_curve",
+        ],
+    )
+    current_figure = ra.AnalysisStep(
+        step_id="01_model_training_figure",
+        intent=(
+            "Render the publication figure declared by step "
+            "'01_model_training'."
+        ),
+        method="visualization",
+        inputs=["table:model_performance", "table:roc_curve"],
+        expected_outputs=["figure:discrimination_calibration"],
+    )
+    current = ra.AnalysisPlan(
+        research_question="build a prediction model",
+        steps=[current_parent, current_figure],
+    )
+    # The replanner echoes the original parent shape and drops the host-split
+    # child. It did not choose a different method or producer.
+    revised = ra.AnalysisPlan(
+        research_question="build a prediction model",
+        steps=[
+            current_parent.model_copy(
+                update={"expected_outputs": ["statistic:auroc"]}
+            )
+        ],
+        revision=2,
+    )
+
+    preserved, findings = _preserve_figure_steps_after_replan(
+        current=current,
+        revised=revised,
+    )
+
+    by_id = {step.step_id: step for step in preserved.steps}
+    assert by_id["01_model_training"].expected_outputs == [
+        "statistic:auroc",
+        "table:model_performance",
+        "table:roc_curve",
+    ]
+    assert "01_model_training_figure" in by_id
+    assert any(
+        (finding.detail or {}).get("reason")
+        == "preserved_figure_parent_output_contract"
+        for finding in findings
+    )
+
+
+def test_preserve_figure_steps_after_replan_does_not_invent_missing_parent(ra):
+    """A dropped producer remains a typed-DAG error; preservation cannot guess."""
+    from easyicu.research_agent.pipeline import (
+        _preserve_figure_steps_after_replan,
+    )
+
+    current_parent = ra.AnalysisStep(
+        step_id="01_model_training",
+        intent="Fit the agent-selected prediction model.",
+        expected_outputs=["table:model_performance"],
+    )
+    current_figure = ra.AnalysisStep(
+        step_id="01_model_training_figure",
+        intent=(
+            "Render the publication figure declared by step "
+            "'01_model_training'."
+        ),
+        method="visualization",
+        inputs=["table:model_performance"],
+        expected_outputs=["figure:discrimination_calibration"],
+    )
+    current = ra.AnalysisPlan(
+        research_question="build a prediction model",
+        steps=[current_parent, current_figure],
+    )
+    revised = ra.AnalysisPlan(
+        research_question="build a prediction model",
+        steps=[
+            ra.AnalysisStep(
+                step_id="02_other",
+                intent="Retain an unrelated descriptive step.",
+                expected_outputs=[],
+            )
+        ],
+        revision=2,
+    )
+
+    preserved, findings = _preserve_figure_steps_after_replan(
+        current=current,
+        revised=revised,
+    )
+
+    assert [step.step_id for step in preserved.steps] == [
+        "02_other",
+        "01_model_training_figure",
+    ]
+    assert all(
+        (finding.detail or {}).get("reason")
+        != "preserved_figure_parent_output_contract"
+        for finding in findings
+    )
+
+
 def test_step_contract_repair_guidance_for_prediction_categorical_passthrough(ra):
     from easyicu.research_agent.pipeline import _step_contract_repair_guidance
 
