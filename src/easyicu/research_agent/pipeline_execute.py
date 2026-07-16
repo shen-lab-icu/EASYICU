@@ -222,6 +222,7 @@ from .provider_budget import (
     StepProviderCallBudget,
     complete_with_provider_budget,
     load_provider_call_budget_receipt,
+    load_provider_call_budget_state,
     provider_call_budget_receipt_path,
 )
 from .run_input_capsule import (
@@ -7349,6 +7350,7 @@ def run_execute_phase(
         )
         provider_receipt_relative_path = str(provider_receipt_path.relative_to(run_dir))
         prior_provider_categories: tuple[str, ...] = ()
+        prior_logical_repair_entries: tuple[Dict[str, object], ...] = ()
         prior_provider_attempts = 0
         provider_receipt_integrity_error: Optional[str] = None
         prior_snapshot_present = False
@@ -7399,11 +7401,14 @@ def run_execute_phase(
 
         if provider_receipt_integrity_error is None and provider_receipt_path.exists():
             try:
-                receipt_limit, receipt_categories = load_provider_call_budget_receipt(
+                receipt_state = load_provider_call_budget_state(
                     provider_receipt_path,
                     step_id=step.step_id,
                     expected_reserved_final_category=reserved_final_category,
                 )
+                receipt_limit = receipt_state.limit
+                receipt_categories = receipt_state.categories
+                prior_logical_repair_entries = receipt_state.logical_repairs
                 effective_provider_limit = min(
                     effective_provider_limit,
                     receipt_limit,
@@ -7425,28 +7430,44 @@ def run_execute_phase(
             provider_receipt_integrity_error is None
             and isinstance(prior_step_record, Mapping)
             and prior_step_record.get("step_provider_call_receipt_version")
-            in {1, PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION}
-            and prior_provider_attempts > 0
+            in {1, 2, PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION}
+            and (prior_provider_attempts > 0 or step_llm_repair_attempts > 0)
         ):
             provider_receipt_integrity_error = (
-                "Durable provider-call receipt is missing for a paid prior attempt."
+                "Durable provider/repair receipt is missing for a prior reservation."
             )
 
         provider_budget = StepProviderCallBudget(
             effective_provider_limit,
             step_id=step.step_id,
             consumed_categories=prior_provider_categories,
+            logical_repair_entries=prior_logical_repair_entries,
             receipt_path=provider_receipt_path,
             reserved_final_category=reserved_final_category,
         )
 
-        step_repair_budget = StepRepairBudget(
-            provider_budget=provider_budget,
-            step_record=step_record,
-            max_llm_repairs=pipeline._max_step_llm_repair_attempts,
-            initial_llm_repair_attempts=step_llm_repair_attempts,
-            provider_receipt_relative_path=provider_receipt_relative_path,
-        )
+        try:
+            step_repair_budget = StepRepairBudget(
+                provider_budget=provider_budget,
+                step_record=step_record,
+                max_llm_repairs=pipeline._max_step_llm_repair_attempts,
+                initial_llm_repair_attempts=step_llm_repair_attempts,
+                initial_repair_classes=(
+                    prior_repair_classes
+                    if provider_receipt_integrity_error is None
+                    else ()
+                ),
+                provider_receipt_relative_path=provider_receipt_relative_path,
+            )
+        except (ProviderCallBudgetReceiptError, ValueError) as exc:
+            provider_receipt_integrity_error = str(exc)
+            step_repair_budget = StepRepairBudget(
+                provider_budget=provider_budget,
+                step_record=step_record,
+                max_llm_repairs=pipeline._max_step_llm_repair_attempts,
+                initial_llm_repair_attempts=step_llm_repair_attempts,
+                provider_receipt_relative_path=provider_receipt_relative_path,
+            )
         _sync_provider_budget = step_repair_budget.sync_provider
 
         _sync_provider_budget()

@@ -57,12 +57,31 @@ class StepRepairBudget:
         step_record: Dict[str, Any],
         max_llm_repairs: int,
         initial_llm_repair_attempts: int = 0,
+        initial_repair_classes: Sequence[str] = (),
         provider_receipt_relative_path: Optional[str] = None,
     ) -> None:
         self._provider_budget = provider_budget
         self._step_record = step_record
         self._max_llm_repairs = int(max_llm_repairs)
-        self._llm_repair_attempts = int(initial_llm_repair_attempts)
+        prior_classes = tuple(str(item).strip() for item in initial_repair_classes)
+        if prior_classes:
+            if len(prior_classes) != int(initial_llm_repair_attempts):
+                raise ValueError("initial logical repair attempts and classes disagree")
+            self._provider_budget.migrate_logical_repairs(prior_classes)
+        durable_classes = self._provider_budget.logical_repair_classes
+        if prior_classes and (
+            len(prior_classes) > len(durable_classes)
+            or durable_classes[: len(prior_classes)] != prior_classes
+        ):
+            raise ValueError("durable logical repair history conflicts with snapshot")
+        self._llm_repair_attempts = max(
+            int(initial_llm_repair_attempts),
+            len(durable_classes),
+        )
+        if durable_classes:
+            self._step_record["step_llm_repair_attempts"] = len(durable_classes)
+            self._step_record["step_llm_repair_budget"] = self._max_llm_repairs
+            self._step_record["step_llm_repair_classes"] = list(durable_classes)
         self._provider_receipt_relative_path = provider_receipt_relative_path
 
     @property
@@ -96,7 +115,9 @@ class StepRepairBudget:
             PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION
         )
         step_record["step_provider_call_receipt"] = (
-            self._provider_receipt_relative_path if snapshot["used"] else None
+            self._provider_receipt_relative_path
+            if snapshot["used"] or snapshot["logical_repair_attempts"]
+            else None
         )
 
     def logical_available(self) -> bool:
@@ -121,9 +142,19 @@ class StepRepairBudget:
             self._step_record["step_llm_repair_budget_exhausted"] = True
             self._step_record["step_llm_repair_budget"] = self._max_llm_repairs
             return False
-        if not self.provider_available():
+        attempt_id = self._provider_budget.reserve_logical_repair(
+            repair_class,
+            max_repairs=self._max_llm_repairs,
+        )
+        if attempt_id is None:
+            if not self.logical_available():
+                self._step_record["step_llm_repair_budget_exhausted"] = True
+                self._step_record["step_llm_repair_budget"] = self._max_llm_repairs
+            else:
+                self._step_record["step_provider_call_repair_unavailable"] = True
+                self.sync_provider()
             return False
-        self._llm_repair_attempts += 1
+        self._llm_repair_attempts = attempt_id
         self._step_record["step_llm_repair_attempts"] = self._llm_repair_attempts
         self._step_record["step_llm_repair_budget"] = self._max_llm_repairs
         self._step_record.setdefault("step_llm_repair_classes", []).append(

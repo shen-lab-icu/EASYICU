@@ -37,7 +37,7 @@ from datetime import datetime
 REPAIR_KEYS = ("repair", "rewrite")
 AUDIT_KEYS = ("audit",)
 INIT_KEYS = ("initial",)
-RECEIPT_SCHEMA_VERSIONS = {1, 2}
+RECEIPT_SCHEMA_VERSIONS = {1, 2, 3}
 RUN_SESSION_START = "Research context built."
 RUN_SESSION_END = "Research-agent run complete."
 STEP_SESSION_START = re.compile(r"^Step \d+/\d+ started:")
@@ -118,6 +118,44 @@ def read_receipts(run_dir: str, inputs: dict) -> list[dict]:
         breakdown = defaultdict(int)
         for c in cats:
             breakdown[_categorize(c)] += 1
+        logical_repairs = d.get("logical_repairs", [])
+        if d.get("schema_version") == 3:
+            if not isinstance(logical_repairs, list):
+                raise BaselineError(f"receipt logical repair ledger invalid: {p}")
+            for index, entry in enumerate(logical_repairs, start=1):
+                history_len = (
+                    entry.get("provider_history_len")
+                    if isinstance(entry, dict)
+                    else None
+                )
+                history_sha256 = (
+                    entry.get("provider_history_sha256")
+                    if isinstance(entry, dict)
+                    else None
+                )
+                expected_history_sha256 = (
+                    _receipt_digest({"categories": cats[:history_len]})
+                    if isinstance(history_len, int)
+                    and not isinstance(history_len, bool)
+                    else None
+                )
+                if (
+                    not isinstance(entry, dict)
+                    or entry.get("attempt_id") != index
+                    or not isinstance(entry.get("repair_class"), str)
+                    or not entry["repair_class"].strip()
+                    or isinstance(history_len, bool)
+                    or not isinstance(history_len, int)
+                    or not 0 <= history_len <= len(cats)
+                    or history_sha256 != expected_history_sha256
+                ):
+                    raise BaselineError(
+                        f"receipt logical repair history inconsistent: {p}"
+                    )
+        elif logical_repairs:
+            raise BaselineError(
+                f"legacy receipt unexpectedly declares logical repairs: {p}"
+            )
         out.append(
             {
                 "step_id": step,
@@ -126,6 +164,10 @@ def read_receipts(run_dir: str, inputs: dict) -> list[dict]:
                 "sequence": cats,
                 "breakdown": dict(breakdown),
                 "repair_calls": breakdown.get("repair", 0),
+                "logical_repair_attempts": len(logical_repairs),
+                "logical_repair_classes": [
+                    entry["repair_class"] for entry in logical_repairs
+                ],
             }
         )
     if not out:

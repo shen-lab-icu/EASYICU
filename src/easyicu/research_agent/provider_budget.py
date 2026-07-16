@@ -13,17 +13,26 @@ from __future__ import annotations
 from collections import Counter
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 import hashlib
 import json
 import os
 from pathlib import Path
 from threading import Lock
-from typing import Callable, Dict, Iterator, Optional, Tuple, TypeVar
-
+from typing import (
+    Callable,
+    Dict,
+    Iterator,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    TypeVar,
+)
 
 _T = TypeVar("_T")
 _RESERVATION_UNSPECIFIED = object()
-PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION = 2
+PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION = 3
 
 
 class ProviderCallBudgetError(RuntimeError):
@@ -61,6 +70,17 @@ class ProviderCallBudgetReceiptError(ProviderCallBudgetError):
     """Raised when a durable provider-call receipt cannot be trusted."""
 
 
+@dataclass(frozen=True)
+class ProviderCallBudgetReceiptState:
+    """Verified durable state for one step's single provider/repair ledger."""
+
+    schema_version: int
+    limit: int
+    categories: Tuple[str, ...]
+    reserved_final_category: Optional[str]
+    logical_repairs: Tuple[Dict[str, object], ...]
+
+
 def provider_call_budget_receipt_path(
     run_dir: Path,
     *,
@@ -85,13 +105,64 @@ def _receipt_digest(payload: Dict[str, object]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def load_provider_call_budget_receipt(
+def _category_history_digest(categories: Sequence[str]) -> str:
+    return _receipt_digest({"categories": [str(item) for item in categories]})
+
+
+def _verified_logical_repairs(
+    raw_entries: object,
+    *,
+    categories: Tuple[str, ...],
+) -> Tuple[Dict[str, object], ...]:
+    if not isinstance(raw_entries, list):
+        raise ProviderCallBudgetReceiptError(
+            "Provider-call receipt logical repair ledger is invalid"
+        )
+    verified: list[Dict[str, object]] = []
+    for index, raw_entry in enumerate(raw_entries, start=1):
+        if not isinstance(raw_entry, dict):
+            raise ProviderCallBudgetReceiptError(
+                "Provider-call receipt logical repair entry is invalid"
+            )
+        attempt_id = raw_entry.get("attempt_id")
+        repair_class = raw_entry.get("repair_class")
+        history_len = raw_entry.get("provider_history_len")
+        history_sha256 = raw_entry.get("provider_history_sha256")
+        binding_sha256 = raw_entry.get("binding_sha256")
+        if (
+            isinstance(attempt_id, bool)
+            or attempt_id != index
+            or not isinstance(repair_class, str)
+            or not repair_class.strip()
+            or isinstance(history_len, bool)
+            or not isinstance(history_len, int)
+            or history_len < 0
+            or history_len > len(categories)
+            or not isinstance(history_sha256, str)
+            or history_sha256 != _category_history_digest(categories[:history_len])
+            or (
+                binding_sha256 is not None
+                and (
+                    not isinstance(binding_sha256, str)
+                    or len(binding_sha256) != 64
+                    or any(char not in "0123456789abcdef" for char in binding_sha256)
+                )
+            )
+        ):
+            raise ProviderCallBudgetReceiptError(
+                "Provider-call receipt logical repair history is inconsistent"
+            )
+        verified.append(dict(raw_entry))
+    return tuple(verified)
+
+
+def load_provider_call_budget_state(
     path: Path,
     *,
     step_id: str,
     expected_reserved_final_category: object = _RESERVATION_UNSPECIFIED,
-) -> Tuple[int, Tuple[str, ...]]:
-    """Load and verify a durable receipt, failing closed on any corruption."""
+) -> ProviderCallBudgetReceiptState:
+    """Load the complete single-ledger state, failing closed on corruption."""
 
     receipt_path = Path(path)
     try:
@@ -108,7 +179,7 @@ def load_provider_call_budget_receipt(
             "Provider-call receipt digest is missing or invalid"
         )
     schema_version = payload.get("schema_version")
-    if schema_version not in {1, PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION}:
+    if schema_version not in {1, 2, PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION}:
         raise ProviderCallBudgetReceiptError(
             "Provider-call receipt schema version is unsupported"
         )
@@ -132,7 +203,7 @@ def load_provider_call_budget_receipt(
         raise ProviderCallBudgetReceiptError("Provider-call receipt history is invalid")
 
     stored_reservation: Optional[str] = None
-    if schema_version == PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION:
+    if schema_version in {2, PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION}:
         raw_reservation = payload.get("reserved_final_category")
         if raw_reservation is not None:
             if not isinstance(raw_reservation, str) or not raw_reservation.strip():
@@ -151,11 +222,6 @@ def load_provider_call_budget_receipt(
         else:
             raise ValueError("expected final reservation must be non-empty or None")
         if schema_version == 1:
-            # Existing audit-enabled runs can migrate conservatively: the
-            # constructor below always re-arms the final slot, regardless of
-            # historical concept-audit calls.  An audit-disabled resume cannot
-            # prove that disabling was the original policy and therefore
-            # fails closed instead of silently weakening the run.
             if expected_reservation is None:
                 raise ProviderCallBudgetReceiptError(
                     "Legacy provider-call receipt does not bind final-audit policy"
@@ -164,7 +230,38 @@ def load_provider_call_budget_receipt(
             raise ProviderCallBudgetReceiptError(
                 "Provider-call receipt final-audit policy changed on resume"
             )
-    return limit, normalized
+
+    logical_repairs = (
+        _verified_logical_repairs(
+            payload.get("logical_repairs"),
+            categories=normalized,
+        )
+        if schema_version == PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION
+        else ()
+    )
+    return ProviderCallBudgetReceiptState(
+        schema_version=int(schema_version),
+        limit=limit,
+        categories=normalized,
+        reserved_final_category=stored_reservation,
+        logical_repairs=logical_repairs,
+    )
+
+
+def load_provider_call_budget_receipt(
+    path: Path,
+    *,
+    step_id: str,
+    expected_reserved_final_category: object = _RESERVATION_UNSPECIFIED,
+) -> Tuple[int, Tuple[str, ...]]:
+    """Load and verify a durable receipt, failing closed on any corruption."""
+
+    state = load_provider_call_budget_state(
+        path,
+        step_id=step_id,
+        expected_reserved_final_category=expected_reserved_final_category,
+    )
+    return state.limit, state.categories
 
 
 class StepProviderCallBudget:
@@ -176,6 +273,7 @@ class StepProviderCallBudget:
         *,
         step_id: Optional[str] = None,
         consumed_categories: Tuple[str, ...] = (),
+        logical_repair_entries: Sequence[Mapping[str, object]] = (),
         receipt_path: Optional[Path] = None,
         reserved_final_category: Optional[str] = None,
     ) -> None:
@@ -189,6 +287,13 @@ class StepProviderCallBudget:
         if any(not item for item in restored):
             raise ValueError("restored provider-call categories must be non-empty")
         self._categories: list[str] = list(restored)
+        self._logical_repairs: list[Dict[str, object]] = [
+            dict(entry)
+            for entry in _verified_logical_repairs(
+                [dict(entry) for entry in logical_repair_entries],
+                categories=restored,
+            )
+        ]
         self._receipt_path = Path(receipt_path) if receipt_path is not None else None
         self._reserved_final_category = (
             str(reserved_final_category).strip() if reserved_final_category else None
@@ -223,6 +328,7 @@ class StepProviderCallBudget:
             "limit": self._limit,
             "categories": list(self._categories),
             "reserved_final_category": self._reserved_final_category,
+            "logical_repairs": [dict(entry) for entry in self._logical_repairs],
         }
         payload["sha256"] = _receipt_digest(payload)
         path = self._receipt_path
@@ -291,6 +397,103 @@ class StepProviderCallBudget:
             return False
         with self._lock:
             return self._can_consume_locked(normalized)
+
+    def migrate_logical_repairs(self, repair_classes: Sequence[str]) -> None:
+        """Seed the v3 ledger once from a verified legacy step snapshot.
+
+        Legacy v1/v2 receipts counted provider calls but not logical repairs.
+        The caller has already verified the monotonic step-record history; this
+        one-way migration copies that exact history into the same durable
+        receipt.  Existing v3 entries are never replaced or shortened.
+        """
+
+        normalized = tuple(str(item).strip() for item in repair_classes)
+        if any(not item for item in normalized):
+            raise ProviderCallBudgetReceiptError(
+                "Legacy logical repair history contains an empty class"
+            )
+        if not normalized:
+            return
+        with self._lock:
+            existing = tuple(
+                str(entry["repair_class"]) for entry in self._logical_repairs
+            )
+            if existing:
+                if (
+                    len(normalized) > len(existing)
+                    or existing[: len(normalized)] != normalized
+                ):
+                    raise ProviderCallBudgetReceiptError(
+                        "Durable logical repair ledger conflicts with step history"
+                    )
+                return
+            history_len = len(self._categories)
+            history_sha256 = _category_history_digest(self._categories)
+            migrated = [
+                {
+                    "attempt_id": index,
+                    "repair_class": repair_class,
+                    "provider_history_len": history_len,
+                    "provider_history_sha256": history_sha256,
+                    "migrated_from_step_snapshot": True,
+                }
+                for index, repair_class in enumerate(normalized, start=1)
+            ]
+            self._logical_repairs.extend(migrated)
+            try:
+                self._persist_locked()
+            except Exception:
+                del self._logical_repairs[-len(migrated) :]
+                raise
+
+    def reserve_logical_repair(
+        self,
+        repair_class: str,
+        *,
+        max_repairs: int,
+        binding_sha256: Optional[str] = None,
+    ) -> Optional[int]:
+        """Durably reserve one logical repair before any provider call.
+
+        The logical attempt and provider-call categories now share one atomic
+        receipt.  A crash after this method cannot grant a fresh logical
+        attempt on resume, even if no provider call was made yet.
+        """
+
+        normalized = str(repair_class).strip()
+        if not normalized:
+            raise ValueError("logical repair class must be non-empty")
+        if isinstance(max_repairs, bool) or not isinstance(max_repairs, int):
+            raise TypeError("logical repair limit must be an integer")
+        if max_repairs < 0:
+            raise ValueError("logical repair limit must be non-negative")
+        normalized_binding: Optional[str] = None
+        if binding_sha256 is not None:
+            normalized_binding = str(binding_sha256).strip().lower()
+            if len(normalized_binding) != 64 or any(
+                char not in "0123456789abcdef" for char in normalized_binding
+            ):
+                raise ValueError("logical repair binding must be a SHA-256 hex digest")
+        with self._lock:
+            if len(self._logical_repairs) >= max_repairs:
+                return None
+            if not self._can_consume_locked("llm_repair_budget_probe"):
+                return None
+            entry: Dict[str, object] = {
+                "attempt_id": len(self._logical_repairs) + 1,
+                "repair_class": normalized,
+                "provider_history_len": len(self._categories),
+                "provider_history_sha256": _category_history_digest(self._categories),
+            }
+            if normalized_binding is not None:
+                entry["binding_sha256"] = normalized_binding
+            self._logical_repairs.append(entry)
+            try:
+                self._persist_locked()
+            except Exception:
+                self._logical_repairs.pop()
+                raise
+            return int(entry["attempt_id"])
 
     def bind_reserved_category(self, category: str, *, token: str) -> None:
         """Bind the final reservation to one exact code/authority audit token."""
@@ -366,6 +569,11 @@ class StepProviderCallBudget:
         with self._lock:
             return tuple(self._categories)
 
+    @property
+    def logical_repair_classes(self) -> Tuple[str, ...]:
+        with self._lock:
+            return tuple(str(entry["repair_class"]) for entry in self._logical_repairs)
+
     def snapshot(self) -> Dict[str, object]:
         """Return a JSON-serializable, internally consistent counter snapshot."""
 
@@ -380,6 +588,10 @@ class StepProviderCallBudget:
                 "exhausted": len(categories) >= self._limit,
                 "categories": list(categories),
                 "category_counts": counts,
+                "logical_repair_attempts": len(self._logical_repairs),
+                "logical_repair_classes": [
+                    str(entry["repair_class"]) for entry in self._logical_repairs
+                ],
                 "reserved_final_category": self._reserved_final_category,
                 "reservation_bound": self._required_reservation_token is not None,
                 "reservation_completed": self._completed_reservation_token is not None,

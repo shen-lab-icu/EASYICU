@@ -96,6 +96,56 @@ def test_consume_appends_repair_classes_in_order(tmp_path):
     assert step_record["step_llm_repair_attempts"] == 2
     assert step_record["step_llm_repair_budget"] == 3
     assert step_record["step_llm_repair_classes"] == ["concept", "runtime"]
+    payload = json.loads((tmp_path / "receipt.json").read_text(encoding="utf-8"))
+    assert [entry["repair_class"] for entry in payload["logical_repairs"]] == [
+        "concept",
+        "runtime",
+    ]
+
+
+def test_durable_ledger_recovers_attempt_missing_from_step_snapshot(tmp_path):
+    provider, _first_record, first = _repair_budget(tmp_path, max_llm=3)
+    assert first.consume("concept")
+
+    payload = json.loads((tmp_path / "receipt.json").read_text(encoding="utf-8"))
+    restored_provider = StepProviderCallBudget(
+        payload["limit"],
+        step_id=STEP_ID,
+        consumed_categories=tuple(payload["categories"]),
+        logical_repair_entries=tuple(payload["logical_repairs"]),
+        receipt_path=tmp_path / "receipt.json",
+        reserved_final_category="concept_audit",
+    )
+    resumed_record: dict = {}
+    resumed = StepRepairBudget(
+        provider_budget=restored_provider,
+        step_record=resumed_record,
+        max_llm_repairs=3,
+        initial_llm_repair_attempts=0,
+        initial_repair_classes=(),
+        provider_receipt_relative_path=".runtime/provider_call_budgets/x.json",
+    )
+
+    assert resumed.llm_repair_attempts == 1
+    assert resumed_record["step_llm_repair_classes"] == ["concept"]
+    assert resumed.consume("runtime")
+    assert resumed_record["step_llm_repair_attempts"] == 2
+    assert resumed_record["step_llm_repair_classes"] == ["concept", "runtime"]
+
+
+def test_sync_reports_receipt_after_logical_reservation_before_provider_call(
+    tmp_path,
+):
+    provider, step_record, budget = _repair_budget(tmp_path)
+    assert budget.consume("contract")
+    assert provider.used == 0
+
+    budget.sync_provider()
+
+    assert (
+        step_record["step_provider_call_receipt"]
+        == ".runtime/provider_call_budgets/x.json"
+    )
 
 
 def test_logical_exhaustion_marks_record_and_refuses(tmp_path):
