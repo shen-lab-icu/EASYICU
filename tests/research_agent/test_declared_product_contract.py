@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
@@ -764,6 +765,221 @@ def test_file_descriptor_still_requires_a_compatible_path():
             ],
         },
         effect_method_authorized=False,
+    )
+
+    assert "declared_product_missing" in _kinds(findings)
+
+
+@pytest.mark.parametrize(
+    ("typed_kind", "filename"),
+    [
+        ("table:summary", "summary.csv"),
+        ("dataset:analysis_rows", "analysis_rows.parquet"),
+    ],
+)
+def test_typed_kind_shorthand_registers_only_an_existing_compatible_file(
+    tmp_path, typed_kind, filename
+):
+    (tmp_path / filename).write_bytes(b"placeholder")
+
+    findings = declared_product_contract_findings(
+        step=_step(outputs=[typed_kind]),
+        step_summary={
+            "status": "ok",
+            "output_files": [
+                {
+                    "kind": typed_kind,
+                    "path": filename,
+                    "role": "supporting",
+                    "metadata": {"description": "generic product"},
+                }
+            ],
+        },
+        effect_method_authorized=False,
+        out_dir=tmp_path,
+    )
+
+    assert "declared_product_missing" not in _kinds(findings)
+
+
+def test_typed_kind_shorthand_accepts_consistent_identity_and_path_aliases(tmp_path):
+    run_dir = tmp_path / "run"
+    out_dir = run_dir / "steps" / "03_analysis" / "outputs"
+    out_dir.mkdir(parents=True)
+    filename = "summary.csv"
+    output_path = out_dir / filename
+    output_path.write_text("value\n1\n", encoding="utf-8")
+
+    findings = declared_product_contract_findings(
+        step=_step(outputs=["table:summary"]),
+        step_summary={
+            "status": "ok",
+            "output_files": [
+                {
+                    "kind": "table:summary",
+                    "name": "table:summary.csv",
+                    "product_type": "table",
+                    "path": str(output_path),
+                    "relative_path": "steps/03_analysis/outputs/summary.csv",
+                    "filename": filename,
+                }
+            ],
+        },
+        effect_method_authorized=False,
+        out_dir=out_dir,
+    )
+
+    assert "declared_product_missing" not in _kinds(findings)
+
+
+def test_typed_kind_shorthand_accepts_absolute_path_with_relative_output_dir(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    out_dir = Path("outputs")
+    out_dir.mkdir()
+    output_path = (tmp_path / out_dir / "summary.csv").absolute()
+    output_path.write_text("value\n1\n", encoding="utf-8")
+
+    findings = declared_product_contract_findings(
+        step=_step(outputs=["table:summary"]),
+        step_summary={
+            "status": "ok",
+            "output_files": [
+                {"kind": "table:summary", "path": str(output_path)}
+            ],
+        },
+        effect_method_authorized=False,
+        out_dir=out_dir,
+    )
+
+    assert "declared_product_missing" not in _kinds(findings)
+
+
+def test_typed_kind_shorthand_authorizes_only_its_descriptor_identity(tmp_path):
+    filename = "physical_name.csv"
+    (tmp_path / filename).write_text("value\n1\n", encoding="utf-8")
+
+    findings = declared_product_contract_findings(
+        step=_step(outputs=["table:logical_summary", "table:physical_name"]),
+        step_summary={
+            "status": "ok",
+            "output_files": [
+                {
+                    "kind": "table:logical_summary",
+                    "path": filename,
+                }
+            ],
+        },
+        effect_method_authorized=False,
+        out_dir=tmp_path,
+    )
+
+    missing = next(
+        finding
+        for finding in findings
+        if finding.detail.get("kind") == "declared_product_missing"
+    )
+    assert missing.detail["missing_products"] == ["table:physical_name"]
+
+
+@pytest.mark.parametrize(
+    "descriptor",
+    [
+        {"kind": "table:summary", "name": "different", "path": "summary.csv"},
+        {
+            "kind": "table:summary",
+            "name": "dataset:summary",
+            "path": "summary.csv",
+        },
+        {
+            "kind": "table:summary",
+            "product_type": "dataset",
+            "path": "summary.csv",
+        },
+        {"kind": "table:summary"},
+        {
+            "kind": "table:summary",
+            "relative_path": "steps/03_analysis/outputs/summary.csv",
+        },
+        {"kind": "table:summary", "path": "summary.json"},
+        {"kind": "table:summary", "path": "missing.csv"},
+        {"kind": "blob:summary", "path": "summary.csv"},
+        {"kind": "table:summary:extra", "path": "summary.csv"},
+    ],
+)
+def test_typed_kind_shorthand_rejects_incomplete_or_conflicting_receipts(
+    tmp_path, descriptor
+):
+    (tmp_path / "summary.csv").write_text("value\n1\n", encoding="utf-8")
+    (tmp_path / "summary.json").write_text('{"value": 1}', encoding="utf-8")
+
+    findings = declared_product_contract_findings(
+        step=_step(outputs=["table:summary"]),
+        step_summary={"status": "ok", "output_files": [descriptor]},
+        effect_method_authorized=False,
+        out_dir=tmp_path,
+    )
+
+    assert "declared_product_missing" in _kinds(findings)
+
+
+def test_typed_kind_shorthand_rejects_output_root_escape(tmp_path):
+    out_dir = tmp_path / "outputs"
+    out_dir.mkdir()
+    (tmp_path / "outside.csv").write_text("value\n1\n", encoding="utf-8")
+
+    findings = declared_product_contract_findings(
+        step=_step(outputs=["table:summary"]),
+        step_summary={
+            "status": "ok",
+            "output_files": [
+                {"kind": "table:summary", "path": "../outside.csv"}
+            ],
+        },
+        effect_method_authorized=False,
+        out_dir=out_dir,
+    )
+
+    assert "declared_product_missing" in _kinds(findings)
+
+
+def test_typed_kind_shorthand_rejects_symlinked_output(tmp_path):
+    target = tmp_path / "target.csv"
+    target.write_text("value\n1\n", encoding="utf-8")
+    (tmp_path / "summary.csv").symlink_to(target.name)
+
+    findings = declared_product_contract_findings(
+        step=_step(outputs=["table:summary"]),
+        step_summary={
+            "status": "ok",
+            "output_files": [{"kind": "table:summary", "path": "summary.csv"}],
+        },
+        effect_method_authorized=False,
+        out_dir=tmp_path,
+    )
+
+    assert "declared_product_missing" in _kinds(findings)
+
+
+def test_typed_kind_shorthand_rejects_conflicting_path_aliases(tmp_path):
+    (tmp_path / "first.csv").write_text("value\n1\n", encoding="utf-8")
+    (tmp_path / "second.csv").write_text("value\n2\n", encoding="utf-8")
+
+    findings = declared_product_contract_findings(
+        step=_step(outputs=["table:summary"]),
+        step_summary={
+            "status": "ok",
+            "output_files": [
+                {
+                    "kind": "table:summary",
+                    "path": "first.csv",
+                    "filename": "second.csv",
+                }
+            ],
+        },
+        effect_method_authorized=False,
+        out_dir=tmp_path,
     )
 
     assert "declared_product_missing" in _kinds(findings)
