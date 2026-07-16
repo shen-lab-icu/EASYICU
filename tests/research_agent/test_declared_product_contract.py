@@ -602,6 +602,186 @@ def test_declared_file_and_statistic_products_must_be_realised_exactly():
     assert finding.detail["missing_products"] == ["table:summary"]
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        120,
+        10**1000,
+    ],
+)
+def test_closed_inline_statistic_descriptor_registers_without_a_path(value):
+    findings = declared_product_contract_findings(
+        step=_step(outputs=["statistic:sample_size"]),
+        step_summary={
+            "status": "ok",
+            "output_files": [
+                {
+                    "kind": "statistic",
+                    "name": "sample_size",
+                    "role": "sample_size",
+                    "value": value,
+                },
+            ],
+        },
+        effect_method_authorized=False,
+    )
+
+    assert "declared_product_missing" not in _kinds(findings)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        "",
+        "not computed",
+        False,
+        {},
+        [],
+        {"n": 120},
+        {"n": 120, "status": "failed"},
+        {"n": 120, "passed": True},
+        {"n": 120, "nested": {"estimate": 1.5}},
+        {"n": 120, "values": [1, 2]},
+        {"n": 120, "missing": None},
+        {"universe_n": 120, "analysis_n": 96},
+        {"error_code": 500, "retry_count": 2},
+        float("nan"),
+        float("inf"),
+        {"n": 120, "estimate": float("nan")},
+        {"n": 120, "estimate": float("inf")},
+    ],
+)
+def test_inline_statistic_requires_a_closed_finite_numeric_value(value):
+    findings = declared_product_contract_findings(
+        step=_step(outputs=["statistic:sample_size"]),
+        step_summary={
+            "status": "ok",
+            "output_files": [
+                {
+                    "kind": "statistic",
+                    "name": "sample_size",
+                    "role": "sample_size",
+                    "value": value,
+                },
+            ],
+        },
+        effect_method_authorized=False,
+    )
+
+    assert "declared_product_missing" in _kinds(findings)
+
+
+@pytest.mark.parametrize(
+    "descriptor",
+    [
+        {"kind": "statistic", "name": "sample_size", "value": 120},
+        {"kind": "statistic", "statistic:sample_size": 120},
+        {"name": "sample_size", "statistic:sample_size": 120},
+        {"value": 120, "statistic:sample_size": 120},
+        {
+            "kind": "statistic",
+            "name": "sample_size",
+            "role": "different_statistic",
+            "value": 120,
+        },
+        {
+            "kind": "statistic",
+            "name": "sample_size",
+            "role": "sample_size",
+            "value": {"sample_size": 120, "other": 1},
+            "status": "ok",
+        },
+        {
+            "kind": "statistic",
+            "name": "sample_size",
+            "role": "sample_size",
+            "value": 120,
+            "error": None,
+        },
+        {
+            "kind": "statistic",
+            "name": "sample_size",
+            "role": "sample_size",
+            "value": {"universe_n": 120, "analysis_n": 96},
+            "statistic:sample_size": 120,
+        },
+    ],
+)
+def test_inline_statistic_requires_an_exact_role_bound_envelope(descriptor):
+    findings = declared_product_contract_findings(
+        step=_step(outputs=["statistic:sample_size"]),
+        step_summary={
+            "status": "ok",
+            "output_files": [descriptor],
+        },
+        effect_method_authorized=False,
+    )
+
+    assert "declared_product_missing" in _kinds(findings)
+
+
+def test_legacy_single_key_inline_statistic_registry_remains_supported():
+    findings = declared_product_contract_findings(
+        step=_step(outputs=["statistic:sample_size"]),
+        step_summary={
+            "status": "ok",
+            "output_files": {"statistic:sample_size": 120},
+        },
+        effect_method_authorized=False,
+    )
+
+    assert "declared_product_missing" not in _kinds(findings)
+
+
+def test_pathless_log_descriptor_is_not_registered_from_inline_metadata():
+    findings = declared_product_contract_findings(
+        step=_step(outputs=["log:validation_trace"]),
+        step_summary={
+            "status": "ok",
+            "output_files": [
+                {
+                    "kind": "log",
+                    "name": "validation_trace",
+                    "role": "validation_trace",
+                    "value": {"passed": True},
+                },
+            ],
+        },
+        effect_method_authorized=False,
+    )
+
+    assert "declared_product_missing" in _kinds(findings)
+
+
+def test_file_descriptor_still_requires_a_compatible_path():
+    findings = declared_product_contract_findings(
+        step=_step(outputs=["table:summary"]),
+        step_summary={
+            "status": "ok",
+            "output_files": [
+                {"kind": "table", "name": "summary", "value": {"rows": 4}},
+            ],
+        },
+        effect_method_authorized=False,
+    )
+
+    assert "declared_product_missing" in _kinds(findings)
+
+
+def test_malformed_path_only_descriptor_has_no_figure_authority():
+    findings = declared_product_contract_findings(
+        step=_step(outputs=[]),
+        step_summary={
+            "status": "ok",
+            "figure_files": [{"path": "unbound_figure.png"}],
+        },
+        effect_method_authorized=False,
+    )
+
+    assert "undeclared_figure_bundle" not in _kinds(findings)
+
+
 def test_declared_assignment_model_requires_a_successfully_fitted_model():
     step = _step(
         method="confounder_selection_and_propensity_model",

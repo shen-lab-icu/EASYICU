@@ -48,6 +48,18 @@ _FAILED_STATUSES = frozenset(
 _OUTPUT_CONTAINER_KEYS = frozenset(
     {"output_files", "output_artifacts", "outputs", "figure_files"}
 )
+_PRODUCT_DESCRIPTOR_FIELDS = frozenset(
+    {
+        "filename",
+        "kind",
+        "name",
+        "path",
+        "product_type",
+        "relative_path",
+        "role",
+        "value",
+    }
+)
 _DIRECT_FIGURE_KEYS = frozenset({"figure_file", "figure_path"})
 _FIGURE_SUFFIXES = frozenset({".png", ".svg", ".pdf", ".tif", ".tiff"})
 _KNOWN_FILE_SUFFIXES = frozenset(
@@ -2246,9 +2258,12 @@ def _summary_scalar_products(value: Any) -> set[tuple[str, str]]:
 
     def visit(node: Any) -> None:
         if isinstance(node, Mapping):
+            keys = {_normalise(raw_key) for raw_key in node}
+            if keys.intersection(_PRODUCT_DESCRIPTOR_FIELDS):
+                return
             for raw_key, child in node.items():
                 key = _normalise(raw_key)
-                if key in _HOST_RECEIPT_SUBTREES:
+                if key in _HOST_RECEIPT_SUBTREES or key in _OUTPUT_CONTAINER_KEYS:
                     continue
                 if isinstance(child, Mapping) or isinstance(child, (list, tuple)):
                     visit(child)
@@ -2265,6 +2280,26 @@ def _summary_scalar_products(value: Any) -> set[tuple[str, str]]:
 
     visit(value)
     return products
+
+
+def _finite_json_number(value: Any) -> bool:
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return True
+    return isinstance(value, float) and math.isfinite(value)
+
+
+def _valid_inline_statistic_descriptor(
+    value: Mapping[str, Any], descriptor: tuple[str, str]
+) -> bool:
+    """Validate the closed pathless statistic receipt used by accounting steps."""
+
+    if set(value) != {"kind", "name", "role", "value"}:
+        return False
+    if descriptor[0] != "statistic" or _normalise(value["role"]) != descriptor[1]:
+        return False
+    return _finite_json_number(value["value"])
 
 
 def _registered_products(
@@ -2312,6 +2347,10 @@ def _registered_products(
             # without turning arbitrary summary prose into product authority.
             descriptor_kind = value.get("kind") or value.get("product_type")
             descriptor_name = value.get("name")
+            descriptor_keys = {_normalise(raw_key) for raw_key in value}
+            descriptor_candidate = bool(
+                descriptor_keys.intersection(_PRODUCT_DESCRIPTOR_FIELDS)
+            )
             typed_descriptor_name = _typed_product(descriptor_name)
             canonical_descriptor_kind = _canonical_kind(descriptor_kind)
             if typed_descriptor_name is not None:
@@ -2337,11 +2376,21 @@ def _registered_products(
             descriptor_paths = [
                 path for path in _iter_paths(descriptor_path) if is_actual_output(path)
             ]
-            if descriptor is not None and any(
+            scalar_descriptor = (
+                descriptor is not None
+                and _valid_inline_statistic_descriptor(value, descriptor)
+            )
+            compatible_descriptor_path = descriptor is not None and any(
                 _descriptor_path_is_compatible(kind=descriptor[0], path=path)
                 for path in descriptor_paths
-            ):
+            )
+            if scalar_descriptor or compatible_descriptor_path:
                 products.add(descriptor)
+            if descriptor_candidate:
+                if compatible_descriptor_path:
+                    for path in descriptor_paths:
+                        add_path(path, explicit_figure_list=explicit_figure_list)
+                return
             for raw_role, child in value.items():
                 role = _typed_product(raw_role)
                 paths = [path for path in _iter_paths(child) if is_actual_output(path)]

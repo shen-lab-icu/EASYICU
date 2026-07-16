@@ -1972,6 +1972,7 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
     returned_slots: dict[str, Optional[int]] = {}
     self_guarded: set[str] = set()
     self_raising: set[str] = set()
+    self_raising_guards: dict[str, set[ast.If]] = {}
     for name, function in marker_functions.items():
         local_nodes = _local_nodes(function)
 
@@ -2191,6 +2192,7 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
                 self_guarded.add(name)
                 if _branch_all_paths_raise(guard.body):
                     self_raising.add(name)
+                    self_raising_guards.setdefault(name, set()).add(guard)
 
         def _empty_initialization(node: ast.AST) -> bool:
             return isinstance(node, (ast.List, ast.Set)) and not node.elts
@@ -2361,6 +2363,7 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
                         terminal_invalid_mutation = True
                 if terminal_initializations == 1 and not terminal_invalid_mutation:
                     self_raising.add(name)
+                    self_raising_guards.setdefault(name, set()).add(terminal_guard)
                     break
 
         positions: set[int] = set()
@@ -2429,16 +2432,35 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
             continue
         if called in self_raising:
             statement = parents.get(call)
-            has_return = any(
-                isinstance(candidate, ast.Return)
+            returns = [
+                candidate
                 for candidate in _local_nodes(marker_function)
+                if isinstance(candidate, ast.Return)
+            ]
+            direct_body = (
+                marker_function.body
+                if isinstance(marker_function, ast.FunctionDef)
+                else []
+            )
+            direct_guard_indexes = [
+                direct_body.index(guard)
+                for guard in self_raising_guards.get(called, set())
+                if guard in direct_body
+            ]
+            returns_follow_guard = not returns or (
+                bool(direct_guard_indexes)
+                and all(
+                    parents.get(candidate) is marker_function
+                    and direct_body.index(candidate) > min(direct_guard_indexes)
+                    for candidate in returns
+                )
             )
             if (
                 not (
                     isinstance(statement, ast.Expr)
                     and statement.value is call
                     and _direct_execution_statement(statement)
-                    and (not has_return or _terminal_entry_function(marker_function))
+                    and returns_follow_guard
                     and not _result_sink_precedes_call(call)
                 )
                 or failure_may_be_swallowed
