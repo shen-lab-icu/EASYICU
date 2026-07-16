@@ -37,7 +37,7 @@ from datetime import datetime
 REPAIR_KEYS = ("repair", "rewrite")
 AUDIT_KEYS = ("audit",)
 INIT_KEYS = ("initial",)
-RECEIPT_SCHEMA_VERSIONS = {1, 2, 3}
+RECEIPT_SCHEMA_VERSIONS = {1, 2, 3, 4}
 RUN_SESSION_START = "Research context built."
 RUN_SESSION_END = "Research-agent run complete."
 STEP_SESSION_START = re.compile(r"^Step \d+/\d+ started:")
@@ -119,7 +119,7 @@ def read_receipts(run_dir: str, inputs: dict) -> list[dict]:
         for c in cats:
             breakdown[_categorize(c)] += 1
         logical_repairs = d.get("logical_repairs", [])
-        if d.get("schema_version") == 3:
+        if d.get("schema_version") in {3, 4}:
             if not isinstance(logical_repairs, list):
                 raise BaselineError(f"receipt logical repair ledger invalid: {p}")
             for index, entry in enumerate(logical_repairs, start=1):
@@ -155,6 +155,43 @@ def read_receipts(run_dir: str, inputs: dict) -> list[dict]:
         elif logical_repairs:
             raise BaselineError(
                 f"legacy receipt unexpectedly declares logical repairs: {p}"
+            )
+        if d.get("schema_version") == 4:
+            reservation = d.get("final_reservation_state")
+            if not isinstance(reservation, dict):
+                raise BaselineError(f"receipt final reservation state invalid: {p}")
+            required_token = reservation.get("required_token")
+            bound_len = reservation.get("bound_provider_history_len")
+            bound_sha256 = reservation.get("bound_provider_history_sha256")
+            completed_token = reservation.get("completed_token")
+            released = reservation.get("released")
+            if required_token is None:
+                valid_reservation = (
+                    bound_len is None
+                    and bound_sha256 is None
+                    and completed_token is None
+                    and released is False
+                )
+            else:
+                valid_reservation = bool(
+                    isinstance(required_token, str)
+                    and required_token.strip()
+                    and isinstance(bound_len, int)
+                    and not isinstance(bound_len, bool)
+                    and 0 <= bound_len <= len(cats)
+                    and bound_sha256
+                    == _receipt_digest({"categories": cats[:bound_len]})
+                    and completed_token in {None, required_token}
+                    and isinstance(released, bool)
+                    and (not released or completed_token is not None)
+                )
+            if not valid_reservation:
+                raise BaselineError(
+                    f"receipt final reservation state inconsistent: {p}"
+                )
+        elif d.get("final_reservation_state") is not None:
+            raise BaselineError(
+                f"legacy receipt unexpectedly declares final reservation state: {p}"
             )
         out.append(
             {

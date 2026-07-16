@@ -7352,6 +7352,10 @@ def run_execute_phase(
         provider_receipt_relative_path = str(provider_receipt_path.relative_to(run_dir))
         prior_provider_categories: tuple[str, ...] = ()
         prior_logical_repair_entries: tuple[Dict[str, object], ...] = ()
+        prior_required_reservation_token: Optional[str] = None
+        prior_reservation_bound_provider_history_len: Optional[int] = None
+        prior_completed_reservation_token: Optional[str] = None
+        prior_reservation_released = False
         prior_provider_attempts = 0
         provider_receipt_integrity_error: Optional[str] = None
         prior_snapshot_present = False
@@ -7410,6 +7414,16 @@ def run_execute_phase(
                 receipt_limit = receipt_state.limit
                 receipt_categories = receipt_state.categories
                 prior_logical_repair_entries = receipt_state.logical_repairs
+                prior_required_reservation_token = (
+                    receipt_state.required_reservation_token
+                )
+                prior_reservation_bound_provider_history_len = (
+                    receipt_state.reservation_bound_provider_history_len
+                )
+                prior_completed_reservation_token = (
+                    receipt_state.completed_reservation_token
+                )
+                prior_reservation_released = receipt_state.reservation_released
                 effective_provider_limit = min(
                     effective_provider_limit,
                     receipt_limit,
@@ -7431,7 +7445,7 @@ def run_execute_phase(
             provider_receipt_integrity_error is None
             and isinstance(prior_step_record, Mapping)
             and prior_step_record.get("step_provider_call_receipt_version")
-            in {1, 2, PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION}
+            in {1, 2, 3, PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION}
             and (prior_provider_attempts > 0 or step_llm_repair_attempts > 0)
         ):
             provider_receipt_integrity_error = (
@@ -7445,6 +7459,12 @@ def run_execute_phase(
             logical_repair_entries=prior_logical_repair_entries,
             receipt_path=provider_receipt_path,
             reserved_final_category=reserved_final_category,
+            required_reservation_token=prior_required_reservation_token,
+            reservation_bound_provider_history_len=(
+                prior_reservation_bound_provider_history_len
+            ),
+            completed_reservation_token=prior_completed_reservation_token,
+            reservation_released=prior_reservation_released,
         )
 
         try:
@@ -8996,6 +9016,20 @@ else:
                             audit_key
                         )
                         cached_findings = llm_concept_audit_cache.get(audit_key)
+                        reservation_status = provider_budget.reservation_status(
+                            "concept_audit",
+                            token=audit_key,
+                        )
+                        if cached_findings is None and reservation_status in {
+                            "attempted_incomplete",
+                            "completed",
+                            "released",
+                        }:
+                            raise ProviderCallBudgetReceiptError(
+                                "Final concept audit has a durable paid/completed "
+                                "reservation but no matching digest-bound cache; "
+                                "refusing a duplicate provider call."
+                            )
                         if cached_findings is not None:
                             # Cache entries preserve the original audit output,
                             # but deterministic policy reclassifiers are the
