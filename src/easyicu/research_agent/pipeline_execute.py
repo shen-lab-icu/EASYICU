@@ -97,6 +97,7 @@ from .code_repair import (
 from .code_hygiene import reorder_forward_references
 from .code_preflight import audit_mechanical_code_contracts
 from .repair_coordination import (
+    RepairAuthorityBinding,
     StepRepairBudget,
     authorized_deterministic_concept_repair,
 )
@@ -7552,7 +7553,36 @@ def run_execute_phase(
         _logical_llm_repair_budget_available = step_repair_budget.logical_available
         _provider_repair_call_available = step_repair_budget.provider_available
         _llm_repair_budget_available = step_repair_budget.available
-        _consume_llm_repair_budget = step_repair_budget.consume
+
+        def _consume_llm_repair_budget(
+            repair_class: str,
+            *,
+            before_code: str,
+            repair_ticket: str,
+        ) -> bool:
+            """Reserve one repair bound to its exact host-owned authority."""
+
+            binding = RepairAuthorityBinding(
+                step_id=step.step_id,
+                attempt_id=step_repair_budget.llm_repair_attempts + 1,
+                repair_class=str(repair_class),
+                before_code_sha256=sha256_of_bytes(before_code.encode("utf-8")),
+                step_spec_sha256=canonical_sha256(step.model_dump(mode="json")),
+                resolved_inputs_sha256=resolved_inputs_sha256,
+                coder_context_sha256=canonical_sha256(
+                    coder_context.model_dump(mode="json")
+                ),
+                repair_ticket_sha256=canonical_sha256(repair_ticket),
+                engine_validator_sha256=(
+                    _deterministic_gate_stamp()["deterministic_gate_fingerprint"]
+                ),
+                prompt_pack_version=prompt_version,
+                run_input_capsule_sha256=run_input_capsule_sha256,
+            )
+            return step_repair_budget.consume(
+                repair_class,
+                authority_binding=binding,
+            )
 
         monotonic_concept_constraints = _persisted_monotonic_concept_constraints(
             prior_step_record
@@ -8001,13 +8031,18 @@ def run_execute_phase(
             resumed_code = resume_controller.prior_code_for_step(step.step_id)
             if resumed_code is None:
                 return None
-            if not _consume_llm_repair_budget("critic_resume"):
-                return None
-            prior_code = _use_resumed_code(resumed_code)
+            prior_code = resumed_code[0]
             critique_log = (
                 "PRIOR CRITIC REVIEW (binding repair requirements):\n"
                 + json.dumps(report, indent=2, ensure_ascii=False, default=str)
             )
+            if not _consume_llm_repair_budget(
+                "critic_resume",
+                before_code=prior_code,
+                repair_ticket=critique_log,
+            ):
+                return None
+            prior_code = _use_resumed_code(resumed_code)
             emit_progress(
                 "coder",
                 f"Repairing prior Critic findings for {step.step_id}.",
@@ -9487,19 +9522,6 @@ else:
                 )
                 return step_record
 
-            concept_repair_attempts += 1
-            if not _consume_llm_repair_budget("concept"):
-                raise AssertionError("LLM repair budget changed without mutation")
-            step_record["concept_repair_attempts"] = concept_repair_attempts
-            emit_progress(
-                "coder",
-                f"Repairing concept-audit violation for {step.step_id}.",
-                run_id=run_id,
-                step_id=step.step_id,
-                current_step=step_current,
-                total_steps=total_steps,
-                repair_attempts=concept_repair_attempts,
-            )
             blocking_usage_findings = _blocking_validator_findings(usage_findings)
             audit_log = "\n".join(
                 (
@@ -9515,26 +9537,44 @@ else:
             )
             structured_repair_ticket = typed_repair_ticket(blocking_usage_findings)
             historical_constraint_log = _monotonic_concept_constraint_log()
+            concept_repair_log = (
+                "Static concept audit blocked this script before "
+                "execution. Fix all ICU-rule violations.\n\n"
+                "TYPED REPAIR TICKET (authoritative routing):\n"
+                + json.dumps(
+                    structured_repair_ticket,
+                    indent=2,
+                    ensure_ascii=False,
+                    default=str,
+                )
+                + "\n\nHUMAN-READABLE FINDINGS:\n"
+                + audit_log
+                + historical_constraint_log
+            )
+            concept_repair_attempts += 1
+            if not _consume_llm_repair_budget(
+                "concept",
+                before_code=code,
+                repair_ticket=concept_repair_log,
+            ):
+                raise AssertionError("LLM repair budget changed without mutation")
+            step_record["concept_repair_attempts"] = concept_repair_attempts
+            emit_progress(
+                "coder",
+                f"Repairing concept-audit violation for {step.step_id}.",
+                run_id=run_id,
+                step_id=step.step_id,
+                current_step=step_current,
+                total_steps=total_steps,
+                repair_attempts=concept_repair_attempts,
+            )
             _remember_concept_constraints(blocking_usage_findings)
             try:
                 repaired_code = coder.repair(
                     context=coder_context,
                     step=step,
                     code=code,
-                    run_log=(
-                        "Static concept audit blocked this script before "
-                        "execution. Fix all ICU-rule violations.\n\n"
-                        "TYPED REPAIR TICKET (authoritative routing):\n"
-                        + json.dumps(
-                            structured_repair_ticket,
-                            indent=2,
-                            ensure_ascii=False,
-                            default=str,
-                        )
-                        + "\n\nHUMAN-READABLE FINDINGS:\n"
-                        + audit_log
-                        + historical_constraint_log
-                    ),
+                    run_log=concept_repair_log,
                     attempt=concept_repair_attempts,
                     provider_budget=provider_budget,
                     provider_category="concept_repair",
@@ -9858,25 +9898,6 @@ else:
                             continue
 
                     if _llm_repair_budget_available():
-                        concept_repair_attempts += 1
-                        if not _consume_llm_repair_budget("post_mutation_concept"):
-                            raise AssertionError(
-                                "LLM repair budget changed without mutation"
-                            )
-                        step_record["concept_repair_attempts"] = concept_repair_attempts
-                        emit_progress(
-                            "coder",
-                            (
-                                "Repairing post-mutation concept violation for "
-                                f"{step.step_id}."
-                            ),
-                            run_id=run_id,
-                            step_id=step.step_id,
-                            current_step=step_current,
-                            total_steps=total_steps,
-                            repair_attempts=step_repair_budget.llm_repair_attempts,
-                        )
-                        _remember_concept_constraints(post_mutation_errors)
                         post_mutation_ticket = typed_repair_ticket(post_mutation_errors)
                         post_mutation_log = "\n".join(
                             (
@@ -9894,28 +9915,52 @@ else:
                             )
                             for finding in post_mutation_errors
                         )
+                        post_mutation_repair_log = (
+                            "A contract or runtime repair produced a new "
+                            "code digest that failed pre-execution audit. "
+                            "Fix every typed error with the smallest change; "
+                            "preserve the earlier contract repair and all "
+                            "Planner-owned science.\n\n"
+                            "TYPED REPAIR TICKET (authoritative routing):\n"
+                            + json.dumps(
+                                post_mutation_ticket,
+                                indent=2,
+                                ensure_ascii=False,
+                                default=str,
+                            )
+                            + "\n\nFINDINGS:\n"
+                            + post_mutation_log
+                            + _monotonic_concept_constraint_log()
+                        )
+                        concept_repair_attempts += 1
+                        if not _consume_llm_repair_budget(
+                            "post_mutation_concept",
+                            before_code=code,
+                            repair_ticket=post_mutation_repair_log,
+                        ):
+                            raise AssertionError(
+                                "LLM repair budget changed without mutation"
+                            )
+                        step_record["concept_repair_attempts"] = concept_repair_attempts
+                        emit_progress(
+                            "coder",
+                            (
+                                "Repairing post-mutation concept violation for "
+                                f"{step.step_id}."
+                            ),
+                            run_id=run_id,
+                            step_id=step.step_id,
+                            current_step=step_current,
+                            total_steps=total_steps,
+                            repair_attempts=step_repair_budget.llm_repair_attempts,
+                        )
+                        _remember_concept_constraints(post_mutation_errors)
                         try:
                             code = coder.repair(
                                 context=coder_context,
                                 step=step,
                                 code=code,
-                                run_log=(
-                                    "A contract or runtime repair produced a new "
-                                    "code digest that failed pre-execution audit. "
-                                    "Fix every typed error with the smallest change; "
-                                    "preserve the earlier contract repair and all "
-                                    "Planner-owned science.\n\n"
-                                    "TYPED REPAIR TICKET (authoritative routing):\n"
-                                    + json.dumps(
-                                        post_mutation_ticket,
-                                        indent=2,
-                                        ensure_ascii=False,
-                                        default=str,
-                                    )
-                                    + "\n\nFINDINGS:\n"
-                                    + post_mutation_log
-                                    + _monotonic_concept_constraint_log()
-                                ),
+                                run_log=post_mutation_repair_log,
                                 attempt=concept_repair_attempts,
                                 provider_budget=provider_budget,
                                 provider_category="post_mutation_concept_repair",
@@ -10650,7 +10695,21 @@ else:
                             # error was a deterministic layout/cosmetic issue.
                         else:
                             visual_repair_attempts += 1
-                            if not _consume_llm_repair_budget("visual"):
+                            qa_log = _visual_repair_request_log(visual_findings)
+                            visual_repair_log = (
+                                "Visual QA rejected one or more figure outputs "
+                                "before evidence registration. Fix the figure "
+                                "layout, preserve all tables/statistics, save PNG "
+                                "and editable SVG with the same stem, include "
+                                "publication figure exports when requested, and rerun.\n\n"
+                                + qa_log
+                                + _monotonic_concept_constraint_log()
+                            )
+                            if not _consume_llm_repair_budget(
+                                "visual",
+                                before_code=code,
+                                repair_ticket=visual_repair_log,
+                            ):
                                 raise AssertionError(
                                     "LLM repair budget changed without mutation"
                                 )
@@ -10669,21 +10728,12 @@ else:
                                 repair_attempts=repair_attempts,
                                 visual_repair_attempts=visual_repair_attempts,
                             )
-                            qa_log = _visual_repair_request_log(visual_findings)
                             try:
                                 code = coder.repair(
                                     context=coder_context,
                                     step=step,
                                     code=code,
-                                    run_log=(
-                                        "Visual QA rejected one or more figure outputs "
-                                        "before evidence registration. Fix the figure "
-                                        "layout, preserve all tables/statistics, save PNG "
-                                        "and editable SVG with the same stem, include "
-                                        "publication figure exports when requested, and rerun.\n\n"
-                                        + qa_log
-                                        + _monotonic_concept_constraint_log()
-                                    ),
+                                    run_log=visual_repair_log,
                                     attempt=visual_repair_attempts,
                                     provider_budget=provider_budget,
                                     provider_category="visual_repair",
@@ -11311,8 +11361,48 @@ else:
                         )
                         return step_record
 
+                    contract_log = _contract_repair_log(early_contract_errors)
+                    structured_repair_ticket = typed_repair_ticket(
+                        early_contract_errors
+                    )
+                    repair_guidance = _step_contract_repair_guidance(
+                        step=step,
+                        step_summary=visual_step_summary,
+                        code=code,
+                        input_bindings=resolved_input_bindings,
+                    )
+                    contract_repair_log = (
+                        "The script executed but failed the machine-readable "
+                        "step contract. Revise the analysis code; do not change "
+                        "the research question. Ensure required primary metrics "
+                        "are computed and written to step_summary.json with "
+                        "explicit numeric keys or nested statistic fields.\n\n"
+                        "STEP SUMMARY:\n"
+                        + json.dumps(
+                            visual_step_summary,
+                            indent=2,
+                            ensure_ascii=False,
+                            default=str,
+                        )
+                        + "\n\nREPAIR GUIDANCE:\n"
+                        + repair_guidance
+                        + "\n\nTYPED REPAIR TICKET (authoritative routing):\n"
+                        + json.dumps(
+                            structured_repair_ticket,
+                            indent=2,
+                            ensure_ascii=False,
+                            default=str,
+                        )
+                        + "\n\nSTRUCTURED CONTRACT FINDINGS (authoritative):\n"
+                        + contract_log
+                        + _monotonic_concept_constraint_log()
+                    )
                     contract_repair_attempts += 1
-                    if not _consume_llm_repair_budget("contract"):
+                    if not _consume_llm_repair_budget(
+                        "contract",
+                        before_code=code,
+                        repair_ticket=contract_repair_log,
+                    ):
                         raise AssertionError(
                             "LLM repair budget changed without mutation"
                         )
@@ -11329,47 +11419,12 @@ else:
                         repair_attempts=repair_attempts,
                         contract_repair_attempts=contract_repair_attempts,
                     )
-                    contract_log = _contract_repair_log(early_contract_errors)
-                    structured_repair_ticket = typed_repair_ticket(
-                        early_contract_errors
-                    )
-                    repair_guidance = _step_contract_repair_guidance(
-                        step=step,
-                        step_summary=visual_step_summary,
-                        code=code,
-                        input_bindings=resolved_input_bindings,
-                    )
                     try:
                         code = coder.repair(
                             context=coder_context,
                             step=step,
                             code=code,
-                            run_log=(
-                                "The script executed but failed the machine-readable "
-                                "step contract. Revise the analysis code; do not change "
-                                "the research question. Ensure required primary metrics "
-                                "are computed and written to step_summary.json with "
-                                "explicit numeric keys or nested statistic fields.\n\n"
-                                "STEP SUMMARY:\n"
-                                + json.dumps(
-                                    visual_step_summary,
-                                    indent=2,
-                                    ensure_ascii=False,
-                                    default=str,
-                                )
-                                + "\n\nREPAIR GUIDANCE:\n"
-                                + repair_guidance
-                                + "\n\nTYPED REPAIR TICKET (authoritative routing):\n"
-                                + json.dumps(
-                                    structured_repair_ticket,
-                                    indent=2,
-                                    ensure_ascii=False,
-                                    default=str,
-                                )
-                                + "\n\nSTRUCTURED CONTRACT FINDINGS (authoritative):\n"
-                                + contract_log
-                                + _monotonic_concept_constraint_log()
-                            ),
+                            run_log=contract_repair_log,
                             attempt=contract_repair_attempts,
                             provider_budget=provider_budget,
                             provider_category="contract_repair",
@@ -11624,7 +11679,11 @@ else:
             ):
                 repair_attempts += 1
                 runtime_repair_attempts += 1
-                if not _consume_llm_repair_budget("runtime"):
+                if not _consume_llm_repair_budget(
+                    "runtime",
+                    before_code=code,
+                    repair_ticket=run_log,
+                ):
                     raise AssertionError("LLM repair budget changed without mutation")
                 step_record["code_repair_attempts"] = repair_attempts
                 step_record["runtime_repair_attempts"] = runtime_repair_attempts

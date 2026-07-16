@@ -10,16 +10,40 @@ repair.
 
 from __future__ import annotations
 
+import ast
+import inspect
 import json
 
+import pytest
+
+from easyicu.research_agent import pipeline_execute
 from easyicu.research_agent.provider_budget import StepProviderCallBudget
 from easyicu.research_agent.repair_coordination import (
+    RepairAuthorityBinding,
     RepairCoordinator,
     StepRepairBudget,
     authorized_deterministic_concept_repair,
 )
 
 STEP_ID = "02_exposure_derivation_and_qc"
+
+
+def _authority_binding(
+    *, attempt_id: int = 1, repair_class: str = "concept"
+) -> RepairAuthorityBinding:
+    return RepairAuthorityBinding(
+        step_id=STEP_ID,
+        attempt_id=attempt_id,
+        repair_class=repair_class,
+        before_code_sha256="a" * 64,
+        step_spec_sha256="b" * 64,
+        resolved_inputs_sha256="c" * 64,
+        coder_context_sha256="d" * 64,
+        repair_ticket_sha256="e" * 64,
+        engine_validator_sha256="f" * 64,
+        prompt_pack_version="test-prompts/1",
+        run_input_capsule_sha256="1" * 64,
+    )
 
 
 def _budget(tmp_path, *, limit: int = 7):
@@ -101,6 +125,50 @@ def test_consume_appends_repair_classes_in_order(tmp_path):
         "concept",
         "runtime",
     ]
+
+
+def test_consume_persists_repair_authority_in_single_provider_receipt(tmp_path):
+    _provider, step_record, budget = _repair_budget(tmp_path, max_llm=3)
+    binding = _authority_binding()
+
+    assert budget.consume("concept", authority_binding=binding)
+
+    payload = json.loads((tmp_path / "receipt.json").read_text(encoding="utf-8"))
+    entry = payload["logical_repairs"][0]
+    assert entry["binding"] == binding.payload()
+    assert entry["binding_sha256"] == binding.sha256
+    assert step_record["step_llm_repair_bindings"] == [binding.sha256]
+
+
+def test_consume_rejects_authority_for_wrong_attempt_or_class(tmp_path):
+    _provider, _step_record, budget = _repair_budget(tmp_path, max_llm=3)
+
+    with pytest.raises(ValueError, match="attempt_id"):
+        budget.consume(
+            "concept",
+            authority_binding=_authority_binding(attempt_id=2),
+        )
+    with pytest.raises(ValueError, match="class"):
+        budget.consume(
+            "runtime",
+            authority_binding=_authority_binding(repair_class="concept"),
+        )
+
+
+def test_every_pipeline_llm_repair_reservation_is_authority_bound():
+    tree = ast.parse(inspect.getsource(pipeline_execute.run_execute_phase))
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_consume_llm_repair_budget"
+    ]
+
+    assert len(calls) == 6
+    for call in calls:
+        keywords = {keyword.arg for keyword in call.keywords}
+        assert keywords == {"before_code", "repair_ticket"}
 
 
 def test_durable_ledger_recovers_attempt_missing_from_step_snapshot(tmp_path):
