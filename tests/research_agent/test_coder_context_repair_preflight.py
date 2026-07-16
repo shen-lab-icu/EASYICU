@@ -1670,6 +1670,63 @@ model.fit(frame)
     )
 
 
+def test_mechanical_preflight_accepts_unchanged_host_provenance_receipts(ra):
+    code = """
+import pandas as pd
+from easyicu.research_agent.methods.descriptive_inputs import (
+    measurement_provenance_receipt,
+)
+
+receipts = []
+for measured_column, count_column in declared_pairs:
+    receipts.append(measurement_provenance_receipt(
+        frame,
+        measured_column=measured_column,
+        count_column=count_column,
+    ))
+pd.DataFrame.from_records(receipts).to_csv('provenance.csv', index=False)
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_host_provenance_receipt_decoy_does_not_authorize_custom_audit(ra):
+    code = """
+from easyicu.research_agent.methods.descriptive_inputs import (
+    measurement_provenance_receipt,
+)
+
+measurement_provenance_receipt(
+    other_frame,
+    measured_column='other_measured',
+    count_column='other_n',
+)
+invalid_pair_n = int(frame['measured'].isna().sum())
+discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+checks = [{
+    'role': 'audit_only',
+    'invalid_pair_n': invalid_pair_n,
+    'discordant_n': discordant_n,
+}]
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
 @pytest.mark.parametrize(
     "mutation",
     ["invalid_pair_n = 0", "discordant_n = 0"],
