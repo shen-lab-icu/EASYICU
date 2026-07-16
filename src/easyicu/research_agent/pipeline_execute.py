@@ -130,6 +130,10 @@ from .declared_product_contract import (
 )
 from .estimators import fit_robustness_rows_from_records
 from .evidence import sha256_of_bytes, sha256_of_file
+from .evidence_registration import (
+    EvidenceRegistrar,
+    filter_success_alias_bindings as _filter_success_alias_bindings,
+)
 from .gate_semantics import blocking_validator_findings as _blocking_validator_findings
 from .llm import MockLLMClient
 from .method_compatibility import (
@@ -3607,145 +3611,6 @@ def scope_findings_to_records(
     return scoped
 
 
-def _filter_success_alias_bindings(
-    bindings: Mapping[str, Sequence[str]],
-    *,
-    existing_aliases: Mapping[str, str],
-    owners_by_evidence_id: Mapping[str, str],
-    step_id: str,
-    records_by_evidence_id: Optional[Mapping[str, Any]] = None,
-) -> Tuple[Dict[str, List[str]], Dict[str, str], Set[str]]:
-    """Keep cross-step product aliases on their existing authority.
-
-    A figure step may legitimately repeat a parent analysis role such as
-    ``primary_association``. Same-step retries may replace their own aliases,
-    but a child must not steal the parent's semantic authority merely because
-    both products mention that role.
-    """
-
-    filtered: Dict[str, List[str]] = {}
-    retained: Dict[str, str] = {}
-    for evidence_id, aliases in bindings.items():
-        accepted: List[str] = []
-        for alias in aliases:
-            alias = str(alias).strip()
-            if not alias:
-                continue
-            existing_id = str(existing_aliases.get(alias) or "").strip()
-            existing_owner = str(owners_by_evidence_id.get(existing_id) or "").strip()
-            if existing_id and existing_id != evidence_id and existing_owner != step_id:
-                retained[alias] = existing_id
-                continue
-            accepted.append(alias)
-        filtered[str(evidence_id)] = list(dict.fromkeys(accepted))
-    records = records_by_evidence_id or {}
-
-    def _record_source_name(evidence_id: str) -> str:
-        record = records.get(evidence_id)
-        relative_path = str(_evidence_record_field(record, "relative_path") or "")
-        name = Path(relative_path).name
-        prefix = f"{evidence_id}__"
-        return name[len(prefix) :] if name.startswith(prefix) else name
-
-    def _is_product_authority(evidence_id: str) -> bool:
-        record = records.get(evidence_id)
-        kind = str(_evidence_record_field(record, "kind") or "").lower()
-        source_name = _record_source_name(evidence_id)
-        if kind in {"table", "figure"}:
-            return True
-        return kind == "statistic" and source_name != "step_summary.json"
-
-    implicit_basename_aliases = {
-        evidence_id: Path(_record_source_name(evidence_id)).stem
-        for evidence_id in filtered
-        if _record_source_name(evidence_id)
-    }
-    alias_claimants: Dict[str, List[str]] = {}
-    for evidence_id, aliases in filtered.items():
-        for alias in aliases:
-            alias_claimants.setdefault(alias, []).append(evidence_id)
-        basename_alias = implicit_basename_aliases.get(evidence_id)
-        if basename_alias:
-            alias_claimants.setdefault(basename_alias, []).append(evidence_id)
-    suppressed_basename_evidence_ids: Set[str] = set()
-    for alias, claimants in alias_claimants.items():
-        unique_claimants = list(dict.fromkeys(claimants))
-        if len(unique_claimants) <= 1:
-            continue
-        product_claimants = [
-            evidence_id
-            for evidence_id in unique_claimants
-            if _is_product_authority(evidence_id)
-        ]
-        selected_product: Optional[str] = None
-        if len(product_claimants) == 1:
-            selected_product = product_claimants[0]
-        elif len(product_claimants) > 1:
-            product_sources = {
-                evidence_id: _record_source_name(evidence_id)
-                for evidence_id in product_claimants
-            }
-            figure_claimants = [
-                evidence_id
-                for evidence_id in product_claimants
-                if str(
-                    _evidence_record_field(records.get(evidence_id), "kind") or ""
-                ).lower()
-                == "figure"
-            ]
-            stems = {
-                Path(product_sources[evidence_id]).stem
-                for evidence_id in figure_claimants
-            }
-            # PNG/SVG/PDF exports with one stem are formats of the same logical
-            # figure, not competing scientific products. Prefer the editable
-            # vector authority deterministically. Distinct real products keep
-            # their duplicate claims so EvidenceStore fails closed.
-            if len(figure_claimants) == len(product_claimants) and len(stems) == 1:
-                format_rank = {
-                    ".svg": 0,
-                    ".pdf": 1,
-                    ".png": 2,
-                    ".tiff": 3,
-                    ".tif": 3,
-                }
-                ranked = sorted(
-                    product_claimants,
-                    key=lambda evidence_id: (
-                        format_rank.get(
-                            Path(product_sources[evidence_id]).suffix.lower(), 99
-                        ),
-                        evidence_id,
-                    ),
-                )
-                best_rank = format_rank.get(
-                    Path(product_sources[ranked[0]]).suffix.lower(), 99
-                )
-                if (
-                    sum(
-                        format_rank.get(
-                            Path(product_sources[evidence_id]).suffix.lower(), 99
-                        )
-                        == best_rank
-                        for evidence_id in ranked
-                    )
-                    == 1
-                ):
-                    selected_product = ranked[0]
-        if selected_product is None:
-            continue
-        for evidence_id in unique_claimants:
-            if evidence_id != selected_product:
-                filtered[evidence_id] = [
-                    candidate
-                    for candidate in filtered[evidence_id]
-                    if candidate != alias
-                ]
-                if implicit_basename_aliases.get(evidence_id) == alias:
-                    suppressed_basename_evidence_ids.add(evidence_id)
-    return filtered, retained, suppressed_basename_evidence_ids
-
-
 def _reader_label_from_stem(stem: str) -> str:
     words = [
         token for token in stem.replace("-", "_").replace(".", "_").split("_") if token
@@ -6151,6 +6016,7 @@ def run_execute_phase(
     context = plan_result.context
     agent_context = plan_result.agent_context
     evidence = plan_result.evidence
+    evidence_registrar = EvidenceRegistrar(evidence)
     findings = plan_result.findings
     plan = plan_result.plan
     plan_path = plan_result.plan_path
@@ -14085,32 +13951,14 @@ else:
         alias_publication_finding: Optional[ValidationFinding] = None
         if step_record["status"] == "ok":
             try:
-                current_evidence_records = evidence.records()
-                (
-                    success_alias_bindings,
-                    retained_cross_step_aliases,
-                    suppressed_basename_evidence_ids,
-                ) = _filter_success_alias_bindings(
-                    pending_success_aliases,
-                    existing_aliases=evidence.aliases(),
-                    owners_by_evidence_id={
-                        record.evidence_id: str(record.produced_by_step or "").strip()
-                        for record in current_evidence_records
-                    },
+                promotion = evidence_registrar.promote_validated_step(
                     step_id=step.step_id,
-                    records_by_evidence_id={
-                        record.evidence_id: record
-                        for record in current_evidence_records
-                    },
+                    pending_aliases=pending_success_aliases,
+                    allowed_evidence_ids=evidence_ids_for_step,
                 )
-                evidence.publish_step_success_aliases(
-                    success_alias_bindings,
-                    step_id=step.step_id,
-                    suppressed_basename_evidence_ids=(suppressed_basename_evidence_ids),
-                )
-                if retained_cross_step_aliases:
+                if promotion.retained_cross_step_aliases:
                     step_record["retained_cross_step_aliases"] = (
-                        retained_cross_step_aliases
+                        promotion.retained_cross_step_aliases
                     )
             except (KeyError, ValueError, OSError) as exc:
                 step_record["status"] = "contract_failed"
