@@ -35,6 +35,7 @@ from .code_patch import CodePatchError, apply_code_patch
 from .code_repair import deterministic_concept_audit_repair
 from .provider_budget import (
     PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION,
+    ProviderCallBudgetReceiptError,
     StepProviderCallBudget,
     complete_with_provider_budget,
 )
@@ -166,6 +167,13 @@ class StepRepairBudget:
             self._step_record["step_llm_repair_attempts"] = len(durable_classes)
             self._step_record["step_llm_repair_budget"] = self._max_llm_repairs
             self._step_record["step_llm_repair_classes"] = list(durable_classes)
+            provider_snapshot = self._provider_budget.snapshot()
+            self._step_record["step_llm_repair_bindings"] = list(
+                provider_snapshot["logical_repair_binding_sha256"]
+            )
+            self._step_record["step_llm_repair_transport_states"] = list(
+                provider_snapshot["logical_repair_transport_states"]
+            )
         self._provider_receipt_relative_path = provider_receipt_relative_path
 
     @property
@@ -198,6 +206,9 @@ class StepRepairBudget:
         step_record["step_provider_call_receipt_version"] = (
             PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION
         )
+        step_record["step_llm_repair_transport_states"] = snapshot[
+            "logical_repair_transport_states"
+        ]
         step_record["step_provider_call_receipt"] = (
             self._provider_receipt_relative_path
             if snapshot["used"] or snapshot["logical_repair_attempts"]
@@ -205,7 +216,19 @@ class StepRepairBudget:
         )
 
     def logical_available(self) -> bool:
-        return self._llm_repair_attempts < self._max_llm_repairs
+        next_attempt_id = self._provider_budget.next_logical_repair_attempt_id()
+        durable_attempts = int(
+            self._provider_budget.snapshot()["logical_repair_attempts"]
+        )
+        if next_attempt_id <= durable_attempts:
+            return next_attempt_id <= self._max_llm_repairs
+        return max(self._llm_repair_attempts, durable_attempts) < self._max_llm_repairs
+
+    @property
+    def next_attempt_id(self) -> int:
+        """Return the next new or exact unpaid-resume attempt identifier."""
+
+        return self._provider_budget.next_logical_repair_attempt_id()
 
     def provider_available(self) -> bool:
         # Every Coder repair starts with a non-audit patch reservation.  The
@@ -232,8 +255,8 @@ class StepRepairBudget:
             self._step_record["step_llm_repair_budget"] = self._max_llm_repairs
             return False
         normalized_class = str(repair_class).strip()
+        expected_attempt_id = self.next_attempt_id
         if authority_binding is not None:
-            expected_attempt_id = self._llm_repair_attempts + 1
             if authority_binding.attempt_id != expected_attempt_id:
                 raise ValueError(
                     "repair authority attempt_id does not match the next durable "
@@ -243,6 +266,9 @@ class StepRepairBudget:
                 raise ValueError(
                     "repair authority class does not match the requested repair"
                 )
+        durable_attempts_before = int(
+            self._provider_budget.snapshot()["logical_repair_attempts"]
+        )
         attempt_id = self._provider_budget.reserve_logical_repair(
             normalized_class,
             max_repairs=self._max_llm_repairs,
@@ -261,16 +287,19 @@ class StepRepairBudget:
                 self._step_record["step_provider_call_repair_unavailable"] = True
                 self.sync_provider()
             return False
-        self._llm_repair_attempts = attempt_id
+        resumed_unpaid_attempt = attempt_id <= durable_attempts_before
+        self._llm_repair_attempts = max(self._llm_repair_attempts, attempt_id)
         self._step_record["step_llm_repair_attempts"] = self._llm_repair_attempts
         self._step_record["step_llm_repair_budget"] = self._max_llm_repairs
-        self._step_record.setdefault("step_llm_repair_classes", []).append(
-            normalized_class
-        )
-        if authority_binding is not None:
-            self._step_record.setdefault("step_llm_repair_bindings", []).append(
-                authority_binding.sha256
+        if not resumed_unpaid_attempt:
+            self._step_record.setdefault("step_llm_repair_classes", []).append(
+                normalized_class
             )
+            if authority_binding is not None:
+                self._step_record.setdefault("step_llm_repair_bindings", []).append(
+                    authority_binding.sha256
+                )
+        self.sync_provider()
         return True
 
 
@@ -339,6 +368,47 @@ class RepairCoordinator:
             return self._normalize_script(str(raw or "").strip()), "full_rewrite"
 
     def repair(
+        self,
+        *,
+        code: str,
+        patch_call: Callable[[], str],
+        full_rewrite_call: Callable[[str], str],
+        logical_repair_attempt_id: Optional[int] = None,
+    ) -> RepairTransportResult:
+        if logical_repair_attempt_id is not None and self._provider_budget is None:
+            raise ValueError(
+                "logical repair transport binding requires a provider budget"
+            )
+
+        try:
+            result = self._repair_once(
+                code=code,
+                patch_call=patch_call,
+                full_rewrite_call=full_rewrite_call,
+            )
+        except ProviderCallBudgetReceiptError:
+            raise
+        except Exception as exc:
+            if logical_repair_attempt_id is not None:
+                assert self._provider_budget is not None
+                self._provider_budget.fail_logical_repair_transport(
+                    attempt_id=logical_repair_attempt_id,
+                    error_type=type(exc).__name__,
+                )
+            raise
+
+        if logical_repair_attempt_id is not None:
+            assert self._provider_budget is not None
+            self._provider_budget.complete_logical_repair_transport(
+                attempt_id=logical_repair_attempt_id,
+                mode=result.mode,
+                after_code_sha256=hashlib.sha256(
+                    result.code.encode("utf-8")
+                ).hexdigest(),
+            )
+        return result
+
+    def _repair_once(
         self,
         *,
         code: str,
