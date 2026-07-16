@@ -791,6 +791,154 @@ def test_paid_pending_logical_repair_fails_closed_without_duplicate_call(tmp_pat
     assert budget.categories == ("runtime_repair_patch",)
 
 
+def test_unrelated_call_does_not_mark_authority_bound_pending_repair_paid(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="unpaid_pending")
+    budget = StepProviderCallBudget(
+        5,
+        step_id="unpaid_pending",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    binding = {
+        "schema_version": "easyicu.repair_authority_binding/2",
+        "provider_category": "runtime_repair",
+    }
+    assert (
+        budget.reserve_logical_repair(
+            "runtime",
+            max_repairs=2,
+            binding=binding,
+        )
+        == 1
+    )
+
+    budget.consume("concept_audit")
+    budget.consume("runtime_repair_patch_extra")
+
+    assert budget.next_logical_repair_attempt_id() == 1
+    assert (
+        budget.reserve_logical_repair(
+            "runtime",
+            max_repairs=2,
+            binding=binding,
+        )
+        == 1
+    )
+
+
+def test_authority_bound_pending_detects_only_its_own_paid_transport(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="owned_pending")
+    budget = StepProviderCallBudget(
+        5,
+        step_id="owned_pending",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    binding = {
+        "schema_version": "easyicu.repair_authority_binding/2",
+        "provider_category": "runtime_repair",
+    }
+    assert (
+        budget.reserve_logical_repair(
+            "runtime",
+            max_repairs=2,
+            binding=binding,
+        )
+        == 1
+    )
+    budget.consume("concept_audit")
+    budget.consume("runtime_repair_patch")
+
+    with pytest.raises(ProviderCallBudgetReceiptError, match="paid provider calls"):
+        budget.next_logical_repair_attempt_id()
+
+
+def test_legacy_pending_keeps_conservative_any_later_call_rule(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="legacy_pending")
+    budget = StepProviderCallBudget(
+        5,
+        step_id="legacy_pending",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    assert (
+        budget.reserve_logical_repair(
+            "runtime",
+            max_repairs=2,
+            binding={"schema_version": "easyicu.repair_authority_binding/1"},
+        )
+        == 1
+    )
+    budget.consume("concept_audit")
+
+    with pytest.raises(ProviderCallBudgetReceiptError, match="paid provider calls"):
+        budget.next_logical_repair_attempt_id()
+
+
+def test_transport_counts_only_attempt_owned_provider_calls(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="owned_transport")
+    budget = StepProviderCallBudget(
+        5,
+        step_id="owned_transport",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    assert (
+        budget.reserve_logical_repair(
+            "runtime",
+            max_repairs=2,
+            binding={
+                "schema_version": "easyicu.repair_authority_binding/2",
+                "provider_category": "runtime_repair",
+            },
+        )
+        == 1
+    )
+    budget.consume("concept_audit")
+    budget.consume("runtime_repair_patch")
+    budget.complete_logical_repair_transport(
+        attempt_id=1,
+        mode="minimal_patch",
+        after_code_sha256="a" * 64,
+    )
+
+    state = load_provider_call_budget_state(path, step_id="owned_transport")
+    transport = state.logical_repairs[0]["transport"]
+    assert transport["provider_history_len"] == 2
+    assert transport["provider_calls"] == 1
+
+
+def test_transport_counts_repeated_attempt_owned_retry_calls(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="owned_retries")
+    budget = StepProviderCallBudget(
+        5,
+        step_id="owned_retries",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    assert (
+        budget.reserve_logical_repair(
+            "runtime",
+            max_repairs=2,
+            binding={
+                "schema_version": "easyicu.repair_authority_binding/2",
+                "provider_category": "runtime_repair",
+            },
+        )
+        == 1
+    )
+    budget.consume("runtime_repair_patch")
+    budget.consume("runtime_repair_patch")
+    budget.complete_logical_repair_transport(
+        attempt_id=1,
+        mode="minimal_patch",
+        after_code_sha256="a" * 64,
+    )
+
+    state = load_provider_call_budget_state(path, step_id="owned_retries")
+    assert state.logical_repairs[0]["transport"]["provider_calls"] == 2
+
+
 def test_failed_logical_repair_transport_is_terminal_and_allows_next_attempt(
     tmp_path,
 ):
@@ -842,6 +990,56 @@ def test_schema_v5_transport_tamper_fails_closed_with_recomputed_outer_digest(
         load_provider_call_budget_state(path, step_id="tampered_transport")
 
 
+def test_pending_logical_repair_must_be_the_final_ledger_entry(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="pending_not_final")
+    budget = StepProviderCallBudget(
+        5,
+        step_id="pending_not_final",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    assert budget.reserve_logical_repair("runtime", max_repairs=2) == 1
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    second = dict(payload["logical_repairs"][0])
+    second["attempt_id"] = 2
+    second["repair_class"] = "contract"
+    payload["logical_repairs"].append(second)
+    payload["sha256"] = _payload_digest_without_sha(payload)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ProviderCallBudgetReceiptError, match="pending.*final"):
+        load_provider_call_budget_state(path, step_id="pending_not_final")
+
+
+def test_invalid_reservation_history_is_rejected_before_transport_validation(
+    tmp_path,
+):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="invalid_history")
+    budget = StepProviderCallBudget(
+        5,
+        step_id="invalid_history",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    assert budget.reserve_logical_repair("runtime", max_repairs=2) == 1
+    budget.consume("runtime_repair_patch")
+    budget.complete_logical_repair_transport(
+        attempt_id=1,
+        mode="minimal_patch",
+        after_code_sha256="a" * 64,
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["logical_repairs"][0]["provider_history_len"] = "0"
+    payload["sha256"] = _payload_digest_without_sha(payload)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(
+        ProviderCallBudgetReceiptError,
+        match="logical repair history",
+    ):
+        load_provider_call_budget_state(path, step_id="invalid_history")
+
+
 def test_logical_repair_binding_payload_and_digest_are_consistent(tmp_path):
     path = provider_call_budget_receipt_path(tmp_path, step_id="bound_repair")
     budget = StepProviderCallBudget(
@@ -868,6 +1066,36 @@ def test_logical_repair_binding_payload_and_digest_are_consistent(tmp_path):
     )
     assert state.logical_repairs[0]["binding"] == binding
     assert len(str(state.logical_repairs[0]["binding_sha256"])) == 64
+
+
+@pytest.mark.parametrize(
+    "binding",
+    [
+        {"schema_version": "easyicu.repair_authority_binding/2"},
+        {
+            "schema_version": "easyicu.repair_authority_binding/1",
+            "provider_category": "runtime_repair",
+        },
+    ],
+)
+def test_repair_authority_provider_category_schema_is_strict(tmp_path, binding):
+    budget = StepProviderCallBudget(
+        5,
+        step_id="strict_binding",
+        receipt_path=provider_call_budget_receipt_path(
+            tmp_path,
+            step_id="strict_binding",
+        ),
+        reserved_final_category="concept_audit",
+    )
+
+    with pytest.raises(ProviderCallBudgetReceiptError, match="provider category"):
+        budget.reserve_logical_repair(
+            "runtime",
+            max_repairs=2,
+            binding=binding,
+        )
+    assert budget.logical_repair_classes == ()
 
 
 def test_logical_repair_binding_tamper_fails_with_recomputed_outer_digest(tmp_path):

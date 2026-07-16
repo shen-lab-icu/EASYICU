@@ -7606,6 +7606,7 @@ def run_execute_phase(
             *,
             before_code: str,
             repair_ticket: str,
+            provider_category: str,
         ) -> bool:
             """Reserve one repair bound to its exact host-owned authority."""
 
@@ -7613,6 +7614,7 @@ def run_execute_phase(
                 step_id=step.step_id,
                 attempt_id=step_repair_budget.next_attempt_id,
                 repair_class=str(repair_class),
+                provider_category=provider_category,
                 before_code_sha256=sha256_of_bytes(before_code.encode("utf-8")),
                 step_spec_sha256=canonical_sha256(step.model_dump(mode="json")),
                 resolved_inputs_sha256=resolved_inputs_sha256,
@@ -8087,6 +8089,7 @@ def run_execute_phase(
                 "critic_resume",
                 before_code=prior_code,
                 repair_ticket=critique_log,
+                provider_category="critic_resume_repair",
             ):
                 return None
             prior_code = _use_resumed_code(resumed_code)
@@ -9620,6 +9623,7 @@ else:
                 "concept",
                 before_code=code,
                 repair_ticket=concept_repair_log,
+                provider_category="concept_repair",
             ):
                 raise AssertionError("LLM repair budget changed without mutation")
             step_record["concept_repair_attempts"] = concept_repair_attempts
@@ -10004,6 +10008,7 @@ else:
                             "post_mutation_concept",
                             before_code=code,
                             repair_ticket=post_mutation_repair_log,
+                            provider_category="post_mutation_concept_repair",
                         ):
                             raise AssertionError(
                                 "LLM repair budget changed without mutation"
@@ -10781,6 +10786,7 @@ else:
                                 "visual",
                                 before_code=code,
                                 repair_ticket=visual_repair_log,
+                                provider_category="visual_repair",
                             ):
                                 raise AssertionError(
                                     "LLM repair budget changed without mutation"
@@ -11479,6 +11485,7 @@ else:
                         "contract",
                         before_code=code,
                         repair_ticket=contract_repair_log,
+                        provider_category="contract_repair",
                     ):
                         raise AssertionError(
                             "LLM repair budget changed without mutation"
@@ -11765,6 +11772,7 @@ else:
                     "runtime",
                     before_code=code,
                     repair_ticket=run_log,
+                    provider_category="runtime_repair",
                 ):
                     raise AssertionError("LLM repair budget changed without mutation")
                 step_record["code_repair_attempts"] = repair_attempts

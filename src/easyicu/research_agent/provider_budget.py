@@ -41,6 +41,8 @@ _LOGICAL_REPAIR_TRANSPORT_STATES = {
     "failed",
     "legacy_untracked",
 }
+_REPAIR_TRANSPORT_PROVIDER_SUFFIXES = ("patch", "full_rewrite")
+_REPAIR_AUTHORITY_BINDING_SCHEMA_V2 = "easyicu.repair_authority_binding/2"
 
 
 class ProviderCallBudgetError(RuntimeError):
@@ -129,11 +131,67 @@ def _is_sha256_hex(value: object) -> bool:
     )
 
 
+def _bound_repair_provider_category(binding: object) -> Optional[str]:
+    """Return the receipt-bound provider category for a logical repair.
+
+    Binding v1 receipts did not record this coordinate. They retain the
+    conservative legacy rule that any later provider call makes a pending
+    transport ambiguous. New bindings name the exact category so unrelated
+    audit/analyzer calls cannot be misattributed to the repair attempt.
+    """
+
+    if not isinstance(binding, dict):
+        return None
+    binding_schema = binding.get("schema_version")
+    has_provider_category = "provider_category" in binding
+    if binding_schema != _REPAIR_AUTHORITY_BINDING_SCHEMA_V2:
+        if has_provider_category:
+            raise ProviderCallBudgetReceiptError(
+                "Legacy repair authority binding unexpectedly declares a "
+                "provider category"
+            )
+        return None
+    if not has_provider_category:
+        raise ProviderCallBudgetReceiptError(
+            "Repair authority binding v2 is missing its provider category"
+        )
+    provider_category = binding.get("provider_category")
+    if (
+        not isinstance(provider_category, str)
+        or not provider_category.strip()
+        or provider_category != provider_category.strip()
+    ):
+        raise ProviderCallBudgetReceiptError(
+            "Provider-call receipt repair provider category is invalid"
+        )
+    return provider_category
+
+
+def _repair_owned_provider_calls(
+    categories: Sequence[str],
+    *,
+    reserved_history_len: int,
+    history_len: int,
+    provider_category: Optional[str],
+) -> int:
+    """Count calls owned by one repair transport, not unrelated step calls."""
+
+    suffix = categories[reserved_history_len:history_len]
+    if provider_category is None:
+        return len(suffix)
+    owned_categories = {
+        f"{provider_category}_{transport_suffix}"
+        for transport_suffix in _REPAIR_TRANSPORT_PROVIDER_SUFFIXES
+    }
+    return sum(category in owned_categories for category in suffix)
+
+
 def _verified_repair_transport(
     raw_transport: object,
     *,
     categories: Tuple[str, ...],
     reserved_history_len: int,
+    provider_category: Optional[str],
     required: bool,
 ) -> Optional[Dict[str, object]]:
     if raw_transport is None and not required:
@@ -170,15 +228,21 @@ def _verified_repair_transport(
     history_len = raw_transport.get("provider_history_len")
     history_sha256 = raw_transport.get("provider_history_sha256")
     provider_calls = raw_transport.get("provider_calls")
+    expected_provider_calls = _repair_owned_provider_calls(
+        categories,
+        reserved_history_len=reserved_history_len,
+        history_len=(history_len if isinstance(history_len, int) else 0),
+        provider_category=provider_category,
+    )
     if (
         isinstance(history_len, bool)
         or not isinstance(history_len, int)
         or not reserved_history_len <= history_len <= len(categories)
-        or (state == "completed" and history_len == reserved_history_len)
         or history_sha256 != _category_history_digest(categories[:history_len])
         or isinstance(provider_calls, bool)
         or not isinstance(provider_calls, int)
-        or provider_calls != history_len - reserved_history_len
+        or provider_calls != expected_provider_calls
+        or (state == "completed" and provider_calls < 1)
     ):
         raise ProviderCallBudgetReceiptError(
             "Provider-call receipt logical repair transport history is inconsistent"
@@ -229,12 +293,6 @@ def _verified_logical_repairs(
         history_sha256 = raw_entry.get("provider_history_sha256")
         binding = raw_entry.get("binding")
         binding_sha256 = raw_entry.get("binding_sha256")
-        transport = _verified_repair_transport(
-            raw_entry.get("transport"),
-            categories=categories,
-            reserved_history_len=(history_len if isinstance(history_len, int) else -1),
-            required=require_transport,
-        )
         binding_pair_invalid = (binding is None) != (binding_sha256 is None)
         if binding is not None and not isinstance(binding, dict):
             binding_pair_invalid = True
@@ -265,6 +323,23 @@ def _verified_logical_repairs(
         ):
             raise ProviderCallBudgetReceiptError(
                 "Provider-call receipt logical repair history is inconsistent"
+            )
+        provider_category = _bound_repair_provider_category(binding)
+        transport = _verified_repair_transport(
+            raw_entry.get("transport"),
+            categories=categories,
+            reserved_history_len=history_len,
+            provider_category=provider_category,
+            required=require_transport,
+        )
+        if (
+            transport is not None
+            and transport.get("state") == "pending"
+            and index != len(raw_entries)
+        ):
+            raise ProviderCallBudgetReceiptError(
+                "Provider-call receipt pending logical repair must be the final "
+                "ledger entry"
             )
         normalized_entry = dict(raw_entry)
         if transport is not None:
@@ -720,6 +795,7 @@ class StepProviderCallBudget:
                 ) from exc
             if not isinstance(normalized_binding_payload, dict):
                 raise ValueError("logical repair binding must be an object")
+            _bound_repair_provider_category(normalized_binding_payload)
             computed_binding = _receipt_digest(normalized_binding_payload)
             if binding_sha256 is None:
                 binding_sha256 = computed_binding
@@ -742,7 +818,15 @@ class StepProviderCallBudget:
                     and pending_transport.get("state") == "pending"
                 ):
                     pending_history_len = int(pending_entry["provider_history_len"])
-                    if len(self._categories) > pending_history_len:
+                    pending_provider_category = _bound_repair_provider_category(
+                        pending_entry.get("binding")
+                    )
+                    if _repair_owned_provider_calls(
+                        self._categories,
+                        reserved_history_len=pending_history_len,
+                        history_len=len(self._categories),
+                        provider_category=pending_provider_category,
+                    ):
                         raise ProviderCallBudgetReceiptError(
                             "A logical repair has paid provider calls but no durable "
                             "transport result; refusing to pay for a duplicate repair"
@@ -796,13 +880,62 @@ class StepProviderCallBudget:
                 transport = entry.get("transport")
                 if isinstance(transport, dict) and transport.get("state") == "pending":
                     history_len = int(entry["provider_history_len"])
-                    if len(self._categories) > history_len:
+                    provider_category = _bound_repair_provider_category(
+                        entry.get("binding")
+                    )
+                    if _repair_owned_provider_calls(
+                        self._categories,
+                        reserved_history_len=history_len,
+                        history_len=len(self._categories),
+                        provider_category=provider_category,
+                    ):
                         raise ProviderCallBudgetReceiptError(
                             "A logical repair has paid provider calls but no durable "
                             "transport result; refusing to resume ambiguously"
                         )
                     return int(entry["attempt_id"])
             return len(self._logical_repairs) + 1
+
+    def assert_logical_repair_provider_category(
+        self,
+        *,
+        attempt_id: int,
+        provider_category: str,
+    ) -> None:
+        """Verify a coordinator will spend against the reserved repair route.
+
+        The check runs before the coordinator reserves a provider call. Legacy
+        bindings have no route coordinate and retain their conservative
+        history-based accounting; v2 bindings must match exactly.
+        """
+
+        normalized_category = str(provider_category)
+        if (
+            not normalized_category.strip()
+            or normalized_category != normalized_category.strip()
+        ):
+            raise ValueError("logical repair provider category must be non-empty")
+        with self._lock:
+            if (
+                isinstance(attempt_id, bool)
+                or not isinstance(attempt_id, int)
+                or attempt_id != len(self._logical_repairs)
+            ):
+                raise ProviderCallBudgetReceiptError(
+                    "Logical repair provider route does not target the current attempt"
+                )
+            entry = self._logical_repairs[attempt_id - 1]
+            transport = entry.get("transport")
+            if not isinstance(transport, dict) or transport.get("state") != "pending":
+                raise ProviderCallBudgetReceiptError(
+                    "Logical repair provider route is already terminal or untracked"
+                )
+            bound_category = _bound_repair_provider_category(entry.get("binding"))
+            if bound_category is not None and bound_category != normalized_category:
+                raise ProviderCallBudgetReceiptError(
+                    "Logical repair provider category conflicts with its authority "
+                    "binding"
+                )
 
     def _record_logical_repair_transport(
         self,
@@ -827,6 +960,7 @@ class StepProviderCallBudget:
                 )
             history_len = len(self._categories)
             reserved_history_len = int(entry["provider_history_len"])
+            provider_category = _bound_repair_provider_category(entry.get("binding"))
             candidate = dict(transport)
             candidate.update(
                 {
@@ -834,13 +968,19 @@ class StepProviderCallBudget:
                     "provider_history_sha256": _category_history_digest(
                         self._categories
                     ),
-                    "provider_calls": history_len - reserved_history_len,
+                    "provider_calls": _repair_owned_provider_calls(
+                        self._categories,
+                        reserved_history_len=reserved_history_len,
+                        history_len=history_len,
+                        provider_category=provider_category,
+                    ),
                 }
             )
             verified = _verified_repair_transport(
                 candidate,
                 categories=tuple(self._categories),
                 reserved_history_len=reserved_history_len,
+                provider_category=provider_category,
                 required=True,
             )
             if verified is None:
