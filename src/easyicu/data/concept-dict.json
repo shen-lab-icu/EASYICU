@@ -3151,6 +3151,9 @@
           "table": "cases",
           "index_var": "OffsetOfDeath",
           "val_var": "OffsetOfDeath",
+          "extra_vars": [
+            "HospitalDischargeType"
+          ],
           "callback": "sic_death",
           "class_name": "col_itm"
         }

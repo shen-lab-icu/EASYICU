@@ -105,32 +105,21 @@ def _apply_callback(
         #
         # BUG HISTORY (fixed 2026-07-16): the threshold was hard-coded as 72h in
         # MILLISECONDS (259,200,000) while the loader delivers minutes, so the window was a
-        # no-op and every patient with a (up to 14.5-yr-later) registry `dateofdeath` was
-        # flagged -> 33.3% (registry all-cause) instead of ~10.7%. Threshold is now in
-        # minutes; a guard degrades to the unit-independent ICU-death disposition
-        # (destination=='Overleden', ~9.9%) if the window ever re-inflates implausibly.
+        # no-op and every patient with a registry `dateofdeath` was flagged. The declared
+        # source contract is now applied deterministically in minutes. Endpoint semantics
+        # must never switch based on the mortality prevalence of the requested cohort.
         df = frame.copy()
-        icu_death = pd.Series(False, index=df.index)  # unit-independent fallback
-        for c in ['destination', 'Destination', 'discharge_destination']:
-            if c in df.columns:
-                icu_death = (
-                    df[c].astype('string').str.strip().str.lower() == 'overleden'
-                ).fillna(False)
-                break
         dod_col = (source.index_var if (source.index_var and source.index_var in df.columns)
                    else ('dateofdeath' if 'dateofdeath' in df.columns else None))
         dis_col = (concept_name if concept_name in df.columns
                    else ('dischargedat' if 'dischargedat' in df.columns else None))
-        if dod_col is not None and dis_col is not None:
-            dod = pd.to_numeric(df[dod_col], errors='coerce')
-            dis = pd.to_numeric(df[dis_col], errors='coerce')
-            died = (dod.notna() & ((dod - dis) < 72 * 60)).fillna(False)  # 72h in MINUTES
-            # Guard: in-hospital ICU mortality > 25% signals a unit mismatch in the window
-            # (the historical bug). Degrade to the ICU-death disposition.
-            if len(df) and float(died.mean()) > 0.25:
-                died = icu_death
-        else:
-            died = icu_death
+        if dod_col is None or dis_col is None:
+            raise ValueError(
+                "aumc_death requires dateofdeath and dischargedat in loader-minute units"
+            )
+        dod = pd.to_numeric(df[dod_col], errors='coerce')
+        dis = pd.to_numeric(df[dis_col], errors='coerce')
+        died = (dod.notna() & ((dod - dis) < 72 * 60)).fillna(False)
         death_values = pd.Series(index=df.index, dtype=object)
         death_values[died] = True  # survivors -> NA (ricu convention)
         df[concept_name] = death_values
@@ -159,23 +148,18 @@ def _apply_callback(
             if c in df.columns:
                 disp_col = c
                 break
-        if disp_col is not None:
-            disp = pd.to_numeric(df[disp_col], errors='coerce')
-            died = (disp == 2028)  # 2028 = Deceased
-            death_values = pd.Series(index=df.index, dtype=object)
-            death_values[died] = True  # survivors/unknown -> NA (ricu convention)
-            df[concept_name] = death_values
-            if offset_secs is not None:
-                df['charttime'] = (offset_secs / 3600.0).where(died)
-            return df
-        # Fallback (no HospitalDischargeType): preserve prior OffsetOfDeath-presence
-        # behavior so extraction never hard-fails (over-broad rate).
-        if offset_secs is None:
-            return df.head(0)
+        if disp_col is None:
+            raise ValueError(
+                "sic_death requires HospitalDischargeType; OffsetOfDeath alone "
+                "cannot identify in-hospital mortality"
+            )
+        disp = pd.to_numeric(df[disp_col], errors='coerce')
+        died = (disp == 2028)  # 2028 = Deceased
         death_values = pd.Series(index=df.index, dtype=object)
-        death_values[offset_secs.notna()] = True
+        death_values[died] = True  # survivors/unknown -> NA (ricu convention)
         df[concept_name] = death_values
-        df['charttime'] = offset_secs / 3600.0
+        if offset_secs is not None:
+            df['charttime'] = (offset_secs / 3600.0).where(died)
         return df
 
     # 🔧 HiRID death callback — matches R ricu hirid_death (callback-itm.R:197)
