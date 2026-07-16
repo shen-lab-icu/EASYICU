@@ -93,10 +93,13 @@ from .code_repair import (
     _deterministic_runner_repair,
     _deterministic_summary_repair,
     deterministic_contract_repair,
-    deterministic_concept_audit_repair,
 )
 from .code_hygiene import reorder_forward_references
 from .code_preflight import audit_mechanical_code_contracts
+from .repair_coordination import (
+    StepRepairBudget,
+    authorized_deterministic_concept_repair,
+)
 from .concept_audit_cache import LLMConceptAuditCache
 from .cohort_repair import extract_cohort_definition_from_prose
 from .cohort_schema import (
@@ -7437,28 +7440,14 @@ def run_execute_phase(
             reserved_final_category=reserved_final_category,
         )
 
-        def _sync_provider_budget() -> None:
-            snapshot = provider_budget.snapshot()
-            step_record["step_provider_call_budget_scope"] = (
-                "coder_generation_repair_concept_audit_and_analyzer"
-            )
-            step_record["step_provider_call_budget"] = snapshot["limit"]
-            step_record["step_provider_call_attempts"] = snapshot["used"]
-            step_record["step_provider_call_remaining"] = snapshot["remaining"]
-            step_record["step_provider_call_budget_exhausted"] = snapshot["exhausted"]
-            step_record["step_provider_call_categories"] = snapshot["categories"]
-            step_record["step_provider_call_reserved_category"] = snapshot[
-                "reserved_final_category"
-            ]
-            step_record["step_provider_call_reservation_released"] = snapshot[
-                "reservation_released"
-            ]
-            step_record["step_provider_call_receipt_version"] = (
-                PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION
-            )
-            step_record["step_provider_call_receipt"] = (
-                provider_receipt_relative_path if snapshot["used"] else None
-            )
+        step_repair_budget = StepRepairBudget(
+            provider_budget=provider_budget,
+            step_record=step_record,
+            max_llm_repairs=pipeline._max_step_llm_repair_attempts,
+            initial_llm_repair_attempts=step_llm_repair_attempts,
+            provider_receipt_relative_path=provider_receipt_relative_path,
+        )
+        _sync_provider_budget = step_repair_budget.sync_provider
 
         _sync_provider_budget()
         if provider_receipt_integrity_error is not None:
@@ -7536,45 +7525,13 @@ def run_execute_phase(
         quarantine_deterministic_revalidated = False
         pending_quarantined_errors: List[ValidationFinding] = []
 
-        def _logical_llm_repair_budget_available() -> bool:
-            return step_llm_repair_attempts < pipeline._max_step_llm_repair_attempts
-
-        def _provider_repair_call_available() -> bool:
-            # Every Coder repair starts with a non-audit patch reservation.  The
-            # exact category name does not affect the reserved-final-audit rule,
-            # so a neutral probe prevents a refused reservation from being
-            # misrecorded as a real logical repair attempt.
-            available = provider_budget.can_consume("llm_repair_budget_probe")
-            if not available:
-                step_record["step_provider_call_repair_unavailable"] = True
-                _sync_provider_budget()
-            return available
-
-        def _llm_repair_budget_available() -> bool:
-            return (
-                _logical_llm_repair_budget_available()
-                and _provider_repair_call_available()
-            )
-
-        def _consume_llm_repair_budget(repair_class: str) -> bool:
-            nonlocal step_llm_repair_attempts
-            if not _logical_llm_repair_budget_available():
-                step_record["step_llm_repair_budget_exhausted"] = True
-                step_record["step_llm_repair_budget"] = (
-                    pipeline._max_step_llm_repair_attempts
-                )
-                return False
-            if not _provider_repair_call_available():
-                return False
-            step_llm_repair_attempts += 1
-            step_record["step_llm_repair_attempts"] = step_llm_repair_attempts
-            step_record["step_llm_repair_budget"] = (
-                pipeline._max_step_llm_repair_attempts
-            )
-            step_record.setdefault("step_llm_repair_classes", []).append(
-                str(repair_class)
-            )
-            return True
+        # Batch-1 of the A2 control-plane split: the four budget-accounting
+        # closures now live in repair_coordination.StepRepairBudget; the local
+        # names below are pure aliases so every call site stays unchanged.
+        _logical_llm_repair_budget_available = step_repair_budget.logical_available
+        _provider_repair_call_available = step_repair_budget.provider_available
+        _llm_repair_budget_available = step_repair_budget.available
+        _consume_llm_repair_budget = step_repair_budget.consume
 
         monotonic_concept_constraints = _persisted_monotonic_concept_constraints(
             prior_step_record
@@ -9084,26 +9041,15 @@ else:
             error_messages: Sequence[str],
             source: str,
         ) -> Tuple[str, List[str]]:
-            """Return an all-or-nothing centrally authorized mechanical repair."""
-
-            candidate_code, repair_names = deterministic_concept_audit_repair(
+            # Implementation extracted to repair_coordination (A2 batch-1);
+            # the authorization side effects stay with the local callback.
+            return authorized_deterministic_concept_repair(
                 script_text,
                 error_messages,
+                authorize=_authorize_automatic_repair,
+                step=step,
+                source=source,
             )
-            if not repair_names or candidate_code == script_text:
-                return script_text, []
-            for repair_name in repair_names:
-                if (
-                    _authorize_automatic_repair(
-                        (repair_name, candidate_code),
-                        step=step,
-                        source=source,
-                        before_code=script_text,
-                    )
-                    is None
-                ):
-                    return script_text, []
-            return candidate_code, list(repair_names)
 
         concept_repair_attempts = 0
         llm_repair_used = critic_resume_repair_used
@@ -9907,7 +9853,7 @@ else:
                             step_id=step.step_id,
                             current_step=step_current,
                             total_steps=total_steps,
-                            repair_attempts=step_llm_repair_attempts,
+                            repair_attempts=step_repair_budget.llm_repair_attempts,
                         )
                         _remember_concept_constraints(post_mutation_errors)
                         post_mutation_ticket = typed_repair_ticket(post_mutation_errors)
