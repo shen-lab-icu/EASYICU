@@ -1454,10 +1454,26 @@ def _typed_input_scope_contract(step: AnalysisStep) -> str:
     if not declared_inputs:
         return ""
     typed_inputs = []
+    typed_cohort_inputs = []
     for item in declared_inputs:
         parsed = _canonical_typed_product(item)
         if parsed is not None and parsed[0] in RUNTIME_BINDABLE_TYPED_INPUT_KINDS:
             typed_inputs.append(str(item))
+            raw_kind, separator, _ = str(item or "").strip().partition(":")
+            if separator and raw_kind.strip().lower() == "cohort":
+                typed_cohort_inputs.append(str(item))
+    typed_cohort_contract = ""
+    if typed_cohort_inputs:
+        typed_cohort_contract = (
+            "- A declared `cohort:*` input is this consumer's row-membership "
+            "authority. Its stable row keys may be a strict subset of "
+            "COHORT_PARQUET; do not require the two key sets to be identical. "
+            "When untyped raw columns are also needed, require unique keys, "
+            "verify every typed-cohort key exists in the raw source, and join "
+            "those columns onto the typed rows while preserving typed-row order. "
+            "Analyze only that joined typed cohort; never admit raw-only rows or "
+            "reconstruct its eligibility rules.\n"
+        )
     return (
         "TYPED INPUT BINDING (binding):\n"
         "- At instrumented execution, read the JSON manifest at "
@@ -1514,6 +1530,7 @@ def _typed_input_scope_contract(step: AnalysisStep) -> str:
         "value_columns_checked, and value_mismatch_n=0 only after actually "
         "comparing them. The host repeats that key-and-value comparison. If it "
         "was not performed, do not call the reconciliation checked.\n"
+        f"{typed_cohort_contract}"
         f"- Exact Planner-declared inputs for this step: {declared_inputs}\n"
         f"- Exact typed inputs for this step: {typed_inputs}\n"
     )

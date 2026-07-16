@@ -1049,6 +1049,48 @@ def test_execute_phase_host_verifies_measurement_provenance_at_every_contract_ga
     assert evaluator_keywords["cohort_path"].id == "execution_cohort_path"
 
 
+def test_primary_cohort_coder_receives_only_exact_locked_cohort_payload():
+    from easyicu.research_agent.cohort_schema import (
+        CohortDefinition,
+        ConceptPredicate,
+        TimeWindow,
+    )
+    from easyicu.research_agent.pipeline_execute import (
+        _planner_locked_cohort_prompt_payload,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan
+
+    definition = CohortDefinition(
+        name="eligible_stays",
+        inclusion=(
+            ConceptPredicate(
+                concept_id="age",
+                time_window=TimeWindow(
+                    anchor="icu_admit",
+                    start_offset_hours=0,
+                    end_offset_hours=1,
+                ),
+                aggregation="first",
+                op=">=",
+                value=18,
+            ),
+        ),
+    )
+    plan = AnalysisPlan(
+        research_question="Describe the locked cohort.",
+        cohort=definition,
+        robustness_specs=[],
+        steps=[],
+    )
+
+    payload = json.loads(_planner_locked_cohort_prompt_payload(plan))
+
+    assert payload == plan.model_dump(mode="json")["cohort"]
+    assert payload["name"] == "eligible_stays"
+    assert payload["inclusion"][0]["op"] == ">="
+    assert "robustness_specs" not in payload
+
+
 def test_primary_cohort_raw_runner_is_scoped_and_authority_hashes_are_rechecked():
     from easyicu.research_agent import pipeline_execute
 

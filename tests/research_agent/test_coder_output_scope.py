@@ -1166,6 +1166,37 @@ def test_coder_prompt_binds_typed_inputs_to_resolved_manifest(ra):
         assert "The host repeats that key-and-value comparison" in prompt
 
 
+def test_coder_prompt_treats_typed_cohort_as_subset_row_authority(ra):
+    step = ra.AnalysisStep(
+        step_id="consume_cohort",
+        intent="Describe the declared upstream cohort.",
+        inputs=["cohort:eligible_stays", "age", "sex"],
+        expected_outputs=["table:result"],
+        method="descriptive_summary",
+    )
+
+    prompts = _ordinary_run_repair_and_agentic_prompts(ra=ra, step=step)
+    for prompt in prompts:
+        assert "consumer's row-membership authority" in prompt
+        assert "may be a strict subset of COHORT_PARQUET" in prompt
+        assert "do not require the two key sets to be identical" in prompt
+        assert "Analyze only that joined typed cohort" in prompt
+
+
+def test_noncohort_typed_input_omits_cohort_subset_guidance(ra):
+    step = ra.AnalysisStep(
+        step_id="consume_table",
+        intent="Describe the declared upstream table.",
+        inputs=["table:eligible_stays", "age"],
+        expected_outputs=["table:result"],
+        method="descriptive_summary",
+    )
+
+    prompts = _ordinary_run_repair_and_agentic_prompts(ra=ra, step=step)
+    for prompt in prompts:
+        assert "consumer's row-membership authority" not in prompt
+
+
 def test_coder_prompts_bind_untyped_only_inputs_to_planner_scope(ra):
     step = ra.AnalysisStep(
         step_id="consume_raw_columns",
