@@ -618,6 +618,13 @@ TABLE-ONE / DESCRIPTIVE SUMMARIES:
   in the output contract. Never invent a provenance pair, catch
   `DescriptiveInputError` and continue, use a provenance receipt as a row mask,
   or use it as permission to alter an analysis denominator.
+- Run every host-owned input-validation or provenance helper, including
+  `measurement_provenance_receipt`, outside any broad model/plot
+  `try/except` whose handler records a skipped result and continues. Its
+  failure must terminate the step before scientific outputs are written. If
+  surrounding resource cleanup makes a `try` unavoidable, every matching
+  handler must have a bare `raise` as its first executable statement; a guard
+  beside the helper call does not help when an outer handler swallows it.
 - For table-one or descriptive steps, build the output table as a
   list of flat row dictionaries from the start. Do not create a
   deeply nested dict and then infer whether a variable is continuous
@@ -855,11 +862,16 @@ STATISTICS APIs:
   and `np.isfinite(y.to_numpy()).all()` are true. If one predictor uses
   a missing-indicator strategy, still drop or explicitly handle missing
   values in the other required covariates after creating that indicator.
-- If a model fit fails inside `except`, write `step_summary.json`
+- For a model-fitting failure only, after all host-owned input validation and
+  provenance checks have already succeeded outside that `try`, write
+  `step_summary.json`
   with null estimate fields and the error message, then exit normally.
   Do NOT `raise`, `raise e`, or call `sys.exit(1)` after writing the
-  failure summary; otherwise the pipeline cannot preserve the machine
-  readable failure as evidence.
+  model-fit failure summary; otherwise the pipeline cannot preserve the
+  machine readable failure as evidence. This normal-exit exception policy
+  never applies to input-binding, row-alignment, structural-accounting,
+  provenance, or other host-validation failures: those must propagate and
+  fail the step.
 
 PYTHON HYGIENE:
 - Python collection constructors must be syntactically valid:

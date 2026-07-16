@@ -1933,7 +1933,14 @@ def _repair_specialization(*, context: ResearchContext, run_log: str, code: str)
             "failure and continue. If the current script keeps a custom audit, "
             "the typed ticket's helper/call/handler lines must all be repaired in "
             "the same patch and every caught validation failure must be "
-            "unconditionally re-raised.\n"
+            "unconditionally re-raised. For every ticket occurrence with a "
+            "`handler_line` (or a host-validation `line` that identifies an "
+            "`except`), edit that exact handler: its first executable statement "
+            "must be a bare `raise`. Do not merely add or move a guard beside "
+            "the helper call, because an outer handler would still swallow the "
+            "failure. The normal-exit summary rule applies only to model-fit "
+            "failures after validation has succeeded, never to provenance or "
+            "host-validation failures.\n"
         )
 
     primary_exposure_binding_signals = (
