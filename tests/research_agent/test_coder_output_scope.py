@@ -331,6 +331,48 @@ def test_coder_repair_fail_closes_nonterminating_provenance_audit(ra):
     assert "unconditionally re-raised" in prompt
 
 
+def test_coder_repair_targets_the_reported_swallowing_handler(ra):
+    llm = _RecordingLLM()
+    step = ra.AnalysisStep(
+        step_id="descriptive_step",
+        intent="Describe the planner-locked cohort.",
+        inputs=["artifact:analysis_cohort"],
+        expected_outputs=["table:descriptive_summary"],
+        method="descriptive_statistics",
+    )
+
+    CoderAgent(llm).repair(
+        context=_context(ra),
+        step=step,
+        code=(
+            "try:\n"
+            "    receipt = measurement_provenance_receipt(frame, "
+            "measured_column='x_measured', count_column='x_n')\n"
+            "except Exception as exc:\n"
+            "    write_failure_summary(exc)\n"
+        ),
+        run_log=(
+            'DETAIL: {"reason":"provenance_audit_not_fail_closed",'
+            '"failure_mode":"provenance_guard_swallowed_by_handler",'
+            '"handler_line":3}'
+        ),
+    )
+
+    prompt = llm.messages[-1].content
+    assert "edit that exact handler" in prompt
+    assert "first executable statement must be a bare `raise`" in prompt
+    assert "normal-exit summary rule applies only to model-fit failures" in prompt
+
+
+def test_coder_guide_separates_model_failure_from_host_validation_failure() -> None:
+    from easyicu.research_agent.agents import _CODER_GUIDE
+
+    assert "outside any broad model/plot" in _CODER_GUIDE
+    assert "a bare `raise` as its first executable statement" in _CODER_GUIDE
+    assert "For a model-fitting failure only" in _CODER_GUIDE
+    assert "never applies to input-binding" in _CODER_GUIDE
+
+
 def test_coder_repair_requires_bidirectional_provenance_pairs(ra):
     llm = _RecordingLLM()
     step = ra.AnalysisStep(
