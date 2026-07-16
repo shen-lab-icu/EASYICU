@@ -345,6 +345,98 @@ def test_resume_history_with_old_audit_does_not_release_slot_for_new_code(tmp_pa
     assert resumed.can_consume("concept_audit") is True
 
 
+def test_final_audit_phase_roundtrips_in_the_single_provider_receipt(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="audit_roundtrip")
+    first = StepProviderCallBudget(
+        3,
+        step_id="audit_roundtrip",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    first.bind_reserved_category("concept_audit", token="audit-authority")
+    assert first.reservation_status(
+        "concept_audit", token="audit-authority"
+    ) == "bound_unpaid"
+    first.consume("concept_audit")
+    assert first.reservation_status(
+        "concept_audit", token="audit-authority"
+    ) == "attempted_incomplete"
+
+    pending = load_provider_call_budget_state(
+        path,
+        step_id="audit_roundtrip",
+        expected_reserved_final_category="concept_audit",
+    )
+    assert pending.required_reservation_token == "audit-authority"
+    assert pending.reservation_bound_provider_history_len == 0
+    assert pending.completed_reservation_token is None
+    assert pending.reservation_released is False
+
+    first.complete_reserved_category("concept_audit", token="audit-authority")
+    completed = load_provider_call_budget_state(
+        path,
+        step_id="audit_roundtrip",
+        expected_reserved_final_category="concept_audit",
+    )
+    resumed = StepProviderCallBudget(
+        completed.limit,
+        step_id="audit_roundtrip",
+        consumed_categories=completed.categories,
+        logical_repair_entries=completed.logical_repairs,
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+        required_reservation_token=completed.required_reservation_token,
+        reservation_bound_provider_history_len=(
+            completed.reservation_bound_provider_history_len
+        ),
+        completed_reservation_token=completed.completed_reservation_token,
+        reservation_released=completed.reservation_released,
+    )
+    assert resumed.reservation_status(
+        "concept_audit", token="audit-authority"
+    ) == "completed"
+    resumed.release_reserved_category("concept_audit", token="audit-authority")
+
+    released = load_provider_call_budget_state(
+        path,
+        step_id="audit_roundtrip",
+        expected_reserved_final_category="concept_audit",
+    )
+    assert released.reservation_released is True
+
+
+def test_final_audit_state_tamper_fails_with_recomputed_outer_digest(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="audit_tamper")
+    budget = StepProviderCallBudget(
+        3,
+        step_id="audit_tamper",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    budget.bind_reserved_category("concept_audit", token="audit-authority")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.pop("sha256")
+    payload["final_reservation_state"]["bound_provider_history_len"] = 2
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    payload["sha256"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProviderCallBudgetReceiptError, match="reservation state"):
+        load_provider_call_budget_state(
+            path,
+            step_id="audit_tamper",
+            expected_reserved_final_category="concept_audit",
+        )
+
+
 def test_receipt_rejects_final_audit_policy_drift(tmp_path):
     path = provider_call_budget_receipt_path(tmp_path, step_id="01_model")
     budget = StepProviderCallBudget(
@@ -667,6 +759,7 @@ def test_schema_v2_receipt_loads_without_inventing_logical_repairs(tmp_path):
     payload.pop("sha256")
     payload["schema_version"] = 2
     payload.pop("logical_repairs")
+    payload.pop("final_reservation_state")
     canonical = json.dumps(
         payload,
         ensure_ascii=False,
@@ -688,6 +781,42 @@ def test_schema_v2_receipt_loads_without_inventing_logical_repairs(tmp_path):
     assert state.schema_version == 2
     assert state.categories == ("initial_generation",)
     assert state.logical_repairs == ()
+
+
+def test_schema_v3_receipt_keeps_logical_repairs_without_audit_phase(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="legacy_v3")
+    budget = StepProviderCallBudget(
+        4,
+        step_id="legacy_v3",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    assert budget.reserve_logical_repair("concept", max_repairs=2) == 1
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.pop("sha256")
+    payload["schema_version"] = 3
+    payload.pop("final_reservation_state")
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    payload["sha256"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    state = load_provider_call_budget_state(
+        path,
+        step_id="legacy_v3",
+        expected_reserved_final_category="concept_audit",
+    )
+    assert state.schema_version == 3
+    assert [entry["repair_class"] for entry in state.logical_repairs] == ["concept"]
+    assert state.required_reservation_token is None
+    assert state.reservation_released is False
 
 
 def test_logical_repair_persistence_failure_rolls_back_reservation(

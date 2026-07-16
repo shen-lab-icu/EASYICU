@@ -32,7 +32,8 @@ from typing import (
 
 _T = TypeVar("_T")
 _RESERVATION_UNSPECIFIED = object()
-PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION = 3
+PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION = 4
+_LOGICAL_REPAIR_RECEIPT_SCHEMA_VERSIONS = {3, 4}
 
 
 class ProviderCallBudgetError(RuntimeError):
@@ -79,6 +80,10 @@ class ProviderCallBudgetReceiptState:
     categories: Tuple[str, ...]
     reserved_final_category: Optional[str]
     logical_repairs: Tuple[Dict[str, object], ...]
+    required_reservation_token: Optional[str]
+    reservation_bound_provider_history_len: Optional[int]
+    completed_reservation_token: Optional[str]
+    reservation_released: bool
 
 
 def provider_call_budget_receipt_path(
@@ -188,7 +193,7 @@ def load_provider_call_budget_state(
             "Provider-call receipt digest is missing or invalid"
         )
     schema_version = payload.get("schema_version")
-    if schema_version not in {1, 2, PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION}:
+    if schema_version not in {1, 2, 3, PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION}:
         raise ProviderCallBudgetReceiptError(
             "Provider-call receipt schema version is unsupported"
         )
@@ -212,7 +217,7 @@ def load_provider_call_budget_state(
         raise ProviderCallBudgetReceiptError("Provider-call receipt history is invalid")
 
     stored_reservation: Optional[str] = None
-    if schema_version in {2, PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION}:
+    if schema_version in {2, 3, PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION}:
         raw_reservation = payload.get("reserved_final_category")
         if raw_reservation is not None:
             if not isinstance(raw_reservation, str) or not raw_reservation.strip():
@@ -245,15 +250,74 @@ def load_provider_call_budget_state(
             payload.get("logical_repairs"),
             categories=normalized,
         )
-        if schema_version == PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION
+        if schema_version in _LOGICAL_REPAIR_RECEIPT_SCHEMA_VERSIONS
         else ()
     )
+    required_reservation_token: Optional[str] = None
+    reservation_bound_provider_history_len: Optional[int] = None
+    completed_reservation_token: Optional[str] = None
+    reservation_released = False
+    if schema_version == PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION:
+        raw_state = payload.get("final_reservation_state")
+        if not isinstance(raw_state, dict):
+            raise ProviderCallBudgetReceiptError(
+                "Provider-call receipt final reservation state is invalid"
+            )
+        required_reservation_token = raw_state.get("required_token")
+        reservation_bound_provider_history_len = raw_state.get(
+            "bound_provider_history_len"
+        )
+        bound_provider_history_sha256 = raw_state.get("bound_provider_history_sha256")
+        completed_reservation_token = raw_state.get("completed_token")
+        reservation_released = raw_state.get("released")
+        if required_reservation_token is None:
+            if (
+                reservation_bound_provider_history_len is not None
+                or bound_provider_history_sha256 is not None
+                or completed_reservation_token is not None
+                or reservation_released is not False
+            ):
+                raise ProviderCallBudgetReceiptError(
+                    "Provider-call receipt has an inconsistent empty final "
+                    "reservation state"
+                )
+        elif (
+            not isinstance(required_reservation_token, str)
+            or not required_reservation_token.strip()
+            or required_reservation_token != required_reservation_token.strip()
+            or isinstance(reservation_bound_provider_history_len, bool)
+            or not isinstance(reservation_bound_provider_history_len, int)
+            or not 0 <= reservation_bound_provider_history_len <= len(normalized)
+            or bound_provider_history_sha256
+            != _category_history_digest(
+                normalized[:reservation_bound_provider_history_len]
+            )
+            or completed_reservation_token not in {None, required_reservation_token}
+            or not isinstance(reservation_released, bool)
+            or (reservation_released and completed_reservation_token is None)
+        ):
+            raise ProviderCallBudgetReceiptError(
+                "Provider-call receipt final reservation state is inconsistent"
+            )
+        if stored_reservation is None and required_reservation_token is not None:
+            raise ProviderCallBudgetReceiptError(
+                "Provider-call receipt binds an audit without a final reservation"
+            )
+    elif payload.get("final_reservation_state") is not None:
+        raise ProviderCallBudgetReceiptError(
+            "Legacy provider-call receipt unexpectedly declares final "
+            "reservation state"
+        )
     return ProviderCallBudgetReceiptState(
         schema_version=int(schema_version),
         limit=limit,
         categories=normalized,
         reserved_final_category=stored_reservation,
         logical_repairs=logical_repairs,
+        required_reservation_token=required_reservation_token,
+        reservation_bound_provider_history_len=(reservation_bound_provider_history_len),
+        completed_reservation_token=completed_reservation_token,
+        reservation_released=reservation_released,
     )
 
 
@@ -285,6 +349,10 @@ class StepProviderCallBudget:
         logical_repair_entries: Sequence[Mapping[str, object]] = (),
         receipt_path: Optional[Path] = None,
         reserved_final_category: Optional[str] = None,
+        required_reservation_token: Optional[str] = None,
+        reservation_bound_provider_history_len: Optional[int] = None,
+        completed_reservation_token: Optional[str] = None,
+        reservation_released: bool = False,
     ) -> None:
         if isinstance(limit, bool) or not isinstance(limit, int):
             raise TypeError("provider-call budget limit must be an integer")
@@ -310,9 +378,40 @@ class StepProviderCallBudget:
         # A historical call in the same category is not proof that the current
         # code + authority binding was audited.  The reservation is released
         # only after the caller binds and completes one exact final token.
-        self._required_reservation_token: Optional[str] = None
-        self._completed_reservation_token: Optional[str] = None
-        self._reservation_released = False
+        required_token = (
+            str(required_reservation_token).strip()
+            if required_reservation_token is not None
+            else None
+        )
+        completed_token = (
+            str(completed_reservation_token).strip()
+            if completed_reservation_token is not None
+            else None
+        )
+        if required_token is None:
+            if (
+                reservation_bound_provider_history_len is not None
+                or completed_token is not None
+                or reservation_released is not False
+            ):
+                raise ValueError("restored final reservation state is inconsistent")
+        elif (
+            self._reserved_final_category is None
+            or not required_token
+            or isinstance(reservation_bound_provider_history_len, bool)
+            or not isinstance(reservation_bound_provider_history_len, int)
+            or not 0 <= reservation_bound_provider_history_len <= len(self._categories)
+            or completed_token not in {None, required_token}
+            or not isinstance(reservation_released, bool)
+            or (reservation_released and completed_token is None)
+        ):
+            raise ValueError("restored final reservation state is inconsistent")
+        self._required_reservation_token = required_token
+        self._reservation_bound_provider_history_len = (
+            reservation_bound_provider_history_len
+        )
+        self._completed_reservation_token = completed_token
+        self._reservation_released = reservation_released
         self._lock = Lock()
 
     def _can_consume_locked(self, category: str) -> bool:
@@ -338,6 +437,21 @@ class StepProviderCallBudget:
             "categories": list(self._categories),
             "reserved_final_category": self._reserved_final_category,
             "logical_repairs": [dict(entry) for entry in self._logical_repairs],
+            "final_reservation_state": {
+                "required_token": self._required_reservation_token,
+                "bound_provider_history_len": (
+                    self._reservation_bound_provider_history_len
+                ),
+                "bound_provider_history_sha256": (
+                    _category_history_digest(
+                        self._categories[: self._reservation_bound_provider_history_len]
+                    )
+                    if self._reservation_bound_provider_history_len is not None
+                    else None
+                ),
+                "completed_token": self._completed_reservation_token,
+                "released": self._reservation_released,
+            },
         }
         payload["sha256"] = _receipt_digest(payload)
         path = self._receipt_path
@@ -545,9 +659,26 @@ class StepProviderCallBudget:
             if normalized != self._reserved_final_category:
                 raise ValueError("category does not own this provider reservation")
             if self._required_reservation_token != normalized_token:
+                previous = (
+                    self._required_reservation_token,
+                    self._reservation_bound_provider_history_len,
+                    self._completed_reservation_token,
+                    self._reservation_released,
+                )
                 self._required_reservation_token = normalized_token
+                self._reservation_bound_provider_history_len = len(self._categories)
                 self._completed_reservation_token = None
                 self._reservation_released = False
+                try:
+                    self._persist_locked()
+                except Exception:
+                    (
+                        self._required_reservation_token,
+                        self._reservation_bound_provider_history_len,
+                        self._completed_reservation_token,
+                        self._reservation_released,
+                    ) = previous
+                    raise
 
     def complete_reserved_category(self, category: str, *, token: str) -> None:
         """Record that the exact bound audit token passed its final gate."""
@@ -562,7 +693,13 @@ class StepProviderCallBudget:
                 or normalized_token != self._required_reservation_token
             ):
                 raise ValueError("reservation token is not the current bound audit")
+            previous = self._completed_reservation_token
             self._completed_reservation_token = normalized_token
+            try:
+                self._persist_locked()
+            except Exception:
+                self._completed_reservation_token = previous
+                raise
 
     def release_reserved_category(self, category: str, *, token: str) -> None:
         """Release the slot only for the exact audit token that passed."""
@@ -578,7 +715,34 @@ class StepProviderCallBudget:
                 or normalized_token != self._completed_reservation_token
             ):
                 raise ValueError("reservation token has not completed the final audit")
+            previous = self._reservation_released
             self._reservation_released = True
+            try:
+                self._persist_locked()
+            except Exception:
+                self._reservation_released = previous
+                raise
+
+    def reservation_status(self, category: str, *, token: str) -> str:
+        """Return the durable phase for one exact final-audit authority token."""
+
+        normalized = str(category).strip()
+        normalized_token = str(token).strip()
+        with self._lock:
+            if (
+                normalized != self._reserved_final_category
+                or not normalized_token
+                or normalized_token != self._required_reservation_token
+            ):
+                return "unbound"
+            if self._reservation_released:
+                return "released"
+            if self._completed_reservation_token == normalized_token:
+                return "completed"
+            bound_len = self._reservation_bound_provider_history_len
+            if bound_len is not None and len(self._categories) > bound_len:
+                return "attempted_incomplete"
+            return "bound_unpaid"
 
     @property
     def limit(self) -> int:
@@ -635,6 +799,9 @@ class StepProviderCallBudget:
                 "reservation_bound": self._required_reservation_token is not None,
                 "reservation_completed": self._completed_reservation_token is not None,
                 "reservation_released": self._reservation_released,
+                "reservation_bound_provider_history_len": (
+                    self._reservation_bound_provider_history_len
+                ),
             }
 
 

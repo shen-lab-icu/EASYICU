@@ -28,16 +28,21 @@ def _write_receipt(
     *,
     tamper: bool = False,
     logical_repairs: list[dict] | None = None,
+    schema_version: int | None = None,
+    final_reservation_state: dict | None = None,
 ) -> None:
+    resolved_schema = schema_version or (3 if logical_repairs is not None else 2)
     payload = {
         "categories": categories,
         "limit": 7,
         "reserved_final_category": "concept_audit",
-        "schema_version": 3 if logical_repairs is not None else 2,
+        "schema_version": resolved_schema,
         "step_id": step_id,
     }
     if logical_repairs is not None:
         payload["logical_repairs"] = logical_repairs
+    if final_reservation_state is not None:
+        payload["final_reservation_state"] = final_reservation_state
     payload["sha256"] = apb._receipt_digest({k: v for k, v in payload.items()})
     if tamper:
         payload["categories"] = categories + [
@@ -276,6 +281,40 @@ def test_schema_v3_logical_history_inconsistency_fails_closed(tmp_path):
     )
 
     with pytest.raises(apb.BaselineError, match="logical repair history"):
+        apb.read_receipts(str(run), {})
+
+
+def test_schema_v4_final_audit_state_is_validated(tmp_path):
+    run = tmp_path / "run_v4"
+    run.mkdir()
+    categories = ["initial_generation", "concept_audit"]
+    _write_receipt(
+        run,
+        "01_model",
+        categories,
+        schema_version=4,
+        logical_repairs=[],
+        final_reservation_state={
+            "required_token": "audit-authority",
+            "bound_provider_history_len": 1,
+            "bound_provider_history_sha256": apb._receipt_digest(
+                {"categories": categories[:1]}
+            ),
+            "completed_token": "audit-authority",
+            "released": False,
+        },
+    )
+    assert apb.read_receipts(str(run), {})[0]["total_calls"] == 2
+
+    path = next((run / ".runtime" / "provider_call_budgets").glob("*.json"))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["final_reservation_state"]["released"] = True
+    payload["final_reservation_state"]["completed_token"] = None
+    body = {key: value for key, value in payload.items() if key != "sha256"}
+    payload["sha256"] = apb._receipt_digest(body)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(apb.BaselineError, match="reservation state"):
         apb.read_receipts(str(run), {})
 
 
