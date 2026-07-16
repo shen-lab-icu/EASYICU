@@ -1505,11 +1505,10 @@ def _callback_aumc_death(
     """AUMC death callback (SUPERSEDED — not on the active extraction path).
 
     NOTE (2026-07-16): the live `death` extraction dispatches through
-    ``callback_apply._apply_callback`` (``if expr == "aumc_death"``), which now reads
-    the source `destination == 'Overleden'` disposition for in-hospital mortality.
-    This CALLBACK_REGISTRY entry has no consumer for `death`; it is kept only for
-    backward compatibility. The 72h-of-discharge window below is the historical ricu
-    heuristic and must not be reused without matching the loader's time unit.
+    ``callback_apply._apply_callback`` (``if expr == "aumc_death"``), which applies the
+    ricu 72h-of-ICU-discharge proxy in the loader's minute scale. This
+    CALLBACK_REGISTRY entry has no consumer for `death`; it is kept only for backward
+    compatibility and must not be reused without correcting its millisecond threshold.
 
     R ricu logic: x[, val_var := is_true(index_var - val_var < hours(72L))]
     where index_var = dateofdeath, val_var = dischargedat
