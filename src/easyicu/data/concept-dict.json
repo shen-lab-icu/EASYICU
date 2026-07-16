@@ -503,7 +503,9 @@
           "callback": "combine_callbacks(\n               convert_unit(binary_op(`/`, 60), 'units/min', 'units/hour'),\n               mimic_rate_mv\n             )"
         }
       ]
-    }
+    },
+    "min": 0,
+    "max": 0.15
   },
   "adm": {
     "target": "id_tbl",
@@ -569,7 +571,7 @@
   "age": {
     "unit": "years",
     "min": 0,
-    "max": 100,
+    "max": 120,
     "target": "id_tbl",
     "description": "patient age",
     "omopid": 4314456,
@@ -859,7 +861,8 @@
           "sub_var": "LaboratoryID"
         }
       ]
-    }
+    },
+    "max": 10000
   },
   "alt": {
     "unit": [
@@ -932,7 +935,8 @@
           "sub_var": "LaboratoryID"
         }
       ]
-    }
+    },
+    "max": 10000
   },
   "amiodarone": {
     "class_name": "lgl_cncpt",
@@ -1264,7 +1268,8 @@
           "sub_var": "LaboratoryID"
         }
       ]
-    }
+    },
+    "max": 10000
   },
   "avpu": {
     "concepts": "gcs",
@@ -1277,7 +1282,7 @@
   "basos": {
     "unit": "%",
     "min": 0,
-    "max": 50,
+    "max": 100,
     "description": "basophils",
     "omopid": 4172647,
     "category": "hematology",
@@ -1344,8 +1349,8 @@
       "mEq/L",
       "mmol/l"
     ],
-    "min": -25,
-    "max": 25,
+    "min": -40,
+    "max": 40,
     "description": "base excess",
     "omopid": 4284393,
     "category": "blood gas",
@@ -1419,7 +1424,7 @@
       "mEq/L",
       "mmol/l"
     ],
-    "min": 5,
+    "min": 2,
     "max": 50,
     "description": "bicarbonate",
     "omopid": 4194291,
@@ -1918,12 +1923,14 @@
           "sub_var": "LaboratoryID"
         }
       ]
-    }
+    },
+    "min": 0,
+    "max": 100
   },
   "bun": {
     "unit": "mg/dL",
     "min": 0,
-    "max": 200,
+    "max": 300,
     "description": "blood urea nitrogen",
     "omopid": 4017361,
     "category": "chemistry",
@@ -1995,7 +2002,7 @@
   },
   "ca": {
     "unit": "mg/dL",
-    "min": 4,
+    "min": 3,
     "max": 20,
     "description": "calcium",
     "omopid": 4216722,
@@ -2070,8 +2077,8 @@
   },
   "cai": {
     "unit": "mmol/L",
-    "min": 0.5,
-    "max": 2,
+    "min": 0.2,
+    "max": 3,
     "description": "calcium ionized",
     "omopid": 46272910,
     "category": "blood gas",
@@ -2418,7 +2425,8 @@
           "sub_var": "LaboratoryID"
         }
       ]
-    }
+    },
+    "max": 200000
   },
   "ckmb": {
     "unit": "ng/mL",
@@ -2484,15 +2492,16 @@
           "sub_var": "LaboratoryID"
         }
       ]
-    }
+    },
+    "max": 500
   },
   "cl": {
     "unit": [
       "mEq/L",
       "mmol/l"
     ],
-    "min": 80,
-    "max": 130,
+    "min": 70,
+    "max": 145,
     "description": "chloride",
     "omopid": 4188066,
     "category": "chemistry",
@@ -2684,7 +2693,7 @@
   "crea": {
     "unit": "mg/dL",
     "min": 0,
-    "max": 15,
+    "max": 25,
     "description": "creatinine",
     "omopid": 4013964,
     "category": "chemistry",
@@ -2873,7 +2882,8 @@
           "callback": "transform_fun(binary_op(`*`, 10))"
         }
       ]
-    }
+    },
+    "max": 500
   },
   "cvp": {
     "unit": [
@@ -4414,7 +4424,7 @@
   "eos": {
     "unit": "%",
     "min": 0,
-    "max": 50,
+    "max": 100,
     "description": "eosinophils",
     "omopid": 4216098,
     "category": "hematology",
@@ -4606,7 +4616,7 @@
       "mcgkgmin"
     ],
     "min": 0,
-    "max": 1.5,
+    "max": 2,
     "description": "epinephrine rate",
     "omopid": 1343916,
     "category": "medications",
@@ -4891,8 +4901,8 @@
       "kPa",
       "%"
     ],
-    "min": 10,
-    "max": 60,
+    "min": 2,
+    "max": 120,
     "description": "End-tidal CO2",
     "omopid": 4353940,
     "category": "ventilator",
@@ -5794,7 +5804,7 @@
   "glu": {
     "unit": "mg/dL",
     "min": 0,
-    "max": 1000,
+    "max": 2000,
     "description": "glucose",
     "omopid": 4144235,
     "category": "chemistry",
@@ -5935,7 +5945,9 @@
           "_comment": "2026-07-03 module coverage audit: SIC d_references 214 = HbA1c (ZL), %, kept; 474 = HbA1c IFCC mmol/mol excluded pending NGSP conversion."
         }
       ]
-    }
+    },
+    "min": 3,
+    "max": 20
   },
   "hbco": {
     "description": "carboxyhemoglobin",
@@ -5995,12 +6007,14 @@
           "_comment": "2026-07-03 module coverage audit: MIMIC-III d_labitems 50805 = Carboxyhemoglobin, Blood Gas."
         }
       ]
-    }
+    },
+    "min": 0,
+    "max": 100
   },
   "hct": {
     "unit": "%",
-    "min": 15,
-    "max": 60,
+    "min": 6,
+    "max": 65,
     "description": "hematocrit",
     "omopid": 4151358,
     "category": "hematology",
@@ -6280,8 +6294,8 @@
   },
   "hgb": {
     "unit": "g/dL",
-    "min": 4,
-    "max": 18,
+    "min": 2,
+    "max": 22,
     "description": "hemoglobin",
     "omopid": 4118981,
     "category": "hematology",
@@ -6571,7 +6585,9 @@
           "sub_var": "itemid"
         }
       ]
-    }
+    },
+    "min": 0.5,
+    "max": 20
   },
   "ins": {
     "unit": "units/hr",
@@ -6795,7 +6811,7 @@
       "mmol/l"
     ],
     "min": 0,
-    "max": 10,
+    "max": 12,
     "description": "potassium",
     "omopid": 4207483,
     "category": "chemistry",
@@ -7997,7 +8013,8 @@
           "sub_var": "LaboratoryID"
         }
       ]
-    }
+    },
+    "max": 60
   },
   "mchc": {
     "unit": [
@@ -8074,7 +8091,7 @@
   },
   "mcv": {
     "unit": "fL",
-    "min": 50,
+    "min": 45,
     "max": 150,
     "description": "mean corpuscular volume",
     "omopid": 4016239,
@@ -8513,7 +8530,7 @@
   "mg": {
     "unit": "mg/dL",
     "min": 0.5,
-    "max": 5,
+    "max": 10,
     "description": "magnesium",
     "omopid": 4243005,
     "category": "chemistry",
@@ -9229,8 +9246,8 @@
       "mEq/L",
       "mmol/l"
     ],
-    "min": 110,
-    "max": 165,
+    "min": 100,
+    "max": 190,
     "description": "sodium",
     "omopid": 4208938,
     "category": "chemistry",
@@ -9772,7 +9789,7 @@
       "mcgkgmin"
     ],
     "min": 0,
-    "max": 3,
+    "max": 5,
     "description": "norepinephrine rate",
     "omopid": 1321341,
     "category": "medications",
@@ -9887,7 +9904,7 @@
       "%",
       "% Sat."
     ],
-    "min": 50,
+    "min": 20,
     "max": 100,
     "description": "oxygen saturation",
     "omopid": 4011919,
@@ -10291,7 +10308,7 @@
       "mmHg",
       "mm Hg"
     ],
-    "min": 10,
+    "min": 5,
     "max": 150,
     "description": "CO2 partial pressure",
     "omopid": 4097882,
@@ -10482,8 +10499,8 @@
     }
   },
   "ph": {
-    "min": 6.8,
-    "max": 8,
+    "min": 6.6,
+    "max": 7.9,
     "description": "pH of blood",
     "omopid": 4097822,
     "category": "blood gas",
@@ -10761,7 +10778,9 @@
           "callback": "mimic_rate_mv"
         }
       ]
-    }
+    },
+    "min": 0,
+    "max": 15
   },
   "phos": {
     "unit": "mg/dL",
@@ -11080,7 +11099,7 @@
       "10(3)/mcL",
       "10^3/mcL"
     ],
-    "min": 5,
+    "min": 1,
     "max": 1200,
     "description": "platelet count",
     "omopid": 4267147,
@@ -11189,8 +11208,8 @@
       "mmHg",
       "mm Hg"
     ],
-    "min": 40,
-    "max": 600,
+    "min": 20,
+    "max": 700,
     "description": "O2 partial pressure",
     "omopid": 4094581,
     "category": "blood gas",
@@ -11810,7 +11829,8 @@
           "sub_var": "LaboratoryID"
         }
       ]
-    }
+    },
+    "max": 200
   },
   "ptt": {
     "unit": "sec",
@@ -11880,7 +11900,8 @@
           "sub_var": "LaboratoryID"
         }
       ]
-    }
+    },
+    "max": 200
   },
   "pulse_pressure": {
     "unit": [
@@ -12736,7 +12757,7 @@
       "%",
       "% Sat."
     ],
-    "min": 50,
+    "min": 20,
     "max": 100,
     "description": "arterial oxygen saturation",
     "omopid": 40483579,
@@ -13180,7 +13201,7 @@
       "%",
       "% Sat."
     ],
-    "min": 50,
+    "min": 20,
     "max": 100,
     "description": "oxygen saturation",
     "omopid": 4196147,
@@ -13379,8 +13400,8 @@
       "C",
       "°C"
     ],
-    "min": 32,
-    "max": 42,
+    "min": 20,
+    "max": 44,
     "description": "temperature",
     "omopid": 4302666,
     "category": "vitals",
@@ -13874,7 +13895,8 @@
           "callback": "transform_fun(binary_op(`/`, 1000))"
         }
       ]
-    }
+    },
+    "max": 100
   },
   "total_input_ml": {
     "unit": "mL",
@@ -14446,7 +14468,8 @@
           "sub_var": "LaboratoryID"
         }
       ]
-    }
+    },
+    "max": 1000
   },
   "uo_12h": {
     "class_name": "rec_cncpt",
@@ -16389,7 +16412,7 @@
   "pap_sys": {
     "unit": "mmHg",
     "min": 0,
-    "max": 120,
+    "max": 150,
     "description": "pulmonary artery pressure, systolic",
     "category": "cardiovascular",
     "sources": {
@@ -16845,7 +16868,7 @@
       "uIU/mL"
     ],
     "min": 0,
-    "max": 100,
+    "max": 500,
     "description": "thyroid stimulating hormone (blood)",
     "category": "chemistry",
     "sources": {
@@ -17116,8 +17139,8 @@
   },
   "icp": {
     "unit": "mmHg",
-    "min": 0,
-    "max": 100,
+    "min": -10,
+    "max": 150,
     "description": "intracranial pressure",
     "category": "neurological",
     "_comment": "2026-07-04 recall sweep: MIMIC-IV has no clean ICP value item (only line-admin/checkbox itemids); mapped MIMIC-III 226, eICU vitalperiodic.icp, HiRID observations.",
@@ -17897,7 +17920,7 @@
       "ng/dl"
     ],
     "min": 0,
-    "max": 12,
+    "max": 20,
     "description": "free thyroxine (free T4)",
     "category": "chemistry",
     "sources": {
