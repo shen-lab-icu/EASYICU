@@ -975,8 +975,8 @@ def test_figure_repair_precedes_output_evidence_and_numeric_claim_seal():
     assert (
         numeric_registration
         < status_resolution
-        < result_authority_publish
         < numeric_authority_publish
+        < result_authority_publish
     )
     assert "publish_aliases=False" in source[artifact_registration:status_resolution]
     assert (

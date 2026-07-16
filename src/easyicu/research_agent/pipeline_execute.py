@@ -129,7 +129,11 @@ from .declared_product_contract import (
     typed_product as _canonical_typed_product,
 )
 from .estimators import fit_robustness_rows_from_records
-from .evidence import sha256_of_bytes, sha256_of_file
+from .evidence import (
+    EvidenceAuthorityIntegrityError,
+    sha256_of_bytes,
+    sha256_of_file,
+)
 from .evidence_registration import (
     EvidenceRegistrar,
     filter_success_alias_bindings as _filter_success_alias_bindings,
@@ -13512,7 +13516,7 @@ else:
             step_record["step_summary_evidence_id"] = step_summary_record_id
 
         def _register_current_step_numeric_claims() -> None:
-            """Publish numeric authority only after every step gate passes."""
+            """Stage numeric authority before exposing current result aliases."""
 
             if (
                 not step_summary
@@ -13524,53 +13528,39 @@ else:
             # step's summary is registered as a NumericClaim so the
             # manuscript binder can reverse-link numbers in prose to the
             # exact field of the exact step output that produced them.
-            try:
-                cap = pipeline._max_numeric_claims_per_step
-                evidence.register_step_summary_numerics(
-                    step_id=step.step_id,
-                    evidence_id=step_summary_record_id,
-                    summary=step_summary,
-                    max_leaves=cap if cap > 0 else None,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Failed to register numeric claims for step %s: %s",
-                    step.step_id,
-                    exc,
-                )
+            cap = pipeline._max_numeric_claims_per_step
+            evidence.register_step_summary_numerics(
+                step_id=step.step_id,
+                evidence_id=step_summary_record_id,
+                summary=step_summary,
+                max_leaves=cap if cap > 0 else None,
+            )
             # Phase-1 derived-claim hook (Commit 2). After every leaf
             # is registered, evaluate any ``derived_claims`` the coder
             # declared in step_summary. Sources must resolve to claims
             # that ALREADY exist in the registry, so this runs second.
             # Errors surface as ``derived_claim_error`` findings rather
             # than aborting — a bad formula should not kill the step.
-            try:
-                _, derived_errors = evidence.register_step_derived_claims(
-                    step_id=step.step_id,
-                    evidence_id=step_summary_record_id,
-                    summary=step_summary,
-                )
-                for err in derived_errors:
-                    findings.append(
-                        ValidationFinding(
-                            validator="derived_claim",
-                            severity="warning",
-                            message=(
-                                f"derived_claims entry {err['name']!r} for step "
-                                f"{step.step_id} was rejected: {err['message']}"
-                            ),
-                            detail={
-                                "step_id": step.step_id,
-                                "claim_name": err["name"],
-                                "reason": err["message"],
-                            },
-                        )
+            _, derived_errors = evidence.register_step_derived_claims(
+                step_id=step.step_id,
+                evidence_id=step_summary_record_id,
+                summary=step_summary,
+            )
+            for err in derived_errors:
+                findings.append(
+                    ValidationFinding(
+                        validator="derived_claim",
+                        severity="warning",
+                        message=(
+                            f"derived_claims entry {err['name']!r} for step "
+                            f"{step.step_id} was rejected: {err['message']}"
+                        ),
+                        detail={
+                            "step_id": step.step_id,
+                            "claim_name": err["name"],
+                            "reason": err["message"],
+                        },
                     )
-            except Exception as exc:
-                logger.warning(
-                    "Failed to register derived claims for step %s: %s",
-                    step.step_id,
-                    exc,
                 )
 
         if standard_executor_terminal_block:
@@ -13948,57 +13938,73 @@ else:
                     ),
                     detail={"step_id": step.step_id},
                 )
-        alias_publication_finding: Optional[ValidationFinding] = None
+        evidence_publication_finding: Optional[ValidationFinding] = None
         if step_record["status"] == "ok":
             try:
-                promotion = evidence_registrar.promote_validated_step(
-                    step_id=step.step_id,
-                    pending_aliases=pending_success_aliases,
-                    allowed_evidence_ids=evidence_ids_for_step,
-                )
+                # Numeric provenance and result aliases must share one durable
+                # commit. The full-state transaction exposes both together; an alias
+                # collision or I/O failure rolls the staged claims back too.
+                with evidence.success_publication_transaction():
+                    _register_current_step_numeric_claims()
+                    promotion = evidence_registrar.promote_validated_step(
+                        step_id=step.step_id,
+                        pending_aliases=pending_success_aliases,
+                        allowed_evidence_ids=evidence_ids_for_step,
+                    )
                 if promotion.retained_cross_step_aliases:
                     step_record["retained_cross_step_aliases"] = (
                         promotion.retained_cross_step_aliases
                     )
-            except (KeyError, ValueError, OSError) as exc:
+            except (
+                EvidenceAuthorityIntegrityError,
+                KeyError,
+                ValueError,
+                OSError,
+            ) as exc:
+                store_unavailable = isinstance(
+                    exc, (EvidenceAuthorityIntegrityError, OSError)
+                )
                 step_record["status"] = "contract_failed"
-                alias_publication_finding = ValidationFinding(
+                evidence_publication_finding = ValidationFinding(
                     validator="result_evidence_authority",
                     severity="error",
                     message=(
-                        "Validated result evidence could not be promoted to "
-                        f"current authority for step {step.step_id}."
+                        "Validated result evidence and numeric provenance could "
+                        "not be promoted to current authority for step "
+                        f"{step.step_id}."
                     ),
                     detail={
                         "step_id": step.step_id,
                         "attempt_id": attempt_id,
                         "checkpoint_id": review_checkpoint_id,
                         "reason": str(exc),
+                        "evidence_store_write_suppressed": store_unavailable,
                     },
                 )
-                contract_findings.append(alias_publication_finding)
+                contract_findings.append(evidence_publication_finding)
                 step_record["contract_findings"] = [
                     finding.model_dump() for finding in contract_findings
                 ]
-                _propagate_findings_to_evidence(
-                    evidence_ids_for_step,
-                    [alias_publication_finding],
-                    metadata={
-                        "step_id": step.step_id,
-                        "generation_mode": step_record["generation_mode"],
-                    },
-                )
+                if not store_unavailable:
+                    _propagate_findings_to_evidence(
+                        evidence_ids_for_step,
+                        [evidence_publication_finding],
+                        metadata={
+                            "step_id": step.step_id,
+                            "generation_mode": step_record["generation_mode"],
+                        },
+                    )
                 has_contract_error = True
         if step_record["status"] == "ok":
             # This stamp is written only after deterministic artifact gates and
-            # Critic review pass and current evidence aliases are published.
+            # Critic review pass, numeric authority, and current evidence aliases
+            # are published.
             step_record.update(_deterministic_gate_stamp())
-            _register_current_step_numeric_claims()
         with shared_lock:
             if final_cleanup_finding is not None:
                 findings.append(final_cleanup_finding)
-            if alias_publication_finding is not None:
-                findings.append(alias_publication_finding)
+            if evidence_publication_finding is not None:
+                findings.append(evidence_publication_finding)
             _append_terminal_step_record(per_step_records, step_record)
             _flush_partial_manifest()
         emit_progress(

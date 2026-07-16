@@ -23,6 +23,7 @@ from .discovery_handoff import (
     ANALYSIS_READY_DECISIONS,
     DiscoveryHandoffPacket,
 )
+from .evidence_authority import load_current_evidence_snapshot
 
 DISCOVERY_PACKAGE_SCHEMA_VERSION = "easyicu.discovery_manuscript_package/1"
 
@@ -577,8 +578,9 @@ def _evidence_registry(root: Path) -> _EvidenceRegistry:
     """Load a fail-closed, hash-verified view of EvidenceStore."""
 
     root = root.resolve()
-    records_payload = _load_json_list(root / "evidence" / "evidence_index.json")
-    aliases = _load_json(root / "evidence" / "evidence_aliases.json")
+    snapshot = load_current_evidence_snapshot(root)
+    records_payload = list(snapshot.records)
+    aliases = dict(snapshot.aliases)
     raw_bindings: List[Dict[str, Any]] = []
     id_counts: Dict[str, int] = {}
     for record in records_payload:

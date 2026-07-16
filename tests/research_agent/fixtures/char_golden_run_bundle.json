@@ -32,11 +32,11 @@
       },
       {
         "count": 1,
-        "event": "current_alias_publish"
+        "event": "numeric_claim_registration"
       },
       {
         "count": 1,
-        "event": "numeric_claim_registration"
+        "event": "current_alias_publish"
       }
     ],
     "02_candidates": [
@@ -74,11 +74,11 @@
       },
       {
         "count": 1,
-        "event": "current_alias_publish"
+        "event": "numeric_claim_registration"
       },
       {
         "count": 1,
-        "event": "numeric_claim_registration"
+        "event": "current_alias_publish"
       }
     ],
     "03_stability": [
@@ -116,11 +116,11 @@
       },
       {
         "count": 1,
-        "event": "current_alias_publish"
+        "event": "numeric_claim_registration"
       },
       {
         "count": 1,
-        "event": "numeric_claim_registration"
+        "event": "current_alias_publish"
       }
     ],
     "04_characterization": [
@@ -158,11 +158,11 @@
       },
       {
         "count": 1,
-        "event": "current_alias_publish"
+        "event": "numeric_claim_registration"
       },
       {
         "count": 1,
-        "event": "numeric_claim_registration"
+        "event": "current_alias_publish"
       }
     ]
   },

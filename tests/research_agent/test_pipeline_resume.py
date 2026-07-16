@@ -17,6 +17,7 @@ from easyicu.research_agent.pipeline_resume import (
     upsert_step_record,
 )
 from easyicu.research_agent.contracts import ValidationFinding
+from easyicu.research_agent.evidence import EvidenceStore
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
 
@@ -201,9 +202,9 @@ def test_resume_runner_finding_uses_exact_step_identifier_boundary(
         resume_state=state,
     ).apply()
 
-    assert [(finding.validator, finding.message) for finding in application.findings] == [
-        ("runner", "Runner failed for step10.")
-    ]
+    assert [
+        (finding.validator, finding.message) for finding in application.findings
+    ] == [("runner", "Runner failed for step10.")]
 
 
 def test_resume_controller_does_not_reuse_ok_superseded_by_failure(
@@ -243,7 +244,10 @@ def test_resume_recomputes_plan_revision_findings_instead_of_carrying_them(
                 validator="plan_contract",
                 severity="error",
                 message="Old trajectory plan was missing a role.",
-                detail={"kind": "trajectory_role_missing", "role": "candidate_selection"},
+                detail={
+                    "kind": "trajectory_role_missing",
+                    "role": "candidate_selection",
+                },
             ).model_dump(mode="json"),
             ValidationFinding(
                 validator="statistical_validator",
@@ -377,6 +381,7 @@ def test_resume_controller_reads_newer_repair_code_from_evidence_index(
         json.dumps([old, new]),
         encoding="utf-8",
     )
+    (evidence_dir / "evidence_aliases.json").write_text("{}", encoding="utf-8")
 
     code, record = ResumeController(
         plan=_plan(),
@@ -387,6 +392,51 @@ def test_resume_controller_reads_newer_repair_code_from_evidence_index(
 
     assert "new repair" in code
     assert record["evidence_id"] == "code_new_repair"
+
+
+def test_modern_evidence_authority_rejects_unregistered_resume_code(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(tmp_path)
+    store.register_text(
+        kind="log",
+        description="Selected modern authority seed.",
+        text="seed\n",
+        filename="authority_seed.txt",
+        evidence_id="authority_seed",
+    )
+    assert store.authority_head_path.is_file()
+
+    unregistered_path = tmp_path / "evidence" / "unregistered_resume.py"
+    unregistered_path.write_text(
+        "import os\nprint(os.environ['COHORT_PARQUET'])\n",
+        encoding="utf-8",
+    )
+    unregistered_record = {
+        "evidence_id": "unregistered_resume_code",
+        "kind": "code",
+        "produced_by_step": "02_model",
+        "relative_path": "evidence/unregistered_resume.py",
+        "sha256": _sha256(unregistered_path),
+        "generation_mode": "llm",
+    }
+    state = {
+        "evidence": [unregistered_record],
+        "per_step_records": [{"step_id": "02_model", "status": "contract_failed"}],
+    }
+    (tmp_path / "manifest_partial.json").write_text(
+        json.dumps({"evidence": [unregistered_record]}),
+        encoding="utf-8",
+    )
+
+    reused = ResumeController(
+        plan=_plan(),
+        run_dir=tmp_path,
+        resume_state=state,
+        resume_from_step_id="02_model",
+    ).prior_code_for_step("02_model")
+
+    assert reused is None
 
 
 def test_quarantined_concept_draft_is_isolated_and_digest_checked(
@@ -419,10 +469,13 @@ def test_quarantined_concept_draft_is_isolated_and_digest_checked(
 
     code_path = tmp_path / loaded.relative_path
     code_path.write_text("import os\nprint('tampered')\n", encoding="utf-8")
-    assert load_quarantined_concept_draft(
-        run_dir=tmp_path,
-        step_id="02_model",
-    ) is None
+    assert (
+        load_quarantined_concept_draft(
+            run_dir=tmp_path,
+            step_id="02_model",
+        )
+        is None
+    )
 
     clear_quarantined_concept_draft(run_dir=tmp_path, step_id="02_model")
     assert not code_path.parent.exists()
@@ -456,7 +509,9 @@ def test_quarantine_store_rejects_symlinked_path_components(
         quarantine_dir.mkdir(parents=True)
         target = outside / f"{symlink_component}.txt"
         target.write_text("keep target", encoding="utf-8")
-        name = "concept_draft.py" if symlink_component == "code" else "concept_draft.json"
+        name = (
+            "concept_draft.py" if symlink_component == "code" else "concept_draft.json"
+        )
         (quarantine_dir / name).symlink_to(target)
 
     with pytest.raises(ValueError, match="symbolic link"):
@@ -467,9 +522,10 @@ def test_quarantine_store_rejects_symlinked_path_components(
             findings=[{"severity": "error", "message": "blocked"}],
         )
 
-    assert load_quarantined_concept_draft(
-        run_dir=tmp_path / "run", step_id="02_model"
-    ) is None
+    assert (
+        load_quarantined_concept_draft(run_dir=tmp_path / "run", step_id="02_model")
+        is None
+    )
     assert sentinel.read_text(encoding="utf-8") == "keep"
 
 
@@ -503,9 +559,7 @@ def test_quarantine_clear_rejects_symlinked_path_without_deleting_outside(
         target = outside / f"{symlink_component}.txt"
         target.write_text("keep target", encoding="utf-8")
         name = (
-            "concept_draft.py"
-            if symlink_component == "code"
-            else "concept_draft.json"
+            "concept_draft.py" if symlink_component == "code" else "concept_draft.json"
         )
         (quarantine_dir / name).symlink_to(target)
 
@@ -524,7 +578,11 @@ def test_quarantine_clear_does_not_silently_ignore_removal_failure(
         step_id="02_model",
         code="import os\nprint(os.environ['COHORT_PARQUET'])\n",
         findings=[
-            {"validator": "llm_concept_auditor", "severity": "error", "message": "blocked"}
+            {
+                "validator": "llm_concept_auditor",
+                "severity": "error",
+                "message": "blocked",
+            }
         ],
     )
 

@@ -21,7 +21,8 @@ Registration assigns a hash-suffixed evidence_id (e.g.
 ``table_table_one_8f3c19a4``) so that two artefacts with the same
 filename stay distinct. The writer agent, however, prefers stable
 semantic names like ``table_one`` or ``outcome_rate``. The store
-therefore maintains an *alias* table — first-write-wins — so that
+therefore maintains an *alias* table — first-write-wins by default, with an
+explicit same-step success transition allowed to replace its own prior alias — so that
 ``{evidence:table_one}`` placeholders in the manuscript resolve to
 the first registered evidence with that filename stem (or to an
 explicit alias passed by the pipeline). Aliases are persisted
@@ -31,20 +32,31 @@ The on-disk layout under ``<workdir>/evidence/`` is::
 
     evidence/
         <evidence_id>__<basename>.<ext>     # the artefact
-        evidence_index.json                 # serialised list of EvidenceRecord
-        evidence_aliases.json               # alias → evidence_id map
+        evidence_authority.json             # selected full-state generation
+        evidence_authority.previous.json    # predecessor for crash recovery
+        evidence_authority_v1.marker.json   # permanent modern-format marker
+        evidence_index.json                 # compatibility record projection
+        evidence_aliases.json               # compatibility alias projection
+        numeric_claims.json                 # compatibility numeric projection
+
+Two run-root selectors sit outside ``evidence/`` so deleting or restoring that
+directory alone cannot silently turn a modern run back into a legacy run::
+
+    .easyicu_evidence_authority_v1.marker.json  # baseline + high-water mirror
+    .easyicu_evidence_authority_head.json       # staged generation selector
+    .easyicu_evidence_authority_transaction.json # prepared/committed receipt
 """
 
 from __future__ import annotations
 
 import enum
+import copy
+from contextlib import contextmanager
 import hashlib
 import json
-import logging
 import os
 import re
 import secrets
-import shutil
 import stat
 import tempfile
 import threading
@@ -53,7 +65,38 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from .evidence_authority import (
+    EVIDENCE_AUTHORITY_FILENAME,
+    EVIDENCE_AUTHORITY_HEAD_FILENAME,
+    EVIDENCE_AUTHORITY_MARKER_FILENAME,
+    EVIDENCE_AUTHORITY_PREVIOUS_FILENAME,
+    EVIDENCE_AUTHORITY_ROOT_MARKER_FILENAME,
+    EVIDENCE_AUTHORITY_TRANSACTION_FILENAME,
+    EvidenceAuthorityIntegrityError,
+    EvidenceAuthoritySnapshot,
+    build_evidence_authority_head,
+    build_evidence_authority_marker,
+    build_evidence_authority_payload,
+    build_evidence_authority_root_marker,
+    build_evidence_authority_transaction,
+    evidence_authority_head_text,
+    evidence_authority_marker_text,
+    evidence_authority_root_marker_text,
+    evidence_authority_transaction_text,
+    evidence_authority_text,
+    load_current_evidence_snapshot,
+    projection_sha256,
+    validate_evidence_authority_root_marker,
+)
 from .schema import EvidenceRecord
+
+try:  # pragma: no cover - available on production POSIX platforms
+    import fcntl
+except ImportError:  # pragma: no cover - non-POSIX fallback
+    fcntl = None  # type: ignore[assignment]
+
+
+_EVIDENCE_AUTHORITY_PROCESS_LOCK = threading.RLock()
 
 
 def _validated_directory_fd(path: Path, *, expected_root: Path) -> int:
@@ -161,10 +204,150 @@ def _atomic_write_text(
     _atomic_write_bytes(path, text.encode(encoding), expected_root=expected_root)
 
 
-def _atomic_copy_file(source: Path, target: Path, *, expected_root: Path) -> None:
-    """Stream-copy into an anchored directory and atomically publish it."""
+@contextmanager
+def _exclusive_evidence_authority_lock(
+    evidence_dir: Path,
+    *,
+    expected_root: Path,
+):
+    """Serialize generation compare-and-swap across store instances/processes."""
 
-    if os.name != "posix":
+    with _EVIDENCE_AUTHORITY_PROCESS_LOCK:
+        if fcntl is None:  # pragma: no cover - production and CI are POSIX
+            yield
+            return
+        parent_fd = _validated_directory_fd(
+            evidence_dir,
+            expected_root=expected_root,
+        )
+        descriptor: Optional[int] = None
+        try:
+            flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(
+                ".evidence_authority.lock",
+                flags,
+                0o600,
+                dir_fd=parent_fd,
+            )
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode):
+                raise EvidenceAuthorityIntegrityError(
+                    "evidence authority lock is not a regular file"
+                )
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            yield
+        finally:
+            if descriptor is not None:
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+                finally:
+                    os.close(descriptor)
+            os.close(parent_fd)
+
+
+def _existing_target_matches(
+    parent_fd: int,
+    name: str,
+    *,
+    expected_sha256: str,
+) -> bool:
+    descriptor: Optional[int] = None
+    try:
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=parent_fd,
+        )
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            return False
+        digest = hashlib.sha256()
+        with os.fdopen(descriptor, "rb") as handle:
+            descriptor = None
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest() == expected_sha256
+    except OSError:
+        return False
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _atomic_write_once_bytes(
+    target: Path,
+    payload: bytes,
+    *,
+    expected_root: Path,
+) -> None:
+    """Publish an immutable evidence blob; equal retries are idempotent."""
+
+    expected_sha256 = sha256_of_bytes(payload)
+    if os.name != "posix":  # pragma: no cover - production/CI use POSIX
+        if target.exists() or target.is_symlink():
+            if target.is_symlink() or sha256_of_file(target) != expected_sha256:
+                raise EvidenceAuthorityIntegrityError(
+                    "existing evidence blob conflicts with immutable payload"
+                )
+            return
+        _atomic_write_bytes(target, payload, expected_root=expected_root)
+        return
+
+    parent_fd = _validated_directory_fd(target.parent, expected_root=expected_root)
+    target_name = _path_component(target.name, label="evidence filename")
+    tmp_name = f".{target_name}.{secrets.token_hex(8)}.tmp"
+    descriptor: Optional[int] = None
+    try:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(tmp_name, flags, 0o600, dir_fd=parent_fd)
+        with os.fdopen(descriptor, "wb") as handle:
+            descriptor = None
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(
+                tmp_name,
+                target_name,
+                src_dir_fd=parent_fd,
+                dst_dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except FileExistsError:
+            if not _existing_target_matches(
+                parent_fd,
+                target_name,
+                expected_sha256=expected_sha256,
+            ):
+                raise EvidenceAuthorityIntegrityError(
+                    "existing evidence blob conflicts with immutable payload"
+                )
+        os.fsync(parent_fd)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        try:
+            os.unlink(tmp_name, dir_fd=parent_fd)
+        except OSError:
+            pass
+        os.close(parent_fd)
+
+
+def _atomic_copy_file(
+    source: Path,
+    target: Path,
+    *,
+    expected_root: Path,
+    expected_sha256: str,
+) -> None:
+    """Stream-copy and publish an immutable, idempotent evidence blob."""
+
+    if os.name != "posix":  # pragma: no cover - production/CI use POSIX
+        if target.exists() or target.is_symlink():
+            if target.is_symlink() or sha256_of_file(target) != expected_sha256:
+                raise EvidenceAuthorityIntegrityError(
+                    "existing evidence blob conflicts with immutable source"
+                )
+            return
         _atomic_write_bytes(target, source.read_bytes(), expected_root=expected_root)
         return
     parent_fd = _validated_directory_fd(target.parent, expected_root=expected_root)
@@ -176,15 +359,33 @@ def _atomic_copy_file(source: Path, target: Path, *, expected_root: Path) -> Non
         fd = os.open(tmp_name, flags, 0o600, dir_fd=parent_fd)
         with source.open("rb") as source_handle, os.fdopen(fd, "wb") as target_handle:
             fd = None
-            shutil.copyfileobj(source_handle, target_handle, length=1024 * 1024)
+            copied_digest = hashlib.sha256()
+            for chunk in iter(lambda: source_handle.read(1024 * 1024), b""):
+                copied_digest.update(chunk)
+                target_handle.write(chunk)
             target_handle.flush()
             os.fsync(target_handle.fileno())
-        os.replace(
-            tmp_name,
-            target_name,
-            src_dir_fd=parent_fd,
-            dst_dir_fd=parent_fd,
-        )
+        if copied_digest.hexdigest() != expected_sha256:
+            raise EvidenceAuthorityIntegrityError(
+                "evidence source changed while its immutable snapshot was copied"
+            )
+        try:
+            os.link(
+                tmp_name,
+                target_name,
+                src_dir_fd=parent_fd,
+                dst_dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except FileExistsError:
+            if not _existing_target_matches(
+                parent_fd,
+                target_name,
+                expected_sha256=expected_sha256,
+            ):
+                raise EvidenceAuthorityIntegrityError(
+                    "existing evidence blob conflicts with immutable source"
+                )
         os.fsync(parent_fd)
         current = os.stat(target.parent, follow_symlinks=False)
         opened = os.fstat(parent_fd)
@@ -193,12 +394,12 @@ def _atomic_copy_file(source: Path, target: Path, *, expected_root: Path) -> Non
     except BaseException:
         if fd is not None:
             os.close(fd)
+        raise
+    finally:
         try:
             os.unlink(tmp_name, dir_fd=parent_fd)
         except OSError:
             pass
-        raise
-    finally:
         os.close(parent_fd)
 
 
@@ -223,9 +424,6 @@ def _path_component(value: str, *, label: str) -> str:
     ):
         raise ValueError(f"{label} must be a single safe path component")
     return text
-
-
-logger = logging.getLogger(__name__)
 
 
 class EvidenceEnforcementMode(str, enum.Enum):
@@ -277,38 +475,6 @@ def _coerce_enforcement_mode(
             f"Unknown evidence enforcement mode: {value!r}; "
             f"expected one of {[m.value for m in EvidenceEnforcementMode]}"
         ) from exc
-
-
-def _quarantine_corrupt_index(path: Path, exc: Exception, kind: str) -> None:
-    """Rename a corrupted index file aside and log a warning.
-
-    Silently returning empty would erase the audit trail the writer agent
-    relies on; instead we keep the broken bytes for forensic inspection
-    and emit a warning so the operator knows evidence was lost.
-    """
-    if not path.exists():
-        logger.warning("evidence %s missing; starting fresh: %s", kind, exc)
-        return
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    backup = path.with_suffix(path.suffix + f".broken-{timestamp}")
-    try:
-        path.replace(backup)
-    except OSError as rename_err:
-        logger.warning(
-            "evidence %s at %s is corrupt (%s); also failed to back up: %s",
-            kind,
-            path,
-            exc,
-            rename_err,
-        )
-        return
-    logger.warning(
-        "evidence %s at %s is corrupt (%s); moved to %s and starting fresh",
-        kind,
-        path,
-        exc,
-        backup,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -727,8 +893,8 @@ class EvidenceStore:
     Each call to :meth:`register_file` copies the file into
     ``evidence/`` under a deterministic name (``<id>__<basename>``)
     and writes an :class:`EvidenceRecord` to the in-memory index. The
-    store is persisted to ``evidence_index.json`` on every call so
-    crashes don't lose evidence.
+    store is persisted as one versioned full-state authority on every call;
+    the historical flat ledgers remain compatibility projections.
     """
 
     def __init__(
@@ -744,18 +910,45 @@ class EvidenceStore:
         self.index_path = self.dir / "evidence_index.json"
         self.aliases_path = self.dir / "evidence_aliases.json"
         self.numeric_claims_path = self.dir / "numeric_claims.json"
+        self.authority_path = self.dir / EVIDENCE_AUTHORITY_FILENAME
+        self.authority_previous_path = self.dir / EVIDENCE_AUTHORITY_PREVIOUS_FILENAME
+        self.authority_marker_path = self.dir / EVIDENCE_AUTHORITY_MARKER_FILENAME
+        self.authority_root_marker_path = (
+            self.root / EVIDENCE_AUTHORITY_ROOT_MARKER_FILENAME
+        )
+        self.authority_head_path = self.root / EVIDENCE_AUTHORITY_HEAD_FILENAME
+        self.authority_transaction_path = (
+            self.root / EVIDENCE_AUTHORITY_TRANSACTION_FILENAME
+        )
         self.enforcement_mode: EvidenceEnforcementMode = _coerce_enforcement_mode(
             enforcement_mode
         )
-        self._records: List[EvidenceRecord] = self._load_records()
-        self._aliases: Dict[str, str] = self._load_aliases()
-        self._numeric_claims: List[NumericClaim] = self._load_numeric_claims()
         # T3.3 — concurrent step execution: every register / get / save
         # path runs under this lock so two worker threads can safely
         # call ``register_file`` simultaneously. Reentrant so that
         # methods that internally call ``register_file`` (e.g.
         # ``register_text`` → ``register_file``) don't self-deadlock.
         self._lock = threading.RLock()
+        self._authority_transaction_depth = 0
+        snapshot = load_current_evidence_snapshot(self.root)
+        self._selected_snapshot_state = self._snapshot_state(snapshot)
+        if snapshot.source in {
+            "authority",
+            "authority_previous_recovery",
+        }:
+            with _exclusive_evidence_authority_lock(
+                self.dir,
+                expected_root=self.root,
+            ):
+                snapshot = load_current_evidence_snapshot(self.root)
+                self._selected_snapshot_state = self._snapshot_state(snapshot)
+                self._load_snapshot(snapshot)
+                self._committed_state = self._raw_state()
+                self._repair_authority_files(snapshot)
+                self._repair_projection_files(self._committed_state)
+        else:
+            self._load_snapshot(snapshot)
+            self._committed_state = self._raw_state()
 
     # ------------------------------------------------------------------
     # Persistence
@@ -777,76 +970,489 @@ class EvidenceStore:
             raise ValueError("evidence path must remain a directory")
         return self.dir
 
-    def _load_records(self) -> List[EvidenceRecord]:
-        if not self.index_path.exists():
-            return []
-        try:
-            data = json.loads(self.index_path.read_text(encoding="utf-8"))
-            return [EvidenceRecord.model_validate(r) for r in data]
-        except Exception as exc:
-            _quarantine_corrupt_index(self.index_path, exc, kind="index")
-            return []
+    @staticmethod
+    def _snapshot_state(snapshot: EvidenceAuthoritySnapshot) -> Dict[str, Any]:
+        return {
+            "records": [dict(item) for item in snapshot.records],
+            "aliases": dict(snapshot.aliases),
+            "numeric_claims": [dict(item) for item in snapshot.numeric_claims],
+        }
 
-    def _load_aliases(self) -> Dict[str, str]:
-        if not self.aliases_path.exists():
-            return {}
+    def _load_snapshot(self, snapshot: EvidenceAuthoritySnapshot) -> None:
         try:
-            data = json.loads(self.aliases_path.read_text(encoding="utf-8"))
+            self._records = [
+                EvidenceRecord.model_validate(record) for record in snapshot.records
+            ]
+            self._aliases = dict(snapshot.aliases)
+            self._numeric_claims = [
+                NumericClaim.from_dict(claim) for claim in snapshot.numeric_claims
+            ]
         except Exception as exc:
-            _quarantine_corrupt_index(self.aliases_path, exc, kind="aliases")
-            return {}
-        if isinstance(data, dict):
-            return {str(k): str(v) for k, v in data.items()}
-        logger.warning(
-            "evidence aliases at %s is not a JSON object (got %s); ignoring",
-            self.aliases_path,
-            type(data).__name__,
-        )
-        _quarantine_corrupt_index(
-            self.aliases_path,
-            ValueError(f"unexpected type {type(data).__name__}"),
-            kind="aliases",
-        )
-        return {}
+            raise EvidenceAuthorityIntegrityError(
+                f"evidence authority payload failed schema validation: {exc}"
+            ) from exc
+        self._authority_generation = snapshot.generation
+        self._authority_payload_sha256 = snapshot.payload_sha256
 
-    def _load_numeric_claims(self) -> List[NumericClaim]:
-        if not self.numeric_claims_path.exists():
-            return []
+    def _raw_state(self) -> Dict[str, Any]:
+        return {
+            "records": [record.model_dump(mode="json") for record in self._records],
+            "aliases": dict(self._aliases),
+            "numeric_claims": [claim.to_dict() for claim in self._numeric_claims],
+        }
+
+    def _restore_raw_state(self, state: Mapping[str, Any]) -> None:
         try:
-            data = json.loads(self.numeric_claims_path.read_text(encoding="utf-8"))
-            return [NumericClaim.from_dict(c) for c in data]
+            self._records = [
+                EvidenceRecord.model_validate(record)
+                for record in state.get("records", [])
+            ]
+            self._aliases = {
+                str(alias): str(evidence_id)
+                for alias, evidence_id in dict(state.get("aliases", {})).items()
+            }
+            self._numeric_claims = [
+                NumericClaim.from_dict(claim)
+                for claim in state.get("numeric_claims", [])
+            ]
         except Exception as exc:
-            _quarantine_corrupt_index(
-                self.numeric_claims_path, exc, kind="numeric_claims"
-            )
-            return []
+            raise EvidenceAuthorityIntegrityError(
+                f"cannot restore committed evidence state: {exc}"
+            ) from exc
 
-    def _save(self) -> None:
-        self._validated_evidence_dir()
-        _atomic_write_text(
-            self.index_path,
-            json.dumps(
-                [r.model_dump(mode="json") for r in self._records],
+    def _projection_texts(self, state: Mapping[str, Any]) -> Dict[Path, str]:
+        return {
+            self.index_path: json.dumps(
+                list(state["records"]),
                 indent=2,
                 ensure_ascii=False,
                 default=str,
             ),
-            expected_root=self.root,
-        )
-        _atomic_write_text(
-            self.aliases_path,
-            json.dumps(self._aliases, indent=2, ensure_ascii=False, sort_keys=True),
-            expected_root=self.root,
-        )
-        _atomic_write_text(
-            self.numeric_claims_path,
-            json.dumps(
-                [c.to_dict() for c in self._numeric_claims],
+            self.aliases_path: json.dumps(
+                dict(state["aliases"]),
+                indent=2,
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            self.numeric_claims_path: json.dumps(
+                list(state["numeric_claims"]),
                 indent=2,
                 ensure_ascii=False,
             ),
+        }
+
+    def _write_projection_files(self, state: Mapping[str, Any]) -> None:
+        for path, text in self._projection_texts(state).items():
+            if path.is_symlink():
+                raise EvidenceAuthorityIntegrityError(
+                    f"evidence projection is a symbolic link: {path.name}"
+                )
+            _atomic_write_text(path, text, expected_root=self.root)
+
+    def _repair_projection_files(self, state: Mapping[str, Any]) -> None:
+        for path, text in self._projection_texts(state).items():
+            if path.is_symlink():
+                raise EvidenceAuthorityIntegrityError(
+                    f"evidence projection is a symbolic link: {path.name}"
+                )
+            try:
+                current = path.read_text(encoding="utf-8") if path.is_file() else None
+            except (OSError, UnicodeError):
+                current = None
+            if current != text:
+                _atomic_write_text(path, text, expected_root=self.root)
+
+    def _load_root_authority_marker(self) -> Dict[str, Any]:
+        path = self.authority_root_marker_path
+        if path.is_symlink() or not path.is_file():
+            raise EvidenceAuthorityIntegrityError(
+                "evidence authority root marker is missing or non-regular"
+            )
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, ValueError, TypeError) as exc:
+            raise EvidenceAuthorityIntegrityError(
+                f"evidence authority root marker is unreadable: {exc}"
+            ) from exc
+        return validate_evidence_authority_root_marker(raw)
+
+    def _accept_committed_candidate(
+        self,
+        *,
+        state: Mapping[str, Any],
+        payload: Mapping[str, Any],
+    ) -> None:
+        self._authority_generation = int(payload["generation"])
+        self._authority_payload_sha256 = str(payload["payload_sha256"])
+        self._committed_state = copy.deepcopy(dict(state))
+        self._selected_snapshot_state = copy.deepcopy(dict(state))
+
+    @staticmethod
+    def _authority_payload_from_snapshot(
+        snapshot: EvidenceAuthoritySnapshot,
+    ) -> Dict[str, Any]:
+        if snapshot.generation is None or snapshot.payload_sha256 is None:
+            raise EvidenceAuthorityIntegrityError(
+                "legacy evidence snapshot has no versioned authority payload"
+            )
+        payload = build_evidence_authority_payload(
+            generation=snapshot.generation,
+            previous_payload_sha256=snapshot.previous_payload_sha256,
+            records=snapshot.records,
+            aliases=snapshot.aliases,
+            numeric_claims=snapshot.numeric_claims,
+        )
+        if payload["payload_sha256"] != snapshot.payload_sha256:
+            raise EvidenceAuthorityIntegrityError(
+                "selected evidence snapshot cannot reproduce its authority digest"
+            )
+        return payload
+
+    def _repair_authority_files(self, snapshot: EvidenceAuthoritySnapshot) -> None:
+        """Restore a selected predecessor after an interrupted commit."""
+
+        if snapshot.source != "authority_previous_recovery":
+            return
+        payload = self._authority_payload_from_snapshot(snapshot)
+        head = build_evidence_authority_head(
+            generation=int(payload["generation"]),
+            payload_sha256=str(payload["payload_sha256"]),
+        )
+        # Repair the selector first. If either write fails, the loader can
+        # still recognize current as an uncommitted successor and retry from
+        # ``previous``. Reversing these writes can strand head=new/current=old.
+        _atomic_write_text(
+            self.authority_head_path,
+            evidence_authority_head_text(head),
             expected_root=self.root,
         )
+        _atomic_write_text(
+            self.authority_path,
+            evidence_authority_text(payload),
+            expected_root=self.root,
+        )
+        root_marker = self._load_root_authority_marker()
+        selected_root_marker = build_evidence_authority_root_marker(
+            legacy_projection_sha256=root_marker["legacy_projection_sha256"],
+            selected_generation=int(payload["generation"]),
+            selected_payload_sha256=str(payload["payload_sha256"]),
+        )
+        _atomic_write_text(
+            self.authority_root_marker_path,
+            evidence_authority_root_marker_text(selected_root_marker),
+            expected_root=self.root,
+        )
+        committed = build_evidence_authority_transaction(
+            state="committed",
+            from_generation=(
+                None
+                if int(payload["generation"]) == 0
+                else int(payload["generation"]) - 1
+            ),
+            from_payload_sha256=payload["previous_payload_sha256"],
+            candidate_generation=int(payload["generation"]),
+            candidate_payload_sha256=str(payload["payload_sha256"]),
+        )
+        _atomic_write_text(
+            self.authority_transaction_path,
+            evidence_authority_transaction_text(committed),
+            expected_root=self.root,
+        )
+
+    def _assert_expected_selected_generation(
+        self,
+        current: EvidenceAuthoritySnapshot,
+    ) -> None:
+        if self._authority_generation is None:
+            if current.generation is not None:
+                raise EvidenceAuthorityIntegrityError(
+                    "stale EvidenceStore handle cannot overwrite a modern generation"
+                )
+            if self._snapshot_state(current) != self._selected_snapshot_state:
+                raise EvidenceAuthorityIntegrityError(
+                    "stale EvidenceStore handle conflicts with changed legacy authority"
+                )
+            return
+        if (
+            current.generation != self._authority_generation
+            or current.payload_sha256 != self._authority_payload_sha256
+        ):
+            raise EvidenceAuthorityIntegrityError(
+                "stale EvidenceStore handle cannot overwrite the selected generation"
+            )
+
+    def _bootstrap_authority_if_needed(
+        self,
+        current: EvidenceAuthoritySnapshot,
+    ) -> None:
+        if self._authority_generation is not None:
+            return
+        marker = build_evidence_authority_marker(projection_sha256(self.dir))
+        if self.authority_root_marker_path.is_symlink():
+            raise EvidenceAuthorityIntegrityError(
+                "evidence authority root marker is a symbolic link"
+            )
+        if not self.authority_root_marker_path.exists():
+            root_marker = build_evidence_authority_root_marker(
+                legacy_projection_sha256=marker["legacy_projection_sha256"],
+                selected_generation=None,
+                selected_payload_sha256=None,
+            )
+            _atomic_write_text(
+                self.authority_root_marker_path,
+                evidence_authority_root_marker_text(root_marker),
+                expected_root=self.root,
+            )
+        else:
+            root_marker = self._load_root_authority_marker()
+            if (
+                root_marker["selected_generation"] is not None
+                and not (
+                    current.source == "root_marker_legacy_prepared"
+                    and root_marker["selected_generation"] == 0
+                )
+            ) or (
+                root_marker["legacy_projection_sha256"]
+                != marker["legacy_projection_sha256"]
+            ):
+                raise EvidenceAuthorityIntegrityError(
+                    "legacy bootstrap conflicts with the root authority marker"
+                )
+        if self.authority_marker_path.is_symlink():
+            raise EvidenceAuthorityIntegrityError(
+                "evidence authority marker is a symbolic link"
+            )
+        marker_matches = False
+        if self.authority_marker_path.is_file():
+            try:
+                marker_matches = (
+                    json.loads(self.authority_marker_path.read_text(encoding="utf-8"))
+                    == marker
+                )
+            except (OSError, UnicodeError, ValueError, TypeError):
+                marker_matches = False
+        if not marker_matches:
+            _atomic_write_text(
+                self.authority_marker_path,
+                evidence_authority_marker_text(marker),
+                expected_root=self.root,
+            )
+        baseline = build_evidence_authority_payload(
+            generation=0,
+            previous_payload_sha256=None,
+            records=self._committed_state["records"],
+            aliases=self._committed_state["aliases"],
+            numeric_claims=self._committed_state["numeric_claims"],
+        )
+        if (
+            root_marker["selected_generation"] == 0
+            and root_marker["selected_payload_sha256"] != baseline["payload_sha256"]
+        ):
+            raise EvidenceAuthorityIntegrityError(
+                "prepared bootstrap root selector has the wrong payload digest"
+            )
+        transaction = build_evidence_authority_transaction(
+            state="prepared",
+            from_generation=None,
+            from_payload_sha256=None,
+            candidate_generation=0,
+            candidate_payload_sha256=str(baseline["payload_sha256"]),
+        )
+        _atomic_write_text(
+            self.authority_transaction_path,
+            evidence_authority_transaction_text(transaction),
+            expected_root=self.root,
+        )
+        _atomic_write_text(
+            self.authority_path,
+            evidence_authority_text(baseline),
+            expected_root=self.root,
+        )
+        head = build_evidence_authority_head(
+            generation=0,
+            payload_sha256=str(baseline["payload_sha256"]),
+        )
+        _atomic_write_text(
+            self.authority_head_path,
+            evidence_authority_head_text(head),
+            expected_root=self.root,
+        )
+        selected_root_marker = build_evidence_authority_root_marker(
+            legacy_projection_sha256=marker["legacy_projection_sha256"],
+            selected_generation=0,
+            selected_payload_sha256=str(baseline["payload_sha256"]),
+        )
+        _atomic_write_text(
+            self.authority_root_marker_path,
+            evidence_authority_root_marker_text(selected_root_marker),
+            expected_root=self.root,
+        )
+        committed = build_evidence_authority_transaction(
+            state="committed",
+            from_generation=None,
+            from_payload_sha256=None,
+            candidate_generation=0,
+            candidate_payload_sha256=str(baseline["payload_sha256"]),
+        )
+        _atomic_write_text(
+            self.authority_transaction_path,
+            evidence_authority_transaction_text(committed),
+            expected_root=self.root,
+        )
+        self._accept_committed_candidate(
+            state=self._committed_state,
+            payload=baseline,
+        )
+
+    def _save(self) -> None:
+        self._validated_evidence_dir()
+        if self._authority_transaction_depth > 0:
+            return
+        candidate_state = self._raw_state()
+        committed_state = copy.deepcopy(self._committed_state)
+        candidate: Optional[Dict[str, Any]] = None
+        try:
+            with _exclusive_evidence_authority_lock(
+                self.dir,
+                expected_root=self.root,
+            ):
+                try:
+                    current = load_current_evidence_snapshot(self.root)
+                    self._assert_expected_selected_generation(current)
+                    if current.source == "authority_previous_recovery":
+                        self._repair_authority_files(current)
+                        self._repair_projection_files(self._snapshot_state(current))
+                    if candidate_state == committed_state:
+                        return
+                    self._bootstrap_authority_if_needed(current)
+                    selected_before = load_current_evidence_snapshot(self.root)
+                    selected_payload = self._authority_payload_from_snapshot(
+                        selected_before
+                    )
+                    candidate = build_evidence_authority_payload(
+                        generation=int(self._authority_generation or 0) + 1,
+                        previous_payload_sha256=self._authority_payload_sha256,
+                        records=candidate_state["records"],
+                        aliases=candidate_state["aliases"],
+                        numeric_claims=candidate_state["numeric_claims"],
+                    )
+                    transaction = build_evidence_authority_transaction(
+                        state="prepared",
+                        from_generation=selected_before.generation,
+                        from_payload_sha256=selected_before.payload_sha256,
+                        candidate_generation=int(candidate["generation"]),
+                        candidate_payload_sha256=str(candidate["payload_sha256"]),
+                    )
+                    _atomic_write_text(
+                        self.authority_transaction_path,
+                        evidence_authority_transaction_text(transaction),
+                        expected_root=self.root,
+                    )
+                    _atomic_write_text(
+                        self.authority_previous_path,
+                        evidence_authority_text(selected_payload),
+                        expected_root=self.root,
+                    )
+                    # Compatibility files and all selectors are staged first.
+                    # The transaction receipt's committed state is written last
+                    # and is the sole commit point for the new generation.
+                    self._write_projection_files(candidate_state)
+                    _atomic_write_text(
+                        self.authority_path,
+                        evidence_authority_text(candidate),
+                        expected_root=self.root,
+                    )
+                    head = build_evidence_authority_head(
+                        generation=int(candidate["generation"]),
+                        payload_sha256=str(candidate["payload_sha256"]),
+                    )
+                    _atomic_write_text(
+                        self.authority_head_path,
+                        evidence_authority_head_text(head),
+                        expected_root=self.root,
+                    )
+                    root_marker = self._load_root_authority_marker()
+                    selected_root_marker = build_evidence_authority_root_marker(
+                        legacy_projection_sha256=root_marker[
+                            "legacy_projection_sha256"
+                        ],
+                        selected_generation=int(candidate["generation"]),
+                        selected_payload_sha256=str(candidate["payload_sha256"]),
+                    )
+                    _atomic_write_text(
+                        self.authority_root_marker_path,
+                        evidence_authority_root_marker_text(selected_root_marker),
+                        expected_root=self.root,
+                    )
+                    committed = build_evidence_authority_transaction(
+                        state="committed",
+                        from_generation=selected_before.generation,
+                        from_payload_sha256=selected_before.payload_sha256,
+                        candidate_generation=int(candidate["generation"]),
+                        candidate_payload_sha256=str(candidate["payload_sha256"]),
+                    )
+                    _atomic_write_text(
+                        self.authority_transaction_path,
+                        evidence_authority_transaction_text(committed),
+                        expected_root=self.root,
+                    )
+                    self._accept_committed_candidate(
+                        state=candidate_state,
+                        payload=candidate,
+                    )
+                except BaseException:
+                    # ``os.replace`` may have committed the final root selector
+                    # before fsync/stat reported an error. Reconcile under the
+                    # same writer lock: a strictly selected candidate is success,
+                    # never a failed step with already-current evidence.
+                    if candidate is not None:
+                        try:
+                            observed = load_current_evidence_snapshot(self.root)
+                        except EvidenceAuthorityIntegrityError:
+                            observed = None
+                        if (
+                            observed is not None
+                            and observed.generation == candidate["generation"]
+                            and observed.payload_sha256 == candidate["payload_sha256"]
+                        ):
+                            self._accept_committed_candidate(
+                                state=candidate_state,
+                                payload=candidate,
+                            )
+                            return
+                    raise
+        except BaseException:
+            self._restore_raw_state(committed_state)
+            raise
+
+    @contextmanager
+    def success_publication_transaction(self):
+        """Commit numeric provenance and result aliases as one generation.
+
+        Nested bulk helpers participate in the outer transaction. Every inner
+        ``_save`` is deferred; only the outermost successful exit performs the
+        cross-process CAS and durable full-state commit. Any exception restores
+        the exact state visible on entry.
+        """
+
+        with self._lock:
+            entry_state = copy.deepcopy(self._raw_state())
+            entry_depth = self._authority_transaction_depth
+            self._authority_transaction_depth = entry_depth + 1
+            try:
+                yield
+            except BaseException:
+                self._authority_transaction_depth = entry_depth
+                self._restore_raw_state(entry_state)
+                raise
+            else:
+                self._authority_transaction_depth = entry_depth
+                if entry_depth == 0:
+                    try:
+                        self._save()
+                    except BaseException:
+                        self._restore_raw_state(entry_state)
+                        raise
 
     def _add_alias(self, alias: str, evidence_id: str) -> None:
         """First-write-wins. We do not overwrite an existing alias because
@@ -895,6 +1501,37 @@ class EvidenceStore:
             suffix_n += 1
         return f"{evidence_id}_v{suffix_n}"
 
+    @staticmethod
+    def _validate_on_sha_change(on_sha_change: str) -> None:
+        if on_sha_change not in {"raise", "new_id", "keep_existing"}:
+            raise ValueError(
+                f"Unknown on_sha_change mode: {on_sha_change!r}. "
+                "Expected one of: raise, new_id, keep_existing."
+            )
+
+    def _keep_existing_record(
+        self,
+        record: EvidenceRecord,
+        *,
+        aliases: Optional[Sequence[str]],
+        publish_aliases: bool,
+    ) -> EvidenceRecord:
+        if publish_aliases:
+            for alias in aliases or []:
+                self._add_alias(alias, record.evidence_id)
+            target = self.root / record.relative_path
+            self._add_alias(
+                _target_basename_stem(target, record.evidence_id),
+                record.evidence_id,
+            )
+            self._add_alias(record.evidence_id, record.evidence_id)
+            record.metadata = {
+                **dict(record.metadata or {}),
+                "aliases_published": True,
+            }
+        self._save()
+        return record
+
     def _register_target(
         self,
         *,
@@ -941,11 +1578,7 @@ class EvidenceStore:
             target.resolve(strict=False).relative_to(base)
         except ValueError as exc:
             raise ValueError("evidence target escapes the evidence directory") from exc
-        if on_sha_change not in {"raise", "new_id", "keep_existing"}:
-            raise ValueError(
-                f"Unknown on_sha_change mode: {on_sha_change!r}. "
-                "Expected one of: raise, new_id, keep_existing."
-            )
+        self._validate_on_sha_change(on_sha_change)
         existing = self._record_by_id(evidence_id)
         if existing is not None:
             if existing.sha256 != sha256:
@@ -1072,16 +1705,25 @@ class EvidenceStore:
             eid = evidence_id or self._make_id(
                 _id_prefix(kind, source_path.stem), source_digest
             )
+            self._validate_on_sha_change(on_sha_change)
             target_eid = eid
             target_metadata = dict(metadata or {})
             target_metadata["aliases_published"] = bool(publish_aliases)
             target_on_sha_change = on_sha_change
             existing = self._record_by_id(eid)
-            if (
-                existing is not None
-                and existing.sha256 != source_digest
-                and on_sha_change == "new_id"
-            ):
+            if existing is not None and existing.sha256 != source_digest:
+                if on_sha_change == "raise":
+                    raise ValueError(
+                        f"Evidence id collision for {eid}: "
+                        f"existing sha256={existing.sha256[:8]} "
+                        f"new sha256={source_digest[:8]}"
+                    )
+                if on_sha_change == "keep_existing":
+                    return self._keep_existing_record(
+                        existing,
+                        aliases=aliases,
+                        publish_aliases=publish_aliases,
+                    )
                 target_eid = self._next_versioned_id(eid)
                 target_metadata.setdefault("resume_supersedes", eid)
                 target_on_sha_change = "raise"
@@ -1090,7 +1732,12 @@ class EvidenceStore:
                 filename=source_path.name,
             )
             if target.resolve() != source_path.resolve():
-                _atomic_copy_file(source_path, target, expected_root=self.root)
+                _atomic_copy_file(
+                    source_path,
+                    target,
+                    expected_root=self.root,
+                    expected_sha256=source_digest,
+                )
             digest = sha256_of_file(target)
             return self._register_target(
                 evidence_id=target_eid,
@@ -1135,16 +1782,25 @@ class EvidenceStore:
             _id_prefix(kind, Path(filename).stem), digest
         )
         with self._lock:
+            self._validate_on_sha_change(on_sha_change)
             target_eid = eid
             target_metadata = dict(metadata or {})
             target_metadata["aliases_published"] = bool(publish_aliases)
             target_on_sha_change = on_sha_change
             existing = self._record_by_id(eid)
-            if (
-                existing is not None
-                and existing.sha256 != digest
-                and on_sha_change == "new_id"
-            ):
+            if existing is not None and existing.sha256 != digest:
+                if on_sha_change == "raise":
+                    raise ValueError(
+                        f"Evidence id collision for {eid}: "
+                        f"existing sha256={existing.sha256[:8]} "
+                        f"new sha256={digest[:8]}"
+                    )
+                if on_sha_change == "keep_existing":
+                    return self._keep_existing_record(
+                        existing,
+                        aliases=aliases,
+                        publish_aliases=publish_aliases,
+                    )
                 target_eid = self._next_versioned_id(eid)
                 target_metadata.setdefault("resume_supersedes", eid)
                 target_on_sha_change = "raise"
@@ -1152,7 +1808,7 @@ class EvidenceStore:
                 evidence_id=target_eid,
                 filename=filename,
             )
-            _atomic_write_bytes(target, payload, expected_root=self.root)
+            _atomic_write_once_bytes(target, payload, expected_root=self.root)
             return self._register_target(
                 evidence_id=target_eid,
                 kind=kind,
@@ -1346,10 +2002,7 @@ class EvidenceStore:
                 if not alias:
                     return
                 prior_evidence_id = batch_alias_owners.get(alias)
-                if (
-                    prior_evidence_id is not None
-                    and prior_evidence_id != evidence_id
-                ):
+                if prior_evidence_id is not None and prior_evidence_id != evidence_id:
                     raise ValueError(
                         f"success promotion batch alias {alias!r} is claimed by "
                         f"both {prior_evidence_id!r} and {evidence_id!r}"
@@ -1554,6 +2207,39 @@ class EvidenceStore:
     # Numeric claim registry (value-level provenance)
     # ------------------------------------------------------------------
 
+    def _upsert_numeric_claim_in_memory(
+        self,
+        *,
+        value: str,
+        canonical: float,
+        evidence_id: str,
+        step_id: str,
+        source_field: str,
+        tolerance: float,
+    ) -> NumericClaim:
+        """Stage one idempotent numeric claim without persisting it."""
+
+        for claim in self._numeric_claims:
+            if (
+                claim.evidence_id == evidence_id
+                and claim.step_id == step_id
+                and claim.source_field == source_field
+                and abs(claim.canonical - canonical) <= claim.tolerance
+            ):
+                if len(value) > len(claim.value):
+                    claim.value = value
+                return claim
+        claim = NumericClaim(
+            value=value,
+            canonical=canonical,
+            evidence_id=evidence_id,
+            step_id=step_id,
+            source_field=source_field,
+            tolerance=tolerance,
+        )
+        self._numeric_claims.append(claim)
+        return claim
+
     def register_numeric_claim(
         self,
         *,
@@ -1572,18 +2258,7 @@ class EvidenceStore:
         literal ``value`` is preserved with the most precise form seen so far.
         """
         with self._lock:
-            for claim in self._numeric_claims:
-                if (
-                    claim.evidence_id == evidence_id
-                    and claim.step_id == step_id
-                    and claim.source_field == source_field
-                    and abs(claim.canonical - canonical) <= claim.tolerance
-                ):
-                    if len(value) > len(claim.value):
-                        claim.value = value
-                    self._save()
-                    return claim
-            claim = NumericClaim(
+            claim = self._upsert_numeric_claim_in_memory(
                 value=value,
                 canonical=canonical,
                 evidence_id=evidence_id,
@@ -1591,7 +2266,6 @@ class EvidenceStore:
                 source_field=source_field,
                 tolerance=tolerance,
             )
-            self._numeric_claims.append(claim)
             self._save()
             return claim
 
@@ -1620,7 +2294,6 @@ class EvidenceStore:
         when called directly) disables the cap. Pipelines pass the
         ``PipelineConfig.max_numeric_claims_per_step`` value.
         """
-        registered: List[NumericClaim] = []
         leaves = _walk_numeric_leaves(summary)
         truncated = False
         if max_leaves is not None and max_leaves > 0 and len(leaves) > max_leaves:
@@ -1629,32 +2302,37 @@ class EvidenceStore:
             truncated = True
         else:
             truncated_count = 0
-        for path, literal, canonical in leaves:
-            registered.append(
-                self.register_numeric_claim(
-                    value=literal,
-                    canonical=canonical,
+        registered: List[NumericClaim] = []
+        with self._lock:
+            for path, literal, canonical in leaves:
+                registered.append(
+                    self._upsert_numeric_claim_in_memory(
+                        value=literal,
+                        canonical=canonical,
+                        evidence_id=evidence_id,
+                        step_id=step_id,
+                        source_field=path,
+                        tolerance=tolerance,
+                    )
+                )
+            if truncated:
+                # A sentinel claim so reviewers see that the step exceeded
+                # the cap without scrolling validator findings. The value is
+                # the cap itself so an audit query can correlate cap value
+                # -> truncated step. The float is the count of *dropped*
+                # leaves; matching it back to the cap is just (literal -
+                # registered_count).
+                self._upsert_numeric_claim_in_memory(
+                    value=str(truncated_count),
+                    canonical=float(truncated_count),
                     evidence_id=evidence_id,
                     step_id=step_id,
-                    source_field=path,
+                    source_field="__easyicu_numeric_claim_overflow__",
                     tolerance=tolerance,
                 )
-            )
-        if truncated:
-            # A sentinel claim so reviewers see that the step exceeded
-            # the cap without scrolling validator findings. The value is
-            # the cap itself so an audit query can correlate cap value
-            # → truncated step. The float is the count of *dropped*
-            # leaves; matching it back to the cap is just (literal -
-            # registered_count).
-            self.register_numeric_claim(
-                value=str(truncated_count),
-                canonical=float(truncated_count),
-                evidence_id=evidence_id,
-                step_id=step_id,
-                source_field="__easyicu_numeric_claim_overflow__",
-                tolerance=tolerance,
-            )
+            # One summary is one authority transition. A crash or stale-store
+            # rejection cannot leave only the first N numeric leaves current.
+            self._save()
         return registered
 
     # ------------------------------------------------------------------
@@ -1753,7 +2431,8 @@ class EvidenceStore:
         with self._lock:
             for claim in self._numeric_claims:
                 if (
-                    claim.step_id == step_id
+                    claim.evidence_id == evidence_id
+                    and claim.step_id == step_id
                     and claim.source_field == name
                     and abs(claim.canonical - result) <= claim.tolerance
                 ):
@@ -1782,7 +2461,7 @@ class EvidenceStore:
             self._save()
             return claim
 
-    def register_step_derived_claims(
+    def _register_step_derived_claims_uncommitted(
         self,
         *,
         step_id: str,
@@ -1883,6 +2562,24 @@ class EvidenceStore:
                     }
                 )
         return registered, errors
+
+    def register_step_derived_claims(
+        self,
+        *,
+        step_id: str,
+        evidence_id: str,
+        summary: Any,
+        tolerance: float = 1e-3,
+    ) -> Tuple[List[NumericClaim], List[Dict[str, Any]]]:
+        """Register one summary's valid derived claims in one generation."""
+
+        with self.success_publication_transaction():
+            return self._register_step_derived_claims_uncommitted(
+                step_id=step_id,
+                evidence_id=evidence_id,
+                summary=summary,
+                tolerance=tolerance,
+            )
 
     def numeric_claims(self) -> List[NumericClaim]:
         with self._lock:
@@ -2444,6 +3141,7 @@ def _looks_result_like_sentence(sentence: str) -> bool:
 
 __all__ = [
     "EvidenceStore",
+    "EvidenceAuthorityIntegrityError",
     "EvidenceEnforcementMode",
     "EvidenceEnforcementError",
     "NumericClaim",

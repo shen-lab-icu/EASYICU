@@ -18,6 +18,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from .evidence_authority import (
+    EVIDENCE_AUTHORITY_FILENAME,
+    EVIDENCE_AUTHORITY_HEAD_FILENAME,
+    EVIDENCE_AUTHORITY_MARKER_FILENAME,
+    EVIDENCE_AUTHORITY_PREVIOUS_FILENAME,
+    EVIDENCE_AUTHORITY_ROOT_MARKER_FILENAME,
+    EVIDENCE_AUTHORITY_TRANSACTION_FILENAME,
+    EvidenceAuthorityIntegrityError,
+    load_current_evidence_snapshot,
+)
+
 
 class LockAuthorityError(ValueError):
     """Raised when a plan-time lock cannot be verified against its anchor."""
@@ -47,17 +58,29 @@ def verified_unique_lock_anchor(
     """Return one digest-valid evidence anchor, or ``None`` for legacy runs."""
 
     run_root = Path(run_dir).resolve()
-    index_path = run_root / "evidence" / "evidence_index.json"
-    if not index_path.exists():
-        return None
-    if index_path.is_symlink() or not index_path.is_file():
-        raise LockAuthorityError(f"{label} evidence index is not a regular file")
     try:
-        raw_records = json.loads(index_path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        raise LockAuthorityError(f"{label} evidence index is unreadable: {exc}") from exc
-    if not isinstance(raw_records, list):
-        raise LockAuthorityError(f"{label} evidence index has an invalid payload")
+        snapshot = load_current_evidence_snapshot(run_root)
+    except EvidenceAuthorityIntegrityError as exc:
+        raise LockAuthorityError(
+            f"{label} evidence authority is invalid: {exc}"
+        ) from exc
+    raw_records = list(snapshot.records)
+    if not raw_records:
+        evidence_dir = run_root / "evidence"
+        ledger_paths = [
+            run_root / EVIDENCE_AUTHORITY_ROOT_MARKER_FILENAME,
+            run_root / EVIDENCE_AUTHORITY_HEAD_FILENAME,
+            run_root / EVIDENCE_AUTHORITY_TRANSACTION_FILENAME,
+            evidence_dir / EVIDENCE_AUTHORITY_FILENAME,
+            evidence_dir / EVIDENCE_AUTHORITY_PREVIOUS_FILENAME,
+            evidence_dir / EVIDENCE_AUTHORITY_MARKER_FILENAME,
+            evidence_dir / "evidence_index.json",
+            evidence_dir / "evidence_aliases.json",
+            evidence_dir / "numeric_claims.json",
+        ]
+        if not any(path.exists() or path.is_symlink() for path in ledger_paths):
+            return None
+        raise LockAuthorityError(f"{label} has no unique plan-time evidence anchor")
     anchors = [
         record
         for record in raw_records
