@@ -2009,25 +2009,23 @@ def test_resume_from_completed_step_can_stop_after_that_step(
         "reuse_step_code",
         "mark_prior_contract_failed",
         "explicit_resume",
-        "expected_coder_calls",
     ),
     [
-        (False, False, True, 1),
-        (True, False, True, 0),
-        (False, True, True, 0),
-        (False, True, False, 0),
+        (False, False, True),
+        (True, False, True),
+        (False, True, True),
+        (False, True, False),
     ],
 )
-def test_resume_from_step_reuses_prior_code(
+def test_resume_from_step_prefers_verified_capsule_over_legacy_code_reuse(
     ra,
     tmp_path: Path,
     monkeypatch,
     reuse_step_code: bool,
     mark_prior_contract_failed: bool,
     explicit_resume: bool,
-    expected_coder_calls: int,
 ):
-    """Resume reuses valid prior code only on failure or explicit opt-in."""
+    """A verified capsule outranks opt-in legacy code-evidence recovery."""
 
     class SingleStepLLM:
         name = "single-step-llm"
@@ -2204,7 +2202,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         stop_after_analysis=True,
     )
     assert second.run_id == first.run_id
-    assert second_llm.coder_calls == expected_coder_calls
+    assert second_llm.coder_calls == 0
 
     partial = json.loads(
         (Path(second.workdir) / "manifest_partial.json").read_text(encoding="utf-8")
@@ -2215,18 +2213,9 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         if record.get("step_id") == "04_primary_association"
     ]
     assert records[-1]["status"] == "ok"
-    assert records[-1]["generation_mode"] == "resumed_code_reuse"
-    assert records[-1]["resumed_code_evidence_id"]
-    assert records[-1]["resumed_code_evidence_id"] != "code_bad"
-    source_code_record = next(
-        record
-        for record in partial["evidence"]
-        if record.get("evidence_id") == records[-1]["resumed_code_evidence_id"]
-    )
-    assert (
-        records[-1]["resumed_from_generation_mode"]
-        == source_code_record["generation_mode"]
-    )
+    if explicit_resume:
+        assert records[-1]["step_authority_capsule_reused"] is True
+    assert "resumed_code_evidence_id" not in records[-1]
     final_code_records = [
         record
         for record in partial["evidence"]
@@ -2234,43 +2223,18 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         and record.get("produced_by_step") == "04_primary_association"
         and record.get("generation_mode") == "resumed_code_reuse"
     ]
-    assert final_code_records
-    assert records[-1]["script_evidence_id"] == final_code_records[-1]["evidence_id"]
-    assert (
-        final_code_records[-1]["evidence_id"] != records[-1]["resumed_code_evidence_id"]
-    )
-    assert final_code_records[-1]["description"].startswith(
-        "Reused prior agent-generated analysis script"
-    )
-    assert final_code_records[-1]["metadata"]["resumed_code_evidence_id"]
-    assert (
-        final_code_records[-1]["metadata"]["resumed_from_generation_mode"]
-        == source_code_record["generation_mode"]
-    )
+    if explicit_resume:
+        assert len(final_code_records) == 1
+        assert records[-1]["script_evidence_id"] == final_code_records[0]["evidence_id"]
+    else:
+        assert final_code_records == []
+    assert records[-1]["script_evidence_id"] != "code_bad"
     if explicit_resume:
         assert not any(
             "stale pre-resume" in finding.get("message", "")
             for finding in partial["findings"]
         )
-    assert any(
-        finding.get("validator") == "coder"
-        and "reused prior agent-generated code" in finding.get("message", "")
-        and "source mode:" in finding.get("message", "")
-        for finding in partial["findings"]
-    )
-    coder_messages = [
-        finding.get("message", "")
-        for finding in partial["findings"]
-        if finding.get("validator") == "coder"
-    ]
-    preflight_reuse = reuse_step_code or mark_prior_contract_failed
-    if preflight_reuse:
-        assert any("before requesting a new coder script" in m for m in coder_messages)
-    else:
-        assert any("Coder agent failed" in m for m in coder_messages)
-    assert records[-1].get("resumed_failed_contract_code_preflight") is (
-        True if mark_prior_contract_failed else None
-    )
+    assert records[-1].get("resumed_failed_contract_code_preflight") is None
 
 
 def test_concept_repair_failure_resumes_quarantined_draft_fail_closed(
@@ -2697,12 +2661,10 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     )
 
     prompt = resumed_llm.repair_prompts[-1]
-    current_ticket = prompt.split(
-        "TYPED REPAIR TICKET (authoritative routing):", 1
-    )[1].split("HUMAN-READABLE FINDINGS:", 1)[0]
-    historical = prompt.split(
-        "PREVIOUSLY REPAIRED CONCEPT FINDINGS", 1
-    )[1]
+    current_ticket = prompt.split("TYPED REPAIR TICKET (authoritative routing):", 1)[
+        1
+    ].split("HUMAN-READABLE FINDINGS:", 1)[0]
+    historical = prompt.split("PREVIOUSLY REPAIRED CONCEPT FINDINGS", 1)[1]
     assert '"call_line": 20' in current_ticket
     assert '"call_line": 10' not in current_ticket
     assert '"call_line"' not in historical

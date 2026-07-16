@@ -29,12 +29,13 @@ generic dispatch Protocol because nothing in the codebase consumes one.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .analysis_types import (
     canonical_analysis_family,
@@ -74,6 +75,7 @@ from .prompts import PROMPT_PACK_VERSION, load_prompt_pack
 from .provider_budget import StepProviderCallBudget, complete_with_provider_budget
 from .repair_coordination import RepairCoordinator
 from .repair_reasons import structured_repair_metadata
+from .step_authority_capsule import ContentRef
 from .schema import (
     AggregationRule,
     AgentRuntimeState,
@@ -1567,6 +1569,14 @@ class CoderAgent:
         context: ResearchContext,
         step: AnalysisStep,
         provider_budget: Optional[StepProviderCallBudget] = None,
+        initial_generation_binding: Optional[Mapping[str, object]] = None,
+        persist_candidate: Optional[Callable[[str], ContentRef]] = None,
+        on_initial_reserved: Optional[Callable[[str, str], None]] = None,
+        on_initial_candidate: Optional[Callable[[ContentRef, str], None]] = None,
+        reserve_compatibility_repair: Optional[
+            Callable[[str, str], Optional[int]]
+        ] = None,
+        on_repair_candidate: Optional[Callable[[ContentRef, str, int], None]] = None,
     ) -> str:
         from .method_compatibility import (
             detect_forbidden_pattern_usage,
@@ -1618,16 +1628,68 @@ class CoderAgent:
                 ),
             ),
         ]
-        raw = complete_with_provider_budget(
-            budget=provider_budget,
-            category="initial_generation",
-            call=lambda: self.llm.complete(
-                messages,
-                max_tokens=_CODER_MAX_TOKENS,
-                temperature=0.1,
-            ),
-        )
-        code = _strip_code_fence(raw.strip())
+        initial_transport_id: Optional[str] = None
+        if provider_budget is not None and initial_generation_binding is not None:
+            initial_transport_id = provider_budget.reserve_initial_generation(
+                initial_generation_binding
+            )
+            binding_sha256 = hashlib.sha256(
+                json.dumps(
+                    dict(initial_generation_binding),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            if on_initial_reserved is not None:
+                on_initial_reserved(initial_transport_id, binding_sha256)
+        try:
+            raw = complete_with_provider_budget(
+                budget=provider_budget,
+                category="initial_generation",
+                call=lambda: self.llm.complete(
+                    messages,
+                    max_tokens=_CODER_MAX_TOKENS,
+                    temperature=0.1,
+                ),
+            )
+            code = _strip_code_fence(raw.strip())
+            initial_ref = (
+                persist_candidate(code) if persist_candidate is not None else None
+            )
+            if initial_transport_id is not None:
+                if initial_ref is None:
+                    raise RuntimeError(
+                        "initial-generation transport requires persisted code bytes"
+                    )
+                assert provider_budget is not None
+                provider_budget.complete_initial_generation_transport(
+                    provider_transport_id=initial_transport_id,
+                    after_code_sha256=initial_ref.sha256,
+                    after_code_size_bytes=initial_ref.size_bytes,
+                )
+            if (
+                initial_ref is not None
+                and initial_transport_id is not None
+                and on_initial_candidate is not None
+            ):
+                on_initial_candidate(initial_ref, initial_transport_id)
+        except Exception as exc:
+            if initial_transport_id is not None and provider_budget is not None:
+                if provider_budget.initial_generation_resume_status() == "pending":
+                    provider_budget.fail_initial_generation_transport(
+                        provider_transport_id=initial_transport_id,
+                        error_type=type(exc).__name__,
+                    )
+                elif provider_budget.initial_generation_resume_status() in {
+                    "unpaid_pending",
+                    "paid_pending",
+                }:
+                    provider_budget.fail_initial_generation_transport(
+                        provider_transport_id=initial_transport_id,
+                        error_type=type(exc).__name__,
+                    )
+            raise
 
         # Patch C: post-codegen pre-execution compatibility enforcement.
         # Loops up to _MAX_PRE_EXEC_COMPATIBILITY_REPAIRS times; each
@@ -1645,6 +1707,16 @@ class CoderAgent:
                 break
             err = format_violation_message(violations)
             self.last_compatibility_repair_attempts = attempt
+            logical_repair_attempt_id = (
+                reserve_compatibility_repair(code, err)
+                if reserve_compatibility_repair is not None
+                else None
+            )
+            if (
+                reserve_compatibility_repair is not None
+                and logical_repair_attempt_id is None
+            ):
+                break
             code = self.repair(
                 context=context,
                 step=step,
@@ -1653,6 +1725,9 @@ class CoderAgent:
                 attempt=attempt,
                 provider_budget=provider_budget,
                 provider_category="compatibility_repair",
+                logical_repair_attempt_id=logical_repair_attempt_id,
+                persist_candidate=persist_candidate,
+                on_candidate_completed=on_repair_candidate,
             )
         return code
 
@@ -1667,6 +1742,8 @@ class CoderAgent:
         provider_budget: Optional[StepProviderCallBudget] = None,
         provider_category: str = "repair",
         logical_repair_attempt_id: Optional[int] = None,
+        persist_candidate: Optional[Callable[[str], ContentRef]] = None,
+        on_candidate_completed: Optional[Callable[[ContentRef, str, int], None]] = None,
     ) -> str:
         """Apply a minimal exact patch, falling back to one full rewrite.
 
@@ -1792,6 +1869,14 @@ class CoderAgent:
 
         self.last_repair_transport = None
         self.last_repair_provider_calls = 0
+        persisted_ref: Optional[ContentRef] = None
+
+        def _persist_result(candidate: str, _mode: str) -> Optional[ContentRef]:
+            nonlocal persisted_ref
+            if persist_candidate is not None:
+                persisted_ref = persist_candidate(candidate)
+            return persisted_ref
+
         repair_result = RepairCoordinator(
             provider_budget=provider_budget,
             provider_category=provider_category,
@@ -1806,9 +1891,20 @@ class CoderAgent:
             ),
             full_rewrite_call=_full_rewrite,
             logical_repair_attempt_id=logical_repair_attempt_id,
+            persist_result=(_persist_result if persist_candidate is not None else None),
         )
         self.last_repair_transport = repair_result.mode
         self.last_repair_provider_calls = repair_result.provider_calls
+        if (
+            persisted_ref is not None
+            and logical_repair_attempt_id is not None
+            and on_candidate_completed is not None
+        ):
+            on_candidate_completed(
+                persisted_ref,
+                repair_result.mode,
+                logical_repair_attempt_id,
+            )
         return repair_result.code
 
 

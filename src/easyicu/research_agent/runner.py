@@ -88,6 +88,53 @@ def _canonical_json_bytes(payload: object) -> bytes:
     ).encode("utf-8")
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _sha256_directory_tree(path: Path) -> str:
+    digest = hashlib.sha256()
+    for item in sorted(path.rglob("*"), key=lambda value: value.as_posix()):
+        relative = item.relative_to(path).as_posix().encode("utf-8")
+        mode = os.lstat(item).st_mode
+        if stat.S_ISLNK(mode):
+            raise RuntimeError(
+                "CodeRunner authority cannot bind a symlinked extra_env tree"
+            )
+        digest.update(relative)
+        digest.update(b"\0")
+        if stat.S_ISREG(mode):
+            digest.update(b"file\0")
+            digest.update(_sha256_file(item).encode("ascii"))
+        elif stat.S_ISDIR(mode):
+            digest.update(b"dir\0")
+        else:
+            raise RuntimeError(
+                "CodeRunner authority cannot bind a special extra_env path"
+            )
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _path_bound_authority_value(value: object) -> object:
+    candidate = Path(str(value)).expanduser()
+    if candidate.is_absolute() and candidate.is_file():
+        return {
+            "path": str(candidate.resolve()),
+            "sha256": _sha256_file(candidate),
+        }
+    if candidate.is_absolute() and candidate.is_dir():
+        return {
+            "path": str(candidate.resolve()),
+            "tree_sha256": _sha256_directory_tree(candidate),
+        }
+    return str(value)
+
+
 def _replace_regular_file_atomically(destination: Path, payload: bytes) -> None:
     """Replace one host-owned control file without following an old link."""
 
@@ -193,9 +240,7 @@ def _code_requests_robustness_authority_snapshot(code: str) -> bool:
     return any(
         isinstance(node, ast.ImportFrom)
         and node.module == "easyicu.research_agent.deterministic_robustness"
-        and any(
-            alias.name == _ROBUSTNESS_AUTHORITY_ENTRYPOINT for alias in node.names
-        )
+        and any(alias.name == _ROBUSTNESS_AUTHORITY_ENTRYPOINT for alias in node.names)
         for node in ast.walk(tree)
     )
 
@@ -208,9 +253,7 @@ def _authority_snapshot_for_code(
             workdir=workdir,
             step_dir=step_dir,
         )
-    _remove_authority_snapshot(
-        step_dir / ".run_artifact_authority_snapshot.json"
-    )
+    _remove_authority_snapshot(step_dir / ".run_artifact_authority_snapshot.json")
     return None, None, None
 
 
@@ -327,9 +370,7 @@ class RunResult:
     @property
     def succeeded(self) -> bool:
         return (
-            self.returncode == 0
-            and not self.timed_out
-            and self.outputs_safe_to_collect
+            self.returncode == 0 and not self.timed_out and self.outputs_safe_to_collect
         )
 
 
@@ -379,9 +420,94 @@ class CodeRunner:
             if allow_unsafe_host_fallback is None
             else bool(allow_unsafe_host_fallback)
         )
+        self._authority_identity_lock = threading.Lock()
+        self._cached_authority_identity_sha256: Optional[str] = None
         # A host runner must never inherit a Docker capability snapshot left in
         # the same context by an earlier run.
         set_runtime_capability_snapshot_provider(None)
+
+    @property
+    def authority_identity_sha256(self) -> str:
+        """Bind replay to this interpreter, packages, inputs, and isolation."""
+
+        with self._authority_identity_lock:
+            if self._cached_authority_identity_sha256 is not None:
+                return self._cached_authority_identity_sha256
+            distributions = {
+                "scikit-learn" if package == "sklearn" else package
+                for package in (*BASELINE_PACKAGES, *OPTIONAL_BASELINE_PACKAGES)
+            }
+            distributions.update(
+                package.pip_name for package in CURATED_METHOD_PACKAGES
+            )
+            distributions.add("patsy")
+            probe = (
+                "import json, platform, sys\n"
+                "from importlib import metadata\n"
+                f"names = {sorted(distributions)!r}\n"
+                "versions = {}\n"
+                "for name in names:\n"
+                "    try:\n"
+                "        versions[name] = metadata.version(name)\n"
+                "    except metadata.PackageNotFoundError:\n"
+                "        versions[name] = 'unavailable'\n"
+                "print(json.dumps({\n"
+                "    'executable': sys.executable,\n"
+                "    'implementation': platform.python_implementation(),\n"
+                "    'python_version': platform.python_version(),\n"
+                "    'platform_system': platform.system(),\n"
+                "    'platform_machine': platform.machine(),\n"
+                "    'packages': versions,\n"
+                "}, sort_keys=True))\n"
+            )
+            probe_env = {
+                key: os.environ[key]
+                for key in _SAFE_INHERITED_ENV_KEYS
+                if os.environ.get(key)
+            }
+            probe_env["PYTHONNOUSERSITE"] = "1"
+            result = subprocess.run(  # noqa: S603 - configured argv, no shell
+                [self.python_executable, "-c", probe],
+                capture_output=True,
+                text=True,
+                timeout=30.0,
+                env=probe_env,
+                encoding="utf-8",
+                errors="replace",
+            )
+            if result.returncode != 0:
+                raise RuntimeError(
+                    "CodeRunner interpreter authority probe failed: "
+                    f"{result.stderr.strip() or self.python_executable}"
+                )
+            try:
+                interpreter = json.loads(result.stdout)
+                if not isinstance(interpreter, dict):
+                    raise TypeError("interpreter authority is not an object")
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    "CodeRunner interpreter authority probe returned invalid JSON"
+                ) from exc
+            extra_env_identity: dict[str, object] = {}
+            for key, value in sorted(self.extra_env.items()):
+                extra_env_identity[key] = _path_bound_authority_value(value)
+            python_binary = Path(self.python_executable).resolve(strict=True)
+            payload = {
+                "schema": "easyicu.code_runner_authority/1",
+                "interpreter": interpreter,
+                "python_entrypoint": {
+                    "configured": self.python_executable,
+                    "resolved": str(python_binary),
+                    "sha256": _sha256_file(python_binary),
+                },
+                "extra_env": extra_env_identity,
+                "network_policy": self.network_policy,
+                "allow_unsafe_host_fallback": self.allow_unsafe_host_fallback,
+            }
+            self._cached_authority_identity_sha256 = hashlib.sha256(
+                _canonical_json_bytes(payload)
+            ).hexdigest()
+            return self._cached_authority_identity_sha256
 
     def _isolation_backend_for_cmd(self, cmd: Sequence[str]) -> str:
         if self.network_policy not in {"none", "disabled"}:
@@ -1031,6 +1157,10 @@ class DockerRunner:
             self.user = None
         self.platform = platform
         self._provenance_lock = threading.Lock()
+        self._pull_lock = threading.Lock()
+        self._pull_attempted = False
+        self._image_identity_lock = threading.Lock()
+        self._cached_image_identity: Optional[Tuple[str, Tuple[str, ...]]] = None
         self._cached_runtime_provenance: Optional[Dict[str, object]] = None
         self._cached_runtime_requirements: Optional[str] = None
         # Resolve the docker binary up front so we can produce a
@@ -1270,9 +1400,7 @@ class DockerRunner:
         }
         env.update(rewritten_extra_env)
         if resolved_inputs_path is not None:
-            relative_manifest = resolved_inputs_path.relative_to(
-                self.workdir.resolve()
-            )
+            relative_manifest = resolved_inputs_path.relative_to(self.workdir.resolve())
             env["EASYICU_RESOLVED_INPUTS_JSON"] = (
                 f"{self.CONTAINER_RUN_ROOT}/{relative_manifest.as_posix()}"
             )
@@ -1305,23 +1433,34 @@ class DockerRunner:
         )
         return cmd
 
-    def _capture_runtime_provenance(self) -> Tuple[Dict[str, object], str]:
-        """Inspect the exact image and capture its installed Python packages.
+    def _ensure_image_ready_for_authority(self) -> None:
+        """Perform the optional mutable-tag pull once, before any identity seal."""
 
-        The result is cached per runner so concurrent/repeated steps share one
-        immutable environment snapshot.  Failure is fatal: a Docker run without
-        an image identity and execution-runtime lockfile is not submission-grade.
-        """
-
-        with self._provenance_lock:
-            if (
-                self._cached_runtime_provenance is not None
-                and self._cached_runtime_requirements is not None
-            ):
-                return (
-                    dict(self._cached_runtime_provenance),
-                    self._cached_runtime_requirements,
+        with self._pull_lock:
+            if self._pull_attempted:
+                return
+            self._pull_attempted = True
+            if not self.pull_image:
+                return
+            try:
+                subprocess.run(  # noqa: S603 - argv list, no shell
+                    [self.docker_executable, "pull", self.image],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=max(60.0, self.timeout_seconds),
                 )
+            except Exception:
+                # Inspection below remains the fail-closed source of truth.
+                pass
+
+    def _inspect_image_identity(self) -> Tuple[str, Tuple[str, ...]]:
+        """Resolve a mutable tag to one immutable image id without running it."""
+
+        self._ensure_image_ready_for_authority()
+        with self._image_identity_lock:
+            if self._cached_image_identity is not None:
+                return self._cached_image_identity
             inspect_proc = subprocess.run(  # noqa: S603 - argv list, no shell
                 [
                     self.docker_executable,
@@ -1344,7 +1483,7 @@ class DockerRunner:
             try:
                 inspected = json.loads(inspect_proc.stdout)
                 image_id = str(inspected["Id"])
-                repo_digests = [str(x) for x in inspected.get("RepoDigests") or []]
+                repo_digests = tuple(str(x) for x in inspected.get("RepoDigests") or [])
             except Exception as exc:
                 raise RuntimeError(
                     "Docker image provenance inspection returned invalid JSON"
@@ -1353,6 +1492,27 @@ class DockerRunner:
                 raise RuntimeError(
                     "Docker image provenance is missing a sha256 image id"
                 )
+            self._cached_image_identity = (image_id, repo_digests)
+            return self._cached_image_identity
+
+    def _capture_runtime_provenance(self) -> Tuple[Dict[str, object], str]:
+        """Inspect the exact image and capture its installed Python packages.
+
+        The result is cached per runner so concurrent/repeated steps share one
+        immutable environment snapshot.  Failure is fatal: a Docker run without
+        an image identity and execution-runtime lockfile is not submission-grade.
+        """
+
+        with self._provenance_lock:
+            if (
+                self._cached_runtime_provenance is not None
+                and self._cached_runtime_requirements is not None
+            ):
+                return (
+                    dict(self._cached_runtime_provenance),
+                    self._cached_runtime_requirements,
+                )
+            image_id, repo_digests = self._inspect_image_identity()
 
             freeze_proc = subprocess.run(  # noqa: S603 - argv list, no shell
                 [
@@ -1423,7 +1583,7 @@ class DockerRunner:
                 "runtime": "docker",
                 "image_reference": self.image,
                 "image_id": image_id,
-                "repo_digests": repo_digests,
+                "repo_digests": list(repo_digests),
                 "network": self.network,
                 "requirements_sha256": hashlib.sha256(
                     requirements_text.encode("utf-8")
@@ -1444,6 +1604,42 @@ class DockerRunner:
                 "Docker runtime provenance lacks a method capability snapshot"
             )
         return tuple(snapshot)
+
+    @property
+    def authority_identity_sha256(self) -> str:
+        """Bind replay cheaply to the immutable image and runner policy."""
+
+        image_id, _repo_digests = self._inspect_image_identity()
+        extra_mount_identity = [
+            {
+                "source": _path_bound_authority_value(source),
+                "destination": destination,
+                "mode": mode,
+            }
+            for source, destination, mode in self.extra_mounts
+        ]
+        payload = {
+            "schema": "easyicu.docker_runner_authority/1",
+            "image_id": image_id,
+            "network": self.network,
+            "extra_mounts": extra_mount_identity,
+            "extra_env": {
+                key: _path_bound_authority_value(value)
+                for key, value in sorted(self.extra_env.items())
+            },
+            "cpu_limit": self.cpu_limit,
+            "memory_limit": self.memory_limit,
+            "user": self.user,
+            "platform": self.platform,
+        }
+        return hashlib.sha256(
+            json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
 
     @staticmethod
     def _container_reference(
@@ -1504,9 +1700,7 @@ class DockerRunner:
             cleanup_notes.append(f"{label} failed")
 
         wait_proc = _control(("wait", container_ref), timeout=10.0)
-        if not teardown_confirmed and (
-            wait_proc is None or wait_proc.returncode != 0
-        ):
+        if not teardown_confirmed and (wait_proc is None or wait_proc.returncode != 0):
             cleanup_notes.append("wait failed")
 
         if not teardown_confirmed:
@@ -1587,20 +1781,6 @@ class DockerRunner:
             workdir=self.workdir,
             step_dir=step_dir,
         )
-
-        if self.pull_image:
-            try:
-                subprocess.run(  # noqa: S603 - argv list, no shell
-                    [self.docker_executable, "pull", self.image],
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                    timeout=max(60.0, self.timeout_seconds),
-                )
-            except Exception:
-                # pull failures are non-fatal; the run will surface
-                # any "image not found" error in stderr below.
-                pass
 
         runtime_provenance, runtime_requirements = self._capture_runtime_provenance()
 
@@ -1767,9 +1947,7 @@ def select_safe_runner_kind(
         "EASYICU_RUNNER_IMAGE", DockerRunner.DEFAULT_IMAGE
     )
     requested_executable = (
-        docker_executable
-        or os.environ.get("EASYICU_DOCKER_EXECUTABLE")
-        or "docker"
+        docker_executable or os.environ.get("EASYICU_DOCKER_EXECUTABLE") or "docker"
     )
     resolved_docker = shutil.which(requested_executable)
     docker_detail = f"Docker executable {requested_executable!r} was not found"
@@ -1795,9 +1973,8 @@ def select_safe_runner_kind(
             if probe.returncode == 0 and image_id.startswith("sha256:"):
                 return "docker"
             detail = str(probe.stderr or probe.stdout or "").strip()
-            docker_detail = (
-                f"Docker image {runtime_image!r} is not ready"
-                + (f": {detail[:240]}" if detail else "")
+            docker_detail = f"Docker image {runtime_image!r} is not ready" + (
+                f": {detail[:240]}" if detail else ""
             )
 
     if sys.platform == "darwin" and shutil.which("sandbox-exec"):

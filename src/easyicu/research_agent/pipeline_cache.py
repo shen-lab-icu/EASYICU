@@ -32,7 +32,6 @@ from .llm import MockLLMClient
 from .prompts import PROMPT_PACK_VERSION, prompt_pack_files
 from .schema import PipelineResult
 
-
 _CACHE_KEY_SCHEMA_VERSION = "easyicu.pipeline_cache_key/2"
 _CACHE_READY_STATUSES = frozenset({"manuscript_ready", "publication_ready"})
 _CACHE_REQUIRED_GATES = (
@@ -123,18 +122,60 @@ def llm_signature(llm: Any) -> str:
 
     Two runs with different LLMs *must* invalidate the cache because the
     bound manuscript / generated code / chosen plan could differ. The
-    signature is canonicalised so router order doesn't matter.
+    signature binds role mapping and ordered fallback topology because both can
+    change which provider produces an answer.
     """
     if llm is None:
         return "unconfigured"
     if isinstance(llm, MockLLMClient):
         return "mock"
+    if isinstance(getattr(llm, "_clients", None), (list, tuple)):
+        payload = {
+            "schema": "easyicu.llm_fallback_authority/1",
+            "class": f"{type(llm).__module__}.{type(llm).__qualname__}",
+            "clients": [llm_signature(client) for client in llm._clients],
+        }
+        return f"fallback-authority:{_canonical_sha256(payload)}"
+    if hasattr(llm, "for_role") and isinstance(getattr(llm, "_roles", None), dict):
+        role_signatures: Dict[str, str] = {}
+        for role in getattr(llm, "_roles"):
+            try:
+                role_signatures[str(role)] = llm_signature(llm.for_role(role))
+            except KeyError:
+                role_signatures[str(role)] = "unconfigured"
+        payload = {
+            "schema": "easyicu.llm_router_authority/1",
+            "class": f"{type(llm).__module__}.{type(llm).__qualname__}",
+            "default": llm_signature(getattr(llm, "_default", None)),
+            "roles": role_signatures,
+        }
+        return f"router-authority:{_canonical_sha256(payload)}"
     if hasattr(llm, "iter_clients"):
-        sigs = sorted(llm_signature(c) for c in llm.iter_clients())
-        return "router(" + ",".join(sigs) + ")"
+        sigs = [llm_signature(c) for c in llm.iter_clients()]
+        return "client-topology:" + _canonical_sha256(sigs)
     model = getattr(llm, "_model", None)
     cls = getattr(llm, "name", llm.__class__.__name__)
-    return f"{cls}:{model}" if model else str(cls)
+    endpoint = (
+        str(
+            getattr(llm, "_resolved_base_url", None)
+            or getattr(llm, "_base_url", None)
+            or ""
+        )
+        .strip()
+        .rstrip("/")
+    )
+    extra_body = getattr(llm, "_extra_body", None)
+    payload = {
+        "schema": "easyicu.llm_client_authority/1",
+        "class": f"{type(llm).__module__}.{type(llm).__qualname__}",
+        "name": str(cls),
+        "model": str(model or ""),
+        # Only digests are persisted: endpoint topology and output-affecting
+        # request options are bound without leaking credentials or headers.
+        "endpoint_sha256": _canonical_sha256(endpoint),
+        "extra_body_sha256": _canonical_sha256(extra_body or {}),
+    }
+    return f"{cls}:{model or ''}:authority:{_canonical_sha256(payload)}"
 
 
 def iter_mock_clients(llm: Any):

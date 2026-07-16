@@ -18,6 +18,7 @@ from easyicu.research_agent.step_authority_capsule import (
     StepAuthorityCapsuleError,
     StepAuthorityCapsuleRef,
     concept_audit_authority_sha256,
+    execution_seal_identity_sha256,
     load_verified_step_authority_capsule,
     put_content_blob,
     read_verified_content,
@@ -94,36 +95,38 @@ def _execution(
     returncode: int = 0,
     outputs_safe_to_collect: bool = True,
 ) -> ExecutionSeal:
-    return ExecutionSeal(
-        execution_identity_sha256=SHA_E,
-        code_sha256=candidate.candidate_code.sha256,
-        resolved_inputs_sha256=candidate.resolved_inputs.sha256,
-        returncode=returncode,
-        duration_seconds=0.25,
-        timed_out=False,
-        outputs_safe_to_collect=outputs_safe_to_collect,
-        requested_network_policy="none",
-        effective_isolation="macos_sandbox_exec",
-        isolation_degraded=False,
-        isolation_degradation_reason=None,
-        runtime_provenance=put_content_blob(
+    payload = {
+        "execution_context_sha256": SHA_D,
+        "code_sha256": candidate.candidate_code.sha256,
+        "resolved_inputs_sha256": candidate.resolved_inputs.sha256,
+        "returncode": returncode,
+        "duration_seconds": 0.25,
+        "timed_out": False,
+        "outputs_safe_to_collect": outputs_safe_to_collect,
+        "requested_network_policy": "none",
+        "effective_isolation": "macos_sandbox_exec",
+        "isolation_degraded": False,
+        "isolation_degradation_reason": None,
+        "runtime_provenance": put_content_blob(
             run_dir,
             payload=b'{"python":"3.13"}',
             media_type="application/json",
         ),
-        stdout=put_content_blob(
+        "stdout": put_content_blob(
             run_dir,
             payload=b"",
             media_type="text/plain",
         ),
-        stderr=put_content_blob(
+        "stderr": put_content_blob(
             run_dir,
             payload=b"",
             media_type="text/plain",
         ),
-        runner_log=None,
-        outputs=(),
-    )
+        "runner_log": None,
+        "outputs": (),
+    }
+    payload["execution_identity_sha256"] = execution_seal_identity_sha256(payload)
+    return ExecutionSeal.model_validate(payload)
 
 
 def _audit(
@@ -595,3 +598,13 @@ def test_code_blob_must_be_utf8_executable_python(tmp_path: Path) -> None:
             tmp_path,
             _candidate(tmp_path, candidate_code=invalid_code),
         )
+
+    assignment_code = put_content_blob(
+        tmp_path,
+        payload=b"value = 1\n",
+        media_type="text/x-python",
+    )
+    assert seal_step_authority_capsule(
+        tmp_path,
+        _candidate(tmp_path, candidate_code=assignment_code),
+    ).capsule_sha256

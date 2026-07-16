@@ -63,6 +63,87 @@ def test_runner_records_real_duration(ra, tmp_path: Path):
     assert "duration_seconds:" in log_text
 
 
+def test_code_runner_authority_binds_extra_inputs_and_isolation(ra, tmp_path: Path):
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1]}).to_parquet(cohort_path, index=False)
+    supplemental = tmp_path / "supplemental.csv"
+    supplemental.write_text("x\n1\n", encoding="utf-8")
+    first = ra.CodeRunner(
+        workdir=tmp_path / "run-a",
+        cohort_parquet=cohort_path,
+        python_executable=sys.executable,
+        extra_env={"SUPPLEMENTAL": str(supplemental)},
+        allow_unsafe_host_fallback=False,
+    )
+    first_identity = first.authority_identity_sha256
+
+    supplemental.write_text("x\n2\n", encoding="utf-8")
+    changed_input = ra.CodeRunner(
+        workdir=tmp_path / "run-b",
+        cohort_parquet=cohort_path,
+        python_executable=sys.executable,
+        extra_env={"SUPPLEMENTAL": str(supplemental)},
+        allow_unsafe_host_fallback=False,
+    )
+    changed_policy = ra.CodeRunner(
+        workdir=tmp_path / "run-c",
+        cohort_parquet=cohort_path,
+        python_executable=sys.executable,
+        extra_env={"SUPPLEMENTAL": str(supplemental)},
+        allow_unsafe_host_fallback=True,
+    )
+    input_dir = tmp_path / "input-dir"
+    input_dir.mkdir()
+    (input_dir / "value.txt").write_text("one", encoding="utf-8")
+    directory_before = ra.CodeRunner(
+        workdir=tmp_path / "run-d",
+        cohort_parquet=cohort_path,
+        python_executable=sys.executable,
+        extra_env={"INPUT_DIR": str(input_dir)},
+    ).authority_identity_sha256
+    (input_dir / "value.txt").write_text("two", encoding="utf-8")
+    directory_after = ra.CodeRunner(
+        workdir=tmp_path / "run-e",
+        cohort_parquet=cohort_path,
+        python_executable=sys.executable,
+        extra_env={"INPUT_DIR": str(input_dir)},
+    ).authority_identity_sha256
+
+    assert first_identity != changed_input.authority_identity_sha256
+    assert changed_input.authority_identity_sha256 != (
+        changed_policy.authority_identity_sha256
+    )
+    assert directory_before != directory_after
+
+
+def test_code_runner_authority_probe_failure_is_fail_closed(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1]}).to_parquet(cohort_path, index=False)
+    runner = ra.CodeRunner(
+        workdir=tmp_path / "run",
+        cohort_parquet=cohort_path,
+        python_executable=sys.executable,
+    )
+    import easyicu.research_agent.runner as runner_module
+
+    monkeypatch.setattr(
+        runner_module.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr="probe failed",
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="authority probe failed"):
+        _ = runner.authority_identity_sha256
+
+
 def test_code_runner_exposes_run_level_artifact_env(ra, tmp_path: Path):
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)

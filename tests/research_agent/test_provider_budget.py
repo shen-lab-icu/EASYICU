@@ -187,6 +187,15 @@ def test_cohort_translation_preserves_existing_single_ledger_state(tmp_path):
         receipt_path=receipt_path,
         reserved_final_category="concept_audit",
     )
+    initial_transport_id = seed.reserve_initial_generation(
+        {"schema_version": "easyicu.initial_generation_authority/1"}
+    )
+    seed.consume("initial_generation")
+    seed.complete_initial_generation_transport(
+        provider_transport_id=initial_transport_id,
+        after_code_sha256="b" * 64,
+        after_code_size_bytes=7,
+    )
     assert seed.reserve_logical_repair("runtime", max_repairs=2) == 1
     seed.consume("runtime_repair_patch")
     seed.complete_logical_repair_transport(
@@ -202,9 +211,7 @@ def test_cohort_translation_preserves_existing_single_ledger_state(tmp_path):
             del messages, kwargs
             return json.dumps(
                 {
-                    "inclusion": [
-                        {"concept_id": "age", "op": ">=", "value": 18}
-                    ],
+                    "inclusion": [{"concept_id": "age", "op": ">=", "value": 18}],
                     "exclusion": [],
                 }
             )
@@ -227,9 +234,26 @@ def test_cohort_translation_preserves_existing_single_ledger_state(tmp_path):
         expected_reserved_final_category="concept_audit",
     )
     assert state.categories == (
+        "initial_generation",
         "runtime_repair_patch",
         "cohort_definition_translation",
     )
+    assert state.initial_generation is not None
+    assert state.initial_generation["transport"] == {
+        "state": "completed",
+        "after_code_sha256": "b" * 64,
+        "after_code_size_bytes": 7,
+        "provider_history_len": 1,
+        "provider_history_sha256": hashlib.sha256(
+            json.dumps(
+                {"categories": ["initial_generation"]},
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest(),
+        "provider_calls": 1,
+    }
     assert len(state.logical_repairs) == 1
     assert state.logical_repairs[0]["transport"]["state"] == "completed"
 
@@ -434,13 +458,15 @@ def test_final_audit_phase_roundtrips_in_the_single_provider_receipt(tmp_path):
         reserved_final_category="concept_audit",
     )
     first.bind_reserved_category("concept_audit", token="audit-authority")
-    assert first.reservation_status(
-        "concept_audit", token="audit-authority"
-    ) == "bound_unpaid"
+    assert (
+        first.reservation_status("concept_audit", token="audit-authority")
+        == "bound_unpaid"
+    )
     first.consume("concept_audit")
-    assert first.reservation_status(
-        "concept_audit", token="audit-authority"
-    ) == "attempted_incomplete"
+    assert (
+        first.reservation_status("concept_audit", token="audit-authority")
+        == "attempted_incomplete"
+    )
 
     pending = load_provider_call_budget_state(
         path,
@@ -472,9 +498,10 @@ def test_final_audit_phase_roundtrips_in_the_single_provider_receipt(tmp_path):
         completed_reservation_token=completed.completed_reservation_token,
         reservation_released=completed.reservation_released,
     )
-    assert resumed.reservation_status(
-        "concept_audit", token="audit-authority"
-    ) == "completed"
+    assert (
+        resumed.reservation_status("concept_audit", token="audit-authority")
+        == "completed"
+    )
     resumed.release_reserved_category("concept_audit", token="audit-authority")
 
     released = load_provider_call_budget_state(
@@ -762,14 +789,11 @@ def test_logical_repair_transport_success_binds_after_code_and_provider_history(
     assert transport == {
         "state": "completed",
         "mode": "minimal_patch",
-        "after_code_sha256": hashlib.sha256(
-            after_code.encode("utf-8")
-        ).hexdigest(),
+        "after_code_sha256": hashlib.sha256(after_code.encode("utf-8")).hexdigest(),
         "provider_history_len": 1,
-        "provider_history_sha256": _category_digest(
-            ["contract_repair_patch"]
-        ),
+        "provider_history_sha256": _category_digest(["contract_repair_patch"]),
         "provider_calls": 1,
+        "result_persistence": "untracked",
     }
 
 
@@ -1054,11 +1078,14 @@ def test_logical_repair_binding_payload_and_digest_are_consistent(tmp_path):
         "attempt_id": 1,
     }
 
-    assert budget.reserve_logical_repair(
-        "contract",
-        max_repairs=3,
-        binding=binding,
-    ) == 1
+    assert (
+        budget.reserve_logical_repair(
+            "contract",
+            max_repairs=3,
+            binding=binding,
+        )
+        == 1
+    )
     state = load_provider_call_budget_state(
         path,
         step_id="bound_repair",
@@ -1106,11 +1133,14 @@ def test_logical_repair_binding_tamper_fails_with_recomputed_outer_digest(tmp_pa
         receipt_path=path,
         reserved_final_category="concept_audit",
     )
-    assert budget.reserve_logical_repair(
-        "runtime",
-        max_repairs=3,
-        binding={"step_id": "bound_tamper", "attempt_id": 1},
-    ) == 1
+    assert (
+        budget.reserve_logical_repair(
+            "runtime",
+            max_repairs=3,
+            binding={"step_id": "bound_tamper", "attempt_id": 1},
+        )
+        == 1
+    )
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload.pop("sha256")
     payload["logical_repairs"][0]["binding"]["attempt_id"] = 2
@@ -1578,7 +1608,7 @@ def test_pipeline_default_budget_executes_two_semantic_repairs_and_final_audit(
     tmp_path: Path,
 ):
     def script(marker: str) -> str:
-        return f'''\
+        return f"""\
 import json
 import os
 import pandas as pd
@@ -1595,7 +1625,7 @@ summary = {{
 pd.DataFrame([summary]).to_csv(os.path.join(out, "cohort_summary.csv"), index=False)
 with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as handle:
     json.dump(summary, handle)
-'''
+"""
 
     class _TwoRepairLLM:
         name = "two-semantic-repair-budget-test"
