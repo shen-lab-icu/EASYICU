@@ -855,6 +855,280 @@ model.fit(frame)
     )
 
 
+def test_mechanical_preflight_blocks_provenance_guard_swallowed_by_handler(ra):
+    code = """
+def provenance_audit(frame):
+    checks = [{
+        'role': 'audit_only',
+        'invalid_pair_n': 1,
+        'discordant_n': 0,
+    }]
+    failed = any(
+        check['invalid_pair_n'] or check['discordant_n'] for check in checks
+    )
+    return {
+        'checks': checks,
+        'fail_closed': failed,
+        'completed_step_allowed': not failed,
+    }
+
+def main(frame):
+    try:
+        audit = provenance_audit(frame)
+        if audit['fail_closed']:
+            raise RuntimeError('invalid measurement provenance')
+        model.fit(frame)
+    except Exception as exc:
+        write_failure_summary(str(exc))
+
+main(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    finding = next(
+        finding
+        for finding in findings
+        if finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+    )
+
+    assert any(
+        issue.get("failure_mode") == "provenance_guard_swallowed_by_handler"
+        and issue.get("handler_line")
+        for issue in finding.detail.get("issues", [])
+    )
+
+
+def test_mechanical_preflight_accepts_immediate_provenance_handler_reraise(ra):
+    code = """
+def provenance_audit(frame):
+    checks = [{
+        'role': 'audit_only',
+        'invalid_pair_n': 1,
+        'discordant_n': 0,
+    }]
+    failed = any(
+        check['invalid_pair_n'] or check['discordant_n'] for check in checks
+    )
+    return {
+        'checks': checks,
+        'fail_closed': failed,
+        'completed_step_allowed': not failed,
+    }
+
+def main(frame):
+    try:
+        audit = provenance_audit(frame)
+        if audit['fail_closed']:
+            raise RuntimeError('invalid measurement provenance')
+        model.fit(frame)
+    except (Exception, ValueError):
+        raise
+
+main(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize("exit_code", ["0", "None"])
+def test_mechanical_preflight_rejects_successful_exit_from_provenance_handler(
+    ra, exit_code
+):
+    code = f"""
+def provenance_audit(frame):
+    checks = [{{
+        'role': 'audit_only',
+        'invalid_pair_n': 1,
+        'discordant_n': 0,
+    }}]
+    failed = any(
+        check['invalid_pair_n'] or check['discordant_n'] for check in checks
+    )
+    return {{
+        'checks': checks,
+        'fail_closed': failed,
+        'completed_step_allowed': not failed,
+    }}
+
+def main(frame):
+    try:
+        audit = provenance_audit(frame)
+        if audit['fail_closed']:
+            raise RuntimeError('invalid measurement provenance')
+        model.fit(frame)
+    except Exception:
+        raise SystemExit({exit_code})
+
+main(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_reports_each_unsafe_provenance_handler(ra):
+    code = """
+def provenance_audit(frame):
+    checks = [{
+        'role': 'audit_only',
+        'invalid_pair_n': 1,
+        'discordant_n': 0,
+    }]
+    failed = any(
+        check['invalid_pair_n'] or check['discordant_n'] for check in checks
+    )
+    return {
+        'checks': checks,
+        'fail_closed': failed,
+        'completed_step_allowed': not failed,
+    }
+
+def main(frame):
+    try:
+        audit = provenance_audit(frame)
+        if audit['fail_closed']:
+            raise RuntimeError('invalid measurement provenance')
+        model.fit(frame)
+    except KeyError:
+        raise
+    except Exception:
+        write_failure_summary()
+
+main(frame)
+"""
+    tree = ast.parse(code)
+    unsafe_line = next(
+        handler.lineno
+        for handler in ast.walk(tree)
+        if isinstance(handler, ast.ExceptHandler)
+        and not (
+            handler.body
+            and isinstance(handler.body[0], ast.Raise)
+            and handler.body[0].exc is None
+        )
+    )
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    finding = next(
+        finding
+        for finding in findings
+        if finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+    )
+    handler_lines = {
+        issue.get("handler_line")
+        for issue in finding.detail.get("issues", [])
+        if issue.get("failure_mode") == "provenance_guard_swallowed_by_handler"
+    }
+
+    assert handler_lines == {unsafe_line}
+
+
+def test_mechanical_preflight_reports_helper_call_and_handler_locations(ra):
+    code = """
+def provenance_audit(frame):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    return {
+        'role': 'audit_only',
+        'invalid_pair_n': invalid_pair_n,
+        'discordant_n': discordant_n,
+    }
+
+def main(frame):
+    try:
+        audit = provenance_audit(frame)
+        failures = []
+        if audit['invalid_pair_n'] or audit['discordant_n']:
+            failures.append('invalid measurement provenance')
+        if failures:
+            raise RuntimeError('; '.join(failures))
+        model.fit(frame)
+    except Exception as exc:
+        write_failure_summary(str(exc))
+
+main(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    finding = next(
+        finding
+        for finding in findings
+        if finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+    )
+    issues = finding.detail.get("issues", [])
+
+    assert any(
+        issue.get("failure_mode") == "provenance_guard_swallowed_by_handler"
+        and issue.get("handler_line")
+        for issue in issues
+    )
+    assert any(
+        issue.get("failure_mode") == "provenance_helper_result_not_immediately_guarded"
+        and issue.get("helper_name") == "provenance_audit"
+        and issue.get("call_line")
+        and issue.get("following_guard_line")
+        for issue in issues
+    )
+
+
+@pytest.mark.parametrize(
+    "handler",
+    [
+        "except Exception:\n        if strict:\n            raise\n        write_failure_summary()",
+        "except Exception:\n        write_failure_summary()\n    finally:\n        publish_partial_output()",
+    ],
+)
+def test_mechanical_preflight_does_not_accept_partial_provenance_reraise(ra, handler):
+    code = f"""
+def provenance_audit(frame):
+    checks = [{{
+        'role': 'audit_only',
+        'invalid_pair_n': 1,
+        'discordant_n': 0,
+    }}]
+    failed = any(
+        check['invalid_pair_n'] or check['discordant_n'] for check in checks
+    )
+    return {{
+        'checks': checks,
+        'fail_closed': failed,
+        'completed_step_allowed': not failed,
+    }}
+
+def main(frame, strict=True):
+    try:
+        audit = provenance_audit(frame)
+        if audit['fail_closed']:
+            raise RuntimeError('invalid measurement provenance')
+        model.fit(frame)
+    {handler}
+
+main(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
 def test_mechanical_preflight_accepts_inline_failure_collection_then_raise(ra):
     code = """
 def main(frame):
@@ -3503,7 +3777,7 @@ def audit_event_presence(frame):
     )
 
 
-def test_mechanical_preflight_accepts_re_raised_reconciliation_error(ra):
+def test_mechanical_preflight_rejects_replaced_reconciliation_error(ra):
     code = """
 def audit_event_presence(frame):
     try:
@@ -3518,9 +3792,36 @@ def audit_event_presence(frame):
 """
     findings = audit_mechanical_code_contracts(code, _figure_step(ra))
 
-    assert not any(
+    assert any(
         finding.detail
         and finding.detail.get("reason") == "provenance_helper_error_swallowed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_rejects_successful_exit_for_host_validation_error(ra):
+    code = """
+from easyicu.research_agent.methods.descriptive_inputs import (
+    DescriptiveInputError,
+    measurement_provenance_receipt,
+)
+
+def audit_measurement(frame):
+    try:
+        return measurement_provenance_receipt(
+            frame,
+            measured_column=measured_column,
+            count_column=count_column,
+        )
+    except DescriptiveInputError:
+        raise SystemExit(0)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "host_validation_helper_error_swallowed"
         for finding in findings
     )
 

@@ -326,6 +326,9 @@ def test_coder_repair_fail_closes_nonterminating_provenance_audit(ra):
     assert "raise before model fitting or output registration" in prompt
     assert "treat an empty checks collection as failure" in prompt
     assert "Do not rely only on an `any(...)` or `all(...)` generator" in prompt
+    assert "host-owned `measurement_provenance_receipt`" in prompt
+    assert "Do not catch that failure and continue" in prompt
+    assert "unconditionally re-raised" in prompt
 
 
 def test_coder_repair_requires_bidirectional_provenance_pairs(ra):
