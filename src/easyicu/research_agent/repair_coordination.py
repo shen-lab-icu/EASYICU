@@ -26,7 +26,9 @@ non-audit slot directly on a full rewrite.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+import hashlib
+import json
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from .code_patch import CodePatchError, apply_code_patch
@@ -36,6 +38,88 @@ from .provider_budget import (
     StepProviderCallBudget,
     complete_with_provider_budget,
 )
+
+REPAIR_AUTHORITY_BINDING_SCHEMA_VERSION = "easyicu.repair_authority_binding/1"
+
+
+def _is_sha256_hex(value: str) -> bool:
+    return len(value) == 64 and all(char in "0123456789abcdef" for char in value)
+
+
+@dataclass(frozen=True)
+class RepairAuthorityBinding:
+    """Content-addressed authority coordinates for one logical repair.
+
+    The binding contains only host-owned identities.  It does not choose any
+    scientific coordinate; it proves which Planner step, candidate code,
+    typed inputs/context, repair ticket, gate implementation and prompt pack
+    authorized a paid repair attempt.
+    """
+
+    step_id: str
+    attempt_id: int
+    repair_class: str
+    before_code_sha256: str
+    step_spec_sha256: str
+    resolved_inputs_sha256: str
+    coder_context_sha256: str
+    repair_ticket_sha256: str
+    engine_validator_sha256: str
+    prompt_pack_version: str
+    run_input_capsule_sha256: Optional[str] = None
+    schema_version: str = REPAIR_AUTHORITY_BINDING_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        if not str(self.step_id).strip():
+            raise ValueError("repair authority step_id must be non-empty")
+        if (
+            isinstance(self.attempt_id, bool)
+            or not isinstance(self.attempt_id, int)
+            or self.attempt_id < 1
+        ):
+            raise ValueError("repair authority attempt_id must be >= 1")
+        if not str(self.repair_class).strip():
+            raise ValueError("repair authority class must be non-empty")
+        if not str(self.prompt_pack_version).strip():
+            raise ValueError("repair authority prompt version must be non-empty")
+        digest_fields = (
+            "before_code_sha256",
+            "step_spec_sha256",
+            "resolved_inputs_sha256",
+            "coder_context_sha256",
+            "repair_ticket_sha256",
+            "engine_validator_sha256",
+        )
+        for field_name in digest_fields:
+            value = str(getattr(self, field_name)).strip().lower()
+            if not _is_sha256_hex(value):
+                raise ValueError(
+                    f"repair authority {field_name} must be a SHA-256 hex digest"
+                )
+            object.__setattr__(self, field_name, value)
+        if self.run_input_capsule_sha256 is not None:
+            capsule_digest = str(self.run_input_capsule_sha256).strip().lower()
+            if not _is_sha256_hex(capsule_digest):
+                raise ValueError(
+                    "repair authority run_input_capsule_sha256 must be a "
+                    "SHA-256 hex digest"
+                )
+            object.__setattr__(self, "run_input_capsule_sha256", capsule_digest)
+
+    def payload(self) -> Dict[str, object]:
+        """Return the canonical JSON-safe receipt payload."""
+
+        return asdict(self)
+
+    @property
+    def sha256(self) -> str:
+        canonical = json.dumps(
+            self.payload(),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 class StepRepairBudget:
@@ -137,14 +221,37 @@ class StepRepairBudget:
     def available(self) -> bool:
         return self.logical_available() and self.provider_available()
 
-    def consume(self, repair_class: str) -> bool:
+    def consume(
+        self,
+        repair_class: str,
+        *,
+        authority_binding: Optional[RepairAuthorityBinding] = None,
+    ) -> bool:
         if not self.logical_available():
             self._step_record["step_llm_repair_budget_exhausted"] = True
             self._step_record["step_llm_repair_budget"] = self._max_llm_repairs
             return False
+        normalized_class = str(repair_class).strip()
+        if authority_binding is not None:
+            expected_attempt_id = self._llm_repair_attempts + 1
+            if authority_binding.attempt_id != expected_attempt_id:
+                raise ValueError(
+                    "repair authority attempt_id does not match the next durable "
+                    "logical repair attempt"
+                )
+            if authority_binding.repair_class != normalized_class:
+                raise ValueError(
+                    "repair authority class does not match the requested repair"
+                )
         attempt_id = self._provider_budget.reserve_logical_repair(
-            repair_class,
+            normalized_class,
             max_repairs=self._max_llm_repairs,
+            binding=(
+                authority_binding.payload() if authority_binding is not None else None
+            ),
+            binding_sha256=(
+                authority_binding.sha256 if authority_binding is not None else None
+            ),
         )
         if attempt_id is None:
             if not self.logical_available():
@@ -158,8 +265,12 @@ class StepRepairBudget:
         self._step_record["step_llm_repair_attempts"] = self._llm_repair_attempts
         self._step_record["step_llm_repair_budget"] = self._max_llm_repairs
         self._step_record.setdefault("step_llm_repair_classes", []).append(
-            str(repair_class)
+            normalized_class
         )
+        if authority_binding is not None:
+            self._step_record.setdefault("step_llm_repair_bindings", []).append(
+                authority_binding.sha256
+            )
         return True
 
 
@@ -312,6 +423,8 @@ def authorized_deterministic_concept_repair(
 
 
 __all__ = [
+    "REPAIR_AUTHORITY_BINDING_SCHEMA_VERSION",
+    "RepairAuthorityBinding",
     "RepairCoordinator",
     "RepairTransportResult",
     "StepRepairBudget",

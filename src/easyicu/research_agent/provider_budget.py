@@ -128,7 +128,15 @@ def _verified_logical_repairs(
         repair_class = raw_entry.get("repair_class")
         history_len = raw_entry.get("provider_history_len")
         history_sha256 = raw_entry.get("provider_history_sha256")
+        binding = raw_entry.get("binding")
         binding_sha256 = raw_entry.get("binding_sha256")
+        binding_pair_invalid = (binding is None) != (binding_sha256 is None)
+        if binding is not None and not isinstance(binding, dict):
+            binding_pair_invalid = True
+        if isinstance(binding, dict) and isinstance(binding_sha256, str):
+            binding_pair_invalid = (
+                binding_pair_invalid or binding_sha256 != _receipt_digest(dict(binding))
+            )
         if (
             isinstance(attempt_id, bool)
             or attempt_id != index
@@ -140,6 +148,7 @@ def _verified_logical_repairs(
             or history_len > len(categories)
             or not isinstance(history_sha256, str)
             or history_sha256 != _category_history_digest(categories[:history_len])
+            or binding_pair_invalid
             or (
                 binding_sha256 is not None
                 and (
@@ -451,6 +460,7 @@ class StepProviderCallBudget:
         repair_class: str,
         *,
         max_repairs: int,
+        binding: Optional[Mapping[str, object]] = None,
         binding_sha256: Optional[str] = None,
     ) -> Optional[int]:
         """Durably reserve one logical repair before any provider call.
@@ -467,7 +477,31 @@ class StepProviderCallBudget:
             raise TypeError("logical repair limit must be an integer")
         if max_repairs < 0:
             raise ValueError("logical repair limit must be non-negative")
+        normalized_binding_payload: Optional[Dict[str, object]] = None
         normalized_binding: Optional[str] = None
+        if binding is not None:
+            try:
+                normalized_binding_payload = json.loads(
+                    json.dumps(
+                        dict(binding),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        allow_nan=False,
+                    )
+                )
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "logical repair binding must be canonical JSON data"
+                ) from exc
+            if not isinstance(normalized_binding_payload, dict):
+                raise ValueError("logical repair binding must be an object")
+            computed_binding = _receipt_digest(normalized_binding_payload)
+            if binding_sha256 is None:
+                binding_sha256 = computed_binding
+            elif str(binding_sha256).strip().lower() != computed_binding:
+                raise ValueError(
+                    "logical repair binding digest does not match its payload"
+                )
         if binding_sha256 is not None:
             normalized_binding = str(binding_sha256).strip().lower()
             if len(normalized_binding) != 64 or any(
@@ -486,6 +520,11 @@ class StepProviderCallBudget:
                 "provider_history_sha256": _category_history_digest(self._categories),
             }
             if normalized_binding is not None:
+                if normalized_binding_payload is None:
+                    raise ValueError(
+                        "logical repair binding digest requires its canonical payload"
+                    )
+                entry["binding"] = normalized_binding_payload
                 entry["binding_sha256"] = normalized_binding
             self._logical_repairs.append(entry)
             try:

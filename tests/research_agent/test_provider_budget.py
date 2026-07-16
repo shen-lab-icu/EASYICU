@@ -559,6 +559,70 @@ def test_logical_repair_reservation_is_durable_before_provider_call(tmp_path):
     assert restored.reserve_logical_repair("runtime", max_repairs=1) is None
 
 
+def test_logical_repair_binding_payload_and_digest_are_consistent(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="bound_repair")
+    budget = StepProviderCallBudget(
+        5,
+        step_id="bound_repair",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    binding = {
+        "schema_version": "easyicu.repair_authority_binding/1",
+        "step_id": "bound_repair",
+        "attempt_id": 1,
+    }
+
+    assert budget.reserve_logical_repair(
+        "contract",
+        max_repairs=3,
+        binding=binding,
+    ) == 1
+    state = load_provider_call_budget_state(
+        path,
+        step_id="bound_repair",
+        expected_reserved_final_category="concept_audit",
+    )
+    assert state.logical_repairs[0]["binding"] == binding
+    assert len(str(state.logical_repairs[0]["binding_sha256"])) == 64
+
+
+def test_logical_repair_binding_tamper_fails_with_recomputed_outer_digest(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="bound_tamper")
+    budget = StepProviderCallBudget(
+        5,
+        step_id="bound_tamper",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    assert budget.reserve_logical_repair(
+        "runtime",
+        max_repairs=3,
+        binding={"step_id": "bound_tamper", "attempt_id": 1},
+    ) == 1
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.pop("sha256")
+    payload["logical_repairs"][0]["binding"]["attempt_id"] = 2
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    payload["sha256"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProviderCallBudgetReceiptError, match="inconsistent"):
+        load_provider_call_budget_state(
+            path,
+            step_id="bound_tamper",
+            expected_reserved_final_category="concept_audit",
+        )
+
+
 def test_legacy_logical_repair_history_migrates_once_into_same_receipt(tmp_path):
     path = provider_call_budget_receipt_path(tmp_path, step_id="legacy")
     budget = StepProviderCallBudget(
@@ -1108,3 +1172,17 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
         "concept_audit",
         "analyzer",
     ]
+    receipt_state = load_provider_call_budget_state(
+        provider_call_budget_receipt_path(
+            Path(result.workdir),
+            step_id="01_summary",
+        ),
+        step_id="01_summary",
+        expected_reserved_final_category="concept_audit",
+    )
+    assert len(receipt_state.logical_repairs) == 2
+    assert all(
+        entry.get("binding", {}).get("step_id") == "01_summary"
+        and entry.get("binding_sha256")
+        for entry in receipt_state.logical_repairs
+    )
