@@ -1377,8 +1377,11 @@ def _registered_product_paths(
     *,
     product_name: str,
     allowed_kinds: frozenset[str],
+    out_dir: Path,
 ) -> list[str]:
     explicit: list[str] = []
+    legacy: list[str] = []
+    target_descriptor_invalid = False
 
     def matches(value: object) -> bool:
         parsed = typed_product(value)
@@ -1389,35 +1392,134 @@ def _registered_product_paths(
         )
 
     def visit_container(value: Any) -> None:
+        nonlocal target_descriptor_invalid
+
         if isinstance(value, Mapping):
-            descriptor_kind = value.get("kind") or value.get("product_type")
-            descriptor_name = value.get("name")
-            descriptor = (
-                f"{descriptor_kind}:{descriptor_name}"
-                if descriptor_kind is not None and descriptor_name is not None
-                else descriptor_name
-            )
-            if matches(descriptor):
-                explicit.extend(
-                    _iter_paths(
-                        next(
-                            (
-                                value.get(key)
-                                for key in ("path", "relative_path", "filename")
-                                if value.get(key)
-                            ),
-                            None,
+            descriptor_keys = {_normalise(raw_key) for raw_key in value}
+            if descriptor_keys.intersection(_PRODUCT_DESCRIPTOR_FIELDS):
+                raw_descriptor_kind = value.get("kind")
+                raw_product_type = value.get("product_type")
+                descriptor_name = value.get("name")
+                raw_kind_identity = typed_product(raw_descriptor_kind)
+                product_type_identity = typed_product(raw_product_type)
+                descriptor_kind_families = {
+                    family
+                    for family in (
+                        raw_kind_identity[0]
+                        if raw_kind_identity is not None
+                        else _canonical_kind(raw_descriptor_kind),
+                        product_type_identity[0]
+                        if product_type_identity is not None
+                        else _canonical_kind(raw_product_type),
+                    )
+                    if family
+                }
+                name_identity = typed_product(descriptor_name)
+                semantic_identities = {
+                    identity
+                    for identity in (
+                        raw_kind_identity,
+                        product_type_identity,
+                        name_identity,
+                    )
+                    if identity is not None
+                }
+                if name_identity is None and descriptor_name is not None:
+                    semantic_identities.update(
+                        identity
+                        for family in descriptor_kind_families
+                        for identity in (
+                            typed_product(f"{family}:{descriptor_name}"),
+                        )
+                        if identity is not None
+                    )
+                identity_targets_product = any(
+                    identity[0] in allowed_kinds and identity[1] == product_name
+                    for identity in semantic_identities
+                )
+                direct_paths = [
+                    path
+                    for field in ("path", "relative_path", "filename")
+                    for path in _iter_paths(value.get(field))
+                ]
+                targets_product = identity_targets_product or (
+                    not semantic_identities
+                    and (
+                        (
+                            _file_stem(descriptor_name) == product_name
+                            or any(
+                                _file_stem(path) == product_name
+                                for path in direct_paths
+                            )
+                        )
+                        and (
+                            not descriptor_kind_families
+                            or bool(descriptor_kind_families & allowed_kinds)
                         )
                     )
                 )
+
+                # Descriptor fields form a closed authority boundary.  Never
+                # recurse into metadata/value or reuse these paths as legacy
+                # filename evidence after descriptor validation fails.
+                if (
+                    isinstance(raw_descriptor_kind, str)
+                    and ":" in raw_descriptor_kind
+                ):
+                    shorthand = _typed_kind_shorthand_receipt(value, out_dir=out_dir)
+                    if shorthand is not None:
+                        descriptor, candidate = shorthand
+                        if (
+                            descriptor[0] in allowed_kinds
+                            and descriptor[1] == product_name
+                        ):
+                            try:
+                                explicit.append(
+                                    str(
+                                        candidate.relative_to(
+                                            Path(out_dir).absolute()
+                                        )
+                                    )
+                                )
+                            except ValueError:
+                                target_descriptor_invalid = True
+                            return
+                    if targets_product:
+                        target_descriptor_invalid = True
+                    return
+
+                if identity_targets_product:
+                    if direct_paths:
+                        explicit.extend(direct_paths[:1])
+                    else:
+                        target_descriptor_invalid = True
+                elif targets_product:
+                    target_descriptor_invalid = True
+                return
+
+            # Exact typed-key mappings are the legacy structured form.  They
+            # remain authoritative even when the physical filename is not the
+            # logical product name.
             for raw_key, child in value.items():
                 if matches(raw_key):
-                    explicit.extend(_iter_paths(child))
+                    paths = list(_iter_paths(child))
+                    if paths:
+                        explicit.extend(paths)
+                    else:
+                        target_descriptor_invalid = True
                 elif isinstance(child, (Mapping, list, tuple)):
                     visit_container(child)
-        elif isinstance(value, (list, tuple)):
+                elif _is_file_path(child) and _file_stem(child) == product_name:
+                    legacy.append(str(child).strip())
+            return
+
+        if isinstance(value, (list, tuple)):
             for child in value:
                 visit_container(child)
+            return
+
+        if _is_file_path(value) and _file_stem(value) == product_name:
+            legacy.append(str(value).strip())
 
     def visit_summary(node: Any) -> None:
         if isinstance(node, Mapping):
@@ -1431,13 +1533,11 @@ def _registered_product_paths(
                 visit_summary(child)
 
     visit_summary(summary)
+    if target_descriptor_invalid:
+        return []
     if explicit:
         return list(dict.fromkeys(explicit))
-    return [
-        value
-        for value in _registered_output_paths(summary)
-        if _file_stem(value) == product_name
-    ]
+    return list(dict.fromkeys(legacy))
 
 
 def _integral_count(value: Any) -> int | None:
@@ -1661,6 +1761,7 @@ def primary_analysis_cohort_integrity_findings(
         step_summary,
         product_name=cohort_product,
         allowed_kinds=_PRIMARY_ANALYSIS_COHORT_DATA_KINDS,
+        out_dir=out_dir,
     )
     if len(cohort_candidates) != 1:
         return finding(
@@ -1779,6 +1880,7 @@ def primary_analysis_cohort_integrity_findings(
             step_summary,
             product_name=product,
             allowed_kinds=frozenset({"table"}),
+            out_dir=out_dir,
         )
         if len(candidates) != 1:
             return finding(
@@ -2302,6 +2404,102 @@ def _valid_inline_statistic_descriptor(
     return _finite_json_number(value["value"])
 
 
+def _typed_kind_shorthand_receipt(
+    value: Mapping[str, Any], *, out_dir: Path | None
+) -> tuple[tuple[str, str], Path] | None:
+    """Resolve one closed ``kind:product`` descriptor to its exact file."""
+
+    raw_kind = value.get("kind")
+    if not isinstance(raw_kind, str) or raw_kind.strip().count(":") != 1:
+        return None
+    descriptor = _typed_product(raw_kind)
+    if (
+        descriptor is None
+        or descriptor[0] not in PLAN_MATERIALIZABLE_TYPED_OUTPUT_KINDS
+        or out_dir is None
+    ):
+        return None
+
+    if "name" in value:
+        raw_name = value.get("name")
+        if not isinstance(raw_name, str) or not raw_name.strip():
+            return None
+        name_descriptor = _typed_product(raw_name)
+        if name_descriptor is None:
+            name_descriptor = _typed_product(f"{descriptor[0]}:{raw_name}")
+        if name_descriptor != descriptor:
+            return None
+    if "product_type" in value and (
+        _canonical_kind(value.get("product_type")) != descriptor[0]
+    ):
+        return None
+
+    # Normalize only the caller's coordinate system.  ``absolute()`` makes an
+    # absolute descriptor comparable with a relative ``out_dir`` without
+    # resolving any symlink or granting authority outside the lexical root.
+    root = Path(out_dir).absolute()
+    candidates: list[Path] = []
+    unresolved_relative_paths: list[Path] = []
+    for field in ("path", "relative_path", "filename"):
+        if field not in value:
+            continue
+        raw_path = value.get(field)
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            return None
+        supplied_path = Path(raw_path.strip())
+        if ".." in supplied_path.parts:
+            return None
+        if supplied_path.is_absolute():
+            try:
+                supplied_path = supplied_path.relative_to(root)
+            except ValueError:
+                return None
+        try:
+            candidates.append(_contained_regular_output_file(root, supplied_path))
+        except ValueError:
+            if Path(raw_path.strip()).is_absolute():
+                return None
+            unresolved_relative_paths.append(supplied_path)
+    if not candidates:
+        return None
+
+    authoritative_stat = candidates[0].stat()
+    authoritative_identity = (authoritative_stat.st_dev, authoritative_stat.st_ino)
+    if any(
+        (candidate.stat().st_dev, candidate.stat().st_ino)
+        != authoritative_identity
+        for candidate in candidates[1:]
+    ):
+        return None
+
+    # A run-relative alias such as ``steps/03/outputs/result.csv`` has meaning
+    # only after another field has identified the authoritative output-local
+    # file.  Project it from ancestors of ``out_dir`` and accept it solely when
+    # it resolves, without links, to that same inode.  This never grants
+    # authority from a filename or ancestor lookup alone.
+    for relative_path in unresolved_relative_paths:
+        matching_candidate: Path | None = None
+        for ancestor in root.parents:
+            projected = ancestor / relative_path
+            try:
+                output_relative = projected.relative_to(root)
+                candidate = _contained_regular_output_file(root, output_relative)
+                candidate_stat = candidate.stat()
+            except (ValueError, OSError):
+                continue
+            if (candidate_stat.st_dev, candidate_stat.st_ino) == authoritative_identity:
+                matching_candidate = candidate
+                break
+        if matching_candidate is None:
+            return None
+
+    if not _descriptor_path_is_compatible(
+        kind=descriptor[0], path=str(candidates[0])
+    ):
+        return None
+    return descriptor, candidates[0]
+
+
 def _registered_products(
     summary: Mapping[str, Any],
     *,
@@ -2345,7 +2543,19 @@ def _registered_products(
             # class is compatible with the canonical typed kind.  This lets a
             # harmless filename prefix differ from the logical product name
             # without turning arbitrary summary prose into product authority.
-            descriptor_kind = value.get("kind") or value.get("product_type")
+            raw_descriptor_kind = value.get("kind")
+            if isinstance(raw_descriptor_kind, str) and ":" in raw_descriptor_kind:
+                shorthand = _typed_kind_shorthand_receipt(value, out_dir=out_dir)
+                if shorthand is not None:
+                    shorthand_descriptor, shorthand_path = shorthand
+                    products.add(shorthand_descriptor)
+                    if shorthand_descriptor[0] == "figure":
+                        figure_paths.append(
+                            (str(shorthand_path), explicit_figure_list)
+                        )
+                return
+
+            descriptor_kind = raw_descriptor_kind or value.get("product_type")
             descriptor_name = value.get("name")
             descriptor_keys = {_normalise(raw_key) for raw_key in value}
             descriptor_candidate = bool(

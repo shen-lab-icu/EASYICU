@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from easyicu.research_agent.cohort_schema import (
     CohortDefinition,
@@ -409,6 +410,225 @@ def test_exact_typed_product_keys_may_bind_noncanonical_filenames(
         )
         == []
     )
+
+
+def test_closed_typed_kind_receipts_bind_primary_cohort_and_attrition(
+    tmp_path: Path,
+) -> None:
+    step = _cohort_step(method="cohort_definition_with_attrition").model_copy(
+        update={
+            "expected_outputs": [
+                "cohort:analysis_set",
+                "table:cohort_flow",
+                "table:attrition",
+            ]
+        }
+    )
+    plan = _plan(step)
+    universe_path, authoritative_path, authoritative = _write_authorities(tmp_path)
+    run_dir = tmp_path / "run"
+    out_dir = run_dir / "steps" / "01_cohort" / "outputs"
+    summary = _write_outputs(
+        out_dir,
+        produced=authoritative,
+        universe_n=8,
+        final_n=4,
+    )
+    summary["output_files"] = [
+        {
+            "kind": "dataset:analysis_set",
+            "path": str(out_dir / "analysis_cohort.parquet"),
+            "relative_path": "steps/01_cohort/outputs/analysis_cohort.parquet",
+        },
+        {
+            "kind": "table:cohort_flow",
+            "path": str(out_dir / "cohort_flow.csv"),
+            "relative_path": "steps/01_cohort/outputs/cohort_flow.csv",
+        },
+        {
+            "kind": "table:attrition",
+            "path": str(out_dir / "cohort_attrition.csv"),
+            "relative_path": "steps/01_cohort/outputs/cohort_attrition.csv",
+        },
+        {
+            "kind": "table",
+            "name": "diagnostics",
+            "path": "cohort_flow.csv",
+        },
+    ]
+
+    assert (
+        primary_analysis_cohort_integrity_findings(
+            step=step,
+            plan=plan,
+            step_summary=summary,
+            out_dir=out_dir,
+            universe_path=universe_path,
+            authoritative_cohort_path=authoritative_path,
+        )
+        == []
+    )
+
+
+def test_conflicting_typed_kind_receipt_cannot_fallback_to_filename(
+    tmp_path: Path,
+) -> None:
+    step = _cohort_step(method="cohort_definition_with_attrition").model_copy(
+        update={
+            "expected_outputs": [
+                "cohort:analysis_set",
+                "table:cohort_flow",
+                "table:attrition",
+            ]
+        }
+    )
+    plan = _plan(step)
+    universe_path, authoritative_path, authoritative = _write_authorities(tmp_path)
+    run_dir = tmp_path / "run"
+    out_dir = run_dir / "steps" / "01_cohort" / "outputs"
+    summary = _write_outputs(
+        out_dir,
+        produced=authoritative,
+        universe_n=8,
+        final_n=4,
+    )
+    (out_dir / "analysis_cohort.parquet").rename(out_dir / "analysis_set.parquet")
+    summary["output_files"] = [
+        {
+            "kind": "dataset:analysis_set",
+            "name": "dataset:different_rows",
+            "path": str(out_dir / "analysis_set.parquet"),
+            "relative_path": "steps/01_cohort/outputs/analysis_set.parquet",
+        },
+        {
+            "kind": "table:cohort_flow",
+            "path": str(out_dir / "cohort_flow.csv"),
+            "relative_path": "steps/01_cohort/outputs/cohort_flow.csv",
+        },
+        {
+            "kind": "table:attrition",
+            "path": str(out_dir / "cohort_attrition.csv"),
+            "relative_path": "steps/01_cohort/outputs/cohort_attrition.csv",
+        },
+    ]
+
+    findings = primary_analysis_cohort_integrity_findings(
+        step=step,
+        plan=plan,
+        step_summary=summary,
+        out_dir=out_dir,
+        universe_path=universe_path,
+        authoritative_cohort_path=authoritative_path,
+    )
+
+    assert len(findings) == 1
+    assert findings[0].detail["issue"] == "analysis_cohort_product_ambiguous"
+    assert findings[0].detail["candidates"] == []
+
+
+@pytest.mark.parametrize(
+    "cohort_entries",
+    [
+        [{"kind": "dataset", "path": "analysis_set.parquet"}],
+        [
+            {
+                "kind": "dataset:analysis_set",
+                "metadata": {"decoy": "analysis_set.parquet"},
+            }
+        ],
+        [
+            {
+                "kind": "dataset:analysis_set",
+                "name": "dataset:different_rows",
+                "path": "analysis_set.parquet",
+            },
+            "analysis_set.parquet",
+        ],
+        [
+            {
+                "kind": "dataset:other_rows",
+                "name": "dataset:analysis_set",
+                "path": "other.parquet",
+            },
+            "analysis_set.parquet",
+        ],
+        [
+            {
+                "kind": "dataset:other_rows",
+                "name": "analysis_set",
+                "path": "other.parquet",
+            },
+            "analysis_set.parquet",
+        ],
+        [
+            {
+                "name": "analysis_set",
+                "path": "other.parquet",
+            },
+            "analysis_set.parquet",
+        ],
+        [
+            {
+                "kind": "table:diagnostics",
+                "product_type": "dataset",
+                "name": "analysis_set",
+                "path": "other.parquet",
+            },
+            "analysis_set.parquet",
+        ],
+    ],
+    ids=(
+        "partial-kind",
+        "nested-metadata-decoy",
+        "conflict-plus-bare-sibling",
+        "typed-name-mirror-conflict",
+        "simple-name-mirror-conflict",
+        "partial-name-conflict",
+        "cross-family-conflict",
+    ),
+)
+def test_malformed_cohort_descriptor_cannot_be_laundered_by_path_fallback(
+    tmp_path: Path,
+    cohort_entries: list[object],
+) -> None:
+    step = _cohort_step(method="cohort_definition_with_attrition").model_copy(
+        update={
+            "expected_outputs": [
+                "cohort:analysis_set",
+                "table:cohort_flow",
+                "table:attrition",
+            ]
+        }
+    )
+    plan = _plan(step)
+    universe_path, authoritative_path, authoritative = _write_authorities(tmp_path)
+    out_dir = tmp_path / "outputs"
+    summary = _write_outputs(
+        out_dir,
+        produced=authoritative,
+        universe_n=8,
+        final_n=4,
+    )
+    (out_dir / "analysis_cohort.parquet").rename(out_dir / "analysis_set.parquet")
+    authoritative.to_parquet(out_dir / "other.parquet", index=False)
+    summary["output_files"] = [
+        *cohort_entries,
+        {"table:cohort_flow": "cohort_flow.csv"},
+        {"table:attrition": "cohort_attrition.csv"},
+    ]
+
+    findings = primary_analysis_cohort_integrity_findings(
+        step=step,
+        plan=plan,
+        step_summary=summary,
+        out_dir=out_dir,
+        universe_path=universe_path,
+        authoritative_cohort_path=authoritative_path,
+    )
+
+    assert len(findings) == 1
+    assert findings[0].detail["issue"] == "analysis_cohort_product_ambiguous"
+    assert findings[0].detail["candidates"] == []
 
 
 def test_filtered_cohort_cannot_masquerade_as_universe(tmp_path: Path) -> None:
