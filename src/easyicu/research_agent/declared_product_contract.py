@@ -754,6 +754,7 @@ _PRIMARY_ANALYSIS_COHORT_METHODS = frozenset(
         "cohort_construction",
         "cohort_definition",
         "cohort_definition_and_attrition",
+        "cohort_definition_with_attrition",
         "eligibility_definition",
         "primary_cohort_definition",
     }
@@ -776,41 +777,94 @@ def _primary_analysis_cohort_product(raw: object) -> tuple[str, str] | None:
     """Return one exact primary-cohort product identity.
 
     ``analysis_cohort`` is the legacy closed product across its supported
-    physical aliases. ``analysis_set`` is accepted only through the explicit
-    Planner-facing ``cohort:`` namespace; a model-specific
-    ``table:analysis_set`` or ``artifact:analysis_set`` must not become a
-    primary population merely because a cohort/attrition step exists nearby.
+    physical aliases. Any non-empty product in the explicit Planner-facing
+    ``cohort:`` namespace is also a closed population identity candidate; the
+    plan-level cohort name and surrounding method/output contract decide whether
+    it owns the primary cohort. A model-specific ``table:analysis_set`` or
+    ``artifact:analysis_set`` must not become a primary population merely
+    because a cohort/attrition step exists nearby.
     """
 
-    raw_kind, separator, _ = str(raw or "").strip().partition(":")
+    raw_kind, separator, raw_product = str(raw or "").strip().partition(":")
+    raw_product = raw_product.strip()
+    if (
+        not separator
+        or not raw_product
+        or Path(raw_product).name != raw_product
+        or "/" in raw_product
+        or "\\" in raw_product
+    ):
+        return None
     parsed = typed_product(raw)
-    if not separator or parsed is None:
+    if parsed is None:
         return None
     kind, name = parsed
     if kind not in _PRIMARY_ANALYSIS_COHORT_DATA_KINDS:
         return None
     if name == "analysis_cohort":
         return parsed
-    if _normalise(raw_kind) == "cohort" and name == "analysis_set":
+    if _normalise(raw_kind) == "cohort":
         return parsed
     return None
 
 
-def _declares_analysis_cohort_product(step: AnalysisStep) -> bool:
-    return any(
-        _primary_analysis_cohort_product(raw) is not None
-        for raw in (step.expected_outputs or [])
+def _declares_reserved_primary_cohort_product(step: AnalysisStep) -> bool:
+    """Return whether a step claims one legacy globally reserved identity."""
+
+    for raw in step.expected_outputs or []:
+        raw_kind, _, _ = str(raw or "").strip().partition(":")
+        parsed = _primary_analysis_cohort_product(raw)
+        if parsed is None:
+            continue
+        _, name = parsed
+        if name == "analysis_cohort" or (
+            _normalise(raw_kind) == "cohort" and name == "analysis_set"
+        ):
+            return True
+    return False
+
+
+def _primary_analysis_cohort_product_matches_plan(
+    raw: object, *, plan: Any
+) -> tuple[str, str] | None:
+    """Bind a named ``cohort:`` product to the Planner-locked cohort only."""
+
+    product = _primary_analysis_cohort_product(raw)
+    if product is None:
+        return None
+    raw_kind, _, _ = str(raw or "").strip().partition(":")
+    _, name = product
+    if name == "analysis_cohort" or (
+        _normalise(raw_kind) == "cohort" and name == "analysis_set"
+    ):
+        return product
+    cohort_name = _normalise(getattr(getattr(plan, "cohort", None), "name", None))
+    if _normalise(raw_kind) == "cohort" and cohort_name and name == cohort_name:
+        return product
+    return None
+
+
+def _declares_explicit_cohort_namespace(raw: object) -> bool:
+    """Recognize an explicit cohort claim even when its product is malformed."""
+
+    raw_kind, separator, raw_product = str(raw or "").strip().partition(":")
+    return bool(
+        separator
+        and raw_product.strip()
+        and _normalise(raw_kind) == "cohort"
     )
 
 
 def _primary_analysis_cohort_attrition_candidate(step: AnalysisStep) -> bool:
-    method = _normalise(step.method).split("_with_", 1)[0]
+    method = _normalise(step.method)
     if method not in _PRIMARY_ANALYSIS_COHORT_METHODS:
         return False
     outputs = list(step.expected_outputs or [])
     parsed = [typed_product(raw) for raw in outputs]
     return any(
-        _primary_analysis_cohort_product(raw) is not None for raw in outputs
+        _primary_analysis_cohort_product(raw) is not None
+        or _declares_explicit_cohort_namespace(raw)
+        for raw in outputs
     ) and any(
         product is not None
         and product[0] == "table"
@@ -841,7 +895,7 @@ def primary_analysis_cohort_producer_uses_universe(
     has_attrition = False
     for raw, parsed in zip(raw_outputs, parsed_outputs, strict=True):
         kind, name = parsed  # type: ignore[misc]
-        if _primary_analysis_cohort_product(raw) is not None:
+        if _primary_analysis_cohort_product_matches_plan(raw, plan=plan) is not None:
             analysis_cohort_products += 1
             continue
         if kind == "table" and name in _PRIMARY_ANALYSIS_COHORT_FLOW_PRODUCTS:
@@ -854,7 +908,11 @@ def primary_analysis_cohort_producer_uses_universe(
     producers = [
         candidate
         for candidate in getattr(plan, "steps", ())
-        if _declares_analysis_cohort_product(candidate)
+        if _declares_reserved_primary_cohort_product(candidate)
+        or any(
+            _primary_analysis_cohort_product_matches_plan(raw, plan=plan) is not None
+            for raw in (candidate.expected_outputs or [])
+        )
     ]
     return len(producers) == 1 and producers[0].step_id == step.step_id
 
@@ -865,17 +923,25 @@ def _contained_regular_output_file(out_dir: Path, value: object) -> Path:
     This helper runs inside the macOS execution sandbox.  Calling
     :meth:`Path.resolve` there asks the kernel to inspect ancestors such as
     ``/private`` that are intentionally outside the sandbox allowlist.  The
-    host already supplies the absolute output root, so containment is enforced
-    without ancestor traversal: require a relative path, reject parent
-    components, reject symlinks at every output-local component, and reject
-    hard-linked files.
+    host already supplies the output root, so containment is enforced without
+    ancestor traversal. Output-local absolute aliases are first reduced
+    lexically to a relative path; outside paths and parent components remain
+    invalid. Every output-local component is then checked for symlinks, and
+    hard-linked files are rejected.
     """
 
     root = Path(out_dir)
     raw = str(value or "").strip()
-    relative = Path(raw)
-    if not raw or relative.is_absolute() or ".." in relative.parts:
-        raise ValueError("output path must be relative and contained")
+    supplied = Path(raw)
+    if supplied.is_absolute():
+        try:
+            relative = supplied.relative_to(root.absolute())
+        except ValueError as exc:
+            raise ValueError("output path must be contained") from exc
+    else:
+        relative = supplied
+    if not raw or ".." in relative.parts:
+        raise ValueError("output path must be contained")
     try:
         if root.is_symlink() or not root.is_dir():
             raise ValueError("output root is not a regular directory")
@@ -1747,7 +1813,8 @@ def primary_analysis_cohort_integrity_findings(
     declared_cohort_products = {
         product[1]
         for raw in (step.expected_outputs or [])
-        if (product := _primary_analysis_cohort_product(raw)) is not None
+        if (product := _primary_analysis_cohort_product_matches_plan(raw, plan=plan))
+        is not None
     }
     if len(declared_cohort_products) != 1:
         return finding(

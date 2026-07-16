@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pandas as pd
@@ -139,6 +140,166 @@ def test_analysis_set_alias_is_a_closed_primary_cohort_product() -> None:
     assert primary_analysis_cohort_producer_uses_universe(step=step, plan=_plan(step))
 
 
+def test_named_cohort_product_is_a_closed_primary_cohort_product() -> None:
+    step = _cohort_step().model_copy(
+        update={
+            "expected_outputs": [
+                "cohort:eligible_stays",
+                "table:cohort_flow",
+                "table:cohort_attrition",
+            ]
+        }
+    )
+
+    plan = _plan(step).model_copy(
+        update={"cohort": replace(_definition(), name="eligible_stays")}
+    )
+    assert primary_analysis_cohort_producer_uses_universe(step=step, plan=plan)
+
+
+def test_named_cohort_product_must_match_planner_cohort_name() -> None:
+    step = _cohort_step().model_copy(
+        update={
+            "expected_outputs": [
+                "cohort:other_population",
+                "table:cohort_flow",
+                "table:cohort_attrition",
+            ]
+        }
+    )
+
+    assert not primary_analysis_cohort_producer_uses_universe(
+        step=step,
+        plan=_plan(step),
+    )
+
+
+@pytest.mark.parametrize(
+    "method",
+    [
+        "cohort_definition_with_sensitivity",
+        "cohort_definition_with_robustness",
+        "cohort_definition_and_attrition_with_sensitivity",
+    ],
+)
+def test_primary_cohort_method_riders_cannot_claim_universe(method: str) -> None:
+    step = _cohort_step(method=method).model_copy(
+        update={
+            "expected_outputs": [
+                "cohort:eligible_stays",
+                "table:cohort_flow",
+                "table:cohort_attrition",
+            ]
+        }
+    )
+    plan = _plan(step).model_copy(
+        update={"cohort": replace(_definition(), name="eligible_stays")}
+    )
+
+    assert not primary_analysis_cohort_producer_uses_universe(step=step, plan=plan)
+
+
+@pytest.mark.parametrize(
+    "product",
+    [
+        "cohort:../eligible_stays",
+        "cohort:other/eligible_stays",
+        "cohort:other\\eligible_stays",
+    ],
+)
+def test_path_shaped_cohort_product_cannot_claim_universe(
+    product: str,
+    tmp_path: Path,
+) -> None:
+    step = _cohort_step().model_copy(
+        update={
+            "expected_outputs": [
+                product,
+                "table:cohort_flow",
+                "table:cohort_attrition",
+            ]
+        }
+    )
+    plan = _plan(step).model_copy(
+        update={"cohort": replace(_definition(), name="eligible_stays")}
+    )
+
+    assert not primary_analysis_cohort_producer_uses_universe(step=step, plan=plan)
+    findings = primary_analysis_cohort_integrity_findings(
+        step=step,
+        plan=plan,
+        step_summary={},
+        out_dir=tmp_path,
+        universe_path=tmp_path / "cohort.parquet",
+        authoritative_cohort_path=tmp_path / "cohort_analysis.parquet",
+    )
+    assert len(findings) == 1
+    assert findings[0].severity == "error"
+    assert findings[0].detail["issue"] == "primary_cohort_product_owner_ambiguous"
+
+
+def test_wrong_named_cohort_product_fails_closed_in_integrity_gate(
+    tmp_path: Path,
+) -> None:
+    step = _cohort_step().model_copy(
+        update={
+            "expected_outputs": [
+                "cohort:other_population",
+                "table:cohort_flow",
+                "table:cohort_attrition",
+            ]
+        }
+    )
+
+    findings = primary_analysis_cohort_integrity_findings(
+        step=step,
+        plan=_plan(step),
+        step_summary={},
+        out_dir=tmp_path,
+        universe_path=tmp_path / "cohort.parquet",
+        authoritative_cohort_path=tmp_path / "cohort_analysis.parquet",
+    )
+
+    assert len(findings) == 1
+    assert findings[0].severity == "error"
+    assert findings[0].detail["issue"] == "primary_cohort_product_owner_ambiguous"
+
+
+def test_nonprimary_named_cohort_does_not_steal_primary_ownership() -> None:
+    primary = _cohort_step()
+    sensitivity = AnalysisStep(
+        step_id="02_sensitivity_cohort",
+        intent="Render one Planner-locked sensitivity population.",
+        expected_outputs=[
+            "cohort:long_stay_sensitivity",
+            "table:cohort_flow",
+        ],
+        method="cohort_definition_sensitivity",
+    )
+
+    plan = _plan(primary, sensitivity)
+    assert primary_analysis_cohort_producer_uses_universe(step=primary, plan=plan)
+    assert not primary_analysis_cohort_producer_uses_universe(
+        step=sensitivity,
+        plan=plan,
+    )
+
+
+def test_nondata_analysis_cohort_name_does_not_steal_primary_ownership() -> None:
+    primary = _cohort_step()
+    foreign = AnalysisStep(
+        step_id="02_figure",
+        intent="Render the cohort display.",
+        expected_outputs=["figure:analysis_cohort"],
+        method="visualization",
+    )
+
+    assert primary_analysis_cohort_producer_uses_universe(
+        step=primary,
+        plan=_plan(primary, foreign),
+    )
+
+
 def test_multiple_primary_cohort_aliases_fail_closed() -> None:
     step = _cohort_step().model_copy(
         update={
@@ -274,6 +435,146 @@ def test_analysis_set_alias_cannot_drop_authoritative_columns(tmp_path: Path) ->
     assert len(findings) == 1
     assert findings[0].severity == "error"
     assert findings[0].detail["issue"] == "analysis_cohort_value_mismatch"
+
+
+def test_named_cohort_product_cannot_change_locked_membership(tmp_path: Path) -> None:
+    step = _cohort_step().model_copy(
+        update={
+            "expected_outputs": [
+                "cohort:eligible_stays",
+                "table:cohort_flow",
+                "table:cohort_attrition",
+            ]
+        }
+    )
+    plan = _plan(step).model_copy(
+        update={"cohort": replace(_definition(), name="eligible_stays")}
+    )
+    universe_path, authoritative_path, authoritative = _write_authorities(tmp_path)
+    out_dir = tmp_path / "outputs"
+    summary = _write_outputs(
+        out_dir,
+        produced=authoritative.iloc[:-1].copy(),
+        universe_n=8,
+        final_n=3,
+    )
+    (out_dir / "analysis_cohort.parquet").rename(out_dir / "eligible_stays.parquet")
+    summary["output_files"] = {
+        "cohort:eligible_stays": "eligible_stays.parquet",
+        "table:cohort_flow": "cohort_flow.csv",
+        "table:cohort_attrition": "cohort_attrition.csv",
+    }
+
+    findings = primary_analysis_cohort_integrity_findings(
+        step=step,
+        plan=plan,
+        step_summary=summary,
+        out_dir=out_dir,
+        universe_path=universe_path,
+        authoritative_cohort_path=authoritative_path,
+    )
+
+    assert len(findings) == 1
+    assert findings[0].severity == "error"
+    assert findings[0].detail["issue"] == "analysis_cohort_identity_mismatch"
+
+
+def test_named_cohort_product_preserves_full_locked_cohort(tmp_path: Path) -> None:
+    step = _cohort_step().model_copy(
+        update={
+            "expected_outputs": [
+                "cohort:eligible_stays",
+                "table:cohort_flow",
+                "table:cohort_attrition",
+            ]
+        }
+    )
+    plan = _plan(step).model_copy(
+        update={"cohort": replace(_definition(), name="eligible_stays")}
+    )
+    universe_path, authoritative_path, authoritative = _write_authorities(tmp_path)
+    out_dir = tmp_path / "outputs"
+    summary = _write_outputs(
+        out_dir,
+        produced=authoritative,
+        universe_n=8,
+        final_n=4,
+    )
+    (out_dir / "analysis_cohort.parquet").rename(out_dir / "eligible_stays.parquet")
+    summary["output_files"] = [
+        {
+            "kind": "cohort",
+            "name": "eligible_stays.parquet",
+            "path": str(out_dir / "eligible_stays.parquet"),
+        },
+        {
+            "kind": "table",
+            "name": "cohort_flow.csv",
+            "path": str(out_dir / "cohort_flow.csv"),
+        },
+        {
+            "kind": "table",
+            "name": "cohort_attrition.csv",
+            "path": str(out_dir / "cohort_attrition.csv"),
+        },
+    ]
+
+    assert (
+        primary_analysis_cohort_integrity_findings(
+            step=step,
+            plan=plan,
+            step_summary=summary,
+            out_dir=out_dir,
+            universe_path=universe_path,
+            authoritative_cohort_path=authoritative_path,
+        )
+        == []
+    )
+
+
+def test_named_cohort_absolute_descriptor_cannot_escape_outputs(
+    tmp_path: Path,
+) -> None:
+    step = _cohort_step().model_copy(
+        update={
+            "expected_outputs": [
+                "cohort:eligible_stays",
+                "table:cohort_flow",
+                "table:cohort_attrition",
+            ]
+        }
+    )
+    plan = _plan(step).model_copy(
+        update={"cohort": replace(_definition(), name="eligible_stays")}
+    )
+    universe_path, authoritative_path, authoritative = _write_authorities(tmp_path)
+    out_dir = tmp_path / "outputs"
+    summary = _write_outputs(
+        out_dir,
+        produced=authoritative,
+        universe_n=8,
+        final_n=4,
+    )
+    outside = tmp_path / "eligible_stays.parquet"
+    (out_dir / "analysis_cohort.parquet").rename(outside)
+    summary["output_files"] = {
+        "cohort:eligible_stays": str(outside),
+        "table:cohort_flow": "cohort_flow.csv",
+        "table:cohort_attrition": "cohort_attrition.csv",
+    }
+
+    findings = primary_analysis_cohort_integrity_findings(
+        step=step,
+        plan=plan,
+        step_summary=summary,
+        out_dir=out_dir,
+        universe_path=universe_path,
+        authoritative_cohort_path=authoritative_path,
+    )
+
+    assert len(findings) == 1
+    assert findings[0].severity == "error"
+    assert findings[0].detail["issue"] == "analysis_cohort_product_unreadable"
 
 
 def test_plain_attrition_role_uses_raw_universe() -> None:

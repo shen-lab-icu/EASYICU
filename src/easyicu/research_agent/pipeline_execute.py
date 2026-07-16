@@ -996,6 +996,18 @@ def _serializable_plan_scientific_scope_signature(
     return list(_plan_scientific_scope_signature(plan))
 
 
+def _planner_locked_cohort_prompt_payload(plan: AnalysisPlan) -> str:
+    """Return only the exact Planner-owned cohort definition for Coder scope."""
+
+    cohort = plan.model_dump(mode="json", include={"cohort"}).get("cohort")
+    return json.dumps(
+        cohort,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
 def _resolve_stop_after_step_selector(
     plan: AnalysisPlan,
     requested: Optional[str],
@@ -7493,6 +7505,7 @@ def run_execute_phase(
             run_dir=run_dir,
         )
         if primary_cohort_uses_universe:
+            locked_cohort_payload = _planner_locked_cohort_prompt_payload(plan)
             role_note = (
                 "CURRENT STEP INPUT ROLE (host-owned execution contract): this "
                 "is the plan's unique primary analysis_cohort + attrition "
@@ -7500,7 +7513,9 @@ def run_execute_phase(
                 "step only. Apply exactly the Planner-locked cohort definition, "
                 "report truthful universe-to-final attrition, and emit an "
                 "analysis_cohort whose ordered row identity matches the locked "
-                "host cohort. Downstream steps receive the filtered cohort."
+                "host cohort. Downstream steps receive the filtered cohort. "
+                "Planner-locked cohort definition JSON: "
+                f"{locked_cohort_payload}."
             )
             prior_notes = str(coder_context.notes or "").strip()
             coder_context = coder_context.model_copy(
