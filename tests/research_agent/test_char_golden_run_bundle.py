@@ -20,7 +20,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-
 _VOLATILE_FIELD_ALLOWLIST = frozenset(
     {
         "timestamp",
@@ -287,7 +286,10 @@ def _finding_bundle(
                 str(key).lower() in {"reason_code", "repair_reason_code", "issue_code"}
                 for key in detail
             ),
-            "owner_result_seal_sha256": owner_seals.get(step_id),
+            # The exact seal digest includes run-local evidence identifiers.
+            # Characterize the required owner join, not a temp-path-dependent
+            # digest; deterministic table/code bytes are locked separately.
+            "owner_result_seal_bound": owner_seals.get(step_id) is not None,
         }
         normalized[_canonical_sha256(identity)] = _normalize(identity)
     return sorted(
@@ -403,9 +405,19 @@ def _build_bundle(*, run_dir: Path, observed_events: list[tuple[str, str]]):
         for record in current_evidence
         if str(record.produced_by_step or "") in _PLAN_STEP_IDS
     ]
-    current_ids = {record.evidence_id for record in step_current_evidence}
+    current_by_id = {record.evidence_id: record for record in step_current_evidence}
+    current_ids = set(current_by_id)
     aliases = {
-        alias: evidence_id
+        alias: {
+            "kind": current_by_id[evidence_id].kind,
+            "produced_by_step": current_by_id[evidence_id].produced_by_step,
+            "description": current_by_id[evidence_id].description,
+            "stable_content_sha256": (
+                current_by_id[evidence_id].sha256
+                if current_by_id[evidence_id].kind in {"code", "table"}
+                else None
+            ),
+        }
         for alias, evidence_id in sorted(store.aliases().items())
         if evidence_id in current_ids
     }
@@ -413,14 +425,22 @@ def _build_bundle(*, run_dir: Path, observed_events: list[tuple[str, str]]):
     evidence_authority = sorted(
         [
             {
-                "evidence_id": record.evidence_id,
                 "kind": record.kind,
                 "produced_by_step": record.produced_by_step,
-                "sha256": record.sha256,
+                "description": record.description,
+                "producer": record.producer,
+                "generation_mode": record.generation_mode,
+                "stable_content_sha256": (
+                    record.sha256 if record.kind in {"code", "table"} else None
+                ),
             }
             for record in step_current_evidence
         ],
-        key=lambda item: (item["produced_by_step"], item["evidence_id"]),
+        key=lambda item: (
+            item["produced_by_step"],
+            item["kind"],
+            item["description"],
+        ),
     )
     claim_authority = sorted(
         [
@@ -505,7 +525,7 @@ def _build_bundle(*, run_dir: Path, observed_events: list[tuple[str, str]]):
                     for finding in finding_authority
                 ),
                 "owner_result_seal_join_used": any(
-                    finding["owner_result_seal_sha256"] is not None
+                    finding["owner_result_seal_bound"]
                     and not finding["finding_detail_has_artifact_digest"]
                     for finding in finding_authority
                 ),
