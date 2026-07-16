@@ -192,11 +192,25 @@ def test_every_generic_repair_entrypoint_crosses_central_authorization_gate() ->
     assert source.count("_deterministic_summary_repair(") == 3
     assert source.count("deterministic_contract_repair(") == 1
     assert source.count("_deterministic_runner_repair(") == 1
-    assert source.count("deterministic_concept_audit_repair(") == 1
-    # Six historical code-candidate boundaries, the rendering-only adapter,
-    # plus the local helper definition. Case-plugin candidates share the runner
-    # boundary and therefore cannot bypass it.
-    assert source.count("_authorize_automatic_repair(") == 8
+    # A2 batch-1 moved the concept-audit repair behind
+    # repair_coordination.authorized_deterministic_concept_repair, which
+    # enforces the all-or-nothing central authorization via its mandatory
+    # ``authorize`` callback. pipeline_execute must never call the raw
+    # repair directly again.
+    assert source.count("deterministic_concept_audit_repair(") == 0
+    coordination_source = (
+        Path(code_repair.__file__)
+        .with_name("repair_coordination.py")
+        .read_text(encoding="utf-8")
+    )
+    assert coordination_source.count("deterministic_concept_audit_repair(") == 1
+    assert "authorize(" in coordination_source
+    assert "authorize=_authorize_automatic_repair" in source
+    # Six historical code-candidate boundaries minus the extracted concept
+    # helper, the rendering-only adapter, plus the local helper definition.
+    # Case-plugin candidates share the runner boundary and therefore cannot
+    # bypass it.
+    assert source.count("_authorize_automatic_repair(") == 7
     assert "authorizer=lambda repair_id: _automatic_repair_authorized(" in source
 
 

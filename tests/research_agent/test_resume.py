@@ -2962,8 +2962,9 @@ def test_resume_reaudits_material_deterministic_quarantine_repair(
     """A deterministic replay retires stale findings without a new coder call."""
 
     import easyicu.research_agent.pipeline_execute as execute_module
+    import easyicu.research_agent.repair_coordination as coordination_module
 
-    real_repair = execute_module.deterministic_concept_audit_repair
+    real_repair = coordination_module.deterministic_concept_audit_repair
     repair_enabled = {"value": False}
 
     def gated_repair(code, messages):
@@ -2972,7 +2973,7 @@ def test_resume_reaudits_material_deterministic_quarantine_repair(
         return real_repair(code, messages)
 
     monkeypatch.setattr(
-        execute_module,
+        coordination_module,
         "deterministic_concept_audit_repair",
         gated_repair,
     )
