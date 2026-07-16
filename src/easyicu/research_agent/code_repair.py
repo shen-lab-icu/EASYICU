@@ -65,7 +65,6 @@ from .code_repair_helpers import (  # noqa: F401  (re-exported for back-compat)
     _strip_columns_from_list_literals,
 )
 
-
 _NULL_PRIMARY_EFFECT_MARKERS = (
     '"complete_case_n": null',
     '"statistic:complete_case_n": null',
@@ -101,8 +100,7 @@ def _patch_rank_safe_statsmodels_design(code: str) -> Optional[str]:
 
     if "_easyicu_rank_safe_design_v1" in code:
         return None
-    helper = textwrap.dedent(
-        """
+    helper = textwrap.dedent("""
 
         def _easyicu_safe_exp_v1(value):
             import math as _math
@@ -177,8 +175,7 @@ def _patch_rank_safe_statsmodels_design(code: str) -> Optional[str]:
             except Exception:
                 pass
             return reduced, dropped
-        """
-    ).strip("\n")
+        """).strip("\n")
 
     model_call = re.compile(
         r"(?m)^(?P<indent>\s*)(?P<lhs>[A-Za-z_]\w*)\s*=\s*sm\.Logit\("
@@ -319,6 +316,22 @@ def deterministic_concept_audit_repair(
     )
     repaired = code
     repair_names: List[str] = []
+
+    scalar_cast_finding = any(
+        "scalar_cast_before_reduction" in str(message).lower()
+        or (
+            "integer cast is applied before" in str(message).lower()
+            and "sum" in str(message).lower()
+        )
+        for message in audit_messages
+    )
+    if scalar_cast_finding:
+        reduced = _patch_scalar_cast_before_reduction(repaired)
+        if reduced != repaired:
+            repair_name = "scalar_cast_before_reduction_v1"
+            repaired = reduced
+            repair_names.append(repair_name)
+
     if provenance_finding:
         guarded = _patch_provenance_fail_closed_guard(repaired)
         if guarded != repaired:
@@ -377,6 +390,7 @@ _PROVENANCE_DECISION_KEYS = (
     "provenance_valid",
 )
 _PROVENANCE_GUARD_SENTINEL = "_easyicu_provenance_fail_closed_guard_v1"
+_PROVENANCE_LOOP_SENTINEL = "_easyicu_provenance_loop_observed"
 _PROVENANCE_PAIR_SCAN_SENTINEL = "_easyicu_provenance_bidirectional_pair_scan_v1"
 _PROVENANCE_HELPER_RERAISE_SENTINEL = "_easyicu_provenance_helper_reraise_v1"
 
@@ -562,8 +576,7 @@ def _patch_returned_provenance_failure_guard(code: str) -> str:
         return {
             str(candidate.value)
             for candidate in _local_nodes(function)
-            if isinstance(candidate, ast.Constant)
-            and isinstance(candidate.value, str)
+            if isinstance(candidate, ast.Constant) and isinstance(candidate.value, str)
         }
 
     marker_nodes = [
@@ -633,13 +646,7 @@ def _patch_returned_provenance_failure_guard(code: str) -> str:
                     ).add(statement.value)
 
         def _empty_initialization(node: ast.AST) -> bool:
-            return (isinstance(node, (ast.List, ast.Set)) and not node.elts) or (
-                isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Name)
-                and node.func.id in {"list", "set"}
-                and not node.args
-                and not node.keywords
-            )
+            return isinstance(node, (ast.List, ast.Set)) and not node.elts
 
         local_returns = [node for node in local_nodes if isinstance(node, ast.Return)]
         valid_collections: set[str] = set()
@@ -659,9 +666,9 @@ def _patch_returned_provenance_failure_guard(code: str) -> str:
 
             initializations = 0
             invalid_mutation = False
-            boundary_lines = [
-                int(call.lineno) for call in allowed_calls
-            ] + [int(statement.lineno) for statement in local_returns]
+            boundary_lines = [int(call.lineno) for call in allowed_calls] + [
+                int(statement.lineno) for statement in local_returns
+            ]
             for candidate in local_nodes:
                 targets: list[ast.AST] = []
                 value: ast.AST | None = None
@@ -719,8 +726,7 @@ def _patch_returned_provenance_failure_guard(code: str) -> str:
                 initializations == 1
                 and not invalid_mutation
                 and all(
-                    parents.get(statement) is function
-                    for statement in local_returns
+                    parents.get(statement) is function for statement in local_returns
                 )
             ):
                 valid_collections.add(collection)
@@ -810,32 +816,11 @@ def _patch_inline_provenance_failure_guard(code: str) -> str:
         for parent in ast.walk(tree)
         for child in ast.iter_child_nodes(parent)
     }
-    assignments: dict[str, ast.AST] = {}
-    for candidate in ast.walk(tree):
-        if not isinstance(candidate, (ast.Assign, ast.AnnAssign)):
-            continue
-        value = candidate.value
-        targets = (
-            candidate.targets
-            if isinstance(candidate, ast.Assign)
-            else [candidate.target]
-        )
-        for target in targets:
-            if isinstance(target, ast.Name):
-                assignments.setdefault(target.id, value)
-
     result_sink_methods = {"fit", "fit_regularized", "predict", "savefig"}
     for guard in sorted(
         (node for node in ast.walk(tree) if isinstance(node, ast.If)),
         key=lambda node: int(getattr(node, "lineno", 0) or 0),
     ):
-        coverage = _inline_provenance_failure_coverage(
-            guard.test,
-            assignments=assignments,
-        )
-        if coverage != _PROVENANCE_FAILURE_KEYS:
-            continue
-
         scope: ast.AST = guard
         current = parents.get(guard)
         unsafe_ancestor = False
@@ -845,7 +830,6 @@ def _patch_inline_provenance_failure_guard(code: str) -> str:
             if isinstance(
                 current,
                 (
-                    ast.If,
                     ast.For,
                     ast.AsyncFor,
                     ast.While,
@@ -863,6 +847,40 @@ def _patch_inline_provenance_failure_guard(code: str) -> str:
             continue
         if current is not None:
             scope = current
+
+        owner = parents.get(guard)
+        preceding: list[ast.stmt] = []
+        if owner is not None:
+            for _, value in ast.iter_fields(owner):
+                if not isinstance(value, list) or guard not in value:
+                    continue
+                preceding = [
+                    statement
+                    for statement in value[: value.index(guard)]
+                    if isinstance(statement, ast.stmt)
+                ]
+                break
+        assignments: dict[str, ast.AST] = {}
+        for candidate in preceding:
+            if not isinstance(candidate, (ast.Assign, ast.AnnAssign)):
+                continue
+            value = candidate.value
+            if value is None:
+                continue
+            targets = (
+                candidate.targets
+                if isinstance(candidate, ast.Assign)
+                else [candidate.target]
+            )
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    assignments[target.id] = value
+        coverage = _inline_provenance_failure_coverage(
+            guard.test,
+            assignments=assignments,
+        )
+        if coverage != _PROVENANCE_FAILURE_KEYS:
+            continue
 
         guard_line = int(getattr(guard, "lineno", 0) or 0)
         result_precedes_guard = False
@@ -901,6 +919,193 @@ def _patch_inline_provenance_failure_guard(code: str) -> str:
     return code
 
 
+def _patch_provenance_loop_coverage_guard(code: str) -> str:
+    """Add a neutral non-empty-loop proof to one exact aggregate audit loop."""
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    if any(
+        isinstance(node, ast.Name) and node.id == _PROVENANCE_LOOP_SENTINEL
+        for node in ast.walk(tree)
+    ):
+        return code
+
+    parents = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+
+    def _nearest_function(node: ast.AST) -> ast.AST | None:
+        current = parents.get(node)
+        while current is not None and not isinstance(
+            current, (ast.FunctionDef, ast.AsyncFunctionDef)
+        ):
+            current = parents.get(current)
+        return current
+
+    def _marker_append(statement: ast.stmt) -> str:
+        if not (
+            isinstance(statement, ast.Expr)
+            and isinstance(statement.value, ast.Call)
+            and isinstance(statement.value.func, ast.Attribute)
+            and statement.value.func.attr == "append"
+            and isinstance(statement.value.func.value, ast.Name)
+            and len(statement.value.args) == 1
+            and not statement.value.keywords
+            and isinstance(statement.value.args[0], ast.Dict)
+        ):
+            return ""
+        payload = statement.value.args[0]
+        keys = {
+            str(key.value).strip().lower()
+            for key in payload.keys
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        }
+        values = _string_literals(payload)
+        if not (_PROVENANCE_FAILURE_KEYS <= keys and "audit_only" in values):
+            return ""
+        return statement.value.func.value.id
+
+    def _failure_append(statement: ast.stmt) -> str:
+        if not (
+            isinstance(statement, ast.Expr)
+            and isinstance(statement.value, ast.Call)
+            and isinstance(statement.value.func, ast.Attribute)
+            and statement.value.func.attr in {"append", "add"}
+            and isinstance(statement.value.func.value, ast.Name)
+        ):
+            return ""
+        return statement.value.func.value.id
+
+    def _collection_test(node: ast.AST, name: str) -> bool:
+        if isinstance(node, ast.Name):
+            return node.id == name
+        if not isinstance(node, ast.Compare) or len(node.ops) != 1:
+            return False
+        return (
+            isinstance(node.left, ast.Call)
+            and isinstance(node.left.func, ast.Name)
+            and node.left.func.id == "len"
+            and len(node.left.args) == 1
+            and isinstance(node.left.args[0], ast.Name)
+            and node.left.args[0].id == name
+            and isinstance(node.comparators[0], ast.Constant)
+            and node.comparators[0].value == 0
+            and isinstance(node.ops[0], (ast.Gt, ast.NotEq))
+        )
+
+    candidates: list[ast.For] = []
+    for function in ast.walk(tree):
+        if not isinstance(function, ast.FunctionDef):
+            continue
+        tokens = {
+            str(node.value).strip().lower()
+            for node in ast.walk(function)
+            if isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and _nearest_function(node) is function
+        }
+        if not (_PROVENANCE_FAILURE_KEYS <= tokens and "audit_only" in tokens):
+            continue
+        assignments: dict[str, ast.AST] = {}
+        for node in ast.walk(function):
+            if _nearest_function(node) not in {None, function}:
+                continue
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)) or node.value is None:
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    assignments.setdefault(target.id, node.value)
+
+        for loop in function.body:
+            if not isinstance(loop, ast.For) or loop.orelse or not loop.body:
+                continue
+            full_guards = [
+                statement
+                for statement in loop.body
+                if isinstance(statement, ast.If)
+                and _inline_provenance_failure_coverage(
+                    statement.test, assignments=assignments
+                )
+                == _PROVENANCE_FAILURE_KEYS
+            ]
+            if len(full_guards) != 1:
+                continue
+            full_guard = full_guards[0]
+            failure_collections = {
+                collection
+                for statement in full_guard.body
+                if (collection := _failure_append(statement))
+            }
+            guard_index = loop.body.index(full_guard)
+            audit_collections = {
+                collection
+                for statement in loop.body[:guard_index]
+                if (collection := _marker_append(statement))
+            }
+            if len(failure_collections) != 1 or len(audit_collections) != 1:
+                continue
+            failure_collection = next(iter(failure_collections))
+            loop_index = function.body.index(loop)
+            terminal_guards = [
+                statement
+                for statement in function.body[loop_index + 1 :]
+                if isinstance(statement, ast.If)
+                and _collection_test(statement.test, failure_collection)
+                and any(isinstance(node, ast.Raise) for node in ast.walk(statement))
+            ]
+            if not terminal_guards:
+                continue
+            candidates.append(loop)
+
+    if len(candidates) != 1:
+        return code
+    loop = candidates[0]
+    lines = code.splitlines(keepends=True)
+    if not loop.body or loop.end_lineno is None:
+        return code
+    loop_line = lines[loop.lineno - 1]
+    loop_indent = loop_line[: len(loop_line) - len(loop_line.lstrip())]
+    body_line = lines[loop.body[0].lineno - 1]
+    body_indent = body_line[: len(body_line) - len(body_line.lstrip())]
+    insertions = [
+        (
+            loop.lineno - 1,
+            f"{loop_indent}{_PROVENANCE_LOOP_SENTINEL} = False\n",
+        ),
+        (
+            loop.body[0].lineno - 1,
+            f"{body_indent}{_PROVENANCE_LOOP_SENTINEL} = True\n",
+        ),
+        (
+            loop.end_lineno,
+            (
+                f"{loop_indent}if not {_PROVENANCE_LOOP_SENTINEL}:\n"
+                f"{loop_indent}    raise RuntimeError(\n"
+                f'{loop_indent}        "Measurement provenance audit had no '
+                'iterable inputs."\n'
+                f"{loop_indent}    )\n"
+            ),
+        ),
+    ]
+    for index, insertion in sorted(insertions, reverse=True):
+        lines.insert(index, insertion)
+    repaired = "".join(lines)
+    try:
+        repaired_tree = ast.parse(repaired)
+    except SyntaxError:
+        return code
+    from .code_preflight import _provenance_fail_closed_findings
+
+    if _provenance_fail_closed_findings(repaired_tree):
+        return code
+    return repaired
+
+
 def _patch_provenance_fail_closed_guard(code: str) -> str:
     """Insert a terminating guard after an explicit provenance-audit call.
 
@@ -914,6 +1119,18 @@ def _patch_provenance_fail_closed_guard(code: str) -> str:
         tree = ast.parse(code)
     except SyntaxError:
         return code
+
+    def _validated_candidate(candidate: str) -> str:
+        if candidate == code:
+            return code
+        try:
+            candidate_tree = ast.parse(candidate)
+        except SyntaxError:
+            return code
+        from .code_preflight import _provenance_fail_closed_findings
+
+        return code if _provenance_fail_closed_findings(candidate_tree) else candidate
+
     if _PROVENANCE_GUARD_SENTINEL in code:
         from .code_preflight import _provenance_fail_closed_findings
 
@@ -1055,8 +1272,11 @@ def _patch_provenance_fail_closed_guard(code: str) -> str:
     decision_repaired = "".join(lines)
     returned_guard = _patch_returned_provenance_failure_guard(decision_repaired)
     if returned_guard != code:
-        return returned_guard
-    return _patch_inline_provenance_failure_guard(code)
+        return _validated_candidate(returned_guard)
+    inline_guard = _patch_inline_provenance_failure_guard(code)
+    if inline_guard != code:
+        return _validated_candidate(inline_guard)
+    return _validated_candidate(_patch_provenance_loop_coverage_guard(code))
 
 
 def _patch_provenance_bidirectional_pair_scan(code: str) -> str:
@@ -1554,15 +1774,13 @@ def _deterministic_summary_repair(
                     flags=re.MULTILINE,
                 )
                 if model_df_assign:
-                    patch = textwrap.dedent(
-                        """
+                    patch = textwrap.dedent("""
                         if 'sex' in model_df.columns:
                             model_df['sex'] = model_df['sex'].astype(str).str.lower().isin(['m', 'male']).astype(float)
                         for col in model_df.columns:
                             if col != 'sex':
                                 model_df[col] = pd.to_numeric(model_df[col], errors="coerce")
-                        """
-                    ).strip("\n")
+                        """).strip("\n")
                     repaired = code.replace(
                         model_df_assign.group(1),
                         model_df_assign.group(1) + "\n" + patch,
@@ -1588,15 +1806,13 @@ def _deterministic_summary_repair(
             repair_name = "sex_numeric_coercion_before_dropna_v1"
             if previous_repair == repair_name:
                 return None
-            replacement = textwrap.dedent(
-                """
+            replacement = textwrap.dedent("""
                 if 'sex' in model_df.columns:
                     model_df['sex'] = model_df['sex'].astype(str).str.lower().isin(['m', 'male']).astype(float)
                 for col in model_df.columns:
                     if col != 'sex':
                         model_df[col] = pd.to_numeric(model_df[col], errors="coerce")
-                """
-            ).strip("\n")
+                """).strip("\n")
             repaired = re.sub(
                 r"^(?P<indent>\s*)model_df = model_df\.apply\(pd\.to_numeric, errors=\"coerce\"\)",
                 lambda match: match.group("indent")
@@ -1848,6 +2064,83 @@ def _patch_boolean_mask_reduction_precedence(code: str) -> Optional[str]:
     return repaired if repaired != code else None
 
 
+def _patch_scalar_cast_before_reduction(code: str) -> str:
+    """Move a zero-argument sum inside an unshadowed built-in ``int`` cast."""
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    from .code_preflight import _builtin_int_binding_is_unmodified
+
+    if not _builtin_int_binding_is_unmodified(tree):
+        return code
+
+    lines = code.splitlines(keepends=True)
+    line_starts: List[int] = []
+    offset = 0
+    for line in lines:
+        line_starts.append(offset)
+        offset += len(line)
+
+    def _absolute_offset(lineno: int, utf8_col: int) -> int:
+        line = lines[lineno - 1]
+        char_col = len(line.encode("utf-8")[:utf8_col].decode("utf-8"))
+        return line_starts[lineno - 1] + char_col
+
+    replacements: List[tuple[int, int, str]] = []
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and not node.args
+            and not node.keywords
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "sum"
+            and isinstance(node.func.value, ast.Call)
+            and isinstance(node.func.value.func, ast.Name)
+            and node.func.value.func.id == "int"
+            and len(node.func.value.args) == 1
+            and not node.func.value.keywords
+        ):
+            continue
+        expression = ast.get_source_segment(code, node.func.value.args[0])
+        if not expression or not all(
+            isinstance(value, int)
+            for value in (
+                node.lineno,
+                node.col_offset,
+                node.end_lineno,
+                node.end_col_offset,
+            )
+        ):
+            continue
+        replacements.append(
+            (
+                _absolute_offset(node.lineno, node.col_offset),
+                _absolute_offset(node.end_lineno, node.end_col_offset),
+                f"int(({expression}).sum())",
+            )
+        )
+
+    if not replacements:
+        return code
+    ordered = sorted(replacements)
+    if any(
+        end > next_start
+        for (_, end, _), (next_start, _, _) in zip(ordered, ordered[1:])
+    ):
+        return code
+    repaired = code
+    for start, end, replacement in reversed(ordered):
+        repaired = repaired[:start] + replacement + repaired[end:]
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
 def _deterministic_runner_repair(
     *,
     code: str,
@@ -1960,8 +2253,7 @@ def _deterministic_runner_repair(
     if missing_seaborn:
         repair_name = "seaborn_matplotlib_fallback_v1"
         if previous_repair != repair_name:
-            fallback = textwrap.dedent(
-                """
+            fallback = textwrap.dedent("""
                 class _EasyICUSeabornFallback:
                     def set_theme(self, *args, **kwargs):
                         return None
@@ -2076,8 +2368,7 @@ def _deterministic_runner_repair(
                             return kwargs.get("ax")
                         return _seaborn_noop
                 sns = _EasyICUSeabornFallback()
-                """
-            ).strip()
+                """).strip()
             repaired = code.replace("import seaborn as sns", fallback, 1)
             if repaired != code:
                 return repair_name, repaired
@@ -2089,8 +2380,7 @@ def _deterministic_runner_repair(
     if missing_proportion_confint:
         repair_name = "local_wilson_proportion_confint_v1"
         if previous_repair != repair_name:
-            helper = textwrap.dedent(
-                """
+            helper = textwrap.dedent("""
                 def proportion_confint(count, nobs=None, alpha=0.05, method="wilson", **kwargs):
                     import math
                     if nobs is None:
@@ -2105,8 +2395,7 @@ def _deterministic_runner_repair(
                     centre = phat + z * z / (2.0 * nobs)
                     spread = z * math.sqrt((phat * (1.0 - phat) + z * z / (4.0 * nobs)) / nobs)
                     return (max(0.0, (centre - spread) / denom), min(1.0, (centre + spread) / denom))
-                """
-            ).strip()
+                """).strip()
             repaired = re.sub(
                 r"^\s*from\s+statsmodels\.stats\.proportion\s+import\s+proportion_confint\s*$",
                 helper,
@@ -2459,8 +2748,7 @@ def _deterministic_runner_repair(
                 repaired,
                 flags=re.MULTILINE,
             )
-            sex_numeric_patch = textwrap.dedent(
-                """
+            sex_numeric_patch = textwrap.dedent("""
                 if 'sex' in model_df.columns:
                     model_df['sex'] = model_df['sex'].astype(str).str.lower().isin(['m', 'male']).astype(float)
                 for col in model_df.columns:
@@ -2468,8 +2756,7 @@ def _deterministic_runner_repair(
                         model_df[col] = pd.to_numeric(model_df[col], errors="coerce")
                 model_df = model_df.replace([np.inf, -np.inf], np.nan)
                 reduced_covariates = [c for c in covariates if model_df[c].isna().mean() <= 0.2]
-                """
-            ).strip("\n")
+                """).strip("\n")
             if model_df_assign and "reduced_covariates =" not in repaired:
                 indent = model_df_assign.group("indent")
                 patch = "\n".join(
@@ -2599,8 +2886,7 @@ def _deterministic_runner_repair(
                 lower_var = "or_lowers"
                 upper_var = "or_uppers"
             plot_marker = "ax.errorbar(x_pos, ors, yerr=[yerr_lower, yerr_upper],"
-            plot_guard = textwrap.dedent(
-                f"""
+            plot_guard = textwrap.dedent(f"""
                 plot_rows = [
                     (s, o, lo, hi)
                     for s, o, lo, hi in zip(strategies, ors, {lower_var}, {upper_var})
@@ -2612,8 +2898,7 @@ def _deterministic_runner_repair(
                 else:
                     strategies, ors, {lower_var}, {upper_var} = [], [], [], []
                     x_pos = np.array([])
-                """
-            ).strip("\n")
+                """).strip("\n")
             if plot_marker in repaired and "plot_rows = [" not in repaired:
                 repaired = repaired.replace(
                     plot_marker,
@@ -2630,8 +2915,7 @@ def _deterministic_runner_repair(
     if missing_internal_utils:
         repair_name = "inline_missing_to_jsonable_utils_v1"
         if previous_repair != repair_name:
-            helper = textwrap.dedent(
-                """
+            helper = textwrap.dedent("""
                 def to_jsonable(x):
                     import math
                     import numpy as np
@@ -2651,8 +2935,7 @@ def _deterministic_runner_repair(
                     except Exception:
                         pass
                     return str(x)
-                """
-            ).strip()
+                """).strip()
             repaired = code.replace(
                 "from easyicu.research_agent.utils import to_jsonable",
                 helper,
@@ -2688,8 +2971,7 @@ def _deterministic_runner_repair(
         if previous_repair != repair_name:
 
             def _numeric_block(prefix: str) -> str:
-                block = textwrap.dedent(
-                    f"""
+                block = textwrap.dedent(f"""
                     if 'sex' in X_{prefix}.columns:
                         X_{prefix}['sex'] = X_{prefix}['sex'].astype(str).str.lower().isin(['m', 'male', '1', 'true']).astype(float)
                     X_{prefix} = X_{prefix}.apply(pd.to_numeric, errors='coerce').replace([np.inf, -np.inf], np.nan)
@@ -2697,8 +2979,7 @@ def _deterministic_runner_repair(
                     valid_{prefix}_idx = X_{prefix}.dropna().index.intersection(y_{prefix}.dropna().index)
                     X_{prefix} = X_{prefix}.loc[valid_{prefix}_idx]
                     y_{prefix} = y_{prefix}.loc[valid_{prefix}_idx].astype(float)
-                    """
-                ).strip("\n")
+                    """).strip("\n")
                 return block.replace("\n", "\n    ")
 
             repaired = code
@@ -2753,9 +3034,7 @@ def _deterministic_runner_repair(
     if table_one_unclosed_syntax:
         repair_name = "table_one_descriptive_repair_v1"
         if previous_repair != repair_name:
-            repaired = (
-                textwrap.dedent(
-                    """
+            repaired = textwrap.dedent("""
                 import json
                 import os
                 import math
@@ -2852,10 +3131,7 @@ def _deterministic_runner_repair(
                 with open(os.path.join(out_dir, "step_summary.json"), "w", encoding="utf-8") as f:
                     json.dump(summary, f, indent=2, default=to_jsonable)
                 print(json.dumps({"table": "table_one.csv", "summary": summary}, default=to_jsonable))
-                """
-                ).strip()
-                + "\n"
-            )
+                """).strip() + "\n"
             return repair_name, repaired
 
     outcome_incidence_broken_syntax = "syntaxerror" in lowered and (
@@ -2865,9 +3141,7 @@ def _deterministic_runner_repair(
     if outcome_incidence_broken_syntax:
         repair_name = "outcome_incidence_descriptive_repair_v1"
         if previous_repair != repair_name:
-            repaired = (
-                textwrap.dedent(
-                    """
+            repaired = textwrap.dedent("""
                 import json
                 import os
                 import math
@@ -2975,10 +3249,7 @@ def _deterministic_runner_repair(
                 with open(os.path.join(out_dir, "step_summary.json"), "w", encoding="utf-8") as f:
                     json.dump(summary, f, indent=2, default=to_jsonable)
                 print(json.dumps(summary, default=to_jsonable))
-                """
-                ).strip()
-                + "\n"
-            )
+                """).strip() + "\n"
             return repair_name, repaired
 
     repeated_keyword_syntax = (
@@ -2989,9 +3260,7 @@ def _deterministic_runner_repair(
     if repeated_keyword_syntax and binary_model_repair_allowed:
         repair_name = "prediction_split_minimal_v1"
         if previous_repair != repair_name:
-            repaired = (
-                textwrap.dedent(
-                    """
+            repaired = textwrap.dedent("""
                 import json
                 import os
                 import numpy as np
@@ -3053,10 +3322,7 @@ def _deterministic_runner_repair(
                 with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
                     json.dump(step_summary, f, indent=2, default=to_jsonable, ensure_ascii=False)
                 print(json.dumps(step_summary, indent=2, default=to_jsonable, ensure_ascii=False))
-                """
-                ).strip()
-                + "\n"
-            )
+                """).strip() + "\n"
             return repair_name, repaired
 
     logreg_nan = (
@@ -3066,8 +3332,7 @@ def _deterministic_runner_repair(
     if logreg_nan and binary_model_repair_allowed:
         repair_name = "logreg_impute_v1"
         if previous_repair != repair_name and "_easyicu_logreg_impute_v1" not in code:
-            patch = textwrap.dedent(
-                """
+            patch = textwrap.dedent("""
 
                 def _easyicu_logreg_impute_v1(frame):
                     if not hasattr(frame, "copy"):
@@ -3081,8 +3346,7 @@ def _deterministic_runner_repair(
                                 series = series.fillna(median if pd.notna(median) else 0)
                         work[col] = series
                     return work
-                """
-            ).strip("\n")
+                """).strip("\n")
             train_split = re.compile(
                 r"(?P<line>X_train,\s*X_test,\s*y_train,\s*y_test\s*=\s*train_test_split\([^\\n]+?\)\s*)",
                 re.DOTALL,
@@ -3121,9 +3385,7 @@ def _deterministic_runner_repair(
     if placeholder_ellipsis and binary_model_repair_allowed:
         repair_name = "prediction_discrimination_template_v1"
         if previous_repair != repair_name:
-            repaired = (
-                textwrap.dedent(
-                    """
+            repaired = textwrap.dedent("""
                 import json
                 import math
                 import os
@@ -3223,10 +3485,7 @@ def _deterministic_runner_repair(
                 with open(os.path.join(step_out_dir, "step_summary.json"), "w", encoding="utf-8") as f:
                     json.dump(step_summary, f, indent=2, default=to_jsonable, ensure_ascii=False)
                 print(json.dumps(step_summary, indent=2, default=to_jsonable, ensure_ascii=False))
-                """
-                ).strip()
-                + "\n"
-            )
+                """).strip() + "\n"
             return repair_name, repaired
 
     omitted_primary_predictor = re.search(
@@ -3290,16 +3549,14 @@ def _deterministic_runner_repair(
                 return repair_name, patched
         repair_name = "logit_regularized_fit_v1"
         if previous_repair != repair_name:
-            helper = textwrap.dedent(
-                """
+            helper = textwrap.dedent("""
 
                 def _easyicu_safe_logit_fit_v1(model):
                     try:
                         return model.fit(disp=0, method="newton")
                     except Exception:
                         return model.fit_regularized(alpha=1e-6, disp=0, trim_mode="off")
-                """
-            ).strip("\n")
+                """).strip("\n")
             patched = code
             if "_easyicu_safe_logit_fit_v1" not in patched:
                 insert_after = patched.find("import warnings")
@@ -3392,9 +3649,7 @@ def _deterministic_runner_repair(
     if publication_style_nameerror:
         repair_name = "publication_bundle_promote_script_v1"
         if previous_repair != repair_name:
-            repaired = (
-                textwrap.dedent(
-                    """
+            repaired = textwrap.dedent("""
                 from __future__ import annotations
                 import json
                 import os
@@ -3466,10 +3721,7 @@ def _deterministic_runner_repair(
                 with open(out_dir / "step_summary.json", "w", encoding="utf-8") as f:
                     json.dump(summary, f, indent=2, ensure_ascii=False)
                 print(json.dumps(summary, indent=2, ensure_ascii=False))
-                """
-                ).strip()
-                + "\n"
-            )
+                """).strip() + "\n"
             return repair_name, repaired
 
     # ----------------------------------------------------------------
@@ -3515,8 +3767,7 @@ def _deterministic_runner_repair(
         ):
             repair_name = f"undefined_helper_stub_{helper_name}_v1"
             if previous_repair != repair_name:
-                stub = textwrap.dedent(
-                    f"""
+                stub = textwrap.dedent(f"""
                     def {helper_name}(*args, **kwargs):
                         \"\"\"Auto-injected stub for an undefined helper.
 
@@ -3544,8 +3795,7 @@ def _deterministic_runner_repair(
                             return str(value)
                         except Exception:
                             return None
-                    """
-                ).strip("\n")
+                    """).strip("\n")
                 repaired = stub + "\n\n" + code
                 if repaired != code:
                     return repair_name, repaired
@@ -3565,8 +3815,7 @@ def _deterministic_runner_repair(
     )
     if dtype_coerce_applies:
         repair_name = "dtype_coerce_v1"
-        patch = textwrap.dedent(
-            """
+        patch = textwrap.dedent("""
 
             def _easyicu_runner_repair_v1(X, y):
                 X_work = X.copy() if hasattr(X, "copy") else X
@@ -3589,8 +3838,7 @@ def _deterministic_runner_repair(
                     X_work = X_arr[mask]
                     y_work = y_arr[mask]
                 return y_work.astype(float), X_work
-            """
-        ).strip("\n")
+            """).strip("\n")
 
         patched = code
         if "_easyicu_runner_repair_v1" not in patched:
