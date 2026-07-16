@@ -473,6 +473,42 @@ def _deterministic_code_gate_findings(
     return findings
 
 
+_POSITIONAL_FINDING_KEYS = {
+    "line",
+    "lines",
+    "lineno",
+    "col_offset",
+    "end_lineno",
+    "end_col_offset",
+    "offset",
+    "offsets",
+}
+
+
+def _finding_detail_without_source_positions(value: Any) -> Any:
+    """Remove transient code coordinates from a persisted repair constraint."""
+
+    if isinstance(value, Mapping):
+        cleaned: Dict[str, Any] = {}
+        for raw_key, raw_value in value.items():
+            key = str(raw_key)
+            normalized = key.casefold()
+            if (
+                normalized in _POSITIONAL_FINDING_KEYS
+                or normalized.endswith("_line")
+                or normalized.endswith("_lines")
+                or normalized.endswith("_lineno")
+                or normalized.endswith("_offset")
+                or normalized.endswith("_offsets")
+            ):
+                continue
+            cleaned[key] = _finding_detail_without_source_positions(raw_value)
+        return cleaned
+    if isinstance(value, (list, tuple)):
+        return [_finding_detail_without_source_positions(item) for item in value]
+    return value
+
+
 def _finding_occurrence_identity(finding: ValidationFinding) -> str:
     """Return a stable identity for one structured validation occurrence.
 
@@ -482,43 +518,11 @@ def _finding_occurrence_identity(finding: ValidationFinding) -> str:
     code locations are not accidentally folded together.
     """
 
-    positional_keys = {
-        "line",
-        "lines",
-        "lineno",
-        "col_offset",
-        "end_lineno",
-        "end_col_offset",
-        "offset",
-        "offsets",
-    }
-
-    def _without_positions(value: Any) -> Any:
-        if isinstance(value, Mapping):
-            cleaned: Dict[str, Any] = {}
-            for raw_key, raw_value in value.items():
-                key = str(raw_key)
-                normalized = key.casefold()
-                if (
-                    normalized in positional_keys
-                    or normalized.endswith("_line")
-                    or normalized.endswith("_lines")
-                    or normalized.endswith("_lineno")
-                    or normalized.endswith("_offset")
-                    or normalized.endswith("_offsets")
-                ):
-                    continue
-                cleaned[key] = _without_positions(raw_value)
-            return cleaned
-        if isinstance(value, (list, tuple)):
-            return [_without_positions(item) for item in value]
-        return value
-
     detail = dict(finding.detail or {})
     structured_reason = str(
         detail.get("reason") or detail.get("kind") or detail.get("issue") or ""
     ).strip()
-    stable_detail = _without_positions(detail)
+    stable_detail = _finding_detail_without_source_positions(detail)
     explicit_occurrence = stable_detail.get("occurrence_id")
     locator_keys = (
         "scope",
@@ -7789,7 +7793,9 @@ def run_execute_phase(
                 {
                     "validator": finding.validator,
                     "message": finding.message,
-                    "detail": dict(finding.detail or {}),
+                    "detail": _finding_detail_without_source_positions(
+                        dict(finding.detail or {})
+                    ),
                 }
                 for finding in monotonic_concept_constraints
             ]
@@ -7808,6 +7814,10 @@ def run_execute_phase(
             pending_quarantined_errors = [
                 ValidationFinding.model_validate(payload) for payload in draft.findings
             ]
+            # Historical errors remain binding regression constraints, but
+            # their old source coordinates are not findings on the current
+            # digest and must never enter an exact minimal-patch ticket.
+            _remember_concept_constraints(pending_quarantined_errors)
             step_record["resumed_quarantined_draft"] = True
             step_record["quarantined_draft_sha256"] = draft.sha256
             step_record["quarantined_draft_relative_path"] = draft.relative_path
@@ -9031,6 +9041,12 @@ else:
                         pass
                 raise
             if pending_quarantined_errors:
+                # The complete current deterministic gate is authoritative for
+                # the current code digest.  Do not mix stale source coordinates
+                # from an older deterministic attempt into its exact repair
+                # ticket.  Nondeterministic/provider findings have no such
+                # replay proof and therefore remain blocking until explicitly
+                # repaired or policy-superseded.
                 existing_keys = {
                     (finding.severity, _finding_occurrence_identity(finding))
                     for finding in code_findings
@@ -9038,7 +9054,8 @@ else:
                 code_findings.extend(
                     finding
                     for finding in pending_quarantined_errors
-                    if (
+                    if finding.validator not in _DETERMINISTIC_CODE_GATE_VALIDATORS
+                    and (
                         finding.severity,
                         _finding_occurrence_identity(finding),
                     )
@@ -9515,6 +9532,7 @@ else:
                 for f in blocking_usage_findings
             )
             structured_repair_ticket = typed_repair_ticket(blocking_usage_findings)
+            historical_constraint_log = _monotonic_concept_constraint_log()
             _remember_concept_constraints(blocking_usage_findings)
             try:
                 repaired_code = coder.repair(
@@ -9533,6 +9551,7 @@ else:
                         )
                         + "\n\nHUMAN-READABLE FINDINGS:\n"
                         + audit_log
+                        + historical_constraint_log
                     ),
                     attempt=concept_repair_attempts,
                     provider_budget=provider_budget,

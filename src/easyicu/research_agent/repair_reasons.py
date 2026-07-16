@@ -8,6 +8,7 @@ changing repair routing.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Mapping, Sequence
 
@@ -28,6 +29,91 @@ class RepairReason(str, Enum):
     DIAGNOSTIC_NOT_COMPLETED = "DIAGNOSTIC_NOT_COMPLETED"
     SCIENTIFIC_SEMANTICS_VIOLATION = "SCIENTIFIC_SEMANTICS_VIOLATION"
     OUTPUT_CONTRACT_INVALID = "OUTPUT_CONTRACT_INVALID"
+
+
+@dataclass(frozen=True)
+class StructuredRepairMetadata:
+    """Stable routing coordinates recovered from host-owned repair payloads."""
+
+    reasons: frozenset[str]
+    helper_names: frozenset[str]
+    failure_modes: frozenset[str]
+    line_anchors: frozenset[int]
+
+
+def structured_repair_metadata(run_log: str) -> StructuredRepairMetadata:
+    """Parse typed repair tickets and finding details without reading prose.
+
+    Repair prompts contain human-readable explanations as well as host-owned
+    JSON payloads.  Only the latter are stable enough to drive context
+    selection or repair specialization.
+    """
+
+    reasons: set[str] = set()
+    helper_names: set[str] = set()
+    failure_modes: set[str] = set()
+    line_anchors: set[int] = set()
+
+    def _collect(payload: Any) -> None:
+        if isinstance(payload, Mapping):
+            for key in ("reason", "structured_reason"):
+                value = payload.get(key)
+                if isinstance(value, str) and value.strip():
+                    reasons.add(value.strip())
+            helper_name = payload.get("helper_name")
+            if isinstance(helper_name, str) and helper_name.strip():
+                helper_names.add(helper_name.strip())
+            helpers = payload.get("helper_names")
+            if isinstance(helpers, list):
+                helper_names.update(
+                    str(item).strip()
+                    for item in helpers
+                    if isinstance(item, str) and item.strip()
+                )
+            failure_mode = payload.get("failure_mode")
+            if isinstance(failure_mode, str) and failure_mode.strip():
+                failure_modes.add(failure_mode.strip())
+            for key, value in payload.items():
+                if (
+                    isinstance(key, str)
+                    and (key == "line" or key.endswith("_line"))
+                    and isinstance(value, int)
+                    and not isinstance(value, bool)
+                    and value > 0
+                ):
+                    line_anchors.add(value)
+            for value in payload.values():
+                _collect(value)
+        elif isinstance(payload, list):
+            for item in payload:
+                _collect(item)
+
+    text = str(run_log or "")
+    decoder = json.JSONDecoder()
+    for marker in (
+        "TYPED REPAIR TICKET (authoritative routing):",
+        "DETAIL:",
+    ):
+        cursor = 0
+        while True:
+            marker_index = text.find(marker, cursor)
+            if marker_index < 0:
+                break
+            fragment = text[marker_index + len(marker) :].lstrip()
+            try:
+                payload, _ = decoder.raw_decode(fragment)
+            except (json.JSONDecodeError, TypeError):
+                pass
+            else:
+                _collect(payload)
+            cursor = marker_index + len(marker)
+
+    return StructuredRepairMetadata(
+        reasons=frozenset(reasons),
+        helper_names=frozenset(helper_names),
+        failure_modes=frozenset(failure_modes),
+        line_anchors=frozenset(line_anchors),
+    )
 
 
 _DETAIL_REASON_CODES = {
@@ -164,4 +250,10 @@ def typed_repair_ticket(
     return ticket
 
 
-__all__ = ["RepairReason", "repair_reason_for_finding", "typed_repair_ticket"]
+__all__ = [
+    "RepairReason",
+    "StructuredRepairMetadata",
+    "repair_reason_for_finding",
+    "structured_repair_metadata",
+    "typed_repair_ticket",
+]

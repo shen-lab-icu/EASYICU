@@ -2561,6 +2561,149 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     assert runner_calls == ["01_summary"]
 
 
+def test_resume_repair_ticket_uses_only_current_deterministic_coordinates(
+    ra, tmp_path: Path, monkeypatch
+):
+    from easyicu.research_agent.audits.validators import ConceptUsageAuditor
+    from easyicu.research_agent.contracts import ValidationFinding
+
+    coordinate = {"call_line": 10}
+
+    def deterministic_finding(self, *, context, script_text, step):
+        del self, context, script_text
+        call_line = coordinate["call_line"]
+        return [
+            ValidationFinding(
+                validator="mechanical_code_preflight",
+                severity="error",
+                message="A deterministic provenance result needs repair.",
+                detail={
+                    "reason": "provenance_audit_not_fail_closed",
+                    "issues": [
+                        {
+                            "failure_mode": (
+                                "provenance_helper_result_not_immediately_guarded"
+                            ),
+                            "helper_name": "provenance_audit",
+                            "call_line": call_line,
+                            "following_guard_line": call_line + 1,
+                        }
+                    ],
+                },
+            )
+        ]
+
+    monkeypatch.setattr(ConceptUsageAuditor, "audit", deterministic_finding)
+
+    draft_code = """
+import json
+import os
+import pandas as pd
+
+df = pd.read_parquet(os.environ["COHORT_PARQUET"])
+out = os.environ["STEP_OUT_DIR"]
+summary = {"n": int(len(df))}
+pd.DataFrame([summary]).to_csv(os.path.join(out, "summary.csv"), index=False)
+with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
+    json.dump(summary, f)
+"""
+
+    class CoordinateLLM:
+        name = "current-coordinate-resume-llm"
+
+        def __init__(self):
+            self.repair_prompts = []
+
+        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
+            del max_tokens, temperature
+            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
+            upper = user.upper()
+            if "ICU-AWARE RESEARCH PLAN" in upper:
+                return json.dumps(
+                    {
+                        "research_question": "Summarize the cohort.",
+                        "steps": [
+                            {
+                                "step_id": "01_summary",
+                                "intent": "Produce a descriptive cohort summary.",
+                                "inputs": ["stay_id"],
+                                "expected_outputs": ["table:summary"],
+                                "method": "descriptive_summary",
+                                "icu_rule_refs": [],
+                            }
+                        ],
+                        "rationale": "coordinate refresh regression",
+                    }
+                )
+            if "WRITE THE PYTHON CODE" in upper:
+                return draft_code
+            if "REPAIR THE PYTHON CODE" in upper:
+                self.repair_prompts.append(user)
+                raise RuntimeError("stop after recording repair prompt")
+            return "{}"
+
+    cohort = pd.DataFrame({"stay_id": [1, 2, 3], "death": [0, 1, 0]})
+    first_llm = CoordinateLLM()
+    first_pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=first_llm,
+        enable_literature=False,
+        enable_visual_qa=False,
+        enable_latex=False,
+        enable_llm_concept_audit=False,
+        enable_deterministic_code_fallback=False,
+        enable_deterministic_runner_repair=False,
+        max_step_provider_calls=20,
+    )
+    first = first_pipeline.run(
+        question="Summarize the cohort.",
+        cohort=cohort,
+        cohort_name="current_coordinate_resume",
+        database="synthetic",
+        target_outcome="death",
+        stop_after_step_id="01_summary",
+        stop_after_analysis=True,
+    )
+    assert '"call_line": 10' in first_llm.repair_prompts[-1]
+
+    coordinate["call_line"] = 20
+    resumed_llm = CoordinateLLM()
+    resumed_pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=resumed_llm,
+        enable_literature=False,
+        enable_visual_qa=False,
+        enable_latex=False,
+        enable_llm_concept_audit=False,
+        enable_deterministic_code_fallback=False,
+        enable_deterministic_runner_repair=False,
+        max_step_provider_calls=20,
+    )
+    resumed_pipeline.run(
+        question="Summarize the cohort.",
+        cohort=cohort,
+        cohort_name="current_coordinate_resume",
+        database="synthetic",
+        target_outcome="death",
+        resume_run_id=first.run_id,
+        resume_from_step_id="01_summary",
+        stop_after_step_id="01_summary",
+        stop_after_analysis=True,
+    )
+
+    prompt = resumed_llm.repair_prompts[-1]
+    current_ticket = prompt.split(
+        "TYPED REPAIR TICKET (authoritative routing):", 1
+    )[1].split("HUMAN-READABLE FINDINGS:", 1)[0]
+    historical = prompt.split(
+        "PREVIOUSLY REPAIRED CONCEPT FINDINGS", 1
+    )[1]
+    assert '"call_line": 20' in current_ticket
+    assert '"call_line": 10' not in current_ticket
+    assert '"call_line"' not in historical
+    assert "provenance_helper_result_not_immediately_guarded" in historical
+
+
 @pytest.mark.parametrize(
     "after",
     [
