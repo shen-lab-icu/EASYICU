@@ -22,15 +22,22 @@ _spec.loader.exec_module(apb)
 
 
 def _write_receipt(
-    run_dir: Path, step_id: str, categories: list[str], *, tamper: bool = False
+    run_dir: Path,
+    step_id: str,
+    categories: list[str],
+    *,
+    tamper: bool = False,
+    logical_repairs: list[dict] | None = None,
 ) -> None:
     payload = {
         "categories": categories,
         "limit": 7,
         "reserved_final_category": "concept_audit",
-        "schema_version": 2,
+        "schema_version": 3 if logical_repairs is not None else 2,
         "step_id": step_id,
     }
+    if logical_repairs is not None:
+        payload["logical_repairs"] = logical_repairs
     payload["sha256"] = apb._receipt_digest({k: v for k, v in payload.items()})
     if tamper:
         payload["categories"] = categories + [
@@ -221,6 +228,54 @@ def test_receipt_digest_tampered_fails_closed(tmp_path):
         run, "01_cohort_flow", ["initial_generation", "concept_audit"], tamper=True
     )
     with pytest.raises(apb.BaselineError, match="digest invalid"):
+        apb.read_receipts(str(run), {})
+
+
+def test_schema_v3_logical_repair_ledger_is_reported(tmp_path):
+    run = tmp_path / "run"
+    run.mkdir()
+    categories = ["initial_generation"]
+    _write_receipt(
+        run,
+        "01_cohort_flow",
+        categories,
+        logical_repairs=[
+            {
+                "attempt_id": 1,
+                "repair_class": "contract",
+                "provider_history_len": 1,
+                "provider_history_sha256": apb._receipt_digest(
+                    {"categories": categories}
+                ),
+            }
+        ],
+    )
+
+    receipts = apb.read_receipts(str(run), {})
+
+    assert receipts[0]["total_calls"] == 1
+    assert receipts[0]["logical_repair_attempts"] == 1
+    assert receipts[0]["logical_repair_classes"] == ["contract"]
+
+
+def test_schema_v3_logical_history_inconsistency_fails_closed(tmp_path):
+    run = tmp_path / "run"
+    run.mkdir()
+    _write_receipt(
+        run,
+        "01_cohort_flow",
+        ["initial_generation"],
+        logical_repairs=[
+            {
+                "attempt_id": 1,
+                "repair_class": "runtime",
+                "provider_history_len": 1,
+                "provider_history_sha256": "0" * 64,
+            }
+        ],
+    )
+
+    with pytest.raises(apb.BaselineError, match="logical repair history"):
         apb.read_receipts(str(run), {})
 
 

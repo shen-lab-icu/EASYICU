@@ -46,6 +46,11 @@ from easyicu.research_agent.run_input_capsule import (
     seal_run_input_capsule,
 )
 from easyicu.research_agent.runtime_artifacts import verified_run_evidence_path
+from easyicu.research_agent.provider_budget import (
+    StepProviderCallBudget,
+    load_provider_call_budget_state,
+    provider_call_budget_receipt_path,
+)
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep, TimeWindow
 
 
@@ -2961,7 +2966,6 @@ def test_resume_reaudits_material_deterministic_quarantine_repair(
 ) -> None:
     """A deterministic replay retires stale findings without a new coder call."""
 
-    import easyicu.research_agent.pipeline_execute as execute_module
     import easyicu.research_agent.repair_coordination as coordination_module
 
     real_repair = coordination_module.deterministic_concept_audit_repair
@@ -2977,21 +2981,6 @@ def test_resume_reaudits_material_deterministic_quarantine_repair(
         "deterministic_concept_audit_repair",
         gated_repair,
     )
-    real_repair_history = execute_module._monotonic_step_llm_repair_history
-    exhaust_logical_budget = {"value": False}
-
-    def forced_repair_history(records, *, limit):
-        attempts, classes, invalid = real_repair_history(records, limit=limit)
-        if not exhaust_logical_budget["value"]:
-            return attempts, classes, invalid
-        return limit, ["concept"] * limit, invalid
-
-    monkeypatch.setattr(
-        execute_module,
-        "_monotonic_step_llm_repair_history",
-        forced_repair_history,
-    )
-
     draft_code = """
 import json
 import os
@@ -3106,10 +3095,28 @@ if __name__ == "__main__":
         first_record.get("step_provider_call_categories") or []
     )
     # Deterministic revalidation/repair runs before the coder-repair budget
-    # branch.  It remains available when that durable logical budget is fully
-    # spent without requesting another coder generation or coder repair.  Other
-    # pipeline roles may still be invoked while the resumed step is finalized.
-    exhaust_logical_budget["value"] = True
+    # branch. Exhaust the NEW durable logical ledger without buying another
+    # provider call; resume must recover this receipt-ahead-of-step-snapshot
+    # state and still permit deterministic revalidation.
+    provider_receipt = provider_call_budget_receipt_path(
+        run_dir,
+        step_id="01_summary",
+    )
+    provider_state = load_provider_call_budget_state(
+        provider_receipt,
+        step_id="01_summary",
+        expected_reserved_final_category=None,
+    )
+    durable_budget = StepProviderCallBudget(
+        provider_state.limit,
+        step_id="01_summary",
+        consumed_categories=provider_state.categories,
+        logical_repair_entries=provider_state.logical_repairs,
+        receipt_path=provider_receipt,
+        reserved_final_category=None,
+    )
+    assert durable_budget.logical_repair_classes == ("concept",)
+    assert durable_budget.reserve_logical_repair("concept", max_repairs=2) == 2
 
     if legacy_stale_checkpoint:
         from easyicu.research_agent.pipeline_resume import (

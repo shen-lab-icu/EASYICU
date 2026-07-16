@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,6 +18,7 @@ from easyicu.research_agent.provider_budget import (
     complete_with_provider_budget,
     consume_active_transport_attempt,
     load_provider_call_budget_receipt,
+    load_provider_call_budget_state,
     provider_call_budget_receipt_path,
 )
 from easyicu.research_agent.pipeline_execute import (
@@ -521,6 +523,163 @@ def test_budget_receipt_is_atomic_restorable_and_survives_lower_limit(tmp_path):
     assert restored.exhausted is True
     with pytest.raises(ProviderCallBudgetExhausted):
         restored.consume("must_not_run")
+
+
+def test_logical_repair_reservation_is_durable_before_provider_call(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="07_balance")
+    budget = StepProviderCallBudget(
+        5,
+        step_id="07_balance",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+
+    assert budget.reserve_logical_repair("contract", max_repairs=3) == 1
+    assert budget.categories == ()
+    assert budget.logical_repair_classes == ("contract",)
+
+    state = load_provider_call_budget_state(
+        path,
+        step_id="07_balance",
+        expected_reserved_final_category="concept_audit",
+    )
+    assert state.categories == ()
+    assert [entry["repair_class"] for entry in state.logical_repairs] == ["contract"]
+    assert state.logical_repairs[0]["provider_history_len"] == 0
+
+    restored = StepProviderCallBudget(
+        state.limit,
+        step_id="07_balance",
+        consumed_categories=state.categories,
+        logical_repair_entries=state.logical_repairs,
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    assert restored.logical_repair_classes == ("contract",)
+    assert restored.reserve_logical_repair("runtime", max_repairs=1) is None
+
+
+def test_legacy_logical_repair_history_migrates_once_into_same_receipt(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="legacy")
+    budget = StepProviderCallBudget(
+        7,
+        step_id="legacy",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    budget.consume("initial_generation")
+    budget.consume("concept_repair_patch")
+
+    budget.migrate_logical_repairs(("concept", "contract"))
+    budget.migrate_logical_repairs(("concept", "contract"))
+
+    state = load_provider_call_budget_state(
+        path,
+        step_id="legacy",
+        expected_reserved_final_category="concept_audit",
+    )
+    assert [entry["attempt_id"] for entry in state.logical_repairs] == [1, 2]
+    assert all(
+        entry.get("migrated_from_step_snapshot") is True
+        for entry in state.logical_repairs
+    )
+    with pytest.raises(
+        ProviderCallBudgetReceiptError,
+        match="conflicts",
+    ):
+        budget.migrate_logical_repairs(("runtime",))
+
+
+def test_schema_v2_receipt_loads_without_inventing_logical_repairs(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="legacy_v2")
+    budget = StepProviderCallBudget(
+        4,
+        step_id="legacy_v2",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    budget.consume("initial_generation")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.pop("sha256")
+    payload["schema_version"] = 2
+    payload.pop("logical_repairs")
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    payload["sha256"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    state = load_provider_call_budget_state(
+        path,
+        step_id="legacy_v2",
+        expected_reserved_final_category="concept_audit",
+    )
+
+    assert state.schema_version == 2
+    assert state.categories == ("initial_generation",)
+    assert state.logical_repairs == ()
+
+
+def test_logical_repair_persistence_failure_rolls_back_reservation(
+    monkeypatch,
+    tmp_path,
+):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="repair")
+    budget = StepProviderCallBudget(3, step_id="repair", receipt_path=path)
+
+    def fail_replace(*_args):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(
+        "easyicu.research_agent.provider_budget.os.replace",
+        fail_replace,
+    )
+    with pytest.raises(ProviderCallBudgetReceiptError, match="persist"):
+        budget.reserve_logical_repair("runtime", max_repairs=2)
+
+    assert budget.logical_repair_classes == ()
+    assert budget.categories == ()
+    assert not path.exists()
+
+
+def test_logical_repair_history_fails_closed_even_with_recomputed_outer_digest(
+    tmp_path,
+):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="repair_tamper")
+    budget = StepProviderCallBudget(
+        3,
+        step_id="repair_tamper",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    assert budget.reserve_logical_repair("runtime", max_repairs=2) == 1
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.pop("sha256")
+    payload["logical_repairs"][0]["provider_history_len"] = 99
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    payload["sha256"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProviderCallBudgetReceiptError, match="inconsistent"):
+        load_provider_call_budget_state(
+            path,
+            step_id="repair_tamper",
+            expected_reserved_final_category="concept_audit",
+        )
 
 
 def test_receipt_persistence_failure_prevents_provider_call(monkeypatch, tmp_path):
