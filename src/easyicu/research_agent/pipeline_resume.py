@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .code_patch import looks_like_executable_python
 from .contracts import ValidationFinding
+from .evidence_authority import load_current_evidence_snapshot
 from .runtime_artifacts import current_step_records, verified_run_evidence_path
 from .schema import AnalysisPlan, AnalysisStep
 
@@ -44,9 +45,7 @@ _QUARANTINE_SCHEMA = "easyicu.quarantined_concept_draft/1"
 _QUARANTINE_DIRNAME = ".quarantine"
 _QUARANTINE_CODE_NAME = "concept_draft.py"
 _QUARANTINE_META_NAME = "concept_draft.json"
-_ROOT_AGENT_CODE_GENERATION_MODES = frozenset(
-    {"llm", "repaired", "runner_repaired"}
-)
+_ROOT_AGENT_CODE_GENERATION_MODES = frozenset({"llm", "repaired", "runner_repaired"})
 _AGENT_CODE_GENERATION_MODES = frozenset(
     {*_ROOT_AGENT_CODE_GENERATION_MODES, "resumed_code_reuse"}
 )
@@ -390,10 +389,9 @@ class ResumeController:
             # can otherwise block a now-valid plan before the selected step.
             if finding.validator == "plan_contract_pending":
                 continue
-            if (
-                finding.validator == "plan_contract"
-                and str(detail.get("kind") or "").startswith("trajectory_")
-            ):
+            if finding.validator == "plan_contract" and str(
+                detail.get("kind") or ""
+            ).startswith("trajectory_"):
                 continue
             if self._finding_mentions_step(finding, rerun_step_ids):
                 continue
@@ -461,11 +459,11 @@ class ResumeController:
     ) -> Optional[Tuple[str, Dict[str, Any]]]:
         """Return eligible evidence-bound code for a resumed step.
 
-        Repair code is registered in ``evidence_index.json`` before the whole
-        step record necessarily reaches ``manifest_partial.json``.  A process
-        interrupted during a later repair must therefore consult both fresh
-        on-disk sources rather than remain pinned to the resume-state snapshot
-        captured at pipeline startup.
+        Modern runs may reuse only code selected by the full-state evidence
+        authority. Legacy runs without that selector retain the historical
+        manifest/index fallback so old checkpoints can still resume. Mutable
+        manifest copies can never re-authorize code omitted from a modern
+        authority generation.
 
         Explicit resume preserves its historical selected-step behaviour.  On
         implicit resume, code is merely offered when the newest outer record
@@ -494,27 +492,32 @@ class ResumeController:
         if not explicitly_selected and not implicitly_failed_contract:
             return None
 
-        payloads: List[Any] = list(
-            (self.resume_state or {}).get("evidence", []) or []
-        )
-        for path in (
-            self.run_dir / "manifest_partial.json",
-            self.run_dir / "evidence" / "evidence_index.json",
-        ):
-            if not path.is_file():
-                continue
-            try:
-                loaded = json.loads(path.read_text(encoding="utf-8"))
-            except Exception:
-                continue
-            if isinstance(loaded, dict):
-                records = loaded.get("evidence", []) or []
-            elif isinstance(loaded, list):
-                records = loaded
-            else:
-                records = []
-            if isinstance(records, list):
-                payloads.extend(records)
+        snapshot = load_current_evidence_snapshot(self.run_dir)
+        if snapshot.generation is not None or snapshot.source in {
+            "root_marker_legacy",
+            "root_marker_legacy_prepared",
+        }:
+            # Once a store has a selected authority, mutable manifest copies
+            # cannot re-authorize code that is absent from that authority.
+            payloads: List[Any] = list(snapshot.records)
+        else:
+            payloads = list((self.resume_state or {}).get("evidence", []) or [])
+            for path in (self.run_dir / "manifest_partial.json",):
+                if not path.is_file():
+                    continue
+                try:
+                    loaded = json.loads(path.read_text(encoding="utf-8"))
+                except Exception:
+                    continue
+                if isinstance(loaded, dict):
+                    records = loaded.get("evidence", []) or []
+                elif isinstance(loaded, list):
+                    records = loaded
+                else:
+                    records = []
+                if isinstance(records, list):
+                    payloads.extend(records)
+            payloads.extend(snapshot.records)
 
         for payload in reversed(payloads):
             if not isinstance(payload, dict):
@@ -531,9 +534,8 @@ class ResumeController:
             ):
                 continue
             expected_sha256 = str(payload.get("sha256") or "").lower()
-            if (
-                len(expected_sha256) != _SHA256_HEX_LENGTH
-                or any(char not in "0123456789abcdef" for char in expected_sha256)
+            if len(expected_sha256) != _SHA256_HEX_LENGTH or any(
+                char not in "0123456789abcdef" for char in expected_sha256
             ):
                 continue
             relative_path = str(payload.get("relative_path") or "")
@@ -682,7 +684,10 @@ def upsert_step_record(
     for idx, existing in enumerate(records):
         if existing.get("step_id") != step_id:
             continue
-        if replace_statuses is not None and existing.get("status") not in replace_statuses:
+        if (
+            replace_statuses is not None
+            and existing.get("status") not in replace_statuses
+        ):
             continue
         records[idx] = record
         return

@@ -193,6 +193,7 @@ from .evidence import (
     _coerce_enforcement_mode,
     sha256_of_file,
 )
+from .evidence_authority import load_current_evidence_snapshot
 from .experience import (
     ExperienceBank,
     ExperienceRecord,
@@ -388,15 +389,7 @@ def _resume_plan_candidate_paths(
     """
 
     del resume_state  # Evidence authority supersedes a mutable manifest path.
-    index_path = run_dir / "evidence" / "evidence_index.json"
-    if not index_path.is_file() or index_path.is_symlink():
-        return []
-    try:
-        records = json.loads(index_path.read_text(encoding="utf-8"))
-    except Exception:
-        return []
-    if not isinstance(records, list):
-        return []
+    records = list(load_current_evidence_snapshot(run_dir).records)
 
     ranked: List[tuple[int, int, Path]] = []
     for index, record in enumerate(records):

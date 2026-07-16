@@ -1378,36 +1378,25 @@ def test_legacy_completed_resume_is_adopted_only_from_verified_context_and_cohor
         evidence_id="provenance_sources",
     )
 
-    index_path = run_dir / "evidence" / "evidence_index.json"
-    index = json.loads(index_path.read_text(encoding="utf-8"))
-    capsule_record = next(
-        record for record in index if record["evidence_id"] == "run_input_capsule"
-    )
-    Path(run_dir / capsule_record["relative_path"]).unlink()
-    index_path.write_text(
-        json.dumps(
-            [
-                record
-                for record in index
-                if record["evidence_id"] != "run_input_capsule"
-            ],
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-    aliases_path = run_dir / "evidence" / "evidence_aliases.json"
-    aliases = json.loads(aliases_path.read_text(encoding="utf-8"))
-    aliases_path.write_text(
-        json.dumps(
-            {
-                alias: evidence_id
-                for alias, evidence_id in aliases.items()
-                if evidence_id != "run_input_capsule"
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
+    capsule_record = evidence.get("run_input_capsule")
+    assert capsule_record is not None
+    capsule_evidence_path = run_dir / capsule_record.relative_path
+    # Emulate a completed run created before RunInputCapsule existed while
+    # keeping the modern evidence ledger authoritative. Flat projection edits
+    # cannot remove selected evidence once a full-state generation exists.
+    with evidence._lock:
+        evidence._records = [
+            record
+            for record in evidence._records
+            if record.evidence_id != "run_input_capsule"
+        ]
+        evidence._aliases = {
+            alias: evidence_id
+            for alias, evidence_id in evidence._aliases.items()
+            if evidence_id != "run_input_capsule"
+        }
+        evidence._save()
+    capsule_evidence_path.unlink()
     (run_dir / RUN_INPUT_CAPSULE_FILENAME).unlink()
 
     partial = json.loads(

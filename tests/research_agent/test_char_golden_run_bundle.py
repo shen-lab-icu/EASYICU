@@ -612,3 +612,95 @@ def test_minimal_typed_pipeline_matches_normalized_golden_bundle(
     expected = json.loads(_GOLDEN_PATH.read_text(encoding="utf-8"))
 
     assert actual == expected, json.dumps(actual, indent=2, sort_keys=True)
+
+
+def test_numeric_authority_failure_prevents_current_alias_publication(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A broken numeric ledger must fail the step before aliases become current."""
+
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.runtime_artifacts import (
+        current_step_records,
+        load_run_artifact_authority,
+    )
+
+    fixture = _load_typed_pipeline_fixture()
+    fixture._disable_unrelated_audits(monkeypatch)
+    numeric_calls = 0
+    original_numeric_registration = EvidenceStore.register_step_summary_numerics
+
+    def fail_numeric_registration(self, *args, **kwargs):
+        nonlocal numeric_calls
+        if str(kwargs.get("step_id") or "") != "01_representation":
+            return original_numeric_registration(self, *args, **kwargs)
+        numeric_calls += 1
+        raise OSError("injected numeric authority failure")
+
+    monkeypatch.setattr(
+        EvidenceStore,
+        "register_step_summary_numerics",
+        fail_numeric_registration,
+    )
+
+    def runner_factory(*, workdir, **_kwargs):
+        return fixture._HybridTrajectoryRunner(workdir=Path(workdir))
+
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=fixture._PlanAndCoderLLM(),
+        timeout_seconds=17.0,
+        standard_executor_timeout_seconds=1_234.0,
+        runner_factory=runner_factory,
+        enable_literature=False,
+        enable_visual_qa=False,
+        enable_latex=False,
+        enable_llm_concept_audit=False,
+        enable_replanning=False,
+        enable_deterministic_code_fallback=True,
+        enable_deterministic_runner_repair=False,
+        max_code_repair_attempts=2,
+    )
+    cohort = pd.DataFrame(
+        {
+            "stay_id": list(range(1, 25)),
+            "marker_h0_6": np.linspace(-1.0, 1.0, 24),
+            "marker_h6_12": np.linspace(-0.5, 1.5, 24),
+            "death": [0, 1] * 12,
+        }
+    )
+    result = pipeline.run(
+        question="Assess fixed-window trajectory phenotypes.",
+        cohort=cohort,
+        cohort_name="trajectory_stability_failure",
+        database="synthetic",
+        target_outcome="death",
+        stop_after_step_id="01_representation",
+        stop_after_analysis=True,
+    )
+
+    run_dir = Path(result.workdir)
+    authority = load_run_artifact_authority(run_dir)
+    assert authority is not None
+    current = current_step_records(authority["per_step_records"])
+    failed = next(
+        record for record in current if record.get("step_id") == "01_representation"
+    )
+    assert failed["status"] == "contract_failed"
+    evidence_findings = [
+        finding
+        for finding in failed.get("contract_findings", [])
+        if finding.get("validator") == "result_evidence_authority"
+    ]
+    assert len(evidence_findings) == 1
+    assert evidence_findings[0]["detail"]["evidence_store_write_suppressed"] is True
+
+    store = EvidenceStore(run_dir)
+    unpublished_result_ids = set(failed.get("evidence_ids", [])) - {
+        str(failed.get("script_evidence_id") or "")
+    }
+    assert unpublished_result_ids
+    assert not unpublished_result_ids.intersection(store.aliases().values())
+    assert numeric_calls == 1

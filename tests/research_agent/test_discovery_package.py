@@ -395,11 +395,10 @@ def test_discovery_package_requires_code_backed_figure_record(
     value,
 ):
     bundle = _build_strict_ready_package(tmp_path)
-    index_path = tmp_path / "evidence" / "evidence_index.json"
-    index = json.loads(index_path.read_text(encoding="utf-8"))
-    figure = next(item for item in index if item["evidence_id"] == bundle["svg"])
-    figure[field] = value
-    _write_json(index_path, index)
+    store = EvidenceStore(tmp_path)
+    figure = next(item for item in store._records if item.evidence_id == bundle["svg"])
+    setattr(figure, field, value)
+    store._save()
 
     assessment = validate_discovery_manuscript_package(run_dir=tmp_path)
 
@@ -413,12 +412,11 @@ def test_discovery_package_requires_primary_source_coverage_in_figure_record(
     tmp_path: Path,
 ):
     bundle = _build_strict_ready_package(tmp_path)
-    index_path = tmp_path / "evidence" / "evidence_index.json"
-    index = json.loads(index_path.read_text(encoding="utf-8"))
-    figure = next(item for item in index if item["evidence_id"] == bundle["svg"])
-    figure["inputs"].remove("primary_result")
-    figure["metadata"]["source_evidence_ids"].remove("primary_result")
-    _write_json(index_path, index)
+    store = EvidenceStore(tmp_path)
+    figure = next(item for item in store._records if item.evidence_id == bundle["svg"])
+    figure.inputs.remove("primary_result")
+    figure.metadata["source_evidence_ids"].remove("primary_result")
+    store._save()
 
     assessment = validate_discovery_manuscript_package(run_dir=tmp_path)
 
@@ -777,11 +775,12 @@ def test_primary_result_requires_table_or_statistic_on_primary_panel(tmp_path: P
 
 def test_discovery_contract_record_must_bind_all_panel_sources(tmp_path: Path):
     bundle = _build_strict_ready_package(tmp_path)
-    index_path = tmp_path / "evidence" / "evidence_index.json"
-    index = json.loads(index_path.read_text(encoding="utf-8"))
-    contract = next(item for item in index if item["evidence_id"] == bundle["contract"])
-    contract["inputs"].remove("primary_result")
-    _write_json(index_path, index)
+    store = EvidenceStore(tmp_path)
+    contract = next(
+        item for item in store._records if item.evidence_id == bundle["contract"]
+    )
+    contract.inputs.remove("primary_result")
+    store._save()
 
     assessment = validate_discovery_manuscript_package(run_dir=tmp_path)
 

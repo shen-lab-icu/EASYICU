@@ -30,6 +30,10 @@ import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
 
 from .evidence import EvidenceStore, sha256_of_file
+from .evidence_authority import (
+    EvidenceAuthorityIntegrityError,
+    load_current_evidence_snapshot,
+)
 from .prompts import PROMPT_PACK_VERSION, prompt_pack_files
 from .runtime_artifacts import (
     current_successful_step_records,
@@ -37,7 +41,6 @@ from .runtime_artifacts import (
     verified_run_evidence_path,
 )
 from .schema import ResearchContext, TimeWindow
-
 
 RUN_INPUT_CAPSULE_FILENAME = "run_input_capsule.json"
 RUN_INPUT_CAPSULE_EVIDENCE_ID = "run_input_capsule"
@@ -206,7 +209,9 @@ def _cohort_frame(cohort: Union[str, Path, pd.DataFrame]) -> pd.DataFrame:
     )
 
 
-def _source_file_identities(source_files: Optional[Sequence[Any]]) -> list[Dict[str, Any]]:
+def _source_file_identities(
+    source_files: Optional[Sequence[Any]],
+) -> list[Dict[str, Any]]:
     identities: list[Dict[str, Any]] = []
     for entry in source_files or []:
         role = None
@@ -350,20 +355,16 @@ def build_environment_identity(*, llm_signature: str) -> Dict[str, Any]:
 
 
 def _records_from_index(run_dir: Path) -> Dict[str, Dict[str, Any]]:
-    index_path = Path(run_dir) / "evidence" / "evidence_index.json"
-    if not index_path.is_file():
-        raise RunInputIdentityError(
-            "Cannot resume safely: evidence_index.json is missing."
-        )
     try:
-        payload = json.loads(index_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError, TypeError) as exc:
+        snapshot = load_current_evidence_snapshot(Path(run_dir))
+    except EvidenceAuthorityIntegrityError as exc:
         raise RunInputIdentityError(
-            "Cannot resume safely: evidence_index.json is corrupt."
+            "Cannot resume safely: evidence authority is corrupt."
         ) from exc
-    if not isinstance(payload, list):
+    payload = list(snapshot.records)
+    if not payload:
         raise RunInputIdentityError(
-            "Cannot resume safely: evidence_index.json is not a record list."
+            "Cannot resume safely: the selected evidence authority has no records."
         )
     records: Dict[str, Dict[str, Any]] = {}
     for raw in payload:
@@ -420,7 +421,9 @@ def seal_run_input_capsule(
     capsule_path = Path(run_dir) / RUN_INPUT_CAPSULE_FILENAME
     existing = evidence.get(RUN_INPUT_CAPSULE_EVIDENCE_ID)
     if capsule_path.exists() or existing is not None:
-        raise RunInputIdentityError("Run input capsule is immutable and already exists.")
+        raise RunInputIdentityError(
+            "Run input capsule is immutable and already exists."
+        )
     context_record = evidence.get("research_context")
     if context_record is None:
         raise RunInputIdentityError(
@@ -440,7 +443,9 @@ def seal_run_input_capsule(
             sha256_of_file(trajectory_path) if trajectory_path.is_file() else None
         ),
         experiment_spec_evidence_id=(
-            str(experiment_record.evidence_id) if experiment_record is not None else None
+            str(experiment_record.evidence_id)
+            if experiment_record is not None
+            else None
         ),
         experiment_spec_sha256=(
             str(experiment_record.sha256) if experiment_record is not None else None
@@ -548,7 +553,9 @@ def adopt_verified_legacy_run_input_capsule(
     context_variables = {variable.name: variable for variable in context.variables}
     for name, description in requested_descriptions.items():
         variable = context_variables.get(name)
-        if variable is None or str(variable.description or "") != str(description or ""):
+        if variable is None or str(variable.description or "") != str(
+            description or ""
+        ):
             mismatched.append("concept_descriptions")
             break
     if mismatched:
@@ -575,7 +582,10 @@ def adopt_verified_legacy_run_input_capsule(
             "Cannot adopt legacy resume: provenance has no unique cohort authority."
         )
     expected_cohort_sha = str(cohort_records[0].get("sha256") or "")
-    if len(expected_cohort_sha) != 64 or sha256_of_file(staged_cohort) != expected_cohort_sha:
+    if (
+        len(expected_cohort_sha) != 64
+        or sha256_of_file(staged_cohort) != expected_cohort_sha
+    ):
         raise RunInputIdentityError(
             "Cannot adopt legacy resume: staged cohort no longer matches its "
             "original provenance digest."
@@ -763,9 +773,7 @@ def _evidence_closure_error(
     if verified_run_evidence_path(run_dir, record) is None:
         return f"evidence {evidence_id} failed path/digest verification"
     dependencies = [
-        str(value)
-        for value in (record.get("inputs") or [])
-        if str(value).strip()
+        str(value) for value in (record.get("inputs") or []) if str(value).strip()
     ]
     script_id = str(record.get("script_evidence_id") or "").strip()
     if script_id:
@@ -795,21 +803,15 @@ _STEP_AUTHORITY_EXPECTED_KINDS = {
     "script_evidence_id": "code",
     "interpretation_evidence_id": "log",
 }
-_RESUME_AUTHORITY_MIGRATION_SCHEMA_VERSION = (
-    "easyicu.resume_step_authority_migration/1"
-)
+_RESUME_AUTHORITY_MIGRATION_SCHEMA_VERSION = "easyicu.resume_step_authority_migration/1"
 _HOST_PROBE_STEP_ID = "00_probe"
 _HOST_PROBE_AUTHORITY_KIND = "host_deterministic_probe"
 _HOST_PROBE_AUTHORITIES = {
     "probe_summary_evidence_id": ("statistic", "probe_summary.json"),
     "probe_table_evidence_id": ("table", "probe_variable_profile.csv"),
 }
-_HOST_COHORT_MATERIALIZER_GENERATION_MODE = (
-    "deterministic_cohort_materializer"
-)
-_HOST_COHORT_MATERIALIZER_AUTHORITY_KIND = (
-    "host_deterministic_cohort_materializer"
-)
+_HOST_COHORT_MATERIALIZER_GENERATION_MODE = "deterministic_cohort_materializer"
+_HOST_COHORT_MATERIALIZER_AUTHORITY_KIND = "host_deterministic_cohort_materializer"
 _HOST_COHORT_MATERIALIZER_AUTHORITY_FIELD = "cohort_table_evidence_id"
 _HOST_COHORT_MATERIALIZER_EVIDENCE_ID = "analysis_cohort_execute_repair"
 _HOST_COHORT_MATERIALIZER_SOURCE_NAME = "cohort_analysis.parquet"
@@ -845,9 +847,7 @@ def _host_probe_authority_error(
     if record.get("step_authority_kind") != _HOST_PROBE_AUTHORITY_KIND:
         return "successful host probe checkpoint lacks migrated probe authority"
     listed = set(evidence_ids)
-    for field, (expected_kind, expected_source_name) in (
-        _HOST_PROBE_AUTHORITIES.items()
-    ):
+    for field, (expected_kind, expected_source_name) in _HOST_PROBE_AUTHORITIES.items():
         evidence_id = str(record.get(field) or "").strip()
         if not evidence_id:
             return f"successful host probe checkpoint is missing required {field}"
@@ -909,8 +909,7 @@ def _host_cohort_materializer_authority_error(
     if (
         str(record.get("generation_mode") or "").strip().lower()
         != _HOST_COHORT_MATERIALIZER_GENERATION_MODE
-        or record.get("step_authority_kind")
-        != _HOST_COHORT_MATERIALIZER_AUTHORITY_KIND
+        or record.get("step_authority_kind") != _HOST_COHORT_MATERIALIZER_AUTHORITY_KIND
     ):
         return f"{prefix} checkpoint lacks migrated cohort authority"
 
@@ -968,9 +967,10 @@ def _host_cohort_materializer_authority_error(
     ):
         return f"{prefix} authority has an unexpected executable dependency"
     metadata = authority.get("metadata")
-    if not isinstance(metadata, Mapping) or not str(
-        metadata.get("reason") or ""
-    ).strip():
+    if (
+        not isinstance(metadata, Mapping)
+        or not str(metadata.get("reason") or "").strip()
+    ):
         return f"{prefix} authority lacks its materialization reason"
 
     closure_error = _evidence_closure_error(
@@ -1045,19 +1045,18 @@ def _migrated_legacy_step_authority(
         if record.get("step_authority_kind") == _HOST_PROBE_AUTHORITY_KIND:
             return None
         migrated_fields: Dict[str, str] = {}
-        for field, (expected_kind, expected_source_name) in (
-            _HOST_PROBE_AUTHORITIES.items()
-        ):
+        for field, (
+            expected_kind,
+            expected_source_name,
+        ) in _HOST_PROBE_AUTHORITIES.items():
             candidates: list[str] = []
             for evidence_id in evidence_ids:
                 authority = records.get(evidence_id)
                 if not isinstance(authority, Mapping):
                     continue
                 if (
-                    str(authority.get("produced_by_step") or "").strip()
-                    != step_id
-                    or str(authority.get("kind") or "").strip().lower()
-                    != expected_kind
+                    str(authority.get("produced_by_step") or "").strip() != step_id
+                    or str(authority.get("kind") or "").strip().lower() != expected_kind
                     or str(authority.get("producer") or "").strip().lower()
                     != "pipeline"
                     or str(authority.get("generation_mode") or "").strip().lower()
@@ -1104,9 +1103,7 @@ def _migrated_legacy_step_authority(
         migrated = dict(record)
         migrated.update(
             {
-                "step_authority_kind": (
-                    _HOST_COHORT_MATERIALIZER_AUTHORITY_KIND
-                ),
+                "step_authority_kind": (_HOST_COHORT_MATERIALIZER_AUTHORITY_KIND),
                 _HOST_COHORT_MATERIALIZER_AUTHORITY_FIELD: (
                     _HOST_COHORT_MATERIALIZER_EVIDENCE_ID
                 ),
@@ -1416,8 +1413,7 @@ def invalidate_unverified_successful_steps(
     previously_invalid = {
         str(record.get("step_id") or "").strip()
         for record in current_records
-        if str(record.get("status") or "").strip().lower()
-        == "resume_evidence_invalid"
+        if str(record.get("status") or "").strip().lower() == "resume_evidence_invalid"
         and str(record.get("step_id") or "").strip()
     }
     dependency_map = {
@@ -1581,8 +1577,7 @@ def prepare_existing_resume_input(
         )
     elif prior_successes:
         prior_llm_signature = str(
-            resume_state.get("llm_signature")
-            or current_environment["llm_signature"]
+            resume_state.get("llm_signature") or current_environment["llm_signature"]
         )
         legacy_prompt_files = dict(resume_state.get("prompt_pack_files") or {})
         legacy_environment = {
@@ -1617,10 +1612,8 @@ def prepare_existing_resume_input(
                 "an immutable run input capsule; start a new run instead."
             )
         plan, _ = load_compatible_plan(run_dir=run_dir, resume_state=resume_state)
-        if (
-            plan is None
-            or " ".join(plan.research_question.split())
-            != " ".join(question.split())
+        if plan is None or " ".join(plan.research_question.split()) != " ".join(
+            question.split()
         ):
             raise RunInputIdentityError(
                 "Cannot bootstrap legacy resume: verified plan question does "
@@ -1682,11 +1675,9 @@ def prepare_existing_resume_input(
     experiment_spec_path: Optional[Path] = None
     if authority.experiment_spec_evidence_path is not None:
         experiment_spec_path = run_dir / "experiment_spec.yaml"
-        if (
-            not experiment_spec_path.is_file()
-            or sha256_of_file(experiment_spec_path)
-            != sha256_of_file(authority.experiment_spec_evidence_path)
-        ):
+        if not experiment_spec_path.is_file() or sha256_of_file(
+            experiment_spec_path
+        ) != sha256_of_file(authority.experiment_spec_evidence_path):
             shutil.copy2(
                 authority.experiment_spec_evidence_path,
                 experiment_spec_path,

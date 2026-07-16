@@ -33,6 +33,9 @@ from easyicu.research_agent.evidence import (
     NumericClaim,
     _evaluate_derived_formula,
 )
+from easyicu.research_agent.evidence_authority import (
+    load_current_evidence_snapshot,
+)
 
 
 # ---------------------------------------------------------------------
@@ -239,6 +242,47 @@ def test_register_derived_claim_is_idempotent(tmp_path: Path) -> None:
     assert len(matches) == 1
 
 
+def test_register_derived_claim_new_evidence_id_is_not_deduped(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(root=tmp_path)
+    store.register_numeric_claim(
+        value="1.42",
+        canonical=1.42,
+        evidence_id="03_attempt_1",
+        step_id="03",
+        source_field="primary_or",
+    )
+    first = store.register_derived_claim(
+        name="primary_or_plus_one",
+        formula="primary_or + 1",
+        explanation="Primary estimate shifted by one.",
+        sources={"primary_or": ("03", "primary_or")},
+        evidence_id="03_attempt_1",
+        step_id="03",
+    )
+    second = store.register_derived_claim(
+        name="primary_or_plus_one",
+        formula="primary_or + 1",
+        explanation="Primary estimate shifted by one.",
+        sources={"primary_or": ("03", "primary_or")},
+        evidence_id="03_attempt_2",
+        step_id="03",
+    )
+
+    matches = [
+        claim
+        for claim in store.numeric_claims()
+        if claim.step_id == "03" and claim.source_field == "primary_or_plus_one"
+    ]
+    assert first is not second
+    assert [claim.evidence_id for claim in matches] == [
+        "03_attempt_1",
+        "03_attempt_2",
+    ]
+    assert first.canonical == second.canonical
+
+
 def test_register_derived_claim_rejects_bad_name(tmp_path: Path) -> None:
     store = EvidenceStore(root=tmp_path)
     with pytest.raises(DerivedFormulaError, match="identifier"):
@@ -310,6 +354,48 @@ def test_register_step_derived_claims_happy_path(tmp_path: Path) -> None:
     assert len(claims) == 2
     names = {c.source_field for c in claims}
     assert names == {"primary_or_ci_low", "primary_or_ci_high"}
+
+
+def test_register_step_derived_claims_commits_one_authority_generation(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(root=tmp_path)
+    store.register_step_summary_numerics(
+        step_id="03",
+        evidence_id="03_attempt_1",
+        summary={"estimate": 2.0},
+    )
+    before = load_current_evidence_snapshot(tmp_path)
+    assert before.generation is not None
+
+    claims, errors = store.register_step_derived_claims(
+        step_id="03",
+        evidence_id="03_attempt_1",
+        summary={
+            "derived_claims": [
+                {
+                    "name": "estimate_plus_one",
+                    "formula": "estimate + 1",
+                    "explanation": "Primary estimate shifted by one.",
+                    "sources": {"estimate": "estimate"},
+                },
+                {
+                    "name": "estimate_doubled",
+                    "formula": "estimate * 2",
+                    "explanation": "Primary estimate multiplied by two.",
+                    "sources": {"estimate": "estimate"},
+                },
+            ]
+        },
+    )
+    after = load_current_evidence_snapshot(tmp_path)
+
+    assert errors == []
+    assert {claim.source_field for claim in claims} == {
+        "estimate_plus_one",
+        "estimate_doubled",
+    }
+    assert after.generation == before.generation + 1
 
 
 def test_register_step_derived_claims_partial_failure(tmp_path: Path) -> None:

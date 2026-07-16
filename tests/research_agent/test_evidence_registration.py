@@ -184,6 +184,17 @@ def test_execute_phase_uses_extracted_registrar_after_success_gate() -> None:
     terminal_checkpoint = execute_source.rindex(
         "_append_terminal_step_record(per_step_records, step_record)"
     )
+    publication_failure = execute_source.index(
+        'validator="result_evidence_authority"', promotion
+    )
 
-    assert status_resolution < success_guard < promotion
-    assert promotion < numeric_authority < terminal_checkpoint
+    assert status_resolution < success_guard < numeric_authority
+    assert numeric_authority < promotion < terminal_checkpoint
+    assert (
+        "EvidenceAuthorityIntegrityError"
+        in execute_source[numeric_authority:publication_failure]
+    )
+    assert (
+        "if not store_unavailable:"
+        in execute_source[publication_failure:terminal_checkpoint]
+    )
