@@ -500,6 +500,9 @@ def test_coder_repair_replaces_unverifiable_module_provenance_scanner(ra):
         "measurement_provenance_receipt(frame, "
         "measured_column=measured_column, count_column=count_column)"
     ) in prompt
+    assert "Keep each returned receipt mapping unchanged" in prompt
+    assert "pd.DataFrame.from_records(receipts)" in prompt
+    assert "do not unpack, copy, relabel, or re-emit" in prompt
     assert "may not change values, rows, denominators" in prompt
 
 
