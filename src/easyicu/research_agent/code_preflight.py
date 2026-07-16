@@ -9,6 +9,7 @@ from __future__ import annotations
 import ast
 import builtins
 import re
+from dataclasses import dataclass, field
 from typing import Optional
 
 from .coder_context import normalised_method_head
@@ -4793,33 +4794,161 @@ def _series_method_root(node: ast.AST, methods: set[str]) -> Optional[str]:
     return None
 
 
-def _numeric_coercion_roots(tree: ast.Module) -> set[str]:
-    """Return names assigned from ``to_numeric(errors='coerce')``."""
+@dataclass
+class _StatementPosition:
+    scope: ast.AST
+    scope_id: int
+    owner: ast.AST
+    field_name: str
+    index: int
+    block: list[ast.stmt] = field(repr=False)
 
-    roots: set[str] = set()
+
+@dataclass(frozen=True)
+class _NumericCoercionSite:
+    scope_id: int
+    statement_id: int
+    root: str
+    line: int
+    scope: ast.AST = field(compare=False, hash=False, repr=False)
+    statement: ast.stmt = field(compare=False, hash=False, repr=False)
+
+
+@dataclass(frozen=True)
+class _GuardBinding:
+    kind: str
+    name: str
+    base: Optional[str]
+    scope_id: int
+    runtime_stable: bool = True
+
+
+@dataclass(frozen=True)
+class _CoercionLossBinding:
+    coercion: _NumericCoercionSite
+    guard_binding: _GuardBinding
+    count_line: int
+    statement_id: int
+    statement: ast.stmt = field(compare=False, hash=False, repr=False)
+
+
+_LEXICAL_SCOPE_NODES = (
+    ast.Module,
+    ast.FunctionDef,
+    ast.AsyncFunctionDef,
+    ast.ClassDef,
+)
+_FAILURE_SUPPRESSING_OWNERS = (ast.Try, ast.TryStar, ast.With, ast.AsyncWith)
+
+
+def _ast_parent_and_statement_positions(
+    tree: ast.Module,
+) -> tuple[dict[int, ast.AST], dict[int, _StatementPosition]]:
+    """Index lexical scopes and ordered statement-list membership."""
+
+    parents = {
+        id(child): parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+
+    def _scope_for(node: ast.AST) -> ast.AST:
+        current = parents.get(id(node))
+        while current is not None:
+            if isinstance(current, _LEXICAL_SCOPE_NODES):
+                return current
+            current = parents.get(id(current))
+        return tree
+
+    positions: dict[int, _StatementPosition] = {}
+    for owner in ast.walk(tree):
+        for field_name, value in ast.iter_fields(owner):
+            if not (
+                isinstance(value, list)
+                and value
+                and all(isinstance(item, ast.stmt) for item in value)
+            ):
+                continue
+            block = value
+            for index, statement in enumerate(block):
+                scope = _scope_for(statement)
+                positions[id(statement)] = _StatementPosition(
+                    scope=scope,
+                    scope_id=id(scope),
+                    owner=owner,
+                    field_name=field_name,
+                    index=index,
+                    block=block,
+                )
+    return parents, positions
+
+
+def _scope_id_for_node(
+    node: ast.AST,
+    *,
+    parents: dict[int, ast.AST],
+    tree: ast.Module,
+) -> int:
+    current: Optional[ast.AST] = node
+    while current is not None:
+        current = parents.get(id(current))
+        if isinstance(current, _LEXICAL_SCOPE_NODES):
+            return id(current)
+    return id(tree)
+
+
+def _numeric_coercion_sites(
+    tree: ast.Module,
+    positions: dict[int, _StatementPosition],
+) -> list[_NumericCoercionSite]:
+    """Return definition-site identities for ``to_numeric(..., coerce)``."""
+
+    sites: list[_NumericCoercionSite] = []
     for node in ast.walk(tree):
-        if not (
-            isinstance(node, ast.Assign)
-            and isinstance(node.value, ast.Call)
-            and _call_name(node.value.func).split(".")[-1] == "to_numeric"
-        ):
+        if isinstance(node, ast.Assign):
+            value = node.value
+            targets = node.targets
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            value = node.value
+            targets = [node.target]
+        else:
             continue
-        for keyword in node.value.keywords:
-            if (
+        if not (
+            isinstance(value, ast.Call)
+            and _call_name(value.func).split(".")[-1] == "to_numeric"
+            and any(
                 keyword.arg == "errors"
                 and isinstance(keyword.value, ast.Constant)
                 and keyword.value.value == "coerce"
-            ):
-                for target in node.targets:
-                    roots.update(
-                        _expression_identity(ast.Name(id=name, ctx=ast.Load()))
-                        for name in _target_names(target)
-                    )
-    return roots
+                for keyword in value.keywords
+            )
+        ):
+            continue
+        position = positions.get(id(node))
+        if position is None:
+            continue
+        for target in targets:
+            sites.extend(
+                _NumericCoercionSite(
+                    scope_id=position.scope_id,
+                    statement_id=id(node),
+                    root=_expression_identity(ast.Name(id=name, ctx=ast.Load())),
+                    line=int(node.lineno),
+                    scope=position.scope,
+                    statement=node,
+                )
+                for name in _target_names(target)
+            )
+    return sites
 
 
-def _coercion_loss_root(node: ast.AST, coercion_roots: set[str]) -> Optional[str]:
-    """Return the coerced Series in ``(raw.notna() & coerced.isna()).sum()``."""
+def _coercion_loss_site(
+    node: ast.AST,
+    coercion_sites: list[_NumericCoercionSite],
+    *,
+    scope_id: int,
+) -> Optional[_NumericCoercionSite]:
+    """Resolve a loss-count expression to one preceding coercion definition."""
 
     if not (
         isinstance(node, ast.Call)
@@ -4828,63 +4957,191 @@ def _coercion_loss_root(node: ast.AST, coercion_roots: set[str]) -> Optional[str
     ):
         return None
     terms = _flatten_bitand_terms(node.func.value)
-    has_raw_present = any(_series_method_root(term, {"notna"}) for term in terms)
-    if not has_raw_present:
+    if not any(_series_method_root(term, {"notna", "notnull"}) for term in terms):
         return None
+    line = int(node.lineno)
     for term in terms:
         root = _series_method_root(term, {"isna", "isnull"})
-        if root in coercion_roots:
-            return root
+        candidates = [
+            site
+            for site in coercion_sites
+            if site.scope_id == scope_id and site.root == root and site.line <= line
+        ]
+        if candidates:
+            return max(candidates, key=lambda site: (site.line, site.statement_id))
     return None
 
 
 def _coercion_loss_bindings(
     tree: ast.Module,
-    coercion_roots: set[str],
-) -> list[tuple[str, str, int]]:
-    """Return ``(binding, coerced-root, line)`` loss-count assignments."""
+    coercion_sites: list[_NumericCoercionSite],
+    positions: dict[int, _StatementPosition],
+    *,
+    builtin_int_unmodified: bool,
+) -> list[_CoercionLossBinding]:
+    """Return scope-bound scalar/dict-key loss-count assignments."""
 
-    bindings: list[tuple[str, str, int]] = []
+    bindings: list[_CoercionLossBinding] = []
 
-    def _contains_loss_count(node: ast.AST) -> Optional[tuple[str, int]]:
+    def _contains_loss_count(
+        node: ast.AST,
+        *,
+        scope_id: int,
+    ) -> Optional[tuple[_NumericCoercionSite, int, bool]]:
+        matches: list[tuple[_NumericCoercionSite, ast.Call]] = []
         for candidate in ast.walk(node):
-            root = _coercion_loss_root(candidate, coercion_roots)
-            if root is not None:
-                return root, int(candidate.lineno)
-        return None
+            site = _coercion_loss_site(
+                candidate,
+                coercion_sites,
+                scope_id=scope_id,
+            )
+            if site is not None:
+                assert isinstance(candidate, ast.Call)
+                matches.append((site, candidate))
+        if not matches:
+            return None
+        site, loss_call = matches[0]
+        exact = len(matches) == 1 and (
+            node is loss_call
+            or bool(
+                builtin_int_unmodified
+                and isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "int"
+                and len(node.args) == 1
+                and not node.keywords
+                and node.args[0] is loss_call
+            )
+        )
+        return site, int(loss_call.lineno), exact
+
+    def _straight_line_from_coercion(
+        coercion: _NumericCoercionSite,
+        loss_position: _StatementPosition,
+    ) -> bool:
+        coercion_position = positions.get(coercion.statement_id)
+        return bool(
+            coercion_position is not None
+            and coercion_position.scope_id == loss_position.scope_id
+            and coercion_position.owner is loss_position.owner
+            and coercion_position.field_name == loss_position.field_name
+            and coercion_position.index < loss_position.index
+        )
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
-            matched = _contains_loss_count(node.value)
-            if matched is None:
+            value = node.value
+            targets = node.targets
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            value = node.value
+            targets = [node.target]
+        else:
+            continue
+        position = positions.get(id(node))
+        if position is None:
+            continue
+
+        if isinstance(value, ast.Dict):
+            if len(targets) != 1 or not isinstance(targets[0], ast.Name):
                 continue
-            root, line = matched
-            for target in node.targets:
-                bindings.extend((name, root, line) for name in _target_names(target))
-        elif isinstance(node, ast.Dict):
-            for key, value in zip(node.keys, node.values):
-                if value is None:
+            base = targets[0].id
+            literal_keys = [
+                key.value
+                for key in value.keys
+                if isinstance(key, ast.Constant) and isinstance(key.value, str)
+            ]
+            has_unpack = any(key is None for key in value.keys)
+            for key, candidate_value in zip(value.keys, value.values):
+                if not (
+                    isinstance(key, ast.Constant)
+                    and isinstance(key.value, str)
+                    and candidate_value is not None
+                ):
                     continue
-                matched = _contains_loss_count(value)
+                matched = _contains_loss_count(
+                    candidate_value,
+                    scope_id=position.scope_id,
+                )
                 if matched is None:
                     continue
-                if isinstance(key, ast.Constant) and isinstance(key.value, str):
-                    root, line = matched
-                    bindings.append((key.value, root, line))
-    return list(dict.fromkeys(bindings))
+                coercion, line, exact = matched
+                bindings.append(
+                    _CoercionLossBinding(
+                        coercion=coercion,
+                        guard_binding=_GuardBinding(
+                            kind="dict_key",
+                            name=key.value,
+                            base=base,
+                            scope_id=position.scope_id,
+                            runtime_stable=(
+                                exact
+                                and _straight_line_from_coercion(
+                                    coercion,
+                                    position,
+                                )
+                                and not has_unpack
+                                and literal_keys.count(key.value) == 1
+                            ),
+                        ),
+                        count_line=line,
+                        statement_id=id(node),
+                        statement=node,
+                    )
+                )
+            continue
+
+        matched = _contains_loss_count(value, scope_id=position.scope_id)
+        if matched is None:
+            continue
+        coercion, line, exact = matched
+        for target in targets:
+            bindings.extend(
+                _CoercionLossBinding(
+                    coercion=coercion,
+                    guard_binding=_GuardBinding(
+                        kind="name",
+                        name=name,
+                        base=None,
+                        scope_id=position.scope_id,
+                        runtime_stable=(
+                            exact
+                            and _straight_line_from_coercion(
+                                coercion,
+                                position,
+                            )
+                        ),
+                    ),
+                    count_line=line,
+                    statement_id=id(node),
+                    statement=node,
+                )
+                for name in _target_names(target)
+            )
+    return bindings
 
 
-def _references_loss_name(node: ast.AST, names: set[str]) -> bool:
-    for candidate in ast.walk(node):
-        if isinstance(candidate, ast.Name) and candidate.id in names:
-            return True
-        if (
-            isinstance(candidate, ast.Constant)
-            and isinstance(candidate.value, str)
-            and candidate.value in names
-        ):
-            return True
-    return False
+def _binding_expression_matches(
+    node: ast.AST,
+    binding: _GuardBinding,
+    *,
+    scope_id: int,
+    builtin_int_unmodified: bool,
+) -> bool:
+    if not binding.runtime_stable:
+        return False
+    if scope_id != binding.scope_id:
+        return False
+    current = node
+    if binding.kind == "name":
+        return isinstance(current, ast.Name) and current.id == binding.name
+    return bool(
+        binding.kind == "dict_key"
+        and isinstance(current, ast.Subscript)
+        and isinstance(current.value, ast.Name)
+        and current.value.id == binding.base
+        and isinstance(current.slice, ast.Constant)
+        and current.slice.value == binding.name
+    )
 
 
 def _literal_int(node: ast.AST, value: int) -> bool:
@@ -4895,17 +5152,33 @@ def _literal_int(node: ast.AST, value: int) -> bool:
     )
 
 
-def _positive_count_test(node: ast.AST, names: set[str]) -> bool:
+def _positive_count_test(
+    node: ast.AST,
+    binding: _GuardBinding,
+    *,
+    scope_id: int,
+    builtin_int_unmodified: bool,
+) -> bool:
     """Return whether an ``if`` condition is true exactly when count > 0."""
 
-    if isinstance(node, (ast.Name, ast.Subscript)):
-        return _references_loss_name(node, names)
+    if _binding_expression_matches(
+        node,
+        binding,
+        scope_id=scope_id,
+        builtin_int_unmodified=builtin_int_unmodified,
+    ):
+        return True
     if not isinstance(node, ast.Compare) or len(node.ops) != 1:
         return False
     left = node.left
     right = node.comparators[0]
     op = node.ops[0]
-    if _references_loss_name(left, names):
+    if _binding_expression_matches(
+        left,
+        binding,
+        scope_id=scope_id,
+        builtin_int_unmodified=builtin_int_unmodified,
+    ):
         return (
             isinstance(op, ast.Gt)
             and _literal_int(right, 0)
@@ -4914,7 +5187,12 @@ def _positive_count_test(node: ast.AST, names: set[str]) -> bool:
             or isinstance(op, ast.NotEq)
             and _literal_int(right, 0)
         )
-    if _references_loss_name(right, names):
+    if _binding_expression_matches(
+        right,
+        binding,
+        scope_id=scope_id,
+        builtin_int_unmodified=builtin_int_unmodified,
+    ):
         return (
             isinstance(op, ast.Lt)
             and _literal_int(left, 0)
@@ -4926,24 +5204,45 @@ def _positive_count_test(node: ast.AST, names: set[str]) -> bool:
     return False
 
 
-def _zero_count_assertion(node: ast.AST, names: set[str]) -> bool:
+def _zero_count_assertion(
+    node: ast.AST,
+    binding: _GuardBinding,
+    *,
+    scope_id: int,
+    builtin_int_unmodified: bool,
+) -> bool:
     """Return whether an assertion fails whenever the count is positive."""
 
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
-        return _references_loss_name(node.operand, names)
+        return _binding_expression_matches(
+            node.operand,
+            binding,
+            scope_id=scope_id,
+            builtin_int_unmodified=builtin_int_unmodified,
+        )
     if not isinstance(node, ast.Compare) or len(node.ops) != 1:
         return False
     left = node.left
     right = node.comparators[0]
     op = node.ops[0]
-    if _references_loss_name(left, names):
+    if _binding_expression_matches(
+        left,
+        binding,
+        scope_id=scope_id,
+        builtin_int_unmodified=builtin_int_unmodified,
+    ):
         return (
             isinstance(op, ast.Eq)
             and _literal_int(right, 0)
             or isinstance(op, ast.LtE)
             and _literal_int(right, 0)
         )
-    if _references_loss_name(right, names):
+    if _binding_expression_matches(
+        right,
+        binding,
+        scope_id=scope_id,
+        builtin_int_unmodified=builtin_int_unmodified,
+    ):
         return (
             isinstance(op, ast.Eq)
             and _literal_int(left, 0)
@@ -4953,38 +5252,348 @@ def _zero_count_assertion(node: ast.AST, names: set[str]) -> bool:
     return False
 
 
+def _guard_failure_escapes(
+    guard: ast.stmt,
+    *,
+    scope: ast.AST,
+    parents: dict[int, ast.AST],
+) -> bool:
+    """Conservatively prove the guard cannot be swallowed in its scope."""
+
+    current: Optional[ast.AST] = guard
+    while current is not scope:
+        parent = parents.get(id(current)) if current is not None else None
+        if parent is None:
+            return False
+        if isinstance(parent, _FAILURE_SUPPRESSING_OWNERS):
+            return False
+        current = parent
+    return True
+
+
+def _statement_is_fail_closed_guard(
+    statement: ast.stmt,
+    binding: _GuardBinding,
+    *,
+    position: _StatementPosition,
+    parents: dict[int, ast.AST],
+    builtin_int_unmodified: bool,
+) -> bool:
+    if not _guard_failure_escapes(
+        statement,
+        scope=position.scope,
+        parents=parents,
+    ):
+        return False
+    if isinstance(statement, ast.If):
+        return bool(
+            _positive_count_test(
+                statement.test,
+                binding,
+                scope_id=position.scope_id,
+                builtin_int_unmodified=builtin_int_unmodified,
+            )
+            and statement.body
+            and isinstance(statement.body[0], ast.Raise)
+        )
+    return bool(
+        isinstance(statement, ast.Assert)
+        and _zero_count_assertion(
+            statement.test,
+            binding,
+            scope_id=position.scope_id,
+            builtin_int_unmodified=builtin_int_unmodified,
+        )
+    )
+
+
+def _immediate_guard_for_statement(
+    statement: ast.stmt,
+    binding: _GuardBinding,
+    *,
+    positions: dict[int, _StatementPosition],
+    parents: dict[int, ast.AST],
+    builtin_int_unmodified: bool,
+) -> bool:
+    position = positions.get(id(statement))
+    if position is None or position.index + 1 >= len(position.block):
+        return False
+    following = position.block[position.index + 1]
+    following_position = positions.get(id(following))
+    if following_position is None or following_position.scope_id != binding.scope_id:
+        return False
+    return _statement_is_fail_closed_guard(
+        following,
+        binding,
+        position=following_position,
+        parents=parents,
+        builtin_int_unmodified=builtin_int_unmodified,
+    )
+
+
+def _function_returns(
+    function: ast.FunctionDef,
+) -> list[ast.Return]:
+    returns: list[ast.Return] = []
+
+    class _ReturnVisitor(ast.NodeVisitor):
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            return
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            return
+
+        def visit_Lambda(self, node: ast.Lambda) -> None:
+            return
+
+        def visit_Return(self, node: ast.Return) -> None:
+            returns.append(node)
+
+    visitor = _ReturnVisitor()
+    for statement in function.body:
+        visitor.visit(statement)
+    return returns
+
+
+def _returned_name_slot(
+    value: Optional[ast.AST],
+    name: str,
+) -> Optional[tuple[int, int]]:
+    if isinstance(value, ast.Name) and value.id == name:
+        return 0, 1
+    if not isinstance(value, (ast.Tuple, ast.List)):
+        return None
+    slots = [
+        index
+        for index, element in enumerate(value.elts)
+        if isinstance(element, ast.Name) and element.id == name
+    ]
+    if len(slots) != 1:
+        return None
+    return slots[0], len(value.elts)
+
+
+def _assigned_name_for_slot(
+    target: ast.AST,
+    *,
+    slot: int,
+    width: int,
+) -> Optional[str]:
+    if width == 1 and isinstance(target, ast.Name):
+        return target.id
+    if not (
+        isinstance(target, (ast.Tuple, ast.List))
+        and len(target.elts) == width
+        and isinstance(target.elts[slot], ast.Name)
+    ):
+        return None
+    return target.elts[slot].id
+
+
+def _function_binding_is_stable(
+    tree: ast.Module,
+    function: ast.FunctionDef,
+    *,
+    parents: dict[int, ast.AST],
+    defining_scope_id: int,
+) -> bool:
+    """Reject decorators or same-scope rebinding of a receipt helper."""
+
+    if function.decorator_list:
+        return False
+    for node in ast.walk(tree):
+        if node is function:
+            continue
+        if _scope_id_for_node(node, parents=parents, tree=tree) != defining_scope_id:
+            continue
+        if (
+            isinstance(node, ast.Name)
+            and node.id == function.name
+            and isinstance(node.ctx, (ast.Store, ast.Del))
+        ):
+            return False
+        if isinstance(node, ast.arg) and node.arg == function.name:
+            return False
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            and node.name == function.name
+        ):
+            return False
+        if isinstance(node, (ast.Import, ast.ImportFrom)) and any(
+            (alias.asname or alias.name.split(".")[0]) == function.name
+            for alias in node.names
+        ):
+            return False
+        if isinstance(node, ast.ExceptHandler) and node.name == function.name:
+            return False
+        if isinstance(node, ast.MatchAs) and node.name == function.name:
+            return False
+        if isinstance(node, ast.MatchStar) and node.name == function.name:
+            return False
+        if isinstance(node, ast.MatchMapping) and node.rest == function.name:
+            return False
+    return True
+
+
+def _exported_receipt_guard_proves_failure(
+    tree: ast.Module,
+    binding: _CoercionLossBinding,
+    *,
+    parents: dict[int, ast.AST],
+    positions: dict[int, _StatementPosition],
+    builtin_int_unmodified: bool,
+) -> bool:
+    """Prove every direct call immediately guards one returned audit dict."""
+
+    loss_guard = binding.guard_binding
+    function = binding.coercion.scope
+    loss_position = positions.get(binding.statement_id)
+    if not (
+        loss_guard.kind == "dict_key"
+        and loss_guard.base
+        and isinstance(function, ast.FunctionDef)
+        and not function.decorator_list
+        and loss_position is not None
+        and loss_position.owner is function
+        and loss_position.field_name == "body"
+        and loss_position.index + 1 < len(loss_position.block)
+    ):
+        return False
+    returned = loss_position.block[loss_position.index + 1]
+    returns = _function_returns(function)
+    if not (
+        isinstance(returned, ast.Return)
+        and returns == [returned]
+        and (slot_info := _returned_name_slot(returned.value, loss_guard.base))
+        is not None
+    ):
+        return False
+    if _has_dynamic_namespace_indirection(tree):
+        return False
+
+    function_position = positions.get(id(function))
+    if function_position is None or not isinstance(function_position.owner, ast.Module):
+        return False
+    if not _function_binding_is_stable(
+        tree,
+        function,
+        parents=parents,
+        defining_scope_id=function_position.scope_id,
+    ):
+        return False
+    if (
+        sum(
+            1
+            for statement in function_position.block
+            if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and statement.name == function.name
+        )
+        != 1
+    ):
+        return False
+
+    name_loads = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name)
+        and isinstance(node.ctx, ast.Load)
+        and node.id == function.name
+    ]
+    calls: list[ast.Call] = []
+    for name_load in name_loads:
+        parent = parents.get(id(name_load))
+        if not (
+            isinstance(parent, ast.Call)
+            and parent.func is name_load
+            and parent not in calls
+        ):
+            return False
+        calls.append(parent)
+    if not calls:
+        return False
+
+    slot, width = slot_info
+    for call in calls:
+        assignment = parents.get(id(call))
+        if isinstance(assignment, ast.Assign):
+            if assignment.value is not call or len(assignment.targets) != 1:
+                return False
+            target = assignment.targets[0]
+        elif isinstance(assignment, ast.AnnAssign):
+            if assignment.value is not call:
+                return False
+            target = assignment.target
+        else:
+            return False
+        assignment_position = positions.get(id(assignment))
+        if not (
+            assignment_position is not None
+            and assignment_position.owner is function_position.owner
+            and assignment_position.field_name == function_position.field_name
+            and assignment_position.index > function_position.index
+        ):
+            return False
+        audit_name = _assigned_name_for_slot(target, slot=slot, width=width)
+        if audit_name is None:
+            return False
+        caller_binding = _GuardBinding(
+            kind="dict_key",
+            name=loss_guard.name,
+            base=audit_name,
+            scope_id=assignment_position.scope_id,
+            runtime_stable=loss_guard.runtime_stable,
+        )
+        if not _immediate_guard_for_statement(
+            assignment,
+            caller_binding,
+            positions=positions,
+            parents=parents,
+            builtin_int_unmodified=builtin_int_unmodified,
+        ):
+            return False
+    return True
+
+
 def _guarded_coercion_roots(
     tree: ast.Module,
-    bindings: list[tuple[str, str, int]],
-) -> set[str]:
-    guarded: set[str] = set()
-    for binding, root, _line in bindings:
-        names = {binding}
-        for node in ast.walk(tree):
-            if (
-                isinstance(node, ast.If)
-                and _positive_count_test(node.test, names)
-                and node.body
-                and isinstance(node.body[0], ast.Raise)
-            ):
-                guarded.add(root)
-            elif isinstance(node, ast.Assert) and _zero_count_assertion(
-                node.test, names
-            ):
-                guarded.add(root)
+    bindings: list[_CoercionLossBinding],
+    *,
+    parents: dict[int, ast.AST],
+    positions: dict[int, _StatementPosition],
+) -> set[_NumericCoercionSite]:
+    guarded: set[_NumericCoercionSite] = set()
+    builtin_int_unmodified = _builtin_int_binding_is_unmodified(tree)
+    for binding in bindings:
+        if _immediate_guard_for_statement(
+            binding.statement,
+            binding.guard_binding,
+            positions=positions,
+            parents=parents,
+            builtin_int_unmodified=builtin_int_unmodified,
+        ) or _exported_receipt_guard_proves_failure(
+            tree,
+            binding,
+            parents=parents,
+            positions=positions,
+            builtin_int_unmodified=builtin_int_unmodified,
+        ):
+            guarded.add(binding.coercion)
     return guarded
 
 
 def _notna_gated_domain_checks(
     tree: ast.Module,
-    coercion_roots: set[str],
-) -> list[tuple[str, int]]:
+    coercion_sites: list[_NumericCoercionSite],
+    *,
+    parents: dict[int, ast.AST],
+) -> list[tuple[_NumericCoercionSite, int]]:
     """Return coerced roots whose domain checks exclude null values."""
 
-    checks: list[tuple[str, int]] = []
+    checks: list[tuple[_NumericCoercionSite, int]] = []
     for node in ast.walk(tree):
         if not (isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitAnd)):
             continue
+        scope_id = _scope_id_for_node(node, parents=parents, tree=tree)
         terms = _flatten_bitand_terms(node)
         notna_roots = {
             root
@@ -4994,8 +5603,23 @@ def _notna_gated_domain_checks(
         }
         for term in terms:
             root = _series_method_root(term, {"isin", "between"})
-            if root and root in coercion_roots and root in notna_roots:
-                checks.append((root, int(term.lineno)))
+            candidates = [
+                site
+                for site in coercion_sites
+                if site.scope_id == scope_id
+                and site.root == root
+                and site.line <= int(term.lineno)
+            ]
+            if root and root in notna_roots and candidates:
+                checks.append(
+                    (
+                        max(
+                            candidates,
+                            key=lambda site: (site.line, site.statement_id),
+                        ),
+                        int(term.lineno),
+                    )
+                )
     return list(dict.fromkeys(checks))
 
 
@@ -5012,14 +5636,30 @@ def _lossy_numeric_coercion_findings(tree: ast.Module) -> list[ValidationFinding
        ``notna()``, so values nulled by coercion silently become missingness.
     """
 
-    coercion_roots = _numeric_coercion_roots(tree)
-    if not coercion_roots:
+    parents, positions = _ast_parent_and_statement_positions(tree)
+    coercion_sites = _numeric_coercion_sites(tree, positions)
+    if not coercion_sites:
         return []
-    loss_bindings = _coercion_loss_bindings(tree, coercion_roots)
-    guarded_roots = _guarded_coercion_roots(tree, loss_bindings)
+    builtin_int_unmodified = _builtin_int_binding_is_unmodified(tree)
+    loss_bindings = _coercion_loss_bindings(
+        tree,
+        coercion_sites,
+        positions,
+        builtin_int_unmodified=builtin_int_unmodified,
+    )
+    guarded_roots = _guarded_coercion_roots(
+        tree,
+        loss_bindings,
+        parents=parents,
+        positions=positions,
+    )
     issues: list[dict[str, object]] = []
     unguarded_loss_lines = sorted(
-        {line for _binding, root, line in loss_bindings if root not in guarded_roots}
+        {
+            binding.count_line
+            for binding in loss_bindings
+            if binding.coercion not in guarded_roots
+        }
     )
     if unguarded_loss_lines:
         issues.append(
@@ -5031,7 +5671,11 @@ def _lossy_numeric_coercion_findings(tree: ast.Module) -> list[ValidationFinding
     domain_lines = sorted(
         {
             line
-            for root, line in _notna_gated_domain_checks(tree, coercion_roots)
+            for root, line in _notna_gated_domain_checks(
+                tree,
+                coercion_sites,
+                parents=parents,
+            )
             if root not in guarded_roots
         }
     )

@@ -1,5 +1,6 @@
 from easyicu.research_agent.repair_reasons import (
     RepairReason,
+    repair_reason_for_finding,
     structured_repair_metadata,
     typed_repair_ticket,
 )
@@ -183,6 +184,17 @@ def test_scalar_cast_before_reduction_has_typed_numeric_reason():
     assert typed_repair_ticket([finding])[0]["reason"] == (
         RepairReason.INVALID_NUMERIC_REDUCTION.value
     )
+
+
+def test_ordinal_rounding_is_distinct_from_numeric_coercion():
+    finding = ValidationFinding(
+        validator="mechanical_code_preflight",
+        severity="error",
+        message="wording is not routing authority",
+        detail={"reason": "lossy_ordinal_rounding", "line": 7},
+    )
+
+    assert repair_reason_for_finding(finding) is RepairReason.LOSSY_ORDINAL_ROUNDING
 
 
 def test_llm_concept_finding_has_typed_semantics_reason_without_phrase_routing():
