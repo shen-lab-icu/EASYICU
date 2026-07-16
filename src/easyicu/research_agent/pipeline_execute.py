@@ -38,7 +38,6 @@ import shutil
 import stat
 import tempfile
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextvars import copy_context
 from dataclasses import dataclass
 from pathlib import Path
@@ -251,6 +250,7 @@ from .run_input_capsule import (
     engine_code_sha256,
     validator_code_sha256,
 )
+from .run_coordination import RunCoordinator, RunExecutionState, RunTransition
 from .runtime_artifacts import (
     current_step_records,
     current_successful_step_records,
@@ -289,6 +289,7 @@ from .step_authority_runtime import (
     seal_legacy_candidate,
     seal_repair_candidate_from_receipt,
 )
+from .step_execution import LockedStepExecutionRequest, StepExecutor
 from .summary_repair import salvage_step_summary
 from .viability import (
     CohortViability,
@@ -6189,6 +6190,8 @@ def run_execute_phase(
         target_outcome=context.target_outcome,
         universe_path=universe_path,
     )
+    step_executor = StepExecutor(clear_output_dir=_clear_output_dir)
+    run_coordinator = RunCoordinator()
     usage_auditor = ConceptUsageAuditor()
     pattern_auditor = AnalysisPatternAuditor()
     stat_validator = StatisticalValidator()
@@ -11333,12 +11336,16 @@ else:
                             ref,
                             status="candidate_checkpointed",
                         )
-                if not bool(getattr(execution_runner, "manages_output_cleanup", False)):
-                    _clear_output_dir(run_dir / "steps" / step.step_id / "outputs")
-                run_result = execution_runner.run(
-                    step_id=step.step_id,
-                    code=code,
-                    resolved_inputs_path=resolved_inputs_path,
+                run_result = step_executor.execute(
+                    runner=execution_runner,
+                    request=LockedStepExecutionRequest(
+                        step_id=step.step_id,
+                        code=code,
+                        resolved_inputs_path=resolved_inputs_path,
+                        output_dir=(
+                            run_dir / "steps" / step.step_id / "outputs"
+                        ),
+                    ),
                 )
 
             def _seal_actual_execution_result() -> None:
@@ -14176,16 +14183,11 @@ else:
                 force=True,
             )
 
-        executed_step_ids = set(preexecuted_step_ids)
-        # ``steps_to_run`` already carries the fail-closed plan-preflight
-        # decision above.  Recomputing from the full plan here would revive
-        # every step after a typed-DAG/trajectory contract ERROR and spend
-        # Coder calls on a plan the host has declared non-executable.
-        remaining_steps = list(steps_to_run)
-        while remaining_steps:
-            step = remaining_steps.pop(0)
-            record = _execute_one_step(step)
-            executed_step_ids.add(step.step_id)
+        def _resolve_run_transition(
+            step: AnalysisStep,
+            record: Dict[str, Any],
+            has_remaining: bool,
+        ) -> RunTransition:
             if run_input_authority_state["corrupted"]:
                 emit_progress(
                     "audit",
@@ -14194,8 +14196,7 @@ else:
                     run_id=run_id,
                     step_id=str(run_input_authority_state.get("step_id") or ""),
                 )
-                remaining_steps.clear()
-                break
+                return RunTransition.stop("input_authority_corrupted")
             if step.step_id == requested_stop_after_step_id:
                 emit_progress(
                     "pause",
@@ -14204,61 +14205,77 @@ else:
                     run_id=run_id,
                     step_id=step.step_id,
                 )
-                break
+                return RunTransition.stop("requested_stop_after_step")
             directed_plan = _maybe_directed_model_replan(
                 failed_step=step, failed_record=record
             )
             if directed_plan is not None:
-                plan = directed_plan
-                # Re-run the modeling step against the revised, de-gated plan.
-                executed_step_ids.discard(step.step_id)
-                step_order.clear()
-                step_order.update({s.step_id: i for i, s in enumerate(plan.steps)})
-                remaining_steps = resume_controller.remaining_steps(
-                    plan=plan,
-                    executed_step_ids=executed_step_ids,
+                return RunTransition.replan(
+                    directed_plan,
+                    rerun_current_step=True,
                 )
-                total_steps = len(plan.steps)
-                continue
             if (
                 pipeline._enable_replanning
                 and record.get("status") == "ok"
                 and _successful_step_requests_replan(record)
-                and remaining_steps
+                and has_remaining
             ):
-                plan = _maybe_replan(
-                    current_plan=plan,
-                    reason=step.step_id,
-                    probe_summary_payload=probe_summary,
-                    completed_records=per_step_records,
+                return RunTransition.replan(
+                    _maybe_replan(
+                        current_plan=plan,
+                        reason=step.step_id,
+                        probe_summary_payload=probe_summary,
+                        completed_records=per_step_records,
+                    )
                 )
-                step_order.clear()
-                step_order.update({s.step_id: i for i, s in enumerate(plan.steps)})
-                remaining_steps = resume_controller.remaining_steps(
-                    plan=plan,
-                    executed_step_ids=executed_step_ids,
-                )
-                total_steps = len(plan.steps)
+            return RunTransition.continue_run()
+
+        def _apply_revised_plan(
+            revised_plan: AnalysisPlan,
+            executed_step_ids: set[str],
+        ) -> Sequence[AnalysisStep]:
+            nonlocal plan, total_steps
+            plan = revised_plan
+            step_order.clear()
+            step_order.update({s.step_id: i for i, s in enumerate(plan.steps)})
+            remaining = resume_controller.remaining_steps(
+                plan=plan,
+                executed_step_ids=executed_step_ids,
+            )
+            total_steps = len(plan.steps)
+            return remaining
+
+        # ``steps_to_run`` already carries the fail-closed plan-preflight
+        # decision above. Recomputing from the full plan here would revive
+        # every step after a typed-DAG/trajectory contract ERROR and spend
+        # Coder calls on a plan the host has declared non-executable.
+        run_coordinator.run_sequential(
+            state=RunExecutionState(
+                remaining_steps=list(steps_to_run),
+                executed_step_ids=set(preexecuted_step_ids),
+            ),
+            execute_step=_execute_one_step,
+            resolve_transition=_resolve_run_transition,
+            apply_revised_plan=_apply_revised_plan,
+        )
     else:
-        workers = min(pipeline._max_concurrent_steps, len(steps_to_run))
-        with ThreadPoolExecutor(
-            max_workers=workers, thread_name_prefix="ra_step"
-        ) as ex:
-            futures = [
-                _submit_in_current_context(ex, _execute_one_step, step)
-                for step in steps_to_run
-            ]
-            for fut in as_completed(futures):
-                exc = fut.exception()
-                if exc is not None:
-                    with shared_lock:
-                        findings.append(
-                            ValidationFinding(
-                                validator="step_executor",
-                                severity="error",
-                                message=f"Worker raised an unhandled exception: {exc!r}",
-                            )
-                        )
+        def _record_parallel_worker_error(exc: BaseException) -> None:
+            with shared_lock:
+                findings.append(
+                    ValidationFinding(
+                        validator="step_executor",
+                        severity="error",
+                        message=f"Worker raised an unhandled exception: {exc!r}",
+                    )
+                )
+
+        run_coordinator.run_parallel(
+            steps=steps_to_run,
+            max_workers=pipeline._max_concurrent_steps,
+            execute_step=_execute_one_step,
+            submit_step=_submit_in_current_context,
+            on_worker_error=_record_parallel_worker_error,
+        )
 
     if run_input_authority_state["corrupted"]:
         _flush_partial_manifest(

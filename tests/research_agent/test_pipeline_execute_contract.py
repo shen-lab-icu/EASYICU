@@ -1310,7 +1310,7 @@ def test_primary_cohort_raw_runner_is_scoped_and_authority_hashes_are_rechecked(
     assert source.count('if run_input_authority_state["corrupted"]:') == 2
     assert '"remaining_steps_suppressed": True' in source
 
-    runner_call = source.index("run_result = execution_runner.run(")
+    runner_call = source.index("run_result = step_executor.execute(")
     authority_check = source.index(
         "authority_finding = _execution_input_authority_integrity_finding(",
         runner_call,
