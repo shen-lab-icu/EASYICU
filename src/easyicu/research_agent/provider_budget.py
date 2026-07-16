@@ -869,8 +869,8 @@ class StepProviderCallBudget:
     def next_logical_repair_attempt_id(self) -> int:
         """Return the new or safely resumable logical-attempt identifier.
 
-        A pending reservation can be reused only while its provider history is
-        unchanged. Once any paid call is visible, the missing result is
+        A pending reservation can be reused only while no attempt-owned provider
+        call is visible. Once that repair has paid calls, the missing result is
         unknowable and resume must fail closed instead of paying twice.
         """
 
