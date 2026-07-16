@@ -1712,10 +1712,21 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
         return True
 
     def _direct_execution_statement(statement: ast.stmt) -> bool:
-        owner = parents.get(statement)
-        if owner is tree or _canonical_entrypoint_guard(owner):
-            return True
-        return isinstance(owner, ast.FunctionDef) and _terminal_entry_function(owner)
+        current: ast.AST = statement
+        while True:
+            owner = parents.get(current)
+            if owner is tree or _canonical_entrypoint_guard(owner):
+                return True
+            if isinstance(owner, ast.FunctionDef):
+                return _terminal_entry_function(owner)
+            # A ``try`` body is entered directly when its owning statement is
+            # entered.  Handler/finally safety is evaluated separately by
+            # ``_failure_exit_may_be_swallowed``; branches, loops, handlers,
+            # ``else`` suites, and context managers remain non-direct here.
+            if isinstance(owner, ast.Try) and current in owner.body:
+                current = owner
+                continue
+            return False
 
     def _result_sink_precedes_call(call: ast.Call) -> bool:
         call_scope = _scope(call)
@@ -1753,15 +1764,59 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
             for node in ast.walk(statement)
         )
 
+    swallowed_exit_issues: dict[tuple[int, int, int], dict[str, object]] = {}
+
     def _failure_exit_may_be_swallowed(node: ast.AST) -> bool:
         """Reject a raise site whose caller-side ``try`` can consume failure."""
 
+        exit_line = int(getattr(node, "lineno", 0) or 0)
         current: Optional[ast.AST] = node
         while current is not None:
             parent = parents.get(current)
             if parent is None:
                 return False
-            if isinstance(parent, (ast.Try, ast.TryStar, ast.With, ast.AsyncWith)):
+            if isinstance(parent, ast.Try):
+                # A failure raised from the try body is proven to escape when
+                # every possible handler immediately raises again.  ``else``
+                # and ``finally`` remain outside this narrow proof because a
+                # later control-flow exit could suppress or replace failure.
+                if (
+                    current in parent.body
+                    and not parent.orelse
+                    and not parent.finalbody
+                    and bool(parent.handlers)
+                    and all(
+                        _handler_immediately_reraises(handler)
+                        for handler in parent.handlers
+                    )
+                ):
+                    current = parent
+                    continue
+                unsafe_handlers = [
+                    handler
+                    for handler in parent.handlers
+                    if not _handler_immediately_reraises(handler)
+                ]
+                handler_lines = [
+                    int(getattr(handler, "lineno", 0) or 0)
+                    for handler in unsafe_handlers
+                ] or [0]
+                for handler_line in handler_lines:
+                    issue = {
+                        "failure_mode": "provenance_guard_swallowed_by_handler",
+                        "exit_line": exit_line,
+                        "try_line": int(getattr(parent, "lineno", 0) or 0),
+                        "handler_line": handler_line or None,
+                    }
+                    swallowed_exit_issues[
+                        (
+                            int(issue["exit_line"] or 0),
+                            int(issue["try_line"] or 0),
+                            int(issue["handler_line"] or 0),
+                        )
+                    ] = issue
+                return True
+            if isinstance(parent, (ast.TryStar, ast.With, ast.AsyncWith)):
                 return True
             current = parent
         return False
@@ -1769,6 +1824,21 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
     environments = {
         scope: _environment(scope) for scope in [tree, *marker_functions.values()]
     }
+
+    def _direct_scope_statement(statement: ast.stmt, scope: ast.AST) -> bool:
+        """Prove a statement lies on a direct, failure-propagating suite path."""
+
+        current: ast.AST = statement
+        while True:
+            owner = parents.get(current)
+            if owner is scope:
+                return True
+            if isinstance(owner, ast.Try) and current in owner.body:
+                if _failure_exit_may_be_swallowed(current):
+                    return False
+                current = owner
+                continue
+            return False
 
     def _stable_local_failure_signals(guard: ast.If, scope: ast.AST) -> bool:
         """Bind both audit counts to immutable built-in ``int`` values."""
@@ -1979,7 +2049,7 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
             """Prove the narrow loop grammar used for aggregate audit failures."""
 
             if (
-                parents.get(loop) is not function
+                not _direct_scope_statement(loop, function)
                 or parents.get(full_guard) is not loop
                 or full_guard not in loop.body
                 or loop.orelse
@@ -1997,7 +2067,7 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
                 and isinstance(empty_guard, ast.If)
                 and _negative_name_test(empty_guard.test, _PROVENANCE_LOOP_SENTINEL)
                 and _branch_all_paths_raise(empty_guard.body)
-                and parents.get(empty_guard) is function
+                and _direct_scope_statement(empty_guard, function)
                 and not _provenance_branch_contains_result_sink(empty_guard.body)
                 and not _result_sink_precedes_guard(empty_guard, parents)
             ):
@@ -2116,6 +2186,7 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
                 and _branch_all_paths_exit(guard.body)
                 and not _provenance_branch_contains_result_sink(guard.body)
                 and not _result_sink_precedes_guard(guard, parents)
+                and not _failure_exit_may_be_swallowed(guard)
             ):
                 self_guarded.add(name)
                 if _branch_all_paths_raise(guard.body):
@@ -2163,7 +2234,7 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
                         and len(targets) == 1
                         and isinstance(targets[0], ast.Name)
                         and _empty_initialization(value)
-                        and parents.get(candidate) is function
+                        and _direct_scope_statement(candidate, function)
                         and boundary_lines
                         and int(candidate.lineno) < min(boundary_lines)
                     ):
@@ -2211,9 +2282,10 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
                 if isinstance(candidate, ast.If)
                 and _exact_collection_test(candidate.test, collection)
                 and _branch_all_paths_raise(candidate.body)
-                and parents.get(candidate) is function
+                and _direct_scope_statement(candidate, function)
                 and not _provenance_branch_contains_result_sink(candidate.body)
                 and not _result_sink_precedes_guard(candidate, parents)
+                and not _failure_exit_may_be_swallowed(candidate)
                 and all(
                     int(call.lineno) < int(candidate.lineno) for call in allowed_calls
                 )
@@ -2258,7 +2330,7 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
                             and len(targets) == 1
                             and isinstance(targets[0], ast.Name)
                             and _empty_initialization(value)
-                            and parents.get(candidate) is function
+                            and _direct_scope_statement(candidate, function)
                             and int(candidate.lineno) < min(event_lines)
                         ):
                             terminal_initializations += 1
@@ -2314,6 +2386,30 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
 
     called_functions: set[str] = set()
     unsafe_call = False
+    provenance_call_issues: list[dict[str, object]] = []
+
+    def _record_call_issue(
+        call: ast.Call,
+        called: str,
+        failure_mode: str,
+        *,
+        following: ast.stmt | None = None,
+    ) -> None:
+        issue = {
+            "failure_mode": failure_mode,
+            "helper_name": called,
+            "call_line": int(getattr(call, "lineno", 0) or 0),
+            "helper_proves_self_raising": called in self_raising,
+            "returned_failure_slot": returned_slots.get(called),
+            "following_guard_line": (
+                int(getattr(following, "lineno", 0) or 0)
+                if following is not None
+                else None
+            ),
+        }
+        if issue not in provenance_call_issues:
+            provenance_call_issues.append(issue)
+
     for call in ast.walk(tree):
         if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Name):
             continue
@@ -2322,8 +2418,14 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
             continue
         called_functions.add(called)
         marker_function = marker_functions[called]
+        failure_may_be_swallowed = _failure_exit_may_be_swallowed(call)
         if not _direct_function_runtime_binding(marker_function):
             unsafe_call = True
+            _record_call_issue(
+                call,
+                called,
+                "provenance_helper_runtime_binding_ambiguous",
+            )
             continue
         if called in self_raising:
             statement = parents.get(call)
@@ -2331,18 +2433,31 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
                 isinstance(candidate, ast.Return)
                 for candidate in _local_nodes(marker_function)
             )
-            if not (
-                isinstance(statement, ast.Expr)
-                and statement.value is call
-                and _direct_execution_statement(statement)
-                and (not has_return or _terminal_entry_function(marker_function))
-                and not _result_sink_precedes_call(call)
-            ) or _failure_exit_may_be_swallowed(call):
+            if (
+                not (
+                    isinstance(statement, ast.Expr)
+                    and statement.value is call
+                    and _direct_execution_statement(statement)
+                    and (not has_return or _terminal_entry_function(marker_function))
+                    and not _result_sink_precedes_call(call)
+                )
+                or failure_may_be_swallowed
+            ):
                 unsafe_call = True
+                _record_call_issue(
+                    call,
+                    called,
+                    "provenance_self_raising_call_not_directly_propagated",
+                )
             continue
         node = parents.get(call)
         if not (isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is call):
             unsafe_call = True
+            _record_call_issue(
+                call,
+                called,
+                "provenance_helper_result_not_bound",
+            )
             continue
         following = _next_statement(node)
         if not (
@@ -2351,6 +2466,12 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
             and _direct_execution_statement(node)
         ):
             unsafe_call = True
+            _record_call_issue(
+                call,
+                called,
+                "provenance_helper_result_not_immediately_guarded",
+                following=following,
+            )
             continue
 
         targets = node.targets if isinstance(node, ast.Assign) else [node.target]
@@ -2381,6 +2502,13 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
                 or _provenance_branch_contains_result_sink(following.body)
                 or _result_sink_precedes_guard(following, parents)
             )
+        if not guarded:
+            _record_call_issue(
+                call,
+                called,
+                "provenance_helper_result_guard_not_fail_closed",
+                following=following,
+            )
         unsafe_call = unsafe_call or not guarded
 
     unsafe_module = module_is_marker and (
@@ -2394,6 +2522,21 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
     if not unsafe_call and not unsafe_definition and not unsafe_module:
         return []
 
+    detail: dict[str, object] = {"reason": "provenance_audit_not_fail_closed"}
+    issue_details = [
+        *swallowed_exit_issues.values(),
+        *provenance_call_issues,
+    ]
+    if unsafe_module:
+        issue_details.append(
+            {
+                "failure_mode": "module_provenance_scope_not_proven_fail_closed",
+                "helper_name": "<module>",
+            }
+        )
+    if issue_details:
+        detail["issues"] = issue_details
+
     return [
         ValidationFinding(
             validator="mechanical_code_preflight",
@@ -2403,7 +2546,7 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
                 "pairs but does not fail the completed step before scientific "
                 "outputs can be published."
             ),
-            detail={"reason": "provenance_audit_not_fail_closed"},
+            detail=detail,
         )
     ]
 
@@ -2482,10 +2625,14 @@ def _handler_catches_reconciliation_failure(handler: ast.ExceptHandler) -> bool:
     )
 
 
-def _handler_immediately_raises(handler: ast.ExceptHandler) -> bool:
-    """Conservatively prove that no caught failure can continue execution."""
+def _handler_immediately_reraises(handler: ast.ExceptHandler) -> bool:
+    """Prove that a handler immediately propagates the caught exception."""
 
-    return bool(handler.body) and isinstance(handler.body[0], ast.Raise)
+    return (
+        bool(handler.body)
+        and isinstance(handler.body[0], ast.Raise)
+        and handler.body[0].exc is None
+    )
 
 
 def _reconciliation_helper_call_names(
@@ -2821,7 +2968,7 @@ def _swallowed_reconciliation_error_findings(
         for handler in node.handlers:
             if not _handler_catches_reconciliation_failure(handler):
                 continue
-            if _handler_immediately_raises(handler):
+            if _handler_immediately_reraises(handler):
                 continue
             provenance_only = calls_in_body == {_RECONCILIATION_HELPER_NAME}
             findings.append(

@@ -1924,7 +1924,16 @@ def _repair_specialization(*, context: ResearchContext, run_log: str, code: str)
             "collection, treat an empty checks collection as failure, and guard "
             "that collection before any scientific sink. Do not rely only on an "
             "`any(...)` or `all(...)` generator reduction whose collection and "
-            "failure flow cannot be verified independently by the host.\n"
+            "failure flow cannot be verified independently by the host. Prefer "
+            "the host-owned `measurement_provenance_receipt` from "
+            "`easyicu.research_agent.methods.descriptive_inputs` for each exact "
+            "measured/count pair the Agent already declared; it validates the "
+            "pair and raises on invalid or discordant rows without choosing a "
+            "cohort, denominator, exposure, outcome, or method. Do not catch that "
+            "failure and continue. If the current script keeps a custom audit, "
+            "the typed ticket's helper/call/handler lines must all be repaired in "
+            "the same patch and every caught validation failure must be "
+            "unconditionally re-raised.\n"
         )
 
     primary_exposure_binding_signals = (
