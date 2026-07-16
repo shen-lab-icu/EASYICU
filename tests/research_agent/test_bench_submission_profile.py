@@ -12,6 +12,7 @@ sys.path.insert(0, str(TOOLS_DIR))
 try:
     from run_research_agent_bench import (  # type: ignore[import-not-found]
         _benchmark_pipeline_options,
+        _enforce_development_resume_repair_budget,
         _enforce_mock_aware_provider,
         _enforce_submission_profile_arms,
         _enforce_submission_profile_runner,
@@ -103,6 +104,55 @@ def test_benchmark_options_keep_execution_timeouts_independent() -> None:
 
     assert options["timeout_seconds"] == 29.0
     assert options["standard_executor_timeout_seconds"] == 2_345.0
+
+
+def test_development_resume_can_raise_durable_step_repair_ceiling() -> None:
+    value = _enforce_development_resume_repair_budget(
+        3,
+        resume_run_id="run_existing",
+        resume_from_step_id="02_table_one",
+        profile=None,
+    )
+    options = _benchmark_pipeline_options(
+        max_total_steps=None,
+        disable_replanning=False,
+        max_code_repair_attempts=None,
+        max_step_llm_repair_attempts=value,
+        enable_repro_envelope=False,
+    )
+
+    assert options["max_step_llm_repair_attempts"] == 3
+
+
+def test_step_repair_ceiling_override_requires_noncanonical_explicit_resume() -> None:
+    with pytest.raises(SystemExit, match="requires both"):
+        _enforce_development_resume_repair_budget(
+            3,
+            resume_run_id=None,
+            resume_from_step_id=None,
+            profile=None,
+        )
+    with pytest.raises(SystemExit, match="submission profile"):
+        _enforce_development_resume_repair_budget(
+            3,
+            resume_run_id="run_existing",
+            resume_from_step_id="02_table_one",
+            profile=CANONICAL_PROFILE,
+        )
+    with pytest.raises(SystemExit, match="must be exactly 3"):
+        _enforce_development_resume_repair_budget(
+            -1,
+            resume_run_id="run_existing",
+            resume_from_step_id="02_table_one",
+            profile=None,
+        )
+    with pytest.raises(SystemExit, match="must be exactly 3"):
+        _enforce_development_resume_repair_budget(
+            4,
+            resume_run_id="run_existing",
+            resume_from_step_id="02_table_one",
+            profile=None,
+        )
 
 
 def test_mock_provider_aware_arm_requires_explicit_smoke_opt_in() -> None:

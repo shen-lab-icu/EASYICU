@@ -1559,6 +1559,7 @@ def _benchmark_pipeline_options(
     max_total_steps: Optional[int],
     disable_replanning: bool,
     max_code_repair_attempts: Optional[int],
+    max_step_llm_repair_attempts: Optional[int] = None,
     timeout_seconds: float = 300.0,
     standard_executor_timeout_seconds: float = 3_600.0,
     enable_repro_envelope: bool = True,
@@ -1592,6 +1593,8 @@ def _benchmark_pipeline_options(
         options["enable_replanning"] = False
     if max_code_repair_attempts is not None:
         options["max_code_repair_attempts"] = int(max_code_repair_attempts)
+    if max_step_llm_repair_attempts is not None:
+        options["max_step_llm_repair_attempts"] = int(max_step_llm_repair_attempts)
     if strict_evidence:
         options["evidence_enforcement_mode"] = "strict"
     if enable_repro_envelope:
@@ -1628,6 +1631,43 @@ def _enforce_submission_profile_arms(
             "reviewer-response run."
         )
     return selected
+
+
+def _enforce_development_resume_repair_budget(
+    value: Optional[int],
+    *,
+    resume_run_id: Optional[str],
+    resume_from_step_id: Optional[str],
+    profile: Optional["SubmissionProfile"],
+) -> Optional[int]:
+    """Gate an explicit cross-resume logical-repair budget override.
+
+    The pipeline already persists logical repair attempts monotonically.  This
+    development-only switch may raise the configured ceiling for one selected
+    failed step without deleting receipts or replaying completed work.  Paper-
+    facing profiles keep their frozen budget and cannot use the override.
+    """
+
+    if value is None:
+        return None
+    normalized = int(value)
+    if normalized != 3:
+        raise SystemExit(
+            "--max-step-llm-repair-attempts must be exactly 3 for an explicit "
+            "one-call development resume; repeated budget ratcheting is not "
+            "allowed."
+        )
+    if not resume_run_id or not resume_from_step_id:
+        raise SystemExit(
+            "--max-step-llm-repair-attempts is development-only and requires "
+            "both --resume-run-id and --resume-from-step-id."
+        )
+    if profile is not None:
+        raise SystemExit(
+            "--max-step-llm-repair-attempts cannot override a submission "
+            "profile's frozen repair budget."
+        )
+    return normalized
 
 
 def _enforce_submission_profile_runner(
@@ -1983,6 +2023,17 @@ def main() -> int:
         help="Override the per-step generated-code repair attempt budget.",
     )
     parser.add_argument(
+        "--max-step-llm-repair-attempts",
+        type=int,
+        default=None,
+        help=(
+            "Development resume only: set the durable total LLM-repair "
+            "ceiling for the selected failed step. Requires --resume-run-id "
+            "and --resume-from-step-id and is forbidden under a submission "
+            "profile. Prior attempts remain counted."
+        ),
+    )
+    parser.add_argument(
         "--no-repro-envelope",
         action="store_true",
         help=(
@@ -2132,6 +2183,12 @@ def main() -> int:
     )
     if resume_from_step_id and not explicit_resume_run_id:
         raise SystemExit("--resume-from-step-id requires --resume-run-id.")
+    max_step_llm_repair_attempts = _enforce_development_resume_repair_budget(
+        getattr(args, "max_step_llm_repair_attempts", None),
+        resume_run_id=explicit_resume_run_id,
+        resume_from_step_id=resume_from_step_id,
+        profile=submission_profile,
+    )
     allow_retrospective_stability_design = bool(
         getattr(args, "allow_retrospective_stability_design", False)
     )
@@ -2167,6 +2224,7 @@ def main() -> int:
         max_total_steps=args.max_total_steps,
         disable_replanning=bool(args.disable_replanning),
         max_code_repair_attempts=args.max_code_repair_attempts,
+        max_step_llm_repair_attempts=max_step_llm_repair_attempts,
         timeout_seconds=float(args.timeout),
         standard_executor_timeout_seconds=float(
             args.standard_executor_timeout
