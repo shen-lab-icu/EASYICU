@@ -4777,6 +4777,294 @@ def _first_time_companion_findings(tree: ast.Module) -> list[ValidationFinding]:
     return []
 
 
+def _flatten_bitand_terms(node: ast.AST) -> list[ast.AST]:
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitAnd):
+        return _flatten_bitand_terms(node.left) + _flatten_bitand_terms(node.right)
+    return [node]
+
+
+def _series_method_root(node: ast.AST, methods: set[str]) -> Optional[str]:
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in methods
+    ):
+        return _expression_identity(node.func.value)
+    return None
+
+
+def _numeric_coercion_roots(tree: ast.Module) -> set[str]:
+    """Return names assigned from ``to_numeric(errors='coerce')``."""
+
+    roots: set[str] = set()
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Assign)
+            and isinstance(node.value, ast.Call)
+            and _call_name(node.value.func).split(".")[-1] == "to_numeric"
+        ):
+            continue
+        for keyword in node.value.keywords:
+            if (
+                keyword.arg == "errors"
+                and isinstance(keyword.value, ast.Constant)
+                and keyword.value.value == "coerce"
+            ):
+                for target in node.targets:
+                    roots.update(
+                        _expression_identity(ast.Name(id=name, ctx=ast.Load()))
+                        for name in _target_names(target)
+                    )
+    return roots
+
+
+def _coercion_loss_root(node: ast.AST, coercion_roots: set[str]) -> Optional[str]:
+    """Return the coerced Series in ``(raw.notna() & coerced.isna()).sum()``."""
+
+    if not (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "sum"
+    ):
+        return None
+    terms = _flatten_bitand_terms(node.func.value)
+    has_raw_present = any(_series_method_root(term, {"notna"}) for term in terms)
+    if not has_raw_present:
+        return None
+    for term in terms:
+        root = _series_method_root(term, {"isna", "isnull"})
+        if root in coercion_roots:
+            return root
+    return None
+
+
+def _coercion_loss_bindings(
+    tree: ast.Module,
+    coercion_roots: set[str],
+) -> list[tuple[str, str, int]]:
+    """Return ``(binding, coerced-root, line)`` loss-count assignments."""
+
+    bindings: list[tuple[str, str, int]] = []
+
+    def _contains_loss_count(node: ast.AST) -> Optional[tuple[str, int]]:
+        for candidate in ast.walk(node):
+            root = _coercion_loss_root(candidate, coercion_roots)
+            if root is not None:
+                return root, int(candidate.lineno)
+        return None
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            matched = _contains_loss_count(node.value)
+            if matched is None:
+                continue
+            root, line = matched
+            for target in node.targets:
+                bindings.extend((name, root, line) for name in _target_names(target))
+        elif isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values):
+                if value is None:
+                    continue
+                matched = _contains_loss_count(value)
+                if matched is None:
+                    continue
+                if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                    root, line = matched
+                    bindings.append((key.value, root, line))
+    return list(dict.fromkeys(bindings))
+
+
+def _references_loss_name(node: ast.AST, names: set[str]) -> bool:
+    for candidate in ast.walk(node):
+        if isinstance(candidate, ast.Name) and candidate.id in names:
+            return True
+        if (
+            isinstance(candidate, ast.Constant)
+            and isinstance(candidate.value, str)
+            and candidate.value in names
+        ):
+            return True
+    return False
+
+
+def _literal_int(node: ast.AST, value: int) -> bool:
+    return (
+        isinstance(node, ast.Constant)
+        and not isinstance(node.value, bool)
+        and node.value == value
+    )
+
+
+def _positive_count_test(node: ast.AST, names: set[str]) -> bool:
+    """Return whether an ``if`` condition is true exactly when count > 0."""
+
+    if isinstance(node, (ast.Name, ast.Subscript)):
+        return _references_loss_name(node, names)
+    if not isinstance(node, ast.Compare) or len(node.ops) != 1:
+        return False
+    left = node.left
+    right = node.comparators[0]
+    op = node.ops[0]
+    if _references_loss_name(left, names):
+        return (
+            isinstance(op, ast.Gt)
+            and _literal_int(right, 0)
+            or isinstance(op, ast.GtE)
+            and _literal_int(right, 1)
+            or isinstance(op, ast.NotEq)
+            and _literal_int(right, 0)
+        )
+    if _references_loss_name(right, names):
+        return (
+            isinstance(op, ast.Lt)
+            and _literal_int(left, 0)
+            or isinstance(op, ast.LtE)
+            and _literal_int(left, 1)
+            or isinstance(op, ast.NotEq)
+            and _literal_int(left, 0)
+        )
+    return False
+
+
+def _zero_count_assertion(node: ast.AST, names: set[str]) -> bool:
+    """Return whether an assertion fails whenever the count is positive."""
+
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        return _references_loss_name(node.operand, names)
+    if not isinstance(node, ast.Compare) or len(node.ops) != 1:
+        return False
+    left = node.left
+    right = node.comparators[0]
+    op = node.ops[0]
+    if _references_loss_name(left, names):
+        return (
+            isinstance(op, ast.Eq)
+            and _literal_int(right, 0)
+            or isinstance(op, ast.LtE)
+            and _literal_int(right, 0)
+        )
+    if _references_loss_name(right, names):
+        return (
+            isinstance(op, ast.Eq)
+            and _literal_int(left, 0)
+            or isinstance(op, ast.GtE)
+            and _literal_int(left, 0)
+        )
+    return False
+
+
+def _guarded_coercion_roots(
+    tree: ast.Module,
+    bindings: list[tuple[str, str, int]],
+) -> set[str]:
+    guarded: set[str] = set()
+    for binding, root, _line in bindings:
+        names = {binding}
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.If)
+                and _positive_count_test(node.test, names)
+                and node.body
+                and isinstance(node.body[0], ast.Raise)
+            ):
+                guarded.add(root)
+            elif isinstance(node, ast.Assert) and _zero_count_assertion(
+                node.test, names
+            ):
+                guarded.add(root)
+    return guarded
+
+
+def _notna_gated_domain_checks(
+    tree: ast.Module,
+    coercion_roots: set[str],
+) -> list[tuple[str, int]]:
+    """Return coerced roots whose domain checks exclude null values."""
+
+    checks: list[tuple[str, int]] = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitAnd)):
+            continue
+        terms = _flatten_bitand_terms(node)
+        notna_roots = {
+            root
+            for term in terms
+            for root in [_series_method_root(term, {"notna", "notnull"})]
+            if root
+        }
+        for term in terms:
+            root = _series_method_root(term, {"isin", "between"})
+            if root and root in coercion_roots and root in notna_roots:
+                checks.append((root, int(term.lineno)))
+    return list(dict.fromkeys(checks))
+
+
+def _lossy_numeric_coercion_findings(tree: ast.Module) -> list[ValidationFinding]:
+    """Detect numeric coercion whose losses never fail closed (A1-1).
+
+    Two structural gaps, both requiring a ``pd.to_numeric(errors="coerce")``
+    source and the absence of any loss fail-close guard (a raise/assert on the
+    computed loss count, or the host helper ``strict_numeric_input``):
+
+    1. ``unchecked_coercion_loss_count`` — the script computes
+       ``(original.notna() & coerced.isna()).sum()`` but never raises on it.
+    2. ``domain_check_gated_on_notna`` — domain validation is conjoined with
+       ``notna()``, so values nulled by coercion silently become missingness.
+    """
+
+    coercion_roots = _numeric_coercion_roots(tree)
+    if not coercion_roots:
+        return []
+    loss_bindings = _coercion_loss_bindings(tree, coercion_roots)
+    guarded_roots = _guarded_coercion_roots(tree, loss_bindings)
+    issues: list[dict[str, object]] = []
+    unguarded_loss_lines = sorted(
+        {line for _binding, root, line in loss_bindings if root not in guarded_roots}
+    )
+    if unguarded_loss_lines:
+        issues.append(
+            {
+                "gap": "unchecked_coercion_loss_count",
+                "lines": unguarded_loss_lines,
+            }
+        )
+    domain_lines = sorted(
+        {
+            line
+            for root, line in _notna_gated_domain_checks(tree, coercion_roots)
+            if root not in guarded_roots
+        }
+    )
+    if domain_lines:
+        issues.append(
+            {
+                "gap": "domain_check_gated_on_notna",
+                "lines": domain_lines,
+            }
+        )
+    if not issues:
+        return []
+    return [
+        ValidationFinding(
+            validator="mechanical_code_preflight",
+            severity="error",
+            message=(
+                "Numeric coercion can silently invalidate observed values: "
+                "the script computes or implies a coercion-loss count but "
+                "never fails closed on it. Add "
+                "`if newly_invalid > 0: raise ValueError(...)` after "
+                "`pd.to_numeric(..., errors='coerce')` (or use the host "
+                "helper `strict_numeric_input`) before any notna()-gated "
+                "domain validation."
+            ),
+            detail={
+                "reason": "lossy_numeric_coercion",
+                "issues": issues,
+            },
+        )
+    ]
+
+
 def audit_mechanical_code_contracts(
     script_text: str,
     step: AnalysisStep,
@@ -4828,6 +5116,7 @@ def audit_mechanical_code_contracts(
     findings.extend(_ordinal_rounding_findings(tree))
     findings.extend(_scalar_cast_before_reduction_findings(tree))
     findings.extend(_first_time_companion_findings(tree))
+    findings.extend(_lossy_numeric_coercion_findings(tree))
     return findings
 
 
