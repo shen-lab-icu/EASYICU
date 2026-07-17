@@ -292,7 +292,13 @@ Code contract:
   claim-first `FigureContract`, map each panel to source evidence,
   and save the publication bundle from the same matplotlib figure.
   Treat this helper surface as EasyICU's default embedded
-  `nature-figure` workflow. Use the actual EasyICU contract field names:
+  `nature-figure` workflow. Call its stable host-owned keyword API directly:
+  `save_publication_figure(fig=fig, out_dir=out_dir, stem=stem,
+  contract=contract)` (substitute your local variable names). Add only
+  documented overrides such as `formats=` or `dpi=` when needed. Do not use
+  `inspect.signature`, `__signature__`, parameter-name loops, or dynamic
+  signature dispatch to adapt EasyICU helpers; EasyICU owns helper-version
+  compatibility. Use the actual EasyICU contract field names:
   `figure_id`, `core_claim`, `panels`, `source_data`,
   and per panel `panel_id`, `title`, `role`, `claim`, `evidence_ids`.
   At the contract top level, write `source_data` as one local CSV basename
@@ -948,7 +954,9 @@ ROBUSTNESS:
   immediately after metrics are computed. If
   `save_publication_figure(...)` or a FigureContract helper raises a
   TypeError, fall back to plain matplotlib PNG+SVG export and record
-  `"publication_helper_skipped": str(exc)`; do not exit non-zero.
+  `"publication_helper_skipped": str(exc)`; do not exit non-zero. Put the
+  stable direct keyword call above inside this narrow fallback; never inspect
+  the helper signature.
 - Never assume every category or stratum exists. Before `.iloc[0]`
   on filtered rows, check `.empty`; before indexing category
   columns, check membership in `df.columns`.

@@ -5628,6 +5628,88 @@ def _notna_gated_domain_checks(
     return list(dict.fromkeys(checks))
 
 
+def _host_helper_runtime_introspection_findings(
+    tree: ast.Module,
+) -> list[ValidationFinding]:
+    """Identify obsolete runtime adaptation of the publication helper."""
+
+    inspect_modules: set[str] = set()
+    inspect_signature_names: set[str] = set()
+    helper_names: set[str] = set()
+    helper_modules: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "inspect":
+                    inspect_modules.add(alias.asname or "inspect")
+                elif (
+                    alias.name == "easyicu.research_agent.publication_figures"
+                    and alias.asname
+                ):
+                    helper_modules.add(alias.asname)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0:
+            if node.module == "inspect":
+                inspect_signature_names.update(
+                    alias.asname or alias.name
+                    for alias in node.names
+                    if alias.name == "signature"
+                )
+            elif node.module == "easyicu.research_agent.publication_figures":
+                helper_names.update(
+                    alias.asname or alias.name
+                    for alias in node.names
+                    if alias.name == "save_publication_figure"
+                )
+            elif node.module == "easyicu.research_agent":
+                helper_modules.update(
+                    alias.asname or alias.name
+                    for alias in node.names
+                    if alias.name == "publication_figures"
+                )
+    if not (helper_names or helper_modules):
+        return []
+
+    signature_call_names = {
+        *(f"{name}.signature" for name in inspect_modules),
+        *inspect_signature_names,
+    }
+    helper_reference_names = {
+        *helper_names,
+        *(f"{name}.save_publication_figure" for name in helper_modules),
+    }
+    introspection_nodes: list[ast.AST] = []
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and _call_name(node.func) in signature_call_names
+            and node.args
+            and _call_name(node.args[0]) in helper_reference_names
+        ):
+            introspection_nodes.append(node)
+        elif (
+            isinstance(node, ast.Attribute)
+            and node.attr == "__signature__"
+            and _call_name(node.value) in helper_reference_names
+        ):
+            introspection_nodes.append(node)
+    return [
+        ValidationFinding(
+            validator="mechanical_code_preflight",
+            severity="error",
+            message=(
+                "Generated code must call the stable host-owned publication "
+                "helper API directly instead of adapting its runtime signature."
+            ),
+            detail={
+                "reason": "host_helper_runtime_introspection",
+                "helper_name": "save_publication_figure",
+                "line": int(node.lineno),
+            },
+        )
+        for node in introspection_nodes
+    ]
+
+
 def _lossy_numeric_coercion_findings(tree: ast.Module) -> list[ValidationFinding]:
     """Detect numeric coercion whose losses never fail closed (A1-1).
 
@@ -5765,6 +5847,7 @@ def audit_mechanical_code_contracts(
     findings.extend(_ordinal_rounding_findings(tree))
     findings.extend(_scalar_cast_before_reduction_findings(tree))
     findings.extend(_first_time_companion_findings(tree))
+    findings.extend(_host_helper_runtime_introspection_findings(tree))
     findings.extend(_lossy_numeric_coercion_findings(tree))
     return findings
 
