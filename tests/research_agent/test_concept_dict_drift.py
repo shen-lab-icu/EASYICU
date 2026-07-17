@@ -12,6 +12,7 @@ from easyicu.research_agent.concept_dict_audit import (
     ConceptDictDriftError,
     assert_dict_matches,
     compute_concept_dict_fingerprint,
+    verify_recorded_dict_match,
     verify_replay_dict_match,
 )
 from easyicu.research_agent.pipeline_profiles import NPJ_DM_2026_05
@@ -98,7 +99,9 @@ def test_profile_locked_sha_enforced_at_plan_start(
         )
 
 
-def test_manifest_records_full_fingerprint(ra, synthetic_cohort: Path, tmp_path: Path) -> None:
+def test_manifest_records_full_fingerprint(
+    ra, synthetic_cohort: Path, tmp_path: Path
+) -> None:
     result = ra.ResearchAgentPipeline(workdir=tmp_path, llm=ra.MockLLMClient()).run(
         question="Is age associated with mortality?",
         cohort=synthetic_cohort,
@@ -133,6 +136,69 @@ def test_replay_passes_when_unchanged(tmp_path: Path) -> None:
         sofa2_sha=fingerprint.sofa2_dict_sha,
     )
     assert verify_replay_dict_match(tmp_path) == []
+
+
+def test_checkpoint_manifest_dict_authority_rejects_mismatch() -> None:
+    fingerprint = compute_concept_dict_fingerprint()
+    manifest = {
+        "concept_dict_fingerprint": {
+            "concept_dict_sha": "0" * 64,
+            "sofa2_dict_sha": fingerprint.sofa2_dict_sha,
+        }
+    }
+
+    with pytest.raises(ConceptDictDriftError, match="concept-dict.json SHA mismatch"):
+        verify_recorded_dict_match(manifest, mode="strict")
+
+
+def test_checkpoint_manifest_without_legacy_dict_authority_remains_compatible() -> None:
+    assert verify_recorded_dict_match({}, mode="strict") == []
+    assert verify_recorded_dict_match({}, mode="soft") == [
+        "manifest has no concept dictionary fingerprint to verify"
+    ]
+
+
+def test_resume_rejects_dict_drift_before_writing_receipt(
+    ra,
+    synthetic_cohort: Path,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from easyicu.research_agent import concept_dict_audit
+
+    kwargs = {
+        "question": "Is age associated with mortality?",
+        "cohort": synthetic_cohort,
+        "cohort_name": "synthetic",
+        "database": "synthetic",
+        "target_outcome": "death",
+    }
+    first = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=ra.MockLLMClient(),
+    ).run(**kwargs)
+    run_dir = Path(first.workdir)
+    root_fingerprint_before = (run_dir / "concept_dict_fingerprint.json").read_bytes()
+    receipts_before = sorted((run_dir / "evidence").glob("*resume_environment*"))
+    fingerprint = concept_dict_audit.compute_concept_dict_fingerprint()
+    monkeypatch.setattr(
+        concept_dict_audit,
+        "compute_concept_dict_fingerprint",
+        lambda: replace(fingerprint, concept_dict_sha="0" * 64),
+    )
+
+    with pytest.raises(ConceptDictDriftError, match="concept-dict.json SHA mismatch"):
+        ra.ResearchAgentPipeline(
+            workdir=tmp_path,
+            llm=ra.MockLLMClient(),
+        ).run(**kwargs, resume_run_id=first.run_id)
+
+    assert (run_dir / "concept_dict_fingerprint.json").read_bytes() == (
+        root_fingerprint_before
+    )
+    assert sorted((run_dir / "evidence").glob("*resume_environment*")) == (
+        receipts_before
+    )
 
 
 def test_sofa2_and_concept_dict_tracked_independently(tmp_path: Path) -> None:

@@ -215,10 +215,190 @@ def test_legacy_success_revalidates_once_and_retires_stale_input_receipt(
         records=first.resume_state["per_step_records"],
         plan=plan,
     )
-    assert second.resume_state["per_step_records"] == first.resume_state[
-        "per_step_records"
-    ]
+    assert (
+        second.resume_state["per_step_records"]
+        == first.resume_state["per_step_records"]
+    )
     assert calls == [step.step_id]
+
+
+def test_replay_projects_only_digest_bound_absolute_output_paths(
+    replay_environment,
+    tmp_path,
+):
+    from easyicu.research_agent.declared_product_contract import (
+        declared_product_contract_findings,
+    )
+
+    pipeline_execute, run_dir, evidence = replay_environment
+    step = AnalysisStep(step_id="01_model", intent="Produce a sealed table.")
+    original_out = tmp_path / "historical" / "steps" / step.step_id / "outputs"
+    original_out.mkdir(parents=True)
+    table_path = original_out / "result.csv"
+    table_path.write_text("n\n2\n", encoding="utf-8")
+    unbound_path = original_out / "unbound.csv"
+
+    record, script, _summary = _register_success(
+        run_dir=run_dir,
+        evidence=evidence,
+        step=step,
+    )
+    table = evidence.register_file(
+        kind="table",
+        description="Sealed result table.",
+        source_path=table_path,
+        evidence_id=f"{step.step_id}_table",
+        produced_by_step=step.step_id,
+        script_evidence_id=script.evidence_id,
+        producer="runner",
+        generation_mode="executed",
+    )
+    record["evidence_ids"].append(table.evidence_id)
+    evidence_by_id = {item.evidence_id: item for item in evidence.records()}
+    replay_out = run_dir / "replay" / "outputs"
+
+    materialized = pipeline_execute._materialize_verified_step_output_view(
+        record=record,
+        evidence_by_id=evidence_by_id,
+        run_dir=run_dir,
+        destination=replay_out,
+    )
+    sealed_summary = {
+        "output_files": [
+            {
+                "kind": "table",
+                "name": "result.csv",
+                "path": str(table_path),
+                "description": str(table_path),
+            },
+            {
+                "kind": "table",
+                "name": "unbound.csv",
+                "path": str(unbound_path),
+            },
+        ],
+        "provenance": {"path": str(table_path)},
+    }
+    projected = pipeline_execute._project_verified_replay_output_paths(
+        sealed_summary,
+        materialized_evidence_by_source_name=materialized,
+    )
+
+    assert materialized["result.csv"] == table.evidence_id
+    assert set(materialized) == {
+        f"{step.step_id}_analysis.py",
+        "step_summary.json",
+        "result.csv",
+    }
+    assert projected["output_files"][0]["path"] == "result.csv"
+    assert projected["output_files"][0]["description"] == str(table_path)
+    assert projected["output_files"][1]["path"] == str(unbound_path)
+    assert projected["provenance"]["path"] == str(table_path)
+    assert sealed_summary["output_files"][0]["path"] == str(table_path)
+    assert (replay_out / "result.csv").read_text(encoding="utf-8") == "n\n2\n"
+
+    bound_findings = declared_product_contract_findings(
+        step=AnalysisStep(
+            step_id=step.step_id,
+            intent="Produce a sealed table.",
+            expected_outputs=["table:result"],
+        ),
+        step_summary=projected,
+        effect_method_authorized=False,
+        out_dir=replay_out,
+    )
+    assert not any(
+        (finding.detail or {}).get("kind") == "declared_product_missing"
+        for finding in bound_findings
+    )
+
+    unbound_findings = declared_product_contract_findings(
+        step=AnalysisStep(
+            step_id=step.step_id,
+            intent="Produce an unsealed table.",
+            expected_outputs=["table:unbound"],
+        ),
+        step_summary=projected,
+        effect_method_authorized=False,
+        out_dir=replay_out,
+    )
+    assert any(
+        (finding.detail or {}).get("kind") == "declared_product_missing"
+        for finding in unbound_findings
+    )
+
+
+def test_revalidation_passes_projected_summary_without_mutating_sealed_paths(
+    replay_environment,
+    monkeypatch,
+    tmp_path,
+):
+    pipeline_execute, run_dir, evidence = replay_environment
+    step = AnalysisStep(
+        step_id="01_model",
+        intent="Produce a declared result table.",
+        expected_outputs=["table:result"],
+    )
+    plan = AnalysisPlan(research_question="Question", steps=[step])
+    historical_out = tmp_path / "old_run" / "steps" / step.step_id / "outputs"
+    historical_out.mkdir(parents=True)
+    table_path = historical_out / "result.csv"
+    table_path.write_text("n\n2\n", encoding="utf-8")
+    summary_payload = {
+        "status": "ok",
+        "output_files": [
+            {
+                "kind": "table",
+                "name": "result.csv",
+                "path": str(table_path),
+            }
+        ],
+    }
+    record, script, summary = _register_success(
+        run_dir=run_dir,
+        evidence=evidence,
+        step=step,
+        summary_payload=summary_payload,
+    )
+    table = evidence.register_file(
+        kind="table",
+        description="Sealed result table.",
+        source_path=table_path,
+        evidence_id=f"{step.step_id}_table",
+        produced_by_step=step.step_id,
+        script_evidence_id=script.evidence_id,
+        producer="runner",
+        generation_mode="executed",
+    )
+    record["evidence_ids"].append(table.evidence_id)
+    captured = {}
+
+    def capture_gates(**kwargs):
+        captured["summary"] = kwargs["step_summary"]
+        assert kwargs["out_dir"].joinpath("result.csv").is_file()
+        return _empty_gates(pipeline_execute)
+
+    monkeypatch.setattr(
+        pipeline_execute,
+        "_evaluate_final_deterministic_gates",
+        capture_gates,
+    )
+
+    result = _revalidate(
+        pipeline_execute,
+        run_dir=run_dir,
+        evidence=evidence,
+        records=[record],
+        plan=plan,
+    )
+
+    latest = result.resume_state["per_step_records"][-1]
+    assert latest["status"] == "ok"
+    assert latest["revalidated_without_execution"] is True
+    assert captured["summary"]["output_files"][0]["path"] == "result.csv"
+    assert latest["step_summary"]["output_files"][0]["path"] == str(table_path)
+    sealed = json.loads((run_dir / summary.relative_path).read_text(encoding="utf-8"))
+    assert sealed["output_files"][0]["path"] == str(table_path)
 
 
 def test_missing_or_tampered_summary_fails_closed(
@@ -553,9 +733,10 @@ def test_deterministic_error_invalidates_evidence_dependent_downstream(
     }
     assert current[upstream.step_id]["status"] == "resume_validator_invalid"
     assert current[downstream.step_id]["status"] == "resume_validator_invalid"
-    assert "invalidated upstream" in current[downstream.step_id][
-        "resume_invalidation_reason"
-    ]
+    assert (
+        "invalidated upstream"
+        in current[downstream.step_id]["resume_invalidation_reason"]
+    )
     assert "current_primary_result" not in evidence.aliases()
 
 
@@ -626,9 +807,10 @@ def test_prior_blocking_critic_cannot_be_upgraded_by_replay(
 
     latest = result.resume_state["per_step_records"][-1]
     assert latest["status"] == "resume_validator_invalid"
-    assert "prior deterministic Critic status remains blocked" in latest[
-        "resume_invalidation_reason"
-    ]
+    assert (
+        "prior deterministic Critic status remains blocked"
+        in latest["resume_invalidation_reason"]
+    )
 
 
 def test_invalid_checkpoint_inherits_monotonic_provider_and_repair_budgets(
