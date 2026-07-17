@@ -99,6 +99,7 @@ class _VisualGovernanceLLM:
         self.contract_repairs = 0
         self.visual_repairs = 0
         self.visual_prompts: list[str] = []
+        self.visual_message_batches: list[list] = []
 
     def complete(self, messages, *, max_tokens=2048, temperature=0.2):
         del max_tokens, temperature
@@ -127,14 +128,28 @@ class _VisualGovernanceLLM:
             if "VISUAL QA REJECTED" in upper:
                 self.visual_repairs += 1
                 self.visual_prompts.append(user)
+                self.visual_message_batches.append(list(messages))
                 if self.visual_error is not None:
                     raise self.visual_error
                 assert self.visual_code is not None
+                if "MINIMAL PATCH MODE" in upper:
+                    assert self.contract_code is not None
+                    return _exact_code_patch([('x="102"', 'x="280"')])
                 return self.visual_code
             self.contract_repairs += 1
             if self.contract_error is not None:
                 raise self.contract_error
             assert self.contract_code is not None
+            if "MINIMAL PATCH MODE" in upper:
+                return _exact_code_patch(
+                    [
+                        ('x="280"', 'x="102"'),
+                        (
+                            self.initial_code.splitlines()[-1],
+                            "\n".join(self.contract_code.splitlines()[-2:]),
+                        ),
+                    ]
+                )
             return self.contract_code
         if "INTERPRET THE RESULTS" in upper:
             return "The summary is available {evidence:summary}."
@@ -143,6 +158,17 @@ class _VisualGovernanceLLM:
         if "EVERY FINDING MUST INCLUDE" in upper and "RETURN JSON ONLY" in upper:
             return json.dumps({"findings": []})
         return "{}"
+
+
+def _exact_code_patch(edits: list[tuple[str, str]]) -> str:
+    return json.dumps(
+        {
+            "format": "easyicu.code_patch/1",
+            "edits": [
+                {"old": old, "new": new, "expected_count": 1} for old, new in edits
+            ],
+        }
+    )
 
 
 def _record(result) -> dict:
@@ -224,19 +250,19 @@ def test_visual_repair_log_keeps_structured_collision_detail() -> None:
     )
 
     log = _visual_repair_request_log([finding])
+    marker = (
+        "STRUCTURED VISUAL FINDINGS " "(diagnostic mirror; not routing authority):\n"
+    )
 
-    for token in (
-        "absolute_risk_by_stage.svg",
-        "37,433",
-        "Deaths",
-        "0.388",
-        "bbox_a",
-        "source-data CSV",
-        "step_summary",
-        "figure contract",
-        "plotting/layout",
-    ):
-        assert token in log
+    assert log.startswith(marker)
+    assert json.loads(log.removeprefix(marker)) == [
+        {
+            "validator": finding.validator,
+            "severity": finding.severity,
+            "message": finding.message,
+            "detail": finding.detail,
+        }
+    ]
 
 
 def test_visual_qa_stays_before_contract_gate() -> None:
@@ -292,6 +318,35 @@ def test_contract_budget_does_not_consume_visual_layout_budget(
     assert record["contract_repair_attempts"] == 1
     assert record["visual_repair_attempts"] == 1
     assert record["code_repair_attempts"] == 2
+    assert record["step_llm_repair_classes"] == ["contract", "visual"]
+    assert record["step_provider_call_categories"] == [
+        "initial_generation",
+        "contract_repair_patch",
+        "visual_repair_patch",
+        "concept_audit",
+        "analyzer",
+    ]
+    authority_prefix = "HOST-OWNED REPAIR AUTHORITY (typed; verbatim):\n"
+    visual_authority_messages = [
+        message.content.removeprefix(authority_prefix)
+        for message in llm.visual_message_batches[0]
+        if message.role == "system" and message.content.startswith(authority_prefix)
+    ]
+    assert len(visual_authority_messages) == 1
+    visual_authority = json.loads(visual_authority_messages[0])
+    assert visual_authority["host_guidance"] == {
+        "layout_only": True,
+        "preserve": [
+            "source_data_values_and_rows",
+            "step_summary_numeric_and_statistical_values",
+            "figure_contract_claims_evidence_and_panel_roles",
+        ],
+        "forbid": [
+            "source_resolution_changes",
+            "cohort_or_data_transformations",
+            "estimate_or_scientific_label_changes",
+        ],
+    }
 
 
 def test_contract_repair_provider_failure_preserves_contract_observability(
