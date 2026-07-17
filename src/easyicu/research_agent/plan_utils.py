@@ -681,6 +681,23 @@ def _clustering_contract_applies(
     return head in allowed_methods and len(output_signals) >= minimum_output_signals
 
 
+def clustering_contract_applies(step: AnalysisStep) -> bool:
+    """Return whether ``step`` owns a closed clustering-analysis contract.
+
+    This public, case-neutral predicate is shared by prompt projection and
+    execution routing so method-family guidance cannot drift into a second
+    private allowlist.  Ownership still requires both an exact normalized
+    method family and declared structured clustering products.
+    """
+
+    return _clustering_contract_applies(
+        method=str(step.method or ""),
+        step_id=str(step.step_id or ""),
+        intent=str(step.intent or ""),
+        expected_outputs=step.expected_outputs or [],
+    )
+
+
 _PLAN_FAMILY_METHODS: dict[str, frozenset[str]] = {
     "prediction_model": frozenset(
         {
@@ -888,6 +905,8 @@ _PREDICTION_CONTRACT_PRODUCTS = frozenset(
         "calibration_intercept",
         "calibration_intercept_median",
         "model_performance",
+        "model_performance_train_test",
+        "prediction_performance",
         "validation_performance",
         "horizon_performance",
         "time_varying_auroc",
@@ -992,6 +1011,12 @@ def _prediction_contract_applies(step: AnalysisStep) -> bool:
     )
 
 
+def prediction_contract_applies(step: AnalysisStep) -> bool:
+    """Public single-source predicate for a typed prediction owner."""
+
+    return _prediction_contract_applies(step)
+
+
 def _cohort_change_contract_applies(step: AnalysisStep) -> bool:
     """Whether a cohort owner declares a closed attrition/overlap product."""
 
@@ -1001,6 +1026,12 @@ def _cohort_change_contract_applies(step: AnalysisStep) -> bool:
         step.expected_outputs or [],
         products=_COHORT_CHANGE_PRODUCTS,
     )
+
+
+def cohort_change_contract_applies(step: AnalysisStep) -> bool:
+    """Public single-source predicate for a structured cohort-change owner."""
+
+    return _cohort_change_contract_applies(step)
 
 
 def _plan_step_owns_contract_family(family: str, step: AnalysisStep) -> bool:

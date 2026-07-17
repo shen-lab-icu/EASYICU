@@ -20,6 +20,7 @@ from easyicu.research_agent.methods.ordered_trends import (
     wilson_interval,
 )
 from easyicu.research_agent.ordered_stratified_contract import (
+    is_ordered_stratified_analysis_step,
     ordered_stratified_numeric_findings,
     ordered_stratified_script_findings,
     ordered_stratified_structure_findings,
@@ -233,6 +234,20 @@ def test_structure_contract_does_not_capture_rendering_child() -> None:
     assert not ordered_stratified_structure_findings(
         step=_step(figure_only=True), step_summary={}
     )
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "table:figure_readiness_summary",
+        "artifact:visual_quality_audit",
+        "table:plotting_data",
+    ],
+)
+def test_ordered_owner_uses_typed_kind_not_rendering_substrings(output: str) -> None:
+    step = _step().model_copy(update={"expected_outputs": [output]})
+
+    assert is_ordered_stratified_analysis_step(step)
 
 
 def test_script_contract_requires_all_three_validated_primitive_calls() -> None:

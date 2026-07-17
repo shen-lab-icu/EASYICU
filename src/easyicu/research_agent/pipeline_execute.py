@@ -102,6 +102,7 @@ from .repair_coordination import (
     authorized_deterministic_concept_repair,
 )
 from .concept_audit_cache import LLMConceptAuditCache
+from .coder_authority_notes import HostCoderAuthority
 from .cohort_repair import extract_cohort_definition_from_prose
 from .cohort_schema import (
     CohortDefinition,
@@ -161,7 +162,9 @@ from .pipeline import (
 )
 from .publication_figures import make_figure_contract
 from .repair_reasons import (
+    RepairPromptAuthority,
     RepairReason,
+    repair_prompt_binding_sha256,
     repair_reason_for_finding,
     typed_repair_ticket,
 )
@@ -223,6 +226,7 @@ from .trajectory_stability_executor import (
 from .trajectory_resume_schema import materialize_legacy_trajectory_replay_schemas
 from .repair_registry import (
     InvariantStatus,
+    RepairClass,
     RepairLedger,
     RepairObservedState,
     automatic_repair_allowed,
@@ -304,6 +308,31 @@ from .viability import (
 from .visual_qa import VLMVisualQAAdapter, VisualQAAuditor
 
 logger = logging.getLogger(__name__)
+
+
+def _repair_prompt_binding_sha256(
+    *,
+    untrusted_diagnostic: str,
+    repair_authority: RepairPromptAuthority,
+    current_repair_authority: RepairPromptAuthority | None = None,
+) -> str:
+    """Bind one provider reservation to diagnostics and typed host authority."""
+
+    return repair_prompt_binding_sha256(
+        untrusted_diagnostic=untrusted_diagnostic,
+        repair_authority=repair_authority,
+        current_repair_authority=current_repair_authority,
+    )
+
+
+def _untrusted_runtime_repair_allowed(*, repair_id: str, source: str) -> bool:
+    """Allow raw runtime diagnostics to authorize syntactic transforms only."""
+
+    if source == "case_plugin_repair":
+        return False
+    if source != "deterministic_runner_repair":
+        return True
+    return repair_metadata_for(repair_id).repair_class is RepairClass.SYNTACTIC
 
 
 _STANDARD_EXECUTOR_INTERNAL_PENDING_ARTIFACTS = frozenset(
@@ -1933,19 +1962,88 @@ def _typed_parent_schema_context_block(
     return block
 
 
-def _coder_context_with_typed_parent_schema_receipts(
-    *,
-    context: ResearchContext,
+def _assignment_model_authority_context_block(
     bindings: Mapping[str, Mapping[str, Any]],
-) -> ResearchContext:
-    """Attach a bounded view of exact typed-parent schemas to one Coder call."""
+) -> str:
+    """Render exact typed assignment-model identities needed during repair."""
 
-    attachment = _typed_parent_schema_context_block(bindings)
-    if not attachment:
-        return context
-    prior_notes = str(context.notes or "").strip()
-    enriched_notes = f"{prior_notes}\n\n{attachment}" if prior_notes else attachment
-    return context.model_copy(update={"notes": enriched_notes})
+    receipts: dict[str, object] = {}
+    model_fields = (
+        "model_id",
+        "analysis_set",
+        "fit_status",
+        "propensity_score_column",
+        "weight_column",
+        "row_identity_column",
+        "analysis_set_n",
+        "analysis_set_identity_sha256",
+    )
+    contract_fields = (
+        "row_identity_column",
+        "row_count",
+        "row_identity_sha256",
+        "authoritative_cohort_sha256",
+        "diagnostic_model_id",
+        "selected_model_id",
+    )
+    for input_key in sorted(bindings):
+        if _typed_input_product(input_key) != ("artifact", "assignment_model"):
+            continue
+        binding = bindings[input_key]
+        contract = binding.get("product_contract")
+        if not isinstance(contract, Mapping):
+            continue
+        models = contract.get("models")
+        if not isinstance(models, list) or not models:
+            continue
+        roster = [
+            {
+                field: model.get(field)
+                for field in model_fields
+                if model.get(field) is not None
+            }
+            for model in models
+            if isinstance(model, Mapping)
+        ]
+        if not roster:
+            continue
+        receipts[input_key] = {
+            "evidence_id": binding.get("evidence_id"),
+            "sha256": binding.get("sha256"),
+            "contract": {
+                **{
+                    field: contract.get(field)
+                    for field in contract_fields
+                    if contract.get(field) is not None
+                },
+                "models": roster,
+            },
+        }
+    if not receipts:
+        return ""
+    return (
+        "HOST-VERIFIED ASSIGNMENT MODEL ROSTER (binding facts only):\n"
+        + json.dumps(
+            receipts,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\nPreserve every declared model_id, analysis_set, propensity/weight "
+        "column, row-identity digest, and denominator. Do not select the first "
+        "model, refit the roster, or merge analysis sets."
+    )
+
+
+def _coder_authority_with_typed_parent_schema_receipts(
+    *,
+    authority: HostCoderAuthority,
+    bindings: Mapping[str, Mapping[str, Any]],
+) -> HostCoderAuthority:
+    """Attach a bounded view of exact typed-parent schemas out of band."""
+
+    authority = authority.append(_typed_parent_schema_context_block(bindings))
+    return authority.append(_assignment_model_authority_context_block(bindings))
 
 
 def _write_resolved_inputs_manifest(
@@ -2689,22 +2787,23 @@ def _authoritative_primary_robustness_contract(
     return None
 
 
-def _coder_context_with_locked_robustness_specs(
+def _coder_authority_with_locked_robustness_specs(
     *,
+    authority: HostCoderAuthority,
     context: ResearchContext,
     step: AnalysisStep,
     run_dir: Path,
-) -> ResearchContext:
-    """Attach the planner-locked variant contract to its execution step."""
+) -> HostCoderAuthority:
+    """Attach the planner-locked variant contract out of band."""
 
     if not _is_cohort_definition_sensitivity_result_step(step):
-        return context
+        return authority
     try:
         specs = _read_locked_robustness_spec_dicts(run_dir)
     except Exception:
-        return context
+        return authority
     if not specs:
-        return context
+        return authority
     fields = (
         "spec_id",
         "axis",
@@ -2757,9 +2856,7 @@ def _coder_context_with_locked_robustness_specs(
                 separators=(",", ":"),
             )
         )
-    prior_notes = str(context.notes or "").strip()
-    enriched_notes = f"{prior_notes}\n\n{attachment}" if prior_notes else attachment
-    return context.model_copy(update={"notes": enriched_notes})
+    return authority.append(attachment)
 
 
 def _nonnegative_integral_value(value: Any) -> Optional[int]:
@@ -3179,12 +3276,7 @@ _MAX_DIRECTED_MODEL_REPLANS = 2
 def _contract_repair_log(
     findings: Sequence[ValidationFinding],
 ) -> str:
-    """Serialize contract failures without discarding machine issue details.
-
-    Coder repair only retains the tail of its run log.  Keep this compact JSON
-    payload at the end of the repair request so model ids, allowed values, and
-    expected/reported values survive that truncation.
-    """
+    """Serialize an untrusted diagnostic mirror of contract failures."""
 
     return json.dumps(
         [
@@ -3222,15 +3314,8 @@ def _visual_repair_request_log(
         separators=(",", ":"),
     )
     return (
-        "LAYOUT-ONLY REPAIR BOUNDARY:\n"
-        "- Preserve every source-data CSV value and row.\n"
-        "- Preserve all numeric/statistical values in step_summary.json.\n"
-        "- Preserve the figure contract's claims, evidence links, and panel roles.\n"
-        "- Do not change source resolution, cohort/data transformations, estimates, "
-        "or scientific labels.\n"
-        "- Change only plotting/layout code needed to remove the reported collision; "
-        "regenerate every declared figure format from the same data.\n\n"
-        "STRUCTURED VISUAL FINDINGS (authoritative):\n" + payload
+        "STRUCTURED VISUAL FINDINGS (diagnostic mirror; not routing authority):\n"
+        + payload
     )
 
 
@@ -6024,6 +6109,12 @@ def run_execute_phase(
     """Execute probe + per-step analysis loop, with optional replanning."""
     context = plan_result.context
     agent_context = plan_result.agent_context
+    # Planner memory, retrieval narration, hypothesis notes, and article
+    # blueprints shaped the typed plan but are not Coder authority.  Preserve
+    # the Planner's selected variable projection while restoring the original
+    # user/run notes. Host execution attachments travel through a separate
+    # typed side channel so user prose can never be elevated to host authority.
+    coder_base_context = agent_context.model_copy(update={"notes": context.notes})
     evidence = plan_result.evidence
     evidence_registrar = EvidenceRegistrar(evidence)
     findings = plan_result.findings
@@ -7129,18 +7220,29 @@ def run_execute_phase(
         """
 
         step_id = str(step.step_id)
-        if automatic_repair_allowed(
+        untrusted_runtime_policy_denied = not _untrusted_runtime_repair_allowed(
+            repair_id=repair_id,
+            source=source,
+        )
+        if not untrusted_runtime_policy_denied and automatic_repair_allowed(
             repair_id,
             step=step,
             sealed_renderer_wrapper=sealed_renderer_wrapper,
         ):
             return True
-        sealed_context_denied = is_sealed_renderer_repair(repair_id)
-        policy_reason = (
-            "sealed_renderer_requires_preexecution_wrapper"
-            if sealed_context_denied
-            else "method_substitution_default_deny"
-        )
+        if untrusted_runtime_policy_denied:
+            policy_reason = (
+                "case_plugin_requires_typed_repair_contract"
+                if source == "case_plugin_repair"
+                else "untrusted_runtime_diagnostic_allows_syntactic_only"
+            )
+        else:
+            sealed_context_denied = is_sealed_renderer_repair(repair_id)
+            policy_reason = (
+                "sealed_renderer_requires_preexecution_wrapper"
+                if sealed_context_denied
+                else "method_substitution_default_deny"
+            )
         _record_repair(
             repair_id=repair_id,
             step_id=step_id,
@@ -7651,8 +7753,10 @@ def run_execute_phase(
                 total_steps=total_steps,
             )
             return step_record
-        coder_context = _coder_context_with_locked_robustness_specs(
-            context=agent_context,
+        coder_context = coder_base_context
+        coder_authority = _coder_authority_with_locked_robustness_specs(
+            authority=HostCoderAuthority(),
+            context=coder_base_context,
             step=step,
             run_dir=run_dir,
         )
@@ -7669,14 +7773,7 @@ def run_execute_phase(
                 "Planner-locked cohort definition JSON: "
                 f"{locked_cohort_payload}."
             )
-            prior_notes = str(coder_context.notes or "").strip()
-            coder_context = coder_context.model_copy(
-                update={
-                    "notes": (
-                        f"{prior_notes}\n\n{role_note}" if prior_notes else role_note
-                    )
-                }
-            )
+            coder_authority = coder_authority.append(role_note)
         resumed_code_reuse_used = False
         critic_resume_repair_used = False
         resumed_quarantined_draft_used = False
@@ -7772,6 +7869,8 @@ def run_execute_phase(
             *,
             before_code: str,
             repair_ticket: str,
+            repair_authority: RepairPromptAuthority,
+            current_repair_authority: Optional[RepairPromptAuthority] = None,
             provider_category: str,
             failure_status: str,
         ) -> bool:
@@ -7789,10 +7888,21 @@ def run_execute_phase(
                 before_code_sha256=sha256_of_bytes(before_code.encode("utf-8")),
                 step_spec_sha256=canonical_sha256(step.model_dump(mode="json")),
                 resolved_inputs_sha256=resolved_inputs_sha256,
-                coder_context_sha256=canonical_sha256(
-                    coder_context.model_dump(mode="json")
+                coder_context_sha256=(
+                    step_authority_coordinates.scoped_coder_context.sha256
+                    if step_authority_coordinates is not None
+                    else canonical_sha256(
+                        {
+                            "research_context": coder_context.model_dump(mode="json"),
+                            "host_coder_authority": coder_authority.payload(),
+                        }
+                    )
                 ),
-                repair_ticket_sha256=canonical_sha256(repair_ticket),
+                repair_ticket_sha256=_repair_prompt_binding_sha256(
+                    untrusted_diagnostic=repair_ticket,
+                    repair_authority=repair_authority,
+                    current_repair_authority=current_repair_authority,
+                ),
                 engine_validator_sha256=(
                     step_authority_coordinates.deterministic_gate_fingerprint
                     if step_authority_coordinates is not None
@@ -7990,8 +8100,8 @@ def run_execute_phase(
             bindings=resolved_input_bindings,
             context_path=plan_result.context_path,
         )
-        coder_context = _coder_context_with_typed_parent_schema_receipts(
-            context=coder_context,
+        coder_authority = _coder_authority_with_typed_parent_schema_receipts(
+            authority=coder_authority,
             bindings=resolved_input_bindings,
         )
         step_record["resolved_inputs_path"] = str(
@@ -8044,7 +8154,10 @@ def run_execute_phase(
                 step_id=step.step_id,
                 run_input_capsule_sha256=run_input_capsule_sha256,
                 planner_scope=step.model_dump(mode="json"),
-                scoped_coder_context=coder_context.model_dump(mode="json"),
+                scoped_coder_context={
+                    "research_context": coder_context.model_dump(mode="json"),
+                    "host_coder_authority": coder_authority.payload(),
+                },
                 resolved_inputs_path=resolved_inputs_path,
                 typed_bindings=resolved_input_bindings,
                 upstream_authority={
@@ -8356,10 +8469,8 @@ def run_execute_phase(
                 for finding in monotonic_concept_constraints
             ]
 
-        def _monotonic_concept_constraint_log() -> str:
-            if not monotonic_concept_constraints:
-                return ""
-            payload = [
+        def _monotonic_concept_constraint_payload() -> List[Dict[str, Any]]:
+            return [
                 {
                     "validator": finding.validator,
                     "message": finding.message,
@@ -8369,6 +8480,27 @@ def run_execute_phase(
                 }
                 for finding in monotonic_concept_constraints
             ]
+
+        def _monotonic_concept_constraint_ticket() -> List[Dict[str, Any]]:
+            """Return durable repair constraints without stale code positions."""
+
+            return typed_repair_ticket(
+                [
+                    finding.model_copy(
+                        update={
+                            "detail": _finding_detail_without_source_positions(
+                                dict(finding.detail or {})
+                            )
+                        }
+                    )
+                    for finding in monotonic_concept_constraints
+                ]
+            )
+
+        def _monotonic_concept_constraint_log() -> str:
+            if not monotonic_concept_constraints:
+                return ""
+            payload = _monotonic_concept_constraint_payload()
             return (
                 "\n\nPREVIOUSLY REPAIRED CONCEPT FINDINGS (binding regression "
                 "constraints; do not reintroduce them):\n"
@@ -8542,6 +8674,8 @@ def run_execute_phase(
             step: AnalysisStep,
             code: str,
             run_log: str,
+            repair_authority: RepairPromptAuthority,
+            current_repair_authority: Optional[RepairPromptAuthority] = None,
             attempt: int,
             provider_budget: StepProviderCallBudget,
             provider_category: str,
@@ -8552,8 +8686,11 @@ def run_execute_phase(
                 return coder.repair(
                     context=context,
                     step=step,
+                    host_authority=coder_authority,
                     code=code,
                     run_log=run_log,
+                    repair_authority=repair_authority,
+                    current_repair_authority=current_repair_authority,
                     attempt=attempt,
                     provider_budget=provider_budget,
                     provider_category=provider_category,
@@ -8646,11 +8783,13 @@ def run_execute_phase(
         def _reserve_compatibility_repair(
             before_code: str,
             repair_ticket: str,
+            repair_authority: RepairPromptAuthority,
         ) -> Optional[int]:
             if not _consume_llm_repair_budget(
                 "compatibility",
                 before_code=before_code,
                 repair_ticket=repair_ticket,
+                repair_authority=repair_authority,
                 provider_category="compatibility_repair",
                 failure_status="concept_failed",
             ):
@@ -8769,10 +8908,20 @@ def run_execute_phase(
                 "PRIOR CRITIC REVIEW (binding repair requirements):\n"
                 + json.dumps(report, indent=2, ensure_ascii=False, default=str)
             )
+            critic_repair_authority = RepairPromptAuthority.create(
+                typed_ticket=[
+                    {
+                        "reason": "OUTPUT_CONTRACT_INVALID",
+                        "validator": "critic_resume",
+                        "detail": {"critic_report": report},
+                    }
+                ]
+            )
             if not _consume_llm_repair_budget(
                 "critic_resume",
                 before_code=prior_code,
                 repair_ticket=critique_log,
+                repair_authority=critic_repair_authority,
                 provider_category="critic_resume_repair",
                 failure_status="critic_failed",
             ):
@@ -8794,6 +8943,7 @@ def run_execute_phase(
                     step=step,
                     code=prior_code,
                     run_log=critique_log,
+                    repair_authority=critic_repair_authority,
                     attempt=1,
                     provider_budget=provider_budget,
                     provider_category="critic_resume_repair",
@@ -9470,6 +9620,7 @@ else:
                     code = coder.run(
                         context=coder_context,
                         step=step,
+                        host_authority=coder_authority,
                         provider_budget=provider_budget,
                         initial_generation_binding=(
                             step_authority_coordinates.initial_generation_binding()
@@ -9610,7 +9761,11 @@ else:
                 fallback_reason=reason,
             )
             fallback_coder = CoderAgent(MockLLMClient(context=coder_context))
-            return fallback_coder.run(context=coder_context, step=step)
+            return fallback_coder.run(
+                context=coder_context,
+                step=step,
+                host_authority=coder_authority,
+            )
 
         llm_concept_audit_completed_digests: set[str] = set()
         llm_concept_audit_tokens_by_digest: Dict[str, str] = {}
@@ -10407,7 +10562,7 @@ else:
                 (
                     f"{f.severity.upper()}: {f.message}"
                     + (
-                        "\nDETAIL: "
+                        "\nDETAIL (diagnostic mirror only): "
                         + json.dumps(f.detail, ensure_ascii=False, sort_keys=True)
                         if f.detail
                         else ""
@@ -10416,26 +10571,27 @@ else:
                 for f in blocking_usage_findings
             )
             structured_repair_ticket = typed_repair_ticket(blocking_usage_findings)
-            historical_constraint_log = _monotonic_concept_constraint_log()
+            current_concept_repair_authority = RepairPromptAuthority.create(
+                typed_ticket=structured_repair_ticket,
+            )
+            concept_repair_authority = RepairPromptAuthority.create(
+                typed_ticket=[
+                    *structured_repair_ticket,
+                    *_monotonic_concept_constraint_ticket(),
+                ],
+            )
             concept_repair_log = (
                 "Static concept audit blocked this script before "
                 "execution. Fix all ICU-rule violations.\n\n"
-                "TYPED REPAIR TICKET (authoritative routing):\n"
-                + json.dumps(
-                    structured_repair_ticket,
-                    indent=2,
-                    ensure_ascii=False,
-                    default=str,
-                )
-                + "\n\nHUMAN-READABLE FINDINGS:\n"
-                + audit_log
-                + historical_constraint_log
+                "HUMAN-READABLE FINDINGS (diagnostic mirror only):\n" + audit_log
             )
             concept_repair_attempts += 1
             if not _consume_llm_repair_budget(
                 "concept",
                 before_code=code,
                 repair_ticket=concept_repair_log,
+                repair_authority=concept_repair_authority,
+                current_repair_authority=current_concept_repair_authority,
                 provider_category="concept_repair",
                 failure_status="concept_failed",
             ):
@@ -10458,6 +10614,8 @@ else:
                     step=step,
                     code=code,
                     run_log=concept_repair_log,
+                    repair_authority=concept_repair_authority,
+                    current_repair_authority=current_concept_repair_authority,
                     attempt=concept_repair_attempts,
                     provider_budget=provider_budget,
                     provider_category="concept_repair",
@@ -10861,11 +11019,22 @@ else:
 
                     if _llm_repair_budget_available():
                         post_mutation_ticket = typed_repair_ticket(post_mutation_errors)
+                        current_post_mutation_repair_authority = (
+                            RepairPromptAuthority.create(
+                                typed_ticket=post_mutation_ticket,
+                            )
+                        )
+                        post_mutation_repair_authority = RepairPromptAuthority.create(
+                            typed_ticket=[
+                                *post_mutation_ticket,
+                                *_monotonic_concept_constraint_ticket(),
+                            ],
+                        )
                         post_mutation_log = "\n".join(
                             (
                                 f"{finding.severity.upper()}: {finding.message}"
                                 + (
-                                    "\nDETAIL: "
+                                    "\nDETAIL (diagnostic mirror only): "
                                     + json.dumps(
                                         finding.detail,
                                         ensure_ascii=False,
@@ -10883,22 +11052,17 @@ else:
                             "Fix every typed error with the smallest change; "
                             "preserve the earlier contract repair and all "
                             "Planner-owned science.\n\n"
-                            "TYPED REPAIR TICKET (authoritative routing):\n"
-                            + json.dumps(
-                                post_mutation_ticket,
-                                indent=2,
-                                ensure_ascii=False,
-                                default=str,
-                            )
-                            + "\n\nFINDINGS:\n"
-                            + post_mutation_log
-                            + _monotonic_concept_constraint_log()
+                            "FINDINGS (diagnostic mirror only):\n" + post_mutation_log
                         )
                         concept_repair_attempts += 1
                         if not _consume_llm_repair_budget(
                             "post_mutation_concept",
                             before_code=code,
                             repair_ticket=post_mutation_repair_log,
+                            repair_authority=post_mutation_repair_authority,
+                            current_repair_authority=(
+                                current_post_mutation_repair_authority
+                            ),
                             provider_category="post_mutation_concept_repair",
                             failure_status="concept_failed",
                         ):
@@ -10926,6 +11090,10 @@ else:
                                 step=step,
                                 code=code,
                                 run_log=post_mutation_repair_log,
+                                repair_authority=post_mutation_repair_authority,
+                                current_repair_authority=(
+                                    current_post_mutation_repair_authority
+                                ),
                                 attempt=concept_repair_attempts,
                                 provider_budget=provider_budget,
                                 provider_category="post_mutation_concept_repair",
@@ -11883,6 +12051,32 @@ else:
                         else:
                             visual_repair_attempts += 1
                             qa_log = _visual_repair_request_log(visual_findings)
+                            visual_host_guidance = {
+                                "layout_only": True,
+                                "preserve": [
+                                    "source_data_values_and_rows",
+                                    "step_summary_numeric_and_statistical_values",
+                                    "figure_contract_claims_evidence_and_panel_roles",
+                                ],
+                                "forbid": [
+                                    "source_resolution_changes",
+                                    "cohort_or_data_transformations",
+                                    "estimate_or_scientific_label_changes",
+                                ],
+                            }
+                            current_visual_repair_authority = (
+                                RepairPromptAuthority.create(
+                                    typed_ticket=typed_repair_ticket(visual_findings),
+                                    host_guidance=visual_host_guidance,
+                                )
+                            )
+                            visual_repair_authority = RepairPromptAuthority.create(
+                                typed_ticket=[
+                                    *typed_repair_ticket(visual_findings),
+                                    *_monotonic_concept_constraint_ticket(),
+                                ],
+                                host_guidance=visual_host_guidance,
+                            )
                             visual_repair_log = (
                                 "Visual QA rejected one or more figure outputs "
                                 "before evidence registration. Fix the figure "
@@ -11890,12 +12084,15 @@ else:
                                 "and editable SVG with the same stem, include "
                                 "publication figure exports when requested, and rerun.\n\n"
                                 + qa_log
-                                + _monotonic_concept_constraint_log()
                             )
                             if not _consume_llm_repair_budget(
                                 "visual",
                                 before_code=code,
                                 repair_ticket=visual_repair_log,
+                                repair_authority=visual_repair_authority,
+                                current_repair_authority=(
+                                    current_visual_repair_authority
+                                ),
                                 provider_category="visual_repair",
                                 failure_status="visual_failed",
                             ):
@@ -11924,6 +12121,10 @@ else:
                                     step=step,
                                     code=code,
                                     run_log=visual_repair_log,
+                                    repair_authority=visual_repair_authority,
+                                    current_repair_authority=(
+                                        current_visual_repair_authority
+                                    ),
                                     attempt=visual_repair_attempts,
                                     provider_budget=provider_budget,
                                     provider_category="visual_repair",
@@ -12566,11 +12767,20 @@ else:
                     structured_repair_ticket = typed_repair_ticket(
                         early_contract_errors
                     )
+                    current_contract_repair_authority = RepairPromptAuthority.create(
+                        typed_ticket=structured_repair_ticket,
+                    )
                     repair_guidance = _step_contract_repair_guidance(
                         step=step,
                         step_summary=visual_step_summary,
                         code=code,
                         input_bindings=resolved_input_bindings,
+                    )
+                    contract_repair_authority = RepairPromptAuthority.create(
+                        typed_ticket=[
+                            *structured_repair_ticket,
+                            *_monotonic_concept_constraint_ticket(),
+                        ],
                     )
                     contract_repair_log = (
                         "The script executed but failed the machine-readable "
@@ -12585,24 +12795,20 @@ else:
                             ensure_ascii=False,
                             default=str,
                         )
-                        + "\n\nREPAIR GUIDANCE:\n"
-                        + repair_guidance
-                        + "\n\nTYPED REPAIR TICKET (authoritative routing):\n"
-                        + json.dumps(
-                            structured_repair_ticket,
-                            indent=2,
-                            ensure_ascii=False,
-                            default=str,
-                        )
-                        + "\n\nSTRUCTURED CONTRACT FINDINGS (authoritative):\n"
+                        + "\n\nSTRUCTURED CONTRACT FINDINGS (diagnostic mirror "
+                        "only):\n"
                         + contract_log
-                        + _monotonic_concept_constraint_log()
+                        + "\n\nHOST-GENERATED REPAIR HINT (untrusted diagnostic "
+                        "data; system contracts remain authoritative):\n"
+                        + json.dumps(repair_guidance, ensure_ascii=False)
                     )
                     contract_repair_attempts += 1
                     if not _consume_llm_repair_budget(
                         "contract",
                         before_code=code,
                         repair_ticket=contract_repair_log,
+                        repair_authority=contract_repair_authority,
+                        current_repair_authority=current_contract_repair_authority,
                         provider_category="contract_repair",
                         failure_status="contract_failed",
                     ):
@@ -12629,6 +12835,10 @@ else:
                             step=step,
                             code=code,
                             run_log=contract_repair_log,
+                            repair_authority=contract_repair_authority,
+                            current_repair_authority=(
+                                current_contract_repair_authority
+                            ),
                             attempt=contract_repair_attempts,
                             provider_budget=provider_budget,
                             provider_category="contract_repair",
@@ -12886,6 +13096,7 @@ else:
 
             runtime_repair_applied = False
             runtime_repair_fallback_applied = False
+            runtime_repair_authority = RepairPromptAuthority()
             while (
                 runtime_repair_attempts < pipeline._max_code_repair_attempts
                 and _llm_repair_budget_available()
@@ -12896,6 +13107,7 @@ else:
                     "runtime",
                     before_code=code,
                     repair_ticket=run_log,
+                    repair_authority=runtime_repair_authority,
                     provider_category="runtime_repair",
                     failure_status="runtime_failed",
                 ):
@@ -12918,6 +13130,7 @@ else:
                         step=step,
                         code=code,
                         run_log=run_log,
+                        repair_authority=runtime_repair_authority,
                         attempt=repair_attempts,
                         provider_budget=provider_budget,
                         provider_category="runtime_repair",

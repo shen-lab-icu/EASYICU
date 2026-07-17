@@ -17,6 +17,7 @@ from easyicu.research_agent.agentic_coder import (
     AgenticCoderAgent,
     maybe_wrap_coder,
 )
+from easyicu.research_agent.coder_authority_notes import HostCoderAuthority
 
 
 class _FakeCoder:
@@ -117,6 +118,33 @@ def test_empty_cli_fallback_preserves_provider_budget(ra, monkeypatch):
     )
 
     assert fallback.run_kwargs["provider_budget"] is budget
+
+
+def test_host_authority_forces_receipt_aware_fallback_without_losing_budget(
+    ra, monkeypatch
+):
+    _make_cli_available(monkeypatch)
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("host authority must not reach the direct CLI")
+        ),
+    )
+    budget = _FakeBudget()
+    authority = HostCoderAuthority().append("exact host binding")
+    fallback = _FakeCoder()
+
+    AgenticCoderAgent(fallback, backend="codex").run(
+        context=_ctx(ra),
+        step=_step(),
+        provider_budget=budget,
+        host_authority=authority,
+    )
+
+    assert fallback.run_called
+    assert fallback.run_kwargs["provider_budget"] is budget
+    assert fallback.run_kwargs["host_authority"] == authority
 
 
 # ---------------------------------------------------------------------------

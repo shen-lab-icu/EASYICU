@@ -33,6 +33,7 @@ from typing import Any, List
 
 from .llm import cli_backend_available
 from .schema import AnalysisStep, ResearchContext
+from .coder_authority_notes import HostCoderAuthority
 
 # The filename the CLI is told to save its final, working script as. We read
 # this file back rather than parsing the CLI's chat output for a code fence —
@@ -140,6 +141,17 @@ class AgenticCoderAgent:
         fallback_kwargs = dict(authority_hooks)
         if provider_budget is not None:
             fallback_kwargs["provider_budget"] = provider_budget
+        host_authority = fallback_kwargs.get("host_authority")
+        if (
+            isinstance(host_authority, HostCoderAuthority)
+            and host_authority.attachments
+        ):
+            return self.fallback.run(
+                context=context,
+                step=step,
+                **fallback_kwargs,
+            )
+        if provider_budget is not None:
             # The local CLI is not yet a receipt-aware provider transport.  In
             # a capsule-backed pipeline, delegating before the durable initial
             # reservation would make a crash repeat the external CLI attempt,

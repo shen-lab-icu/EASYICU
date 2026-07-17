@@ -22,6 +22,7 @@ from typing import Any, Mapping, Optional, Sequence
 
 from pydantic import ValidationError
 
+from .coder_authority_notes import HostCoderAuthority
 from .gate_semantics import blocking_validator_findings
 from .method_capabilities import (
     BASELINE_PACKAGES,
@@ -869,6 +870,40 @@ def capsule_matches_coordinates(
     return _capsule_matches_coordinates(verified.capsule, coordinates)
 
 
+def _decode_scoped_coder_context(
+    payload: object,
+) -> tuple[dict[str, object], HostCoderAuthority]:
+    """Decode current wrapped contexts and legacy flat ResearchContext blobs."""
+
+    if not isinstance(payload, dict):
+        raise TypeError("scoped coder context is not an object")
+    if set(payload) == {"research_context", "host_coder_authority"}:
+        research_context = payload.get("research_context")
+        if not isinstance(research_context, dict):
+            raise TypeError("wrapped ResearchContext is not an object")
+        authority = HostCoderAuthority.from_payload(payload.get("host_coder_authority"))
+        return dict(research_context), authority
+    return dict(payload), HostCoderAuthority()
+
+
+def _scoped_coder_contexts_match_except_run_memory(
+    current_payload: object,
+    frozen_payload: object,
+) -> tuple[bool, dict[str, object]]:
+    current_context, current_authority = _decode_scoped_coder_context(current_payload)
+    frozen_context, frozen_authority = _decode_scoped_coder_context(frozen_payload)
+    current_comparable = dict(current_context)
+    frozen_comparable = dict(frozen_context)
+    for field in ("created_at", "notes"):
+        current_comparable.pop(field, None)
+        frozen_comparable.pop(field, None)
+    return (
+        current_comparable == frozen_comparable
+        and current_authority == frozen_authority,
+        frozen_context,
+    )
+
+
 def adopt_frozen_scoped_coder_context(
     verified: VerifiedStepAuthorityCapsule,
     coordinates: StepAuthorityCoordinates,
@@ -899,18 +934,15 @@ def adopt_frozen_scoped_coder_context(
                 verified.capsule.scoped_coder_context,
             ).decode("utf-8")
         )
-        if not isinstance(current_payload, dict) or not isinstance(
-            frozen_payload, dict
-        ):
-            raise TypeError("scoped coder context is not an object")
-        current_comparable = dict(current_payload)
-        frozen_comparable = dict(frozen_payload)
-        for field in ("created_at", "notes"):
-            current_comparable.pop(field, None)
-            frozen_comparable.pop(field, None)
-        if current_comparable != frozen_comparable:
+        contexts_match, frozen_context_payload = (
+            _scoped_coder_contexts_match_except_run_memory(
+                current_payload,
+                frozen_payload,
+            )
+        )
+        if not contexts_match:
             return None
-        frozen_context = ResearchContext.model_validate(frozen_payload)
+        frozen_context = ResearchContext.model_validate(frozen_context_payload)
     except (UnicodeDecodeError, ValueError, TypeError, ValidationError) as exc:
         raise StepAuthorityRuntimeError(
             "checkpoint-selected scoped coder context is invalid"
@@ -949,18 +981,15 @@ def adopt_candidate_for_control_plane_revalidation(
                 capsule.scoped_coder_context,
             ).decode("utf-8")
         )
-        if not isinstance(current_payload, dict) or not isinstance(
-            frozen_payload, dict
-        ):
-            raise TypeError("scoped coder context is not an object")
-        current_comparable = dict(current_payload)
-        frozen_comparable = dict(frozen_payload)
-        for field in ("created_at", "notes"):
-            current_comparable.pop(field, None)
-            frozen_comparable.pop(field, None)
-        if current_comparable != frozen_comparable:
+        contexts_match, frozen_context_payload = (
+            _scoped_coder_contexts_match_except_run_memory(
+                current_payload,
+                frozen_payload,
+            )
+        )
+        if not contexts_match:
             return None
-        frozen_context = ResearchContext.model_validate(frozen_payload)
+        frozen_context = ResearchContext.model_validate(frozen_context_payload)
     except (UnicodeDecodeError, ValueError, TypeError, ValidationError) as exc:
         raise StepAuthorityRuntimeError(
             "checkpoint-selected scoped coder context is invalid"

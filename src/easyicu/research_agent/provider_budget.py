@@ -1318,6 +1318,45 @@ class StepProviderCallBudget:
                     "binding"
                 )
 
+    def assert_logical_repair_prompt_binding(
+        self,
+        *,
+        attempt_id: int,
+        repair_ticket_sha256: str,
+    ) -> None:
+        """Join the actual repair prompt to the pending receipt before payment."""
+
+        normalized_digest = str(repair_ticket_sha256 or "").strip().lower()
+        if len(normalized_digest) != 64 or any(
+            char not in "0123456789abcdef" for char in normalized_digest
+        ):
+            raise ValueError("repair prompt binding must be a SHA-256 hex digest")
+        with self._lock:
+            if (
+                isinstance(attempt_id, bool)
+                or not isinstance(attempt_id, int)
+                or attempt_id != len(self._logical_repairs)
+            ):
+                raise ProviderCallBudgetReceiptError(
+                    "Repair prompt binding does not target the current attempt"
+                )
+            entry = self._logical_repairs[attempt_id - 1]
+            transport = entry.get("transport")
+            if not isinstance(transport, dict) or transport.get("state") != "pending":
+                raise ProviderCallBudgetReceiptError(
+                    "Repair prompt binding is already terminal or untracked"
+                )
+            binding = entry.get("binding")
+            if not isinstance(binding, dict):
+                raise ProviderCallBudgetReceiptError(
+                    "Repair prompt binding is absent from the provider receipt"
+                )
+            bound_digest = binding.get("repair_ticket_sha256")
+            if bound_digest != normalized_digest:
+                raise ProviderCallBudgetReceiptError(
+                    "Actual repair prompt conflicts with its authority receipt"
+                )
+
     def _record_logical_repair_transport(
         self,
         *,

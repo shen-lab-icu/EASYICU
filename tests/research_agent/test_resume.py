@@ -2596,7 +2596,9 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
             if "WRITE THE PYTHON CODE" in upper:
                 return draft_code
             if "REPAIR THE PYTHON CODE" in upper:
-                self.repair_prompts.append(user)
+                self.repair_prompts.append(
+                    "\n".join(str(message.content or "") for message in messages)
+                )
                 raise RuntimeError("stop after recording repair prompt")
             return "{}"
 
@@ -2650,14 +2652,15 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     )
 
     prompt = resumed_llm.repair_prompts[-1]
-    current_ticket = prompt.split("TYPED REPAIR TICKET (authoritative routing):", 1)[
-        1
-    ].split("HUMAN-READABLE FINDINGS:", 1)[0]
-    historical = prompt.split("PREVIOUSLY REPAIRED CONCEPT FINDINGS", 1)[1]
+    authority_payload = prompt.split(
+        "HOST-OWNED REPAIR AUTHORITY (typed; verbatim):", 1
+    )[1].split("REPAIR THE PYTHON CODE", 1)[0]
+    parsed_authority = json.loads(authority_payload)
+    current_ticket = json.dumps(parsed_authority["typed_ticket"], sort_keys=True)
     assert '"call_line": 20' in current_ticket
     assert '"call_line": 10' not in current_ticket
-    assert '"call_line"' not in historical
-    assert "provenance_helper_result_not_immediately_guarded" in historical
+    assert "provenance_helper_result_not_immediately_guarded" in current_ticket
+    assert parsed_authority["host_guidance"] == {}
 
 
 @pytest.mark.parametrize(

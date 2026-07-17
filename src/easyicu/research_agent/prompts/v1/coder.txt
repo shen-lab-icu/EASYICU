@@ -705,8 +705,10 @@ CLINICAL SCORE AND MISSINGNESS SEMANTICS:
   unavailable merely because the count was omitted from the planner's primary
   input list. This audit normally verifies provenance only: it must not turn
   the count into a physiological value, outcome, adjustment covariate, or new
-  cohort rule. The narrow exception is an agent-planned sparse binary
-  event-presence exposure when the registered base concept is an
+  cohort rule.
+- BINARY EVENT-PRESENCE EXCEPTION:
+  The narrow exception is an agent-planned sparse binary event-presence
+  exposure when the registered base concept is an
   event/indicator rather than a continuous measurement. In that case
   `<concept>_n > 0` may encode event presence only if the count is complete,
   finite, non-negative, integer-like, the paired `<concept>_measured` flag is

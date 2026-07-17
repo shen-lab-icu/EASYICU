@@ -6,8 +6,7 @@ import ast
 import json
 import re
 
-from .repair_reasons import structured_repair_metadata
-
+from .repair_reasons import StructuredRepairMetadata
 
 PATCH_FORMAT = "easyicu.code_patch/1"
 
@@ -88,7 +87,9 @@ def looks_like_executable_python(text: str) -> bool:
         return False
     if all(
         isinstance(node, ast.Expr)
-        and isinstance(node.value, (ast.Constant, ast.Dict, ast.List, ast.Set, ast.Tuple))
+        and isinstance(
+            node.value, (ast.Constant, ast.Dict, ast.List, ast.Set, ast.Tuple)
+        )
         for node in tree.body
     ):
         return False
@@ -112,7 +113,12 @@ def looks_like_executable_python(text: str) -> bool:
     )
 
 
-def repair_code_excerpt(code: str, run_log: str, *, char_limit: int = 10_000) -> str:
+def repair_code_excerpt(
+    code: str,
+    *,
+    repair_metadata: StructuredRepairMetadata | None = None,
+    char_limit: int = 10_000,
+) -> str:
     """Select exact, diagnosis-relevant source slices within ``char_limit``.
 
     Host-owned typed coordinates take priority over human validator prose.
@@ -128,17 +134,22 @@ def repair_code_excerpt(code: str, run_log: str, *, char_limit: int = 10_000) ->
     try:
         tree = ast.parse(text)
     except SyntaxError:
-        return text[: char_limit // 2] + "\n# ... omitted ...\n" + text[-char_limit // 2 :]
+        return (
+            text[: char_limit // 2] + "\n# ... omitted ...\n" + text[-char_limit // 2 :]
+        )
 
-    metadata = structured_repair_metadata(run_log)
+    metadata = repair_metadata or StructuredRepairMetadata(
+        reasons=frozenset(),
+        helper_names=frozenset(),
+        failure_modes=frozenset(),
+        line_anchors=frozenset(),
+    )
     structured_terms = {
         *metadata.reasons,
         *metadata.helper_names,
         *metadata.failure_modes,
     }
-    token_sources = structured_terms or set(
-        re.findall(r"[A-Za-z_][A-Za-z0-9_]{2,}", str(run_log or ""))
-    )
+    token_sources = structured_terms
     stop_tokens = {
         "after",
         "all",
@@ -218,8 +229,7 @@ def repair_code_excerpt(code: str, run_log: str, *, char_limit: int = 10_000) ->
 
     def _rendered_size(ranges: list[tuple[int, int]]) -> int:
         return sum(
-            sum(len(line) for line in lines[start - 1 : end])
-            for start, end in ranges
+            sum(len(line) for line in lines[start - 1 : end]) for start, end in ranges
         ) + max(0, len(ranges) - 1) * len(separator)
 
     def _try_add_range(start: int, end: int) -> bool:
@@ -278,6 +288,41 @@ def repair_code_excerpt(code: str, run_log: str, *, char_limit: int = 10_000) ->
 
     for line_number in sorted(metadata.line_anchors):
         _sibling_context(line_number)
+
+    # Runtime stdout/stderr is not a source of repair authority.  When the host
+    # has no typed coordinates, select deterministic complete AST statements
+    # rather than mining attacker-controlled diagnostic tokens.  Alternate
+    # early/late statements and use nested sibling slices when a top-level
+    # function is too large to fit whole.
+    if not structured_terms and not metadata.line_anchors:
+        non_import_blocks = [
+            block
+            for block in blocks
+            if not isinstance(block[3], (ast.Import, ast.ImportFrom))
+        ]
+        ordered_blocks: list[tuple[int, int, int, ast.stmt]] = []
+        left = 0
+        right = len(non_import_blocks) - 1
+        while left <= right:
+            ordered_blocks.append(non_import_blocks[left])
+            if right != left:
+                ordered_blocks.append(non_import_blocks[right])
+            left += 1
+            right -= 1
+        for _score, start, end, node in ordered_blocks:
+            if _try_add_range(start, end):
+                continue
+            nested_statements = sorted(
+                (
+                    statement
+                    for statement in ast.walk(node)
+                    if isinstance(statement, ast.stmt) and statement is not node
+                ),
+                key=lambda statement: int(getattr(statement, "lineno", 0) or 0),
+            )
+            if nested_statements:
+                _sibling_context(int(nested_statements[0].lineno))
+                _sibling_context(int(nested_statements[-1].lineno))
 
     # With no source line (for example a module-scope finding), take compact
     # neighborhoods around the strongest typed-token blocks.  Neighboring

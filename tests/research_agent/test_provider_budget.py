@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 
 from easyicu.research_agent.audits.validators import LLMConceptAuditor
+from easyicu.research_agent.code_patch import PATCH_FORMAT
 from easyicu.research_agent.provider_budget import (
     PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION,
     ProviderCallBudgetExhausted,
@@ -1699,10 +1700,27 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
                 )
             if "REPAIR THE PYTHON CODE" in upper:
                 self.repair_calls += 1
-                return script(
+                old_marker = (
+                    "SEMANTIC_REPAIR_ROUND_1"
+                    if self.repair_calls == 1
+                    else "SEMANTIC_REPAIR_ROUND_2"
+                )
+                new_marker = (
                     "SEMANTIC_REPAIR_ROUND_2"
                     if self.repair_calls == 1
                     else "SEMANTIC_AUDIT_SAFE"
+                )
+                return json.dumps(
+                    {
+                        "format": PATCH_FORMAT,
+                        "edits": [
+                            {
+                                "old": f"# {old_marker}",
+                                "new": f"# {new_marker}",
+                                "expected_count": 1,
+                            }
+                        ],
+                    }
                 )
             if "INTERPRET THE RESULTS" in upper:
                 return "Cohort summary completed {evidence:cohort_summary}."
