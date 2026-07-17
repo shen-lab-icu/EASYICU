@@ -4480,9 +4480,12 @@ def extract_database(
                         if meta:
                             mod_result["bounds"][c_name] = meta
                         if output_dir is not None:
-                            mod_out = os.path.join(output_dir, mod_name)
-                            os.makedirs(mod_out, exist_ok=True)
-                            dst = os.path.join(mod_out, f"{c_name}.parquet")
+                            # flat：派生模块（sepsis3_*）每模块单概念，与普通模块
+                            # 统一写 output_dir/{module}.parquet，不再嵌套
+                            # {module}/{concept}.parquet（否则 17 扁平 + 2 嵌套的
+                            # 混合布局违反"每模块一个宽表"契约）。
+                            os.makedirs(output_dir, exist_ok=True)
+                            dst = os.path.join(output_dir, f"{mod_name}.parquet")
                             shutil.move(info["path"], dst)
                             concept_info = _concept_result_info(dst, info)
                             concept_info["rows"] = rows
@@ -4493,9 +4496,7 @@ def extract_database(
                             _attach_bounds_metadata(df, info)
                             mod_result["concepts"][c_name] = df
                 if output_dir is not None:
-                    mod_out = os.path.join(output_dir, mod_name)
-                    os.makedirs(mod_out, exist_ok=True)
-                    with open(os.path.join(mod_out, "_manifest.json"), "w") as f:
+                    with open(os.path.join(output_dir, f"{mod_name}.manifest.json"), "w") as f:
                         json.dump(output_manifest, f)
             result["modules"][mod_name] = mod_result
             units_done += 1
