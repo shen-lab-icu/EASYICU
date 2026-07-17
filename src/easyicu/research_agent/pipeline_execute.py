@@ -7825,8 +7825,13 @@ def run_execute_phase(
             status: str,
         ) -> None:
             nonlocal current_capsule_ref
+            previous_ref = current_capsule_ref
             current_capsule_ref = ref
-            _checkpoint_authority_state(status)
+            try:
+                _checkpoint_authority_state(status)
+            except BaseException:
+                current_capsule_ref = previous_ref
+                raise
 
         def _ensure_candidate_capsule(
             script_text: str,
@@ -8749,36 +8754,58 @@ def run_execute_phase(
             transport_id: str,
             binding_sha256: str,
         ) -> None:
-            _sync_provider_budget()
-            _checkpoint_authority_state(
-                "initial_generation_pending",
-                extra={
-                    "capsule_pending_initial_transport_id": transport_id,
-                    "capsule_pending_initial_binding_sha256": binding_sha256,
-                },
-            )
+            try:
+                _sync_provider_budget()
+                _checkpoint_authority_state(
+                    "initial_generation_pending",
+                    extra={
+                        "capsule_pending_initial_transport_id": transport_id,
+                        "capsule_pending_initial_binding_sha256": binding_sha256,
+                    },
+                )
+            except (
+                ProviderCallBudgetReceiptError,
+                StepAuthorityRuntimeError,
+                StepAuthorityCapsuleError,
+            ):
+                raise
+            except Exception as exc:
+                raise StepAuthorityRuntimeError(
+                    "Initial-generation reservation could not be checkpointed."
+                ) from exc
 
         def _on_initial_candidate(
             code_ref: object,
             _transport_id: str,
         ) -> None:
-            coordinates = step_authority_coordinates
-            if coordinates is None or not hasattr(code_ref, "sha256"):
-                return
-            receipt_state = load_provider_call_budget_state(
-                provider_receipt_path,
-                step_id=step.step_id,
-                expected_reserved_final_category=reserved_final_category,
-            )
-            candidate_ref = seal_initial_generation_candidate(
-                coordinates,
-                code_ref=code_ref,
-                receipt_state=receipt_state,
-            )
-            _sync_provider_budget()
-            step_record.pop("capsule_pending_initial_transport_id", None)
-            step_record.pop("capsule_pending_initial_binding_sha256", None)
-            _checkpoint_capsule(candidate_ref, status="candidate_checkpointed")
+            try:
+                coordinates = step_authority_coordinates
+                if coordinates is None or not hasattr(code_ref, "sha256"):
+                    return
+                receipt_state = load_provider_call_budget_state(
+                    provider_receipt_path,
+                    step_id=step.step_id,
+                    expected_reserved_final_category=reserved_final_category,
+                )
+                candidate_ref = seal_initial_generation_candidate(
+                    coordinates,
+                    code_ref=code_ref,
+                    receipt_state=receipt_state,
+                )
+                _sync_provider_budget()
+                step_record.pop("capsule_pending_initial_transport_id", None)
+                step_record.pop("capsule_pending_initial_binding_sha256", None)
+                _checkpoint_capsule(candidate_ref, status="candidate_checkpointed")
+            except (
+                ProviderCallBudgetReceiptError,
+                StepAuthorityRuntimeError,
+                StepAuthorityCapsuleError,
+            ):
+                raise
+            except Exception as exc:
+                raise StepAuthorityRuntimeError(
+                    "Initial-generation candidate authority could not be checkpointed."
+                ) from exc
 
         def _reserve_compatibility_repair(
             before_code: str,
@@ -9608,6 +9635,45 @@ else:
                         )
                     )
             else:
+
+                def _record_initial_coder_failure(exc: Exception) -> Dict[str, Any]:
+                    """Persist an ordinary provider/candidate failure as terminal.
+
+                    Receipt/capsule integrity exceptions are handled by the
+                    dedicated hard-raise branch below. This path only prevents
+                    an already failed paid generation from falling back to
+                    prior or untracked code.
+                    """
+
+                    with shared_lock:
+                        findings.append(
+                            ValidationFinding(
+                                validator="coder",
+                                severity="error",
+                                message=(
+                                    f"Coder agent failed for step {step.step_id}: "
+                                    f"{exc}"
+                                ),
+                                detail={
+                                    "step_id": step.step_id,
+                                    "error_type": type(exc).__name__,
+                                },
+                            )
+                        )
+                        step_record["status"] = "coder_failed"
+                        _append_terminal_step_record(per_step_records, step_record)
+                        _flush_partial_manifest()
+                    emit_progress(
+                        "coder",
+                        f"Coder failed for {step.step_id}.",
+                        status="error",
+                        run_id=run_id,
+                        step_id=step.step_id,
+                        current_step=step_current,
+                        total_steps=total_steps,
+                    )
+                    return step_record
+
                 try:
                     emit_progress(
                         "coder",
@@ -9687,10 +9753,7 @@ else:
                         and provider_budget.initial_generation_resume_status()
                         == "failed"
                     ):
-                        raise StepAuthorityRuntimeError(
-                            "Initial generation reached a terminal provider failure; "
-                            "the same attempt cannot fall back to untracked code."
-                        ) from exc
+                        return _record_initial_coder_failure(exc)
                     resumed_code = resume_controller.prior_code_for_step(step.step_id)
                     if resumed_code is not None:
                         code = _use_resumed_code(resumed_code, error=exc)
@@ -9717,29 +9780,7 @@ else:
                                     )
                                 )
                         else:
-                            with shared_lock:
-                                findings.append(
-                                    ValidationFinding(
-                                        validator="coder",
-                                        severity="error",
-                                        message=f"Coder agent failed for step {step.step_id}: {exc}",
-                                    )
-                                )
-                                step_record["status"] = "coder_failed"
-                                _append_terminal_step_record(
-                                    per_step_records, step_record
-                                )
-                                _flush_partial_manifest()
-                            emit_progress(
-                                "coder",
-                                f"Coder failed for {step.step_id}.",
-                                status="error",
-                                run_id=run_id,
-                                step_id=step.step_id,
-                                current_step=step_current,
-                                total_steps=total_steps,
-                            )
-                            return step_record
+                            return _record_initial_coder_failure(exc)
 
         def _deterministic_fallback_code(reason: str) -> Optional[str]:
             nonlocal deterministic_fallback_used

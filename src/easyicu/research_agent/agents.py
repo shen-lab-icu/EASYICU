@@ -2024,6 +2024,11 @@ class CoderAgent:
                 ),
             )
             code = _strip_code_fence(raw.strip())
+            if not looks_like_executable_python(code):
+                raise ValueError(
+                    "Initial coder response is not a complete executable Python "
+                    "script; refusing to persist or seal it as candidate authority."
+                )
             initial_ref = (
                 persist_candidate(code) if persist_candidate is not None else None
             )

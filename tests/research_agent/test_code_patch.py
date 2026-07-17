@@ -1,5 +1,31 @@
-from easyicu.research_agent.code_patch import repair_code_excerpt
+from easyicu.research_agent.code_patch import (
+    looks_like_executable_python,
+    repair_code_excerpt,
+)
 from easyicu.research_agent.repair_reasons import RepairPromptAuthority
+
+
+def test_executable_candidate_detection_keeps_runtime_failure_paths():
+    assert looks_like_executable_python("raise RuntimeError('repair me')")
+    assert looks_like_executable_python("print('no artifact yet')")
+    assert looks_like_executable_python("result = 1")
+    assert looks_like_executable_python("pass")
+
+
+def test_executable_candidate_detection_rejects_inert_or_invalid_payloads():
+    for payload in (
+        "{}",
+        "[]",
+        "plain_prose",
+        "1 + 2",
+        "return 1",
+        "not python !",
+        'f"Analysis complete; import pandas"',
+        '"import " + "pandas"',
+        "analysis_complete  # import pandas",
+        "pd.DataFrame",
+    ):
+        assert not looks_like_executable_python(payload)
 
 
 def test_repair_excerpt_keeps_module_audit_initialization_loop_and_guard():
