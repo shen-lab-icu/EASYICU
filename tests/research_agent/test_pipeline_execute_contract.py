@@ -934,9 +934,9 @@ def test_execute_phase_preserves_repair_provenance_across_concept_and_runtime():
 
     # Initial concept, post-mutation concept, visual, contract, and runtime
     # repairs each mark the same lineage flag after a successful coder call.
-    assert source.count("llm_repair_used = True") == 5
-    assert "concept_repair_used=concept_repair_used" in source
-    assert "llm_repair_used=llm_repair_used" in source
+    assert source.count("worker_progress.llm_repair_used = True") == 5
+    assert source.count("worker_progress.generation_mode(") == 4
+    assert source.count("llm_repair_used=False") == 1
     # A repaired resumed script must receive a fresh analyzer interpretation;
     # only genuinely unchanged reuse and deterministic fallback skip it.
     assert 'final_generation_mode in {"resumed_code_reuse", "fallback"}' in source
