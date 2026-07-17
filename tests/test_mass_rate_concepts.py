@@ -72,7 +72,14 @@ def test_miiv_source_uses_mimic_rate_mv(cdict, name, itemid, _u1, _u2, _max):
     src = miiv[0]
     assert src["table"] == "inputevents"
     assert src["sub_var"] == "itemid"
-    assert src["ids"] == itemid
+    # `ids` may be a scalar or a list -- a concept legitimately spans several itemids.
+    # 2026-07-17: fentanyl_rate became [221744, 225942]; 225942 'Fentanyl (Concentrate)'
+    # carries 138,860 rate rows / 13,907 stays at rateuom mcg/hour versus 221744's
+    # 11,992 / 1,175, so the single-itemid form was silently dropping 92.1% of stays --
+    # and contradicting the lgl `fentanyl` concept, which already listed 225942.
+    declared = src["ids"] if isinstance(src["ids"], list) else [src["ids"]]
+    expected = itemid if isinstance(itemid, list) else [itemid]
+    assert set(expected).issubset(set(declared))
     assert src["callback"] == "mimic_rate_mv"
     assert src["stop_var"] == "endtime"
 

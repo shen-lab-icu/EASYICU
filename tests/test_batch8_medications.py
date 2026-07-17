@@ -19,10 +19,15 @@ DICT = pathlib.Path(__file__).resolve().parents[1] / "src" / "easyicu" / "data" 
 MAIN_DBS = {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}
 
 
+# 2026-07-17: warfarin, enoxaparin and milrinone were redefined as pharmacological
+# CLASSES (VKA / LMWH / PDE3-inhibitor), not single molecules, because the Dutch and
+# Austrian hospitals stock a different class member than the Anglo drug we had mapped.
+# That gained each an AUMC source (acenocoumarol / nadroparin / enoximone), so all three
+# go 5/6 -> 6/6. See test_*_is_pharmacological_class below.
 BATCH8 = [
-    ("warfarin",   {"miiv", "mimic", "eicu", "hirid", "sic"}, 5),
+    ("warfarin",   {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
     ("apixaban",   {"sic"},                          1),
-    ("enoxaparin", {"miiv", "mimic", "eicu", "hirid", "sic"}, 5),
+    ("enoxaparin", {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
     ("aspirin",    {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
 ]
 
@@ -74,12 +79,13 @@ def test_registered_in_webapp_catalog(name, _dbs, expected_cov):
     assert CONCEPT_DB_COVERAGE[name] == expected_cov
 
 
-def test_warfarin_sic_uses_phenprocoumon(cdict):
-    """SIC uses phenprocoumon (Marcumar) which is the European warfarin
-    equivalent — DrugID 1657. Documented design choice."""
+def test_warfarin_sic_uses_vka_class(cdict):
+    """2026-07-17: `warfarin` is the vitamin-K-antagonist CLASS, not the molecule.
+    SIC stocks no true warfarin; it has phenprocoumon (1657, 36 pts) and acenocoumarol
+    (1892, 23 pts) -- both coumarin VKAs, both now included."""
     sic = cdict["warfarin"]["sources"]["sic"]
-    ids = sic[0]["ids"] if isinstance(sic, list) else sic["ids"]
-    assert ids == [1657]
+    ids = set(sic[0]["ids"] if isinstance(sic, list) else sic["ids"])
+    assert ids == {1657, 1892}
 
 
 def test_apixaban_sic_only(cdict):
@@ -89,12 +95,13 @@ def test_apixaban_sic_only(cdict):
     assert sources == {"sic"}
 
 
-def test_enoxaparin_sic_includes_both_doses(cdict):
-    """SIC distinguishes prophylactic (1536) and therapeutic (1923) doses;
-    the boolean concept includes both."""
+def test_enoxaparin_sic_includes_lmwh_class(cdict):
+    """2026-07-17: `enoxaparin` is the LMWH CLASS. SIC has prophylactic (1536) and
+    therapeutic (1923) enoxaparin, plus dalteparin (1534, 5,966 pts) -- the LMWH the
+    site actually stocks -- now added."""
     sic = cdict["enoxaparin"]["sources"]["sic"]
     ids = set(sic[0]["ids"] if isinstance(sic, list) else sic["ids"])
-    assert ids == {1536, 1923}
+    assert ids == {1536, 1923, 1534}
 
 
 def test_aspirin_mimic_and_miiv_use_prescriptions(cdict):

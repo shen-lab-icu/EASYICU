@@ -25,6 +25,9 @@ CONCEPT_DICTIONARY = {
     'o2sat': ('Oxygen Saturation (SpO2)', '血氧饱和度', '%'),
     'sao2': ('Arterial Oxygen Saturation', '动脉血氧饱和度', '%'),
     'mech_vent': ('Mechanical Ventilation', '机械通气', 'boolean'),
+    'vent_mode': ('Ventilator Breath-Control Mode', '呼吸机控制类型', 'category'),
+    'vent_breath_seq': ('Ventilator Breath Sequencing', '呼吸机呼吸序列', 'category'),
+    'driving_pres_controlled': ('Driving Pressure (controlled vent)', '驱动压(控制通气)', 'cmH2O'),
     'ett_gcs': ('Intubation/Tracheostomy Status', '气管插管/切开状态', 'boolean'),
     'fio2': ('Fraction of Inspired Oxygen', '吸入氧浓度', '%'),
 
@@ -473,7 +476,7 @@ CONCEPT_GROUPS_INTERNAL = {
     'sepsis_shared': ['susp_inf', 'infection_icd', 'samp', 'culture_positive', 'bld_culture_positive'],  # Sepsis共享概念（已移除sep3）
     'vitals': ['hr', 'map', 'sbp', 'dbp', 'pulse_pressure', 'temp', 'spo2', 'resp', 'shock_index', 'modified_shock_index', 'diastolic_shock_index'],  # 🔧 etco2 移到 ventilator
     'respiratory': ['pafi', 'safi', 'fio2', 'supp_o2', 'vent_ind', 'vent_start', 'vent_end', 'o2sat', 'sao2', 'mech_vent', 'ett_gcs', 'ecmo', 'ecmo_indication', 'adv_resp', 'oxygenation_index'],
-    'ventilator': ['peep', 'tidal_vol', 'tidal_vol_set', 'pip', 'plateau_pres', 'mean_airway_pres', 'minute_vol', 'vent_rate', 'etco2', 'compliance', 'driving_pres', 'ps'],
+    'ventilator': ['peep', 'tidal_vol', 'tidal_vol_set', 'pip', 'plateau_pres', 'mean_airway_pres', 'minute_vol', 'vent_rate', 'etco2', 'compliance', 'driving_pres', 'ps', 'vent_mode', 'vent_breath_seq', 'driving_pres_controlled'],
     'blood_gas': ['be', 'cai', 'hbco', 'lact', 'methb', 'pco2', 'ph', 'po2', 'tco2'],
     'chemistry': ['alb', 'alp', 'alt', 'ast', 'anion_gap', 'bicar', 'bili', 'bili_dir', 'bun', 'ca', 'ck', 'ckmb', 'cl', 'crea', 'crp', 'glu', 'k', 'mg', 'na', 'phos', 'tnt', 'tri', 'ammonia', 'amylase', 'd_dimer', 'ferritin', 'ldh', 'lipase', 'osmolality', 'corrected_calcium', 'ggt', 'trig', 'tsh', 'total_protein', 'ntprobnp', 'cortisol', 'pct', 'bnp', 'uric_acid', 'cholesterol', 'hdl', 'ldl', 'iron', 'tibc', 'transferrin', 'ft4', 'prealbumin', 'myoglobin', 't4'],
     'hematology': ['bnd', 'basos', 'eos', 'esr', 'fgn', 'hba1c', 'hct', 'hgb', 'inr_pt', 'lymph', 'mch', 'mchc', 'mcv', 'neut', 'plt', 'pt', 'ptt', 'rbc', 'rdw', 'wbc', 'nlr', 'plr', 'monos', 'mpv', 'retic'],
@@ -675,10 +678,12 @@ CONCEPT_DB_COVERAGE = {
     'pafi': 5, 'safi': 5, 'urine': 5,
     'peep': 4, 'tidal_vol': 4, 'ins': 4,
     'mech_vent': 3, 'vent_ind': 3, 'ecmo': 2, 'rrt': 4,
+    'vent_mode': 4, 'vent_breath_seq': 4,  # miiv/mimic/aumc/hirid (eICU 332 stays, SIC none)
+    'driving_pres_controlled': 4,  # plateau+mode overlap: miiv/mimic/aumc/hirid
     'furosemide': 6,
     'propofol': 6, 'midazolam': 6, 'dexmedetomidine': 5,
     'fentanyl': 6, 'morphine': 6, 'heparin': 6,
-    'mannitol': 5, 'amiodarone': 6, 'milrinone': 5, 'rocuronium': 5,
+    'mannitol': 5, 'amiodarone': 6, 'milrinone': 6, 'rocuronium': 5,
     # Rate concepts (2026-05-13): HiRID pharma has no propofol reference;
     # SIC removed pending AmountPerMinute unit audit (see
     # audit_reports/sic_amount_per_minute_unit_audit_20260513.md)
@@ -698,15 +703,15 @@ CONCEPT_DB_COVERAGE = {
     'meropenem': 6,
     'calcium_iv': 6,
     # Batch 4 (2026-05-13; HiRID additions audited 2026-05-27)
-    'potassium_iv': 5,
+    'potassium_iv': 6,
     'magnesium_iv': 6,
-    'albumin_iv': 4,
-    'packed_rbc': 5,
+    'albumin_iv': 5,
+    'packed_rbc': 6,
     # Batch 5 (2026-05-13; round-3 additions audited 2026-05-27)
     'bicarbonate': 6,
     'dextrose50': 5,
     'ffp': 5,
-    'platelets': 5,
+    'platelets': 6,
     # Batch 6 (2026-05-13; prescriptions/HiRID/AUMC additions audited 2026-05-27)
     'levetiracetam': 6,
     'dexamethasone': 6,
@@ -716,12 +721,12 @@ CONCEPT_DB_COVERAGE = {
     'phenytoin': 5,
     'labetalol': 6,
     'esmolol': 6,
-    'diltiazem': 6,
+    'diltiazem': 5,
     'nicardipine': 4,
     # Batch 8 (2026-05-14; prescriptions/HiRID additions audited 2026-05-27)
-    'warfarin': 5,
+    'warfarin': 6,
     'apixaban': 1,
-    'enoxaparin': 5,
+    'enoxaparin': 6,
     'aspirin': 6,
     'insulin': 5,  # MIIV+MIMIC+eICU+AUMC+HiRID
     # Fluid balance (2026-05-14)

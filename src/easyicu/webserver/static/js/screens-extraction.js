@@ -332,7 +332,7 @@
     ['Sepsis-3 (SOFA-1)', 'Sepsis-3 (SOFA-1)', 1, true, false],
     ['Sepsis shared', 'Sepsis 共享概念', 5, true, false],
     ['Respiratory', '呼吸系统', 15, true, false],
-    ['Ventilator', '呼吸机参数', 12, true, false],
+    ['Ventilator', '呼吸机参数', 15, true, false],
     ['Blood gas', '血气分析', 9, true, false],
     ['Lab — Hematology', '实验室-血液学', 25, true, false],
     ['Vasopressors', '血管活性药物', 17, true, false],

@@ -24,7 +24,14 @@ BATCH7 = [
     ("phenytoin",   {"miiv", "mimic", "eicu", "hirid", "sic"},        5),
     ("labetalol",   {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
     ("esmolol",     {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
-    ("diltiazem",   {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
+    # 2026-07-17: HiRID source REMOVED. This concept is IV diltiazem everywhere else
+    # (miiv inputevents 221468 / aumc drugitems 7174 / eicu infusion), but HiRID's only
+    # entries were oral tablets: 121 'Diltiazem tabl 30 mg' has 0 rows, and 1001071
+    # 'Diltiazem Tbl 60 mg' has 12 rows / 3 patients. HiRID has no IV diltiazem at all,
+    # so 3 patients of a pharmacokinetically different route (oral, slow onset, not
+    # titratable) were making the HiRID column route-incomparable to the other 5 DBs.
+    # Declaring the absence beats faking the coverage.
+    ("diltiazem",   {"miiv", "mimic", "eicu", "aumc", "sic"},          5),
     ("nicardipine", {"miiv", "mimic", "eicu", "aumc"},         4),
 ]
 
@@ -105,5 +112,7 @@ def test_phenytoin_uses_eicu_admissiondrug_but_excludes_aumc(cdict):
 
 def test_batch7_hirid_scope_matches_audit(cdict):
     assert "hirid" not in cdict["nicardipine"]["sources"]
-    for c in ["phenytoin", "labetalol", "esmolol", "diltiazem"]:
+    # 2026-07-17: diltiazem joined nicardipine as HiRID-absent -- see the BATCH7 note.
+    assert "hirid" not in cdict["diltiazem"]["sources"]
+    for c in ["phenytoin", "labetalol", "esmolol"]:
         assert cdict[c]["sources"]["hirid"][0]["callback"] == "transform_fun(set_val(TRUE))"

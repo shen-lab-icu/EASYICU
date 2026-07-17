@@ -1554,23 +1554,50 @@ def _infer_numeric_time_unit(values: pd.Series, index_col: str | None = None) ->
 
     # 🔧 FIX 2026-05-11: AUMC 的 measuredat_minutes 在多处被改名为 charttime（值仍为分钟），
     # 导致按 hour_like 解释会溢出 pd.Timedelta（>106751 days = ~292 years）。
-    # 当 max(|values|) 远超合理小时范围（>10 万 = 11 年）时，回退到分钟解释。
-    # 这处理了所有 AUMC sofa2 链路上的时间单位 bug。
+    # 当 |values| 远超合理小时范围（>10 万 = 11 年）时，回退到分钟解释。
     REASONABLE_HOURS_THRESHOLD = 100_000  # >11 years in hours is implausible for ICU
 
     if name in hour_like:
         try:
-            _abs_max = pd.to_numeric(values, errors="coerce").abs().max()
-            if pd.notna(_abs_max) and _abs_max > REASONABLE_HOURS_THRESHOLD:
-                # Values are likely in minutes (e.g. AUMC measuredat_minutes renamed to charttime).
-                # If max as minutes still exceeds threshold, try seconds; otherwise minutes.
-                if _abs_max > REASONABLE_HOURS_THRESHOLD * 60:
-                    return "s"
-                return "min"
+            _numeric = pd.to_numeric(values, errors="coerce").dropna()
+            if len(_numeric):
+                # 🔧 FIX 2026-07-17b: use a ROBUST upper quantile, NOT the raw max. The bulk
+                # sliding-window path (_slide_vectorized_bulk) feeds the WHOLE merged multi-patient
+                # charttime column here. eICU/AUMC charttime is hours-since-admission, but a handful
+                # of corrupt rows carry stray offsets up to ~876k. The old raw-max guard let a SINGLE
+                # garbage row flip the entire (genuinely-hour) column to 'min', mis-scaling SOFA
+                # sliding windows ~60x -> saturated SOFA (eICU 37-41% flat-per-patient, median 5 vs
+                # miiv 1; AUMC sofa2 mean 4.36 vs clean sofa1 1.50 — same DB/population, only the
+                # threshold crossing differed). A robust p99.9 ignores the garbage tail while still
+                # catching a genuinely minute/second-scale column (where MOST values are large).
+                # Corroborate with grid spacing (~1-unit spacing => already hours) before demoting.
+                _robust_max = float(_numeric.abs().quantile(0.999))
+                if _robust_max > REASONABLE_HOURS_THRESHOLD:
+                    if len(_numeric) >= 2:
+                        _pos = _numeric.sort_values().diff().dropna()
+                        _pos = _pos[_pos > 0]
+                        if len(_pos) and float(_pos.median()) < 15:
+                            return "h"
+                    if _robust_max > REASONABLE_HOURS_THRESHOLD * 60:
+                        return "s"
+                    return "min"
         except Exception:
             pass
         return "h"
     if name in minute_like or name.endswith("offset"):
+        # 🔧 FIX 2026-07-17: EasyICU normalizes concept time to HOURS-since-admission
+        # (see docstring + run_manifest time_axis_policy), but AUMC (`measuredat_minutes`)
+        # and eICU (`*offset`) keep a minutes-like COLUMN NAME. The name-first rule here
+        # demoted already-hour values to minutes, shrinking KDIGO UO/creatinine windows
+        # ~60x (uo_rt 60-70x inflated -> oliguria never trips -> UO-AKI dead for AUMC/eICU;
+        # creatinine baseline collapses to whole-stay min -> Stage-3 over-call). Mirror the
+        # hour_like spacing guard: ~1-unit grid spacing means the values are already hours.
+        _numeric = pd.to_numeric(values, errors="coerce").dropna()
+        if len(_numeric) >= 2:
+            _positive = _numeric.sort_values().diff().dropna()
+            _positive = _positive[_positive > 0]
+            if len(_positive) and float(_positive.median()) < 15:
+                return "h"
         return "min"
 
     numeric = pd.to_numeric(values, errors="coerce").dropna()
