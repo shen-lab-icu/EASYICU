@@ -49,11 +49,12 @@ prompt and authority drift without improving safety.
 - Runner/synthetic-fixture/cache/loader group: 50 passed.
 - Characterization suite: 48 passed.
 - The combined resume/characterization collection ended 115 passed / 12 resume
-  failures after cache invalidation. A representative clean-run failure
-  (`test_partial_manifest_is_written_after_run`) reproduces on an untouched
-  `be17f40` clone; an earlier cache-hit collection passed 127/127. This
-  cache-sensitive baseline debt is recorded for the milestone regression batch
-  and was not changed here.
+  failures inside Codex's outer sandbox. Subsequent outer-environment replay
+  proved that generated steps were blocked before execution by nested macOS
+  `sandbox-exec` (`returncode=71`); all 12 pass when the canonical test process
+  is allowed to invoke the inner sandbox. This is a milestone test-environment
+  constraint, not cache or engine debt, and production fail-closed isolation was
+  not relaxed.
 - The exact pytest 9.1 cross-directory sandwich reproducer now resolves `ra`.
 - Black, Ruff, `py_compile`, and `git diff --check` passed.
 - Production source contains no `newly_invalid_or_coerced_n` literal.

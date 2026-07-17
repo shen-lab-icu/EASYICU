@@ -208,6 +208,7 @@ def test_rejected_repair_restores_exact_parent_then_clears_latch(tmp_path):
     )
     assert state.current_capsule_ref == child
     assert state.last_completed_repair_parent_ref == parent
+    assert state.last_completed_repair_child_ref == child
     assert state.last_completed_repair_code_sha256 == repaired_ref.sha256
 
     authority.reject_completed_repair_candidate(
@@ -216,6 +217,7 @@ def test_rejected_repair_restores_exact_parent_then_clears_latch(tmp_path):
     )
     assert state.current_capsule_ref == parent
     assert state.last_completed_repair_parent_ref is None
+    assert state.last_completed_repair_child_ref is None
     assert state.last_completed_repair_code_sha256 is None
     assert step_record["step_authority_rejected_repair_candidate"] == (
         "runtime_repair_semantic_noop"
@@ -239,6 +241,7 @@ def test_repair_rejection_checkpoint_failure_keeps_child_and_latch(tmp_path):
         coordinates=SimpleNamespace(),
         current_capsule_ref=child,
         last_completed_repair_parent_ref=parent,
+        last_completed_repair_child_ref=child,
         last_completed_repair_code_sha256=repaired_ref.sha256,
     )
     step_record = {
@@ -270,10 +273,66 @@ def test_repair_rejection_checkpoint_failure_keeps_child_and_latch(tmp_path):
 
     assert state.current_capsule_ref == child
     assert state.last_completed_repair_parent_ref == parent
+    assert state.last_completed_repair_child_ref == child
     assert state.last_completed_repair_code_sha256 == repaired_ref.sha256
     assert step_record == expected_record
     assert records == expected_records
     assert history == expected_history
+
+
+def test_stale_repair_rejection_cannot_rollback_newer_current_capsule(tmp_path):
+    parent = _ref("a")
+    repaired_child = _ref("b")
+    newer = _ref("c")
+    repaired_code = "value = 2\n"
+    repaired_ref = _code_ref(repaired_code)
+    state = StepAttemptState(
+        coordinates=SimpleNamespace(),
+        current_capsule_ref=parent,
+    )
+    step_record = {
+        "step_id": "01_summary",
+        "attempt_id": "run:01_summary:1",
+        "capsule_pending_repair_attempt_id": 1,
+        "capsule_pending_repair_binding_sha256": "binding",
+        "capsule_pending_repair_failure_status": "runtime_failed",
+    }
+    records: list[dict] = []
+    history: list[dict] = []
+    receipt = SimpleNamespace(logical_repairs=[{"transport": {"state": "completed"}}])
+    authority = _authority(
+        tmp_path,
+        state=state,
+        step_record=step_record,
+        records=records,
+        history=history,
+        flush=lambda: None,
+        load_verified=lambda _run_dir, *, ref, **_kwargs: _verified(
+            ref,
+            repaired_ref,
+        ),
+        seal_repair=lambda *_args, **_kwargs: repaired_child,
+        receipt=receipt,
+    )
+
+    authority.seal_completed_repair_candidate(
+        repaired_ref,
+        1,
+        failure_status="runtime_failed",
+    )
+    authority.checkpoint_capsule(newer, status="candidate_checkpointed")
+    record_count = len(records)
+
+    authority.reject_completed_repair_candidate(
+        repaired_code,
+        reason="stale_runtime_repair_rejection",
+    )
+
+    assert state.current_capsule_ref == newer
+    assert state.last_completed_repair_parent_ref == parent
+    assert state.last_completed_repair_code_sha256 == repaired_ref.sha256
+    assert len(records) == record_count
+    assert "step_authority_rejected_repair_candidate" not in step_record
 
 
 def test_repair_child_checkpoint_failure_preserves_parent_and_pending(tmp_path):
@@ -317,6 +376,7 @@ def test_repair_child_checkpoint_failure_preserves_parent_and_pending(tmp_path):
 
     assert state.current_capsule_ref == parent
     assert state.last_completed_repair_parent_ref is None
+    assert state.last_completed_repair_child_ref is None
     assert state.last_completed_repair_code_sha256 is None
     assert step_record == expected_record
     assert records == []

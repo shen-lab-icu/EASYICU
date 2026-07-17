@@ -38,6 +38,7 @@ class StepAttemptState:
     selected_resume_capsule: Optional[VerifiedStepAuthorityCapsule] = None
     capsule_execution_replay_consumed: bool = False
     last_completed_repair_parent_ref: Optional[StepAuthorityCapsuleRef] = None
+    last_completed_repair_child_ref: Optional[StepAuthorityCapsuleRef] = None
     last_completed_repair_code_sha256: Optional[str] = None
     capsule_audit_findings_by_digest: Dict[str, Tuple[List[ValidationFinding], str]] = (
         field(default_factory=dict)
@@ -238,6 +239,7 @@ class CheckpointAuthority:
             delete_fields=self._PENDING_REPAIR_FIELDS,
         )
         self.state.last_completed_repair_parent_ref = parent_ref
+        self.state.last_completed_repair_child_ref = sealed_ref
         self.state.last_completed_repair_code_sha256 = str(code_ref.sha256)
 
     def reject_completed_repair_candidate(
@@ -251,6 +253,9 @@ class CheckpointAuthority:
         rejected_digest = hashlib.sha256(rejected_code.encode("utf-8")).hexdigest()
         if (
             self.state.last_completed_repair_parent_ref is None
+            or self.state.last_completed_repair_child_ref is None
+            or self.state.current_capsule_ref
+            != self.state.last_completed_repair_child_ref
             or self.state.last_completed_repair_code_sha256 != rejected_digest
         ):
             return
@@ -260,6 +265,7 @@ class CheckpointAuthority:
             extra={"step_authority_rejected_repair_candidate": reason},
         )
         self.state.last_completed_repair_parent_ref = None
+        self.state.last_completed_repair_child_ref = None
         self.state.last_completed_repair_code_sha256 = None
 
     def checkpoint_initial_reservation(
