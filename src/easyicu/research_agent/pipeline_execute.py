@@ -270,12 +270,9 @@ from .side_findings import SideFinding
 from .skills import ClinicalSkill
 from .step_authority_capsule import (
     StepAuthorityCapsuleError,
-    StepAuthorityCapsuleRef,
-    VerifiedStepAuthorityCapsule,
     load_verified_step_authority_capsule,
 )
 from .step_authority_runtime import (
-    StepAuthorityCoordinates,
     StepAuthorityRuntimeError,
     adopt_candidate_for_control_plane_revalidation,
     adopt_frozen_scoped_coder_context,
@@ -296,6 +293,11 @@ from .step_authority_runtime import (
     seal_initial_generation_candidate,
     seal_legacy_candidate,
     seal_repair_candidate_from_receipt,
+)
+from .step_attempt_authority import (
+    CheckpointAuthority,
+    StepAttemptState,
+    StepAuthorityOperations,
 )
 from .step_execution import LockedStepExecutionRequest, StepExecutor
 from .summary_repair import salvage_step_summary
@@ -7784,83 +7786,30 @@ def run_execute_phase(
         quarantine_policy_superseded = False
         quarantine_deterministic_revalidated = False
         pending_quarantined_errors: List[ValidationFinding] = []
-        step_authority_coordinates: Optional[StepAuthorityCoordinates] = None
-        current_capsule_ref: Optional[StepAuthorityCapsuleRef] = None
-        selected_resume_capsule: Optional[VerifiedStepAuthorityCapsule] = None
-        capsule_execution_replay_consumed = False
-        last_completed_repair_parent_ref: Optional[StepAuthorityCapsuleRef] = None
-        last_completed_repair_code_sha256: Optional[str] = None
-        capsule_audit_findings_by_digest: Dict[
-            str, Tuple[List[ValidationFinding], str]
-        ] = {}
-
-        def _checkpoint_authority_state(
-            status: str,
-            *,
-            extra: Optional[Mapping[str, object]] = None,
-        ) -> None:
-            snapshot = dict(step_record)
-            snapshot["status"] = status
-            if current_capsule_ref is not None:
-                verified = load_verified_step_authority_capsule(
-                    run_dir,
-                    ref=current_capsule_ref,
-                    expected_step_id=step.step_id,
-                )
-                ref_payload = current_capsule_ref.model_dump(mode="json")
-                step_record["step_authority_capsule_ref"] = ref_payload
-                step_record["step_authority_capsule_stage"] = verified.capsule.stage
-                snapshot["step_authority_capsule_ref"] = ref_payload
-                snapshot["step_authority_capsule_stage"] = verified.capsule.stage
-            if extra:
-                step_record.update(dict(extra))
-                snapshot.update(dict(extra))
-            with shared_lock:
-                _upsert_current_capsule_checkpoint(per_step_records, snapshot)
-                _flush_partial_manifest()
-
-        def _checkpoint_capsule(
-            ref: StepAuthorityCapsuleRef,
-            *,
-            status: str,
-        ) -> None:
-            nonlocal current_capsule_ref
-            previous_ref = current_capsule_ref
-            current_capsule_ref = ref
-            try:
-                _checkpoint_authority_state(status)
-            except BaseException:
-                current_capsule_ref = previous_ref
-                raise
-
-        def _ensure_candidate_capsule(
-            script_text: str,
-            *,
-            reason: str,
-        ) -> Optional[StepAuthorityCapsuleRef]:
-            nonlocal current_capsule_ref
-            coordinates = step_authority_coordinates
-            if coordinates is None:
-                return None
-            code_ref = persist_candidate_code(coordinates, script_text)
-            if current_capsule_ref is not None:
-                current = load_verified_step_authority_capsule(
-                    run_dir,
-                    ref=current_capsule_ref,
-                    expected_step_id=step.step_id,
-                )
-                if current.capsule.candidate_code == code_ref:
-                    return current_capsule_ref
-                ref = seal_deterministic_candidate(
-                    coordinates,
-                    parent_ref=current_capsule_ref,
-                    code_ref=code_ref,
-                    reason=reason,
-                )
-            else:
-                ref = seal_legacy_candidate(coordinates, code_ref=code_ref)
-            _checkpoint_capsule(ref, status="candidate_checkpointed")
-            return ref
+        step_attempt_state = StepAttemptState()
+        checkpoint_authority = CheckpointAuthority(
+            run_dir=run_dir,
+            step_id=step.step_id,
+            state=step_attempt_state,
+            step_record=step_record,
+            per_step_records=per_step_records,
+            step_attempt_history=step_attempt_history,
+            shared_lock=shared_lock,
+            flush_partial_manifest=_flush_partial_manifest,
+            upsert_checkpoint=_upsert_current_capsule_checkpoint,
+            provider_receipt_path=provider_receipt_path,
+            reserved_final_category=reserved_final_category,
+            sync_provider_budget=_sync_provider_budget,
+            operations=StepAuthorityOperations(
+                load_verified_capsule=load_verified_step_authority_capsule,
+                persist_candidate_code=persist_candidate_code,
+                seal_deterministic_candidate=seal_deterministic_candidate,
+                seal_legacy_candidate=seal_legacy_candidate,
+                seal_initial_candidate=seal_initial_generation_candidate,
+                seal_repair_candidate=seal_repair_candidate_from_receipt,
+                load_provider_receipt=load_provider_call_budget_state,
+            ),
+        )
 
         # Batch-1 of the A2 control-plane split: the four budget-accounting
         # closures now live in repair_coordination.StepRepairBudget; the local
@@ -7881,7 +7830,7 @@ def run_execute_phase(
         ) -> bool:
             """Reserve one repair bound to its exact host-owned authority."""
 
-            _ensure_candidate_capsule(
+            checkpoint_authority.ensure_candidate(
                 before_code,
                 reason="pre_repair_authority_binding",
             )
@@ -7894,8 +7843,8 @@ def run_execute_phase(
                 step_spec_sha256=canonical_sha256(step.model_dump(mode="json")),
                 resolved_inputs_sha256=resolved_inputs_sha256,
                 coder_context_sha256=(
-                    step_authority_coordinates.scoped_coder_context.sha256
-                    if step_authority_coordinates is not None
+                    step_attempt_state.coordinates.scoped_coder_context.sha256
+                    if step_attempt_state.coordinates is not None
                     else canonical_sha256(
                         {
                             "research_context": coder_context.model_dump(mode="json"),
@@ -7909,8 +7858,8 @@ def run_execute_phase(
                     current_repair_authority=current_repair_authority,
                 ),
                 engine_validator_sha256=(
-                    step_authority_coordinates.deterministic_gate_fingerprint
-                    if step_authority_coordinates is not None
+                    step_attempt_state.coordinates.deterministic_gate_fingerprint
+                    if step_attempt_state.coordinates is not None
                     else canonical_sha256(
                         {
                             "schema": "easyicu.step_control_plane_fingerprint/1",
@@ -7933,7 +7882,7 @@ def run_execute_phase(
                 authority_binding=binding,
             )
             if consumed:
-                _checkpoint_authority_state(
+                checkpoint_authority.checkpoint_state(
                     "repair_transport_pending",
                     extra={
                         "capsule_pending_repair_attempt_id": (
@@ -8154,7 +8103,7 @@ def run_execute_phase(
                     "coder_provider_identity_sha256": (coder_provider_identity_sha256),
                 }
             )
-            step_authority_coordinates = prepare_step_authority_coordinates(
+            step_attempt_state.coordinates = prepare_step_authority_coordinates(
                 run_dir=run_dir,
                 step_id=step.step_id,
                 run_input_capsule_sha256=run_input_capsule_sha256,
@@ -8178,14 +8127,16 @@ def run_execute_phase(
                 prompt_pack=prompt_files,
             )
             try:
-                selected_resume_capsule = load_checkpoint_selected_step_capsule(
-                    run_dir,
-                    step_id=step.step_id,
-                    checkpoint=(
-                        plan_result.resume_state
-                        if isinstance(plan_result.resume_state, Mapping)
-                        else None
-                    ),
+                step_attempt_state.selected_resume_capsule = (
+                    load_checkpoint_selected_step_capsule(
+                        run_dir,
+                        step_id=step.step_id,
+                        checkpoint=(
+                            plan_result.resume_state
+                            if isinstance(plan_result.resume_state, Mapping)
+                            else None
+                        ),
+                    )
                 )
                 # A paid repair result belongs to the historical parent and
                 # coordinates recorded before a crash. Recover that exact
@@ -8194,12 +8145,14 @@ def run_execute_phase(
                 # the receipt's before-code and authority binding impossible to
                 # satisfy after a control-plane update.
                 if (
-                    selected_resume_capsule is not None
+                    step_attempt_state.selected_resume_capsule is not None
                     and isinstance(prior_step_record, Mapping)
                     and prior_step_record.get("capsule_pending_repair_attempt_id")
                     is not None
                 ):
-                    current_capsule_ref = selected_resume_capsule.ref
+                    step_attempt_state.current_capsule_ref = (
+                        step_attempt_state.selected_resume_capsule.ref
+                    )
                     pending_attempt = prior_step_record.get(
                         "capsule_pending_repair_attempt_id"
                     )
@@ -8236,7 +8189,7 @@ def run_execute_phase(
                         )
                     historical_coordinates = coordinates_from_verified_capsule(
                         run_dir,
-                        selected_resume_capsule,
+                        step_attempt_state.selected_resume_capsule,
                     )
                     recovered_code_ref = repair_code_ref(
                         receipt_state,
@@ -8244,52 +8197,54 @@ def run_execute_phase(
                     )
                     recovered_ref = seal_repair_candidate_from_receipt(
                         historical_coordinates,
-                        parent_ref=current_capsule_ref,
-                        checkpoint_parent_ref=current_capsule_ref,
+                        parent_ref=step_attempt_state.current_capsule_ref,
+                        checkpoint_parent_ref=step_attempt_state.current_capsule_ref,
                         code_ref=recovered_code_ref,
                         receipt_state=receipt_state,
                         attempt_id=pending_attempt,
                         failure_status=pending_failure_status,
                     )
-                    _checkpoint_capsule(
+                    checkpoint_authority.checkpoint_capsule(
                         recovered_ref,
                         status="candidate_checkpointed",
                     )
-                    selected_resume_capsule = load_verified_step_authority_capsule(
-                        run_dir,
-                        ref=recovered_ref,
-                        expected_step_id=step.step_id,
+                    step_attempt_state.selected_resume_capsule = (
+                        load_verified_step_authority_capsule(
+                            run_dir,
+                            ref=recovered_ref,
+                            expected_step_id=step.step_id,
+                        )
                     )
-                if selected_resume_capsule is not None and not (
+                if step_attempt_state.selected_resume_capsule is not None and not (
                     capsule_matches_coordinates(
-                        selected_resume_capsule,
-                        step_authority_coordinates,
+                        step_attempt_state.selected_resume_capsule,
+                        step_attempt_state.coordinates,
                     )
                 ):
                     frozen_context = adopt_frozen_scoped_coder_context(
-                        selected_resume_capsule,
-                        step_authority_coordinates,
+                        step_attempt_state.selected_resume_capsule,
+                        step_attempt_state.coordinates,
                     )
                     if frozen_context is None:
                         adopted_candidate = (
                             adopt_candidate_for_control_plane_revalidation(
-                                selected_resume_capsule,
-                                step_authority_coordinates,
+                                step_attempt_state.selected_resume_capsule,
+                                step_attempt_state.coordinates,
                             )
                         )
                         if adopted_candidate is None:
                             step_record["step_authority_capsule_cache_miss"] = (
                                 "authority_drift"
                             )
-                            selected_resume_capsule = None
+                            step_attempt_state.selected_resume_capsule = None
                         else:
                             (
                                 coder_context,
-                                step_authority_coordinates,
+                                step_attempt_state.coordinates,
                                 adopted_ref,
                             ) = adopted_candidate
-                            current_capsule_ref = adopted_ref
-                            selected_resume_capsule = (
+                            step_attempt_state.current_capsule_ref = adopted_ref
+                            step_attempt_state.selected_resume_capsule = (
                                 load_verified_step_authority_capsule(
                                     run_dir,
                                     ref=adopted_ref,
@@ -8300,26 +8255,32 @@ def run_execute_phase(
                                 "control_plane_drift_revalidation"
                             )
                     else:
-                        coder_context, step_authority_coordinates = frozen_context
+                        coder_context, step_attempt_state.coordinates = frozen_context
                         step_record["step_authority_frozen_context_reused"] = True
                 if (
-                    selected_resume_capsule is not None
+                    step_attempt_state.selected_resume_capsule is not None
                     and isinstance(prior_step_record, Mapping)
                     and prior_step_record.get("quarantined_requires_repair") is True
                 ):
                     step_record["step_authority_capsule_cache_miss"] = (
                         "quarantine_not_migrated"
                     )
-                    selected_resume_capsule = None
-                if selected_resume_capsule is not None:
-                    current_capsule_ref = selected_resume_capsule.ref
+                    step_attempt_state.selected_resume_capsule = None
+                if step_attempt_state.selected_resume_capsule is not None:
+                    step_attempt_state.current_capsule_ref = (
+                        step_attempt_state.selected_resume_capsule.ref
+                    )
                     step_record["step_authority_capsule_ref"] = (
-                        selected_resume_capsule.ref.model_dump(mode="json")
+                        step_attempt_state.selected_resume_capsule.ref.model_dump(
+                            mode="json"
+                        )
                     )
                     step_record["step_authority_capsule_stage"] = (
-                        selected_resume_capsule.capsule.stage
+                        step_attempt_state.selected_resume_capsule.capsule.stage
                     )
-                    audit = selected_resume_capsule.capsule.concept_audit
+                    audit = (
+                        step_attempt_state.selected_resume_capsule.capsule.concept_audit
+                    )
                     if audit is not None:
                         current_auditor_identity = llm_concept_auditor_identity_sha256
                         current_validator_identity = (
@@ -8333,11 +8294,11 @@ def run_execute_phase(
                             and audit.validator_implementation_sha256
                             == current_validator_identity
                         ):
-                            capsule_audit_findings_by_digest[
-                                selected_resume_capsule.capsule.candidate_code.sha256
+                            step_attempt_state.capsule_audit_findings_by_digest[
+                                step_attempt_state.selected_resume_capsule.capsule.candidate_code.sha256
                             ] = (
                                 read_concept_audit_findings(
-                                    selected_resume_capsule,
+                                    step_attempt_state.selected_resume_capsule,
                                     run_dir=run_dir,
                                 ),
                                 audit.audit_key,
@@ -8346,7 +8307,9 @@ def run_execute_phase(
                             step_record["step_authority_audit_cache_miss"] = (
                                 "audit_identity_drift"
                             )
-                    _checkpoint_authority_state("capsule_revalidation_pending")
+                    checkpoint_authority.checkpoint_state(
+                        "capsule_revalidation_pending"
+                    )
                 elif (
                     provider_budget.initial_generation_resume_status() == "completed"
                     and isinstance(prior_step_record, Mapping)
@@ -8374,7 +8337,7 @@ def run_execute_phase(
                             "checkpoint"
                         )
                     recovered_code_ref = initial_generation_code_ref(
-                        step_authority_coordinates,
+                        step_attempt_state.coordinates,
                         load_provider_call_budget_state(
                             provider_receipt_path,
                             step_id=step.step_id,
@@ -8382,7 +8345,7 @@ def run_execute_phase(
                         ),
                     )
                     recovered_ref = seal_initial_generation_candidate(
-                        step_authority_coordinates,
+                        step_attempt_state.coordinates,
                         code_ref=recovered_code_ref,
                         receipt_state=load_provider_call_budget_state(
                             provider_receipt_path,
@@ -8390,14 +8353,16 @@ def run_execute_phase(
                             expected_reserved_final_category=reserved_final_category,
                         ),
                     )
-                    _checkpoint_capsule(
+                    checkpoint_authority.checkpoint_capsule(
                         recovered_ref,
                         status="candidate_checkpointed",
                     )
-                    selected_resume_capsule = load_verified_step_authority_capsule(
-                        run_dir,
-                        ref=recovered_ref,
-                        expected_step_id=step.step_id,
+                    step_attempt_state.selected_resume_capsule = (
+                        load_verified_step_authority_capsule(
+                            run_dir,
+                            ref=recovered_ref,
+                            expected_step_id=step.step_id,
+                        )
                     )
             except StepAuthorityRuntimeError as exc:
                 capsule_finding = ValidationFinding(
@@ -8608,70 +8573,6 @@ def run_execute_phase(
             )
             return prior_code
 
-        def _seal_completed_repair_candidate(
-            code_ref: object,
-            _mode: str,
-            logical_attempt_id: int,
-            *,
-            failure_status: str,
-        ) -> None:
-            nonlocal current_capsule_ref
-            nonlocal last_completed_repair_code_sha256
-            nonlocal last_completed_repair_parent_ref
-            coordinates = step_authority_coordinates
-            if coordinates is None or current_capsule_ref is None:
-                return
-            if not hasattr(code_ref, "sha256"):
-                raise StepAuthorityRuntimeError(
-                    "repair persistence did not return a content reference"
-                )
-            parent_ref = current_capsule_ref
-            receipt_state = load_provider_call_budget_state(
-                provider_receipt_path,
-                step_id=step.step_id,
-                expected_reserved_final_category=reserved_final_category,
-            )
-            sealed_ref = seal_repair_candidate_from_receipt(
-                coordinates,
-                parent_ref=parent_ref,
-                checkpoint_parent_ref=parent_ref,
-                code_ref=code_ref,
-                receipt_state=receipt_state,
-                attempt_id=logical_attempt_id,
-                failure_status=failure_status,
-            )
-            last_completed_repair_parent_ref = parent_ref
-            last_completed_repair_code_sha256 = str(code_ref.sha256)
-            for key in (
-                "capsule_pending_repair_attempt_id",
-                "capsule_pending_repair_binding_sha256",
-                "capsule_pending_repair_failure_status",
-            ):
-                step_record.pop(key, None)
-            _checkpoint_capsule(sealed_ref, status="candidate_checkpointed")
-
-        def _reject_completed_repair_candidate(
-            rejected_code: str,
-            *,
-            reason: str,
-        ) -> None:
-            """Restore the exact parent when a paid candidate fails host checks."""
-
-            nonlocal current_capsule_ref
-            nonlocal last_completed_repair_code_sha256
-            nonlocal last_completed_repair_parent_ref
-            rejected_digest = sha256_of_bytes(rejected_code.encode("utf-8"))
-            if (
-                last_completed_repair_parent_ref is None
-                or last_completed_repair_code_sha256 != rejected_digest
-            ):
-                return
-            current_capsule_ref = last_completed_repair_parent_ref
-            step_record["step_authority_rejected_repair_candidate"] = reason
-            _checkpoint_authority_state("candidate_checkpointed")
-            last_completed_repair_parent_ref = None
-            last_completed_repair_code_sha256 = None
-
         def _repair_with_capsule(
             *,
             failure_status: str,
@@ -8686,7 +8587,7 @@ def run_execute_phase(
             provider_category: str,
             logical_repair_attempt_id: int,
         ) -> str:
-            coordinates = step_authority_coordinates
+            coordinates = step_attempt_state.coordinates
             try:
                 return coder.repair(
                     context=context,
@@ -8710,11 +8611,10 @@ def run_execute_phase(
                         else None
                     ),
                     on_candidate_completed=(
-                        lambda ref, mode, logical_id: (
+                        lambda ref, _mode, logical_id: (
                             (
-                                _seal_completed_repair_candidate(
+                                checkpoint_authority.seal_completed_repair_candidate(
                                     ref,
-                                    mode,
                                     logical_id,
                                     failure_status=failure_status,
                                 )
@@ -8725,87 +8625,10 @@ def run_execute_phase(
                     ),
                 )
             except Exception:
-                receipt_state = load_provider_call_budget_state(
-                    provider_receipt_path,
-                    step_id=step.step_id,
-                    expected_reserved_final_category=reserved_final_category,
+                checkpoint_authority.clear_failed_repair_transport(
+                    logical_repair_attempt_id
                 )
-                if (
-                    1 <= logical_repair_attempt_id <= len(receipt_state.logical_repairs)
-                    and dict(
-                        receipt_state.logical_repairs[
-                            logical_repair_attempt_id - 1
-                        ].get("transport")
-                        or {}
-                    ).get("state")
-                    == "failed"
-                ):
-                    for key in (
-                        "capsule_pending_repair_attempt_id",
-                        "capsule_pending_repair_binding_sha256",
-                        "capsule_pending_repair_failure_status",
-                    ):
-                        step_record.pop(key, None)
-                    if current_capsule_ref is not None:
-                        _checkpoint_authority_state("candidate_checkpointed")
                 raise
-
-        def _on_initial_reserved(
-            transport_id: str,
-            binding_sha256: str,
-        ) -> None:
-            try:
-                _sync_provider_budget()
-                _checkpoint_authority_state(
-                    "initial_generation_pending",
-                    extra={
-                        "capsule_pending_initial_transport_id": transport_id,
-                        "capsule_pending_initial_binding_sha256": binding_sha256,
-                    },
-                )
-            except (
-                ProviderCallBudgetReceiptError,
-                StepAuthorityRuntimeError,
-                StepAuthorityCapsuleError,
-            ):
-                raise
-            except Exception as exc:
-                raise StepAuthorityRuntimeError(
-                    "Initial-generation reservation could not be checkpointed."
-                ) from exc
-
-        def _on_initial_candidate(
-            code_ref: object,
-            _transport_id: str,
-        ) -> None:
-            try:
-                coordinates = step_authority_coordinates
-                if coordinates is None or not hasattr(code_ref, "sha256"):
-                    return
-                receipt_state = load_provider_call_budget_state(
-                    provider_receipt_path,
-                    step_id=step.step_id,
-                    expected_reserved_final_category=reserved_final_category,
-                )
-                candidate_ref = seal_initial_generation_candidate(
-                    coordinates,
-                    code_ref=code_ref,
-                    receipt_state=receipt_state,
-                )
-                _sync_provider_budget()
-                step_record.pop("capsule_pending_initial_transport_id", None)
-                step_record.pop("capsule_pending_initial_binding_sha256", None)
-                _checkpoint_capsule(candidate_ref, status="candidate_checkpointed")
-            except (
-                ProviderCallBudgetReceiptError,
-                StepAuthorityRuntimeError,
-                StepAuthorityCapsuleError,
-            ):
-                raise
-            except Exception as exc:
-                raise StepAuthorityRuntimeError(
-                    "Initial-generation candidate authority could not be checkpointed."
-                ) from exc
 
         def _reserve_compatibility_repair(
             before_code: str,
@@ -9440,7 +9263,7 @@ else:
         # code still runs through every current execution audit and repair gate.
         preflight_trajectory_stability_code = (
             None
-            if selected_resume_capsule is not None
+            if step_attempt_state.selected_resume_capsule is not None
             else _deterministic_trajectory_stability_code(
                 "trajectory_stability_spec_preflight", preflight=True
             )
@@ -9501,8 +9324,8 @@ else:
             )
             if reuse_selected_step_code_opt_in or failed_contract_code_preflight_reuse:
                 preflight_resumed_code = resumed_code_candidate
-        if selected_resume_capsule is not None:
-            code = selected_resume_capsule.candidate_code
+        if step_attempt_state.selected_resume_capsule is not None:
+            code = step_attempt_state.selected_resume_capsule.candidate_code
             resumed_code_reuse_used = True
             step_record["generation_mode"] = "resumed_code_reuse"
             step_record["step_authority_capsule_reused"] = True
@@ -9689,46 +9512,49 @@ else:
                         host_authority=coder_authority,
                         provider_budget=provider_budget,
                         initial_generation_binding=(
-                            step_authority_coordinates.initial_generation_binding()
-                            if step_authority_coordinates is not None
+                            step_attempt_state.coordinates.initial_generation_binding()
+                            if step_attempt_state.coordinates is not None
                             else None
                         ),
                         persist_candidate=(
                             (
                                 lambda candidate: persist_candidate_code(
-                                    step_authority_coordinates, candidate
+                                    step_attempt_state.coordinates, candidate
                                 )
                             )
-                            if step_authority_coordinates is not None
+                            if step_attempt_state.coordinates is not None
                             else None
                         ),
                         on_initial_reserved=(
-                            _on_initial_reserved
-                            if step_authority_coordinates is not None
+                            checkpoint_authority.checkpoint_initial_reservation
+                            if step_attempt_state.coordinates is not None
                             else None
                         ),
                         on_initial_candidate=(
-                            _on_initial_candidate
-                            if step_authority_coordinates is not None
+                            (
+                                lambda ref, _transport_id: (
+                                    checkpoint_authority.seal_initial_candidate(ref)
+                                )
+                            )
+                            if step_attempt_state.coordinates is not None
                             else None
                         ),
                         reserve_compatibility_repair=(
                             _reserve_compatibility_repair
-                            if step_authority_coordinates is not None
+                            if step_attempt_state.coordinates is not None
                             else None
                         ),
                         on_repair_candidate=(
                             (
-                                lambda ref, mode, logical_id: (
-                                    _seal_completed_repair_candidate(
+                                lambda ref, _mode, logical_id: (
+                                    checkpoint_authority.seal_completed_repair_candidate(
                                         ref,
-                                        mode,
                                         logical_id,
                                         failure_status="concept_failed",
                                     )
                                 )
                             )
-                            if step_authority_coordinates is not None
+                            if step_attempt_state.coordinates is not None
                             else None
                         ),
                     )
@@ -9749,7 +9575,7 @@ else:
                 except Exception as exc:
                     _sync_provider_budget()
                     if (
-                        step_authority_coordinates is not None
+                        step_attempt_state.coordinates is not None
                         and provider_budget.initial_generation_resume_status()
                         == "failed"
                     ):
@@ -9926,8 +9752,10 @@ else:
                     )
             try:
                 audited_code_digest = sha256_of_bytes(script_text.encode("utf-8"))
-                sealed_capsule_audit = capsule_audit_findings_by_digest.get(
-                    audited_code_digest
+                sealed_capsule_audit = (
+                    step_attempt_state.capsule_audit_findings_by_digest.get(
+                        audited_code_digest
+                    )
                 )
                 if include_llm and sealed_capsule_audit is not None:
                     sealed_findings, audit_key = sealed_capsule_audit
@@ -10667,7 +10495,7 @@ else:
                     quarantined_draft_active
                     and not _python_repair_is_materially_changed(code, repaired_code)
                 ):
-                    _reject_completed_repair_candidate(
+                    checkpoint_authority.reject_completed_repair_candidate(
                         repaired_code,
                         reason="quarantined_repair_semantic_noop",
                     )
@@ -10868,7 +10696,7 @@ else:
         final_concept_gate_approved_code_digest: Optional[str] = None
         while True:
             code = reorder_forward_references(code)
-            _ensure_candidate_capsule(
+            checkpoint_authority.ensure_candidate(
                 code,
                 reason="host_code_normalization_or_deterministic_mutation",
             )
@@ -10934,8 +10762,8 @@ else:
                 if post_mutation_errors:
                     if (
                         final_llm_audit_due
-                        and step_authority_coordinates is not None
-                        and current_capsule_ref is not None
+                        and step_attempt_state.coordinates is not None
+                        and step_attempt_state.current_capsule_ref is not None
                         and not any(
                             str((finding.detail or {}).get("issue_code") or "")
                             in {
@@ -10947,7 +10775,7 @@ else:
                     ):
                         current_authority = load_verified_step_authority_capsule(
                             run_dir,
-                            ref=current_capsule_ref,
+                            ref=step_attempt_state.current_capsule_ref,
                             expected_step_id=step.step_id,
                         )
                         if (
@@ -10971,8 +10799,8 @@ else:
                                 }
                             )
                             blocked_ref = seal_concept_audit_capsule(
-                                step_authority_coordinates,
-                                parent_ref=current_capsule_ref,
+                                step_attempt_state.coordinates,
+                                parent_ref=step_attempt_state.current_capsule_ref,
                                 findings=usage_findings,
                                 audit_key=blocked_audit_key,
                                 auditor_identity_sha256=(
@@ -10986,7 +10814,7 @@ else:
                                     )
                                 ),
                             )
-                            _checkpoint_capsule(
+                            checkpoint_authority.checkpoint_capsule(
                                 blocked_ref,
                                 status="concept_audited_pending_review",
                             )
@@ -11323,12 +11151,12 @@ else:
                             "skipped_no_auditor_client"
                         )
                     if (
-                        step_authority_coordinates is not None
-                        and current_capsule_ref is not None
+                        step_attempt_state.coordinates is not None
+                        and step_attempt_state.current_capsule_ref is not None
                     ):
                         current_authority = load_verified_step_authority_capsule(
                             run_dir,
-                            ref=current_capsule_ref,
+                            ref=step_attempt_state.current_capsule_ref,
                             expected_step_id=step.step_id,
                         )
                         if (
@@ -11353,8 +11181,8 @@ else:
                                 }
                             )
                             audited_ref = seal_concept_audit_capsule(
-                                step_authority_coordinates,
-                                parent_ref=current_capsule_ref,
+                                step_attempt_state.coordinates,
+                                parent_ref=step_attempt_state.current_capsule_ref,
                                 findings=usage_findings,
                                 audit_key=audit_key,
                                 auditor_identity_sha256=(
@@ -11368,7 +11196,7 @@ else:
                                     )
                                 ),
                             )
-                            _checkpoint_capsule(
+                            checkpoint_authority.checkpoint_capsule(
                                 audited_ref,
                                 status="concept_audited_pending_review",
                             )
@@ -11484,13 +11312,14 @@ else:
                 ),
             )
             replay_execution = (
-                selected_resume_capsule
+                step_attempt_state.selected_resume_capsule
                 if (
                     custom_runner_replay_allowed
-                    and not capsule_execution_replay_consumed
-                    and selected_resume_capsule is not None
-                    and selected_resume_capsule.capsule.execution is not None
-                    and selected_resume_capsule.capsule.candidate_code.sha256
+                    and not step_attempt_state.capsule_execution_replay_consumed
+                    and step_attempt_state.selected_resume_capsule is not None
+                    and step_attempt_state.selected_resume_capsule.capsule.execution
+                    is not None
+                    and step_attempt_state.selected_resume_capsule.capsule.candidate_code.sha256
                     == candidate_code_digest
                 )
                 else None
@@ -11538,16 +11367,16 @@ else:
                             _append_terminal_step_record(per_step_records, step_record)
                             _flush_partial_manifest()
                         return step_record
-                    capsule_execution_replay_consumed = True
+                    step_attempt_state.capsule_execution_replay_consumed = True
                     step_record["capsule_execution_replayed"] = True
             if replay_execution is None:
                 if (
-                    step_authority_coordinates is not None
-                    and current_capsule_ref is not None
+                    step_attempt_state.coordinates is not None
+                    and step_attempt_state.current_capsule_ref is not None
                 ):
                     current_before_execution = load_verified_step_authority_capsule(
                         run_dir,
-                        ref=current_capsule_ref,
+                        ref=step_attempt_state.current_capsule_ref,
                         expected_step_id=step.step_id,
                     )
                     if current_before_execution.capsule.stage not in {
@@ -11555,14 +11384,14 @@ else:
                         "concept_audited",
                     }:
                         ref = seal_deterministic_candidate(
-                            step_authority_coordinates,
-                            parent_ref=current_capsule_ref,
+                            step_attempt_state.coordinates,
+                            parent_ref=step_attempt_state.current_capsule_ref,
                             code_ref=persist_candidate_code(
-                                step_authority_coordinates, code
+                                step_attempt_state.coordinates, code
                             ),
                             reason="execution_context_changed_or_retry_requested",
                         )
-                        _checkpoint_capsule(
+                        checkpoint_authority.checkpoint_capsule(
                             ref,
                             status="candidate_checkpointed",
                         )
@@ -11579,17 +11408,17 @@ else:
             def _seal_actual_execution_result() -> None:
                 if (
                     replay_execution is not None
-                    or step_authority_coordinates is None
-                    or current_capsule_ref is None
+                    or step_attempt_state.coordinates is None
+                    or step_attempt_state.current_capsule_ref is None
                 ):
                     return
                 executed_ref = seal_execution_capsule(
-                    step_authority_coordinates,
-                    parent_ref=current_capsule_ref,
+                    step_attempt_state.coordinates,
+                    parent_ref=step_attempt_state.current_capsule_ref,
                     run_result=run_result,
                     execution_context_digest=execution_context_digest,
                 )
-                _checkpoint_capsule(
+                checkpoint_authority.checkpoint_capsule(
                     executed_ref,
                     status="executed_pending_review",
                 )
@@ -13181,7 +13010,7 @@ else:
                     )
                     _sync_provider_budget()
                     if not _python_repair_is_materially_changed(code, repaired_code):
-                        _reject_completed_repair_candidate(
+                        checkpoint_authority.reject_completed_repair_candidate(
                             repaired_code,
                             reason="runtime_repair_semantic_noop",
                         )

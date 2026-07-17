@@ -484,7 +484,8 @@ def test_noop_runtime_repair_is_retried_without_reexecution(
     )
 
     record = _latest_step_record(Path(result.workdir))
-    assert llm.repair_calls == 2
+    assert record["step_llm_repair_attempts"] == 2
+    assert llm.repair_calls == 4
     assert sum("NOOP_RUNTIME_FAILURE" in code for code in executed_code) == 1
     assert record["status"] == "repair_failed"
 
@@ -1039,7 +1040,10 @@ def test_resume_seals_completed_repair_after_capsule_checkpoint_crash(
     assert first_record["status"] == "repair_transport_pending"
     assert first_record["capsule_pending_repair_attempt_id"] == 1
     assert llm.generation_calls == 1
-    assert llm.repair_calls == 1
+    # This fixture intentionally returns a complete script to the patch route,
+    # so one logical repair uses patch + authorized full-rewrite calls.
+    assert llm.repair_calls == 2
+    repair_calls_before_resume = llm.repair_calls
     assert runner_phases == ["CAPSULE_CRASH_INITIAL"]
 
     monkeypatch.setattr(
@@ -1058,7 +1062,7 @@ def test_resume_seals_completed_repair_after_capsule_checkpoint_crash(
         "control_plane_drift_revalidation"
     )
     assert llm.generation_calls == 1
-    assert llm.repair_calls == 1
+    assert llm.repair_calls == repair_calls_before_resume
     assert runner_phases == [
         "CAPSULE_CRASH_INITIAL",
         "CAPSULE_CRASH_REPAIRED",
