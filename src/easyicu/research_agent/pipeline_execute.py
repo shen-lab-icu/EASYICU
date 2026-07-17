@@ -25,6 +25,7 @@ writes inside the original method body.
 from __future__ import annotations
 
 import ast
+import copy
 import csv
 import hashlib
 import importlib
@@ -5009,7 +5010,7 @@ def _materialize_verified_step_output_view(
     evidence_by_id: Mapping[str, Any],
     run_dir: Path,
     destination: Path,
-) -> None:
+) -> Dict[str, str]:
     """Copy only listed, verified same-step evidence under source filenames."""
 
     step_id = str(record.get("step_id") or "").strip()
@@ -5053,6 +5054,83 @@ def _materialize_verified_step_output_view(
         shutil.copyfile(verified_path, target)
         target.chmod(stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
         copied[source_name] = evidence_id
+    return copied
+
+
+_REPLAY_SUMMARY_OUTPUT_CONTAINER_KEYS = frozenset(
+    {"output_files", "output_artifacts", "outputs", "figure_files"}
+)
+_REPLAY_SUMMARY_DESCRIPTOR_PATH_KEYS = frozenset({"path", "relative_path", "filename"})
+_REPLAY_SUMMARY_DIRECT_FIGURE_KEYS = frozenset({"figure_file", "figure_path"})
+
+
+def _project_verified_replay_output_paths(
+    summary: Mapping[str, Any],
+    *,
+    materialized_evidence_by_source_name: Mapping[str, str],
+) -> Dict[str, Any]:
+    """Point one in-memory replay summary at its verified temporary view.
+
+    Historical summaries may contain absolute paths into the original step
+    output directory.  Resume revalidation deliberately does not trust those
+    mutable files: it copies the checkpoint's digest-verified evidence into a
+    temporary output view instead.  Project only path values whose basename
+    is backed by exactly one materialized, same-step evidence record.  An
+    unmatched absolute path is left intact so containment gates continue to
+    fail closed.
+
+    The sealed summary bytes and checkpoint record are never modified; this
+    projection exists only for deterministic replay against the temporary
+    evidence view.
+    """
+
+    source_names = {
+        str(name)
+        for name in materialized_evidence_by_source_name
+        if str(name) and Path(str(name)).name == str(name)
+    }
+
+    def project_path(value: str) -> str:
+        raw = str(value).strip()
+        source_name = Path(raw).name
+        return source_name if source_name in source_names else value
+
+    def visit(value: Any, *, output_container: bool = False) -> Any:
+        if isinstance(value, Mapping):
+            projected: Dict[Any, Any] = {}
+            for raw_key, child in value.items():
+                key = re.sub(r"[^a-z0-9]+", "_", str(raw_key).strip().lower()).strip(
+                    "_"
+                )
+                starts_output_container = key in _REPLAY_SUMMARY_OUTPUT_CONTAINER_KEYS
+                child_is_output = output_container or starts_output_container
+                if isinstance(child, str) and (
+                    key in _REPLAY_SUMMARY_DIRECT_FIGURE_KEYS
+                    or (
+                        output_container and key in _REPLAY_SUMMARY_DESCRIPTOR_PATH_KEYS
+                    )
+                    or starts_output_container
+                ):
+                    projected[raw_key] = project_path(child)
+                elif isinstance(child, str):
+                    projected[raw_key] = child
+                else:
+                    projected[raw_key] = visit(
+                        child,
+                        output_container=child_is_output,
+                    )
+            return projected
+        if isinstance(value, list):
+            return [visit(item, output_container=output_container) for item in value]
+        if isinstance(value, tuple):
+            return tuple(
+                visit(item, output_container=output_container) for item in value
+            )
+        if isinstance(value, str) and output_container:
+            return project_path(value)
+        return copy.deepcopy(value)
+
+    return visit(summary)
 
 
 def _resume_typed_input_bindings(
@@ -5796,11 +5874,15 @@ def _selectively_revalidate_resume_successes(
                 dir=run_dir,
             ) as temporary_root:
                 replay_out_dir = Path(temporary_root) / "outputs"
-                _materialize_verified_step_output_view(
+                materialized_outputs = _materialize_verified_step_output_view(
                     record=prior_record,
                     evidence_by_id=evidence_by_id,
                     run_dir=run_dir,
                     destination=replay_out_dir,
+                )
+                replay_step_summary = _project_verified_replay_output_paths(
+                    trusted_record["step_summary"],
+                    materialized_evidence_by_source_name=materialized_outputs,
                 )
                 completed_records = [
                     record
@@ -5817,7 +5899,7 @@ def _selectively_revalidate_resume_successes(
                     run_dir=run_dir,
                     out_dir=replay_out_dir,
                     step=step,
-                    step_summary=dict(trusted_record["step_summary"]),
+                    step_summary=replay_step_summary,
                     step_record=prior_record,
                     completed_step_records=completed_records,
                     resolved_input_bindings=resolved_bindings,

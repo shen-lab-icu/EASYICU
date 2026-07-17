@@ -134,6 +134,7 @@ from .pipeline_config import PipelineConfig
 from .contracts import _ExecutePhaseResult, _PlanPhaseResult, _WritePhaseResult
 from .concept_dict_audit import (
     assert_dict_matches as assert_concept_dict_matches,
+    verify_recorded_dict_match,
     write_concept_dict_fingerprint,
 )
 from .cohort_schema import (
@@ -3781,6 +3782,13 @@ class ResearchAgentPipeline:
                         "non-empty but has no readable checkpoint."
                     )
                 if resume_state is not None:
+                    # Dictionary identity is part of the interrupted run's
+                    # provenance authority.  Check the checkpoint-selected
+                    # manifest before prepare_existing_resume_input writes a
+                    # resume receipt or the plan phase refreshes the mutable
+                    # root fingerprint file.  Historical manifests that
+                    # predate dictionary fingerprints remain compatible.
+                    verify_recorded_dict_match(resume_state, mode="strict")
                     prepared_resume = prepare_existing_resume_input(
                         run_dir=run_dir,
                         resume_state=resume_state,
