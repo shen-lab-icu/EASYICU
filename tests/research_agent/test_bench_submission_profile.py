@@ -25,6 +25,7 @@ from easyicu.research_agent.pipeline_profiles import (
     NPJ_DM_2026_05,
     NPJ_DM_2026_06,
     NPJ_DM_2026_07,
+    NPJ_DM_2026_07_16,
     get_submission_profile,
 )
 
@@ -170,8 +171,14 @@ def test_submission_profile_registry_is_versioned() -> None:
     assert old_profile is NPJ_DM_2026_05
     profile = get_submission_profile("npj_dm/20260611")
     assert profile is CANONICAL_PROFILE
+    bounds_profile = get_submission_profile("npj_dm/20260708")
+    assert bounds_profile is NPJ_DM_2026_07
+    assert (
+        bounds_profile.expected_concept_dict_sha
+        == "bc377779ce0f6b7983b2f8f527a37c1c394cc38e4a64055c9d9268b5f4d451ea"
+    )
     current_profile = get_submission_profile()
-    assert current_profile is NPJ_DM_2026_07
+    assert current_profile is NPJ_DM_2026_07_16
     assert DEFAULT_SUBMISSION_PROFILE_REF == current_profile.ref
     with pytest.raises(ValueError, match="Unknown submission profile"):
         get_submission_profile("npj_dm/main")

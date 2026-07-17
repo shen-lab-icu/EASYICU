@@ -125,11 +125,29 @@ NPJ_DM_2026_07 = SubmissionProfile(
     expected_sofa2_dict_sha="b26e36b6ef5ea947027c8f7cd514fc5174545aa658187d6bdb8ec43f2a80b6aa",
 )
 
-DEFAULT_SUBMISSION_PROFILE_REF = NPJ_DM_2026_07.ref
+NPJ_DM_2026_07_16 = SubmissionProfile(
+    name="npj_dm",
+    version="20260716",
+    locked_at="2026-07-16T10:17:17-04:00",
+    evidence_enforcement_mode="strict",
+    writer_digest_widened=True,
+    enable_reproducibility_envelope=True,
+    requires_arm="aware",
+    requires_runner="docker",
+    # Re-locked after ea9fc98 made SICdb hospital-discharge type an explicit
+    # input to the fail-closed in-hospital mortality callback. Keep the
+    # 20260708 profile immutable so archived runs retain their original
+    # dictionary authority.
+    expected_concept_dict_sha="095350e3d897ed6824673b229435941932bd8270b75667826e8b32538e5de146",
+    expected_sofa2_dict_sha="b26e36b6ef5ea947027c8f7cd514fc5174545aa658187d6bdb8ec43f2a80b6aa",
+)
+
+DEFAULT_SUBMISSION_PROFILE_REF = NPJ_DM_2026_07_16.ref
 SUBMISSION_PROFILE_REGISTRY: Dict[str, SubmissionProfile] = {
     NPJ_DM_2026_05.ref: NPJ_DM_2026_05,
     NPJ_DM_2026_06.ref: NPJ_DM_2026_06,
     NPJ_DM_2026_07.ref: NPJ_DM_2026_07,
+    NPJ_DM_2026_07_16.ref: NPJ_DM_2026_07_16,
 }
 
 
@@ -151,6 +169,7 @@ __all__ = [
     "NPJ_DM_2026_05",
     "NPJ_DM_2026_06",
     "NPJ_DM_2026_07",
+    "NPJ_DM_2026_07_16",
     "DEFAULT_SUBMISSION_PROFILE_REF",
     "SUBMISSION_PROFILE_REGISTRY",
     "get_submission_profile",
