@@ -237,9 +237,156 @@ def test_lossy_coercion_guard_is_a_typed_deterministic_minimal_repair(ra):
 
     assert names == ["lossy_numeric_coercion_guard_v1"]
     assert repaired.count("_easyicu_lossy_numeric_coercion_guard_v1") == 1
-    assert repaired.count('record["newly_invalid_or_coerced_n"]') == 1
+    assert repaired.count("record['newly_invalid_or_coerced_n']") == 1
     assert "return coerced, record" in repaired
     assert _lossy_findings(repaired, ra) == []
+
+
+@pytest.mark.parametrize(
+    ("key_source", "runtime_key"),
+    [
+        ("coercion_loss_n", "coercion_loss_n"),
+        (r"coercion\nloss_n", "coercion\nloss_n"),
+    ],
+    ids=["renamed-key", "escaped-newline-key"],
+)
+def test_lossy_guard_uses_the_unique_structural_count_key(
+    ra,
+    key_source: str,
+    runtime_key: str,
+) -> None:
+    from easyicu.research_agent.code_repair import (
+        deterministic_concept_audit_repair,
+    )
+
+    renamed = _T2_E3_QUARANTINED_SHAPE.replace(
+        "newly_invalid_or_coerced_n",
+        key_source,
+    )
+    repaired, names = deterministic_concept_audit_repair(
+        renamed,
+        [],
+        repair_reasons=[RepairReason.LOSSY_NUMERIC_COERCION],
+        repair_findings=_lossy_findings(renamed, ra),
+    )
+
+    assert names == ["lossy_numeric_coercion_guard_v1"]
+    assert f"record[{runtime_key!r}] > 0" in repaired
+    assert _lossy_findings(repaired, ra) == []
+    namespace: dict[str, object] = {"cohort": pd.DataFrame({"aki_stage_max": [0.0]})}
+    exec(repaired, namespace)
+    with pytest.raises(ValueError, match="numeric coercion invalidated"):
+        namespace["numeric_coercion_audit"](
+            pd.DataFrame({"stage": [0, "dirty"]}),
+            "stage",
+            "ordinal",
+        )
+
+
+def test_lossy_guard_refuses_two_structural_keys_in_one_record(ra) -> None:
+    from easyicu.research_agent.code_repair import (
+        deterministic_concept_audit_repair,
+    )
+
+    ambiguous = """
+import pandas as pd
+
+def numeric_coercion_audit(frame, column):
+    original = frame[column]
+    coerced = pd.to_numeric(original, errors="coerce")
+    record = {
+        "first_loss_n": int((original.notna() & coerced.isna()).sum()),
+        "second_loss_n": int((original.notna() & coerced.isna()).sum()),
+    }
+    return coerced, record
+"""
+    repaired, names = deterministic_concept_audit_repair(
+        ambiguous,
+        [],
+        repair_reasons=[RepairReason.LOSSY_NUMERIC_COERCION],
+        repair_findings=_lossy_findings(ambiguous, ra),
+    )
+
+    assert repaired == ambiguous
+    assert names == []
+
+
+def test_lossy_guard_refuses_renamed_count_key_overwrite(ra) -> None:
+    from easyicu.research_agent.code_repair import (
+        deterministic_concept_audit_repair,
+    )
+
+    renamed = _T2_E3_QUARANTINED_SHAPE.replace(
+        "newly_invalid_or_coerced_n",
+        "coercion_loss_n",
+    )
+    overwritten = renamed.replace(
+        "        ),\n    }",
+        '        ),\n        "coercion_loss_n": 0,\n    }',
+        1,
+    )
+    repaired, names = deterministic_concept_audit_repair(
+        overwritten,
+        [],
+        repair_reasons=[RepairReason.LOSSY_NUMERIC_COERCION],
+        repair_findings=_lossy_findings(overwritten, ra),
+    )
+
+    assert repaired == overwritten
+    assert names == []
+
+
+def test_lossy_guard_refuses_dynamic_count_key_overwrite(ra) -> None:
+    from easyicu.research_agent.code_repair import (
+        deterministic_concept_audit_repair,
+    )
+
+    renamed = _T2_E3_QUARANTINED_SHAPE.replace(
+        "newly_invalid_or_coerced_n",
+        "coercion_loss_n",
+    )
+    overwritten = renamed.replace(
+        "import pandas as pd",
+        'import pandas as pd\n\ndynamic_key = "coercion_loss_n"',
+        1,
+    ).replace(
+        "        ),\n    }",
+        "        ),\n        dynamic_key: 0,\n    }",
+        1,
+    )
+    repaired, names = deterministic_concept_audit_repair(
+        overwritten,
+        [],
+        repair_reasons=[RepairReason.LOSSY_NUMERIC_COERCION],
+        repair_findings=_lossy_findings(overwritten, ra),
+    )
+
+    assert repaired == overwritten
+    assert names == []
+
+
+def test_dynamic_key_overwrite_keeps_handwritten_guard_blocked(ra) -> None:
+    unsafe_guard = """
+import pandas as pd
+
+dynamic_key = "coercion_loss_n"
+
+def numeric_coercion_audit(frame, column):
+    original = frame[column]
+    coerced = pd.to_numeric(original, errors="coerce")
+    record = {
+        "coercion_loss_n": int((original.notna() & coerced.isna()).sum()),
+        dynamic_key: 0,
+    }
+    if record["coercion_loss_n"] > 0:
+        raise ValueError("numeric coercion invalidated observed values")
+    return coerced, record
+"""
+
+    assert _lossy_findings(unsafe_guard, ra), (
+        "a computed dict key can overwrite the literal loss count at runtime; "
+        "the apparent guard must not make preflight pass"
+    )
 
 
 def test_lossy_guard_does_not_route_on_human_message_text() -> None:
