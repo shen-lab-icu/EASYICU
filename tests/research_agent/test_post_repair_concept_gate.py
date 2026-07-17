@@ -6,6 +6,8 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from easyicu.research_agent.code_patch import PATCH_FORMAT
+
 _SAFE_CODE = """
 import json
 import os
@@ -81,6 +83,26 @@ _RECOVERED_REPAIR_CODE = _SAFE_CODE.replace(
     '"path": "cohort_summary.csv"}]}',
 )
 
+_UNSAFE_REPAIR_CODE_AGAIN = _UNSAFE_REPAIR_CODE.replace(
+    '"phase": "repaired"',
+    '"phase": "repaired_again"',
+)
+
+
+def _script_patch(old: str, new: str) -> str:
+    return json.dumps(
+        {
+            "format": PATCH_FORMAT,
+            "edits": [
+                {
+                    "old": old.strip(),
+                    "new": new.strip(),
+                    "expected_count": 1,
+                }
+            ],
+        }
+    )
+
 
 class _RepairGateLLM:
     name = "post-repair-concept-gate-llm"
@@ -115,7 +137,12 @@ class _RepairGateLLM:
             self.repair_calls += 1
             if self.interrupt_repair:
                 raise KeyboardInterrupt("simulated operator interruption")
-            return _UNSAFE_REPAIR_CODE
+            if self.repair_calls == 1:
+                return _script_patch(_SAFE_CODE, _UNSAFE_REPAIR_CODE)
+            return _script_patch(
+                _UNSAFE_REPAIR_CODE,
+                _UNSAFE_REPAIR_CODE_AGAIN,
+            )
         if "WRITE THE PYTHON CODE" in upper:
             self.write_calls += 1
             return _SAFE_CODE
@@ -149,8 +176,8 @@ class _SequentialRepairLLM(_RepairGateLLM):
         if "REPAIR THE PYTHON CODE" in upper:
             self.repair_calls += 1
             if self.repair_calls == 1:
-                return _SAFE_CODE
-            return _LATER_CONTRACT_ERROR_CODE
+                return _script_patch(_INITIAL_CONCEPT_ERROR_CODE, _SAFE_CODE)
+            return _script_patch(_SAFE_CODE, _LATER_CONTRACT_ERROR_CODE)
         return super().complete(
             messages,
             max_tokens=max_tokens,
@@ -168,8 +195,11 @@ class _MechanicalRecoveryLLM(_RepairGateLLM):
         if "REPAIR THE PYTHON CODE" in upper:
             self.repair_calls += 1
             if self.repair_calls == 1:
-                return _INVALID_HELPER_REPAIR_CODE
-            return _RECOVERED_REPAIR_CODE
+                return _script_patch(_SAFE_CODE, _INVALID_HELPER_REPAIR_CODE)
+            return _script_patch(
+                _INVALID_HELPER_REPAIR_CODE,
+                _RECOVERED_REPAIR_CODE,
+            )
         return super().complete(
             messages,
             max_tokens=max_tokens,
@@ -262,6 +292,16 @@ def test_contract_repair_reenters_concept_gate_before_runner(
     assert llm.repair_calls == 2
     assert any("UNSAFE_POST_REPAIR" in script for script in audited_scripts)
     assert record["status"] == "blocked_by_concept_audit"
+    assert record["step_llm_repair_attempts"] == 2
+    assert record["step_llm_repair_classes"] == [
+        "contract",
+        "post_mutation_concept",
+    ]
+    assert record["step_provider_call_categories"] == [
+        "initial_generation",
+        "contract_repair_patch",
+        "post_mutation_concept_repair_patch",
+    ]
     assert not (
         run_dir / "steps" / "01_summary" / "outputs" / "unsafe_executed.txt"
     ).exists()
@@ -308,6 +348,12 @@ def test_contract_repair_mechanical_error_uses_remaining_step_budget(
     assert record["step_llm_repair_classes"] == [
         "contract",
         "post_mutation_concept",
+    ]
+    assert record["step_provider_call_categories"] == [
+        "initial_generation",
+        "contract_repair_patch",
+        "post_mutation_concept_repair_patch",
+        "analyzer",
     ]
 
 
@@ -388,6 +434,13 @@ def test_quarantine_persists_repaired_constraints_across_later_repairs(
     assert [
         finding["message"] for finding in record["monotonic_concept_constraints"]
     ] == expected_messages
+    assert record["step_llm_repair_attempts"] == 2
+    assert record["step_llm_repair_classes"] == ["concept", "contract"]
+    assert record["step_provider_call_categories"] == [
+        "initial_generation",
+        "concept_repair_patch",
+        "contract_repair_patch",
+    ]
 
 
 def test_unfinished_step_record_restores_only_binding_concept_errors() -> None:
