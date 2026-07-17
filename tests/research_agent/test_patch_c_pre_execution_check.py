@@ -19,6 +19,7 @@ post-hoc validator in ``audits/patterns.py`` records the issue.
 
 from __future__ import annotations
 
+import json
 from typing import List
 
 import pytest
@@ -27,6 +28,7 @@ from easyicu.research_agent.agents import (
     CoderAgent,
     _MAX_PRE_EXEC_COMPATIBILITY_REPAIRS,
 )
+from easyicu.research_agent.code_patch import PATCH_FORMAT
 from easyicu.research_agent.llm import LLMMessage
 from easyicu.research_agent.method_compatibility import (
     detect_forbidden_pattern_usage,
@@ -43,7 +45,6 @@ from easyicu.research_agent.schema import (
     ResearchContext,
     VariableRole,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -85,6 +86,34 @@ from scipy.stats import spearmanr
 df = pd.read_parquet("cohort.parquet")
 rho, p = spearmanr(df["gcs"], df["hr"])
 """
+
+
+def _patch(*edits: tuple[str, str]) -> str:
+    return json.dumps(
+        {
+            "format": PATCH_FORMAT,
+            "edits": [
+                {"old": old, "new": new, "expected_count": 1} for old, new in edits
+            ],
+        }
+    )
+
+
+_CLEAN_PATCH = _patch(
+    (
+        "from sklearn.cluster import MiniBatchKMeans",
+        "from scipy.stats import spearmanr",
+    ),
+    (
+        'X = df[["gcs", "hr"]].fillna(0).values\n'
+        "clusters = MiniBatchKMeans(n_clusters=3, random_state=0).fit_predict(X)",
+        'rho, p = spearmanr(df["gcs"], df["hr"])',
+    ),
+)
+
+
+def _still_bad_patch(index: int) -> str:
+    return _patch((f"random_state={index}", f"random_state={index + 1}"))
 
 
 class _ScriptedLLM:
@@ -202,7 +231,7 @@ def test_coderagent_requests_full_token_budget():
 
 
 def test_coderagent_run_triggers_repair_on_violation_then_returns_clean_code():
-    llm = _ScriptedLLM([_BAD_SCRIPT, _CLEAN_SCRIPT])
+    llm = _ScriptedLLM([_BAD_SCRIPT, _CLEAN_PATCH])
     agent = CoderAgent(llm)
     code = agent.run(context=_ordinal_context(), step=_step())
     assert code == _CLEAN_SCRIPT.strip() or "spearman" in code
@@ -238,7 +267,7 @@ def test_coderagent_repair_rejects_non_script_output():
 
 
 def test_coderagent_repair_allows_only_contract_named_method_modules():
-    llm = _ScriptedLLM([_CLEAN_SCRIPT])
+    llm = _ScriptedLLM([_CLEAN_PATCH])
     agent = CoderAgent(llm)
 
     agent.repair(
@@ -274,24 +303,36 @@ def test_coderagent_run_gives_up_after_max_repairs_and_returns_last_attempt():
     """If the LLM keeps writing forbidden patterns, return the last attempt
     so the post-hoc validator can record it in the audit trail.
 
-    The repair budget is bounded by _MAX_PRE_EXEC_COMPATIBILITY_REPAIRS;
-    we never call the LLM more than (1 + budget) times.
+    The logical repair budget is bounded by
+    _MAX_PRE_EXEC_COMPATIBILITY_REPAIRS. This fixture returns a successful
+    minimal patch for each logical attempt, so each attempt uses one call.
     """
-    # Initial + budget repairs all return bad scripts
+    # Initial generation returns a bad script. Each exact patch changes code but
+    # deliberately leaves the forbidden method in place for the next check.
     n_attempts = 1 + _MAX_PRE_EXEC_COMPATIBILITY_REPAIRS
-    llm = _ScriptedLLM([_BAD_SCRIPT] * n_attempts)
+    llm = _ScriptedLLM(
+        [
+            _BAD_SCRIPT,
+            *(
+                _still_bad_patch(index)
+                for index in range(_MAX_PRE_EXEC_COMPATIBILITY_REPAIRS)
+            ),
+        ]
+    )
     agent = CoderAgent(llm)
     code = agent.run(context=_ordinal_context(), step=_step())
     # Returns last attempt (still bad)
     assert "MiniBatchKMeans" in code
     assert len(llm.calls) == n_attempts
-    assert agent.last_compatibility_repair_attempts == _MAX_PRE_EXEC_COMPATIBILITY_REPAIRS
+    assert (
+        agent.last_compatibility_repair_attempts == _MAX_PRE_EXEC_COMPATIBILITY_REPAIRS
+    )
     # Violations are still recorded for the final state.
     assert len(agent.last_compatibility_violations) >= 1
 
 
 def test_coderagent_compatibility_repairs_share_provider_budget():
-    llm = _ScriptedLLM([_BAD_SCRIPT, _BAD_SCRIPT, _CLEAN_SCRIPT])
+    llm = _ScriptedLLM([_BAD_SCRIPT, _still_bad_patch(0)])
     agent = CoderAgent(llm)
     budget = StepProviderCallBudget(2, step_id="01_test")
 
