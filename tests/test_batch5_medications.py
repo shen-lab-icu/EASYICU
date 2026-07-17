@@ -30,7 +30,10 @@ BATCH5 = [
     ("bicarbonate", {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
     ("dextrose50",  {"miiv", "mimic", "eicu", "hirid", "sic"},         5),
     ("ffp",         {"miiv", "mimic", "eicu", "aumc", "hirid"},        5),
-    ("platelets",   {"miiv", "mimic", "aumc", "hirid", "sic"},         5),
+    # 2026-07-17: platelets gained eICU via intakeOutput (3,668 stays). It had been
+    # marked eICU-absent because the *medication* table has no blood products -- true,
+    # but that made the column a constant FALSE rather than an honest gap.
+    ("platelets",   {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
 ]
 
 
@@ -121,10 +124,18 @@ def test_ffp_aumc_added_but_sic_still_absent(cdict):
     assert "sic" not in sources
 
 
-def test_platelets_has_no_eicu(cdict):
-    """Consistent with packed_rbc — platelet transfusions are in blood bank
-    records, not medication table."""
-    assert "eicu" not in cdict["platelets"]["sources"]
+def test_platelets_eicu_uses_intakeoutput_not_medication(cdict):
+    """2026-07-17. Still consistent with packed_rbc -- the medication table really
+    does not carry platelet transfusions. But "not in the medication table" was
+    implemented as "not in eICU at all", so platelets was a constant FALSE across
+    ~200k stays while the data sat in intakeOutput: celllabel 'Platelets' (8,571
+    rows / 3,668 stays) and 'Volume-Transfuse platelet pheresis' (1,276 / 399).
+    Explicit celllabel ids, not a regex (the intakeoutput rgx_itm minutes bug).
+    """
+    eicu = cdict["platelets"]["sources"]["eicu"]
+    assert all(src["table"] == "intakeoutput" for src in eicu)
+    assert all("regex" not in src for src in eicu), "intakeoutput must use explicit ids"
+    assert "Platelets" in {i for src in eicu for i in src["ids"]}
 
 
 def test_batch5_hirid_sources_use_boolean_callback(cdict):

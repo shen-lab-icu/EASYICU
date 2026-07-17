@@ -26,7 +26,9 @@ MEDICATIONS = [
     ("heparin",          6, {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}),
     ("mannitol",         5, {"miiv", "mimic", "eicu", "aumc", "sic"}),
     ("amiodarone",       6, {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}),
-    ("milrinone",        5, {"miiv", "mimic", "eicu", "hirid", "sic"}),
+    # 2026-07-17: milrinone redefined as the PDE3-inhibitor inotrope CLASS; AUMC stocks
+    # enoximone (7196, 2,459 adm) not milrinone, so it gains an AUMC source -> 6/6.
+    ("milrinone",        6, {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}),
     ("rocuronium",       5, {"miiv", "eicu", "aumc", "hirid", "sic"}),
 ]
 

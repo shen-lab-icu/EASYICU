@@ -26,6 +26,8 @@ from easyicu.research_agent.pipeline_profiles import (
     NPJ_DM_2026_06,
     NPJ_DM_2026_07,
     NPJ_DM_2026_07_16,
+    NPJ_DM_2026_07_17,
+    SUBMISSION_PROFILE_REGISTRY,
     get_submission_profile,
 )
 
@@ -107,6 +109,55 @@ def test_benchmark_options_keep_execution_timeouts_independent() -> None:
     assert options["standard_executor_timeout_seconds"] == 2_345.0
 
 
+def test_benchmark_options_disable_cross_run_memory_by_default() -> None:
+    # Canonical/benchmark runs must NOT inject cross-run RunMemory (StrategyCard)
+    # into the planner: every resume reuses the workdir, so prior-run cards would
+    # pollute a fresh/resumed run and undermine reproducibility. Default off; the
+    # explicit opt-in flag is the only way to turn it back on. A submission
+    # profile never re-enables it.
+    default_options = _benchmark_pipeline_options(
+        max_total_steps=None,
+        disable_replanning=False,
+        max_code_repair_attempts=None,
+    )
+    assert default_options["enable_memory"] is False
+    # ExperienceBank is explicitly pinned off (guards against profile/default
+    # drift silently re-opening cross-run experience injection).
+    assert default_options["enable_experience_bank"] is False
+
+    with_profile = _benchmark_pipeline_options(
+        max_total_steps=None,
+        disable_replanning=False,
+        max_code_repair_attempts=None,
+        submission_profile=CANONICAL_PROFILE,
+    )
+    assert with_profile["enable_memory"] is False
+    assert with_profile["enable_experience_bank"] is False
+
+    # The opt-in flag is for exploratory (profile-less) runs only.
+    opted_in = _benchmark_pipeline_options(
+        max_total_steps=None,
+        disable_replanning=False,
+        max_code_repair_attempts=None,
+        enable_cross_run_memory=True,
+    )
+    assert opted_in["enable_memory"] is True
+    assert opted_in["enable_experience_bank"] is False
+
+
+def test_cross_run_memory_optin_is_rejected_for_a_submission_profile() -> None:
+    # The profile pins the flags off; a CLI flag must never silently re-open
+    # cross-run memory on a paper-facing run. Fail closed instead.
+    with pytest.raises(SystemExit):
+        _benchmark_pipeline_options(
+            max_total_steps=None,
+            disable_replanning=False,
+            max_code_repair_attempts=None,
+            submission_profile=CANONICAL_PROFILE,
+            enable_cross_run_memory=True,
+        )
+
+
 def test_development_resume_can_raise_durable_step_repair_ceiling() -> None:
     value = _enforce_development_resume_repair_budget(
         3,
@@ -177,8 +228,14 @@ def test_submission_profile_registry_is_versioned() -> None:
         bounds_profile.expected_concept_dict_sha
         == "bc377779ce0f6b7983b2f8f527a37c1c394cc38e4a64055c9d9268b5f4d451ea"
     )
+    # Prior default (20260716) stays retrievable as an immutable archival contract.
+    assert get_submission_profile("npj_dm/20260716") is NPJ_DM_2026_07_16
     current_profile = get_submission_profile()
-    assert current_profile is NPJ_DM_2026_07_16
+    assert current_profile is NPJ_DM_2026_07_17
+    assert (
+        current_profile.expected_concept_dict_sha
+        == "b930e4384a07df16bc642a1e7df48d9fb5248c6bdac27f60fd78882ce612df54"
+    )
     assert DEFAULT_SUBMISSION_PROFILE_REF == current_profile.ref
     with pytest.raises(ValueError, match="Unknown submission profile"):
         get_submission_profile("npj_dm/main")
@@ -190,7 +247,20 @@ def test_submission_profile_as_pipeline_options_matches_canonical() -> None:
         "evidence_enforcement_mode": "strict",
         "writer_digest_widened": True,
         "enable_reproducibility_envelope": True,
+        # Cross-run agent memory is submission-defining: a paper-facing run is
+        # never steered by prior-run StrategyCards / ExperienceBank cards.
+        "enable_memory": False,
+        "enable_experience_bank": False,
     }
+
+
+def test_every_submission_profile_pins_cross_run_memory_off() -> None:
+    # Structural, not per-tool: the guarantee must hold for EVERY entrypoint
+    # that applies a profile, and for every registered (incl. archival) profile.
+    for ref, profile in SUBMISSION_PROFILE_REGISTRY.items():
+        opts = profile.as_pipeline_options()
+        assert opts["enable_memory"] is False, ref
+        assert opts["enable_experience_bank"] is False, ref
 
 
 def test_benchmark_options_merges_profile_overrides() -> None:

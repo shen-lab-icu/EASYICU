@@ -1567,6 +1567,7 @@ def _benchmark_pipeline_options(
     llm_seed: Optional[int] = None,
     writer_digest_widened: bool = False,
     strict_evidence: bool = False,
+    enable_cross_run_memory: bool = False,
     submission_profile: Optional["SubmissionProfile"] = None,
     runner_kind: Optional[str] = None,
     enable_retrospective_trajectory_stability_design: bool = False,
@@ -1614,6 +1615,30 @@ def _benchmark_pipeline_options(
         options["llm_seed"] = int(llm_seed)
     if enable_retrospective_trajectory_stability_design:
         options["enable_retrospective_trajectory_stability_design"] = True
+    # Cross-run RunMemory (StrategyCard) injection is OFF by default for
+    # benchmark/canonical runs. Every resume reuses the same workdir, so a prior
+    # run's distilled StrategyCards would be re-injected into the planner on the
+    # next run — unvalidated procedural memory that undermines reproducibility of
+    # a fresh/resumed canonical run. Disabling it also stops the run from writing
+    # new cards. Within-run authority (StepAuthorityCapsule / checkpoints /
+    # evidence store) does not use RunMemory and is unaffected. ExperienceBank is
+    # already opt-in (engine default False; the harness never enables it). No
+    # submission profile sets ``enable_memory``, so this is deterministic.
+    # ``--enable-cross-run-memory`` opts back in for non-canonical runs ONLY.
+    # A submission profile already pins both flags off as submission-defining
+    # options (see SubmissionProfile.as_pipeline_options), and the profile must
+    # win: fail closed rather than let a flag silently re-open cross-run memory
+    # on a paper-facing run.
+    if submission_profile is not None and enable_cross_run_memory:
+        raise SystemExit(
+            "--enable-cross-run-memory is incompatible with a submission "
+            "profile: a paper-facing canonical run must not inject cross-run "
+            "StrategyCards into the planner. Drop --submission-profile for an "
+            "exploratory run instead."
+        )
+    # ``setdefault`` so a profile's pinned values (applied above) always win.
+    options.setdefault("enable_memory", bool(enable_cross_run_memory))
+    options.setdefault("enable_experience_bank", False)
     return options
 
 
@@ -2017,6 +2042,19 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--enable-cross-run-memory",
+        action="store_true",
+        help=(
+            "Opt back into cross-run RunMemory (StrategyCard) injection. OFF by "
+            "default for benchmark/canonical runs: distilling and re-injecting "
+            "StrategyCards from a prior run of the same workdir (every resume "
+            "reuses the workdir) feeds unvalidated procedural cards into the "
+            "planner and hurts reproducibility. Within-run authority "
+            "(StepAuthorityCapsule / checkpoints / evidence) is unaffected. Use "
+            "only for non-canonical exploratory runs."
+        ),
+    )
+    parser.add_argument(
         "--max-code-repair-attempts",
         type=int,
         default=None,
@@ -2234,6 +2272,7 @@ def main() -> int:
         llm_seed=getattr(args, "llm_seed", None),
         writer_digest_widened=bool(args.writer_digest_widened),
         strict_evidence=bool(args.strict_evidence),
+        enable_cross_run_memory=bool(getattr(args, "enable_cross_run_memory", False)),
         submission_profile=submission_profile,
         runner_kind=runner_kind,
         enable_retrospective_trajectory_stability_design=(

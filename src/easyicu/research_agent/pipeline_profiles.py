@@ -48,6 +48,17 @@ class SubmissionProfile:
             "evidence_enforcement_mode": self.evidence_enforcement_mode,
             "writer_digest_widened": self.writer_digest_widened,
             "enable_reproducibility_envelope": self.enable_reproducibility_envelope,
+            # Cross-run agent memory is submission-DEFINING, not a run-shape knob.
+            # A paper-facing run must not be steered by StrategyCards distilled
+            # from a prior run of the same workdir (every resume reuses it) nor by
+            # ExperienceBank cards: that is unvalidated procedural memory and it
+            # makes the run irreproducible. Pinning it on the PROFILE rather than
+            # on one CLI is what makes the guarantee hold for every entrypoint
+            # that applies a profile — a per-tool default is silently bypassed by
+            # the next entrypoint. Within-run authority (StepAuthorityCapsule /
+            # checkpoints / EvidenceStore) does not use RunMemory and is unaffected.
+            "enable_memory": False,
+            "enable_experience_bank": False,
         }
 
     def pipeline_options(self) -> Dict[str, Any]:
@@ -142,12 +153,32 @@ NPJ_DM_2026_07_16 = SubmissionProfile(
     expected_sofa2_dict_sha="b26e36b6ef5ea947027c8f7cd514fc5174545aa658187d6bdb8ec43f2a80b6aa",
 )
 
-DEFAULT_SUBMISSION_PROFILE_REF = NPJ_DM_2026_07_16.ref
+NPJ_DM_2026_07_17 = SubmissionProfile(
+    name="npj_dm",
+    version="20260717",
+    locked_at="2026-07-17T00:00:00Z",
+    evidence_enforcement_mode="strict",
+    writer_digest_widened=True,
+    enable_reproducibility_envelope=True,
+    requires_arm="aware",
+    requires_runner="docker",
+    # Re-locked 2026-07-17 (定档) after the own-concept audit + new ventilator
+    # concepts entered the frozen dictionary: 38 own-concept aggregate-arity/unit/
+    # route fixes and 43 within-concept recall recoveries, plus vent_mode,
+    # vent_breath_seq, and driving_pres_controlled (per-mode driving pressure).
+    # sofa2-dict.json tracks the accompanying ventilation/SOFA-2 coverage update.
+    # See concept-dict.LOCK.json. Older profiles stay immutable replay contracts.
+    expected_concept_dict_sha="b930e4384a07df16bc642a1e7df48d9fb5248c6bdac27f60fd78882ce612df54",
+    expected_sofa2_dict_sha="65075a691ef103112d9df0df452601299c37603c1c075742fe211bb75d2f92cc",
+)
+
+DEFAULT_SUBMISSION_PROFILE_REF = NPJ_DM_2026_07_17.ref
 SUBMISSION_PROFILE_REGISTRY: Dict[str, SubmissionProfile] = {
     NPJ_DM_2026_05.ref: NPJ_DM_2026_05,
     NPJ_DM_2026_06.ref: NPJ_DM_2026_06,
     NPJ_DM_2026_07.ref: NPJ_DM_2026_07,
     NPJ_DM_2026_07_16.ref: NPJ_DM_2026_07_16,
+    NPJ_DM_2026_07_17.ref: NPJ_DM_2026_07_17,
 }
 
 
@@ -170,6 +201,7 @@ __all__ = [
     "NPJ_DM_2026_06",
     "NPJ_DM_2026_07",
     "NPJ_DM_2026_07_16",
+    "NPJ_DM_2026_07_17",
     "DEFAULT_SUBMISSION_PROFILE_REF",
     "SUBMISSION_PROFILE_REGISTRY",
     "get_submission_profile",

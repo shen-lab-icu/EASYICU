@@ -1,0 +1,45 @@
+{
+  "finalized": true,
+  "finalized_note": "定稿 2026-07-17 — dictionary frozen for the full-6-database extraction full6_20260717. No dictionary edits after this without a new lock + re-extraction.",
+  "locked_for_extraction_run": "full6_20260717",
+  "concept_dict_sha256": "b930e4384a07df16bc642a1e7df48d9fb5248c6bdac27f60fd78882ce612df54",
+  "sofa2_dict_sha256": "65075a691ef103112d9df0df452601299c37603c1c075742fe211bb75d2f92cc",
+  "total_concepts": 251,
+  "own_concepts_not_in_ricu": 130,
+  "new_this_round": [
+    "vent_mode",
+    "vent_breath_seq",
+    "driving_pres_controlled"
+  ],
+  "extraction_contract": {
+    "output_layout": "one wide parquet per module ({db}/{module}.parquet): id + time + one column per concept — NOT per-concept files. Matches the web export path (webserver/dataio.py).",
+    "load_call": "load_concepts(module_concepts, merge=True) once per module inside keep_cache; do NOT hand-write a per-concept merge (time-column mismatch -> Cartesian blow-up -> OOM).",
+    "batching": "one-shot per module for all databases; only eICU (~200k) may split, capped at MAX_EXTRACT_CHUNKS=3. No manual batch_size tuning.",
+    "spill": "DuckDB temp + batch spill default to <output_dir>/.easyicu_spill (the output drive), not system /tmp."
+  },
+  "merge_oom_safety": {
+    "verified": true,
+    "method": "load_concepts(merge=True) on the trickiest mixed-time-axis modules (respiratory: vent_start/vent_end intervals + charttime points; medications rate concepts; circulatory) at 150 patients per DB.",
+    "result_rows_per_patient": {
+      "miiv_respiratory": 91, "eicu_respiratory": 67, "hirid_respiratory": 59, "mimic_respiratory": 153,
+      "aumc_respiratory": 104, "aumc_medications": 71, "aumc_circulatory": 99,
+      "sic_respiratory": 71, "sic_medications": 19, "sic_circulatory": 68
+    },
+    "conclusion": "19-153 rows/patient = normal ICU time-series density, no Cartesian explosion on any of the 6 databases. Cartesian blow-up is a per-patient property, so this generalises to full cohort scale. merge=True normalises the time axis before joining; the previous OOM came from a hand-written merge on inconsistent time columns (now removed)."
+  },
+  "gates_passed": {
+    "aggregate_arity_violations": 0,
+    "json_roundtrip": true,
+    "concept_catalog_tests": "104 passed (test_concept_catalog_consistency + invariants + full_dict_audit + resources + webserver + extended)",
+    "extract_chunk_cap_tests": "39 passed (tests/test_extract_chunk_cap.py — never > 3 chunks any db/module)",
+    "module_extraction_tests": "test_concept_bounds_enforcement updated to the one-wide-file-per-module contract",
+    "full_pipeline_smoke": "17 modules -> wide parquets, 0 manifest errors; build_flat_tables builds study2 (41 cols, 0 skipped) + study3 (50 cols); fio2/pafi/urine/gcs/cvp/lact all present"
+  },
+  "audit_coverage": {
+    "own103_vs_official_code": "38 fixes (aggregate arity, plr dimension, 3 units, eICU blood-product wrong-table, HiRID route errors)",
+    "recall_sweep": "43 fixes (near-broken SIC mean_airway_pres/calcium_iv/bicarbonate/nitroglycerin; AUMC packed_rbc/ft4/retic; class-vs-molecule enoxaparin/milrinone/warfarin; eICU wrong-table nicardipine/diltiazem/pantoprazole)",
+    "cross_db_distribution_scan": "235 concepts scanned; all our-own >=3x outliers resolved or explained (ferritin/myoglobin = true assay-selection difference, ng/mL==ug/L identity)",
+    "vent_mode": "new harmonised mode concepts (MIMIC-IV/III/AUMC/HiRID); driving_pres_controlled = mode-conditioned driving pressure",
+    "final_data_distribution_check": "PENDING — to be run on the completed full6_20260717 wide extraction (cross-db consistency + completeness report)."
+  }
+}

@@ -93,6 +93,24 @@ def _apply_callback(
     if expr == "identity_callback":
         return frame
 
+    if expr in ("vent_mode_control", "vent_mode_seq"):
+        # Harmonise a native ventilator-mode label/code onto one axis (control | seq)
+        # via the per-DB map in data/vent_mode_map.json. See apply_vent_mode_frame.
+        from .callbacks import apply_vent_mode_frame
+        axis = "control" if expr == "vent_mode_control" else "seq"
+        out_column = "vent_mode" if expr == "vent_mode_control" else "vent_breath_seq"
+        val_col = concept_name if concept_name in frame.columns else (source.value_var or "value")
+        db_name = None
+        try:
+            db_name = data_source.config.name
+        except Exception:
+            pass
+        result = apply_vent_mode_frame(frame, val_col, db_name, axis, out_column)
+        # rename the harmonised column to concept_name if the loader expects it there
+        if out_column in result.columns and concept_name != out_column:
+            result = result.rename(columns={out_column: concept_name})
+        return result
+
     if expr == "aumc_death":
         # In-hospital mortality, matching ricu's aumc_death:
         #   x[, val_var := is_true(dateofdeath - dischargedat < hours(72L))]
