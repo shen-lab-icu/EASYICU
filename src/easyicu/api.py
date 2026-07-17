@@ -3776,36 +3776,33 @@ def _run_module_extraction(
     warnings = []
     kwargs = dict(
         data_path=data_path, database=database,
-        concepts=concepts, verbose=False, merge=False,
+        concepts=concepts, verbose=False, merge=True,
         concept_workers=1, use_sofa2=use_sofa2,
     )
     if patient_ids_filter:
         kwargs['patient_ids'] = patient_ids_filter
 
-    # 🚀 内存兜底（16GB 机器可用性）：一次性(one-shot)加载对"宽模块×大队列"会
-    # 超内存并**静默返回空概念**——放不下的概念被下方 `len(df) > 0` 过滤悄悄丢弃，
-    # 既不报错也不触发 MemoryError 回退。实测 mimic `medications` 49 概念 × 61,532
-    # 患者：一次性只存了 6 个概念（估算峰值 11.5GB > 可用），而 3k 患者却能存 45 个
-    # ——"患者越多概念越少"正是静默截断。这里用 EasyICU 自带的 auto_batch_size
-    # 内存估算兜底：调用方要求一次性(batch_size 为 None 或覆盖全队列)且估算放不下时，
-    # 自动降级为有界分批(MIN_BATCH=10000，最多几批，re-scan 开销可控)。窄模块 /
-    # 小队列 / 大内存机器估算能放下 → auto_batch_size 返回 None → 保持一次性(最快)。
-    # 机器自适应：64GB 上预算大→几乎不分批；16GB 上只对真正放不下的宽模块分批。
+    # ── 一个模块一次 load、合并成一个宽表、写一个 {module}.parquet（不重复 io）──
+    # load_concepts 一次拿到该模块**所有概念**（chartevents/labevents 等共享源表只扫
+    # 一次；内部若按患者分批也由它自己 concat，对外仍是一次调用、一次扫描）。
+    #
+    # 分批策略：**除超大队列外一律一次性**。只有患者数 > ONESHOT_MAX_PATIENTS（15万，
+    # 实际只有 eICU ~20万命中）才让 auto_batch_size 以 ≤ MAX_EXTRACT_CHUNKS（默认 3）份
+    # 启用。实测最重非 eICU 模块 miiv medications（49 概念 × 9.4万患者）merge=True 一次性
+    # 峰值仅 5.44GB，远低于预算；旧内存估算器约 3-5× 高估会把这类模块误判成要分批（见
+    # web 端 dataio.py:1657 的同款观察），故对 ≤15万 的库直接跳过估算、强制一次性。
+    ONESHOT_MAX_PATIENTS = 150_000
     _n_ids = 0
     if patient_ids_filter:
         try:
             _n_ids = len(next(iter(patient_ids_filter.values())))
         except Exception:
             _n_ids = 0
-    if _n_ids and (not batch_size or batch_size >= _n_ids):
+    if _n_ids > ONESHOT_MAX_PATIENTS and (not batch_size or batch_size >= _n_ids):
         try:
             from easyicu.runtime.memory_manager import auto_batch_size as _auto_bs
-            # 稳定预算：默认用**物理总内存**判定，而不是波动的"当前可用"——否则后台
-            # 程序临时吃内存会把本来能一次性的 vitals 等误判成分批(过度分批变慢)。
-            # auto_batch_size 内部 budget = avail*0.6，故传 total_ram 使每模块一次性
-            # 上限≈0.6*total(16GB→~9.8GB)，实测只有 49-概念宽模块(medications/chemistry)
-            # 在大队列时超过→确定性分批必得全量概念；其余 17 个模块保持一次性(最快)。
-            # EASYICU_ONESHOT_BUDGET_MB 可直接指定该上限(MB)。
+            # 稳定预算：用物理总内存判定（而非波动的当前可用），避免后台程序临时吃内存
+            # 把本可一次性的模块误判成分批。EASYICU_ONESHOT_BUDGET_MB 可覆盖此上限(MB)。
             _stable_avail_mb = None
             _env_budget = os.environ.get('EASYICU_ONESHOT_BUDGET_MB')
             if _env_budget:
@@ -3829,11 +3826,8 @@ def _run_module_extraction(
     try:
         result = _lc(**kwargs)
     except MemoryError:
-        # 一次性加载内存不足(仅可能在极小内存机器上的最大队列发生)：
-        # 降级为有界 in-process 分批。会每批重读源表(较慢)，但保证不 OOM。
         traceback.print_exc()
         if loader is not None:
-            # 先释放组内共享缓存，给分批重试腾出内存
             try:
                 loader.concept_resolver.clear_table_cache()
             except Exception:
@@ -3843,7 +3837,11 @@ def _run_module_extraction(
             _n = len(next(iter(patient_ids_filter.values()))) if patient_ids_filter else 0
         except Exception:
             _n = 0
-        fallback_bs = max(10000, _n // 8) if _n else 10000
+        from easyicu.runtime.memory_manager import (
+            MAX_EXTRACT_CHUNKS as _MAX_CH,
+            _ceil_div as _cdiv,
+        )
+        fallback_bs = max(10000, _cdiv(_n, _MAX_CH)) if _n else 10000
         errors.append(
             f"{module_name}: one-shot OOM, retrying batched (batch_size={fallback_bs})"
         )
@@ -3859,96 +3857,38 @@ def _run_module_extraction(
         errors.append(f"load_concepts({module_name}): {e}")
         result = {}
 
-    # 将结果写入 parquet 文件
-    if isinstance(result, dict):
-        for c, df in result.items():
-            try:
-                if hasattr(df, "data") and isinstance(df.data, pd.DataFrame):
-                    df = df.data
-                elif hasattr(df, "to_pandas"):
-                    df = df.to_pandas()
-                # 🔧 Post-aggregation concept-bounds enforcement (the missing
-                # ricu-style filter_bounds): drop physiologically-impossible values
-                # that survive the DuckDB aggregation path. See _enforce_concept_bounds.
-                _n_oob = 0
-                _rows_before = len(df) if isinstance(df, pd.DataFrame) else None
-                _has_bounds = c in _load_concept_bounds_map()
-                _bounds_skipped = False
-                _loader_bounds = {}
-                if isinstance(df, pd.DataFrame):
-                    candidate = df.attrs.get("easyicu_bounds_loader", {})
-                    if isinstance(candidate, dict):
-                        _loader_bounds = {
-                            key: candidate[key]
-                            for key in _BOUNDS_METADATA_KEYS
-                            if key in candidate
-                        }
-                    df, _n_oob = _enforce_concept_bounds(df, c)
-                if _n_oob == -1:
-                    # unit-safety guard tripped: bounds NOT enforced for this concept
-                    # (median out of range → wrong unit for this DB). Surface loudly.
-                    warnings.append(
-                        f"{c}: BOUNDS SKIPPED (unit-suspect: median outside declared range)"
-                    )
-                    _bounds_skipped = True
-                    _n_oob = 0
-                if isinstance(df, pd.DataFrame) and len(df) > 0:
-                    path = os.path.join(output_dir, f"{c}.parquet")
-                    df.to_parquet(path, index=False, engine="pyarrow")
-                    if not _has_bounds:
-                        _bounds_status = "not_declared"
-                    elif _bounds_skipped:
-                        _bounds_status = "skipped_unit_suspect"
-                    else:
-                        _bounds_status = "enforced"
-                    _raw_non_null = _loader_bounds.get(
-                        "bounds_raw_transformed_non_null"
-                    )
-                    _bounded_non_null = _loader_bounds.get(
-                        "bounds_bounded_transformed_non_null"
-                    )
-                    if _bounds_skipped:
-                        _bounds_dropped = None
-                        _bounds_count_status = "skipped_unit_suspect"
-                    elif _raw_non_null is not None and _bounded_non_null is not None:
-                        _bounds_dropped = max(
-                            0, int(_raw_non_null) - int(_bounded_non_null)
-                        )
-                        _bounds_count_status = "pre_aggregation_exact"
-                    else:
-                        _bounds_dropped = None if _has_bounds else 0
-                        _bounds_count_status = (
-                            "pre_aggregation_count_unavailable"
-                            if _has_bounds
-                            else "not_applicable"
-                        )
-                    saved[c] = {
-                        "path": path,
-                        "rows": len(df),
-                        "rows_before": _rows_before,
-                        # Fast SQL paths enforce bounds before aggregation but
-                        # do not materialise rejected raw rows. Never report
-                        # the post-aggregation guard count as the total.
-                        "bounds_dropped": _bounds_dropped,
-                        "bounds_dropped_post_aggregation": _n_oob,
-                        "bounds_count_status": _bounds_count_status,
-                        "bounds_skipped": _bounds_skipped,
-                        "bounds_status": _bounds_status,
-                        **_loader_bounds,
-                    }
-            except Exception as e:
-                errors.append(f"{c}: {e}")
-    elif isinstance(result, pd.DataFrame) and len(result) > 0:
-        # NOTE: merge=True (wide) path — not used by the per-concept export.
-        # Row-drop bounds enforcement is unsafe on a wide frame (one row spans many
-        # concepts); a wide clamp would need per-cell NaN. The export uses merge=False
-        # (dict branch above), which IS bounds-enforced. Left unchanged intentionally.
-        for c in concepts:
-            if c in result.columns:
-                path = os.path.join(output_dir, f"{c}.parquet")
-                result.to_parquet(path, index=False, engine="pyarrow")
-                saved[c] = {"path": path, "rows": len(result)}
-                break
+    # 写出：load_concepts(merge=True) 直接返回该模块宽表（id + time + 每概念一列），
+    # 与 web 端(dataio.py)完全一致的成熟路径。**不再自造合并**——避免 endtime 列冲突、
+    # 递归概念(oxygenation_index/adv_resp/ecmo…)一次性 load 爆内存、以及把含 numpy 的
+    # 逐概念元数据塞进 manifest 导致 json.dump 崩溃等"手写合并"问题。生理边界在
+    # load_concepts 内部按 filter_bounds 预聚合强制（与 web 端同一套）。
+    if isinstance(result, pd.DataFrame) and len(result) > 0:
+        try:
+            _cols = [c for c in concepts if c in result.columns]
+            # parquet 写盘前净化 object 混合列：指示类概念(如 mech_circ_support)可能返回
+            # bool/float 混合 → object dtype，pyarrow 写 parquet 会报类型冲突。仅对"所有
+            # 非空值都能无损转成数值"的 object 列转数值(bool→0/1)；纯字符串列(如 sex/
+            # vent_mode)保持不动（str+None pyarrow 可正常写）。
+            for _oc in result.columns:
+                if result[_oc].dtype == object:
+                    _num = pd.to_numeric(result[_oc], errors="coerce")
+                    if bool((_num.notna() | result[_oc].isna()).all()):
+                        result[_oc] = _num
+            path = os.path.join(output_dir, f"{module_name}.parquet")
+            result.to_parquet(path, index=False, engine="pyarrow")
+            saved[module_name] = {
+                "path": path,
+                "rows": len(result),
+                "concepts": _cols,
+            }
+        except Exception as e:
+            traceback.print_exc()
+            errors.append(f"write({module_name}): {e}")
+    elif isinstance(result, dict) and result:
+        # merge=True 应始终返回 DataFrame；若意外返回 dict，大声记错而不静默丢数据。
+        errors.append(
+            f"{module_name}: merge=True returned a dict ({len(result)} concepts) unexpectedly; not written"
+        )
 
     elapsed = time.time() - t0
     manifest = {
@@ -4315,6 +4255,28 @@ def extract_database(
             data_path = get_default_data_path()
     data_path = str(data_path)
 
+    # 磁盘溢写 / 批处理中间文件的默认落点：**输出目录旁的 .easyicu_spill/**，而不是
+    # 系统临时目录（常在快满的系统盘上）。输出目录通常在用户为数据特意选的大盘上，
+    # 这样零配置即安全，调用方无需每次手设 TMPDIR / EASYICU_DUCKDB_TEMP_DIR。放在
+    # 最前，确保后续所有 DuckDB 连接与 fork 出的 worker 子进程都继承此设置。
+    # opt-out：显式把 EASYICU_DUCKDB_TEMP_DIR 指向别处（非 .easyicu_spill）则完全尊重。
+    # 多库循环：每库各自重指向本库输出旁，故用 basename 判定"是否用户自定义"。
+    if output_dir is not None:
+        _cur_spill = os.environ.get('EASYICU_DUCKDB_TEMP_DIR')
+        _user_spill = (
+            _cur_spill is not None
+            and os.path.basename(os.path.normpath(_cur_spill)) != '.easyicu_spill'
+        )
+        if not _user_spill:
+            _spill_root = os.path.join(os.path.abspath(str(output_dir)), '.easyicu_spill')
+            try:
+                os.makedirs(_spill_root, exist_ok=True)
+                os.environ['EASYICU_DUCKDB_TEMP_DIR'] = _spill_root
+                os.environ['TMPDIR'] = _spill_root
+                tempfile.tempdir = _spill_root
+            except Exception:
+                pass
+
     # 获取患者 ID
     if patient_ids is None:
         all_ids, id_col = get_all_patient_ids(data_path, database, max_patients)
@@ -4421,32 +4383,46 @@ def extract_database(
             "bounds": mod_result["bounds"],
             "elapsed_sec": mod_result["elapsed"],
         }
-        for c_name, info in manifest.get("saved", {}).items():
-            pq_path = info["path"]
-            if os.path.exists(pq_path):
-                rows = info.get("rows", 0)
-                meta = _bounds_metadata_from_manifest_info(info)
-                if meta:
-                    mod_result["bounds"][c_name] = meta
-                if output_dir is not None:
-                    # 流式写盘：move 文件到输出目录，不读回内存
-                    mod_out = os.path.join(output_dir, mod_name)
-                    os.makedirs(mod_out, exist_ok=True)
-                    dst = os.path.join(mod_out, f"{c_name}.parquet")
-                    shutil.move(pq_path, dst)
-                    concept_info = _concept_result_info(dst, info)
-                    concept_info["rows"] = rows
-                    mod_result["concepts"][c_name] = concept_info
-                    output_manifest["saved"][c_name] = concept_info
-                else:
-                    # 无输出目录：读回 DataFrame 到内存
-                    df = pd.read_parquet(pq_path)
-                    _attach_bounds_metadata(df, info)
-                    mod_result["concepts"][c_name] = df
+        # 每个模块一个宽表 parquet：manifest["saved"] 只有一条（键=模块名），
+        # info 里带 concepts（列名清单）+ concept_meta（逐概念 rows/bounds provenance）。
+        for _saved_key, info in manifest.get("saved", {}).items():
+            pq_path = info.get("path")
+            if not pq_path or not os.path.exists(pq_path):
+                continue
+            module_rows = info.get("rows", 0)
+            concept_meta = info.get("concept_meta", {}) or {}
+            concept_names = info.get("concepts") or list(concept_meta.keys())
+            # 逐概念 bounds 元数据（provenance）
+            for cn, cmeta in concept_meta.items():
+                bmeta = _bounds_metadata_from_manifest_info(cmeta)
+                if bmeta:
+                    mod_result["bounds"][cn] = bmeta
+            if output_dir is not None:
+                # flat：一个模块一个文件 output_dir/{module}.parquet（不重复 io）
+                os.makedirs(output_dir, exist_ok=True)
+                dst = os.path.join(output_dir, f"{mod_name}.parquet")
+                shutil.move(pq_path, dst)
+                module_info = {
+                    "path": dst,
+                    "rows": module_rows,
+                    "concepts": concept_names,
+                    "merge_keys": info.get("merge_keys", []),
+                    "concept_meta": concept_meta,
+                }
+                output_manifest["saved"][mod_name] = module_info
+                # 逐概念一条（path 都指向该模块宽表），供 summary CSV 保留每概念行数。
+                for cn in concept_names:
+                    cmeta = concept_meta.get(cn, {})
+                    concept_info = {"path": dst, "rows": cmeta.get("rows", module_rows)}
+                    for k, v in cmeta.items():
+                        if k != "rows":
+                            concept_info[k] = v
+                    mod_result["concepts"][cn] = concept_info
+            else:
+                # 无输出目录：读回宽表 DataFrame 到内存（键=模块名）
+                mod_result["concepts"][mod_name] = pd.read_parquet(pq_path)
         if output_dir is not None:
-            mod_out = os.path.join(output_dir, mod_name)
-            os.makedirs(mod_out, exist_ok=True)
-            with open(os.path.join(mod_out, "_manifest.json"), "w") as f:
+            with open(os.path.join(output_dir, f"{mod_name}.manifest.json"), "w") as f:
                 json.dump(output_manifest, f)
         return mod_result
 
