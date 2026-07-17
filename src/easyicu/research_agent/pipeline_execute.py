@@ -300,6 +300,7 @@ from .step_attempt_authority import (
     StepAuthorityOperations,
 )
 from .step_execution import LockedStepExecutionRequest, StepExecutor
+from .step_worker_state import StepWorkerProgress
 from .summary_repair import salvage_step_summary
 from .viability import (
     CohortViability,
@@ -7303,34 +7304,6 @@ def run_execute_phase(
             return None
         return repair
 
-    def _script_generation_mode(
-        *,
-        repair_attempts: int,
-        fallback_used: bool,
-        standard_executor_used: bool = False,
-        runner_repair_name: Optional[str] = None,
-        resumed_code_reuse: bool = False,
-        concept_repair_used: bool = False,
-        llm_repair_used: bool = False,
-    ) -> str:
-        if standard_executor_used:
-            return "deterministic_standard"
-        # Report the code that actually executed, not merely where its first
-        # draft came from. A resumed script that required a fresh LLM repair is
-        # repaired code; labelling it as pure reuse hides the model mutation and
-        # can incorrectly trigger reuse-only audit shortcuts.
-        if llm_repair_used:
-            return "repaired"
-        if fallback_used:
-            return "fallback"
-        if runner_repair_name:
-            return "runner_repaired"
-        if repair_attempts > 0 or concept_repair_used:
-            return "repaired"
-        if resumed_code_reuse:
-            return "resumed_code_reuse"
-        return "llm"
-
     def _propagate_findings_to_evidence(
         evidence_ids: Sequence[str],
         findings_for_step: Sequence[ValidationFinding],
@@ -7776,8 +7749,7 @@ def run_execute_phase(
                 f"{locked_cohort_payload}."
             )
             coder_authority = coder_authority.append(role_note)
-        resumed_code_reuse_used = False
-        critic_resume_repair_used = False
+        worker_progress = StepWorkerProgress()
         resumed_quarantined_draft_used = False
         quarantined_draft_active = False
         quarantined_repair_materially_changed = False
@@ -7902,8 +7874,8 @@ def run_execute_phase(
                 finding.model_dump(mode="json")
                 for finding in monotonic_concept_constraints
             ]
-        preexecution_runner_repair_name: Optional[str] = None
-        runner_repair_name: Optional[str] = None
+        worker_progress.preexecution_runner_repair_name = None
+        worker_progress.runner_repair_name = None
         sealed_renderer_repair_id: Optional[str] = None
         sealed_renderer_authorized_code_sha256: Optional[str] = None
         sealed_renderer_implementation_sha256: Optional[str] = None
@@ -8410,8 +8382,8 @@ def run_execute_phase(
         )
         step_record["semantics_family"] = local_runtime_state.analysis_family
 
-        deterministic_fallback_used = False
-        deterministic_standard_executor_used = False
+        worker_progress.deterministic_fallback_used = False
+        worker_progress.deterministic_standard_executor_used = False
 
         def _remember_concept_constraints(
             candidates: Sequence[ValidationFinding],
@@ -8511,8 +8483,7 @@ def run_execute_phase(
             *,
             error: Optional[BaseException] = None,
         ) -> str:
-            nonlocal resumed_code_reuse_used
-            resumed_code_reuse_used = True
+            worker_progress.resumed_code_reuse_used = True
             prior_code, resumed_record = resumed_code
             step_record["generation_mode"] = "resumed_code_reuse"
             step_record["resumed_code_evidence_id"] = resumed_record.get("evidence_id")
@@ -8647,7 +8618,6 @@ def run_execute_phase(
             return step_repair_budget.llm_repair_attempts
 
         def _resume_summary_repair_code() -> Optional[str]:
-            nonlocal preexecution_runner_repair_name
             if (
                 requested_resume_from_step_id != step.step_id
                 or not pipeline._enable_deterministic_runner_repair
@@ -8689,7 +8659,7 @@ def run_execute_phase(
                 return None
             repair_name, repaired_code = repair
             _use_resumed_code(resumed_code)
-            preexecution_runner_repair_name = repair_name
+            worker_progress.preexecution_runner_repair_name = repair_name
             step_record["runner_repair"] = repair_name
             step_record["resume_summary_repair"] = repair_name
             _record_repair(
@@ -8744,7 +8714,6 @@ def run_execute_phase(
         def _resume_critic_repair_code() -> Optional[str]:
             """Repair the selected prior script from structured Critic feedback."""
 
-            nonlocal critic_resume_repair_used
             report = resume_controller.prior_negative_critic_report_for_step(
                 step.step_id
             )
@@ -8825,7 +8794,7 @@ def run_execute_phase(
                         )
                     )
                 return None
-            critic_resume_repair_used = True
+            worker_progress.critic_resume_repair_used = True
             step_record["critic_resume_repair"] = True
             step_record["critic_resume_repair_status"] = report.get("status")
             return repaired
@@ -8844,7 +8813,6 @@ def run_execute_phase(
         def _deterministic_publication_figure_code(
             reason: str,
         ) -> Optional[str]:
-            nonlocal deterministic_fallback_used, preexecution_runner_repair_name
             nonlocal sealed_renderer_repair_id
             nonlocal sealed_renderer_implementation_sha256
             nonlocal sealed_renderer_parent_digests
@@ -8853,7 +8821,7 @@ def run_execute_phase(
                 run_dir, step.step_id
             )
             if (
-                deterministic_fallback_used
+                worker_progress.deterministic_fallback_used
                 or not pipeline._enable_deterministic_runner_repair
                 or not _step_has_figure_only_output_contract(step)
                 or exact_repair_id is None
@@ -9058,8 +9026,8 @@ else:
             )
             if authorized is None:
                 return None
-            deterministic_fallback_used = True
-            preexecution_runner_repair_name = repair_id
+            worker_progress.deterministic_fallback_used = True
+            worker_progress.preexecution_runner_repair_name = repair_id
             if sealed_renderer:
                 sealed_renderer_repair_id = repair_id
                 sealed_renderer_implementation_sha256 = sealed_implementation_digest
@@ -9115,16 +9083,15 @@ else:
             *,
             preflight: bool = False,
         ) -> Optional[str]:
-            nonlocal deterministic_fallback_used
             if (
-                deterministic_fallback_used
+                worker_progress.deterministic_fallback_used
                 or not pipeline._enable_deterministic_runner_repair
                 or (preflight and not _absolute_risk_context_preflight_supported())
             ):
                 return None
             if not _absolute_risk_context_preflight_supported():
                 return None
-            deterministic_fallback_used = True
+            worker_progress.deterministic_fallback_used = True
             step_record["deterministic_code_fallback"] = reason
             step_record["deterministic_standard_analysis"] = "absolute_risk_context"
             emit_progress(
@@ -9152,16 +9119,15 @@ else:
             *,
             preflight: bool = False,
         ) -> Optional[str]:
-            nonlocal deterministic_fallback_used
             if (
-                deterministic_fallback_used
+                worker_progress.deterministic_fallback_used
                 or not pipeline._enable_deterministic_runner_repair
                 or (preflight and not _robustness_sensitivity_preflight_supported())
             ):
                 return None
             if not _robustness_sensitivity_preflight_supported():
                 return None
-            deterministic_fallback_used = True
+            worker_progress.deterministic_fallback_used = True
             step_record["deterministic_code_fallback"] = reason
             step_record["deterministic_standard_analysis"] = "robustness_sensitivity"
             emit_progress(
@@ -9199,16 +9165,15 @@ else:
             *,
             preflight: bool = False,
         ) -> Optional[str]:
-            nonlocal deterministic_fallback_used
             if (
-                deterministic_fallback_used
+                worker_progress.deterministic_fallback_used
                 or not pipeline._enable_deterministic_runner_repair
                 or (preflight and not _missingness_audit_preflight_supported())
             ):
                 return None
             if not _missingness_audit_preflight_supported():
                 return None
-            deterministic_fallback_used = True
+            worker_progress.deterministic_fallback_used = True
             step_record["deterministic_code_fallback"] = reason
             step_record["deterministic_standard_analysis"] = (
                 "missingness_measurement_audit"
@@ -9232,14 +9197,13 @@ else:
             *,
             preflight: bool = False,
         ) -> Optional[str]:
-            nonlocal deterministic_standard_executor_used
-            if deterministic_standard_executor_used or (
+            if worker_progress.deterministic_standard_executor_used or (
                 preflight and not _trajectory_stability_preflight_supported()
             ):
                 return None
             if not _trajectory_stability_preflight_supported():
                 return None
-            deterministic_standard_executor_used = True
+            worker_progress.deterministic_standard_executor_used = True
             step_record["deterministic_standard_selection_reason"] = reason
             step_record["deterministic_standard_analysis"] = (
                 "trajectory_cluster_stability"
@@ -9326,7 +9290,7 @@ else:
                 preflight_resumed_code = resumed_code_candidate
         if step_attempt_state.selected_resume_capsule is not None:
             code = step_attempt_state.selected_resume_capsule.candidate_code
-            resumed_code_reuse_used = True
+            worker_progress.resumed_code_reuse_used = True
             step_record["generation_mode"] = "resumed_code_reuse"
             step_record["step_authority_capsule_reused"] = True
             step_record["resumed_from_generation_mode"] = str(
@@ -9609,13 +9573,12 @@ else:
                             return _record_initial_coder_failure(exc)
 
         def _deterministic_fallback_code(reason: str) -> Optional[str]:
-            nonlocal deterministic_fallback_used
             if (
-                deterministic_fallback_used
+                worker_progress.deterministic_fallback_used
                 or not pipeline._enable_deterministic_code_fallback
             ):
                 return None
-            deterministic_fallback_used = True
+            worker_progress.deterministic_fallback_used = True
             plan_result.used_mock_llm = True
             step_record["deterministic_code_fallback"] = reason
             emit_progress(
@@ -9796,13 +9759,13 @@ else:
                     include_llm
                     and pipeline._enable_llm_concept_audit
                     and (
-                        deterministic_fallback_used
-                        or deterministic_standard_executor_used
+                        worker_progress.deterministic_fallback_used
+                        or worker_progress.deterministic_standard_executor_used
                     )
                 ):
                     generation_mode = (
                         "deterministic_standard"
-                        if deterministic_standard_executor_used
+                        if worker_progress.deterministic_standard_executor_used
                         else "deterministic_fallback"
                     )
                     code_findings.append(
@@ -10004,12 +9967,12 @@ else:
                 source=source,
             )
 
-        concept_repair_attempts = 0
-        llm_repair_used = critic_resume_repair_used
-        concept_audit_error_count = 0
-        deterministic_concept_repairs = 0
+        worker_progress.concept_repair_attempts = 0
+        worker_progress.llm_repair_used = worker_progress.critic_resume_repair_used
+        worker_progress.concept_audit_error_count = 0
+        worker_progress.deterministic_concept_repairs = 0
         _MAX_DETERMINISTIC_CONCEPT_REPAIRS = 3
-        applied_concept_repair_names: List[str] = []
+        worker_progress.applied_concept_repair_names = []
         concept_approved_code_digest: Optional[str] = None
         while True:
             # A quarantined checkpoint is digest-bound authority.  Do not
@@ -10020,13 +9983,17 @@ else:
                 code = reorder_forward_references(code)
             usage_findings = _concept_findings_for_code(code, include_llm=False)
             step_record["usage_findings"] = [f.model_dump() for f in usage_findings]
-            concept_audit_error_count += sum(
+            worker_progress.concept_audit_error_count += sum(
                 1
                 for f in usage_findings
                 if f.validator == usage_auditor.name and f.severity == "error"
             )
-            step_record["concept_audit_error_count"] = concept_audit_error_count
-            step_record["concept_repair_attempts"] = concept_repair_attempts
+            step_record["concept_audit_error_count"] = (
+                worker_progress.concept_audit_error_count
+            )
+            step_record["concept_repair_attempts"] = (
+                worker_progress.concept_repair_attempts
+            )
             if not any(f.severity == "error" for f in usage_findings):
                 concept_approved_code_digest = sha256_of_bytes(code.encode("utf-8"))
                 step_record["concept_approved_code_sha256"] = (
@@ -10095,7 +10062,7 @@ else:
                 )
                 return step_record
 
-            if deterministic_standard_executor_used:
+            if worker_progress.deterministic_standard_executor_used:
                 terminal_finding = ValidationFinding(
                     validator="trajectory_stability_executor",
                     severity="error",
@@ -10145,7 +10112,10 @@ else:
             # model round-trip and re-audit. This does NOT consume the LLM
             # repair budget, and is bounded because each repair removes its
             # own pattern (a re-audit then finds nothing left to change).
-            if deterministic_concept_repairs < _MAX_DETERMINISTIC_CONCEPT_REPAIRS:
+            if (
+                worker_progress.deterministic_concept_repairs
+                < _MAX_DETERMINISTIC_CONCEPT_REPAIRS
+            ):
                 _audit_error_msgs = [
                     value
                     for finding in usage_findings
@@ -10170,13 +10140,13 @@ else:
                 )
                 if _det_names and _det_code != code:
                     _det_before_code = code
-                    deterministic_concept_repairs += 1
-                    applied_concept_repair_names.extend(_det_names)
+                    worker_progress.deterministic_concept_repairs += 1
+                    worker_progress.applied_concept_repair_names.extend(_det_names)
                     step_record["deterministic_concept_repairs"] = (
-                        deterministic_concept_repairs
+                        worker_progress.deterministic_concept_repairs
                     )
                     step_record["applied_concept_repair_names"] = list(
-                        applied_concept_repair_names
+                        worker_progress.applied_concept_repair_names
                     )
                     for _name in _det_names:
                         _record_repair(
@@ -10226,7 +10196,8 @@ else:
                     continue
 
             if (
-                concept_repair_attempts >= pipeline._max_code_repair_attempts
+                worker_progress.concept_repair_attempts
+                >= pipeline._max_code_repair_attempts
                 or not _llm_repair_budget_available()
                 or provider_budget.exhausted
             ):
@@ -10358,8 +10329,10 @@ else:
                 step_record["concept_audit_block"] = {
                     "step_id": step.step_id,
                     "errors": _block_errors,
-                    "deterministic_repairs_applied": list(applied_concept_repair_names),
-                    "llm_repair_attempts": concept_repair_attempts,
+                    "deterministic_repairs_applied": list(
+                        worker_progress.applied_concept_repair_names
+                    ),
+                    "llm_repair_attempts": worker_progress.concept_repair_attempts,
                     "offending_code_lines": _offending_lines,
                     "candidate_remedies": _remedies,
                 }
@@ -10381,8 +10354,8 @@ else:
                         "",
                         "## Repair already attempted",
                         f"- deterministic: "
-                        f"{applied_concept_repair_names or 'none matched'}",
-                        f"- LLM coder repair attempts: {concept_repair_attempts}",
+                        f"{worker_progress.applied_concept_repair_names or 'none matched'}",
+                        f"- LLM coder repair attempts: {worker_progress.concept_repair_attempts}",
                         "",
                         "## Offending code lines",
                         "```python",
@@ -10454,7 +10427,7 @@ else:
                 "execution. Fix all ICU-rule violations.\n\n"
                 "HUMAN-READABLE FINDINGS (diagnostic mirror only):\n" + audit_log
             )
-            concept_repair_attempts += 1
+            worker_progress.concept_repair_attempts += 1
             if not _consume_llm_repair_budget(
                 "concept",
                 before_code=code,
@@ -10465,7 +10438,9 @@ else:
                 failure_status="concept_failed",
             ):
                 raise AssertionError("LLM repair budget changed without mutation")
-            step_record["concept_repair_attempts"] = concept_repair_attempts
+            step_record["concept_repair_attempts"] = (
+                worker_progress.concept_repair_attempts
+            )
             emit_progress(
                 "coder",
                 f"Repairing concept-audit violation for {step.step_id}.",
@@ -10473,7 +10448,7 @@ else:
                 step_id=step.step_id,
                 current_step=step_current,
                 total_steps=total_steps,
-                repair_attempts=concept_repair_attempts,
+                repair_attempts=worker_progress.concept_repair_attempts,
             )
             _remember_concept_constraints(blocking_usage_findings)
             try:
@@ -10485,7 +10460,7 @@ else:
                     run_log=concept_repair_log,
                     repair_authority=concept_repair_authority,
                     current_repair_authority=current_concept_repair_authority,
-                    attempt=concept_repair_attempts,
+                    attempt=worker_progress.concept_repair_attempts,
                     provider_budget=provider_budget,
                     provider_category="concept_repair",
                     logical_repair_attempt_id=(step_repair_budget.llm_repair_attempts),
@@ -10512,7 +10487,7 @@ else:
                             "quarantined_draft_sha256": step_record.get(
                                 "quarantined_draft_sha256"
                             ),
-                            "repair_attempt": concept_repair_attempts,
+                            "repair_attempt": worker_progress.concept_repair_attempts,
                             "semantic_noop": True,
                         },
                     )
@@ -10527,7 +10502,7 @@ else:
                     step_record["quarantined_repair_succeeded"] = False
                     continue
                 code = repaired_code
-                llm_repair_used = True
+                worker_progress.llm_repair_used = True
                 if quarantined_draft_active:
                     quarantined_draft_active = False
                     quarantined_repair_materially_changed = True
@@ -10675,14 +10650,16 @@ else:
                     _flush_partial_manifest()
                 return step_record
 
-        repair_attempts = 0
-        contract_repair_attempts = 0
-        visual_repair_attempts = 0
+        worker_progress.repair_attempts = 0
+        worker_progress.contract_repair_attempts = 0
+        worker_progress.visual_repair_attempts = 0
         # Contract, visual-layout, and runtime failures have independent repair
         # budgets. ``repair_attempts`` remains the total mutation count used for
         # provenance and generation-mode labels.
-        runtime_repair_attempts = 0
-        runner_repair_name = preexecution_runner_repair_name
+        worker_progress.runtime_repair_attempts = 0
+        worker_progress.runner_repair_name = (
+            worker_progress.preexecution_runner_repair_name
+        )
         is_trajectory_stability_standard = bool(
             step.trajectory_stability_spec is not None
             and step_record.get("deterministic_standard_analysis")
@@ -10839,7 +10816,7 @@ else:
                         for finding in post_mutation_errors
                     ]
                     if (
-                        deterministic_concept_repairs
+                        worker_progress.deterministic_concept_repairs
                         < _MAX_DETERMINISTIC_CONCEPT_REPAIRS
                     ):
                         deterministic_code, deterministic_names = (
@@ -10854,13 +10831,15 @@ else:
                         if deterministic_names and deterministic_code != code:
                             before_code = code
                             code = deterministic_code
-                            deterministic_concept_repairs += 1
-                            applied_concept_repair_names.extend(deterministic_names)
+                            worker_progress.deterministic_concept_repairs += 1
+                            worker_progress.applied_concept_repair_names.extend(
+                                deterministic_names
+                            )
                             step_record["deterministic_concept_repairs"] = (
-                                deterministic_concept_repairs
+                                worker_progress.deterministic_concept_repairs
                             )
                             step_record["applied_concept_repair_names"] = list(
-                                applied_concept_repair_names
+                                worker_progress.applied_concept_repair_names
                             )
                             for repair_name in deterministic_names:
                                 _record_repair(
@@ -10923,7 +10902,7 @@ else:
                             "Planner-owned science.\n\n"
                             "FINDINGS (diagnostic mirror only):\n" + post_mutation_log
                         )
-                        concept_repair_attempts += 1
+                        worker_progress.concept_repair_attempts += 1
                         if not _consume_llm_repair_budget(
                             "post_mutation_concept",
                             before_code=code,
@@ -10938,7 +10917,9 @@ else:
                             raise AssertionError(
                                 "LLM repair budget changed without mutation"
                             )
-                        step_record["concept_repair_attempts"] = concept_repair_attempts
+                        step_record["concept_repair_attempts"] = (
+                            worker_progress.concept_repair_attempts
+                        )
                         emit_progress(
                             "coder",
                             (
@@ -10963,7 +10944,7 @@ else:
                                 current_repair_authority=(
                                     current_post_mutation_repair_authority
                                 ),
-                                attempt=concept_repair_attempts,
+                                attempt=worker_progress.concept_repair_attempts,
                                 provider_budget=provider_budget,
                                 provider_category="post_mutation_concept_repair",
                                 logical_repair_attempt_id=(
@@ -10971,7 +10952,7 @@ else:
                                 ),
                             )
                             _sync_provider_budget()
-                            llm_repair_used = True
+                            worker_progress.llm_repair_used = True
                             _clear_output_dir(
                                 run_dir / "steps" / step.step_id / "outputs"
                             )
@@ -11140,8 +11121,8 @@ else:
                     elif not pipeline._enable_llm_concept_audit:
                         step_record["llm_concept_audit_status"] = "disabled"
                     elif (
-                        deterministic_fallback_used
-                        or deterministic_standard_executor_used
+                        worker_progress.deterministic_fallback_used
+                        or worker_progress.deterministic_standard_executor_used
                     ):
                         step_record["llm_concept_audit_status"] = (
                             "skipped_trusted_deterministic_code"
@@ -11204,18 +11185,7 @@ else:
                     # of unchanged code is needed after the digest-bound audit.
                     break
 
-            concept_repair_used = bool(
-                concept_repair_attempts or deterministic_concept_repairs
-            )
-            current_generation_mode = _script_generation_mode(
-                repair_attempts=repair_attempts,
-                fallback_used=deterministic_fallback_used,
-                standard_executor_used=deterministic_standard_executor_used,
-                runner_repair_name=runner_repair_name,
-                resumed_code_reuse=resumed_code_reuse_used,
-                concept_repair_used=concept_repair_used,
-                llm_repair_used=llm_repair_used,
-            )
+            current_generation_mode = worker_progress.generation_mode()
             run_label = {
                 "llm": "generated script",
                 "resumed_code_reuse": "resumed script",
@@ -11229,7 +11199,7 @@ else:
                 step_id=step.step_id,
                 current_step=step_current,
                 total_steps=total_steps,
-                repair_attempts=repair_attempts,
+                repair_attempts=worker_progress.repair_attempts,
             )
             execution_runner = runner
             execution_timeout_seconds = pipeline._timeout_seconds
@@ -11241,7 +11211,7 @@ else:
                     universe_path=universe_path,
                     timeout_seconds=execution_timeout_seconds,
                 )
-            elif deterministic_standard_executor_used:
+            elif worker_progress.deterministic_standard_executor_used:
                 # A registered standard executes the exact typed workload the
                 # planner froze. Give it a distinct bounded runner rather than
                 # widening the shared generated-code runner's timeout. This is
@@ -11594,7 +11564,7 @@ else:
                 step_record["isolation_degradation_reason"] = (
                     run_result.isolation_degradation_reason
                 )
-            step_record["code_repair_attempts"] = repair_attempts
+            step_record["code_repair_attempts"] = worker_progress.repair_attempts
 
             if current_generation_mode == "llm":
                 script_description = (
@@ -11615,7 +11585,10 @@ else:
                     f"step {step.step_id}."
                 )
             else:
-                total_repair_attempts = repair_attempts + concept_repair_attempts
+                total_repair_attempts = (
+                    worker_progress.repair_attempts
+                    + worker_progress.concept_repair_attempts
+                )
                 script_description = (
                     f"Repaired analysis script for step {step.step_id} "
                     f"(attempt {total_repair_attempts})."
@@ -11643,12 +11616,12 @@ else:
                 generation_mode=current_generation_mode,
                 prompt_pack_version=prompt_version,
                 metadata={
-                    "repair_attempts": repair_attempts,
-                    "concept_repair_attempts": concept_repair_attempts,
-                    "deterministic_concept_repairs": deterministic_concept_repairs,
-                    "llm_repair_used": llm_repair_used,
+                    "repair_attempts": worker_progress.repair_attempts,
+                    "concept_repair_attempts": worker_progress.concept_repair_attempts,
+                    "deterministic_concept_repairs": worker_progress.deterministic_concept_repairs,
+                    "llm_repair_used": worker_progress.llm_repair_used,
                     "fallback_reason": step_record.get("deterministic_code_fallback"),
-                    "runner_repair": runner_repair_name,
+                    "runner_repair": worker_progress.runner_repair_name,
                     "resumed_code_evidence_id": step_record.get(
                         "resumed_code_evidence_id"
                     ),
@@ -11685,16 +11658,16 @@ else:
                     producer="runner",
                     generation_mode=current_generation_mode,
                     metadata={
-                        "repair_attempts": repair_attempts,
-                        "concept_repair_attempts": concept_repair_attempts,
+                        "repair_attempts": worker_progress.repair_attempts,
+                        "concept_repair_attempts": worker_progress.concept_repair_attempts,
                         "deterministic_concept_repairs": (
-                            deterministic_concept_repairs
+                            worker_progress.deterministic_concept_repairs
                         ),
-                        "llm_repair_used": llm_repair_used,
+                        "llm_repair_used": worker_progress.llm_repair_used,
                         "fallback_reason": step_record.get(
                             "deterministic_code_fallback"
                         ),
-                        "runner_repair": runner_repair_name,
+                        "runner_repair": worker_progress.runner_repair_name,
                         "resumed_from_generation_mode": step_record.get(
                             "resumed_from_generation_mode"
                         ),
@@ -11746,7 +11719,9 @@ else:
                         visual_step_summary = vloaded
                     else:
                         visual_step_summary = {"raw": vloaded}
-                if runner_repair_name and is_sealed_renderer_repair(runner_repair_name):
+                if worker_progress.runner_repair_name and is_sealed_renderer_repair(
+                    worker_progress.runner_repair_name
+                ):
                     visual_step_summary = _write_host_input_binding_receipts(
                         out_dir=run_result.out_dir,
                         step_summary=visual_step_summary,
@@ -11858,7 +11833,8 @@ else:
                                 total_steps=total_steps,
                             )
                         elif (
-                            visual_repair_attempts >= pipeline._max_code_repair_attempts
+                            worker_progress.visual_repair_attempts
+                            >= pipeline._max_code_repair_attempts
                             or not _llm_repair_budget_available()
                         ):
                             fallback_code = _deterministic_fallback_code("visual_qa")
@@ -11892,7 +11868,7 @@ else:
                                     "visual_qa",
                                     (
                                         f"Visual QA blocked {step.step_id} after "
-                                        f"{visual_repair_attempts} layout repair "
+                                        f"{worker_progress.visual_repair_attempts} layout repair "
                                         "attempts."
                                     ),
                                     status="error",
@@ -11907,7 +11883,7 @@ else:
                                 (
                                     f"Cosmetic visual QA findings demoted to warning "
                                     f"for {step.step_id} after "
-                                    f"{visual_repair_attempts} layout repair attempts."
+                                    f"{worker_progress.visual_repair_attempts} layout repair attempts."
                                 ),
                                 status="warning",
                                 run_id=run_id,
@@ -11919,7 +11895,7 @@ else:
                             # registration only when every remaining visual
                             # error was a deterministic layout/cosmetic issue.
                         else:
-                            visual_repair_attempts += 1
+                            worker_progress.visual_repair_attempts += 1
                             qa_log = _visual_repair_request_log(visual_findings)
                             visual_host_guidance = {
                                 "layout_only": True,
@@ -11969,10 +11945,12 @@ else:
                                 raise AssertionError(
                                     "LLM repair budget changed without mutation"
                                 )
-                            repair_attempts += 1
-                            step_record["code_repair_attempts"] = repair_attempts
+                            worker_progress.repair_attempts += 1
+                            step_record["code_repair_attempts"] = (
+                                worker_progress.repair_attempts
+                            )
                             step_record["visual_repair_attempts"] = (
-                                visual_repair_attempts
+                                worker_progress.visual_repair_attempts
                             )
                             emit_progress(
                                 "visual_qa",
@@ -11981,8 +11959,8 @@ else:
                                 step_id=step.step_id,
                                 current_step=step_current,
                                 total_steps=total_steps,
-                                repair_attempts=repair_attempts,
-                                visual_repair_attempts=visual_repair_attempts,
+                                repair_attempts=worker_progress.repair_attempts,
+                                visual_repair_attempts=worker_progress.visual_repair_attempts,
                             )
                             try:
                                 code = _repair_with_capsule(
@@ -11995,7 +11973,7 @@ else:
                                     current_repair_authority=(
                                         current_visual_repair_authority
                                     ),
-                                    attempt=visual_repair_attempts,
+                                    attempt=worker_progress.visual_repair_attempts,
                                     provider_budget=provider_budget,
                                     provider_category="visual_repair",
                                     logical_repair_attempt_id=(
@@ -12003,7 +11981,7 @@ else:
                                     ),
                                 )
                                 _sync_provider_budget()
-                                llm_repair_used = True
+                                worker_progress.llm_repair_used = True
                                 _clear_output_dir(run_result.out_dir)
                                 continue
                             except (
@@ -12031,7 +12009,7 @@ else:
                                             "step_id": step.step_id,
                                             "error_type": type(exc).__name__,
                                             "visual_repair_attempts": (
-                                                visual_repair_attempts
+                                                worker_progress.visual_repair_attempts
                                             ),
                                         },
                                     )
@@ -12427,10 +12405,12 @@ else:
                                     for finding in early_contract_findings
                                 ],
                                 "step_summary": visual_step_summary,
-                                "llm_repair_used": llm_repair_used,
+                                "llm_repair_used": worker_progress.llm_repair_used,
                                 "generation_mode": current_generation_mode,
-                                "code_repair_attempts": repair_attempts,
-                                "contract_repair_attempts": (contract_repair_attempts),
+                                "code_repair_attempts": worker_progress.repair_attempts,
+                                "contract_repair_attempts": (
+                                    worker_progress.contract_repair_attempts
+                                ),
                             }
                         )
                         with shared_lock:
@@ -12502,7 +12482,7 @@ else:
                         summary_repair = _deterministic_summary_repair(
                             code=code,
                             step_summary=visual_step_summary,
-                            previous_repair=runner_repair_name,
+                            previous_repair=worker_progress.runner_repair_name,
                             analysis_family=local_runtime_state.analysis_family,
                         )
                         summary_repair = _authorize_automatic_repair(
@@ -12514,16 +12494,20 @@ else:
                     else:
                         summary_repair = None
                     if summary_repair is not None:
-                        contract_repair_attempts += 1
-                        repair_attempts += 1
-                        runner_repair_name, code = summary_repair
-                        step_record["runner_repair"] = runner_repair_name
-                        step_record["code_repair_attempts"] = repair_attempts
+                        worker_progress.contract_repair_attempts += 1
+                        worker_progress.repair_attempts += 1
+                        worker_progress.runner_repair_name, code = summary_repair
+                        step_record["runner_repair"] = (
+                            worker_progress.runner_repair_name
+                        )
+                        step_record["code_repair_attempts"] = (
+                            worker_progress.repair_attempts
+                        )
                         step_record["contract_repair_attempts"] = (
-                            contract_repair_attempts
+                            worker_progress.contract_repair_attempts
                         )
                         _record_repair(
-                            repair_id=runner_repair_name,
+                            repair_id=worker_progress.runner_repair_name,
                             step_id=step.step_id,
                             trigger={
                                 "source": "deterministic_summary_repair",
@@ -12544,7 +12528,7 @@ else:
                             "runner_repair",
                             (
                                 f"Applied deterministic summary repair for "
-                                f"{step.step_id}: {runner_repair_name}."
+                                f"{step.step_id}: {worker_progress.runner_repair_name}."
                             ),
                             run_id=run_id,
                             step_id=step.step_id,
@@ -12558,7 +12542,7 @@ else:
                         contract_repair = deterministic_contract_repair(
                             code=code,
                             findings=early_contract_errors,
-                            previous_repair=runner_repair_name,
+                            previous_repair=worker_progress.runner_repair_name,
                         )
                         contract_repair = _authorize_automatic_repair(
                             contract_repair,
@@ -12569,16 +12553,20 @@ else:
                     else:
                         contract_repair = None
                     if contract_repair is not None:
-                        contract_repair_attempts += 1
-                        repair_attempts += 1
-                        runner_repair_name, code = contract_repair
-                        step_record["runner_repair"] = runner_repair_name
-                        step_record["code_repair_attempts"] = repair_attempts
+                        worker_progress.contract_repair_attempts += 1
+                        worker_progress.repair_attempts += 1
+                        worker_progress.runner_repair_name, code = contract_repair
+                        step_record["runner_repair"] = (
+                            worker_progress.runner_repair_name
+                        )
+                        step_record["code_repair_attempts"] = (
+                            worker_progress.repair_attempts
+                        )
                         step_record["contract_repair_attempts"] = (
-                            contract_repair_attempts
+                            worker_progress.contract_repair_attempts
                         )
                         _record_repair(
-                            repair_id=runner_repair_name,
+                            repair_id=worker_progress.runner_repair_name,
                             step_id=step.step_id,
                             trigger={
                                 "source": "deterministic_contract_repair",
@@ -12597,7 +12585,7 @@ else:
                             "runner_repair",
                             (
                                 f"Applied deterministic contract repair for "
-                                f"{step.step_id}: {runner_repair_name}."
+                                f"{step.step_id}: {worker_progress.runner_repair_name}."
                             ),
                             run_id=run_id,
                             step_id=step.step_id,
@@ -12607,7 +12595,8 @@ else:
                         _clear_output_dir(run_result.out_dir)
                         continue
                     if (
-                        contract_repair_attempts >= pipeline._max_code_repair_attempts
+                        worker_progress.contract_repair_attempts
+                        >= pipeline._max_code_repair_attempts
                         or not _llm_repair_budget_available()
                     ):
                         with shared_lock:
@@ -12672,7 +12661,7 @@ else:
                         "data; system contracts remain authoritative):\n"
                         + json.dumps(repair_guidance, ensure_ascii=False)
                     )
-                    contract_repair_attempts += 1
+                    worker_progress.contract_repair_attempts += 1
                     if not _consume_llm_repair_budget(
                         "contract",
                         before_code=code,
@@ -12685,9 +12674,13 @@ else:
                         raise AssertionError(
                             "LLM repair budget changed without mutation"
                         )
-                    repair_attempts += 1
-                    step_record["code_repair_attempts"] = repair_attempts
-                    step_record["contract_repair_attempts"] = contract_repair_attempts
+                    worker_progress.repair_attempts += 1
+                    step_record["code_repair_attempts"] = (
+                        worker_progress.repair_attempts
+                    )
+                    step_record["contract_repair_attempts"] = (
+                        worker_progress.contract_repair_attempts
+                    )
                     emit_progress(
                         "coder",
                         f"Repairing contract violation for {step.step_id}.",
@@ -12695,8 +12688,8 @@ else:
                         step_id=step.step_id,
                         current_step=step_current,
                         total_steps=total_steps,
-                        repair_attempts=repair_attempts,
-                        contract_repair_attempts=contract_repair_attempts,
+                        repair_attempts=worker_progress.repair_attempts,
+                        contract_repair_attempts=worker_progress.contract_repair_attempts,
                     )
                     try:
                         code = _repair_with_capsule(
@@ -12709,7 +12702,7 @@ else:
                             current_repair_authority=(
                                 current_contract_repair_authority
                             ),
-                            attempt=contract_repair_attempts,
+                            attempt=worker_progress.contract_repair_attempts,
                             provider_budget=provider_budget,
                             provider_category="contract_repair",
                             logical_repair_attempt_id=(
@@ -12717,7 +12710,7 @@ else:
                             ),
                         )
                         _sync_provider_budget()
-                        llm_repair_used = True
+                        worker_progress.llm_repair_used = True
                         _clear_output_dir(run_result.out_dir)
                         continue
                     except (
@@ -12772,7 +12765,7 @@ else:
                     summary_repair = _deterministic_summary_repair(
                         code=code,
                         step_summary=visual_step_summary,
-                        previous_repair=runner_repair_name,
+                        previous_repair=worker_progress.runner_repair_name,
                         analysis_family=local_runtime_state.analysis_family,
                     )
                     summary_repair = _authorize_automatic_repair(
@@ -12784,10 +12777,10 @@ else:
                 else:
                     summary_repair = None
                 if summary_repair is not None:
-                    runner_repair_name, code = summary_repair
-                    step_record["runner_repair"] = runner_repair_name
+                    worker_progress.runner_repair_name, code = summary_repair
+                    step_record["runner_repair"] = worker_progress.runner_repair_name
                     _record_repair(
-                        repair_id=runner_repair_name,
+                        repair_id=worker_progress.runner_repair_name,
                         step_id=step.step_id,
                         trigger={
                             "source": "deterministic_summary_repair",
@@ -12801,7 +12794,7 @@ else:
                     )
                     emit_progress(
                         "runner_repair",
-                        f"Applied deterministic summary repair for {step.step_id}: {runner_repair_name}.",
+                        f"Applied deterministic summary repair for {step.step_id}: {worker_progress.runner_repair_name}.",
                         run_id=run_id,
                         step_id=step.step_id,
                         current_step=step_current,
@@ -12883,13 +12876,16 @@ else:
                     code=code,
                     run_log=(run_log + _monotonic_concept_constraint_log()),
                 )
-                if plugin_repair is not None and plugin_repair[0] != runner_repair_name:
+                if (
+                    plugin_repair is not None
+                    and plugin_repair[0] != worker_progress.runner_repair_name
+                ):
                     runner_repair = plugin_repair
                 else:
                     runner_repair = _deterministic_runner_repair(
                         code=code,
                         run_log=run_log,
-                        previous_repair=runner_repair_name,
+                        previous_repair=worker_progress.runner_repair_name,
                         analysis_family=local_runtime_state.analysis_family,
                     )
                 runner_repair = _authorize_automatic_repair(
@@ -12905,10 +12901,10 @@ else:
             else:
                 runner_repair = None
             if runner_repair is not None:
-                runner_repair_name, code = runner_repair
-                step_record["runner_repair"] = runner_repair_name
+                worker_progress.runner_repair_name, code = runner_repair
+                step_record["runner_repair"] = worker_progress.runner_repair_name
                 _record_repair(
-                    repair_id=runner_repair_name,
+                    repair_id=worker_progress.runner_repair_name,
                     step_id=step.step_id,
                     trigger={
                         "source": "deterministic_runner_repair",
@@ -12920,7 +12916,7 @@ else:
                 )
                 emit_progress(
                     "runner_repair",
-                    f"Applied deterministic runner repair for {step.step_id}: {runner_repair_name}.",
+                    f"Applied deterministic runner repair for {step.step_id}: {worker_progress.runner_repair_name}.",
                     run_id=run_id,
                     step_id=step.step_id,
                     current_step=step_current,
@@ -12930,7 +12926,8 @@ else:
                 continue
 
             if (
-                runtime_repair_attempts >= pipeline._max_code_repair_attempts
+                worker_progress.runtime_repair_attempts
+                >= pipeline._max_code_repair_attempts
                 or not _llm_repair_budget_available()
             ):
                 fallback_code = _deterministic_fallback_code("execution_failure")
@@ -12968,11 +12965,12 @@ else:
             runtime_repair_fallback_applied = False
             runtime_repair_authority = RepairPromptAuthority()
             while (
-                runtime_repair_attempts < pipeline._max_code_repair_attempts
+                worker_progress.runtime_repair_attempts
+                < pipeline._max_code_repair_attempts
                 and _llm_repair_budget_available()
             ):
-                repair_attempts += 1
-                runtime_repair_attempts += 1
+                worker_progress.repair_attempts += 1
+                worker_progress.runtime_repair_attempts += 1
                 if not _consume_llm_repair_budget(
                     "runtime",
                     before_code=code,
@@ -12982,8 +12980,10 @@ else:
                     failure_status="runtime_failed",
                 ):
                     raise AssertionError("LLM repair budget changed without mutation")
-                step_record["code_repair_attempts"] = repair_attempts
-                step_record["runtime_repair_attempts"] = runtime_repair_attempts
+                step_record["code_repair_attempts"] = worker_progress.repair_attempts
+                step_record["runtime_repair_attempts"] = (
+                    worker_progress.runtime_repair_attempts
+                )
                 emit_progress(
                     "coder",
                     f"Repairing failed script for {step.step_id}.",
@@ -12991,7 +12991,7 @@ else:
                     step_id=step.step_id,
                     current_step=step_current,
                     total_steps=total_steps,
-                    repair_attempts=repair_attempts,
+                    repair_attempts=worker_progress.repair_attempts,
                 )
                 try:
                     repaired_code = _repair_with_capsule(
@@ -13001,7 +13001,7 @@ else:
                         code=code,
                         run_log=run_log,
                         repair_authority=runtime_repair_authority,
-                        attempt=repair_attempts,
+                        attempt=worker_progress.repair_attempts,
                         provider_budget=provider_budget,
                         provider_category="runtime_repair",
                         logical_repair_attempt_id=(
@@ -13018,7 +13018,7 @@ else:
                             "Runtime repair returned no material Python change."
                         )
                     code = repaired_code
-                    llm_repair_used = True
+                    worker_progress.llm_repair_used = True
                     runtime_repair_applied = True
                     _clear_output_dir(run_result.out_dir)
                     break
@@ -13044,7 +13044,8 @@ else:
                     )
                     can_retry_repair = bool(
                         (is_transient or is_noop_repair)
-                        and runtime_repair_attempts < pipeline._max_code_repair_attempts
+                        and worker_progress.runtime_repair_attempts
+                        < pipeline._max_code_repair_attempts
                         and _llm_repair_budget_available()
                         and not provider_budget.exhausted
                     )
@@ -13054,14 +13055,14 @@ else:
                             (
                                 f"Repair attempt did not yield usable code for "
                                 f"{step.step_id} "
-                                f"(attempt {repair_attempts}): {type(exc).__name__}; "
+                                f"(attempt {worker_progress.repair_attempts}): {type(exc).__name__}; "
                                 "retrying the repair without re-executing unchanged code."
                             ),
                             run_id=run_id,
                             step_id=step.step_id,
                             current_step=step_current,
                             total_steps=total_steps,
-                            repair_attempts=repair_attempts,
+                            repair_attempts=worker_progress.repair_attempts,
                         )
                         continue
 
@@ -13127,7 +13128,7 @@ else:
             ):
                 promoted = _promote_sibling_figure_exports(out_dir=run_result.out_dir)
             if promoted is not None:
-                runner_repair_name = promoted
+                worker_progress.runner_repair_name = promoted
                 step_record["runner_repair"] = promoted
                 _record_repair(
                     repair_id=promoted,
@@ -13154,7 +13155,7 @@ else:
                         ),
                     )
                 if rescued is not None:
-                    runner_repair_name = rescued
+                    worker_progress.runner_repair_name = rescued
                     step_record["runner_repair"] = rescued
                     _record_repair(
                         repair_id=rescued,
@@ -13185,7 +13186,7 @@ else:
                             require_declared_sources=True,
                         )
                     if promoted is not None:
-                        runner_repair_name = promoted
+                        worker_progress.runner_repair_name = promoted
                         step_record["runner_repair"] = promoted
                         _record_repair(
                             repair_id=promoted,
@@ -13280,7 +13281,7 @@ else:
                 for p in run_result.out_dir.iterdir()
                 if p.is_file()
                 and not (
-                    deterministic_standard_executor_used
+                    worker_progress.deterministic_standard_executor_used
                     and _is_standard_executor_internal_artifact(p)
                 )
             )
@@ -13320,7 +13321,9 @@ else:
         # replaces the entire output directory, so running it after registration
         # would leave evidence digests and claims bound to a retired draft.
         step_summary = _load_step_summary_from_outputs(run_result.out_dir)
-        if runner_repair_name and is_sealed_renderer_repair(runner_repair_name):
+        if worker_progress.runner_repair_name and is_sealed_renderer_repair(
+            worker_progress.runner_repair_name
+        ):
             step_summary = _write_host_input_binding_receipts(
                 out_dir=run_result.out_dir,
                 step_summary=step_summary,
@@ -13374,7 +13377,7 @@ else:
                 ),
             )
             if repaired is not None:
-                runner_repair_name = repaired
+                worker_progress.runner_repair_name = repaired
                 step_record["runner_repair"] = repaired
                 _record_repair(
                     repair_id=repaired,
@@ -13479,7 +13482,7 @@ else:
                 for path in run_result.out_dir.iterdir()
                 if path.is_file()
                 and not (
-                    deterministic_standard_executor_used
+                    worker_progress.deterministic_standard_executor_used
                     and _is_standard_executor_internal_artifact(path)
                 )
             )
@@ -13507,20 +13510,12 @@ else:
             # writer interrupted during teardown could recreate its private
             # streaming file.  Internal work products are never evidence,
             # even if a runner reports one explicitly.
-            if deterministic_standard_executor_used and (
+            if worker_progress.deterministic_standard_executor_used and (
                 _is_standard_executor_internal_artifact(art)
             ):
                 continue
             step_aliases = _semantic_aliases_for(step, art)
-            generation_mode = _script_generation_mode(
-                repair_attempts=repair_attempts,
-                fallback_used=deterministic_fallback_used,
-                standard_executor_used=deterministic_standard_executor_used,
-                runner_repair_name=runner_repair_name,
-                resumed_code_reuse=resumed_code_reuse_used,
-                concept_repair_used=concept_repair_used,
-                llm_repair_used=llm_repair_used,
-            )
+            generation_mode = worker_progress.generation_mode()
             if art.name == "step_summary.json":
                 summary_authority = "\0".join(
                     (
@@ -13712,14 +13707,8 @@ else:
                     ],
                     "evidence_ids": evidence_ids_for_step,
                     "llm_repair_used": False,
-                    "generation_mode": _script_generation_mode(
-                        repair_attempts=repair_attempts,
-                        fallback_used=deterministic_fallback_used,
-                        standard_executor_used=(deterministic_standard_executor_used),
-                        runner_repair_name=runner_repair_name,
-                        resumed_code_reuse=resumed_code_reuse_used,
-                        concept_repair_used=concept_repair_used,
-                        llm_repair_used=False,
+                    "generation_mode": worker_progress.generation_mode(
+                        llm_repair_used=False
                     ),
                 }
             )
@@ -13789,16 +13778,8 @@ else:
         step_record["figure_source_findings"] = [
             f.model_dump() for f in figure_source_findings
         ]
-        step_record["llm_repair_used"] = llm_repair_used
-        step_record["generation_mode"] = _script_generation_mode(
-            repair_attempts=repair_attempts,
-            fallback_used=deterministic_fallback_used,
-            standard_executor_used=deterministic_standard_executor_used,
-            runner_repair_name=runner_repair_name,
-            resumed_code_reuse=resumed_code_reuse_used,
-            concept_repair_used=concept_repair_used,
-            llm_repair_used=llm_repair_used,
-        )
+        step_record["llm_repair_used"] = worker_progress.llm_repair_used
+        step_record["generation_mode"] = worker_progress.generation_mode()
         raw_side_findings = step_summary.get("side_findings")
         if isinstance(raw_side_findings, list):
             side_findings = []
