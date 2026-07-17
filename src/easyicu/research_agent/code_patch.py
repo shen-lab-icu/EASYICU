@@ -83,6 +83,10 @@ def looks_like_executable_python(text: str) -> bool:
         tree = ast.parse(stripped)
     except SyntaxError:
         return False
+    try:
+        compile(tree, "<easyicu-candidate>", "exec")
+    except (SyntaxError, ValueError, TypeError):
+        return False
     if not tree.body:
         return False
     if all(
@@ -93,23 +97,14 @@ def looks_like_executable_python(text: str) -> bool:
         for node in tree.body
     ):
         return False
+    # A complete candidate may intentionally raise on its first pass or may
+    # consist of a direct call such as ``main()``/``print(...)``. Those are
+    # executable programs whose runtime/output gates must decide success. Raw
+    # prose, lone names, and inert arithmetic/literal expressions are not.
     return any(
-        marker in stripped
-        for marker in (
-            "\nimport ",
-            "import ",
-            "\nfrom ",
-            "from ",
-            "\ndef ",
-            "def ",
-            "os.environ",
-            "pd.",
-            "json.",
-            ".to_csv",
-            "write_text",
-            "STEP_OUT_DIR",
-            "COHORT_PARQUET",
-        )
+        not isinstance(node, ast.Expr)
+        or isinstance(node.value, (ast.Call, ast.Await, ast.Yield, ast.YieldFrom))
+        for node in tree.body
     )
 
 

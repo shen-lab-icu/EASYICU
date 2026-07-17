@@ -1112,6 +1112,122 @@ print(json.dumps(summary))
     assert not out_dir.exists() or not list(out_dir.glob("publication_figure*"))
 
 
+@pytest.mark.parametrize(
+    ("failing_status", "expected_code_calls", "error_pattern"),
+    [
+        (
+            "initial_generation_pending",
+            0,
+            "reservation could not be checkpointed",
+        ),
+        (
+            "candidate_checkpointed",
+            1,
+            "candidate authority could not be checkpointed",
+        ),
+    ],
+)
+def test_initial_authority_checkpoint_io_failure_never_enters_code_fallback(
+    ra,
+    tmp_path: Path,
+    monkeypatch,
+    failing_status: str,
+    expected_code_calls: int,
+    error_pattern: str,
+):
+    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.step_authority_runtime import (
+        StepAuthorityRuntimeError,
+    )
+
+    class ValidCoderLLM:
+        name = "initial-authority-checkpoint-io-failure"
+
+        def __init__(self):
+            self.code_calls = 0
+
+        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
+            del max_tokens, temperature
+            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
+            upper = user.upper()
+            if "ICU-AWARE RESEARCH PLAN" in upper:
+                return json.dumps(
+                    {
+                        "research_question": "Summarize the locked ICU cohort.",
+                        "steps": [
+                            {
+                                "step_id": "01_summary",
+                                "intent": "Produce the declared cohort summary.",
+                                "inputs": ["stay_id"],
+                                "expected_outputs": ["table:cohort_summary"],
+                                "method": "descriptive_summary",
+                                "icu_rule_refs": [],
+                            }
+                        ],
+                        "rationale": "checkpoint integrity regression",
+                    }
+                )
+            if "WRITE THE PYTHON CODE" in upper:
+                self.code_calls += 1
+                return """
+import json
+import os
+import pandas as pd
+
+df = pd.read_parquet(os.environ["COHORT_PARQUET"])
+out = os.environ["STEP_OUT_DIR"]
+pd.DataFrame({"n": [len(df)]}).to_csv(
+    os.path.join(out, "cohort_summary.csv"), index=False
+)
+summary = {
+    "n": len(df),
+    "output_files": [
+        {"kind": "table", "name": "cohort_summary", "path": "cohort_summary.csv"}
+    ],
+}
+with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as handle:
+    json.dump(summary, handle)
+"""
+            return _empty_custom_llm_response(user)
+
+    original_write = pipeline_execute.write_run_checkpoint
+
+    def fail_target_checkpoint(path, payload):  # noqa: ANN001, ANN202
+        statuses = {
+            str(record.get("status") or "")
+            for record in payload.get("per_step_records", [])
+            if isinstance(record, dict)
+        }
+        if failing_status in statuses:
+            raise OSError(f"simulated {failing_status} checkpoint failure")
+        return original_write(path, payload)
+
+    monkeypatch.setattr(
+        pipeline_execute,
+        "write_run_checkpoint",
+        fail_target_checkpoint,
+    )
+    llm = ValidCoderLLM()
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=llm,
+        enable_literature=False,
+        enable_visual_qa=False,
+        enable_latex=False,
+    )
+
+    with pytest.raises(StepAuthorityRuntimeError, match=error_pattern):
+        pipeline.run(
+            question="Summarize the locked ICU cohort.",
+            cohort=pd.DataFrame({"stay_id": [1, 2]}),
+            cohort_name="checkpoint_failure_test",
+            database="synthetic",
+            stop_after_analysis=True,
+        )
+
+    assert llm.code_calls == expected_code_calls
+
+
 def test_promote_prior_publication_bundle_copies_real_figure_exports(tmp_path: Path):
     from easyicu.research_agent.pipeline import _promote_prior_publication_bundle
 
@@ -8625,8 +8741,7 @@ def test_preserve_figure_steps_after_replan_restores_exact_parent_products(ra):
     current_figure = ra.AnalysisStep(
         step_id="01_model_training_figure",
         intent=(
-            "Render the publication figure declared by step "
-            "'01_model_training'."
+            "Render the publication figure declared by step " "'01_model_training'."
         ),
         method="visualization",
         inputs=["table:model_performance", "table:roc_curve"],
@@ -8641,9 +8756,7 @@ def test_preserve_figure_steps_after_replan_restores_exact_parent_products(ra):
     revised = ra.AnalysisPlan(
         research_question="build a prediction model",
         steps=[
-            current_parent.model_copy(
-                update={"expected_outputs": ["statistic:auroc"]}
-            )
+            current_parent.model_copy(update={"expected_outputs": ["statistic:auroc"]})
         ],
         revision=2,
     )
@@ -8681,8 +8794,7 @@ def test_preserve_figure_steps_after_replan_does_not_invent_missing_parent(ra):
     current_figure = ra.AnalysisStep(
         step_id="01_model_training_figure",
         intent=(
-            "Render the publication figure declared by step "
-            "'01_model_training'."
+            "Render the publication figure declared by step " "'01_model_training'."
         ),
         method="visualization",
         inputs=["table:model_performance"],

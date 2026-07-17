@@ -30,6 +30,10 @@ from easyicu.research_agent.schema import (
     TemporalConstraint,
     UserPreferences,
 )
+from easyicu.research_agent.step_authority_capsule import (
+    ContentRef,
+    StepAuthorityCapsuleError,
+)
 
 
 class _CaptureLLM:
@@ -454,6 +458,63 @@ def test_initial_prompt_runtime_gate_fails_before_provider_without_dropping_cont
     assert budget.initial_generation_resume_status() == "absent"
     assert reservations == []
     assert not receipt_path.exists()
+
+
+def test_initial_literal_response_fails_transport_before_candidate_persistence(
+    ra,
+    tmp_path,
+):
+    llm = _CaptureLLM(["{}"])
+    receipt_path = tmp_path / "provider_receipt.json"
+    budget = StepProviderCallBudget(
+        2,
+        step_id="ordered_exposure_qc",
+        receipt_path=receipt_path,
+    )
+    persisted = []
+
+    with pytest.raises(ValueError, match="not a complete executable Python"):
+        CoderAgent(llm).run(
+            context=_wide_context(ra, n_families=1),
+            step=_quality_step(ra, n_families=1),
+            provider_budget=budget,
+            initial_generation_binding={"schema_version": "test"},
+            persist_candidate=lambda code: persisted.append(code),
+        )
+
+    assert persisted == []
+    assert budget.categories == ("initial_generation",)
+    assert budget.initial_generation_resume_status() == "failed"
+    assert receipt_path.exists()
+
+
+def test_initial_candidate_capsule_integrity_error_remains_hard_failure(ra, tmp_path):
+    llm = _CaptureLLM(["import os\nvalue = 1\n"])
+    budget = StepProviderCallBudget(
+        2,
+        step_id="ordered_exposure_qc",
+        receipt_path=tmp_path / "provider_receipt.json",
+    )
+
+    def reject_candidate(_ref, _transport_id):  # noqa: ANN001, ANN202
+        raise StepAuthorityCapsuleError("simulated capsule digest mismatch")
+
+    with pytest.raises(StepAuthorityCapsuleError, match="digest mismatch"):
+        CoderAgent(llm).run(
+            context=_wide_context(ra, n_families=1),
+            step=_quality_step(ra, n_families=1),
+            provider_budget=budget,
+            initial_generation_binding={"schema_version": "test"},
+            persist_candidate=lambda code: ContentRef(
+                sha256="a" * 64,
+                size_bytes=len(code.encode("utf-8")),
+                media_type="text/x-python",
+            ),
+            on_initial_candidate=reject_candidate,
+        )
+
+    assert budget.categories == ("initial_generation",)
+    assert budget.initial_generation_resume_status() == "completed"
 
 
 def test_patch_prompt_uses_compact_authority_context_under_transport_gate(ra):
