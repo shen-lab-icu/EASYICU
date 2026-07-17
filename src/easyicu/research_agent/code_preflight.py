@@ -5051,6 +5051,10 @@ def _coercion_loss_bindings(
                 if isinstance(key, ast.Constant) and isinstance(key.value, str)
             ]
             has_unpack = any(key is None for key in value.keys)
+            has_dynamic_key = any(
+                key is not None and not isinstance(key, ast.Constant)
+                for key in value.keys
+            )
             for key, candidate_value in zip(value.keys, value.values):
                 if not (
                     isinstance(key, ast.Constant)
@@ -5080,6 +5084,7 @@ def _coercion_loss_bindings(
                                     position,
                                 )
                                 and not has_unpack
+                                and not has_dynamic_key
                                 and literal_keys.count(key.value) == 1
                             ),
                         ),

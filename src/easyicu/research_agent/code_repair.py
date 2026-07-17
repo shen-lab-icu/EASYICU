@@ -293,7 +293,6 @@ _FILLNA_ZERO_ASSIGN_RE = re.compile(
 )
 
 _LOSSY_NUMERIC_COERCION_GUARD_SENTINEL = "_easyicu_lossy_numeric_coercion_guard_v1"
-_LOSSY_NUMERIC_COERCION_COUNT_KEY = "newly_invalid_or_coerced_n"
 
 
 def _lossy_numeric_coercion_repair_lines(
@@ -508,7 +507,7 @@ def _patch_lossy_numeric_coercion_guard(
     """Insert one fail-closed guard around an existing loss-count audit.
 
     The repair is deliberately narrower than the detector: it applies only
-    when exactly one simple dict assignment already computes the host-standard
+    when exactly one simple dict assignment already computes a uniquely named
     loss count from ``notna() & isna()`` followed by ``sum()``. It never
     chooses a column, coercion policy, domain, or missing-data strategy.
     """
@@ -535,7 +534,7 @@ def _patch_lossy_numeric_coercion_guard(
     from .code_preflight import _builtin_int_binding_is_unmodified
 
     builtin_int_is_safe = _builtin_int_binding_is_unmodified(tree)
-    candidates: list[tuple[ast.Assign | ast.AnnAssign, str]] = []
+    candidates: list[tuple[ast.Assign | ast.AnnAssign, str, str]] = []
     for node in ast.walk(tree):
         target: Optional[ast.AST] = None
         value: Optional[ast.AST] = None
@@ -548,23 +547,35 @@ def _patch_lossy_numeric_coercion_guard(
         if not isinstance(target, ast.Name) or not isinstance(value, ast.Dict):
             continue
         if any(key is None for key in value.keys):
-            # ``**mapping`` could overwrite the host-standard count at runtime.
+            # ``**mapping`` could overwrite the matched count at runtime.
             continue
-        matching_values = [
-            candidate_value
-            for key, candidate_value in zip(value.keys, value.values)
-            if isinstance(key, ast.Constant)
-            and key.value == _LOSSY_NUMERIC_COERCION_COUNT_KEY
-        ]
-        if len(matching_values) != 1:
+        if any(not isinstance(key, ast.Constant) for key in value.keys):
+            # A computed key could equal the matched literal at runtime and
+            # silently overwrite the count before the inserted guard reads it.
             continue
-        loss_value = matching_values[0]
-        loss_call = _exact_loss_count_call(
-            loss_value,
-            tree=tree,
-            parents=parents,
-        )
-        if loss_call is None or int(loss_call.lineno) not in finding_lines:
+        matching_entries: list[tuple[str, ast.AST]] = []
+        for key, candidate_value in zip(value.keys, value.values):
+            if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
+                continue
+            loss_call = _exact_loss_count_call(
+                candidate_value,
+                tree=tree,
+                parents=parents,
+            )
+            if loss_call is None or int(loss_call.lineno) not in finding_lines:
+                continue
+            matching_entries.append((key.value, candidate_value))
+        if len(matching_entries) != 1:
+            continue
+        count_key, loss_value = matching_entries[0]
+        if (
+            sum(
+                1
+                for key in value.keys
+                if isinstance(key, ast.Constant) and key.value == count_key
+            )
+            != 1
+        ):
             continue
         if (
             isinstance(loss_value, ast.Call)
@@ -573,11 +584,11 @@ def _patch_lossy_numeric_coercion_guard(
             and not builtin_int_is_safe
         ):
             continue
-        candidates.append((node, target.id))
+        candidates.append((node, target.id, count_key))
     if len(candidates) != 1:
         return code
 
-    assignment, record_name = candidates[0]
+    assignment, record_name, count_key = candidates[0]
     standalone = _standalone_statement_source(
         code,
         assignment,
@@ -592,7 +603,7 @@ def _patch_lossy_numeric_coercion_guard(
         lines[assignment.end_lineno - 1] += "\n"
     guard = (
         f"{indent}# {_LOSSY_NUMERIC_COERCION_GUARD_SENTINEL}\n"
-        f'{indent}if {record_name}["{_LOSSY_NUMERIC_COERCION_COUNT_KEY}"] > 0:\n'
+        f"{indent}if {record_name}[{count_key!r}] > 0:\n"
         f'{body_indent}raise ValueError("numeric coercion invalidated observed '
         'non-missing values")\n'
     )
