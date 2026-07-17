@@ -407,6 +407,18 @@ def _build_bundle(*, run_dir: Path, observed_events: list[tuple[str, str]]):
     ]
     current_by_id = {record.evidence_id: record for record in step_current_evidence}
     current_ids = set(current_by_id)
+    raw_aliases = {
+        str(alias): str(evidence_id)
+        for alias, evidence_id in store.aliases().items()
+        if evidence_id in current_ids
+    }
+    # EvidenceStore publishes every record id as a compatibility self-alias.
+    # Those ids are content-derived (for example analyzer prose is allowed to
+    # vary while its semantic owner stays fixed), so hashing the raw self-alias
+    # names makes this characterization oracle environment-sensitive.  The
+    # current-evidence bundle above already locks every selected record.  Keep
+    # the self-alias invariant as a count and hash only user/product semantic
+    # aliases here.
     aliases = {
         alias: {
             "kind": current_by_id[evidence_id].kind,
@@ -418,8 +430,8 @@ def _build_bundle(*, run_dir: Path, observed_events: list[tuple[str, str]]):
                 else None
             ),
         }
-        for alias, evidence_id in sorted(store.aliases().items())
-        if evidence_id in current_ids
+        for alias, evidence_id in sorted(raw_aliases.items())
+        if alias != evidence_id
     }
     claims = store.authoritative_numeric_claims(ledger)
     evidence_authority = sorted(
@@ -472,7 +484,7 @@ def _build_bundle(*, run_dir: Path, observed_events: list[tuple[str, str]]):
     }
     return _normalize(
         {
-            "schema": "easyicu.freeze_char_golden/1",
+            "schema": "easyicu.freeze_char_golden/2",
             "volatile_field_allowlist": sorted(_VOLATILE_FIELD_ALLOWLIST),
             "step_statuses": [
                 {
@@ -498,6 +510,11 @@ def _build_bundle(*, run_dir: Path, observed_events: list[tuple[str, str]]):
             "current_aliases": {
                 "count": len(aliases),
                 "mapping_sha256": _canonical_sha256(aliases),
+            },
+            "current_self_aliases": {
+                "count": sum(
+                    alias == evidence_id for alias, evidence_id in raw_aliases.items()
+                ),
             },
             "authoritative_numeric_claims": {
                 "count": len(claim_authority),

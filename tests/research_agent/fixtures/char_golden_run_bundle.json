@@ -167,12 +167,15 @@
     ]
   },
   "current_aliases": {
-    "count": 60,
-    "mapping_sha256": "e84015a60a08c870b2e6fb3a3eddfb34b1f6fca228ff1ffa6f1ef387c193c839"
+    "count": 31,
+    "mapping_sha256": "0757e2be2ac59f65757b74983e4f49f85fd75fe292e678b18b1bd81d152e8030"
   },
   "current_evidence": {
     "count": 29,
     "mapping_sha256": "f30fdd37beceb1f6259a17e29777f0a61f25865c5c0168fd7c87034371a7c68f"
+  },
+  "current_self_aliases": {
+    "count": 29
   },
   "dependency_edges": [
     [
@@ -292,7 +295,7 @@
     "status": "diagnostic_only",
     "strict_fail_closed": true
   },
-  "schema": "easyicu.freeze_char_golden/1",
+  "schema": "easyicu.freeze_char_golden/2",
   "step_statuses": [
     {
       "status": "ok",
