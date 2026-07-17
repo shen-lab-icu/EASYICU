@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import json
+
 from easyicu.research_agent.agentic_coder import AgenticCoderAgent
-from easyicu.research_agent.agents import CoderAgent
+from easyicu.research_agent.agents import CoderAgent as _ProductionCoderAgent
+from easyicu.research_agent.coder_authority_notes import HostCoderAuthority
 from easyicu.research_agent.llm import LLMMessage
 from easyicu.research_agent.pipeline_execute import (
-    _coder_context_with_typed_parent_schema_receipts,
+    _coder_authority_with_typed_parent_schema_receipts,
     _typed_parent_schema_context_block,
 )
 from easyicu.research_agent.plan_utils import effect_output_authorized
+from easyicu.research_agent.repair_reasons import RepairPromptAuthority, RepairRoute
 from easyicu.research_agent.schema import AnalysisStep, PlannedModelRequirement
 
 
@@ -18,6 +22,102 @@ class _RecordingLLM:
     def complete(self, messages, **kwargs):  # noqa: ANN001, ANN003
         self.messages = list(messages)
         return "import os\n"
+
+
+def _test_host_repair_authority(run_log: str) -> RepairPromptAuthority:
+    """Turn explicit test-host diagnostics into the production side-channel."""
+
+    text = str(run_log or "")
+    ticket: list[dict[str, object]] = [
+        {
+            "validator": "mechanical_code_preflight",
+            "message": text,
+            "detail": {},
+        }
+    ]
+    decoder = json.JSONDecoder()
+    for marker in (
+        "TYPED REPAIR TICKET (authoritative routing):",
+        "DETAIL:",
+    ):
+        cursor = 0
+        while True:
+            marker_index = text.find(marker, cursor)
+            if marker_index < 0:
+                break
+            fragment = text[marker_index + len(marker) :].lstrip()
+            try:
+                payload, consumed = decoder.raw_decode(fragment)
+            except json.JSONDecodeError:
+                cursor = marker_index + len(marker)
+                continue
+            if isinstance(payload, list):
+                for item in payload:
+                    if not isinstance(item, dict):
+                        continue
+                    trusted_item = dict(item)
+                    trusted_item.setdefault("validator", "mechanical_code_preflight")
+                    ticket.append(trusted_item)
+            elif isinstance(payload, dict):
+                trusted_item = dict(payload)
+                trusted_item.setdefault("validator", "mechanical_code_preflight")
+                ticket.append(trusted_item)
+            cursor = marker_index + len(marker) + consumed
+    normalized = text.lower()
+    route_codes = []
+    phrase_routes = {
+        RepairRoute.SPARSE_EVENT: (
+            "binary event",
+            "reconcile_binary_event_presence",
+        ),
+        RepairRoute.PROVENANCE_VALUE_SELECTION: (
+            "provenance",
+            "gated on measured",
+        ),
+        RepairRoute.PRIMARY_EXPOSURE_BINDING: (
+            "authoritative_primary_exposure",
+            "authoritative primary exposure",
+        ),
+        RepairRoute.TABULAR_EXPOSURE_BINDING: (
+            "exposure table",
+            "exposure-table",
+            "exposure artifact",
+            "primary_exposure_definition",
+            "assignment model artifact",
+            "typed dataframe artifact",
+        ),
+        RepairRoute.ASSIGNMENT_COMPLETION: ("assignment_model_unfitted",),
+        RepairRoute.ASSIGNMENT_BINDING: ("registered propensity",),
+        RepairRoute.UNDEFINED_HELPER: ("undefined_helper", "undefined helper"),
+        RepairRoute.FIGURE_SOURCE_TRACE: ("not verified against",),
+        RepairRoute.STRUCTURAL_ACCOUNTING: ("partial cohort flow",),
+        RepairRoute.ARBITRARY_COLUMN: ("column discovery",),
+        RepairRoute.ORDINAL_COVARIATE: ("ordinal",),
+    }
+    for route, phrases in phrase_routes.items():
+        if any(phrase in normalized for phrase in phrases):
+            route_codes.append(route)
+    if "reconcile_binary_event_presence" in normalized:
+        route_codes = [
+            route
+            for route in route_codes
+            if route is not RepairRoute.PROVENANCE_VALUE_SELECTION
+        ]
+    return RepairPromptAuthority.create(
+        typed_ticket=ticket,
+        route_codes=route_codes,
+    )
+
+
+class CoderAgent(_ProductionCoderAgent):
+    """Test adapter that marks legacy test diagnostics as host-owned input."""
+
+    def repair(self, **kwargs):  # noqa: ANN003, ANN201
+        kwargs.setdefault(
+            "repair_authority",
+            _test_host_repair_authority(str(kwargs.get("run_log") or "")),
+        )
+        return super().repair(**kwargs)
 
 
 def _context(ra):
@@ -77,10 +177,11 @@ def test_initial_and_repair_coder_receive_the_same_typed_parent_schema(ra):
         }
     }
     schema_block = _typed_parent_schema_context_block(bindings)
-    context = _coder_context_with_typed_parent_schema_receipts(
-        context=_context(ra),
+    authority = _coder_authority_with_typed_parent_schema_receipts(
+        authority=HostCoderAuthority(),
         bindings=bindings,
     )
+    context = _context(ra)
     step = ra.AnalysisStep(
         step_id="render",
         intent="Render the declared typed table product.",
@@ -91,15 +192,16 @@ def test_initial_and_repair_coder_receive_the_same_typed_parent_schema(ra):
     llm = _RecordingLLM()
     coder = CoderAgent(llm)
 
-    coder.run(context=context, step=step)
-    initial_prompt = llm.messages[-1].content
+    coder.run(context=context, step=step, host_authority=authority)
+    initial_prompt = "\n".join(message.content for message in llm.messages)
     coder.repair(
         context=context,
         step=step,
+        host_authority=authority,
         code="import os\n",
         run_log="A requested column is absent from the bound parent table.",
     )
-    repair_prompt = llm.messages[-1].content
+    repair_prompt = "\n".join(message.content for message in llm.messages)
 
     assert schema_block in initial_prompt
     assert schema_block in repair_prompt

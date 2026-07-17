@@ -195,9 +195,18 @@ def test_every_pipeline_llm_repair_reservation_is_authority_bound():
     assert len(calls) == 7
     for call in calls:
         keywords = {keyword.arg for keyword in call.keywords}
-        assert keywords == {
+        assert {
             "before_code",
             "repair_ticket",
+            "repair_authority",
+            "provider_category",
+            "failure_status",
+        } <= keywords
+        assert keywords <= {
+            "before_code",
+            "repair_ticket",
+            "repair_authority",
+            "current_repair_authority",
             "provider_category",
             "failure_status",
         }
@@ -219,6 +228,46 @@ def test_every_pipeline_llm_repair_reservation_is_authority_bound():
         and isinstance(keyword.value, ast.Constant)
     )
     assert reserved_categories == sorted([*coder_categories, "compatibility_repair"])
+
+
+def test_runtime_repair_uses_empty_typed_authority_side_channel():
+    tree = ast.parse(inspect.getsource(pipeline_execute.run_execute_phase))
+    empty_runtime_assignments = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "runtime_repair_authority"
+            for target in node.targets
+        )
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == "RepairPromptAuthority"
+        and not node.value.args
+        and not node.value.keywords
+    ]
+    assert len(empty_runtime_assignments) == 1
+
+    for function_name in ("_consume_llm_repair_budget", "_repair_with_capsule"):
+        runtime_calls = []
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == function_name
+            ):
+                continue
+            keywords = {keyword.arg: keyword.value for keyword in node.keywords}
+            category = keywords.get("provider_category")
+            if (
+                isinstance(category, ast.Constant)
+                and category.value == "runtime_repair"
+            ):
+                runtime_calls.append(keywords)
+        assert len(runtime_calls) == 1
+        authority = runtime_calls[0]["repair_authority"]
+        assert isinstance(authority, ast.Name)
+        assert authority.id == "runtime_repair_authority"
 
 
 def test_every_pipeline_coder_repair_binds_current_logical_attempt():
@@ -371,7 +420,7 @@ def test_repair_coordinator_keeps_patch_as_default_without_audit_reservation():
     )
 
 
-def test_repair_coordinator_does_not_buy_rewrite_for_patch_response_script():
+def test_patch_response_full_script_requires_authorized_rewrite_transport():
     calls: list[str] = []
     provider = StepProviderCallBudget(2, step_id=STEP_ID)
     coordinator = RepairCoordinator(
@@ -384,12 +433,18 @@ def test_repair_coordinator_does_not_buy_rewrite_for_patch_response_script():
     result = coordinator.repair(
         code="import os\nvalue = 1\n",
         patch_call=lambda: calls.append("patch") or "import os\nvalue = 2\n",
-        full_rewrite_call=lambda _reason: calls.append("rewrite") or "unused",
+        full_rewrite_call=lambda _reason: calls.append("rewrite")
+        or "import os\nvalue = 3\n",
     )
 
-    assert calls == ["patch"]
-    assert result.mode == "patch_response_full_script"
-    assert result.provider_calls == 1
+    assert calls == ["patch", "rewrite"]
+    assert result.mode == "full_rewrite"
+    assert result.code == "import os\nvalue = 3"
+    assert result.provider_calls == 2
+    assert provider.categories == (
+        "contract_repair_patch",
+        "contract_repair_full_rewrite",
+    )
 
 
 def test_repair_coordinator_persists_completed_transport_before_return(tmp_path):
@@ -461,6 +516,118 @@ def test_repair_coordinator_persists_failed_transport_before_reraising(tmp_path)
     )
     assert state.logical_repairs[0]["transport"]["state"] == "failed"
     assert state.logical_repairs[0]["transport"]["error_type"] == "RuntimeError"
+
+
+def test_repair_preflight_fails_transport_before_any_provider_charge(tmp_path):
+    provider = _budget(tmp_path)
+    assert provider.reserve_logical_repair("runtime", max_repairs=2) == 1
+    coordinator = RepairCoordinator(
+        provider_budget=provider,
+        provider_category="runtime_repair",
+        normalize_script=lambda value: value,
+        is_executable_script=lambda value: value.startswith("import "),
+    )
+    provider_called = False
+
+    def patch_call():
+        nonlocal provider_called
+        provider_called = True
+        return "unused"
+
+    with pytest.raises(RuntimeError, match="prompt transport too large"):
+        coordinator.repair(
+            code="import os\nvalue = 1\n",
+            patch_preflight=lambda: (_ for _ in ()).throw(
+                RuntimeError("prompt transport too large")
+            ),
+            patch_call=patch_call,
+            full_rewrite_call=lambda _reason: "unused",
+            logical_repair_attempt_id=1,
+        )
+
+    state = load_provider_call_budget_state(
+        tmp_path / "receipt.json",
+        step_id=STEP_ID,
+        expected_reserved_final_category="concept_audit",
+    )
+    assert provider_called is False
+    assert provider.categories == ()
+    assert state.logical_repairs[0]["transport"]["state"] == "failed"
+    assert state.logical_repairs[0]["transport"]["error_type"] == "RuntimeError"
+
+
+def test_direct_rewrite_preflight_fails_before_any_provider_charge(tmp_path):
+    provider = _budget(tmp_path, limit=2)
+    assert provider.reserve_logical_repair("runtime", max_repairs=2) == 1
+    coordinator = RepairCoordinator(
+        provider_budget=provider,
+        provider_category="runtime_repair",
+        normalize_script=lambda value: value,
+        is_executable_script=lambda value: value.startswith("import "),
+    )
+    provider_called = False
+
+    def rewrite_call(_reason):
+        nonlocal provider_called
+        provider_called = True
+        return "unused"
+
+    with pytest.raises(RuntimeError, match="rewrite prompt too large"):
+        coordinator.repair(
+            code="import os\nvalue = 1\n",
+            patch_call=lambda: "unused",
+            full_rewrite_preflight=lambda _reason: (_ for _ in ()).throw(
+                RuntimeError("rewrite prompt too large")
+            ),
+            full_rewrite_call=rewrite_call,
+            logical_repair_attempt_id=1,
+        )
+
+    state = load_provider_call_budget_state(
+        tmp_path / "receipt.json",
+        step_id=STEP_ID,
+        expected_reserved_final_category="concept_audit",
+    )
+    assert provider_called is False
+    assert provider.categories == ()
+    assert state.logical_repairs[0]["transport"]["state"] == "failed"
+
+
+def test_fallback_rewrite_preflight_preserves_only_paid_patch_call(tmp_path):
+    provider = _budget(tmp_path)
+    assert provider.reserve_logical_repair("runtime", max_repairs=2) == 1
+    coordinator = RepairCoordinator(
+        provider_budget=provider,
+        provider_category="runtime_repair",
+        normalize_script=lambda value: value,
+        is_executable_script=lambda value: value.startswith("import "),
+    )
+    rewrite_called = False
+
+    def rewrite_call(_reason):
+        nonlocal rewrite_called
+        rewrite_called = True
+        return "unused"
+
+    with pytest.raises(RuntimeError, match="rewrite prompt too large"):
+        coordinator.repair(
+            code="import os\nvalue = 1\n",
+            patch_call=lambda: "not a patch",
+            full_rewrite_preflight=lambda _reason: (_ for _ in ()).throw(
+                RuntimeError("rewrite prompt too large")
+            ),
+            full_rewrite_call=rewrite_call,
+            logical_repair_attempt_id=1,
+        )
+
+    state = load_provider_call_budget_state(
+        tmp_path / "receipt.json",
+        step_id=STEP_ID,
+        expected_reserved_final_category="concept_audit",
+    )
+    assert rewrite_called is False
+    assert provider.categories == ("runtime_repair_patch",)
+    assert state.logical_repairs[0]["transport"]["state"] == "failed"
 
 
 def test_repair_coordinator_rejects_mismatched_bound_provider_category(tmp_path):

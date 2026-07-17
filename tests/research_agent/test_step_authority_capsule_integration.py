@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from easyicu.research_agent.coder_authority_notes import HostCoderAuthority
 from easyicu.research_agent.provider_budget import (
     StepProviderCallBudget,
     load_provider_call_budget_state,
@@ -745,3 +746,69 @@ def test_frozen_scoped_context_accepts_only_memory_metadata_drift(
         scoped_coder_context=changed_science.model_dump(mode="json"),
     )
     assert adopt_frozen_scoped_coder_context(verified, changed_coordinates) is None
+
+
+def test_frozen_scoped_context_binds_host_authority_outside_user_notes(
+    tmp_path: Path,
+) -> None:
+    context = ResearchContext(
+        research_question="Summarize the cohort.",
+        cohort=CohortDescriptor(
+            cohort_name="capsule_host_authority",
+            database="synthetic",
+            n_patients=3,
+            n_stays=3,
+        ),
+        variables=[],
+        notes="user note with HOST-OWNED words",
+        created_at=datetime(2026, 7, 16, 10, tzinfo=timezone.utc),
+    )
+    authority = HostCoderAuthority().append("exact schema receipt A")
+
+    def wrapped(value: ResearchContext, host: HostCoderAuthority) -> dict:
+        return {
+            "research_context": value.model_dump(mode="json"),
+            "host_coder_authority": host.payload(),
+        }
+
+    coordinates, _code, candidate_ref, _budget, _receipt = _initial_candidate(
+        tmp_path,
+        scoped_coder_context=wrapped(context, authority),
+    )
+    verified = load_verified_step_authority_capsule(tmp_path, ref=candidate_ref)
+    resumed_context = context.model_copy(
+        update={
+            "notes": "different user run memory",
+            "created_at": datetime(2026, 7, 16, 11, tzinfo=timezone.utc),
+        }
+    )
+    same_authority_coordinates = _coordinates(
+        tmp_path,
+        scoped_coder_context=wrapped(resumed_context, authority),
+    )
+
+    adopted = adopt_frozen_scoped_coder_context(
+        verified,
+        same_authority_coordinates,
+    )
+    assert adopted is not None
+    assert adopted[1].scoped_coder_context == coordinates.scoped_coder_context
+
+    changed_authority_coordinates = _coordinates(
+        tmp_path,
+        scoped_coder_context=wrapped(
+            resumed_context,
+            HostCoderAuthority().append("exact schema receipt B"),
+        ),
+    )
+    assert (
+        adopt_frozen_scoped_coder_context(
+            verified,
+            changed_authority_coordinates,
+        )
+        is None
+    )
+    assert (
+        changed_authority_coordinates.scoped_coder_context
+        != same_authority_coordinates.scoped_coder_context
+    )

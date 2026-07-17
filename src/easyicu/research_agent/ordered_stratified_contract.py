@@ -31,6 +31,11 @@ CONTROLLED_METHOD = "ordinal_stratified_descriptive_analysis"
 CONTRACT_KEY = "ordered_stratified_contract"
 CONTRACT_SCHEMA_VERSION = "1.0"
 
+_FIGURE_OUTPUT_KINDS = frozenset({"figure", "plot", "chart", "fig", "heatmap"})
+_LEGACY_RENDERING_PRODUCTS = frozenset(
+    {"figure", "plot", "chart", "heatmap", "visual", "visualization"}
+)
+
 _STRATIFIED_REQUIRED_COLUMNS = {
     "level_value",
     "level_order",
@@ -93,10 +98,18 @@ def is_ordered_stratified_analysis_step(step: AnalysisStep) -> bool:
 
     if str(step.method or "").strip().lower() != CONTROLLED_METHOD:
         return False
-    outputs = [str(value or "").strip().lower() for value in step.expected_outputs]
-    if outputs and all(
-        "figure" in value or "plot" in value or "visual" in value for value in outputs
-    ):
+
+    def _is_rendering_product(value: object) -> bool:
+        token = str(value or "").strip().lower()
+        kind, separator, product = token.partition(":")
+        if separator:
+            # A typed kind is authoritative.  A table/artifact name containing
+            # ``figure`` remains an analysis product, not a rendering child.
+            return kind.strip() in _FIGURE_OUTPUT_KINDS and bool(product.strip())
+        return token in _LEGACY_RENDERING_PRODUCTS
+
+    outputs = [value for value in step.expected_outputs if str(value or "").strip()]
+    if outputs and all(_is_rendering_product(value) for value in outputs):
         return False
     return True
 
