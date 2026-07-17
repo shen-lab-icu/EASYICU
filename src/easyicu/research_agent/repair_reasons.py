@@ -522,6 +522,7 @@ def structured_repair_metadata(
 
 _DETAIL_REASON_CODES = {
     "invalid_local_helper_call": RepairReason.INVALID_HELPER_SIGNATURE,
+    "host_helper_runtime_introspection": RepairReason.INVALID_HELPER_SIGNATURE,
     "undefined_helper_call": RepairReason.UNDEFINED_HELPER,
     "branch_local_unbound": RepairReason.UNBOUND_LOCAL,
     "lossy_ordinal_rounding": RepairReason.LOSSY_ORDINAL_ROUNDING,
