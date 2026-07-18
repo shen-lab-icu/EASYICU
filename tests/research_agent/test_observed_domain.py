@@ -19,7 +19,12 @@ import numpy as np
 import pandas as pd
 
 from easyicu.research_agent.agents import _format_observed_domain
+from easyicu.research_agent.cohort_artifact_facts import observed_domain_for_series
 from easyicu.research_agent.context import _observed_domain
+
+
+def test_legacy_observed_domain_name_is_canonical_object() -> None:
+    assert _observed_domain is observed_domain_for_series
 
 
 def test_binary_criterion_flagged_binary():
