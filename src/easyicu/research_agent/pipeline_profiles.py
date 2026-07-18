@@ -199,13 +199,34 @@ NPJ_DM_2026_07_17 = SubmissionProfile(
     enable_experience_bank=False,
 )
 
-DEFAULT_SUBMISSION_PROFILE_REF = NPJ_DM_2026_07_17.ref
+NPJ_DM_2026_07_18 = SubmissionProfile(
+    name="npj_dm",
+    version="20260718",
+    locked_at="2026-07-18T17:55:00-04:00",
+    evidence_enforcement_mode="strict",
+    writer_digest_widened=True,
+    enable_reproducibility_envelope=True,
+    requires_arm="aware",
+    requires_runner="docker",
+    # Additive re-lock after the post-full6 data-foundation corrections in
+    # 58d2267, 63b0967, and 8e97d31.  This profile pins the packaged dictionary
+    # bytes used to materialize fresh canonical inputs; it does not rewrite the
+    # historical full6_20260717 extraction lock or authorize reuse of cohorts
+    # materialized under that older dictionary authority.
+    expected_concept_dict_sha="fccadc53622dc82fe1dc8696617e52044168b6a84a9255e97e59df9e53bc5803",
+    expected_sofa2_dict_sha="61f37a41083cd96df49a2e61d26c682e9d090d0a22d05ff97ba85a966b165b1c",
+    enable_memory=False,
+    enable_experience_bank=False,
+)
+
+DEFAULT_SUBMISSION_PROFILE_REF = NPJ_DM_2026_07_18.ref
 SUBMISSION_PROFILE_REGISTRY: Dict[str, SubmissionProfile] = {
     NPJ_DM_2026_05.ref: NPJ_DM_2026_05,
     NPJ_DM_2026_06.ref: NPJ_DM_2026_06,
     NPJ_DM_2026_07.ref: NPJ_DM_2026_07,
     NPJ_DM_2026_07_16.ref: NPJ_DM_2026_07_16,
     NPJ_DM_2026_07_17.ref: NPJ_DM_2026_07_17,
+    NPJ_DM_2026_07_18.ref: NPJ_DM_2026_07_18,
 }
 
 
@@ -229,6 +250,7 @@ __all__ = [
     "NPJ_DM_2026_07",
     "NPJ_DM_2026_07_16",
     "NPJ_DM_2026_07_17",
+    "NPJ_DM_2026_07_18",
     "DEFAULT_SUBMISSION_PROFILE_REF",
     "SUBMISSION_PROFILE_REGISTRY",
     "get_submission_profile",

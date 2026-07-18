@@ -81,7 +81,6 @@ def _bootstrap_imports():
 _REQUIRED_KINDS = {"code", "log", "table", "figure", "statistic"}
 _ARM_ORDER = ("naive", "aware")
 _ARM_LABELS = {"naive": "Naive", "aware": "ICU-aware"}
-_DEFAULT_SUBMISSION_PROFILE_REF = "npj_dm/20260611"
 
 
 class _JSONLObjectDecodeError(ValueError):
@@ -137,9 +136,20 @@ def _resolve_submission_profile(profile_ref: Optional[str]):
     from easyicu.research_agent.pipeline_profiles import get_submission_profile
 
     try:
-        return get_submission_profile(profile_ref or _DEFAULT_SUBMISSION_PROFILE_REF)
+        return get_submission_profile(profile_ref)
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
+
+
+def _default_submission_profile_ref() -> str:
+    """Resolve the benchmark CLI default from the canonical registry."""
+
+    _bootstrap_imports()
+    from easyicu.research_agent.pipeline_profiles import (
+        DEFAULT_SUBMISSION_PROFILE_REF,
+    )
+
+    return DEFAULT_SUBMISSION_PROFILE_REF
 
 
 def _register_case_patterns(case_name: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -1936,6 +1946,7 @@ def main() -> int:
 
     from tests.bench import ANALYSIS_BENCH_ITEMS, RULE_BENCH_ITEMS  # type: ignore
 
+    default_submission_profile_ref = _default_submission_profile_ref()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--bench-kind",
@@ -2155,10 +2166,10 @@ def main() -> int:
     )
     parser.add_argument(
         "--profile",
-        default=_DEFAULT_SUBMISSION_PROFILE_REF,
+        default=default_submission_profile_ref,
         help=(
             "Versioned submission profile ref used with --submission-profile "
-            f"(default: {_DEFAULT_SUBMISSION_PROFILE_REF})."
+            f"(default: {default_submission_profile_ref})."
         ),
     )
     parser.add_argument(

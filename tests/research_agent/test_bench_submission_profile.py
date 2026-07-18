@@ -13,6 +13,7 @@ sys.path.insert(0, str(TOOLS_DIR))
 try:
     from run_research_agent_bench import (  # type: ignore[import-not-found]
         _benchmark_pipeline_options,
+        _default_submission_profile_ref,
         _enforce_development_resume_repair_budget,
         _enforce_mock_aware_provider,
         _enforce_submission_profile_arms,
@@ -28,6 +29,7 @@ from easyicu.research_agent.pipeline_profiles import (
     NPJ_DM_2026_07,
     NPJ_DM_2026_07_16,
     NPJ_DM_2026_07_17,
+    NPJ_DM_2026_07_18,
     SUBMISSION_PROFILE_REGISTRY,
     get_submission_profile,
 )
@@ -231,11 +233,13 @@ def test_submission_profile_registry_is_versioned() -> None:
     )
     # Prior default (20260716) stays retrievable as an immutable archival contract.
     assert get_submission_profile("npj_dm/20260716") is NPJ_DM_2026_07_16
+    # The 20260717 profile remains retrievable after the additive re-lock.
+    assert get_submission_profile("npj_dm/20260717") is NPJ_DM_2026_07_17
     current_profile = get_submission_profile()
-    assert current_profile is NPJ_DM_2026_07_17
+    assert current_profile is NPJ_DM_2026_07_18
     assert (
         current_profile.expected_concept_dict_sha
-        == "b930e4384a07df16bc642a1e7df48d9fb5248c6bdac27f60fd78882ce612df54"
+        == "fccadc53622dc82fe1dc8696617e52044168b6a84a9255e97e59df9e53bc5803"
     )
     assert DEFAULT_SUBMISSION_PROFILE_REF == current_profile.ref
     with pytest.raises(ValueError, match="Unknown submission profile"):
@@ -261,9 +265,10 @@ def test_pre_existing_profile_options_are_immutable_three_keys() -> None:
 
 
 def test_new_canonical_profile_pins_cross_run_memory_off() -> None:
-    # Only the new profile pins cross-run memory OFF as a submission-defining
-    # option — exactly five keys.
-    assert NPJ_DM_2026_07_17.as_pipeline_options() == {
+    # The current profile pins cross-run memory OFF as a submission-defining
+    # option — exactly five keys.  The archived 20260717 profile also retains
+    # the explicit False values it was originally sealed with.
+    assert NPJ_DM_2026_07_18.as_pipeline_options() == {
         "evidence_enforcement_mode": "strict",
         "writer_digest_widened": True,
         "enable_reproducibility_envelope": True,
@@ -271,7 +276,7 @@ def test_new_canonical_profile_pins_cross_run_memory_off() -> None:
         "enable_experience_bank": False,
     }
     # The default profile is the one that pins it off.
-    assert DEFAULT_SUBMISSION_PROFILE_REF == NPJ_DM_2026_07_17.ref
+    assert DEFAULT_SUBMISSION_PROFILE_REF == NPJ_DM_2026_07_18.ref
 
 
 def test_every_profile_either_omits_or_pins_memory_off_never_on() -> None:
@@ -316,11 +321,43 @@ def test_pre_existing_profile_to_dict_omits_memory_fields() -> None:
 
 
 def test_new_canonical_profile_to_dict_surfaces_pinned_memory_fields() -> None:
-    # The only profile that pins cross-run memory DOES surface both keys in its
-    # public serialization — explicitly False, not absent.
-    payload = NPJ_DM_2026_07_17.to_dict()
+    # The current profile surfaces both pinned keys in its public serialization
+    # — explicitly False, not absent.
+    payload = NPJ_DM_2026_07_18.to_dict()
     assert payload["enable_memory"] is False
     assert payload["enable_experience_bank"] is False
+
+
+def test_20260717_profile_to_dict_remains_immutable_after_relock() -> None:
+    expected = {
+        "enable_experience_bank": False,
+        "enable_memory": False,
+        "enable_reproducibility_envelope": True,
+        "evidence_enforcement_mode": "strict",
+        "expected_concept_dict_sha": "b930e4384a07df16bc642a1e7df48d9fb5248c6bdac27f60fd78882ce612df54",
+        "expected_sofa2_dict_sha": "65075a691ef103112d9df0df452601299c37603c1c075742fe211bb75d2f92cc",
+        "locked_at": "2026-07-17T00:00:00Z",
+        "name": "npj_dm",
+        "ref": "npj_dm/20260717",
+        "requires_arm": "aware",
+        "requires_runner": "docker",
+        "version": "20260717",
+        "writer_digest_widened": True,
+    }
+    assert NPJ_DM_2026_07_17.to_dict() == expected
+    assert json.dumps(NPJ_DM_2026_07_17.to_dict(), sort_keys=True) == json.dumps(
+        expected, sort_keys=True
+    )
+
+
+def test_benchmark_default_profile_is_registry_owned() -> None:
+    assert _default_submission_profile_ref() == DEFAULT_SUBMISSION_PROFILE_REF
+
+
+def test_current_profile_is_reexported_by_package_identity() -> None:
+    import easyicu.research_agent as research_agent
+
+    assert research_agent.NPJ_DM_2026_07_18 is NPJ_DM_2026_07_18
 
 
 # Frozen canonical to_dict() snapshots for the archival profiles. Key-set
