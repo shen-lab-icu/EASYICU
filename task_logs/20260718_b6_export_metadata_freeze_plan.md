@@ -1,6 +1,6 @@
 # B6 export-intake / concept-metadata freeze plan
 
-> 状态：2026-07-18 10:02 EDT；**B6-A 已完成，B6-B projector + native export/intake sidecar 已完成（五步 2/5）**。
+> 状态：2026-07-18 15:16 EDT；**B6-A 已完成，B6-B 正式里程碑仍为五步 2/5；ResearchContext v2 所需的 typed materialized cohort/trajectory authority 与 replay bridge 已由 `7cc215e` 完成**。
 > 当前代码：`acc874c`/`1481f09`（B6-A）+ `7ee66fd`/`7e8c16f`（projector/source authority）+ `987bdc5`/`7674814`（sidecar/native export→Agent binding）；
 > packaged concept baseline：`8e97d31`。
 > 边界：B6-B 不混入新的 concept-dict 科学内容编辑；只建立共享、可摘要绑定的 metadata 投影。
@@ -11,7 +11,7 @@
 |---|---|---|---|
 | B6-A manifest-authoritative intake | **完成** | `acc874c`；native-first + legacy、Parquet/CSV/XLSX、containment、feature definitions、cohort/catalog/replication 共用 adapter | 保持兼容与 fail-close，不扩 case-specific intake |
 | B6-A snapshot/performance | **完成** | `1481f09`；read-only mmap verified snapshot、CSV/XLSX 单会话解析缓存、Parquet 列裁剪、四 consumer 显式 close；105 项主回归 + 64 项独立复审 | 超大 CSV/XLSX 的内存阈值/临时列式缓存是后续预算优化，非 freeze blocker |
-| B6-B typed metadata / replay identity | **进行中（2/5）** | `7ee66fd` + `7e8c16f` projector/source authority；`987bdc5` + `7674814` sidecar/native export→Agent strict binding；303 项聚合 + 28 项 meta/capability，两路 adversarial ACCEPT | 实施 materialized cohort / ResearchContext v2 bridge |
+| B6-B typed metadata / replay identity | **进行中（2/5 + v2 bridge 前置）** | `7ee66fd` + `7e8c16f` projector/source authority；`987bdc5` + `7674814` sidecar/native export→Agent strict binding；`7cc215e` typed cohort/trajectory authority、RunInputCapsule v3、legacy v2 verified receipt 与 runner pre/post integrity；202 + 95 项最终回归 | 实施 ResearchContext v2 与 scoped Planner/Coder/repair 投影 |
 
 ## 为什么 B6 不能后置
 
