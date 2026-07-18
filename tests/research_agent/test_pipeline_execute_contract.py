@@ -949,8 +949,16 @@ def test_execute_phase_routes_figure_contracts_through_early_repair_loop():
     early_gate = source.index("early_contract_errors = [")
     before_early_gate = source[:early_gate]
 
-    assert "figure_contract_validator.audit(" in before_early_gate
-    assert "figure_source_validator.audit(" in before_early_gate
+    # The figure-contract / figure-source audits are lifted into
+    # _post_canonicalization_figure_findings, which the early repair loop calls
+    # before the early-contract-error gate, so figure errors still route through
+    # the in-run repair loop.
+    assert "_post_canonicalization_figure_findings(" in before_early_gate
+    helper_source = inspect.getsource(
+        pipeline_execute._post_canonicalization_figure_findings
+    )
+    assert "figure_contract_validator.audit(" in helper_source
+    assert "figure_source_validator.audit(" in helper_source
 
 
 def test_figure_repair_precedes_output_evidence_and_numeric_claim_seal():
