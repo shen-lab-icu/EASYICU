@@ -537,7 +537,6 @@ COMPOSITE_CONCEPT_OUTPUT_SOURCES = {
 # whose outputs are surfaced through canonical web concepts above.
 HIDDEN_DICTIONARY_CONCEPTS = {
     'bicarb',
-    'cvp',
     'kdigo_aki',
     'kdigo_creat',
     'kdigo_uo',
