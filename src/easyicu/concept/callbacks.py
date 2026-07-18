@@ -7731,9 +7731,22 @@ def _callback_egfr(tables, ctx):
 
     def _broadcast(frame_tbl, value_col):
         df = frame_tbl.data
-        keys = [c for c in frame_tbl.id_columns if c in df.columns and c in id_cols]
-        if not keys or value_col not in df.columns:
+        if value_col not in df.columns:
             return None
+        keys = [c for c in frame_tbl.id_columns if c in df.columns and c in id_cols]
+        if not keys:
+            # The ICU-stay id column can be named differently on the crea time
+            # series and on the id-level demographics for the same database.
+            # MIMIC-III labels it 'icustay_id' on labevents/chartevents (crea) but
+            # 'stay_id' on the patients-derived age/sex concepts. Both are the single
+            # ICU-stay identifier carrying identical values, so when each side has
+            # exactly one id column, align by renaming rather than dropping every row.
+            demo_ids = [c for c in frame_tbl.id_columns if c in df.columns]
+            if len(demo_ids) == 1 and len(id_cols) == 1 and demo_ids[0] != id_cols[0]:
+                df = df.rename(columns={demo_ids[0]: id_cols[0]})
+                keys = [id_cols[0]]
+            else:
+                return None
         return df[keys + [value_col]].drop_duplicates(subset=keys), keys
 
     age_bc = _broadcast(age_t, "age")
