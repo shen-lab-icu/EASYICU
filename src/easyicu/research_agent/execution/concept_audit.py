@@ -54,6 +54,10 @@ class ConceptQuarantineState:
         "policy_superseded",
         "deterministic_revalidated",
         "pending_errors",
+        "resumed_draft_used",
+        "repair_materially_changed",
+        "repair_succeeded",
+        "superseded_by_fallback",
     )
 
     def __init__(self) -> None:
@@ -61,6 +65,10 @@ class ConceptQuarantineState:
         self.policy_superseded: bool = False
         self.deterministic_revalidated: bool = False
         self.pending_errors: List[ValidationFinding] = []
+        self.resumed_draft_used: bool = False
+        self.repair_materially_changed: bool = False
+        self.repair_succeeded: bool = False
+        self.superseded_by_fallback: bool = False
 
 
 @dataclass(frozen=True, slots=True)
