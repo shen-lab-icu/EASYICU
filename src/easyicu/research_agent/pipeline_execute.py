@@ -101,13 +101,13 @@ from .repair_coordination import (
     authorized_deterministic_concept_repair,
 )
 from .concept_audit_cache import LLMConceptAuditCache
-from .concept_audit_execution import (
+from .execution.concept_audit import (
     ConceptAuditAuthority,
     ConceptAuditCoordinator,
     ConceptAuditRuntime,
     ConceptQuarantineState,
 )
-from .concept_gate import (
+from .gates.concept import (
     DETERMINISTIC_CODE_GATE_VALIDATORS as _DETERMINISTIC_CODE_GATE_VALIDATORS,
     deterministic_code_gate_findings as _deterministic_code_gate_findings,
     deterministic_gate_stamp as _deterministic_gate_stamp,
