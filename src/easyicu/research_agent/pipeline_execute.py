@@ -138,14 +138,20 @@ from .evidence_registration import (
     StepEvidenceCommit,
     filter_success_alias_bindings as _filter_success_alias_bindings,
 )
-from .contract_gate import (
+from .contract_gate import (  # re-export the full contract_gate.__all__ for old-path back-compat
+    _AGENT_OWNED_ROBUSTNESS_RESULT_METHODS,
+    _AGENT_OWNED_ROBUSTNESS_RESULT_PRODUCTS,
+    _AUXILIARY_OUTPUT_KINDS,
     _authoritative_primary_robustness_contract,
     _closed_auxiliary_output_products,
     _cohort_definition_sensitivity_contract_findings,
+    _declared_sensitivity_csv_paths,
     _is_cohort_definition_sensitivity_result_step,
     _method_head,
+    _nonnegative_integral_value,
     _post_canonicalization_figure_findings,
     _read_locked_robustness_spec_dicts,
+    _sensitivity_csv_rows,
     _step_deterministic_contract_findings,
 )
 from .figure_contract_preparation import (
@@ -2761,8 +2767,6 @@ def _contract_repair_log(
     )
 
 
-
-
 def _is_terminal_publication_figure_repair_step(step: Any) -> bool:
     """Return true for rendering-only terminal publication figure repair steps."""
 
@@ -3044,8 +3048,6 @@ def _unowned_sealed_authority_markers(
     return [
         marker for marker in _SEALED_AUTHORITY_SUMMARY_MARKERS if marker in step_summary
     ]
-
-
 
 
 def _max_finding_severity(
