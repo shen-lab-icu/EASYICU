@@ -62,8 +62,8 @@ def test_compat_table_is_nonempty_and_covers_both_modules():
     covered = {m.__name__.rsplit(".", 1)[-1] for m, _ in _compat_table()}
     assert covered == {
         "contract",
-        "figure_contract_preparation",
-        "publication_figure_execution",
+        "figure_preparation",
+        "publication_figure",
     }
     assert len(contract_gate.__all__) >= 14
     assert len(figure_contract_preparation.__all__) == 8

@@ -166,7 +166,7 @@ from .gates.contract import (  # re-export the full contract gate API for old-pa
     _sensitivity_csv_rows,
     _step_deterministic_contract_findings,
 )
-from .figure_contract_preparation import (
+from .execution.figure_preparation import (
     _ensure_step_figure_contract,
     _family_has_deterministic_figure_renderer,
     _figure_contract_source_data_canonicalization_candidate,
@@ -176,7 +176,7 @@ from .figure_contract_preparation import (
     _step_has_figure_only_output_contract,
     _step_summary_paths,
 )
-from .publication_figure_execution import (
+from .execution.publication_figure import (
     SealedRendererState,
     _deterministic_publication_figure_code,
     _sealed_parent_planner_anchors,
