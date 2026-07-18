@@ -10,6 +10,7 @@ CONCEPT_DICTIONARY = {
     'sbp': ('Systolic Blood Pressure', '收缩压', 'mmHg'),
     'dbp': ('Diastolic Blood Pressure', '舒张压', 'mmHg'),
     'pulse_pressure': ('Pulse Pressure (SBP - DBP)', '脉压差 (收缩压 - 舒张压)', 'mmHg'),
+    'cvp': ('Central Venous Pressure', '中心静脉压', 'mmHg'),
     'shock_index': ('Shock Index', '休克指数', 'ratio'),
     'modified_shock_index': ('Modified Shock Index', '改良休克指数', 'ratio'),
     'diastolic_shock_index': ('Diastolic Shock Index', '舒张压休克指数', 'ratio'),
@@ -474,7 +475,7 @@ CONCEPT_GROUPS_INTERNAL = {
     'sepsis3_sofa2': ['sep3_sofa2'],  # 🔧 共享概念移到单独的 sepsis_shared 模块
     'sepsis3_sofa1': ['sep3_sofa1'],  # 🔧 共享概念移到单独的 sepsis_shared 模块
     'sepsis_shared': ['susp_inf', 'infection_icd', 'samp', 'culture_positive', 'bld_culture_positive'],  # Sepsis共享概念（已移除sep3）
-    'vitals': ['hr', 'map', 'sbp', 'dbp', 'pulse_pressure', 'temp', 'spo2', 'resp', 'shock_index', 'modified_shock_index', 'diastolic_shock_index'],  # 🔧 etco2 移到 ventilator
+    'vitals': ['hr', 'map', 'sbp', 'dbp', 'pulse_pressure', 'cvp', 'temp', 'spo2', 'resp', 'shock_index', 'modified_shock_index', 'diastolic_shock_index'],  # 🔧 etco2 移到 ventilator；cvp(中心静脉压,measured 血流动力学 vital,dict category=vitals)接入 vitals 模块,不再走单独 cvp_extraction
     'respiratory': ['pafi', 'safi', 'fio2', 'supp_o2', 'vent_ind', 'vent_start', 'vent_end', 'o2sat', 'sao2', 'mech_vent', 'ett_gcs', 'ecmo', 'ecmo_indication', 'adv_resp', 'oxygenation_index'],
     'ventilator': ['peep', 'tidal_vol', 'tidal_vol_set', 'pip', 'plateau_pres', 'mean_airway_pres', 'minute_vol', 'vent_rate', 'etco2', 'compliance', 'driving_pres', 'ps', 'vent_mode', 'vent_breath_seq', 'driving_pres_controlled'],
     'blood_gas': ['be', 'cai', 'hbco', 'lact', 'methb', 'pco2', 'ph', 'po2', 'tco2'],
@@ -648,6 +649,7 @@ CLINICAL_THRESHOLDS = {
     'na':   {'lines': [135, 145], 'colors': ['#f59e0b', '#f59e0b'], 'labels': ['Hyponatremia', 'Hypernatremia'], 'unit': 'mEq/L', 'source': 'standard reference range'},
     'anion_gap': {'lines': [8, 16], 'colors': ['#3b82f6', '#ef4444'], 'labels': ['Low AG', 'High AG (metabolic acidosis)'], 'unit': 'mEq/L', 'source': 'standard chemistry'},
     'pulse_pressure': {'lines': [25, 60], 'colors': ['#ef4444', '#f59e0b'], 'labels': ['Narrow PP (shock)', 'Wide PP'], 'unit': 'mmHg', 'source': 'hemodynamic textbook'},
+    'cvp':  {'lines': [12], 'colors': ['#ef4444'], 'labels': ['Venous congestion (↑AKI risk)'], 'unit': 'mmHg', 'source': 'venous congestion / CVP-AKI literature'},
     'plt':  {'lines': [150], 'colors': ['#ef4444'], 'labels': ['Thrombocytopenia'], 'unit': '×10³/µL', 'source': 'SOFA coag component'},
     'hgb':  {'lines': [7], 'colors': ['#ef4444'], 'labels': ['Severe Anemia'], 'unit': 'g/dL', 'source': 'WHO anemia; TRICC transfusion'},
     'inr_pt': {'lines': [1.5], 'colors': ['#f59e0b'], 'labels': ['Coagulopathy'], 'unit': '', 'source': 'clinical coagulopathy threshold'},
@@ -661,7 +663,7 @@ CLINICAL_THRESHOLDS = {
 
 # 临床概念分道映射
 CLINICAL_LANES = {
-    'vitals': ['hr', 'map', 'sbp', 'dbp', 'temp', 'spo2', 'resp'],
+    'vitals': ['hr', 'map', 'sbp', 'dbp', 'cvp', 'temp', 'spo2', 'resp'],
     'labs': ['lact', 'crea', 'bili', 'plt', 'hgb', 'wbc', 'inr_pt', 'glu', 'k', 'na', 'alb', 'crp', 'tnt', 'ph', 'po2', 'pco2'],
     'interventions': ['norepi_rate', 'epi_rate', 'dopa_rate', 'dobu_rate', 'fio2', 'peep', 'ins', 'abx', 'cort', 'rrt'],
     'scores': ['sofa', 'sofa2', 'qsofa', 'sirs', 'gcs', 'mews', 'news', 'pafi', 'safi'],
