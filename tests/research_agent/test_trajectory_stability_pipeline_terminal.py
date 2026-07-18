@@ -409,9 +409,11 @@ class _TerminalRunner:
 
 
 def _disable_unrelated_step_audits(monkeypatch: pytest.MonkeyPatch) -> None:
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent import contract_gate, pipeline_execute
 
-    monkeypatch.setattr(pipeline_execute, "_step_contract_findings", lambda **_: [])
+    # ``_step_contract_findings`` now resolves inside the moved deterministic
+    # contract gate (``contract_gate``); patch it there so the gate sees the stub.
+    monkeypatch.setattr(contract_gate, "_step_contract_findings", lambda **_: [])
     monkeypatch.setattr(pipeline_execute, "trajectory_bundle_findings", lambda **_: [])
     monkeypatch.setattr(
         pipeline_execute.RuntimeSupervisor,
@@ -469,10 +471,10 @@ def _run_terminal_case(
             concept_audit,
         )
     if stability_mode == "ok_contract_error":
-        from easyicu.research_agent import pipeline_execute
+        from easyicu.research_agent import contract_gate
 
         monkeypatch.setattr(
-            pipeline_execute,
+            contract_gate,
             "_step_contract_findings",
             lambda **kwargs: (
                 [
