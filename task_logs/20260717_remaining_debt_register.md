@@ -1,7 +1,7 @@
 # research_agent 架构总控板 / 剩余债务台账 — 当前单一执行视图
 
 > 更新：2026-07-18 08:16 EDT
-> 分支 / 当前代码基线：`refactor/agent-control-plane@1481f09`（packaged concept baseline `63b0967`）
+> 分支 / research-agent 生产基线：`refactor/agent-control-plane@1481f09`（packaged concept baseline `8e97d31`）
 > 当前策略：**先完成有边界的 Track B-Core 架构整理，再 fresh 重跑 E3/H2/E2，随后执行 3–6 个 held-out 全流程。**
 
 ## 文档权威关系
@@ -53,7 +53,7 @@
 | 目录 / import cycle 治理 | **当前批完成，持续门禁** | 稳定实现归入职责子包；parent artifact authority 进 `authority/parent_artifact.py`，distribution seal 回 renderer；graph gate 当前 216 modules / 157 top-level / 12 packages / 708 edges / SCC 24/5/2 / 0 literal dynamic import | 后续模块随真实职责提取归位；每批以 cyclic-module count + largest SCC 为风险门，SCC 个数仅报告；不机械降低顶层文件数 |
 | B2 canonical 跨-run memory | **完成** | `a9cb05c`；新 profile 显式 off，旧 profile canonical JSON 不变 | canonical 永不重开；非 canonical 才允许显式 opt-in |
 | B3 step 并发 | **关闭，无需实现** | canonical 三题因 replanning + primary cohort + typed deps 被正确强制串行 | 保留 serial-gate 契约；不拆安全守卫追求伪加速。跨库 replicate 另属非关键路径 |
-| B6 跨库 export / metadata 契约 | **P0，B6-A 完成 / B6-B 待做** | `acc874c` 接通 native-first/legacy-compatible Parquet/CSV/XLSX intake；`1481f09` 完成 verified snapshot、CSV/XLSX 单会话解析缓存、Parquet 列裁剪和四 consumer 生命周期。105 项主回归 + 64 项独立复审全绿 | 以 `63b0967` 为 packaged concept baseline 落 B6-B typed projector、sidecar/ResearchContext、authority/replay digest 和 drift gate。不得把 extraction bounds 混成 physiological `valid_range` |
+| B6 跨库 export / metadata 契约 | **P0，B6-A 完成 / B6-B 待做** | `acc874c` 接通 native-first/legacy-compatible Parquet/CSV/XLSX intake；`1481f09` 完成 verified snapshot、CSV/XLSX 单会话解析缓存、Parquet 列裁剪和四 consumer 生命周期。105 项主回归 + 64 项独立复审全绿 | 以 `8e97d31` 为 packaged concept baseline 落 B6-B typed projector、sidecar/ResearchContext、authority/replay digest 和 drift gate。不得把 extraction bounds 混成 physiological `valid_range` |
 | B7 dormant primary runners | **已达成，不物理删** | `_PRIMARY_DETERMINISTIC_RUNNERS` 空集 + registry lock | 投稿实验前不做化妆性删除；live `figures/*.py` 不得误删 |
 | B7-3 display labels | **后置独立变更** | 会改变 display contract、source SHA 和可见文字 | 单独审稿图合同变更；不得当“零风险清理”顺手做 |
 | B8 middleware/hooks | **待判定，当前不做** | empty middleware 只会增加抽象层 | 只有出现两个以上真实 hook consumer 才引入 |

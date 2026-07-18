@@ -2,7 +2,7 @@
 
 > 状态：2026-07-18 08:16 EDT；**B6-A core + snapshot/performance 已完成，B6-B 未开始**。
 > 当前代码：`acc874c`（intake core）+ `1481f09`（verified snapshot/performance）；
-> packaged concept baseline：`63b0967`。
+> packaged concept baseline：`8e97d31`。
 > 边界：B6-B 不混入新的 concept-dict 科学内容编辑；只建立共享、可摘要绑定的 metadata 投影。
 
 ## 实施状态
