@@ -1,7 +1,7 @@
 # research_agent 架构总控板 / 剩余债务台账 — 当前单一执行视图
 
-> 更新：2026-07-18 08:16 EDT
-> 分支 / research-agent 生产基线：`refactor/agent-control-plane@1481f09`（packaged concept baseline `8e97d31`）
+> 更新：2026-07-18 17:25 EDT
+> 分支 / research-agent 生产基线：`refactor/agent-control-plane@f99e676`（packaged concept baseline `8e97d31`）
 > 当前策略：**先完成有边界的 Track B-Core 架构整理，再 fresh 重跑 E3/H2/E2，随后执行 3–6 个 held-out 全流程。**
 
 ## 文档权威关系
@@ -18,15 +18,14 @@
 
 ## 当前量化快照
 
-| 指标 | 冻结基线 | 当前 `1481f09` | 变化 |
+| 指标 | 冻结基线 | 当前 `f99e676` | 变化 |
 |---|---:|---:|---:|
-| `_execute_one_step` 行数 | 6,694 | 6,026 | −668（−10.0%） |
-| `run_execute_phase` 行数 | 8,451 | 7,628 | −823（−9.7%） |
-| `pipeline_execute.py` 行数 | 14,631 | 11,045 | −3,586（−24.5%） |
-| `pipeline_execute.py + authority/{typed_binding,plan_authority}.py` | — | 12,610 | 新职责模块带来净 +72 行显式类型/边界/兼容代码；这是职责迁移，不冒充代码删除 |
-| `research_agent` 模块 / 顶层兼容路径 | — | 216 / 157 | canonical 实现已归入职责子包；旧顶层 façade 为归档/API 兼容而保留 |
-| package / import edge | 8 / 674 | 12 / 708 | 新增 `gates/`、`execution/`、`authority/`、`intake/`；由自动 graph gate 约束 |
-| 潜在 import SCC / 循环模块 | 1 个・最大 103 / 103 | 3 个・最大 24 / 31 | parent-artifact cycle cut 将 103 模块巨环拆为 24/5/2；该静态图含 lazy/local import，不能冒充 import-time SCC 全消除 |
+| `_execute_one_step` 行数 | 6,694 | 6,048 | −646（−9.7%） |
+| `run_execute_phase` 行数 | 8,451 | 7,692 | −759（−9.0%） |
+| `pipeline_execute.py` 行数 | 14,631 | 11,134 | −3,497（−23.9%） |
+| `research_agent` 模块 / 顶层兼容路径 | — | 224 / 161 | canonical 实现已归入职责子包；B6 新 leaf/module 是显式 typed authority，不冒充删码 |
+| package / import edge | 8 / 674 | 12 / 756 | 新增 `gates/`、`execution/`、`authority/`、`intake/` 与 typed-context 边界；由自动 graph gate 约束 |
+| 潜在 import SCC / 循环模块 | 1 个・最大 103 / 103 | 3 个・最大 23 / 30 | 巨环已拆为 23/5/2；B6 未新增循环回退，0 literal dynamic import |
 | E3 Step02 性能验收 | 旧 6 calls / 373.5s | 1 call / 0 repair / 26.8s | active wall −92.8% |
 | fresh E3/H2/E2 | — | 未启动 | Track B-Core freeze 后执行 |
 | held-out 全流程 | — | 未启动 | fresh 三题后执行 3–6 个 |
@@ -50,10 +49,10 @@
 | StepExecutor / RunCoordinator | **完成（限定职责）** | `StepExecutor` 恰好执行一次已锁脚本并拥有 cleanup；`RunCoordinator` 只做 queue/stop/continue/replan transition application 与并发错误回传；120 项独立回归全绿 | 不把 PlanAuthority、gate、repair、evidence 或科学决策塞入协调器；剩余主体是必要顺序编排和维护债，不是 freeze blocker |
 | PlanAuthority | **完成（纯 candidate authority 边界）** | `authority/plan_authority.py` 用冻结 typed result 承接 completed-step snapshot、estimand/figure 保留、plan cap、robustness lock 投影、typed/trajectory/companion shaping 与 scientific no-op 判定；`e54f675` 独立对抗审阅 ACCEPT | provider 调用、revision/evidence 注册、cohort mutation、runner 重建、replan budget 继续由 orchestrator 单一持有；不得扩成第二个 Planner |
 | TypedBindingResolver | **完成（3/3）** | `authority/plan_scope.py` + `authority/typed_binding.py` 承接 scientific signature、lineage/binding/schema receipt/manifest/resume 与 resolver；`dfb76b6` 用单一 resolver 替换 step 内闭包，每次显式传当前 plan，旧路径 identity 不变 | 保持 evidence fail-close、exact unpublished ID/alias 边界和 Planner 科学所有权；不再为凑 LOC 继续切本职责 |
-| 目录 / import cycle 治理 | **当前批完成，持续门禁** | 稳定实现归入职责子包；parent artifact authority 进 `authority/parent_artifact.py`，distribution seal 回 renderer；graph gate 当前 216 modules / 157 top-level / 12 packages / 708 edges / SCC 24/5/2 / 0 literal dynamic import | 后续模块随真实职责提取归位；每批以 cyclic-module count + largest SCC 为风险门，SCC 个数仅报告；不机械降低顶层文件数 |
+| 目录 / import cycle 治理 | **当前批完成，持续门禁** | 稳定实现归入职责子包；parent artifact authority 进 `authority/parent_artifact.py`，distribution seal 回 renderer；graph gate 当前 224 modules / 161 top-level / 12 packages / 756 edges / SCC 23/5/2 / 0 literal dynamic import | 后续模块随真实职责提取归位；每批以 cyclic-module count + largest SCC 为风险门，SCC 个数仅报告；不机械降低顶层文件数 |
 | B2 canonical 跨-run memory | **完成** | `a9cb05c`；新 profile 显式 off，旧 profile canonical JSON 不变 | canonical 永不重开；非 canonical 才允许显式 opt-in |
 | B3 step 并发 | **关闭，无需实现** | canonical 三题因 replanning + primary cohort + typed deps 被正确强制串行 | 保留 serial-gate 契约；不拆安全守卫追求伪加速。跨库 replicate 另属非关键路径 |
-| B6 跨库 export / metadata 契约 | **P0，B6-A 完成 / B6-B 2/5 + bridge 前置** | `acc874c`/`1481f09` native intake；`7ee66fd`/`7e8c16f` projector；`987bdc5`/`7674814` sidecar；`7cc215e` 封存 typed materialized cohort/trajectory、RunInputCapsule v3、legacy v2 verified receipt 与 runner pre/post integrity。最终 202 + 95 项全绿 | 继续 ResearchContext v2、scoped Planner/Coder/repair metadata、implementation digest 与 drift/freeze gate；不得把 extraction bounds 混成 physiological `valid_range` |
+| B6 跨库 export / metadata 契约 | **完成（A + B 五步 5/5）** | `acc874c`/`1481f09` native intake；`7ee66fd`/`7e8c16f` projector；`987bdc5`/`7674814` sidecar；`7cc215e` typed cohort/trajectory authority；`f99e676` ResearchContext v2、4 KiB scoped facts、implementation/cache/resume drift gate。208 core + 207 prompt/meta + 244 resume/cache + 34 wiring + 28 meta/capability 全绿 | 冻结 shared engine；后续只修 freeze shards 发现的确定 fail-open/fail-closed 回归，不按题加规则 |
 | B7 dormant primary runners | **已达成，不物理删** | `_PRIMARY_DETERMINISTIC_RUNNERS` 空集 + registry lock | 投稿实验前不做化妆性删除；live `figures/*.py` 不得误删 |
 | B7-3 display labels | **后置独立变更** | 会改变 display contract、source SHA 和可见文字 | 单独审稿图合同变更；不得当“零风险清理”顺手做 |
 | B8 middleware/hooks | **待判定，当前不做** | empty middleware 只会增加抽象层 | 只有出现两个以上真实 hook consumer 才引入 |
@@ -61,9 +60,9 @@
 
 ## 接下来三个可验收 bundle
 
-1. **B6-B（B6-A 已完成；正式里程碑 2/5，typed materialized authority 前置已完成）**：继续 ResearchContext v2、scoped Planner/Coder/repair metadata、implementation digest 与 drift/freeze gate；保持旧 v1/封存字节可读，不给旧 payload 新增 `null` 身份键。
-2. **冻结门**：串行分片回归 + meta/capability + capsule/resume/provider/evidence authority + arch/graph diff，并锁定唯一 commit/profile/dictionary/model/prompt/rubric/retry policy。PlanAuthority 与职责域 state 已令 `run_execute_phase` 达到原 `≤7,660` 目标；`_execute_one_step` 的剩余主体是必要顺序编排，不为诊断 LOC 目标强拆。
-3. **fresh 三题 + held-out**：唯一 freeze 版本 fresh 跑 E3/H2/E2，再跑 3–6 个未参与修复的全流程任务；结果不得反向诱导 shared-engine case patch。
+1. **冻结门**：从 `f99e676` 串行跑完整分片回归 + meta/capability + capsule/resume/provider/evidence authority + arch/graph diff，并锁定唯一 commit/profile/dictionary/model/prompt/rubric/retry policy。
+2. **fresh 三题**：唯一 freeze 版本 fresh 跑 E3/H2/E2；失败只按通用能力缺口或诚实 fail-close 归档，不按题向 shared engine 加规则。
+3. **held-out**：再跑 3–6 个未参与修复的全流程任务；meta lint 不能替代 held-out，结果不得反向诱导 case patch。
 
 ## 架构 freeze 的完成定义
 
