@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import importlib
+import ast
+import inspect
 import os
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
-
 
 MODULE_ALIASES = (
     (
@@ -42,9 +43,15 @@ MODULE_ALIASES = (
     ),
 )
 
+LEGACY_LEAF_MODULES = {
+    legacy.rsplit(".", 1)[-1] for legacy, _canonical in MODULE_ALIASES
+}
+
 
 @pytest.mark.parametrize("legacy,canonical", MODULE_ALIASES)
-def test_legacy_path_is_the_canonical_module_object(legacy: str, canonical: str) -> None:
+def test_legacy_path_is_the_canonical_module_object(
+    legacy: str, canonical: str
+) -> None:
     assert importlib.import_module(legacy) is importlib.import_module(canonical)
 
 
@@ -66,3 +73,34 @@ for legacy, canonical in pairs:
     source_root = str(Path(__file__).resolve().parents[2] / "src")
     env["PYTHONPATH"] = source_root + os.pathsep + env.get("PYTHONPATH", "")
     subprocess.run([sys.executable, "-c", script], check=True, env=env)
+
+
+@pytest.mark.parametrize("legacy,canonical", MODULE_ALIASES)
+def test_canonical_module_never_imports_legacy_facade_or_pipeline_execute(
+    legacy: str,
+    canonical: str,
+) -> None:
+    del legacy
+    module = importlib.import_module(canonical)
+    tree = ast.parse(inspect.getsource(module))
+    imported_leaves: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            imported_leaves.add(node.module.rsplit(".", 1)[-1])
+        elif isinstance(node, ast.Import):
+            imported_leaves.update(
+                alias.name.rsplit(".", 1)[-1] for alias in node.names
+            )
+    assert "pipeline_execute" not in imported_leaves
+    assert imported_leaves.isdisjoint(LEGACY_LEAF_MODULES)
+
+
+def test_pipeline_execute_uses_only_canonical_responsibility_paths() -> None:
+    module = importlib.import_module("easyicu.research_agent.pipeline_execute")
+    tree = ast.parse(inspect.getsource(module))
+    imported_leaves = {
+        node.module.rsplit(".", 1)[-1]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module
+    }
+    assert imported_leaves.isdisjoint(LEGACY_LEAF_MODULES)
