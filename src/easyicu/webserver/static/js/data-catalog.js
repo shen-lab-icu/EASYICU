@@ -33,7 +33,7 @@
     sepsis3_sofa2: ['sep3_sofa2'],
     sepsis3_sofa1: ['sep3_sofa1'],
     sepsis_shared: ['susp_inf', 'infection_icd', 'samp'],
-    vitals: ['hr', 'map', 'sbp', 'dbp', 'pulse_pressure', 'temp', 'spo2', 'resp'],
+    vitals: ['hr', 'map', 'sbp', 'dbp', 'pulse_pressure', 'cvp', 'temp', 'spo2', 'resp'],
     respiratory: ['pafi', 'safi', 'fio2', 'supp_o2', 'vent_ind', 'vent_start', 'vent_end', 'o2sat', 'sao2', 'mech_vent', 'ett_gcs', 'ecmo', 'ecmo_indication', 'adv_resp'],
     ventilator: ['peep', 'tidal_vol', 'tidal_vol_set', 'pip', 'plateau_pres', 'mean_airway_pres', 'minute_vol', 'vent_rate', 'etco2', 'compliance', 'driving_pres', 'ps', 'vent_mode', 'vent_breath_seq', 'driving_pres_controlled'],
     blood_gas: ['be', 'cai', 'hbco', 'lact', 'methb', 'pco2', 'ph', 'po2', 'tco2'],
@@ -53,7 +53,7 @@
   const dict = {
     hr: ['Heart Rate', '心率', 'bpm'], map: ['Mean Arterial Pressure', '平均动脉压', 'mmHg'],
     sbp: ['Systolic Blood Pressure', '收缩压', 'mmHg'], dbp: ['Diastolic Blood Pressure', '舒张压', 'mmHg'],
-    pulse_pressure: ['Pulse Pressure (SBP - DBP)', '脉压差', 'mmHg'], temp: ['Temperature', '体温', '°C'],
+    pulse_pressure: ['Pulse Pressure (SBP - DBP)', '脉压差', 'mmHg'], cvp: ['Central Venous Pressure', '中心静脉压', 'mmHg'], temp: ['Temperature', '体温', '°C'],
     etco2: ['End-Tidal CO2', '呼气末二氧化碳', 'mmHg'], resp: ['Respiratory Rate', '呼吸频率', 'breaths/min'],
     pafi: ['PaO2/FiO2 Ratio', '氧合指数', 'mmHg'], safi: ['SpO2/FiO2 Ratio', '脉氧/吸氧比', ''],
     supp_o2: ['Supplemental Oxygen', '辅助吸氧', 'boolean'], vent_ind: ['Ventilation Duration Windows', '机械通气时间窗', 'boolean'],
@@ -164,7 +164,7 @@
   // database coverage (how many of the 6 ICU databases harmonize this concept)
   const cov = {
     hr: 6, map: 6, sbp: 6, dbp: 6, resp: 6, spo2: 6, temp: 6, glu: 6, crea: 6, bili: 6, plt: 6, hgb: 6, wbc: 6, na: 6, k: 6,
-    anion_gap: 6, pulse_pressure: 6, age: 6, sex: 6, weight: 6, height: 6, death: 6, los_icu: 6, sofa: 6, sofa2: 6, gcs: 6,
+    anion_gap: 6, pulse_pressure: 6, cvp: 6, age: 6, sex: 6, weight: 6, height: 6, death: 6, los_icu: 6, sofa: 6, sofa2: 6, gcs: 6,
     lact: 5, alb: 5, crp: 5, fio2: 5, po2: 5, pco2: 5, ph: 5, pafi: 5, safi: 5, urine: 5,
     peep: 4, tidal_vol: 4, ins: 4, mech_vent: 3, vent_ind: 3, ecmo: 2, rrt: 4, vent_mode: 4, vent_breath_seq: 4, driving_pres_controlled: 4,
     furosemide: 6, propofol: 6, midazolam: 6, dexmedetomidine: 4, fentanyl: 6, morphine: 6, heparin: 6,

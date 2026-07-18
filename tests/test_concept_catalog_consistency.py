@@ -122,7 +122,10 @@ def test_web_catalog_groups_are_unique_and_complete() -> None:
     assert len(CONCEPT_GROUPS_INTERNAL) == 19
     # 2026-07-17: +vent_mode, +vent_breath_seq (harmonised ventilator-mode concepts,
     # grouped under 'ventilator'). 277 -> 279.
-    assert len(CONCEPT_DICTIONARY) == 280
+    # 2026-07-17: +cvp into the 'vitals' group (was only in concept-dict.json /
+    # pulled by a separate cvp_extraction; central venous pressure is a measured
+    # vital and now extracts with the vitals module). 280 -> 281.
+    assert len(CONCEPT_DICTIONARY) == 281
     assert set(CONCEPT_GROUP_NAMES) >= set(CONCEPT_GROUPS_INTERNAL)
     assert len(grouped) == len(set(grouped))
     assert set(grouped) == set(CONCEPT_DICTIONARY)

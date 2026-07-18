@@ -238,7 +238,7 @@
   const GUIDED_EXTRACT_WINDOW_HOURS = 24 * 30;
   const GUIDED_EXTRACT_MODULES = [
     ['demographics', 'Demographics', '人口统计', 6, true],
-    ['vitals', 'Vital signs', '生命体征', 11, true],
+    ['vitals', 'Vital signs', '生命体征', 12, true],
     ['chemistry', 'Lab — Chemistry', '实验室-生化', 49, true],
     ['sofa2_score', 'SOFA-2 scores', 'SOFA-2 评分', 7, true],
     ['sepsis3_sofa2', 'Sepsis-3 (SOFA-2)', 'Sepsis-3 (SOFA-2)', 1, true],
