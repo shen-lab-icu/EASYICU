@@ -11,14 +11,27 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import io
 import json
+import mmap
 import os
 import tempfile
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from threading import RLock
 from types import MappingProxyType
-from typing import Any, Dict, Iterator, Mapping, Optional, Sequence, Tuple, Union
+from typing import (
+    Any,
+    BinaryIO,
+    Dict,
+    Iterator,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 
 import pandas as pd
 import pyarrow.parquet as pq
@@ -275,6 +288,215 @@ def _verified_file_snapshot(
         ) from exc
 
 
+class _RetainedVerifiedSnapshot:
+    """One anonymous, content-verified package member snapshot.
+
+    The file descriptor is private to the host process and is reused for every
+    projected concept read from the same physical file.  The lock protects the
+    shared seek position; it is deliberately transport-only and never becomes
+    a second evidence or package authority.
+    """
+
+    def __init__(self, handle: BinaryIO, identity: FileIdentity, *, member: str):
+        self._handle = handle
+        self.identity = identity
+        self.member = member
+        self._lock = RLock()
+        self._closed = False
+        self._parsed_frames: dict[tuple[str, Optional[str]], pd.DataFrame] = {}
+
+    @classmethod
+    def capture(
+        cls,
+        path: Path,
+        *,
+        expected: Optional[FileIdentity] = None,
+        member: Optional[str] = None,
+    ) -> "_RetainedVerifiedSnapshot":
+        label = member or path.name
+        handle = tempfile.TemporaryFile(mode="w+b")
+        try:
+            with path.open("rb") as source:
+                before = os.fstat(source.fileno())
+                before_coordinates = (
+                    int(before.st_dev),
+                    int(before.st_ino),
+                    int(before.st_size),
+                    int(before.st_mtime_ns),
+                )
+                if expected is not None and before_coordinates != (
+                    expected.device,
+                    expected.inode,
+                    expected.size,
+                    expected.mtime_ns,
+                ):
+                    raise ExportPackageError(
+                        f"manifest-listed file identity changed before snapshot: {label}",
+                        code="manifest_file_mutated",
+                        member=label,
+                    )
+
+                digest = hashlib.sha256()
+                while chunk := source.read(1024 * 1024):
+                    digest.update(chunk)
+                    handle.write(chunk)
+                after = os.fstat(source.fileno())
+                observed = FileIdentity(
+                    device=int(after.st_dev),
+                    inode=int(after.st_ino),
+                    size=int(after.st_size),
+                    mtime_ns=int(after.st_mtime_ns),
+                    sha256=digest.hexdigest(),
+                )
+                if before_coordinates != (
+                    observed.device,
+                    observed.inode,
+                    observed.size,
+                    observed.mtime_ns,
+                ) or (expected is not None and observed != expected):
+                    raise ExportPackageError(
+                        f"manifest-listed file changed while creating snapshot: {label}",
+                        code="manifest_file_mutated",
+                        member=label,
+                    )
+            handle.flush()
+            handle.seek(0)
+            return cls(handle, observed, member=label)
+        except BaseException:
+            handle.close()
+            raise
+
+    @contextmanager
+    def reader(self) -> Iterator[BinaryIO]:
+        """Yield a read-only memory map without exposing the writable owner."""
+
+        with self._lock:
+            if self._closed:
+                raise ExportPackageError(
+                    f"verified export snapshot is closed: {self.member}",
+                    code="export_snapshot_closed",
+                    member=self.member,
+                )
+            mapping = mmap.mmap(
+                self._handle.fileno(),
+                0,
+                access=mmap.ACCESS_READ,
+            )
+            reader = io.BufferedReader(_ReadOnlyMmapIO(mapping))
+            try:
+                yield reader
+            finally:
+                reader.close()
+
+    def close(self) -> None:
+        """Close the anonymous snapshot exactly once."""
+
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._parsed_frames.clear()
+            self._handle.close()
+
+    def projected_frame(
+        self,
+        *,
+        file_format: str,
+        columns: Sequence[str],
+        excel_sheet: Optional[str] = None,
+    ) -> pd.DataFrame:
+        """Read one projection without reparsing a wide row-oriented file.
+
+        Parquet retains native column pruning.  CSV and XLSX are row-oriented,
+        so their first projection parses the verified snapshot once and later
+        projections return defensive copies from the package-session cache.
+        The same lock protects both the mmap cursor and the cached DataFrame.
+        """
+
+        requested = list(dict.fromkeys(columns))
+        with self._lock:
+            if self._closed:
+                raise ExportPackageError(
+                    f"verified export snapshot is closed: {self.member}",
+                    code="export_snapshot_closed",
+                    member=self.member,
+                )
+            if file_format == "parquet":
+                with self.reader() as snapshot:
+                    return pd.read_parquet(
+                        snapshot,
+                        engine="pyarrow",
+                        columns=requested,
+                    )
+
+            cache_key = (file_format, excel_sheet)
+            cached = self._parsed_frames.get(cache_key)
+            if cached is None:
+                with self.reader() as snapshot:
+                    if file_format == "csv":
+                        cached = pd.read_csv(snapshot)
+                    elif file_format == "excel":
+                        cached = pd.read_excel(
+                            snapshot,
+                            sheet_name=excel_sheet,
+                            engine="openpyxl",
+                        )
+                    else:  # pragma: no cover - verified during package open
+                        raise ExportPackageError(
+                            f"unsupported export format: {file_format}"
+                        )
+                self._parsed_frames[cache_key] = cached
+
+            missing = [column for column in requested if column not in cached.columns]
+            if missing:
+                raise ExportPackageError(
+                    f"verified export snapshot is missing columns: {missing}",
+                    code="file_schema_invalid",
+                    member=self.member,
+                )
+            return cached.loc[:, requested].copy(deep=True)
+
+    def __del__(self) -> None:  # pragma: no cover - lifecycle fallback only
+        try:
+            self.close()
+        except Exception:
+            pass
+
+
+class _ReadOnlyMmapIO(io.RawIOBase):
+    """Seekable read-only stream over an mmap with no writable file descriptor."""
+
+    def __init__(self, mapping: mmap.mmap):
+        super().__init__()
+        self._mapping = mapping
+
+    def readable(self) -> bool:
+        return True
+
+    def seekable(self) -> bool:
+        return True
+
+    def writable(self) -> bool:
+        return False
+
+    def readinto(self, buffer: Any) -> int:
+        chunk = self._mapping.read(len(buffer))
+        buffer[: len(chunk)] = chunk
+        return len(chunk)
+
+    def seek(self, offset: int, whence: int = os.SEEK_SET) -> int:
+        self._mapping.seek(offset, whence)
+        return int(self._mapping.tell())
+
+    def tell(self) -> int:
+        return int(self._mapping.tell())
+
+    def close(self) -> None:
+        if not self.closed:
+            self._mapping.close()
+        super().close()
+
+
 @dataclass(frozen=True, slots=True)
 class ExportPhysicalFile:
     """One manifest-listed physical data file after schema inspection."""
@@ -290,6 +512,7 @@ class ExportPhysicalFile:
     time_column: Optional[str]
     time_columns: Tuple[str, ...]
     identity: FileIdentity
+    _snapshot: _RetainedVerifiedSnapshot = field(repr=False, compare=False)
     excel_sheet: Optional[str] = None
 
 
@@ -314,6 +537,18 @@ class ExportPackage:
         """Return the compatibility index shape used by existing callers."""
 
         return {concept: dict(info) for concept, info in self.concept_index.items()}
+
+    def close(self) -> None:
+        """Release every anonymous physical-file snapshot owned by this package."""
+
+        for physical_file in self.files:
+            physical_file._snapshot.close()
+
+    def __enter__(self) -> "ExportPackage":
+        return self
+
+    def __exit__(self, *_exc_info: object) -> None:
+        self.close()
 
 
 def _read_json(path: Path, *, label: str) -> tuple[dict[str, Any], bytes]:
@@ -490,14 +725,16 @@ def _validated_columns(values: Sequence[object], *, path: Path) -> Tuple[str, ..
     return columns
 
 
-def _schema_for_file(
-    path: Path, file_format: str
-) -> tuple[Tuple[str, ...], int | None, Optional[str], FileIdentity]:
+def _schema_for_file(path: Path, file_format: str) -> tuple[
+    Tuple[str, ...],
+    int | None,
+    Optional[str],
+    FileIdentity,
+    _RetainedVerifiedSnapshot,
+]:
+    retained = _RetainedVerifiedSnapshot.capture(path, member=path.name)
     try:
-        with _verified_file_snapshot(path, member=path.name) as (
-            snapshot,
-            identity,
-        ):
+        with retained.reader() as snapshot:
             if file_format == "parquet":
                 parquet_file = pq.ParquetFile(snapshot)
                 columns = _validated_columns(parquet_file.schema.names, path=path)
@@ -543,11 +780,14 @@ def _schema_for_file(
                     workbook.close()
             else:  # pragma: no cover - guarded by caller
                 raise ExportPackageError(f"unsupported export format: {file_format}")
+        _require_identity(path, retained.identity)
     except ExportPackageError:
+        retained.close()
         raise
     except Exception as exc:
+        retained.close()
         raise ExportPackageError(f"cannot inspect export file: {path}") from exc
-    return columns, rows, excel_sheet, identity
+    return columns, rows, excel_sheet, retained.identity, retained
 
 
 def _declared_concepts(entry: Mapping[str, Any]) -> Tuple[str, ...]:
@@ -926,7 +1166,11 @@ def _authorized_native_value_columns(
     return authorized
 
 
-def open_export_package(export_dir: Union[str, Path]) -> ExportPackage:
+def _open_export_package_impl(
+    export_dir: Union[str, Path],
+    *,
+    _build_snapshots: list[_RetainedVerifiedSnapshot],
+) -> ExportPackage:
     """Parse and verify one native-first EasyICU export package."""
 
     root = Path(export_dir).expanduser()
@@ -992,9 +1236,10 @@ def open_export_package(export_dir: Union[str, Path]) -> ExportPackage:
                 f"manifest format {manifest_format!r} conflicts with {path.name!r}",
                 code="manifest_format_mismatch",
             )
-        columns, physical_rows, excel_sheet, identity = _schema_for_file(
-            path, file_format
+        columns, physical_rows, excel_sheet, identity, retained_snapshot = (
+            _schema_for_file(path, file_format)
         )
+        _build_snapshots.append(retained_snapshot)
         declared_rows_raw = entry.get("rows")
         if declared_rows_raw is not None and (
             not isinstance(declared_rows_raw, int)
@@ -1033,6 +1278,7 @@ def open_export_package(export_dir: Union[str, Path]) -> ExportPackage:
             time_column=time_column,
             time_columns=time_columns,
             identity=identity,
+            _snapshot=retained_snapshot,
             excel_sheet=excel_sheet,
         )
         physical_files.append(physical_file)
@@ -1143,22 +1389,41 @@ def open_export_package(export_dir: Union[str, Path]) -> ExportPackage:
     )
 
 
+def open_export_package(export_dir: Union[str, Path]) -> ExportPackage:
+    """Parse and retain one verified native-first EasyICU export package."""
+
+    build_snapshots: list[_RetainedVerifiedSnapshot] = []
+    try:
+        return _open_export_package_impl(
+            export_dir,
+            _build_snapshots=build_snapshots,
+        )
+    except BaseException:
+        for snapshot in build_snapshots:
+            snapshot.close()
+        raise
+
+
 def verify_export_package(package: ExportPackage) -> None:
     """Re-open ``package`` and require the same content-bound authority."""
 
     current = open_export_package(package.root)
-    if current.authority_sha256 != package.authority_sha256:
-        raise ExportPackageError(
-            "export package authority changed during materialization",
-            code="export_package_authority_changed",
-            manifest_path=package.manifest_path,
-        )
+    try:
+        if current.authority_sha256 != package.authority_sha256:
+            raise ExportPackageError(
+                "export package authority changed during materialization",
+                code="export_package_authority_changed",
+                manifest_path=package.manifest_path,
+            )
+    finally:
+        current.close()
 
 
 def index_export_package(export_dir: Union[str, Path]) -> Dict[str, Dict[str, object]]:
     """Return a manifest-authoritative concept index for an export package."""
 
-    return open_export_package(export_dir).index_dict()
+    with open_export_package(export_dir) as package:
+        return package.index_dict()
 
 
 def resolve_exported_concept(
@@ -1202,28 +1467,11 @@ def _read_projected(
     physical_file: ExportPhysicalFile, columns: Sequence[str]
 ) -> pd.DataFrame:
     try:
-        with _verified_file_snapshot(
-            physical_file.path,
-            expected=physical_file.identity,
-            member=physical_file.relative_path,
-        ) as (snapshot, _identity):
-            if physical_file.file_format == "parquet":
-                frame = pd.read_parquet(
-                    snapshot, engine="pyarrow", columns=list(columns)
-                )
-            elif physical_file.file_format == "csv":
-                frame = pd.read_csv(snapshot, usecols=list(columns))
-            elif physical_file.file_format == "excel":
-                frame = pd.read_excel(
-                    snapshot,
-                    usecols=list(columns),
-                    sheet_name=physical_file.excel_sheet,
-                    engine="openpyxl",
-                )
-            else:  # pragma: no cover - verified during package open
-                raise ExportPackageError(
-                    f"unsupported export format: {physical_file.file_format}"
-                )
+        frame = physical_file._snapshot.projected_frame(
+            file_format=physical_file.file_format,
+            columns=columns,
+            excel_sheet=physical_file.excel_sheet,
+        )
     except ExportPackageError:
         raise
     except Exception as exc:
@@ -1245,49 +1493,50 @@ def read_exported_concept(
 ) -> pd.DataFrame:
     """Read one concept from its unique manifest-listed physical file."""
 
-    package = (
-        export_dir
-        if isinstance(export_dir, ExportPackage)
-        else open_export_package(export_dir)
-    )
-    index = package.concept_index
-    resolved = resolve_exported_concept(index, concept)
-    if resolved is None:
-        raise KeyError(
-            f"Concept {concept!r} is not present in {package.root}. "
-            f"Available concepts include: {sorted(index)[:20]}"
-        )
-    info = index[resolved]
-    path = Path(str(info["file"]))
-    physical_file = next(item for item in package.files if item.path == path)
-    authorized = {
-        value
-        for value, candidate in package.concept_index.items()
-        if Path(str(candidate["file"])) == path
-    }
-    columns = [
-        value
-        for value in [
-            physical_file.id_column,
-            *physical_file.time_columns,
-            resolved,
-            *(extra_columns or []),
+    owns_package = not isinstance(export_dir, ExportPackage)
+    package = export_dir if not owns_package else open_export_package(export_dir)
+    try:
+        index = package.concept_index
+        resolved = resolve_exported_concept(index, concept)
+        if resolved is None:
+            raise KeyError(
+                f"Concept {concept!r} is not present in {package.root}. "
+                f"Available concepts include: {sorted(index)[:20]}"
+            )
+        info = index[resolved]
+        path = Path(str(info["file"]))
+        physical_file = next(item for item in package.files if item.path == path)
+        authorized = {
+            value
+            for value, candidate in package.concept_index.items()
+            if Path(str(candidate["file"])) == path
+        }
+        columns = [
+            value
+            for value in [
+                physical_file.id_column,
+                *physical_file.time_columns,
+                resolved,
+                *(extra_columns or []),
+            ]
+            if value is not None
+            if value in {physical_file.id_column, *physical_file.time_columns}
+            or value in authorized
         ]
-        if value is not None
-        if value in {physical_file.id_column, *physical_file.time_columns}
-        or value in authorized
-    ]
-    frame = _read_projected(physical_file, columns)
-    rename: dict[str, str] = {}
-    if physical_file.id_column != ID_COL:
-        rename[physical_file.id_column] = ID_COL
-    if physical_file.time_column == "time" and "charttime" not in frame.columns:
-        rename["time"] = "charttime"
-    if resolved != concept:
-        rename[resolved] = concept
-    if rename:
-        frame = frame.rename(columns=rename)
-    return frame
+        frame = _read_projected(physical_file, columns)
+        rename: dict[str, str] = {}
+        if physical_file.id_column != ID_COL:
+            rename[physical_file.id_column] = ID_COL
+        if physical_file.time_column == "time" and "charttime" not in frame.columns:
+            rename["time"] = "charttime"
+        if resolved != concept:
+            rename[resolved] = concept
+        if rename:
+            frame = frame.rename(columns=rename)
+        return frame
+    finally:
+        if owns_package:
+            package.close()
 
 
 __all__ = [

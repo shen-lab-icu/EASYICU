@@ -463,11 +463,46 @@ def materialize_cohort(
     """
     t0 = time.time()
     source_mode, root = _resolve_source(data_path, prefer_existing)
-    export_package = (
-        open_export_package(root)
-        if source_mode == "export" and is_export_package(root)
-        else None
+    common = dict(
+        feature_concepts=feature_concepts,
+        database=database,
+        cohort_definition=cohort_definition,
+        cohort_window=cohort_window,
+        outcome_concepts=outcome_concepts,
+        static_concepts=static_concepts,
+        patient_ids=patient_ids,
+        source_mode=source_mode,
+        root=root,
+        t0=t0,
     )
+    if source_mode == "export" and is_export_package(root):
+        with open_export_package(root) as export_package:
+            return _materialize_cohort_from_resolved_source(
+                export_package=export_package,
+                **common,
+            )
+    return _materialize_cohort_from_resolved_source(
+        export_package=None,
+        **common,
+    )
+
+
+def _materialize_cohort_from_resolved_source(
+    *,
+    feature_concepts: Sequence[str],
+    database: str,
+    cohort_definition: Optional[CohortDefinition],
+    cohort_window: Window,
+    outcome_concepts: Sequence[str],
+    static_concepts: Sequence[str],
+    patient_ids: Optional[Sequence[int]],
+    source_mode: str,
+    root: Path,
+    export_package: Optional[ExportPackage],
+    t0: float,
+) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    """Materialize from one already-resolved, explicitly owned source."""
+
     if (
         export_package is not None
         and export_package.database
@@ -623,11 +658,38 @@ def build_trajectory_long(
     series; ``None`` keeps the full available trajectory.
     """
     source_mode, root = _resolve_source(data_path, prefer_existing)
-    export_package = (
-        open_export_package(root)
-        if source_mode == "export" and is_export_package(root)
-        else None
+    common = dict(
+        concepts=concepts,
+        database=database,
+        window=window,
+        patient_ids=patient_ids,
+        source_mode=source_mode,
+        root=root,
     )
+    if source_mode == "export" and is_export_package(root):
+        with open_export_package(root) as export_package:
+            return _build_trajectory_long_from_resolved_source(
+                export_package=export_package,
+                **common,
+            )
+    return _build_trajectory_long_from_resolved_source(
+        export_package=None,
+        **common,
+    )
+
+
+def _build_trajectory_long_from_resolved_source(
+    *,
+    concepts: Sequence[str],
+    database: str,
+    window: Optional[Window],
+    patient_ids: Optional[Sequence[int]],
+    source_mode: str,
+    root: Path,
+    export_package: Optional[ExportPackage],
+) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    """Build trajectory rows from one already-resolved, explicitly owned source."""
+
     if (
         export_package is not None
         and export_package.database

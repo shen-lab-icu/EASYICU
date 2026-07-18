@@ -10,6 +10,9 @@ import pandas as pd
 import pytest
 
 from easyicu.research_agent import cohort_materializer
+from easyicu.research_agent.easyicu_case_builder import (
+    build_lactate_map_vaso_cohort_from_export,
+)
 from easyicu.research_agent.data_catalog import build_available_catalog
 from easyicu.research_agent.intake import export_package as intake
 from easyicu.research_agent.replication.discovery import discover_easyicu_exports
@@ -136,6 +139,57 @@ def test_materializer_rejects_requested_database_mismatch(tmp_path: Path) -> Non
             outcome_concepts=("death",),
         )
     assert exc_info.value.code == "export_package_database_mismatch"
+
+
+def test_internal_package_owners_close_snapshots_on_error_or_skip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    closed: list[int] = []
+    original_close = intake._RetainedVerifiedSnapshot.close
+
+    def recording_close(snapshot) -> None:
+        if not snapshot._closed:
+            closed.append(id(snapshot))
+        original_close(snapshot)
+
+    monkeypatch.setattr(intake._RetainedVerifiedSnapshot, "close", recording_close)
+
+    materializer_root = _analysis_export(
+        tmp_path / "materializer-owner", database="eicu"
+    )
+    with pytest.raises(intake.ExportPackageError):
+        cohort_materializer.materialize_cohort(
+            data_path=materializer_root,
+            database="miiv",
+            feature_concepts=("lact",),
+            static_concepts=("age",),
+            outcome_concepts=("death",),
+        )
+    assert len(closed) == 3
+
+    closed.clear()
+    trajectory_root = _analysis_export(tmp_path / "trajectory-owner", database="eicu")
+    with pytest.raises(intake.ExportPackageError):
+        cohort_materializer.build_trajectory_long(
+            data_path=trajectory_root,
+            database="miiv",
+            concepts=("lact",),
+        )
+    assert len(closed) == 3
+
+    closed.clear()
+    case_root = _analysis_export(tmp_path / "case-owner", database="eicu")
+    with pytest.raises(intake.ExportPackageError):
+        build_lactate_map_vaso_cohort_from_export(
+            case_root,
+            expected_database="miiv",
+        )
+    assert len(closed) == 3
+
+    closed.clear()
+    discovery_root = _analysis_export(tmp_path / "discovery-owner")
+    assert discover_easyicu_exports([discovery_root]) == {}
+    assert len(closed) == 3
 
 
 def test_materializer_fail_closes_on_unprojected_database_native_time(
@@ -317,7 +371,7 @@ def test_materializer_rejects_package_change_between_concept_reads(
             static_concepts=("age",),
             outcome_concepts=("death",),
         )
-    assert exc_info.value.code == "manifest_file_mutated"
+    assert exc_info.value.code == "export_package_authority_changed"
 
 
 def test_catalog_uses_manifest_inventory_and_ignores_stale_files(

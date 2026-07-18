@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -170,6 +171,165 @@ def test_projected_read_uses_verified_immutable_snapshot(
     frame = intake.read_exported_concept(package, "lact")
 
     assert frame["lact"].tolist() == pytest.approx([1.2, 3.4])
+
+
+def test_package_reuses_one_physical_snapshot_across_concept_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    temporary_file_calls = 0
+    original_temporary_file = intake.tempfile.TemporaryFile
+
+    def counted_temporary_file(*args, **kwargs):
+        nonlocal temporary_file_calls
+        temporary_file_calls += 1
+        return original_temporary_file(*args, **kwargs)
+
+    monkeypatch.setattr(intake.tempfile, "TemporaryFile", counted_temporary_file)
+    root = _native_package(tmp_path / "snapshot-reuse", export_format="csv")
+    package = intake.open_export_package(root)
+    calls_after_open = temporary_file_calls
+
+    for _ in range(4):
+        frame = intake.read_exported_concept(package, "lact")
+        assert frame["lact"].tolist() == pytest.approx([1.2, 3.4])
+
+    assert temporary_file_calls == calls_after_open
+    package.close()
+
+
+@pytest.mark.parametrize("export_format", ["csv", "excel"])
+def test_row_oriented_snapshot_is_parsed_once_per_package_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    export_format: str,
+) -> None:
+    root = _native_package(
+        tmp_path / f"parsed-cache-{export_format}",
+        export_format=export_format,
+    )
+    suffix = "csv" if export_format == "csv" else "xlsx"
+    labs_path = root / f"labs.{suffix}"
+    labs = (
+        pd.read_csv(labs_path)
+        if export_format == "csv"
+        else pd.read_excel(labs_path, sheet_name="EasyICU export")
+    )
+    labs["bun"] = [12.0, 18.0]
+    _write_frame(labs_path, labs, export_format)
+    manifest_path = root / intake.NATIVE_MANIFEST
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["concept_selection"]["modules"]["labs"].append("bun")
+    labs_entry = next(item for item in manifest["files"] if item["module"] == "labs")
+    labs_entry["concepts"] = 2
+    labs_entry["concept_ids"].append("bun")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    package = intake.open_export_package(root)
+    parser_name = "read_csv" if export_format == "csv" else "read_excel"
+    original_parser = getattr(intake.pd, parser_name)
+    parse_calls = 0
+
+    def counted_parser(*args, **kwargs):
+        nonlocal parse_calls
+        parse_calls += 1
+        return original_parser(*args, **kwargs)
+
+    monkeypatch.setattr(intake.pd, parser_name, counted_parser)
+    try:
+        lact = intake.read_exported_concept(package, "lact")
+        bun = intake.read_exported_concept(package, "bun")
+        lact_again = intake.read_exported_concept(package, "lact")
+        lact.iloc[0, lact.columns.get_loc("lact")] = 999.0
+
+        assert parse_calls == 1
+        assert bun["bun"].tolist() == pytest.approx([12.0, 18.0])
+        assert lact_again["lact"].tolist() == pytest.approx([1.2, 3.4])
+    finally:
+        package.close()
+
+
+def test_concurrent_reads_serialize_the_retained_snapshot_cursor(
+    tmp_path: Path,
+) -> None:
+    root = _native_package(tmp_path / "snapshot-concurrent", export_format="csv")
+    with intake.open_export_package(root) as package:
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            results = list(
+                executor.map(
+                    lambda _index: intake.read_exported_concept(package, "lact"),
+                    range(8),
+                )
+            )
+
+    assert all(frame["lact"].tolist() == pytest.approx([1.2, 3.4]) for frame in results)
+
+
+def test_package_close_is_idempotent_and_reads_fail_closed(tmp_path: Path) -> None:
+    root = _native_package(tmp_path / "snapshot-close")
+    package = intake.open_export_package(root)
+
+    package.close()
+    package.close()
+
+    with pytest.raises(intake.ExportPackageError) as exc_info:
+        intake.read_exported_concept(package, "lact")
+    assert exc_info.value.code == "export_snapshot_closed"
+
+
+def test_retained_snapshot_reader_cannot_poison_authority_bytes(tmp_path: Path) -> None:
+    root = _native_package(tmp_path / "snapshot-read-only", export_format="csv")
+    with intake.open_export_package(root) as package:
+        physical = next(item for item in package.files if "lact" in item.columns)
+        with physical._snapshot.reader() as reader:
+            assert not reader.writable()
+            with pytest.raises((AttributeError, OSError)):
+                reader.write(b"forged")
+            with pytest.raises(OSError):
+                reader.fileno()
+
+        frame = intake.read_exported_concept(package, "lact")
+
+    assert frame["lact"].tolist() == pytest.approx([1.2, 3.4])
+
+
+def test_failed_package_build_closes_already_retained_snapshots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _native_package(tmp_path / "snapshot-build-failure")
+    (root / "outcomes.parquet").write_bytes(b"not parquet")
+    closed_members: list[str] = []
+    original_close = intake._RetainedVerifiedSnapshot.close
+
+    def recording_close(snapshot) -> None:
+        closed_members.append(snapshot.member)
+        original_close(snapshot)
+
+    monkeypatch.setattr(intake._RetainedVerifiedSnapshot, "close", recording_close)
+
+    with pytest.raises(intake.ExportPackageError):
+        intake.open_export_package(root)
+
+    assert "labs.parquet" in closed_members
+
+
+def test_path_form_concept_read_closes_its_temporary_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _native_package(tmp_path / "snapshot-path-lifecycle")
+    closed_members: list[str] = []
+    original_close = intake._RetainedVerifiedSnapshot.close
+
+    def recording_close(snapshot) -> None:
+        if snapshot.member not in closed_members:
+            closed_members.append(snapshot.member)
+        original_close(snapshot)
+
+    monkeypatch.setattr(intake._RetainedVerifiedSnapshot, "close", recording_close)
+
+    frame = intake.read_exported_concept(root, "lact")
+
+    assert frame["lact"].tolist() == pytest.approx([1.2, 3.4])
+    assert set(closed_members) == {"labs.parquet", "outcomes.parquet"}
 
 
 def test_manifest_inventory_is_the_only_data_authority(tmp_path: Path) -> None:
@@ -416,7 +576,7 @@ def test_duplicate_physical_concept_is_rejected(tmp_path: Path) -> None:
         intake.open_export_package(root)
 
 
-def test_verified_file_identity_rejects_post_open_mutation(tmp_path: Path) -> None:
+def test_retained_snapshot_never_reads_post_open_mutation(tmp_path: Path) -> None:
     root = _native_package(tmp_path / "export")
     package = intake.open_export_package(root)
     physical = next(item for item in package.files if "lact" in item.columns)
@@ -424,12 +584,15 @@ def test_verified_file_identity_rejects_post_open_mutation(tmp_path: Path) -> No
         {"stay_id": [1, 2], "charttime": [1.0, 2.0], "lact": [9.0, 9.0]}
     ).to_parquet(physical.path, index=False)
 
+    frame = intake._read_projected(physical, ["stay_id", "lact"])
+    assert frame["lact"].tolist() == pytest.approx([1.2, 3.4])
     with pytest.raises(intake.ExportPackageError) as exc_info:
-        intake._read_projected(physical, ["stay_id", "lact"])
-    assert exc_info.value.code == "manifest_file_mutated"
+        intake.verify_export_package(package)
+    assert exc_info.value.code == "export_package_authority_changed"
+    package.close()
 
 
-def test_content_digest_rejects_same_size_same_mtime_csv_mutation(
+def test_retained_snapshot_ignores_same_size_same_mtime_csv_mutation(
     tmp_path: Path,
 ) -> None:
     root = _native_package(tmp_path / "digest", export_format="csv")
@@ -445,9 +608,12 @@ def test_content_digest_rejects_same_size_same_mtime_csv_mutation(
         ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
     )
 
+    frame = intake._read_projected(physical, [physical.id_column, "lact"])
+    assert frame["lact"].tolist() == pytest.approx([1.2, 3.4])
     with pytest.raises(intake.ExportPackageError) as exc_info:
-        intake._read_projected(physical, [physical.id_column, "lact"])
-    assert exc_info.value.code == "manifest_file_mutated"
+        intake.verify_export_package(package)
+    assert exc_info.value.code == "export_package_authority_changed"
+    package.close()
 
 
 @pytest.mark.parametrize(
