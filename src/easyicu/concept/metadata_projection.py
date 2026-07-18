@@ -18,7 +18,7 @@ import json
 import math
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, Sequence
 
 from .schema import ConceptDefinition, ConceptSource
 
@@ -71,6 +71,8 @@ class NumericBounds:
                 ) from exc
             if not math.isfinite(numeric):
                 raise MetadataProjectionError(f"{label} must be finite when present")
+            if numeric == 0.0:
+                numeric = 0.0
             object.__setattr__(self, label, numeric)
         if (
             self.minimum is not None
@@ -106,6 +108,14 @@ class ColumnProjectionSpec:
             raise MetadataProjectionError(
                 "column_name and source_concept must be strings"
             )
+        if self.aggregation is not None and not isinstance(self.aggregation, str):
+            raise MetadataProjectionError("aggregation must be a string when present")
+        for label, value in (
+            ("time_origin", self.time_origin),
+            ("time_unit", self.time_unit),
+        ):
+            if value is not None and not isinstance(value, str):
+                raise MetadataProjectionError(f"{label} must be a string when present")
         if not self.column_name.strip() or not self.source_concept.strip():
             raise MetadataProjectionError(
                 "column_name and source_concept must be non-empty"
@@ -150,7 +160,7 @@ class ColumnProjectionSpec:
 
 @dataclass(frozen=True, slots=True)
 class SourceLineage:
-    """One dictionary source entry for the database that produced the column."""
+    """One dictionary source entry selected for the actual source database."""
 
     database: str
     table: Optional[str]
@@ -211,6 +221,8 @@ class ConceptColumnMetadata:
     time_origin: Optional[str]
     time_unit: Optional[str]
     source_database: Optional[str]
+    dictionary_source_database: Optional[str]
+    source_resolution_chain: tuple[str, ...]
     available_databases: tuple[str, ...]
     source_declared_for_database: Optional[bool]
     availability_basis: str
@@ -244,6 +256,8 @@ class ConceptColumnMetadata:
             "time_origin": self.time_origin,
             "time_unit": self.time_unit,
             "source_database": self.source_database,
+            "dictionary_source_database": self.dictionary_source_database,
+            "source_resolution_chain": list(self.source_resolution_chain),
             "available_databases": list(self.available_databases),
             "source_declared_for_database": self.source_declared_for_database,
             "availability_basis": self.availability_basis,
@@ -266,7 +280,7 @@ def _canonical_json_value(value: object, *, path: str) -> object:
     if isinstance(value, float):
         if not math.isfinite(value):
             raise MetadataProjectionError(f"{path} must not contain non-finite values")
-        return value
+        return 0.0 if value == 0.0 else value
     if isinstance(value, Mapping):
         canonical: dict[str, object] = {}
         for key, item in value.items():
@@ -345,6 +359,17 @@ def _source_lineage(database: str, source: ConceptSource) -> SourceLineage:
     )
 
 
+def _source_has_executable_anchor(source: ConceptSource) -> bool:
+    """Return whether a source entry can identify a loader or physical relation.
+
+    Selector IDs, units, intervals and extra parameters only qualify an already
+    anchored source.  Treating those attachments as a direct source by
+    themselves would overstate dictionary availability.
+    """
+
+    return bool(source.table or source.callback or source.class_name or source.target)
+
+
 def _lineage_sort_key(entry: SourceLineage) -> tuple[object, ...]:
     return (
         entry.database,
@@ -375,10 +400,21 @@ def project_concept_column_metadata(
     *,
     spec: ColumnProjectionSpec,
     source_database: Optional[str],
+    source_database_class_prefixes: Sequence[str] = (),
     analysis_plausibility_range: Optional[NumericBounds] = None,
 ) -> ConceptColumnMetadata:
     """Project dictionary/run/analysis authorities without conflating them."""
 
+    if source_database is not None and not isinstance(source_database, str):
+        raise MetadataProjectionError("source_database must be a string when present")
+    if isinstance(source_database, str) and not source_database.strip():
+        raise MetadataProjectionError("source_database must be non-empty when present")
+    if analysis_plausibility_range is not None and not isinstance(
+        analysis_plausibility_range, NumericBounds
+    ):
+        raise MetadataProjectionError(
+            "analysis_plausibility_range must be NumericBounds when present"
+        )
     if definition.name != spec.source_concept:
         raise MetadataProjectionError(
             "projection source_concept does not match ConceptDefinition.name"
@@ -423,16 +459,47 @@ def project_concept_column_metadata(
     normalized_database = _clean_optional(source_database)
     if normalized_database is not None:
         normalized_database = normalized_database.lower()
+    if isinstance(source_database_class_prefixes, (str, bytes)):
+        raise MetadataProjectionError(
+            "source_database_class_prefixes must be a sequence of database names"
+        )
+    normalized_prefixes: list[str] = []
+    for value in source_database_class_prefixes:
+        if not isinstance(value, str) or not value.strip():
+            raise MetadataProjectionError(
+                "source database class prefixes must be non-empty strings"
+            )
+        normalized_prefixes.append(value.strip().lower())
+    if normalized_database is None and normalized_prefixes:
+        raise MetadataProjectionError(
+            "source database class prefixes require source_database"
+        )
+    resolution_chain = tuple(
+        dict.fromkeys(
+            [
+                *([normalized_database] if normalized_database is not None else []),
+                *normalized_prefixes,
+            ]
+        )
+    )
     available_databases = tuple(sorted(str(name) for name in definition.sources))
+    dictionary_source_database = next(
+        (name for name in resolution_chain if name in definition.sources),
+        None,
+    )
     actual_sources = (
-        tuple(definition.sources.get(normalized_database, ()))
-        if normalized_database is not None
+        tuple(
+            source
+            for source in definition.sources.get(dictionary_source_database, ())
+            if _source_has_executable_anchor(source)
+        )
+        if dictionary_source_database is not None
         else ()
     )
     lineage = tuple(
         sorted(
             (
-                _source_lineage(normalized_database or "", item)
+                _source_lineage(dictionary_source_database or "", item)
                 for item in actual_sources
             ),
             key=_lineage_sort_key,
@@ -448,10 +515,10 @@ def project_concept_column_metadata(
             )
         )
     )
-    database_declared = (
-        normalized_database in definition.sources
-        if normalized_database is not None
-        else False
+    database_declared = dictionary_source_database is not None
+    inherited_source = bool(
+        dictionary_source_database is not None
+        and dictionary_source_database != normalized_database
     )
     has_derived_definition = bool(derived or definition.callback)
     if normalized_database is None:
@@ -459,13 +526,23 @@ def project_concept_column_metadata(
         availability_basis = "source_database_not_supplied"
     elif actual_sources:
         source_declared_for_database = True
-        availability_basis = "direct_source"
+        availability_basis = (
+            "inherited_direct_source" if inherited_source else "direct_source"
+        )
     elif database_declared and has_derived_definition:
         source_declared_for_database = True
-        availability_basis = "declared_derived_or_unresolved"
+        availability_basis = (
+            "inherited_declared_derived_or_unresolved"
+            if inherited_source
+            else "declared_derived_or_unresolved"
+        )
     elif database_declared:
         source_declared_for_database = True
-        availability_basis = "declared_without_direct_source"
+        availability_basis = (
+            "inherited_declared_without_direct_source"
+            if inherited_source
+            else "declared_without_direct_source"
+        )
     elif has_derived_definition:
         source_declared_for_database = False
         availability_basis = "derived_dependencies_not_resolved"
@@ -495,6 +572,8 @@ def project_concept_column_metadata(
         time_origin=(spec.time_origin if time_like else None),
         time_unit=(spec.time_unit if time_like else None),
         source_database=normalized_database,
+        dictionary_source_database=dictionary_source_database,
+        source_resolution_chain=resolution_chain,
         available_databases=available_databases,
         source_declared_for_database=source_declared_for_database,
         availability_basis=availability_basis,
