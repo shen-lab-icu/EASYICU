@@ -151,6 +151,12 @@ from .authority.registration import (
     filter_success_alias_bindings as _filter_success_alias_bindings,
 )
 from .authority.parent_artifact import _resolve_upstream_manifest_step
+from .authority.plan_authority import (
+    NormalizedPlanCandidate as NormalizedPlanCandidate,
+    _preserve_completed_step_snapshots_after_replan,
+    _preserve_locked_robustness_specs_after_replan,
+    normalize_replan_candidate,
+)
 from .authority.plan_scope import (
     _normalise_scientific_text,
     _plan_scientific_scope_signature,
@@ -821,129 +827,6 @@ def _failed_contract_code_can_be_reused_before_coder(
     return _step_scientific_signature(executed_step) == _step_scientific_signature(step)
 
 
-def _preserve_completed_step_snapshots_after_replan(
-    *,
-    current_plan: AnalysisPlan,
-    revised_plan: AnalysisPlan,
-    completed_records: Sequence[Mapping[str, Any]],
-) -> Tuple[AnalysisPlan, List[ValidationFinding]]:
-    """Keep already-executed Planner steps immutable across replans.
-
-    A replanner may change future work, but it cannot retroactively change the
-    scientific request that produced registered evidence. The host-recorded
-    ``analysis_request.step`` snapshot and the current plan-level scientific
-    scope are execution authority. Replacing either would launder stale evidence
-    or permanently block every downstream typed consumer, so restore them before
-    accepting the revised DAG.
-    """
-
-    current_ids = {str(step.step_id) for step in current_plan.steps}
-    snapshots: Dict[str, AnalysisStep] = {}
-    completed_current_records = [
-        record
-        for record in current_successful_step_records(completed_records)
-        if str(record.get("step_id") or "").strip() in current_ids
-    ]
-    for record in completed_current_records:
-        step_id = str(record.get("step_id") or "").strip()
-        analysis_request = record.get("analysis_request")
-        raw_step = (
-            analysis_request.get("step")
-            if isinstance(analysis_request, Mapping)
-            else None
-        )
-        if step_id not in current_ids or not isinstance(raw_step, Mapping):
-            continue
-        try:
-            snapshot = AnalysisStep.model_validate(raw_step)
-        except (TypeError, ValueError):
-            continue
-        if str(snapshot.step_id) == step_id:
-            snapshots[step_id] = snapshot
-    changed_ids: List[str] = []
-    revised_steps: List[AnalysisStep] = []
-    revised_ids: Set[str] = set()
-    for step in revised_plan.steps:
-        step_id = str(step.step_id)
-        snapshot = snapshots.get(step_id)
-        if snapshot is not None:
-            revised_ids.add(step_id)
-            if step.model_dump(mode="json") != snapshot.model_dump(mode="json"):
-                changed_ids.append(step_id)
-            revised_steps.append(snapshot)
-        else:
-            revised_steps.append(step)
-            revised_ids.add(step_id)
-
-    reinserted_ids: List[str] = []
-    current_positions = {
-        str(step.step_id): index for index, step in enumerate(current_plan.steps)
-    }
-    for step_id in sorted(
-        snapshots,
-        key=lambda value: current_positions.get(value, len(current_positions)),
-    ):
-        if step_id in revised_ids:
-            continue
-        insert_at = min(
-            current_positions.get(step_id, len(revised_steps)), len(revised_steps)
-        )
-        revised_steps.insert(insert_at, snapshots[step_id])
-        revised_ids.add(step_id)
-        reinserted_ids.append(step_id)
-
-    current_scope = _plan_scientific_scope_signature(current_plan)
-    revised_scope = _plan_scientific_scope_signature(revised_plan)
-    restored_plan_scope = bool(completed_current_records) and (
-        revised_scope != current_scope
-    )
-    restored_plan_scope_fields: List[str] = []
-    if restored_plan_scope:
-        for field_name in (
-            "research_question",
-            "analysis_type",
-            "cohort",
-            "robustness_specs",
-            "rationale",
-        ):
-            if getattr(revised_plan, field_name) != getattr(current_plan, field_name):
-                restored_plan_scope_fields.append(field_name)
-
-    if not changed_ids and not reinserted_ids and not restored_plan_scope:
-        return revised_plan, []
-    update: Dict[str, Any] = {"steps": revised_steps}
-    if restored_plan_scope:
-        update.update(
-            {
-                "research_question": current_plan.research_question,
-                "analysis_type": current_plan.analysis_type,
-                "cohort": current_plan.cohort,
-                "robustness_specs": current_plan.robustness_specs,
-                "rationale": current_plan.rationale,
-            }
-        )
-    preserved = revised_plan.model_copy(update=update)
-    return preserved, [
-        ValidationFinding(
-            validator="replanner",
-            severity="warning",
-            message=(
-                "Replanner attempted to change completed execution authority; "
-                "restored the host-recorded step snapshots and plan-level "
-                "scientific scope so registered evidence remains bound to "
-                "immutable scientific requests."
-            ),
-            detail={
-                "restored_changed_step_ids": sorted(set(changed_ids)),
-                "reinserted_step_ids": reinserted_ids,
-                "restored_plan_scope": restored_plan_scope,
-                "restored_plan_scope_fields": restored_plan_scope_fields,
-                "reason": "completed_step_snapshot_immutable",
-            },
-        )
-    ]
-
-
 class _InertPythonNodeStripper(ast.NodeTransformer):
     """Remove syntax that cannot repair analytical behavior."""
 
@@ -1194,37 +1077,6 @@ def _successful_step_requests_replan(record: Mapping[str, Any]) -> bool:
         container.get(field) is True
         for container in containers
         for field in _SUCCESS_REPLAN_REQUEST_FIELDS
-    )
-
-
-def _preserve_locked_robustness_specs_after_replan(
-    *,
-    current_plan: AnalysisPlan,
-    revised_plan: AnalysisPlan,
-    run_dir: Path,
-) -> tuple[AnalysisPlan, Optional[ValidationFinding]]:
-    """Keep probe/runtime replans from mutating the plan-time spec lock."""
-
-    locked_specs = robustness_specs_for_execution(
-        run_dir=run_dir,
-        plan=current_plan,
-    )
-    revised_specs = list(revised_plan.robustness_specs or [])
-    if robustness_specs_sha(revised_specs) == robustness_specs_sha(locked_specs):
-        return revised_plan, None
-    preserved = revised_plan.model_copy(update={"robustness_specs": list(locked_specs)})
-    return preserved, ValidationFinding(
-        validator="replanner",
-        severity="warning",
-        message=(
-            "Replanner attempted to change the immutable plan-time robustness "
-            "specifications; preserved the verified lock and retained only the "
-            "other plan revisions."
-        ),
-        detail={
-            "reason": "preserve_locked_robustness_specs",
-            "locked_spec_ids": [spec.spec_id for spec in locked_specs],
-        },
     )
 
 
@@ -4297,103 +4149,24 @@ def run_execute_phase(
                 )
             )
             return current_plan
-        revised, immutable_step_findings = (
-            _preserve_completed_step_snapshots_after_replan(
-                current_plan=current_plan,
-                revised_plan=revised,
-                completed_records=completed_records or [],
-            )
+        locked_robustness_specs = robustness_specs_for_execution(
+            run_dir=run_dir,
+            plan=current_plan,
         )
-        findings.extend(immutable_step_findings)
-        # Guard against the replanner silently dropping the primary
-        # result-bearing MODEL step (the estimand) while inserting an
-        # audit/reconciliation step. Run this before figure preservation so the re-attached
-        # model step precedes any re-attached figure step.
-        revised, estimand_findings = _preserve_primary_estimand_step_after_replan(
-            current=current_plan,
-            revised=revised,
-        )
-        if estimand_findings:
-            findings.extend(estimand_findings)
-        # Guard against the replanner silently dropping figure-producing
-        # steps; task contracts (e.g. EasyICU experiment runner) still
-        # require those artefacts regardless of the LLM's revised framing.
-        revised, preservation_findings = _preserve_figure_steps_after_replan(
-            current=current_plan,
-            revised=revised,
-        )
-        if preservation_findings:
-            findings.extend(preservation_findings)
-
-        # Cap total plan size after a replan. A verbose replanner can grow a
-        # simple analysis into many revisions without converging. The cap
-        # truncates excess late-stage steps and forces the replanner
-        # to revise existing steps in place on later passes. Cap of 0
-        # disables the guard for backward compatibility.
-        revised, report_input_findings = _augment_report_typed_product_inputs(
-            plan=revised
-        )
-        findings.extend(report_input_findings)
-
-        cap = pipeline._max_total_steps
-        if cap > 0:
-            protected_step_ids = [
-                str(record.get("step_id"))
-                for record in current_successful_step_records(completed_records or [])
-                if record.get("step_id") and record.get("status") == "ok"
-            ]
-            capped_revised, cap_findings = _cap_plan_preserving_figure_steps(
-                plan=revised,
-                cap=cap,
-                protected_step_ids=protected_step_ids,
-            )
-            revised = capped_revised
-            findings.extend(
-                finding.model_copy(
-                    update={
-                        "validator": "replanner",
-                        "message": (finding.message or "").replace(
-                            "Initial plan had",
-                            "Replanner produced",
-                        ),
-                    }
-                )
-                for finding in cap_findings
-            )
-
-        revised, robustness_lock_finding = (
-            _preserve_locked_robustness_specs_after_replan(
-                current_plan=current_plan,
-                revised_plan=revised,
-                run_dir=run_dir,
-            )
-        )
-        if robustness_lock_finding is not None:
-            findings.append(robustness_lock_finding)
-        revised, trajectory_product_findings = augment_trajectory_plan_products(
-            plan=revised,
+        normalized_candidate = normalize_replan_candidate(
+            current_plan=current_plan,
+            candidate_plan=revised,
+            completed_records=completed_records or [],
             context=context,
+            max_total_steps=pipeline._max_total_steps,
+            locked_robustness_specs=locked_robustness_specs,
         )
-        findings.extend(trajectory_product_findings)
-        revised, companion_input_findings = _augment_measurement_companion_inputs(
-            plan=revised,
-            context=context,
-        )
-        findings.extend(companion_input_findings)
-        revised, post_transform_snapshot_findings = (
-            _preserve_completed_step_snapshots_after_replan(
-                current_plan=current_plan,
-                revised_plan=revised,
-                completed_records=completed_records or [],
-            )
-        )
-        findings.extend(post_transform_snapshot_findings)
+        revised = normalized_candidate.plan
+        findings.extend(normalized_candidate.findings)
 
-        # No-op detection uses the scientific signature rather than the full
-        # model_dump. Only casing/whitespace changes in intent are cosmetic;
-        # semantic prose remains authoritative until every estimand coordinate
-        # has a structured schema field.
-        if _plan_signature(revised) == _plan_signature(current_plan):
+        # The typed authority result owns only candidate normalization. The
+        # orchestration state transition and any durable registration stay here.
+        if not normalized_candidate.substantive:
             _replan_state["noop_streak"] += 1
             cap_noop = pipeline._max_consecutive_noop_replans
             if cap_noop and _replan_state["noop_streak"] >= cap_noop:
