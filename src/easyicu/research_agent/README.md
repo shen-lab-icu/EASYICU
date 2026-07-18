@@ -66,6 +66,27 @@ symbols continue to be exposed from `easyicu.research_agent`.
 - **Layer 3 — Agent Orchestration**: planner / replanner / coder / analyzer / writer coordinated through a runtime supervisor pattern.
 - **Layer 4 — Candidate Hypothesis Ranking**: a pre-plan hypothesis blueprint that distills literature, feasibility, self-critique and ICU domain gates before the planner executes, ranking candidate research questions for human curation. It is **not** an autonomous scientific-discovery system; it is a ranking module whose outputs are filtered by humans and constrained by Layers 1–2.
 
+### Control-plane responsibility packages
+
+The execute loop is being decomposed along authority boundaries rather than by
+mechanically moving every top-level file:
+
+| Package | Owns | Must not own |
+| --- | --- | --- |
+| `gates/` | read-only contract, visual and concept findings/decisions | provider calls, repair budget, checkpoint/evidence mutation, scientific design |
+| `execution/` | provider-backed concept audit and preparation/rendering of already-authorized figure products | cohort, exposure, outcome, method or estimand selection |
+| `authority/` | typed success-promotion boundaries around the existing EvidenceStore/checkpoint authorities | a second `current` selector or independent evidence ledger |
+
+`pipeline_execute.py` remains the orchestration caller while the remaining
+PlanAuthority/TypedBindingResolver/StepExecutor boundaries are extracted. The
+legacy top-level module paths (`contract_gate`, `concept_gate`,
+`concept_audit_execution`, `gate_evaluator`, `figure_contract_preparation`,
+`publication_figure_execution`, `evidence_registration`) are module-object
+aliases to the canonical packages. This is intentional: archived scripts and
+public imports keep working, and monkeypatches through either path reach the
+same implementation. New canonical code must import the responsibility package
+directly, never the compatibility façade.
+
 Current scope note: Layer 4 is bounded. It produces an auditable
 `hypothesis_blueprint.json` before planning, ranking candidates by
 coverage / literature-saturation / gate-pass weights, but it should not
