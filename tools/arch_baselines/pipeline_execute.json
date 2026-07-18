@@ -1,0 +1,49 @@
+{
+  "tool_version": "1.4.0",
+  "tool_sha256": "11fc4aa3f45313522b917ef36c13bc0979feac98b78de655e3f6ad85919bd73d",
+  "shim_import_paths": [],
+  "files": {
+    "pipeline_execute.py": {
+      "loc": 14631,
+      "sha256": "2f77cf14179e0941e13d4cb1c7befd9cc15fee55980708248eaecf3a686c8757",
+      "intra_package_import_edges": 56,
+      "shim_bypass_violations": []
+    },
+    "pipeline.py": {
+      "loc": 10747,
+      "sha256": "5d989352a11aa8358c495b46adc95f8e01edb10c1ba4c25ba27e9aeea610f01c",
+      "intra_package_import_edges": 71,
+      "shim_bypass_violations": []
+    },
+    "pipeline_report.py": {
+      "loc": 2861,
+      "sha256": "e52645f954944d1bba6e645fe281c201e8d1f31b739879da8b442e8f5df11b13",
+      "intra_package_import_edges": 12,
+      "shim_bypass_violations": []
+    }
+  },
+  "functions": {
+    "pipeline_execute.py::_execute_one_step": {
+      "lines": 6694,
+      "line_start": 7513,
+      "direct_nested_funcs": 26,
+      "total_nested_funcs": 28,
+      "own_bound_names": 347,
+      "own_nonlocal_names": [
+        "runtime_state"
+      ],
+      "own_nonlocal_count": 1,
+      "callable_closure_captured_names": 37
+    },
+    "pipeline_execute.py::run_execute_phase": {
+      "lines": 8451,
+      "line_start": 6181,
+      "direct_nested_funcs": 16,
+      "total_nested_funcs": 48,
+      "own_bound_names": 143,
+      "own_nonlocal_names": [],
+      "own_nonlocal_count": 0,
+      "callable_closure_captured_names": 80
+    }
+  }
+}
