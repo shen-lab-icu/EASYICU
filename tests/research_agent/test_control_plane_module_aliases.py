@@ -32,6 +32,14 @@ MODULE_ALIASES = (
         "easyicu.research_agent.concept_audit_execution",
         "easyicu.research_agent.execution.concept_audit",
     ),
+    (
+        "easyicu.research_agent.figure_contract_preparation",
+        "easyicu.research_agent.execution.figure_preparation",
+    ),
+    (
+        "easyicu.research_agent.publication_figure_execution",
+        "easyicu.research_agent.execution.publication_figure",
+    ),
 )
 
 
