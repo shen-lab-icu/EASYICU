@@ -35,6 +35,7 @@ from ..declared_product_contract import (
     authorize_declared_figure_product_slots,
     typed_product as _canonical_typed_product,
 )
+from ..authority.parent_artifact import _resolve_upstream_manifest_step
 
 if TYPE_CHECKING:
     from ..pipeline import ResearchAgentPipeline
@@ -42,7 +43,6 @@ from ..evidence import sha256_of_bytes, sha256_of_file
 from .figure_preparation import _step_has_figure_only_output_contract
 from ..pipeline import (
     _distribution_availability_figure_step_matches_parent,
-    _resolve_upstream_manifest_step,
     _sealed_renderer_figure_step_matches_parent,
     _sealed_renderer_parent_digest_seal,
     deterministic_figure_repair_id_for_upstream,

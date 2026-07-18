@@ -150,6 +150,7 @@ from .authority.registration import (
     StepEvidenceCommit,
     filter_success_alias_bindings as _filter_success_alias_bindings,
 )
+from .authority.parent_artifact import _resolve_upstream_manifest_step
 from .gates.contract import (  # re-export the full contract gate API for old-path back-compat
     _AGENT_OWNED_ROBUSTNESS_RESULT_METHODS,
     _AGENT_OWNED_ROBUSTNESS_RESULT_PRODUCTS,
@@ -201,7 +202,6 @@ from .pipeline import (
     _build_probe_summary,
     _clear_output_dir,
     _distribution_availability_figure_step_matches_parent,
-    _resolve_upstream_manifest_step,
     _sealed_renderer_figure_step_matches_parent,
     _sealed_renderer_parent_digest_seal,
     deterministic_figure_family_supported_for_upstream,
