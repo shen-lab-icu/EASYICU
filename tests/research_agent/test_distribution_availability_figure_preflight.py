@@ -1204,6 +1204,7 @@ print(json.dumps(summary))
             return "{}"
 
     from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.gates import visual as visual_gate_module
 
     class ControlledVisualAuditor:
         def __init__(self, *args, **kwargs):
@@ -1231,7 +1232,7 @@ print(json.dumps(summary))
             return []
 
     monkeypatch.setattr(
-        pipeline_execute,
+        visual_gate_module,
         "VisualQAAuditor",
         ControlledVisualAuditor,
     )
