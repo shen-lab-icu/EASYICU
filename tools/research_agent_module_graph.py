@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
-TOOL_VERSION = "1.0.0"
+TOOL_VERSION = "1.1.0"
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PACKAGE_DIR = REPO_ROOT / "src" / "easyicu" / "research_agent"
@@ -389,10 +389,13 @@ def build_snapshot(
     top_level_count = sum(
         1 for source in modules.values() if "/" not in source.relative_path
     )
-    largest_scc_size = max((len(component) for component in components), default=0)
+    largest_scc_size = max(
+        (len(component) for component in cyclic_components), default=0
+    )
+    cyclic_module_count = sum(len(component) for component in cyclic_components)
 
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "tool_version": TOOL_VERSION,
         "tool_sha256": _sha256(Path(__file__)),
         "package_name": package_name,
@@ -402,6 +405,7 @@ def build_snapshot(
             "package_count": len(packages),
             "edge_count": len(sorted_edges),
             "cyclic_scc_count": len(cyclic_components),
+            "cyclic_module_count": cyclic_module_count,
             "largest_scc_size": largest_scc_size,
         },
         "modules": module_files,
@@ -437,7 +441,10 @@ def compare_snapshots(
     errors: List[str] = []
     current_metrics = current.get("metrics", {})
     baseline_metrics = baseline.get("metrics", {})
-    for metric in ("cyclic_scc_count", "largest_scc_size"):
+    # Splitting one giant SCC into several smaller SCCs increases the component
+    # count while reducing the actual cyclic burden.  Gate the number of modules
+    # participating in cycles and the largest component; report SCC count only.
+    for metric in ("cyclic_module_count", "largest_scc_size"):
         before = int(baseline_metrics.get(metric, 0))
         after = int(current_metrics.get(metric, 0))
         if after > before:

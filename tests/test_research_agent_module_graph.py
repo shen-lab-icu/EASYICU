@@ -55,6 +55,7 @@ def test_snapshot_resolves_relative_absolute_dynamic_imports_and_sccs(
         "package_count": 2,
         "edge_count": 7,
         "cyclic_scc_count": 2,
+        "cyclic_module_count": 4,
         "largest_scc_size": 2,
     }
     assert snapshot["cyclic_sccs"] == [
@@ -96,7 +97,7 @@ def test_nonliteral_all_is_recorded_as_unavailable(tmp_path: Path) -> None:
     assert snapshot["legacy_surfaces"]["demo.a"]["literal_all"] is None
 
 
-@pytest.mark.parametrize("metric", ["cyclic_scc_count", "largest_scc_size"])
+@pytest.mark.parametrize("metric", ["cyclic_module_count", "largest_scc_size"])
 def test_diff_rejects_increased_cycle_metric(tmp_path: Path, metric: str) -> None:
     baseline = graph.build_snapshot(
         _write_package(tmp_path), "demo", legacy_targets=("demo.a",)
@@ -104,6 +105,24 @@ def test_diff_rejects_increased_cycle_metric(tmp_path: Path, metric: str) -> Non
     current = copy.deepcopy(baseline)
     current["metrics"][metric] += 1
     assert any(metric in error for error in graph.compare_snapshots(current, baseline))
+
+
+def test_diff_accepts_one_large_scc_split_into_more_smaller_sccs(
+    tmp_path: Path,
+) -> None:
+    baseline = graph.build_snapshot(
+        _write_package(tmp_path), "demo", legacy_targets=("demo.a",)
+    )
+    current = copy.deepcopy(baseline)
+    current["metrics"].update(
+        {
+            "cyclic_scc_count": baseline["metrics"]["cyclic_scc_count"] + 1,
+            "cyclic_module_count": baseline["metrics"]["cyclic_module_count"] - 1,
+            "largest_scc_size": baseline["metrics"]["largest_scc_size"] - 1,
+        }
+    )
+
+    assert graph.compare_snapshots(current, baseline) == []
 
 
 def test_diff_rejects_missing_legacy_module_and_all_symbol(tmp_path: Path) -> None:
