@@ -1415,21 +1415,29 @@ def load_concepts(
                     use_sofa2=use_sofa2,
                     **load_kwargs,
                 )
-        return inprocess_batch_load_streaming(
-            loader=loader,
-            concepts=concepts_list,
-            patient_batches=_iter_patient_id_batches(
-                loader,
-                effective_batch_size,
+        # inprocess_batch_load_streaming calls the *base* loader with the STRIPPED
+        # concepts_list (no special routing). If specials were requested but we reached
+        # here (use_subprocess was set yet _sample_patient_ids returned None, so the
+        # subprocess path above was skipped), returning here would silently drop the
+        # whole special group — the exact class of bug this fix closes. Fall through to
+        # the non-batched loader path instead, which re-attaches specials (~L1480).
+        # Trade the memory of a non-batched full load for correctness over silent loss.
+        if not _special:
+            return inprocess_batch_load_streaming(
+                loader=loader,
+                concepts=concepts_list,
+                patient_batches=_iter_patient_id_batches(
+                    loader,
+                    effective_batch_size,
+                    total_patients=_total_patients,
+                    sample_strategy='sorted',
+                ),
                 total_patients=_total_patients,
-                sample_strategy='sorted',
-            ),
-            total_patients=_total_patients,
-            batch_size=effective_batch_size,
-            verbose=verbose,
-            memory_efficient=memory_efficient,
-            **load_kwargs,
-        )
+                batch_size=effective_batch_size,
+                verbose=verbose,
+                memory_efficient=memory_efficient,
+                **load_kwargs,
+            )
 
     # 使用统一加载器加载概念
     if concepts_list:
