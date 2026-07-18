@@ -41,6 +41,7 @@ import tempfile
 import threading
 from contextvars import copy_context
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -3739,6 +3740,106 @@ def collect_visual_gate_result(
         error_findings=tuple(error_findings),
         demoted_findings=tuple(demoted_findings),
         blocking_errors=tuple(blocking_errors),
+    )
+
+
+class VisualRepairAction(str, Enum):
+    """Which of the three top-level visual-error branches the step should take.
+
+    Only meaningful when the gate found blocking visual errors; the concrete
+    side effects (demote / terminal / fallback-retry / capsule repair) are the
+    orchestrator's, driven by these actions plus its own budget/attempt state.
+    """
+
+    SEALED_SUPPRESS = "sealed_suppress"  # verified sealed renderer — never rewrite
+    EXHAUSTED = "exhausted"  # out of layout-repair attempts or LLM budget
+    LLM_REPAIR = "llm_repair"  # request one bounded LLM layout repair
+
+
+@dataclass(frozen=True)
+class VisualRepairDecision:
+    """Side-effect-free recommendation for how to handle visual errors.
+
+    Batch 1a-2 — the decision half of the typed Visual-QA gate. It selects the
+    branch and, for ``LLM_REPAIR``, carries the repair RECOMMENDATION (the base
+    typed repair ticket, the layout-only host guidance, and the operator repair
+    log). It never calls an LLM, consumes budget, builds a RepairPromptAuthority,
+    touches evidence, or decides control flow — the orchestration layer does all
+    of that. The monotonic-concept regression constraints are appended to the
+    authority by the orchestrator, not here.
+    """
+
+    action: VisualRepairAction
+    reason: str
+    repair_ticket: Tuple[Dict[str, Any], ...] = ()
+    host_guidance: Optional[Dict[str, Any]] = None
+    repair_log: str = ""
+
+
+def decide_visual_repair(
+    result: VisualGateResult,
+    *,
+    sealed: bool,
+    attempts_exhausted: bool,
+    budget_available: bool,
+) -> Optional[VisualRepairDecision]:
+    """Classify the visual-error branch and build the repair recommendation.
+
+    Mirrors the original ``if sealed / elif exhausted-or-no-budget / else``
+    selection inside ``_execute_one_step`` plus the ``LLM_REPAIR`` payload
+    construction. Returns ``None`` when the gate found no errors (no decision to
+    make). Pure: ``sealed`` / ``attempts_exhausted`` / ``budget_available`` are
+    the caller's already-evaluated state reads.
+    """
+
+    if not result.has_errors:
+        return None
+
+    if sealed:
+        return VisualRepairDecision(
+            action=VisualRepairAction.SEALED_SUPPRESS,
+            reason="sealed_renderer_authorized_code",
+        )
+
+    if attempts_exhausted or not budget_available:
+        if attempts_exhausted and not budget_available:
+            reason = "max_visual_repair_attempts_and_no_llm_budget"
+        elif attempts_exhausted:
+            reason = "max_visual_repair_attempts"
+        else:
+            reason = "no_llm_repair_budget"
+        return VisualRepairDecision(
+            action=VisualRepairAction.EXHAUSTED,
+            reason=reason,
+        )
+
+    host_guidance = {
+        "layout_only": True,
+        "preserve": [
+            "source_data_values_and_rows",
+            "step_summary_numeric_and_statistical_values",
+            "figure_contract_claims_evidence_and_panel_roles",
+        ],
+        "forbid": [
+            "source_resolution_changes",
+            "cohort_or_data_transformations",
+            "estimate_or_scientific_label_changes",
+        ],
+    }
+    repair_log = (
+        "Visual QA rejected one or more figure outputs "
+        "before evidence registration. Fix the figure "
+        "layout, preserve all tables/statistics, save PNG "
+        "and editable SVG with the same stem, include "
+        "publication figure exports when requested, and rerun.\n\n"
+        + _visual_repair_request_log(list(result.findings))
+    )
+    return VisualRepairDecision(
+        action=VisualRepairAction.LLM_REPAIR,
+        reason="llm_layout_repair",
+        repair_ticket=tuple(typed_repair_ticket(list(result.findings))),
+        host_guidance=host_guidance,
+        repair_log=repair_log,
     )
 
 
@@ -12020,7 +12121,19 @@ else:
                         f.model_dump() for f in visual_findings
                     ]
                     if visual_gate.has_errors:
-                        if sealed_renderer_authorized_code_sha256 is not None:
+                        visual_repair_decision = decide_visual_repair(
+                            visual_gate,
+                            sealed=sealed_renderer_authorized_code_sha256 is not None,
+                            attempts_exhausted=(
+                                worker_progress.visual_repair_attempts
+                                >= pipeline._max_code_repair_attempts
+                            ),
+                            budget_available=_llm_repair_budget_available(),
+                        )
+                        if (
+                            visual_repair_decision.action
+                            is VisualRepairAction.SEALED_SUPPRESS
+                        ):
                             demoted_findings = list(visual_gate.demoted_findings)
                             blocking_visual_errors = list(visual_gate.blocking_errors)
                             step_record["visual_findings"] = [
@@ -12078,9 +12191,8 @@ else:
                                 total_steps=total_steps,
                             )
                         elif (
-                            worker_progress.visual_repair_attempts
-                            >= pipeline._max_code_repair_attempts
-                            or not _llm_repair_budget_available()
+                            visual_repair_decision.action
+                            is VisualRepairAction.EXHAUSTED
                         ):
                             fallback_code = _deterministic_fallback_code("visual_qa")
                             if fallback_code is not None:
@@ -12134,41 +12246,23 @@ else:
                             # error was a deterministic layout/cosmetic issue.
                         else:
                             worker_progress.visual_repair_attempts += 1
-                            qa_log = _visual_repair_request_log(visual_findings)
-                            visual_host_guidance = {
-                                "layout_only": True,
-                                "preserve": [
-                                    "source_data_values_and_rows",
-                                    "step_summary_numeric_and_statistical_values",
-                                    "figure_contract_claims_evidence_and_panel_roles",
-                                ],
-                                "forbid": [
-                                    "source_resolution_changes",
-                                    "cohort_or_data_transformations",
-                                    "estimate_or_scientific_label_changes",
-                                ],
-                            }
+                            visual_host_guidance = visual_repair_decision.host_guidance
                             current_visual_repair_authority = (
                                 RepairPromptAuthority.create(
-                                    typed_ticket=typed_repair_ticket(visual_findings),
+                                    typed_ticket=list(
+                                        visual_repair_decision.repair_ticket
+                                    ),
                                     host_guidance=visual_host_guidance,
                                 )
                             )
                             visual_repair_authority = RepairPromptAuthority.create(
                                 typed_ticket=[
-                                    *typed_repair_ticket(visual_findings),
+                                    *visual_repair_decision.repair_ticket,
                                     *_monotonic_concept_constraint_ticket(),
                                 ],
                                 host_guidance=visual_host_guidance,
                             )
-                            visual_repair_log = (
-                                "Visual QA rejected one or more figure outputs "
-                                "before evidence registration. Fix the figure "
-                                "layout, preserve all tables/statistics, save PNG "
-                                "and editable SVG with the same stem, include "
-                                "publication figure exports when requested, and rerun.\n\n"
-                                + qa_log
-                            )
+                            visual_repair_log = visual_repair_decision.repair_log
                             if not _consume_llm_repair_budget(
                                 "visual",
                                 before_code=code,
