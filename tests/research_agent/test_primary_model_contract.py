@@ -1094,7 +1094,7 @@ def test_primary_model_contract_is_wired_into_all_contract_passes() -> None:
 
     from easyicu.research_agent import pipeline_execute
 
-    def _direct_calls(function) -> list[ast.Call]:
+    def _audit_calls(function, validator_name: str) -> list[ast.Call]:
         tree = ast.parse(inspect.getsource(function))
         return [
             node
@@ -1103,23 +1103,47 @@ def test_primary_model_contract_is_wired_into_all_contract_passes() -> None:
             and isinstance(node.func, ast.Attribute)
             and node.func.attr == "audit"
             and isinstance(node.func.value, ast.Name)
-            and node.func.value.id == "primary_model_contract_validator"
+            and node.func.value.id == validator_name
         ]
 
-    early_calls = _direct_calls(pipeline_execute.run_execute_phase)
-    final_calls = _direct_calls(pipeline_execute._evaluate_final_deterministic_gates)
+    def _shared_gate_calls(function) -> list[ast.Call]:
+        tree = ast.parse(inspect.getsource(function))
+        return [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_step_deterministic_contract_findings"
+        ]
 
-    # The mutable execution loop owns one early repair gate. The extracted
-    # read-only evaluator owns the single final authority gate after all
-    # repairable output checks have passed.
+    # The early repair gate and the final authority gate now evaluate ONE shared
+    # deterministic contract sequence (dedup), so the primary-model contract
+    # validator is audited exactly once — inside that shared sequence — and it
+    # carries the execution-cohort path there.
+    shared_audits = _audit_calls(
+        pipeline_execute._step_deterministic_contract_findings,
+        "primary_model_contract_validator",
+    )
+    assert len(shared_audits) == 1
+    shared_keywords = {kw.arg: kw.value for kw in shared_audits[0].keywords}
+    assert isinstance(shared_keywords.get("cohort_path"), ast.Name)
+    assert shared_keywords["cohort_path"].id == "execution_cohort_path"
+
+    # The mutable execution loop still owns one early repair gate and the
+    # extracted read-only evaluator owns the single final authority gate; each
+    # wires in the shared sequence and passes its already-resolved cohort path.
+    early_calls = _shared_gate_calls(pipeline_execute.run_execute_phase)
+    final_calls = _shared_gate_calls(
+        pipeline_execute._evaluate_final_deterministic_gates
+    )
     assert len(early_calls) == 1
     assert len(final_calls) == 1
     early_keywords = {keyword.arg: keyword.value for keyword in early_calls[0].keywords}
     final_keywords = {keyword.arg: keyword.value for keyword in final_calls[0].keywords}
-    assert isinstance(early_keywords.get("cohort_path"), ast.Name)
-    assert early_keywords["cohort_path"].id == "step_execution_cohort_path"
-    assert isinstance(final_keywords.get("cohort_path"), ast.Name)
-    assert final_keywords["cohort_path"].id == "execution_cohort_path"
+    assert isinstance(early_keywords.get("execution_cohort_path"), ast.Name)
+    assert early_keywords["execution_cohort_path"].id == "step_execution_cohort_path"
+    assert isinstance(final_keywords.get("execution_cohort_path"), ast.Name)
+    assert final_keywords["execution_cohort_path"].id == "execution_cohort_path"
 
 
 def test_primary_model_contract_rejects_noncanonical_machine_fields(

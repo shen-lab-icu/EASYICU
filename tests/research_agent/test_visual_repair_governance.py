@@ -271,7 +271,7 @@ def test_visual_qa_stays_before_contract_gate() -> None:
     source = inspect.getsource(pipeline_execute.run_execute_phase)
 
     assert source.index("VisualQAAuditor().audit_with_expected") < source.index(
-        "early_contract_findings = _step_contract_findings"
+        "early_contract_findings = _step_deterministic_contract_findings"
     )
     visual_except = source[
         source.index("except Exception as exc:", source.index("qa_log =")) :
@@ -279,6 +279,37 @@ def test_visual_qa_stays_before_contract_gate() -> None:
     assert visual_except.index(
         "_demote_cosmetic_visual_findings"
     ) < visual_except.index("visual_qa_repair_failed")
+
+
+def test_figure_canonicalization_repair_stays_between_gate_and_figure_audits() -> None:
+    # Batch 1a-0 ordering guard (the boundary the dedup must never reorder): the
+    # early figure-contract canonicalization REPAIR runs after the shared
+    # deterministic contract gate and BEFORE the figure-contract / figure-source
+    # audits, so those validators audit the already-canonicalized contracts.
+    # Extracting the shared 14-validator contract sequence left this hard
+    # sequence intact; lock it so a later gate extraction cannot silently move
+    # the repair past the audits (which would fail-open on stale contracts).
+    from easyicu.research_agent import pipeline_execute
+
+    source = inspect.getsource(pipeline_execute.run_execute_phase)
+    shared_gate = source.index(
+        "early_contract_findings = _step_deterministic_contract_findings"
+    )
+    canonicalization_repair = source.index(
+        "_install_figure_contract_source_data_canonicalization("
+    )
+    figure_contract_audit = source.index(
+        "early_contract_findings += figure_contract_validator.audit"
+    )
+    figure_source_audit = source.index(
+        "early_contract_findings += figure_source_validator.audit"
+    )
+    assert (
+        shared_gate
+        < canonicalization_repair
+        < figure_contract_audit
+        < figure_source_audit
+    )
 
 
 def test_contract_budget_does_not_consume_visual_layout_budget(

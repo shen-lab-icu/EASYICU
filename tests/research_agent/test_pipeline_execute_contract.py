@@ -1207,31 +1207,44 @@ def test_execute_phase_host_verifies_measurement_provenance_at_every_contract_ga
 
     from easyicu.research_agent import pipeline_execute
 
-    execute_tree = ast.parse(inspect.getsource(pipeline_execute.run_execute_phase))
-    direct_calls = [
-        node
-        for node in ast.walk(execute_tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "audit"
-        and isinstance(node.func.value, ast.Name)
-        and node.func.value.id == "step_summary_integrity_validator"
-    ]
-    evaluator_tree = ast.parse(
-        inspect.getsource(pipeline_execute._evaluate_final_deterministic_gates)
+    # The early repair gate and the final authority gate now share ONE
+    # deterministic contract sequence (dedup): the summary-integrity validator is
+    # audited exactly once, inside that shared sequence, carrying the
+    # execution-cohort path.
+    shared_tree = ast.parse(
+        inspect.getsource(pipeline_execute._step_deterministic_contract_findings)
     )
-    evaluator_calls = [
+    shared_audits = [
         node
-        for node in ast.walk(evaluator_tree)
+        for node in ast.walk(shared_tree)
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "audit"
         and isinstance(node.func.value, ast.Name)
         and node.func.value.id == "step_summary_integrity_validator"
     ]
+    assert len(shared_audits) == 1
+    shared_keywords = {kw.arg: kw.value for kw in shared_audits[0].keywords}
+    assert isinstance(shared_keywords.get("cohort_path"), ast.Name)
+    assert shared_keywords["cohort_path"].id == "execution_cohort_path"
+
+    def _shared_gate_calls(function) -> list:
+        tree = ast.parse(inspect.getsource(function))
+        return [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_step_deterministic_contract_findings"
+        ]
 
     # Early repair screening remains in the orchestration loop; the final
     # read-only review is owned by the reusable deterministic gate evaluator.
+    # Each wires in the shared sequence and passes its resolved cohort path.
+    direct_calls = _shared_gate_calls(pipeline_execute.run_execute_phase)
+    evaluator_calls = _shared_gate_calls(
+        pipeline_execute._evaluate_final_deterministic_gates
+    )
     assert len(direct_calls) == 1
     assert len(evaluator_calls) == 1
     direct_keywords = {
@@ -1240,10 +1253,10 @@ def test_execute_phase_host_verifies_measurement_provenance_at_every_contract_ga
     evaluator_keywords = {
         keyword.arg: keyword.value for keyword in evaluator_calls[0].keywords
     }
-    assert isinstance(direct_keywords.get("cohort_path"), ast.Name)
-    assert direct_keywords["cohort_path"].id == "step_execution_cohort_path"
-    assert isinstance(evaluator_keywords.get("cohort_path"), ast.Name)
-    assert evaluator_keywords["cohort_path"].id == "execution_cohort_path"
+    assert isinstance(direct_keywords.get("execution_cohort_path"), ast.Name)
+    assert direct_keywords["execution_cohort_path"].id == "step_execution_cohort_path"
+    assert isinstance(evaluator_keywords.get("execution_cohort_path"), ast.Name)
+    assert evaluator_keywords["execution_cohort_path"].id == "execution_cohort_path"
 
 
 def test_primary_cohort_coder_receives_only_exact_locked_cohort_payload():
