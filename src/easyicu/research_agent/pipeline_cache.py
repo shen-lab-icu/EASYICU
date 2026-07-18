@@ -28,9 +28,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence
 
+from .evidence_authority import EvidenceAuthorityIntegrityError
 from .llm import MockLLMClient
 from .prompts import PROMPT_PACK_VERSION, prompt_pack_files
-from .schema import PipelineResult
+from .run_input_capsule import (
+    RunInputIdentityError,
+    invalidate_unverified_successful_steps,
+    load_verified_run_input_capsule,
+)
+from .runtime_artifacts import verified_run_evidence_path
+from .schema import AnalysisManifest, PipelineResult
 
 _CACHE_KEY_SCHEMA_VERSION = "easyicu.pipeline_cache_key/2"
 _CACHE_READY_STATUSES = frozenset({"manuscript_ready", "publication_ready"})
@@ -230,6 +237,7 @@ def _completed_run_payload(
     *,
     run_dir: Path,
     expected_run_id: str,
+    scientific_identity: Mapping[str, Any],
 ) -> Optional[tuple[Dict[str, Path], Dict[str, Any]]]:
     """Return verified result paths only for a complete reusable run."""
 
@@ -238,6 +246,19 @@ def _completed_run_payload(
         return None
     manifest = _read_json_object(manifest_path)
     if manifest is None or str(manifest.get("run_id") or "") != expected_run_id:
+        return None
+    try:
+        AnalysisManifest.model_validate(manifest)
+        input_authority = load_verified_run_input_capsule(
+            run_dir=run_dir,
+            scientific_identity=dict(scientific_identity),
+        )
+    except (
+        EvidenceAuthorityIntegrityError,
+        RunInputIdentityError,
+        TypeError,
+        ValueError,
+    ):
         return None
     if not manifest.get("finished_at"):
         return None
@@ -285,6 +306,32 @@ def _completed_run_payload(
     if not latest or set(latest.values()) != {"ok"}:
         return None
 
+    manifest_evidence = manifest.get("evidence")
+    if not isinstance(manifest_evidence, list):
+        return None
+    manifest_records: Dict[str, Dict[str, Any]] = {}
+    for raw_record in manifest_evidence:
+        if not isinstance(raw_record, Mapping):
+            return None
+        evidence_id = str(raw_record.get("evidence_id") or "").strip()
+        if not evidence_id or evidence_id in manifest_records:
+            return None
+        manifest_records[evidence_id] = dict(raw_record)
+    if manifest_records != input_authority.evidence_records:
+        return None
+    if any(
+        verified_run_evidence_path(run_dir, record) is None
+        for record in input_authority.evidence_records.values()
+    ):
+        return None
+    _, invalidated = invalidate_unverified_successful_steps(
+        run_dir=run_dir,
+        resume_state=manifest,
+        records=input_authority.evidence_records,
+    )
+    if invalidated:
+        return None
+
     paths: Dict[str, Path] = {}
     for key, manifest_key, default in (
         ("context", "context_path", "research_context.json"),
@@ -314,9 +361,36 @@ def _completed_run_payload(
     )
     if status_path is None:
         return None
-    run_status = _read_json_object(status_path)
+    root_evidence_pairs = {
+        "context": "research_context",
+        "plan": "analysis_plan",
+        "manuscript": "manuscript_scaffold_bound",
+    }
+    for path_key, evidence_id in root_evidence_pairs.items():
+        record = input_authority.evidence_records.get(evidence_id)
+        if (
+            record is None
+            or verified_run_evidence_path(run_dir, record) is None
+            or hash_file(paths[path_key]) != str(record.get("sha256") or "")
+        ):
+            return None
+    status_record = input_authority.evidence_records.get("run_status")
+    if status_record is None:
+        return None
+    status_evidence_path = verified_run_evidence_path(run_dir, status_record)
+    if status_evidence_path is None or hash_file(status_path) != str(
+        status_record.get("sha256") or ""
+    ):
+        return None
+    run_status = _read_json_object(status_evidence_path)
     if run_status is None or str(run_status.get("status") or "") not in (
         _CACHE_READY_STATUSES
+    ):
+        return None
+    if run_status.get("gates") != dict(readiness):
+        return None
+    if str(run_status.get("research_question") or "") != str(
+        manifest.get("research_question") or ""
     ):
         return None
     return paths, manifest
@@ -427,7 +501,12 @@ class PipelineCache:
 
     # -- query / record -------------------------------------------------
 
-    def lookup(self, cache_key: str) -> Optional[PipelineResult]:
+    def lookup(
+        self,
+        cache_key: str,
+        *,
+        scientific_identity: Mapping[str, Any],
+    ) -> Optional[PipelineResult]:
         """Return a prior complete :class:`PipelineResult`, otherwise ``None``.
 
         Existence alone is not completion.  The final manifest, current step
@@ -447,7 +526,11 @@ class PipelineCache:
             return None
         run_dir = Path(workdir)
         manifest = run_dir / "manifest.json"
-        completed = _completed_run_payload(run_dir=run_dir, expected_run_id=run_id)
+        completed = _completed_run_payload(
+            run_dir=run_dir,
+            expected_run_id=run_id,
+            scientific_identity=scientific_identity,
+        )
         if completed is None:
             index.pop(cache_key, None)
             self.save_index(index)
@@ -468,7 +551,13 @@ class PipelineCache:
         except Exception:
             return None
 
-    def record_hit(self, cache_key: str, result: PipelineResult) -> None:
+    def record_hit(
+        self,
+        cache_key: str,
+        result: PipelineResult,
+        *,
+        scientific_identity: Mapping[str, Any],
+    ) -> None:
         """Record ``result`` only when host-owned completion gates pass."""
 
         run_dir = Path(result.workdir)
@@ -476,6 +565,7 @@ class PipelineCache:
             _completed_run_payload(
                 run_dir=run_dir,
                 expected_run_id=str(result.run_id),
+                scientific_identity=scientific_identity,
             )
             is None
         ):

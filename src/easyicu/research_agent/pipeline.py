@@ -3575,6 +3575,7 @@ class ResearchAgentPipeline:
         target_outcome: Optional[str],
         stop_after_analysis: bool,
         cache_key: Optional[str],
+        scientific_identity: Mapping[str, Any],
         experiment_spec_path: Optional[Path],
         audit_logger: Optional[AuditLogger],
         emit_progress: Callable[..., None],
@@ -3595,6 +3596,7 @@ class ResearchAgentPipeline:
             target_outcome=target_outcome,
             stop_after_analysis=stop_after_analysis,
             cache_key=cache_key,
+            scientific_identity=scientific_identity,
             experiment_spec_path=experiment_spec_path,
             audit_logger=audit_logger,
             emit_progress=emit_progress,
@@ -4061,7 +4063,10 @@ class ResearchAgentPipeline:
                 flags=self._cache_flag_payload(),
                 science_inputs=run_scientific_identity,
             )
-            cached = self._cache.lookup(cache_key)
+            cached = self._cache.lookup(
+                cache_key,
+                scientific_identity=run_scientific_identity,
+            )
             if cached is not None:
                 shutil.rmtree(run_dir, ignore_errors=True)
                 _emit_progress(
@@ -4214,6 +4219,7 @@ class ResearchAgentPipeline:
                 target_outcome=target_outcome,
                 stop_after_analysis=stop_after_analysis,
                 cache_key=cache_key,
+                scientific_identity=run_scientific_identity,
                 experiment_spec_path=experiment_spec_path,
                 audit_logger=audit_logger,
                 emit_progress=_emit_progress,
