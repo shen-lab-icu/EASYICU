@@ -52,6 +52,31 @@ class ConceptColumnRole(str, Enum):
     EVENT_TIME = "event_time"
 
 
+_DERIVED_ROLE_TRANSITIONS = {
+    ConceptColumnRole.VALUE: frozenset(
+        {
+            ConceptColumnRole.VALUE,
+            ConceptColumnRole.NUMERIC_AGGREGATE,
+            ConceptColumnRole.COUNT,
+            ConceptColumnRole.MEASUREMENT_STATUS,
+            ConceptColumnRole.FIRST_OBSERVATION_TIME,
+            ConceptColumnRole.LAST_OBSERVATION_TIME,
+        }
+    ),
+    ConceptColumnRole.EVENT_STATUS: frozenset(
+        {
+            ConceptColumnRole.EVENT_STATUS,
+            ConceptColumnRole.EVENT_FRACTION,
+            ConceptColumnRole.COUNT,
+            ConceptColumnRole.MEASUREMENT_STATUS,
+            ConceptColumnRole.FIRST_OBSERVATION_TIME,
+            ConceptColumnRole.LAST_OBSERVATION_TIME,
+            ConceptColumnRole.EVENT_TIME,
+        }
+    ),
+}
+
+
 @dataclass(frozen=True, slots=True)
 class NumericBounds:
     """Finite, ordered numeric bounds; either endpoint may be unspecified."""
@@ -996,6 +1021,88 @@ def project_concept_column_metadata(
     )
 
 
+def derive_concept_column_metadata(
+    source: ConceptColumnMetadata,
+    *,
+    spec: ColumnProjectionSpec,
+) -> ConceptColumnMetadata:
+    """Derive one materialized-column contract from sealed source metadata.
+
+    This is deliberately a *projection of an existing authority*, not a second
+    dictionary lookup.  A cohort materializer may change the physical column
+    name, aggregation, representation role, or time coordinate, while every
+    source/database/lineage coordinate remains byte-for-byte inherited from
+    the verified export metadata.
+    """
+
+    if not isinstance(source, ConceptColumnMetadata):
+        raise MetadataProjectionError("source metadata must be ConceptColumnMetadata")
+    if not isinstance(spec, ColumnProjectionSpec):
+        raise MetadataProjectionError("spec must be ColumnProjectionSpec")
+    if spec.source_concept != source.source_concept:
+        raise MetadataProjectionError(
+            "derived projection source_concept does not match source authority"
+        )
+    permitted_roles = _DERIVED_ROLE_TRANSITIONS.get(source.role)
+    if permitted_roles is None or spec.role not in permitted_roles:
+        raise MetadataProjectionError(
+            "derived projection role is not authorized by the sealed source role "
+            f"({source.role.value!r} -> {spec.role.value!r})"
+        )
+
+    value_like = spec.role in {
+        ConceptColumnRole.VALUE,
+        ConceptColumnRole.NUMERIC_AGGREGATE,
+    }
+    range_preserving = spec.role is ConceptColumnRole.VALUE or (
+        spec.role is ConceptColumnRole.NUMERIC_AGGREGATE
+        and spec.aggregation in _RANGE_PRESERVING_AGGREGATIONS
+    )
+    time_like = spec.role in {
+        ConceptColumnRole.FIRST_OBSERVATION_TIME,
+        ConceptColumnRole.LAST_OBSERVATION_TIME,
+        ConceptColumnRole.EVENT_TIME,
+    }
+    derived = ConceptColumnMetadata(
+        column_name=spec.column_name,
+        source_concept=source.source_concept,
+        role=spec.role,
+        aggregation=spec.aggregation,
+        canonical_unit=(source.canonical_unit if value_like else None),
+        accepted_units=(source.accepted_units if value_like else ()),
+        extraction_bounds=(source.extraction_bounds if range_preserving else None),
+        analysis_plausibility_range=(
+            source.analysis_plausibility_range if range_preserving else None
+        ),
+        allowed_values=(
+            (0, 1)
+            if spec.role
+            in {
+                ConceptColumnRole.MEASUREMENT_STATUS,
+                ConceptColumnRole.EVENT_STATUS,
+            }
+            else None
+        ),
+        time_origin=(spec.time_origin if time_like else None),
+        time_unit=(spec.time_unit if time_like else None),
+        source_database=source.source_database,
+        dictionary_source_database=source.dictionary_source_database,
+        source_resolution_chain=source.source_resolution_chain,
+        available_databases=source.available_databases,
+        source_declared_for_database=source.source_declared_for_database,
+        availability_basis=source.availability_basis,
+        source_lineage=source.source_lineage,
+        description=source.description,
+        category=source.category,
+        class_name=source.class_name,
+        derived_from_concepts=source.derived_from_concepts,
+    )
+    # Exercise the strict parser here as a defense against future additions to
+    # ConceptColumnMetadata that this explicit authority-preserving copy must
+    # not silently omit.
+    return ConceptColumnMetadata.from_dict(derived.to_dict())
+
+
 def canonical_metadata_bytes(metadata: ConceptColumnMetadata) -> bytes:
     """Return deterministic JSON bytes suitable for sidecar/replay binding."""
 
@@ -1046,6 +1153,7 @@ __all__ = [
     "NumericBounds",
     "SourceLineage",
     "canonical_metadata_bytes",
+    "derive_concept_column_metadata",
     "metadata_payload_sha256",
     "metadata_sha256",
     "project_concept_column_metadata",

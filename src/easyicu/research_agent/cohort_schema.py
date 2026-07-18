@@ -21,14 +21,13 @@ from functools import lru_cache
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, Literal, Mapping, Optional
 
 from .lock_authority import (
     LockAuthorityError,
     assert_lock_matches_evidence_anchor,
     rehydrate_timestamp_only_legacy_lock,
 )
-
 
 # Framework-owned anchors stay deliberately small and generic. Disease- or
 # intervention-specific anchors such as "sepsis_onset" or "vent_start" are
@@ -569,8 +568,10 @@ ANALYSIS_COHORT_FILENAME = "cohort_analysis.parquet"
 def _declares_analysis_cohort(step: Any) -> bool:
     for raw in getattr(step, "expected_outputs", ()) or ():
         kind, separator, name = str(raw or "").strip().casefold().partition(":")
-        if separator and kind in {"artifact", "dataset", "table"} and name == (
-            "analysis_cohort"
+        if (
+            separator
+            and kind in {"artifact", "dataset", "table"}
+            and name == ("analysis_cohort")
         ):
             return True
     return False
@@ -595,9 +596,7 @@ def _descriptor_window_matches_predicate(value: Any, window: TimeWindow) -> bool
     labels such as ``entire_stay`` fail closed.
     """
 
-    normalized = re.sub(
-        r"[^a-z0-9.]+", "_", str(value or "").casefold()
-    ).strip("_")
+    normalized = re.sub(r"[^a-z0-9.]+", "_", str(value or "").casefold()).strip("_")
     if not normalized:
         return False
 
@@ -659,9 +658,7 @@ def _planner_declared_context_column_bindings(
     descriptors_by_source: Dict[str, list[Any]] = {}
     for descriptor in getattr(context, "variables", ()) or ():
         name = str(getattr(descriptor, "name", "") or "").strip()
-        source_concept = str(
-            getattr(descriptor, "source_concept", "") or ""
-        ).strip()
+        source_concept = str(getattr(descriptor, "source_concept", "") or "").strip()
         role = getattr(descriptor, "role", "")
         role_value = str(getattr(role, "value", role) or "").strip().casefold()
         if (
@@ -722,6 +719,67 @@ def _planner_declared_context_column_bindings(
         if len(candidates) == 1:
             bindings[concept_id] = candidates[0]
     return bindings
+
+
+def _predicate_column_binding_records(
+    definition: CohortDefinition,
+    bindings: Mapping[str, str],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "concept_id": concept_id,
+            "column": column,
+            "basis": "planner_declared_operational_output_source_concept",
+            "predicate_contracts": [
+                {
+                    "aggregation": predicate.aggregation,
+                    "time_window": predicate.time_window.to_dict(),
+                }
+                for predicate in (*definition.inclusion, *definition.exclusion)
+                if predicate.concept_id == concept_id
+            ],
+        }
+        for concept_id, column in sorted(bindings.items())
+    ]
+
+
+def analysis_cohort_authority_coordinates(
+    *,
+    plan: Any,
+    context: Any,
+    columns: Any,
+    data: Any = None,
+) -> dict[str, object]:
+    """Recompute the science-owned coordinates bound by an analysis child."""
+
+    definition = coerce_cohort_definition(getattr(plan, "cohort", None))
+    if definition is None or not (definition.inclusion or definition.exclusion):
+        raise CohortSchemaError("analysis cohort authority requires locked predicates")
+    bindings = _planner_declared_context_column_bindings(
+        definition=definition,
+        plan=plan,
+        context=context,
+        columns=columns,
+    )
+    coordinates: dict[str, object] = {
+        "cohort_definition_sha256": cohort_definition_sha(definition),
+        "predicate_column_bindings": _predicate_column_binding_records(
+            definition, bindings
+        ),
+    }
+    if data is not None:
+        filter_input = data.reset_index(drop=True)
+        selected = build_cohort(
+            definition,
+            filter_input,
+            column_bindings=bindings,
+        )
+        positions = tuple(int(index) for index in selected.index.tolist())
+        coordinates["selected_row_count"] = len(positions)
+        coordinates["selected_row_positions_sha256"] = hashlib.sha256(
+            json.dumps(list(positions), separators=(",", ":")).encode("ascii")
+        ).hexdigest()
+    return coordinates
 
 
 def coerce_isfinite_safe_dtypes(frame: Any) -> Any:
@@ -799,6 +857,9 @@ def materialize_locked_analysis_cohort(
     result: Dict[str, Any] = {
         "status": "no_definition",
         "path": None,
+        "authority_path": None,
+        "authority_ref": None,
+        "cohort_definition_sha256": None,
         "n_universe": None,
         "n_cohort": None,
         "error": None,
@@ -806,59 +867,110 @@ def materialize_locked_analysis_cohort(
     definition = coerce_cohort_definition(getattr(plan, "cohort", None))
     if definition is None or not (definition.inclusion or definition.exclusion):
         return result
+    from .intake.materialized_metadata import (
+        MaterializedMetadataError,
+        implementation_bundle_sha256,
+        load_verified_materialized_cohort_authority,
+        publish_ordered_subset_materialized_cohort,
+        read_verified_materialized_cohort_table,
+    )
+
+    # Authority verification deliberately happens outside the legacy error
+    # fallback below. A typed cohort that loses or corrupts its authority must
+    # fail closed rather than silently becoming an untyped universe.
+    typed_parent = load_verified_materialized_cohort_authority(universe_path)
     try:
         import pandas as pd  # type: ignore
 
-        universe = pd.read_parquet(universe_path)
+        universe = (
+            read_verified_materialized_cohort_table(
+                universe_path,
+                verified=typed_parent,
+            ).to_pandas()
+            if typed_parent is not None
+            else pd.read_parquet(universe_path)
+        )
+        filter_input = (
+            universe.reset_index(drop=True) if typed_parent is not None else universe
+        )
         column_bindings = _planner_declared_context_column_bindings(
             definition=definition,
             plan=plan,
             context=context,
-            columns=universe.columns,
+            columns=filter_input.columns,
         )
         cohort = build_cohort(
             definition,
-            universe,
+            filter_input,
             column_bindings=column_bindings,
-        ).reset_index(drop=True)
-    except Exception as exc:  # fall back to the universe; never break the run
+        )
+    except Exception as exc:
+        if typed_parent is not None:
+            raise MaterializedMetadataError(
+                "typed cohort definition could not be applied to its sealed universe"
+            ) from exc
+        # Preserve the historical best-effort behavior only for legacy inputs.
         result.update(status="error", error=f"{type(exc).__name__}: {exc}")
         return result
 
-    cohort = coerce_isfinite_safe_dtypes(cohort)
     out_path = Path(run_dir) / f"{stem}.parquet"
-    cohort.to_parquet(out_path, index=False)
-    provenance = {
-        "schema_version": "easyicu.analysis_cohort/1",
+    predicate_bindings = _predicate_column_binding_records(definition, column_bindings)
+    semantic_provenance = {
+        "schema_version": (
+            "easyicu.analysis_cohort/2"
+            if typed_parent is not None
+            else "easyicu.analysis_cohort/1"
+        ),
         "locked_at": datetime.now(timezone.utc).isoformat(),
         "universe_parquet": str(universe_path),
         "cohort_definition": definition.to_dict(),
         "cohort_sha256": cohort_definition_sha(definition),
         "n_universe": int(len(universe)),
         "n_analysis_cohort": int(len(cohort)),
-        "predicate_column_bindings": [
-            {
-                "concept_id": concept_id,
-                "column": column,
-                "basis": "planner_declared_operational_output_source_concept",
-                "predicate_contracts": [
-                    {
-                        "aggregation": predicate.aggregation,
-                        "time_window": predicate.time_window.to_dict(),
-                    }
-                    for predicate in (*definition.inclusion, *definition.exclusion)
-                    if predicate.concept_id == concept_id
-                ],
-            }
-            for concept_id, column in sorted(column_bindings.items())
-        ],
+        "predicate_column_bindings": predicate_bindings,
     }
-    (Path(run_dir) / f"{stem}_provenance.json").write_text(
-        json.dumps(provenance, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
+    authority_ref = None
+    authority_path = None
+    if typed_parent is not None:
+        selected_positions = tuple(int(index) for index in cohort.index.tolist())
+        verified_child = publish_ordered_subset_materialized_cohort(
+            universe_path,
+            out_path,
+            selected_row_positions=selected_positions,
+            semantic_provenance=semantic_provenance,
+            producer_implementation_sha256=implementation_bundle_sha256(
+                (
+                    Path(__file__),
+                    Path(__file__).resolve().parent
+                    / "intake"
+                    / "materialized_metadata.py",
+                )
+            ),
+            producer_parameters={
+                "cohort_definition": definition.to_dict(),
+                "cohort_definition_sha256": cohort_definition_sha(definition),
+                "predicate_column_bindings": predicate_bindings,
+                "stem": stem,
+            },
+            expected_parent_authority=typed_parent.reference,
+        )
+        if verified_child is None:  # pragma: no cover - typed parent selected above
+            raise RuntimeError("typed analysis cohort publication lost authority")
+        authority_ref = verified_child.reference.to_dict()
+        authority_path = out_path.parent / verified_child.reference.file
+    else:
+        cohort = coerce_isfinite_safe_dtypes(cohort).reset_index(drop=True)
+        cohort.to_parquet(out_path, index=False)
+        (Path(run_dir) / f"{stem}_provenance.json").write_text(
+            json.dumps(semantic_provenance, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
     result.update(
         status="applied",
         path=out_path,
+        authority_path=authority_path,
+        authority_ref=authority_ref,
+        cohort_definition_sha256=cohort_definition_sha(definition),
         n_universe=int(len(universe)),
         n_cohort=int(len(cohort)),
     )
