@@ -76,6 +76,7 @@ TARGET_FILES: List[Path] = [
     RA / "pipeline_execute.py",
     RA / "pipeline.py",
     RA / "pipeline_report.py",
+    RA / "authority" / "typed_binding.py",
 ]
 # (file, function name) — first match by name (top-level or nested).
 TARGET_FUNCTIONS: List[Tuple[str, str]] = [
